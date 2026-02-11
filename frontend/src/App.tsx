@@ -1,82 +1,55 @@
 import { useState } from 'react'
 import { Container, Typography, Box, Paper } from '@mui/material'
-import { WorkflowStep } from './types'
-import WorkflowStepper from './components/WorkflowStepper'
-import PropertyFactsForm from './components/PropertyFactsForm'
-import ComparableSalesDisplay from './components/ComparableSalesDisplay'
-import ComparableReviewTable from './components/ComparableReviewTable'
-import WeightedScoringTable from './components/WeightedScoringTable'
-import ValuationModelsDisplay from './components/ValuationModelsDisplay'
-import ReportDisplay from './components/ReportDisplay'
+import { WorkflowStep, PropertyFacts } from './types'
+import { PropertyFactsForm } from './components/PropertyFactsForm'
 
 function App() {
-  const [currentStep, setCurrentStep] = useState<WorkflowStep>(WorkflowStep.PROPERTY_FACTS)
-  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [currentStep] = useState<WorkflowStep>(WorkflowStep.PROPERTY_FACTS)
+  const [propertyFacts, setPropertyFacts] = useState<PropertyFacts | undefined>()
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | undefined>()
 
-  const handleStepChange = (step: WorkflowStep) => {
-    setCurrentStep(step)
+  const handleAddressSubmit = async (address: string) => {
+    setLoading(true)
+    setError(undefined)
+    
+    try {
+      // TODO: Call API to fetch property facts
+      // For now, just simulate a delay
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      
+      // Mock data for testing
+      setPropertyFacts({
+        address,
+        propertyType: 'SINGLE_FAMILY' as any,
+        units: 1,
+        bedrooms: 3,
+        bathrooms: 2,
+        squareFootage: 1500,
+        lotSize: 5000,
+        yearBuilt: 2000,
+        constructionType: 'BRICK' as any,
+        basement: true,
+        parkingSpaces: 2,
+        assessedValue: 250000,
+        annualTaxes: 5000,
+        zoning: 'R-1',
+        interiorCondition: 'AVERAGE' as any,
+        coordinates: { lat: 41.8781, lng: -87.6298 },
+        dataSource: 'mock',
+        userModifiedFields: [],
+      })
+    } catch (err) {
+      setError('Failed to fetch property data. Please try again.')
+    } finally {
+      setLoading(false)
+    }
   }
 
-  const handleSessionStart = (newSessionId: string) => {
-    setSessionId(newSessionId)
-  }
-
-  const renderStepContent = () => {
-    if (!sessionId && currentStep !== WorkflowStep.PROPERTY_FACTS) {
-      return null
-    }
-
-    switch (currentStep) {
-      case WorkflowStep.PROPERTY_FACTS:
-        return (
-          <PropertyFactsForm
-            sessionId={sessionId}
-            onSessionStart={handleSessionStart}
-            onNext={() => handleStepChange(WorkflowStep.COMPARABLE_SEARCH)}
-          />
-        )
-      case WorkflowStep.COMPARABLE_SEARCH:
-        return (
-          <ComparableSalesDisplay
-            sessionId={sessionId!}
-            onNext={() => handleStepChange(WorkflowStep.COMPARABLE_REVIEW)}
-            onBack={() => handleStepChange(WorkflowStep.PROPERTY_FACTS)}
-          />
-        )
-      case WorkflowStep.COMPARABLE_REVIEW:
-        return (
-          <ComparableReviewTable
-            sessionId={sessionId!}
-            onNext={() => handleStepChange(WorkflowStep.WEIGHTED_SCORING)}
-            onBack={() => handleStepChange(WorkflowStep.COMPARABLE_SEARCH)}
-          />
-        )
-      case WorkflowStep.WEIGHTED_SCORING:
-        return (
-          <WeightedScoringTable
-            sessionId={sessionId!}
-            onNext={() => handleStepChange(WorkflowStep.VALUATION)}
-            onBack={() => handleStepChange(WorkflowStep.COMPARABLE_REVIEW)}
-          />
-        )
-      case WorkflowStep.VALUATION:
-        return (
-          <ValuationModelsDisplay
-            sessionId={sessionId!}
-            onNext={() => handleStepChange(WorkflowStep.REPORT)}
-            onBack={() => handleStepChange(WorkflowStep.WEIGHTED_SCORING)}
-          />
-        )
-      case WorkflowStep.REPORT:
-        return (
-          <ReportDisplay
-            sessionId={sessionId!}
-            onBack={() => handleStepChange(WorkflowStep.VALUATION)}
-          />
-        )
-      default:
-        return null
-    }
+  const handlePropertyFactsSubmit = (facts: PropertyFacts) => {
+    setPropertyFacts(facts)
+    // TODO: Advance to next step
+    console.log('Property facts confirmed:', facts)
   }
 
   return (
@@ -89,14 +62,16 @@ function App() {
           Property valuation and investment analysis tool
         </Typography>
 
-        {sessionId && (
-          <Box sx={{ mb: 4 }}>
-            <WorkflowStepper currentStep={currentStep} onStepClick={handleStepChange} />
-          </Box>
-        )}
-
         <Paper elevation={2} sx={{ p: { xs: 2, sm: 3, md: 4 } }}>
-          {renderStepContent()}
+          {currentStep === WorkflowStep.PROPERTY_FACTS && (
+            <PropertyFactsForm
+              propertyFacts={propertyFacts}
+              onAddressSubmit={handleAddressSubmit}
+              onSubmit={handlePropertyFactsSubmit}
+              loading={loading}
+              error={error}
+            />
+          )}
         </Paper>
       </Box>
     </Container>
