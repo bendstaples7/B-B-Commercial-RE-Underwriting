@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Container, Typography, Box, Paper } from '@mui/material'
-import { WorkflowStep, PropertyFacts } from './types'
+import { WorkflowStep, PropertyFacts, PropertyType, ConstructionType, InteriorCondition } from './types'
 import { PropertyFactsForm } from './components/PropertyFactsForm'
 
 function App() {
@@ -21,20 +21,20 @@ function App() {
       // Mock data for testing
       setPropertyFacts({
         address,
-        propertyType: 'SINGLE_FAMILY' as any,
+        propertyType: PropertyType.SINGLE_FAMILY,
         units: 1,
         bedrooms: 3,
         bathrooms: 2,
         squareFootage: 1500,
         lotSize: 5000,
         yearBuilt: 2000,
-        constructionType: 'BRICK' as any,
+        constructionType: ConstructionType.BRICK,
         basement: true,
         parkingSpaces: 2,
         assessedValue: 250000,
         annualTaxes: 5000,
         zoning: 'R-1',
-        interiorCondition: 'AVERAGE' as any,
+        interiorCondition: InteriorCondition.AVERAGE,
         coordinates: { lat: 41.8781, lng: -87.6298 },
         dataSource: 'mock',
         userModifiedFields: [],
