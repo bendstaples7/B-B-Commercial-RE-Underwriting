@@ -4,9 +4,11 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_migrate import Migrate
 import os
 
 db = SQLAlchemy()
+migrate = Migrate()
 limiter = Limiter(
     key_func=get_remote_address,
     default_limits=["200 per day", "50 per hour"]
@@ -24,6 +26,7 @@ def create_app(config_name='development'):
     
     # Initialize extensions
     db.init_app(app)
+    migrate.init_app(app, db, directory='alembic_migrations')
     CORS(app)
     limiter.init_app(app)
     
@@ -38,6 +41,18 @@ def create_app(config_name='development'):
     # Register blueprints
     from app.controllers import api_bp
     app.register_blueprint(api_bp, url_prefix='/api')
+    
+    from app.controllers.lead_controller import lead_bp
+    app.register_blueprint(lead_bp, url_prefix='/api/leads')
+    
+    from app.controllers.import_controller import import_bp
+    app.register_blueprint(import_bp, url_prefix='/api/leads/import')
+    
+    from app.controllers.enrichment_controller import enrichment_bp
+    app.register_blueprint(enrichment_bp, url_prefix='/api/leads')
+    
+    from app.controllers.marketing_controller import marketing_bp
+    app.register_blueprint(marketing_bp, url_prefix='/api/leads/marketing')
     
     app.logger.info("Flask application initialized successfully")
     

@@ -32,9 +32,9 @@ def client(app):
 @pytest.fixture
 def seeded_app(app):
     """Create application with seeded test data."""
-    with app.app_context():
-        test_data = seed_test_data(app)
-        yield app, test_data
+    # app fixture already has an active app context
+    test_data = seed_test_data(app)
+    yield app, test_data
 
 @pytest.fixture
 def mock_apis():

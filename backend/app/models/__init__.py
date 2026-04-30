@@ -12,6 +12,13 @@ from app.models.scenario import (
     BuyHoldScenario
 )
 
+# Lead management models
+from app.models.lead import Lead, LeadAuditTrail
+from app.models.import_job import ImportJob, FieldMapping, OAuthToken
+from app.models.lead_scoring import ScoringWeights
+from app.models.enrichment import DataSource, EnrichmentRecord
+from app.models.marketing import MarketingList, MarketingListMember
+
 __all__ = [
     'PropertyFacts',
     'PropertyType',
@@ -28,4 +35,15 @@ __all__ = [
     'WholesaleScenario',
     'FixFlipScenario',
     'BuyHoldScenario',
+    # Lead management
+    'Lead',
+    'LeadAuditTrail',
+    'ImportJob',
+    'FieldMapping',
+    'OAuthToken',
+    'ScoringWeights',
+    'DataSource',
+    'EnrichmentRecord',
+    'MarketingList',
+    'MarketingListMember',
 ]

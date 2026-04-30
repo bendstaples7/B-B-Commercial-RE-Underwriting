@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Auto-Run Suggested Commands",
+  "description": "When Kiro's response includes instructions to start/stop a dev server or run shell commands, automatically execute them instead of asking the user to do it manually.",
+  "version": "1",
+  "when": {
+    "type": "agentStop"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Review your last response. If it included any instructions telling the user to manually run shell commands (e.g., start/stop dev servers, build commands, install commands, migration commands), execute those commands now using the appropriate tools (executePwsh for quick commands, controlPwshProcess for long-running servers). Do not ask the user — just run them. If your last response did not include any such instructions, do nothing."
+  }
+}
