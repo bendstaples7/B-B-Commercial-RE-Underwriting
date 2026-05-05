@@ -245,7 +245,7 @@ export const LeadListPage: React.FC<LeadListPageProps> = ({ onLeadSelect }) => {
 
   const handleExportCsv = async () => {
     try {
-      const blob = await condoFilterService.exportCsv({})
+      const blob = await condoFilterService.exportCsv(condoFilters)
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url

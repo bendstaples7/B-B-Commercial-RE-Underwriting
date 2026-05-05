@@ -31,7 +31,7 @@ def create_app(config_name='development'):
     limiter.init_app(app)
 
     # Auto-apply pending migrations in development
-    if os.getenv('FLASK_ENV', 'development') == 'development':
+    if config_name == 'development':
         with app.app_context():
             try:
                 from flask_migrate import upgrade
