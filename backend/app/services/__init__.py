@@ -8,6 +8,7 @@ from .google_sheets_importer import GoogleSheetsImporter
 from .lead_scoring_engine import LeadScoringEngine
 from .data_source_connector import DataSourceConnector, DataSourcePlugin, EnrichmentData
 from .marketing_manager import MarketingManager
+from .condo_filter_service import CondoFilterService
 
 __all__ = [
     'PropertyDataService',
@@ -21,4 +22,5 @@ __all__ = [
     'DataSourcePlugin',
     'EnrichmentData',
     'MarketingManager',
+    'CondoFilterService',
 ]

@@ -4,10 +4,7 @@
 import axios, { AxiosError, AxiosInstance } from 'axios'
 import type {
   AnalysisSession,
-  StartAnalysisRequest,
   StartAnalysisResponse,
-  UpdateStepDataRequest,
-  AdvanceStepRequest,
   StepResult,
   ErrorResponse,
   Report,

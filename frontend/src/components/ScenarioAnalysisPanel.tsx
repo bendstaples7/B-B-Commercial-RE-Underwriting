@@ -12,10 +12,6 @@ import {
 import type {
   ARVRange,
   Scenario,
-  ScenarioType,
-  WholesaleScenario,
-  FixFlipScenario,
-  BuyHoldScenario,
 } from '@/types'
 import { WholesaleScenarioForm } from './WholesaleScenarioForm'
 import { FixFlipScenarioForm } from './FixFlipScenarioForm'
@@ -30,7 +26,8 @@ interface ScenarioAnalysisPanelProps {
 
 export const ScenarioAnalysisPanel: React.FC<ScenarioAnalysisPanelProps> = ({
   arvRange,
-  sessionId,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  sessionId: _sessionId,
   onScenariosChange,
 }) => {
   const [selectedScenarios, setSelectedScenarios] = useState<{

@@ -102,6 +102,11 @@ class Lead(db.Model):
     # Analysis link
     analysis_session_id = db.Column(db.Integer, db.ForeignKey('analysis_sessions.id'), nullable=True)
 
+    # Condo filter
+    condo_risk_status = db.Column(db.String(50), nullable=True)
+    building_sale_possible = db.Column(db.String(50), nullable=True)
+    condo_analysis_id = db.Column(db.Integer, db.ForeignKey('address_group_analyses.id'), nullable=True)
+
     # Relationships
     analysis_session = db.relationship('AnalysisSession', backref=db.backref('lead', uselist=False), uselist=False, foreign_keys=[analysis_session_id])
     enrichment_records = db.relationship('EnrichmentRecord', backref='lead', lazy='dynamic')

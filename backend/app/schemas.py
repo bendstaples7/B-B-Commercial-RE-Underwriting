@@ -485,3 +485,42 @@ class MarketingListsQuerySchema(Schema):
     user_id = fields.Str(load_default=None, validate=validate.Length(max=255))
     page = fields.Int(load_default=1, validate=validate.Range(min=1))
     per_page = fields.Int(load_default=25, validate=validate.Range(min=1, max=100))
+
+
+# ---------------------------------------------------------------------------
+# Condo Filter Schemas
+# ---------------------------------------------------------------------------
+
+VALID_CONDO_RISK_STATUSES = [
+    'likely_condo', 'likely_not_condo', 'partial_condo_possible', 'needs_review', 'unknown',
+]
+
+VALID_BUILDING_SALE_POSSIBLE = ['yes', 'no', 'maybe', 'unknown']
+
+
+class CondoFilterResultsQuerySchema(Schema):
+    """Query params for GET /api/condo-filter/results."""
+    condo_risk_status = fields.Str(
+        load_default=None,
+        validate=validate.OneOf(VALID_CONDO_RISK_STATUSES),
+    )
+    building_sale_possible = fields.Str(
+        load_default=None,
+        validate=validate.OneOf(VALID_BUILDING_SALE_POSSIBLE),
+    )
+    manually_reviewed = fields.Bool(load_default=None)
+    page = fields.Int(load_default=1, validate=validate.Range(min=1))
+    per_page = fields.Int(load_default=20, validate=validate.Range(min=1, max=100))
+
+
+class CondoFilterOverrideSchema(Schema):
+    """Request body for PUT /api/condo-filter/results/<id>/override."""
+    condo_risk_status = fields.Str(
+        required=True,
+        validate=validate.OneOf(VALID_CONDO_RISK_STATUSES),
+    )
+    building_sale_possible = fields.Str(
+        required=True,
+        validate=validate.OneOf(VALID_BUILDING_SALE_POSSIBLE),
+    )
+    reason = fields.Str(required=True, validate=validate.Length(min=1, max=1000))
