@@ -24,7 +24,6 @@ import HomeIcon from '@mui/icons-material/Home'
 import PeopleIcon from '@mui/icons-material/People'
 import CloudUploadIcon from '@mui/icons-material/CloudUpload'
 import CampaignIcon from '@mui/icons-material/Campaign'
-import ApartmentIcon from '@mui/icons-material/Apartment'
 import Avatar from '@mui/material/Avatar'
 import { WorkflowStep, PropertyFacts, PropertyType, ConstructionType, InteriorCondition } from './types'
 import { PropertyFactsForm } from './components/PropertyFactsForm'
@@ -34,7 +33,6 @@ import { ImportWizard } from './components/ImportWizard'
 import { ImportHistoryTable } from './components/ImportHistoryTable'
 import { MarketingListManager } from './components/MarketingListManager'
 import { OAuthCallback } from './components/OAuthCallback'
-import { CondoReviewPage } from './components/CondoReviewPage'
 
 const DRAWER_WIDTH = 240
 
@@ -44,7 +42,6 @@ const NAV_ITEMS = [
   { label: 'Leads', path: '/leads', icon: <PeopleIcon /> },
   { label: 'Import', path: '/import', icon: <CloudUploadIcon /> },
   { label: 'Marketing', path: '/marketing', icon: <CampaignIcon /> },
-  { label: 'Condo Filter', path: '/condo-filter', icon: <ApartmentIcon /> },
 ] as const
 
 // ---------------------------------------------------------------------------
@@ -329,7 +326,6 @@ function App() {
           <Route path="/import" element={<ImportRoute />} />
           <Route path="/import/callback" element={<OAuthCallback />} />
           <Route path="/marketing" element={<MarketingListManager />} />
-          <Route path="/condo-filter" element={<CondoReviewPage />} />
         </Routes>
       </Box>
     </Box>

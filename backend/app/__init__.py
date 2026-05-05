@@ -29,6 +29,19 @@ def create_app(config_name='development'):
     migrate.init_app(app, db, directory='alembic_migrations')
     CORS(app)
     limiter.init_app(app)
+
+    # Auto-apply pending migrations in development only.
+    # Uses FLASK_ENV if set, otherwise falls back to config_name.
+    # This ensures: tests (config_name='testing') skip, production (FLASK_ENV='production') skips,
+    # local dev (both default to 'development') runs migrations.
+    effective_env = os.getenv('FLASK_ENV', config_name)
+    if effective_env == 'development':
+        with app.app_context():
+            try:
+                from flask_migrate import upgrade
+                upgrade(directory='alembic_migrations')
+            except Exception as e:
+                app.logger.warning("Auto-migrate skipped: %s", e)
     
     # Configure logging
     from app.logging_config import setup_logging

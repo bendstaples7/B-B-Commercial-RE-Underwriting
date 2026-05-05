@@ -13,6 +13,8 @@ import {
   Collapse,
   Slider,
   Pagination,
+  Tabs,
+  Tab,
 } from '@mui/material'
 import FilterListIcon from '@mui/icons-material/FilterList'
 import ClearIcon from '@mui/icons-material/Clear'
@@ -23,8 +25,13 @@ import type {
   LeadListFilters,
   LeadListResponse,
   MarketingList,
+  CondoFilterParams,
 } from '@/types'
 import { leadService } from '@/services/leadApi'
+import { useQueryClient } from '@tanstack/react-query'
+import { CondoResultsTable } from '@/components/CondoResultsTable'
+import { CondoDetailView } from '@/components/CondoDetailView'
+import { condoFilterService } from '@/services/condoFilterApi'
 
 // Register AG Grid community modules
 ModuleRegistry.registerModules([AllCommunityModule])
@@ -103,11 +110,23 @@ const COLUMN_DEFS: ColDef<LeadSummary>[] = [
 ]
 
 export const LeadListPage: React.FC<LeadListPageProps> = ({ onLeadSelect }) => {
+  const queryClient = useQueryClient()
   const [leads, setLeads] = useState<LeadSummary[]>([])
   const [totalLeads, setTotalLeads] = useState(0)
   const [totalPages, setTotalPages] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Tab state
+  const [activeTab, setActiveTab] = useState(0)
+
+  // Condo filter state
+  const [condoFilters, setCondoFilters] = useState<CondoFilterParams>({ page: 1, per_page: 20 })
+  const [condoDetailId, setCondoDetailId] = useState<number | null>(null)
+  const [condoDetailOpen, setCondoDetailOpen] = useState(false)
+  const [analysisRunning, setAnalysisRunning] = useState(false)
+  const [analysisError, setAnalysisError] = useState<string | null>(null)
+  const [analysisSuccess, setAnalysisSuccess] = useState<string | null>(null)
 
   // Filter state
   const [filtersOpen, setFiltersOpen] = useState(false)
@@ -208,82 +227,159 @@ export const LeadListPage: React.FC<LeadListPageProps> = ({ onLeadSelect }) => {
     setPage(1)
   }
 
+  // Condo filter handlers
+  const handleRunAnalysis = async () => {
+    setAnalysisRunning(true)
+    setAnalysisError(null)
+    setAnalysisSuccess(null)
+    try {
+      const summary = await condoFilterService.runAnalysis()
+      queryClient.invalidateQueries({ queryKey: ['condoFilterResults'] })
+      setAnalysisSuccess(`Analysis complete: ${summary.total_groups} address groups, ${summary.total_properties} properties processed.`)
+    } catch (err: any) {
+      setAnalysisError(err.message || 'Failed to run analysis.')
+    } finally {
+      setAnalysisRunning(false)
+    }
+  }
+
+  const handleExportCsv = async () => {
+    try {
+      const blob = await condoFilterService.exportCsv(condoFilters)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'condo_filter_results.csv'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch { /* non-critical */ }
+  }
+
   return (
     <Box component="section" aria-labelledby="lead-list-heading" sx={{ px: { xs: 1, sm: 2 }, height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Box>
-          <Typography variant="h5" id="lead-list-heading" component="h2">Leads</Typography>
-          <Typography variant="body2" color="text.secondary">
-            {totalLeads} lead{totalLeads !== 1 ? 's' : ''} found
-          </Typography>
-        </Box>
-        <Button variant="outlined" startIcon={<FilterListIcon />} onClick={() => setFiltersOpen((p) => !p)} aria-expanded={filtersOpen}>
-          Filters
-        </Button>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+        <Typography variant="h5" id="lead-list-heading" component="h2">Leads</Typography>
       </Box>
 
-      <Collapse in={filtersOpen}>
-        <Paper sx={{ p: { xs: 2, sm: 3 }, mb: 2 }} role="search" aria-label="Lead filters">
-          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr' }, gap: 2 }}>
-            <FormControl size="small" fullWidth>
-              <InputLabel id="filter-lead-category-label">Lead Category</InputLabel>
-              <Select labelId="filter-lead-category-label" value={leadCategory} label="Lead Category" onChange={(e) => setLeadCategory(e.target.value as any)}>
-                <MenuItem value="">All</MenuItem>
-                <MenuItem value="residential">Residential</MenuItem>
-                <MenuItem value="commercial">Commercial</MenuItem>
-              </Select>
-            </FormControl>
-            <FormControl size="small" fullWidth>
-              <InputLabel id="filter-property-type-label">Property Type</InputLabel>
-              <Select labelId="filter-property-type-label" value={propertyType} label="Property Type" onChange={(e) => setPropertyType(e.target.value)}>
-                {PROPERTY_TYPE_OPTIONS.map((opt) => (<MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>))}
-              </Select>
-            </FormControl>
-            <TextField size="small" label="City" value={city} onChange={(e) => setCity(e.target.value)} fullWidth />
-            <TextField size="small" label="State" value={state} onChange={(e) => setState(e.target.value)} fullWidth />
-            <TextField size="small" label="Zip Code" value={zip} onChange={(e) => setZip(e.target.value)} fullWidth />
-            <TextField size="small" label="Owner Name" value={ownerName} onChange={(e) => setOwnerName(e.target.value)} fullWidth />
-            <FormControl size="small" fullWidth>
-              <InputLabel id="filter-marketing-list-label">Marketing List</InputLabel>
-              <Select labelId="filter-marketing-list-label" value={marketingListId} label="Marketing List" onChange={(e) => setMarketingListId(e.target.value as number | '')}>
-                <MenuItem value="">All</MenuItem>
-                {marketingLists.map((ml) => (<MenuItem key={ml.id} value={ml.id}>{ml.name}</MenuItem>))}
-              </Select>
-            </FormControl>
-          </Box>
-          <Box sx={{ mt: 2, px: 1 }}>
-            <Typography variant="body2" gutterBottom>Score Range: {scoreRange[0]} – {scoreRange[1]}</Typography>
-            <Slider value={scoreRange} onChange={(_e, v) => setScoreRange(v as [number, number])} valueLabelDisplay="auto" min={0} max={100} />
-          </Box>
-          <Box sx={{ display: 'flex', gap: 1, mt: 2, justifyContent: 'flex-end' }}>
-            <Button variant="text" startIcon={<ClearIcon />} onClick={handleClearFilters}>Clear</Button>
-            <Button variant="contained" onClick={handleApplyFilters}>Apply</Button>
-          </Box>
-        </Paper>
-      </Collapse>
+      <Tabs value={activeTab} onChange={(_e, v) => setActiveTab(v)} sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}>
+        <Tab label="All Leads" />
+        {/* Disabled until public records + skip tracing provide complete data */}
+        <Tab label="Condo Analysis" disabled />
+      </Tabs>
 
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {/* Tab 0: All Leads */}
+      {activeTab === 0 && (
+        <>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+            <Typography variant="body2" color="text.secondary">
+              {totalLeads} lead{totalLeads !== 1 ? 's' : ''} found
+            </Typography>
+            <Button variant="outlined" startIcon={<FilterListIcon />} onClick={() => setFiltersOpen((p) => !p)} aria-expanded={filtersOpen}>
+              Filters
+            </Button>
+          </Box>
 
-      {/* AG Grid — scrollable, columns draggable to reorder, resizable */}
-      <Paper sx={{ flex: 1, minHeight: 500, width: '100%' }}>
-        <div style={{ height: '100%', width: '100%', minHeight: 500 }}>
-          <AgGridReact<LeadSummary>
-            rowData={leads}
-            columnDefs={COLUMN_DEFS}
-            defaultColDef={defaultColDef}
-            loading={loading}
-            rowSelection="single"
-            onRowClicked={(e) => { if (e.data) onLeadSelect?.(e.data.id) }}
-            onSortChanged={handleSortChanged}
-            suppressMovableColumns={false}
-            animateRows={true}
+          <Collapse in={filtersOpen}>
+            <Paper sx={{ p: { xs: 2, sm: 3 }, mb: 2 }} role="search" aria-label="Lead filters">
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr' }, gap: 2 }}>
+                <FormControl size="small" fullWidth>
+                  <InputLabel id="filter-lead-category-label">Lead Category</InputLabel>
+                  <Select labelId="filter-lead-category-label" value={leadCategory} label="Lead Category" onChange={(e) => setLeadCategory(e.target.value as any)}>
+                    <MenuItem value="">All</MenuItem>
+                    <MenuItem value="residential">Residential</MenuItem>
+                    <MenuItem value="commercial">Commercial</MenuItem>
+                  </Select>
+                </FormControl>
+                <FormControl size="small" fullWidth>
+                  <InputLabel id="filter-property-type-label">Property Type</InputLabel>
+                  <Select labelId="filter-property-type-label" value={propertyType} label="Property Type" onChange={(e) => setPropertyType(e.target.value)}>
+                    {PROPERTY_TYPE_OPTIONS.map((opt) => (<MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>))}
+                  </Select>
+                </FormControl>
+                <TextField size="small" label="City" value={city} onChange={(e) => setCity(e.target.value)} fullWidth />
+                <TextField size="small" label="State" value={state} onChange={(e) => setState(e.target.value)} fullWidth />
+                <TextField size="small" label="Zip Code" value={zip} onChange={(e) => setZip(e.target.value)} fullWidth />
+                <TextField size="small" label="Owner Name" value={ownerName} onChange={(e) => setOwnerName(e.target.value)} fullWidth />
+                <FormControl size="small" fullWidth>
+                  <InputLabel id="filter-marketing-list-label">Marketing List</InputLabel>
+                  <Select labelId="filter-marketing-list-label" value={marketingListId} label="Marketing List" onChange={(e) => setMarketingListId(e.target.value as number | '')}>
+                    <MenuItem value="">All</MenuItem>
+                    {marketingLists.map((ml) => (<MenuItem key={ml.id} value={ml.id}>{ml.name}</MenuItem>))}
+                  </Select>
+                </FormControl>
+              </Box>
+              <Box sx={{ mt: 2, px: 1 }}>
+                <Typography variant="body2" gutterBottom>Score Range: {scoreRange[0]} – {scoreRange[1]}</Typography>
+                <Slider value={scoreRange} onChange={(_e, v) => setScoreRange(v as [number, number])} valueLabelDisplay="auto" min={0} max={100} />
+              </Box>
+              <Box sx={{ display: 'flex', gap: 1, mt: 2, justifyContent: 'flex-end' }}>
+                <Button variant="text" startIcon={<ClearIcon />} onClick={handleClearFilters}>Clear</Button>
+                <Button variant="contained" onClick={handleApplyFilters}>Apply</Button>
+              </Box>
+            </Paper>
+          </Collapse>
+
+          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+
+          <Paper sx={{ flex: 1, minHeight: 500, width: '100%' }}>
+            <div style={{ height: '100%', width: '100%', minHeight: 500 }}>
+              <AgGridReact<LeadSummary>
+                rowData={leads}
+                columnDefs={COLUMN_DEFS}
+                defaultColDef={defaultColDef}
+                loading={loading}
+                rowSelection="single"
+                onRowClicked={(e) => { if (e.data) onLeadSelect?.(e.data.id) }}
+                onSortChanged={handleSortChanged}
+                suppressMovableColumns={false}
+                animateRows={true}
+              />
+            </div>
+          </Paper>
+
+          {totalPages > 1 && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+              <Pagination count={totalPages} page={page} onChange={(_e, v) => setPage(v)} color="primary" showFirstButton showLastButton />
+            </Box>
+          )}
+        </>
+      )}
+
+      {/* Tab 1: Condo Analysis
+          SHELVED — Hidden until public records + skip tracing are connected.
+          The classification engine needs populated county_assessor_pin and owner
+          names to produce useful results. Currently everything shows "needs_review"
+          because those fields are mostly null. Re-enable this tab once data is complete.
+          See: backend/app/services/condo_filter_service.py for full details. */}
+      {activeTab === 1 && (
+        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+          <Box sx={{ display: 'flex', gap: 2, mb: 2, alignItems: 'center' }}>
+            <Button
+              variant="contained"
+              onClick={handleRunAnalysis}
+              disabled={analysisRunning}
+            >
+              {analysisRunning ? 'Running Analysis...' : 'Run Analysis'}
+            </Button>
+            <Button variant="outlined" onClick={handleExportCsv}>
+              Export CSV
+            </Button>
+          </Box>
+
+          {analysisError && <Alert severity="error" sx={{ mb: 2 }}>{analysisError}</Alert>}
+          {analysisSuccess && <Alert severity="success" sx={{ mb: 2 }}>{analysisSuccess}</Alert>}
+
+          <CondoResultsTable
+            filters={condoFilters}
+            onFiltersChange={setCondoFilters}
+            onRowClick={(analysis) => { setCondoDetailId(analysis.id); setCondoDetailOpen(true) }}
           />
-        </div>
-      </Paper>
 
-      {totalPages > 1 && (
-        <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
-          <Pagination count={totalPages} page={page} onChange={(_e, v) => setPage(v)} color="primary" showFirstButton showLastButton />
+          <CondoDetailView
+            analysisId={condoDetailId}
+            open={condoDetailOpen}
+            onClose={() => { setCondoDetailOpen(false); setCondoDetailId(null) }}
+          />
         </Box>
       )}
     </Box>
