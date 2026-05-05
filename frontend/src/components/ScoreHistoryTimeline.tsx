@@ -25,6 +25,7 @@ import {
   Stack,
   Typography,
 } from '@mui/material'
+import { Fragment } from 'react'
 import type { LeadScoreRecord, RecommendedAction } from '@/types'
 import { LeadScoreBadge } from './LeadScoreBadge'
 
@@ -120,7 +121,7 @@ export function ScoreHistoryTimeline({
               const isLast = idx === sorted.length - 1
 
               return (
-                <Box key={record.id}>
+                <Fragment key={record.id}>
                   <ListItem
                     disableGutters
                     sx={{ display: 'block', py: 1 }}
@@ -180,7 +181,7 @@ export function ScoreHistoryTimeline({
                     </Stack>
                   </ListItem>
                   {!isLast && <Divider component="li" />}
-                </Box>
+                </Fragment>
               )
             })}
           </List>

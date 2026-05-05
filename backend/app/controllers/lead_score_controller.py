@@ -133,11 +133,11 @@ def recalculate_scores():
     400: Invalid parameters
     404: Lead not found (when lead_id specified)
     """
-    data = request.get_json()
-    if not data:
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
         return jsonify({
             'error': 'Validation error',
-            'message': 'Request body is required',
+            'message': 'Request body must be a JSON object',
         }), 400
 
     lead_id = data.get('lead_id')

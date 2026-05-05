@@ -207,7 +207,12 @@ class DeterministicScoringEngine:
 
     @staticmethod
     def _years_owned_score(lead: Lead) -> float:
-        """10+ years = 10, 5-9 years = 7, 2-4 years = 4, <2 years = 2, missing = 0."""
+        """10+ years = 10, 5-9 years = 7, 2-4 years = 4, <2 years = 2, missing = 0.
+
+        Future acquisition dates (negative years owned) are treated as invalid
+        data and score 0 — a lead cannot have been owned for a negative
+        duration.
+        """
         if not lead.acquisition_date:
             return 0.0
 
@@ -215,6 +220,8 @@ class DeterministicScoringEngine:
         delta = today - lead.acquisition_date
         years = delta.days / 365.25
 
+        if years < 0:
+            return 0.0
         if years >= 10:
             return 10.0
         elif years >= 5:
@@ -289,7 +296,12 @@ class DeterministicScoringEngine:
 
     @staticmethod
     def _commercial_property_type_fit(lead: Lead) -> float:
-        """Commercial/mixed-use = 20, multi-family 5+ = 15, other = 5, missing = 0."""
+        """Commercial/mixed-use = 20, multi-family 5+ units = 15, other = 5, missing = 0.
+
+        Multi-family properties only qualify for the 15-point tier when the
+        estimated unit count is 5 or greater; smaller multi-families fall
+        through to the 5-point "other" bucket to match the design doc.
+        """
         if not lead.property_type:
             return 0.0
 
@@ -303,7 +315,14 @@ class DeterministicScoringEngine:
         if pt in commercial_types:
             return 20.0
         elif pt in multi_family_types:
-            return 15.0
+            units = getattr(lead, "units", None)
+            try:
+                unit_count = int(units) if units is not None else 0
+            except (TypeError, ValueError):
+                unit_count = 0
+            if unit_count >= 5:
+                return 15.0
+            return 5.0
         else:
             return 5.0
 
@@ -359,13 +378,17 @@ class DeterministicScoringEngine:
         """Based on number of distinct owners at same normalized address.
 
         1 owner = 10, 2 = 7, 3-4 = 4, 5+ = 2.
+        ``owner_count`` values of 0 or less are treated as data-absent
+        (no analysis run yet) and fall through to the middle default rather
+        than being credited as the strongest concentration signal.
+
         Uses the condo_analysis relationship if available.
         """
         condo_analysis = getattr(lead, "condo_analysis", None)
         if condo_analysis and hasattr(condo_analysis, "owner_count"):
             owner_count = condo_analysis.owner_count
-            if owner_count is not None:
-                if owner_count <= 1:
+            if owner_count is not None and owner_count > 0:
+                if owner_count == 1:
                     return 10.0
                 elif owner_count == 2:
                     return 7.0

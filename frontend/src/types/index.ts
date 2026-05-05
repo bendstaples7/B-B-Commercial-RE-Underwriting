@@ -634,7 +634,11 @@ export interface LeadScoreRecord {
 }
 
 export interface LeadScoreResponse {
-  latest: LeadScoreRecord
+  /**
+   * The most recent LeadScoreRecord for the lead, or `null` when the lead
+   * has never been scored.
+   */
+  latest: LeadScoreRecord | null
   history: LeadScoreRecord[]
 }
 
