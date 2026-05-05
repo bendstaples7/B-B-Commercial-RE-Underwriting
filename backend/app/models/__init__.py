@@ -22,6 +22,9 @@ from app.models.marketing import MarketingList, MarketingListMember
 # Condo filter models
 from app.models.address_group_analysis import AddressGroupAnalysis
 
+# Lead scoring models
+from app.models.lead_score import LeadScore
+
 __all__ = [
     'PropertyFacts',
     'PropertyType',
@@ -51,4 +54,6 @@ __all__ = [
     'MarketingListMember',
     # Condo filter
     'AddressGroupAnalysis',
+    # Lead scoring
+    'LeadScore',
 ]

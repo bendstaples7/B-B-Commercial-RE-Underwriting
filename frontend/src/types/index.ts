@@ -327,19 +327,56 @@ export interface LeadSummary {
   property_state: string | null
   property_zip: string | null
   property_type: string | null
+  bedrooms: number | null
+  bathrooms: number | null
+  square_footage: number | null
+  lot_size: number | null
+  year_built: number | null
+  units: number | null
+  units_allowed: number | null
+  zoning: string | null
+  county_assessor_pin: string | null
+  tax_bill_2021: number | null
+  most_recent_sale: string | null
   owner_first_name: string
   owner_last_name: string
+  owner_2_first_name: string | null
+  owner_2_last_name: string | null
+  ownership_type: string | null
+  acquisition_date: string | null
+  phone_1: string | null
+  phone_2: string | null
+  phone_3: string | null
+  phone_4: string | null
+  phone_5: string | null
+  phone_6: string | null
+  phone_7: string | null
+  email_1: string | null
+  email_2: string | null
+  email_3: string | null
+  email_4: string | null
+  email_5: string | null
+  socials: string | null
+  mailing_address: string | null
   mailing_city: string | null
   mailing_state: string | null
   mailing_zip: string | null
+  address_2: string | null
+  returned_addresses: string | null
   lead_score: number
   lead_category: string
   data_source: string | null
   created_at: string | null
   updated_at: string | null
   source: string | null
+  date_identified: string | null
   notes: string | null
   needs_skip_trace: boolean | null
+  skip_tracer: string | null
+  date_skip_traced: string | null
+  date_added_to_hubspot: string | null
+  up_next_to_mail: boolean | null
+  mailer_history: Record<string, any> | null
 }
 
 export interface LeadDetail extends Lead {
@@ -560,4 +597,60 @@ export interface CondoOverrideRequest {
   condo_risk_status: CondoRiskStatus
   building_sale_possible: BuildingSalePossible
   reason: string
+}
+
+// ---------------------------------------------------------------------------
+// Lead Scoring Types
+// ---------------------------------------------------------------------------
+
+export type RecommendedAction =
+  | 'review_now'
+  | 'enrich_data'
+  | 'mail_ready'
+  | 'call_ready'
+  | 'valuation_needed'
+  | 'suppress'
+  | 'nurture'
+  | 'needs_manual_review'
+
+export interface ScoreSignal {
+  dimension: string
+  points: number
+}
+
+export interface LeadScoreRecord {
+  id: number
+  lead_id: number
+  property_id?: number | null
+  score_version: string
+  total_score: number
+  score_tier: 'A' | 'B' | 'C' | 'D'
+  data_quality_score: number
+  recommended_action: RecommendedAction
+  top_signals: ScoreSignal[]
+  score_details: Record<string, number>
+  missing_data: string[]
+  created_at: string
+}
+
+export interface LeadScoreResponse {
+  /**
+   * The most recent LeadScoreRecord for the lead, or `null` when the lead
+   * has never been scored.
+   */
+  latest: LeadScoreRecord | null
+  history: LeadScoreRecord[]
+}
+
+export interface RecalculateRequest {
+  lead_id?: number
+  source_type?: string
+  all?: boolean
+}
+
+export interface RecalculateResponse {
+  success: boolean
+  message: string
+  score?: LeadScoreRecord
+  count?: number
 }
