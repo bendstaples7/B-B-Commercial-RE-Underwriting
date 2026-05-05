@@ -48,7 +48,7 @@ const PER_PAGE = 20
 
 /** AG Grid column definitions */
 const COLUMN_DEFS: ColDef<LeadSummary>[] = [
-  { field: 'property_street', headerName: 'Property Street', width: 200 },
+  { field: 'property_street', headerName: 'Property Street', width: 200, sortable: true },
   { field: 'property_city', headerName: 'Property City', width: 130 },
   { field: 'property_state', headerName: 'State', width: 70 },
   { field: 'property_zip', headerName: 'Zip', width: 80 },
@@ -98,8 +98,8 @@ const COLUMN_DEFS: ColDef<LeadSummary>[] = [
   { field: 'date_skip_traced', headerName: 'Date Skip Traced', width: 130 },
   { field: 'date_added_to_hubspot', headerName: 'Added to HubSpot', width: 130 },
   { field: 'up_next_to_mail', headerName: 'Up Next to Mail', width: 120 },
-  { field: 'lead_score', headerName: 'Score', width: 80 },
-  { field: 'created_at', headerName: 'Added', width: 110 },
+  { field: 'lead_score', headerName: 'Score', width: 80, sortable: true },
+  { field: 'created_at', headerName: 'Added', width: 110, sortable: true },
 ]
 
 export const LeadListPage: React.FC<LeadListPageProps> = ({ onLeadSelect }) => {
@@ -130,7 +130,7 @@ export const LeadListPage: React.FC<LeadListPageProps> = ({ onLeadSelect }) => {
 
   // AG Grid default column settings
   const defaultColDef = useMemo<ColDef>(() => ({
-    sortable: true,
+    sortable: false,
     resizable: true,
     filter: false,
   }), [])
