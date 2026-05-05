@@ -155,6 +155,7 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({ onComplete, onCancel
   const [importJob, setImportJob] = useState<ImportJob | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
   const [importStarting, setImportStarting] = useState(false)
+  const [leadCategory, setLeadCategory] = useState<'residential' | 'commercial'>('residential')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Clean up polling on unmount
@@ -319,6 +320,7 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({ onComplete, onCancel
         spreadsheet_id: extractSpreadsheetId(spreadsheetId),
         sheet_name: selectedSheet.title,
         field_mapping_id: savedMapping?.id,
+        lead_category: leadCategory,
       })
       setImportJob(job)
       startPolling(job.id)
@@ -559,9 +561,22 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({ onComplete, onCancel
       {!importJob && !importError && (
         <>
           <Typography variant="body1">
-            Ready to import from sheet &quot;{selectedSheet?.title}&quot;. Click Start Import to
-            begin.
+            Ready to import from sheet &quot;{selectedSheet?.title}&quot;. Select a lead category
+            and click Start Import to begin.
           </Typography>
+          <FormControl size="small" sx={{ maxWidth: 240 }}>
+            <InputLabel id="lead-category-label">Lead Category</InputLabel>
+            <Select
+              labelId="lead-category-label"
+              value={leadCategory}
+              label="Lead Category"
+              onChange={(e) => setLeadCategory(e.target.value as 'residential' | 'commercial')}
+              aria-label="Select lead category"
+            >
+              <MenuItem value="residential">Residential</MenuItem>
+              <MenuItem value="commercial">Commercial</MenuItem>
+            </Select>
+          </FormControl>
           <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
             {onCancel && (
               <Button onClick={onCancel} aria-label="Cancel import">

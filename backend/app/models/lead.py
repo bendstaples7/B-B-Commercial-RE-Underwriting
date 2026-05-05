@@ -87,6 +87,9 @@ class Lead(db.Model):
     up_next_to_mail = db.Column(db.Boolean, nullable=True, default=False)
     mailer_history = db.Column(db.JSON, nullable=True)  # JSONB for flexible mailer tracking
 
+    # Lead classification
+    lead_category = db.Column(db.String(50), nullable=False, default='residential', server_default='residential', index=True)
+
     # Scoring
     lead_score = db.Column(db.Float, default=0)
 

@@ -155,6 +155,7 @@ export const leadService = {
     spreadsheet_id: string
     sheet_name: string
     field_mapping_id?: number
+    lead_category?: 'residential' | 'commercial'
   }): Promise<ImportJob> {
     const response = await api.post<ImportJob>('/leads/import/start', data)
     return response.data

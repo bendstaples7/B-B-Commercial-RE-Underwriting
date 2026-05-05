@@ -170,6 +170,10 @@ FIELD_SYNONYMS: dict[str, list[str]] = {
     "socials": ["socials", "social media", "linkedin", "facebook", "social links"],
     "up_next_to_mail": ["up next to mail", "up_next_to_mail", "next to mail", "mail target"],
     "mailer_history": ["mailer history", "mailer_history", "mailers", "mailer"],
+    "lead_category": [
+        "lead category", "lead_category", "category", "lead type",
+        "residential or commercial", "res/comm", "asset class",
+    ],
 }
 
 # Reverse lookup: normalised synonym → db field
@@ -216,6 +220,7 @@ FIELD_MAX_LENGTHS: dict[str, int] = {
     "email_3": 255,
     "email_4": 255,
     "email_5": 255,
+    "lead_category": 50,
 }
 
 # Fields expected to hold integer values
@@ -657,6 +662,7 @@ class GoogleSheetsImporter:
         "email_3", "email_4", "email_5",
         "socials",
         "up_next_to_mail", "mailer_history",
+        "lead_category",
     }
 
     def _update_lead_fields(self, lead: Lead, data: dict, changed_by: str) -> None:
@@ -693,7 +699,7 @@ class GoogleSheetsImporter:
     # Import orchestration
     # ------------------------------------------------------------------
 
-    def process_import(self, job_id: int) -> ImportResult:
+    def process_import(self, job_id: int, lead_category: str = 'residential') -> ImportResult:
         """Execute an import job: read rows from Google Sheets, validate,
         and upsert into the database.
 
@@ -759,6 +765,9 @@ class GoogleSheetsImporter:
                     logger.debug("Row %d skipped: %s", idx, result.errors)
                 else:
                     try:
+                        # Inject lead_category into the cleaned data if not already set
+                        if 'lead_category' not in result.cleaned_data or not result.cleaned_data['lead_category']:
+                            result.cleaned_data['lead_category'] = lead_category
                         self.upsert_lead(
                             result.cleaned_data,
                             import_job_id=job_id,

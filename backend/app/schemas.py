@@ -150,6 +150,7 @@ class LeadListQuerySchema(Schema):
 
     # Filters
     property_type = fields.Str(load_default=None, validate=validate.Length(max=50))
+    lead_category = fields.Str(load_default=None, validate=validate.OneOf(['residential', 'commercial']))
     city = fields.Str(load_default=None, validate=validate.Length(max=100))
     state = fields.Str(load_default=None, validate=validate.Length(max=50))
     zip = fields.Str(load_default=None, validate=validate.Length(max=20))
@@ -254,6 +255,9 @@ class LeadDetailResponseSchema(Schema):
     # Scoring
     lead_score = fields.Float()
 
+    # Classification
+    lead_category = fields.Str()
+
     # Metadata
     data_source = fields.Str(allow_none=True)
     last_import_job_id = fields.Int(allow_none=True)
@@ -347,6 +351,10 @@ class ImportStartRequestSchema(Schema):
     spreadsheet_id = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     sheet_name = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     field_mapping_id = fields.Int(load_default=None, validate=validate.Range(min=1))
+    lead_category = fields.Str(
+        load_default='residential',
+        validate=validate.OneOf(['residential', 'commercial']),
+    )
 
 
 class ImportJobsQuerySchema(Schema):

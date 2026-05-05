@@ -1,14 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Box,
   Paper,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  TableSortLabel,
   Typography,
   TextField,
   Select,
@@ -16,15 +9,15 @@ import {
   FormControl,
   InputLabel,
   Button,
-  Chip,
-  CircularProgress,
   Alert,
-  Pagination,
-  Slider,
   Collapse,
+  Slider,
+  Pagination,
 } from '@mui/material'
 import FilterListIcon from '@mui/icons-material/FilterList'
 import ClearIcon from '@mui/icons-material/Clear'
+import { AgGridReact } from 'ag-grid-react'
+import { AllCommunityModule, ModuleRegistry, ColDef } from 'ag-grid-community'
 import type {
   LeadSummary,
   LeadListFilters,
@@ -33,14 +26,13 @@ import type {
 } from '@/types'
 import { leadService } from '@/services/leadApi'
 
+// Register AG Grid community modules
+ModuleRegistry.registerModules([AllCommunityModule])
+
 /** Props accepted by LeadListPage. */
 export interface LeadListPageProps {
-  /** Called when the user clicks a lead row. */
   onLeadSelect?: (leadId: number) => void
 }
-
-type SortField = 'lead_score' | 'created_at' | 'property_street'
-type SortOrder = 'asc' | 'desc'
 
 const PROPERTY_TYPE_OPTIONS = [
   { value: '', label: 'All' },
@@ -54,13 +46,63 @@ const PROPERTY_TYPE_OPTIONS = [
 
 const PER_PAGE = 20
 
-/**
- * Paginated lead list with filtering, sorting, and score display.
- *
- * Requirements: 4.5, 4.6, 5.5, 5.6
- */
+/** AG Grid column definitions */
+const COLUMN_DEFS: ColDef<LeadSummary>[] = [
+  { field: 'property_street', headerName: 'Property Street', width: 200 },
+  { field: 'property_city', headerName: 'Property City', width: 130 },
+  { field: 'property_state', headerName: 'State', width: 70 },
+  { field: 'property_zip', headerName: 'Zip', width: 80 },
+  { field: 'property_type', headerName: 'Property Type', width: 120 },
+  { field: 'lead_category', headerName: 'Category', width: 110 },
+  { field: 'bedrooms', headerName: 'Beds', width: 65 },
+  { field: 'bathrooms', headerName: 'Baths', width: 65 },
+  { field: 'square_footage', headerName: 'Sq Ft', width: 80 },
+  { field: 'lot_size', headerName: 'Lot Size', width: 85 },
+  { field: 'year_built', headerName: 'Year Built', width: 90 },
+  { field: 'units', headerName: 'Units', width: 65 },
+  { field: 'units_allowed', headerName: 'Units Allowed', width: 110 },
+  { field: 'zoning', headerName: 'Zoning', width: 90 },
+  { field: 'county_assessor_pin', headerName: 'Assessor PIN', width: 130 },
+  { field: 'tax_bill_2021', headerName: 'Tax Bill 2021', width: 110 },
+  { field: 'most_recent_sale', headerName: 'Most Recent Sale', width: 140 },
+  { field: 'owner_first_name', headerName: 'Owner First', width: 120 },
+  { field: 'owner_last_name', headerName: 'Owner Last', width: 120 },
+  { field: 'owner_2_first_name', headerName: 'Owner 2 First', width: 120 },
+  { field: 'owner_2_last_name', headerName: 'Owner 2 Last', width: 120 },
+  { field: 'ownership_type', headerName: 'Ownership Type', width: 130 },
+  { field: 'acquisition_date', headerName: 'Acquisition Date', width: 130 },
+  { field: 'phone_1', headerName: 'Phone 1', width: 130 },
+  { field: 'phone_2', headerName: 'Phone 2', width: 130 },
+  { field: 'phone_3', headerName: 'Phone 3', width: 130 },
+  { field: 'phone_4', headerName: 'Phone 4', width: 130 },
+  { field: 'phone_5', headerName: 'Phone 5', width: 130 },
+  { field: 'phone_6', headerName: 'Phone 6', width: 130 },
+  { field: 'phone_7', headerName: 'Phone 7', width: 130 },
+  { field: 'email_1', headerName: 'Email 1', width: 190 },
+  { field: 'email_2', headerName: 'Email 2', width: 190 },
+  { field: 'email_3', headerName: 'Email 3', width: 190 },
+  { field: 'email_4', headerName: 'Email 4', width: 190 },
+  { field: 'email_5', headerName: 'Email 5', width: 190 },
+  { field: 'socials', headerName: 'Socials', width: 150 },
+  { field: 'mailing_address', headerName: 'Mailing Address', width: 200 },
+  { field: 'mailing_city', headerName: 'Mailing City', width: 130 },
+  { field: 'mailing_state', headerName: 'Mailing State', width: 90 },
+  { field: 'mailing_zip', headerName: 'Mailing Zip', width: 90 },
+  { field: 'address_2', headerName: 'Address 2', width: 150 },
+  { field: 'returned_addresses', headerName: 'Returned Addresses', width: 160 },
+  { field: 'source', headerName: 'Source', width: 110 },
+  { field: 'date_identified', headerName: 'Date Identified', width: 120 },
+  { field: 'notes', headerName: 'Notes', width: 220 },
+  { field: 'needs_skip_trace', headerName: 'Needs Skip Trace', width: 130 },
+  { field: 'skip_tracer', headerName: 'Skip Tracer', width: 110 },
+  { field: 'date_skip_traced', headerName: 'Date Skip Traced', width: 130 },
+  { field: 'date_added_to_hubspot', headerName: 'Added to HubSpot', width: 130 },
+  { field: 'up_next_to_mail', headerName: 'Up Next to Mail', width: 120 },
+  { field: 'lead_score', headerName: 'Score', width: 80 },
+  { field: 'created_at', headerName: 'Added', width: 110 },
+]
+
 export const LeadListPage: React.FC<LeadListPageProps> = ({ onLeadSelect }) => {
-  // Data state
   const [leads, setLeads] = useState<LeadSummary[]>([])
   const [totalLeads, setTotalLeads] = useState(0)
   const [totalPages, setTotalPages] = useState(0)
@@ -69,6 +111,7 @@ export const LeadListPage: React.FC<LeadListPageProps> = ({ onLeadSelect }) => {
 
   // Filter state
   const [filtersOpen, setFiltersOpen] = useState(false)
+  const [leadCategory, setLeadCategory] = useState<'residential' | 'commercial' | ''>('')
   const [propertyType, setPropertyType] = useState('')
   const [city, setCity] = useState('')
   const [state, setState] = useState('')
@@ -79,20 +122,27 @@ export const LeadListPage: React.FC<LeadListPageProps> = ({ onLeadSelect }) => {
 
   // Pagination & sorting
   const [page, setPage] = useState(1)
-  const [sortBy, setSortBy] = useState<SortField>('lead_score')
-  const [sortOrder, setSortOrder] = useState<SortOrder>('desc')
+  const [sortBy, setSortBy] = useState<string>('lead_score')
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc')
 
   // Marketing lists for filter dropdown
   const [marketingLists, setMarketingLists] = useState<MarketingList[]>([])
 
-  // Build the filters object from current state
+  // AG Grid default column settings
+  const defaultColDef = useMemo<ColDef>(() => ({
+    sortable: true,
+    resizable: true,
+    filter: false,
+  }), [])
+
   const buildFilters = useCallback((): LeadListFilters => {
     const filters: LeadListFilters = {
       page,
       per_page: PER_PAGE,
-      sort_by: sortBy,
+      sort_by: (sortBy === 'lead_score' || sortBy === 'created_at' || sortBy === 'property_street') ? sortBy : 'lead_score',
       sort_order: sortOrder,
     }
+    if (leadCategory) filters.lead_category = leadCategory
     if (propertyType) filters.property_type = propertyType
     if (city.trim()) filters.city = city.trim()
     if (state.trim()) filters.state = state.trim()
@@ -102,9 +152,8 @@ export const LeadListPage: React.FC<LeadListPageProps> = ({ onLeadSelect }) => {
     if (scoreRange[1] < 100) filters.score_max = scoreRange[1]
     if (marketingListId !== '') filters.marketing_list_id = marketingListId as number
     return filters
-  }, [page, sortBy, sortOrder, propertyType, city, state, zip, ownerName, scoreRange, marketingListId])
+  }, [page, sortBy, sortOrder, leadCategory, propertyType, city, state, zip, ownerName, scoreRange, marketingListId])
 
-  // Fetch leads
   const fetchLeads = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -120,43 +169,22 @@ export const LeadListPage: React.FC<LeadListPageProps> = ({ onLeadSelect }) => {
     }
   }, [buildFilters])
 
-  // Fetch marketing lists for the filter dropdown (once)
   useEffect(() => {
     const loadMarketingLists = async () => {
       try {
         const response = await leadService.listMarketingLists({ per_page: 100 })
         setMarketingLists(response.lists)
-      } catch {
-        // Non-critical — filter dropdown just won't have options
-      }
+      } catch { /* non-critical */ }
     }
     loadMarketingLists()
   }, [])
 
-  // Reload leads when filters, page, or sort change
-  useEffect(() => {
-    fetchLeads()
-  }, [fetchLeads])
+  useEffect(() => { fetchLeads() }, [fetchLeads])
 
-  // Sorting handler
-  const handleSort = (field: SortField) => {
-    if (sortBy === field) {
-      setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))
-    } else {
-      setSortBy(field)
-      setSortOrder(field === 'property_street' ? 'asc' : 'desc')
-    }
-    setPage(1)
-  }
+  const handleApplyFilters = () => { setPage(1); fetchLeads() }
 
-  // Apply filters (reset to page 1)
-  const handleApplyFilters = () => {
-    setPage(1)
-    fetchLeads()
-  }
-
-  // Clear all filters
   const handleClearFilters = () => {
+    setLeadCategory('')
     setPropertyType('')
     setCity('')
     setState('')
@@ -167,292 +195,81 @@ export const LeadListPage: React.FC<LeadListPageProps> = ({ onLeadSelect }) => {
     setPage(1)
   }
 
-  // Score color helper
-  const getScoreColor = (score: number): 'success' | 'warning' | 'error' | 'default' => {
-    if (score >= 70) return 'success'
-    if (score >= 40) return 'warning'
-    if (score > 0) return 'error'
-    return 'default'
-  }
-
-  const formatDate = (dateStr: string | null): string => {
-    if (!dateStr) return '—'
-    try {
-      return new Date(dateStr).toLocaleDateString()
-    } catch {
-      return '—'
-    }
-  }
-
   return (
-    <Box component="section" aria-labelledby="lead-list-heading" sx={{ px: { xs: 1, sm: 2 } }}>
+    <Box component="section" aria-labelledby="lead-list-heading" sx={{ px: { xs: 1, sm: 2 }, height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Box>
-          <Typography variant="h5" id="lead-list-heading" component="h2">
-            Leads
-          </Typography>
+          <Typography variant="h5" id="lead-list-heading" component="h2">Leads</Typography>
           <Typography variant="body2" color="text.secondary">
             {totalLeads} lead{totalLeads !== 1 ? 's' : ''} found
           </Typography>
         </Box>
-        <Button
-          variant="outlined"
-          startIcon={<FilterListIcon />}
-          onClick={() => setFiltersOpen((prev) => !prev)}
-          aria-expanded={filtersOpen}
-          aria-controls="lead-filter-panel"
-        >
+        <Button variant="outlined" startIcon={<FilterListIcon />} onClick={() => setFiltersOpen((p) => !p)} aria-expanded={filtersOpen}>
           Filters
         </Button>
       </Box>
 
-      {/* Filter Panel */}
       <Collapse in={filtersOpen}>
-        <Paper
-          id="lead-filter-panel"
-          sx={{ p: { xs: 2, sm: 3 }, mb: 2 }}
-          role="search"
-          aria-label="Lead filters"
-        >
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr' },
-              gap: 2,
-            }}
-          >
+        <Paper sx={{ p: { xs: 2, sm: 3 }, mb: 2 }} role="search" aria-label="Lead filters">
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr' }, gap: 2 }}>
+            <FormControl size="small" fullWidth>
+              <InputLabel id="filter-lead-category-label">Lead Category</InputLabel>
+              <Select labelId="filter-lead-category-label" value={leadCategory} label="Lead Category" onChange={(e) => setLeadCategory(e.target.value as any)}>
+                <MenuItem value="">All</MenuItem>
+                <MenuItem value="residential">Residential</MenuItem>
+                <MenuItem value="commercial">Commercial</MenuItem>
+              </Select>
+            </FormControl>
             <FormControl size="small" fullWidth>
               <InputLabel id="filter-property-type-label">Property Type</InputLabel>
-              <Select
-                labelId="filter-property-type-label"
-                value={propertyType}
-                label="Property Type"
-                onChange={(e) => setPropertyType(e.target.value)}
-              >
-                {PROPERTY_TYPE_OPTIONS.map((opt) => (
-                  <MenuItem key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </MenuItem>
-                ))}
+              <Select labelId="filter-property-type-label" value={propertyType} label="Property Type" onChange={(e) => setPropertyType(e.target.value)}>
+                {PROPERTY_TYPE_OPTIONS.map((opt) => (<MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>))}
               </Select>
             </FormControl>
-
-            <TextField
-              size="small"
-              label="City"
-              value={city}
-              onChange={(e) => setCity(e.target.value)}
-              fullWidth
-            />
-
-            <TextField
-              size="small"
-              label="State"
-              value={state}
-              onChange={(e) => setState(e.target.value)}
-              fullWidth
-            />
-
-            <TextField
-              size="small"
-              label="Zip Code"
-              value={zip}
-              onChange={(e) => setZip(e.target.value)}
-              fullWidth
-            />
-
-            <TextField
-              size="small"
-              label="Owner Name"
-              value={ownerName}
-              onChange={(e) => setOwnerName(e.target.value)}
-              fullWidth
-            />
-
+            <TextField size="small" label="City" value={city} onChange={(e) => setCity(e.target.value)} fullWidth />
+            <TextField size="small" label="State" value={state} onChange={(e) => setState(e.target.value)} fullWidth />
+            <TextField size="small" label="Zip Code" value={zip} onChange={(e) => setZip(e.target.value)} fullWidth />
+            <TextField size="small" label="Owner Name" value={ownerName} onChange={(e) => setOwnerName(e.target.value)} fullWidth />
             <FormControl size="small" fullWidth>
               <InputLabel id="filter-marketing-list-label">Marketing List</InputLabel>
-              <Select
-                labelId="filter-marketing-list-label"
-                value={marketingListId}
-                label="Marketing List"
-                onChange={(e) => setMarketingListId(e.target.value as number | '')}
-              >
+              <Select labelId="filter-marketing-list-label" value={marketingListId} label="Marketing List" onChange={(e) => setMarketingListId(e.target.value as number | '')}>
                 <MenuItem value="">All</MenuItem>
-                {marketingLists.map((ml) => (
-                  <MenuItem key={ml.id} value={ml.id}>
-                    {ml.name}
-                  </MenuItem>
-                ))}
+                {marketingLists.map((ml) => (<MenuItem key={ml.id} value={ml.id}>{ml.name}</MenuItem>))}
               </Select>
             </FormControl>
           </Box>
-
-          {/* Score range slider */}
           <Box sx={{ mt: 2, px: 1 }}>
-            <Typography variant="body2" gutterBottom id="score-range-label">
-              Score Range: {scoreRange[0]} – {scoreRange[1]}
-            </Typography>
-            <Slider
-              value={scoreRange}
-              onChange={(_e, newValue) => setScoreRange(newValue as [number, number])}
-              valueLabelDisplay="auto"
-              min={0}
-              max={100}
-              aria-labelledby="score-range-label"
-            />
+            <Typography variant="body2" gutterBottom>Score Range: {scoreRange[0]} – {scoreRange[1]}</Typography>
+            <Slider value={scoreRange} onChange={(_e, v) => setScoreRange(v as [number, number])} valueLabelDisplay="auto" min={0} max={100} />
           </Box>
-
           <Box sx={{ display: 'flex', gap: 1, mt: 2, justifyContent: 'flex-end' }}>
-            <Button
-              variant="text"
-              startIcon={<ClearIcon />}
-              onClick={handleClearFilters}
-              aria-label="Clear all filters"
-            >
-              Clear
-            </Button>
-            <Button variant="contained" onClick={handleApplyFilters} aria-label="Apply filters">
-              Apply
-            </Button>
+            <Button variant="text" startIcon={<ClearIcon />} onClick={handleClearFilters}>Clear</Button>
+            <Button variant="contained" onClick={handleApplyFilters}>Apply</Button>
           </Box>
         </Paper>
       </Collapse>
 
-      {/* Error */}
-      {error && (
-        <Alert severity="error" sx={{ mb: 2 }} role="alert">
-          {error}
-        </Alert>
-      )}
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
-      {/* Table */}
-      <TableContainer
-        component={Paper}
-        sx={{ overflowX: 'auto' }}
-        role="region"
-        aria-labelledby="lead-list-heading"
-      >
-        <Table size="small" aria-label="Leads table">
-          <TableHead>
-            <TableRow>
-              <TableCell sx={{ fontWeight: 'bold', minWidth: 200 }} scope="col">
-                <TableSortLabel
-                  active={sortBy === 'property_street'}
-                  direction={sortBy === 'property_street' ? sortOrder : 'asc'}
-                  onClick={() => handleSort('property_street')}
-                >
-                  Address
-                </TableSortLabel>
-              </TableCell>
-              <TableCell sx={{ fontWeight: 'bold', minWidth: 140 }} scope="col">
-                Owner
-              </TableCell>
-              <TableCell sx={{ fontWeight: 'bold', minWidth: 90 }} align="center" scope="col">
-                <TableSortLabel
-                  active={sortBy === 'lead_score'}
-                  direction={sortBy === 'lead_score' ? sortOrder : 'desc'}
-                  onClick={() => handleSort('lead_score')}
-                >
-                  Score
-                </TableSortLabel>
-              </TableCell>
-              <TableCell sx={{ fontWeight: 'bold', minWidth: 120 }} scope="col">
-                Property Type
-              </TableCell>
-              <TableCell sx={{ fontWeight: 'bold', minWidth: 120 }} scope="col">
-                Location
-              </TableCell>
-              <TableCell sx={{ fontWeight: 'bold', minWidth: 100 }} scope="col">
-                <TableSortLabel
-                  active={sortBy === 'created_at'}
-                  direction={sortBy === 'created_at' ? sortOrder : 'desc'}
-                  onClick={() => handleSort('created_at')}
-                >
-                  Added
-                </TableSortLabel>
-              </TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {loading && leads.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 6 }}>
-                  <CircularProgress size={32} aria-label="Loading leads" />
-                </TableCell>
-              </TableRow>
-            ) : leads.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6} align="center" sx={{ py: 6 }}>
-                  <Typography variant="body2" color="text.secondary">
-                    No leads found. Adjust your filters or import leads to get started.
-                  </Typography>
-                </TableCell>
-              </TableRow>
-            ) : (
-              leads.map((lead) => (
-                <TableRow
-                  key={lead.id}
-                  hover
-                  sx={{ cursor: onLeadSelect ? 'pointer' : 'default' }}
-                  onClick={() => onLeadSelect?.(lead.id)}
-                  role={onLeadSelect ? 'button' : undefined}
-                  tabIndex={onLeadSelect ? 0 : undefined}
-                  onKeyDown={(e) => {
-                    if (onLeadSelect && (e.key === 'Enter' || e.key === ' ')) {
-                      e.preventDefault()
-                      onLeadSelect(lead.id)
-                    }
-                  }}
-                  aria-label={`Lead: ${lead.property_street}, Owner: ${lead.owner_first_name} ${lead.owner_last_name}, Score: ${lead.lead_score}`}
-                >
-                  <TableCell>
-                    <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                      {[lead.property_street, lead.property_city, lead.property_state, lead.property_zip].filter(Boolean).join(', ')}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2">{lead.owner_first_name} {lead.owner_last_name}</Typography>
-                  </TableCell>
-                  <TableCell align="center">
-                    <Chip
-                      label={lead.lead_score.toFixed(1)}
-                      size="small"
-                      color={getScoreColor(lead.lead_score)}
-                      aria-label={`Score ${lead.lead_score.toFixed(1)}`}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2">{lead.property_type || '—'}</Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2">
-                      {[lead.mailing_city, lead.mailing_state, lead.mailing_zip]
-                        .filter(Boolean)
-                        .join(', ') || '—'}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>
-                    <Typography variant="body2">{formatDate(lead.created_at)}</Typography>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      {/* AG Grid — scrollable, columns draggable to reorder, resizable */}
+      <Paper sx={{ flex: 1, minHeight: 500, width: '100%' }}>
+        <div style={{ height: '100%', width: '100%', minHeight: 500 }}>
+          <AgGridReact<LeadSummary>
+            rowData={leads}
+            columnDefs={COLUMN_DEFS}
+            defaultColDef={defaultColDef}
+            loading={loading}
+            rowSelection="single"
+            onRowClicked={(e) => { if (e.data) onLeadSelect?.(e.data.id) }}
+            suppressMovableColumns={false}
+            animateRows={true}
+          />
+        </div>
+      </Paper>
 
-      {/* Pagination */}
       {totalPages > 1 && (
         <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
-          <Pagination
-            count={totalPages}
-            page={page}
-            onChange={(_e, value) => setPage(value)}
-            color="primary"
-            showFirstButton
-            showLastButton
-            aria-label="Lead list pagination"
-          />
+          <Pagination count={totalPages} page={page} onChange={(_e, v) => setPage(v)} color="primary" showFirstButton showLastButton />
         </Box>
       )}
     </Box>

@@ -104,7 +104,7 @@ def _serialize_field_mapping(mapping):
     }
 
 
-def _enqueue_import_task(job_id: int) -> None:
+def _enqueue_import_task(job_id: int, lead_category: str = 'residential') -> None:
     """Attempt to enqueue an import job via Celery.
 
     Falls back to synchronous processing when the Celery broker is
@@ -113,14 +113,14 @@ def _enqueue_import_task(job_id: int) -> None:
     """
     try:
         from celery_worker import import_task  # noqa: WPS433
-        import_task.apply_async(args=[job_id], ignore_result=True)
-        logger.info("Enqueued import task for job %d", job_id)
+        import_task.apply_async(args=[job_id, lead_category], ignore_result=True)
+        logger.info("Enqueued import task for job %d (category=%s)", job_id, lead_category)
     except Exception as enqueue_err:
         logger.warning(
             "Could not enqueue Celery task for job %d, running synchronously: %s",
             job_id, enqueue_err,
         )
-        importer.process_import(job_id)
+        importer.process_import(job_id, lead_category=lead_category)
 
 
 # ---------------------------------------------------------------------------
@@ -506,7 +506,8 @@ def start_import():
     # We attempt to send to Celery; if the broker is unavailable we fall
     # back to synchronous processing so the API remains functional in
     # development environments without a running Celery worker.
-    _enqueue_import_task(job.id)
+    lead_category = data.get('lead_category', 'residential')
+    _enqueue_import_task(job.id, lead_category=lead_category)
 
     # Re-read the job to get the latest state
     db.session.refresh(job)
@@ -639,7 +640,9 @@ def rerun_import(job_id):
     db.session.commit()
 
     # Enqueue the Celery task
-    _enqueue_import_task(new_job.id)
+    rerun_data = request.get_json(silent=True) or {}
+    lead_category = rerun_data.get('lead_category', 'residential')
+    _enqueue_import_task(new_job.id, lead_category=lead_category)
 
     db.session.refresh(new_job)
 

@@ -99,26 +99,64 @@ def _parse_pagination(args):
 
 
 def _serialize_lead_summary(lead):
-    """Serialize a Lead for list views."""
+    """Serialize a Lead for list views — includes all spreadsheet fields."""
     return {
         'id': lead.id,
+        'lead_category': lead.lead_category,
         'property_street': lead.property_street,
         'property_city': lead.property_city,
         'property_state': lead.property_state,
         'property_zip': lead.property_zip,
         'property_type': lead.property_type,
+        'bedrooms': lead.bedrooms,
+        'bathrooms': lead.bathrooms,
+        'square_footage': lead.square_footage,
+        'lot_size': lead.lot_size,
+        'year_built': lead.year_built,
+        'units': lead.units,
+        'units_allowed': lead.units_allowed,
+        'zoning': lead.zoning,
+        'county_assessor_pin': lead.county_assessor_pin,
+        'tax_bill_2021': lead.tax_bill_2021,
+        'most_recent_sale': lead.most_recent_sale,
         'owner_first_name': lead.owner_first_name,
         'owner_last_name': lead.owner_last_name,
+        'owner_2_first_name': lead.owner_2_first_name,
+        'owner_2_last_name': lead.owner_2_last_name,
+        'ownership_type': lead.ownership_type,
+        'acquisition_date': lead.acquisition_date.isoformat() if lead.acquisition_date else None,
+        'phone_1': lead.phone_1,
+        'phone_2': lead.phone_2,
+        'phone_3': lead.phone_3,
+        'phone_4': lead.phone_4,
+        'phone_5': lead.phone_5,
+        'phone_6': lead.phone_6,
+        'phone_7': lead.phone_7,
+        'email_1': lead.email_1,
+        'email_2': lead.email_2,
+        'email_3': lead.email_3,
+        'email_4': lead.email_4,
+        'email_5': lead.email_5,
+        'socials': lead.socials,
+        'mailing_address': lead.mailing_address,
         'mailing_city': lead.mailing_city,
         'mailing_state': lead.mailing_state,
         'mailing_zip': lead.mailing_zip,
+        'address_2': lead.address_2,
+        'returned_addresses': lead.returned_addresses,
+        'source': lead.source,
+        'date_identified': lead.date_identified.isoformat() if lead.date_identified else None,
+        'notes': lead.notes,
+        'needs_skip_trace': lead.needs_skip_trace,
+        'skip_tracer': lead.skip_tracer,
+        'date_skip_traced': lead.date_skip_traced.isoformat() if lead.date_skip_traced else None,
+        'date_added_to_hubspot': lead.date_added_to_hubspot.isoformat() if lead.date_added_to_hubspot else None,
+        'up_next_to_mail': lead.up_next_to_mail,
+        'mailer_history': lead.mailer_history,
         'lead_score': lead.lead_score,
         'data_source': lead.data_source,
         'created_at': lead.created_at.isoformat() if lead.created_at else None,
         'updated_at': lead.updated_at.isoformat() if lead.updated_at else None,
-        'source': lead.source,
-        'notes': lead.notes,
-        'needs_skip_trace': lead.needs_skip_trace,
     }
 
 
@@ -185,6 +223,8 @@ def _serialize_lead_detail(lead):
         'mailer_history': lead.mailer_history,
         # Scoring
         'lead_score': lead.lead_score,
+        # Classification
+        'lead_category': lead.lead_category,
         # Metadata
         'data_source': lead.data_source,
         'last_import_job_id': lead.last_import_job_id,
@@ -282,6 +322,10 @@ def list_leads():
     query = Lead.query
 
     # --- Filters ---
+    lead_category = args.get('lead_category')
+    if lead_category:
+        query = query.filter(Lead.lead_category == lead_category)
+
     property_type = args.get('property_type')
     if property_type:
         query = query.filter(Lead.property_type == property_type)

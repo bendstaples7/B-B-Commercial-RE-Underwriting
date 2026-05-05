@@ -43,13 +43,15 @@ def bulk_rescore_task(user_id: str, lead_ids: list[int] | None = None) -> int:
 
 
 @celery.task(name='import.process')
-def import_task(job_id: int) -> dict:
+def import_task(job_id: int, lead_category: str = 'residential') -> dict:
     """Celery task wrapper for processing a Google Sheets import job.
 
     Parameters
     ----------
     job_id : int
         Primary key of the ImportJob to process.
+    lead_category : str
+        Category to assign to imported leads ('residential' or 'commercial').
 
     Returns
     -------
@@ -62,7 +64,7 @@ def import_task(job_id: int) -> dict:
     app = create_app()
     with app.app_context():
         importer_service = GoogleSheetsImporter()
-        result = importer_service.process_import(job_id)
+        result = importer_service.process_import(job_id, lead_category=lead_category)
         return {
             'job_id': result.job_id,
             'status': result.status,

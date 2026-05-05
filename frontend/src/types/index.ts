@@ -277,6 +277,7 @@ export interface Lead {
   mailing_state: string | null
   mailing_zip: string | null
   lead_score: number
+  lead_category: string
   data_source: string | null
   last_import_job_id: number | null
   created_at: string | null
@@ -332,6 +333,7 @@ export interface LeadSummary {
   mailing_state: string | null
   mailing_zip: string | null
   lead_score: number
+  lead_category: string
   data_source: string | null
   created_at: string | null
   updated_at: string | null
@@ -474,6 +476,7 @@ export interface LeadListFilters {
   page?: number
   per_page?: number
   property_type?: string
+  lead_category?: 'residential' | 'commercial'
   city?: string
   state?: string
   zip?: string
