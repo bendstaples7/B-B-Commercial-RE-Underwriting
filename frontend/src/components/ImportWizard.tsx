@@ -189,6 +189,7 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({ onComplete, onCancel
         setAuthenticated(true)
         localStorage.setItem('google_authenticated', 'true')
         localStorage.setItem('user_id', result.user_id)
+        setAuthLoading(false)
         setActiveStep(1)
       }
     } catch (err: unknown) {
@@ -686,7 +687,7 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({ onComplete, onCancel
           </Alert>
           {importJob.error_log && importJob.error_log.length > 0 && (
             <Typography variant="body2" color="text.secondary">
-              Errors: {importJob.error_log.map((e) => `Row ${e.row}: ${e.error}`).join('; ')}
+              Errors: {importJob.error_log.map((e) => `Row ${e.row}: ${(e as any).errors?.join(', ') || e.error || 'Unknown error'}`).join('; ')}
             </Typography>
           )}
           <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end', mt: 2 }}>

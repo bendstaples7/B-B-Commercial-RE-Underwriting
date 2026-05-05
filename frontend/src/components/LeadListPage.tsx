@@ -181,7 +181,20 @@ export const LeadListPage: React.FC<LeadListPageProps> = ({ onLeadSelect }) => {
 
   useEffect(() => { fetchLeads() }, [fetchLeads])
 
-  const handleApplyFilters = () => { setPage(1); fetchLeads() }
+  const handleApplyFilters = () => { setPage(1) }
+
+  const handleSortChanged = useCallback((event: any) => {
+    const columnState = event.api.getColumnState()
+    const sorted = columnState.find((c: any) => c.sort)
+    if (sorted) {
+      setSortBy(sorted.colId)
+      setSortOrder(sorted.sort as 'asc' | 'desc')
+    } else {
+      setSortBy('lead_score')
+      setSortOrder('desc')
+    }
+    setPage(1)
+  }, [])
 
   const handleClearFilters = () => {
     setLeadCategory('')
@@ -261,6 +274,7 @@ export const LeadListPage: React.FC<LeadListPageProps> = ({ onLeadSelect }) => {
             loading={loading}
             rowSelection="single"
             onRowClicked={(e) => { if (e.data) onLeadSelect?.(e.data.id) }}
+            onSortChanged={handleSortChanged}
             suppressMovableColumns={false}
             animateRows={true}
           />

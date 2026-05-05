@@ -305,6 +305,9 @@ class GoogleSheetsImporter:
                     token_uri="https://oauth2.googleapis.com/token",
                     scopes=SCOPES,
                 )
+                # Validate the token by refreshing it
+                from google.auth.transport.requests import Request as AuthRequest
+                creds.refresh(AuthRequest())
             elif "auth_code" in credentials:
                 flow = Flow.from_client_config(
                     {

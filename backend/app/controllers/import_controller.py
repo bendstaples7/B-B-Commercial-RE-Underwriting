@@ -62,7 +62,7 @@ def handle_errors(f):
             logger.error("Unexpected error: %s", str(e), exc_info=True)
             return jsonify({
                 'error': 'Internal server error',
-                'message': str(e) if str(e) else 'An unexpected error occurred',
+                'message': 'An unexpected error occurred',
             }), 500
     return decorated_function
 
@@ -461,7 +461,12 @@ def start_import():
     # Resolve field mapping
     field_mapping_id = data.get('field_mapping_id')
     if field_mapping_id:
-        fm = db.session.get(FieldMapping, field_mapping_id)
+        fm = FieldMapping.query.filter_by(
+            id=field_mapping_id,
+            user_id=user_id,
+            spreadsheet_id=spreadsheet_id,
+            sheet_name=sheet_name,
+        ).first()
         if not fm:
             return jsonify({
                 'error': 'Not found',
