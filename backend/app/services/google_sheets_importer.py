@@ -768,17 +768,18 @@ class GoogleSheetsImporter:
                         # Inject lead_category into the cleaned data if not already set
                         if 'lead_category' not in result.cleaned_data or not result.cleaned_data['lead_category']:
                             result.cleaned_data['lead_category'] = lead_category
-                        self.upsert_lead(
-                            result.cleaned_data,
-                            import_job_id=job_id,
-                            data_source="google_sheets",
-                        )
+                        # Use a savepoint so a single row failure doesn't rollback prior rows
+                        with db.session.begin_nested():
+                            self.upsert_lead(
+                                result.cleaned_data,
+                                import_job_id=job_id,
+                                data_source="google_sheets",
+                            )
                         rows_imported += 1
                     except Exception as row_exc:
                         rows_skipped += 1
                         error_log.append({"row": idx, "errors": [str(row_exc)]})
                         logger.warning("Row %d upsert failed: %s", idx, row_exc)
-                        db.session.rollback()
 
                 # Update progress periodically (every 50 rows)
                 if (idx - 1) % 50 == 0:

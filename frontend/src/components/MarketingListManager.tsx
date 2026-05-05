@@ -719,9 +719,6 @@ export const MarketingListManager: React.FC = () => {
                     <MenuItem value="Single Family">Single Family</MenuItem>
                     <MenuItem value="Multi Family">Multi Family</MenuItem>
                     <MenuItem value="Commercial">Commercial</MenuItem>
-                    <MenuItem value="Condo">Condo</MenuItem>
-                    <MenuItem value="Townhouse">Townhouse</MenuItem>
-                    <MenuItem value="Land">Land</MenuItem>
                   </Select>
                 </FormControl>
                 <TextField
