@@ -70,6 +70,9 @@ def create_app(config_name='development'):
     from app.controllers.condo_filter_controller import condo_filter_bp
     app.register_blueprint(condo_filter_bp, url_prefix='/api/condo-filter')
     
+    from app.controllers.lead_score_controller import lead_score_bp
+    app.register_blueprint(lead_score_bp, url_prefix='/api/lead-scores')
+    
     app.logger.info("Flask application initialized successfully")
     
     return app

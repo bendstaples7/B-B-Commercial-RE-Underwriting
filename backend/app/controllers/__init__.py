@@ -10,6 +10,7 @@ from app.controllers.import_controller import import_bp
 from app.controllers.enrichment_controller import enrichment_bp
 from app.controllers.marketing_controller import marketing_bp
 from app.controllers.condo_filter_controller import condo_filter_bp
+from app.controllers.lead_score_controller import lead_score_bp
 
 __all__ = [
     'api_bp',
@@ -19,4 +20,5 @@ __all__ = [
     'enrichment_bp',
     'marketing_bp',
     'condo_filter_bp',
+    'lead_score_bp',
 ]

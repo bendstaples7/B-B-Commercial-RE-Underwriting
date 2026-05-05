@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, within, fireEvent } from '@/test/testUtils'
+import { render, screen, waitFor, within } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
 import { ImportWizard } from './ImportWizard'
 import { leadService } from '@/services/leadApi'
@@ -61,10 +61,8 @@ const user = userEvent.setup({ pointerEventsCheck: 0 })
 /**
  * Helper: get the actual <input> inside an MUI TextField by its visible label text.
  * MUI associates <label> with <input> via htmlFor/id.
- * For password fields, we fall back to querySelector since they don't have role="textbox".
  */
 function getInput(labelText: string): HTMLInputElement {
-  // MUI TextField renders a <label> with the given text, linked to the <input> via htmlFor
   const label = screen.getByText(labelText, { selector: 'label' })
   const inputId = label.getAttribute('for')
   if (inputId) {
@@ -75,26 +73,28 @@ function getInput(labelText: string): HTMLInputElement {
   return screen.getByRole('textbox', { name: labelText }) as HTMLInputElement
 }
 
-/** Helper: type into auth fields and submit the form */
-async function fillAndSubmitAuth() {
+const SPREADSHEET_LABEL = 'Google Sheets URL or Spreadsheet ID'
+
+/**
+ * Drive the wizard from step 0 to step 1 by mocking the auth handler to return
+ * a result without `auth_url` (the "already authenticated" branch) and clicking
+ * the Connect button.
+ */
+async function advanceToSheetStep() {
   vi.mocked(leadService.authenticateGoogleSheets).mockResolvedValue({
     message: 'ok',
     user_id: 'user1',
   })
-
-  await user.type(getInput('Client ID'), 'test-id')
-  await user.type(getInput('Client Secret'), 'test-secret')
-
-  // Submit the form directly (bypasses disabled button CSS issue)
-  const form = screen.getByLabelText('Google OAuth2 authentication form')
-  fireEvent.submit(form)
-
-  await waitFor(() => expect(getInput('Spreadsheet ID')).toBeInTheDocument())
+  await user.click(screen.getByLabelText('Connect to Google Sheets'))
+  await waitFor(() => expect(getInput(SPREADSHEET_LABEL)).toBeInTheDocument())
 }
 
 describe('ImportWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // The wizard reads `google_authenticated` from localStorage on mount.
+    // Clear it so each test starts on step 0.
+    localStorage.clear()
   })
 
   it('renders the wizard heading and stepper labels', () => {
@@ -107,31 +107,30 @@ describe('ImportWizard', () => {
     expect(within(stepper).getByText('Import')).toBeInTheDocument()
   })
 
-  it('shows auth form on step 0 with required fields', () => {
+  it('shows the Connect to Google Sheets button on step 0', () => {
     render(<ImportWizard />)
-    expect(getInput('Client ID')).toBeInTheDocument()
-    expect(getInput('Client Secret')).toBeInTheDocument()
-    expect(screen.getByLabelText('Authenticate with Google')).toBeDisabled()
+    expect(
+      screen.getByText(
+        'Connect your Google account to import leads from Google Sheets.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText('Connect to Google Sheets')).toBeEnabled()
   })
 
-  it('calls authenticateGoogleSheets and advances to step 1 on success', async () => {
+  it('calls authenticateGoogleSheets with redirect_uri and advances to step 1 when already authenticated', async () => {
     vi.mocked(leadService.authenticateGoogleSheets).mockResolvedValue({
       message: 'Authenticated',
       user_id: 'user1',
     })
 
     render(<ImportWizard />)
-
-    await user.type(getInput('Client ID'), 'my-client-id')
-    await user.type(getInput('Client Secret'), 'my-secret')
-    fireEvent.submit(screen.getByLabelText('Google OAuth2 authentication form'))
+    await user.click(screen.getByLabelText('Connect to Google Sheets'))
 
     await waitFor(() => {
-      expect(getInput('Spreadsheet ID')).toBeInTheDocument()
+      expect(getInput(SPREADSHEET_LABEL)).toBeInTheDocument()
     })
     expect(leadService.authenticateGoogleSheets).toHaveBeenCalledWith({
-      client_id: 'my-client-id',
-      client_secret: 'my-secret',
+      redirect_uri: expect.stringContaining('/import/callback'),
     })
   })
 
@@ -141,10 +140,7 @@ describe('ImportWizard', () => {
     )
 
     render(<ImportWizard />)
-
-    await user.type(getInput('Client ID'), 'bad-id')
-    await user.type(getInput('Client Secret'), 'bad-secret')
-    fireEvent.submit(screen.getByLabelText('Google OAuth2 authentication form'))
+    await user.click(screen.getByLabelText('Connect to Google Sheets'))
 
     await waitFor(() => {
       expect(screen.getByText('Invalid credentials')).toBeInTheDocument()
@@ -165,9 +161,9 @@ describe('ImportWizard', () => {
     })
 
     render(<ImportWizard />)
-    await fillAndSubmitAuth()
+    await advanceToSheetStep()
 
-    await user.type(getInput('Spreadsheet ID'), 'sheet123')
+    await user.type(getInput(SPREADSHEET_LABEL), 'sheet123')
     await user.click(screen.getByLabelText('Load sheets'))
 
     await waitFor(() => {
@@ -190,9 +186,9 @@ describe('ImportWizard', () => {
     })
 
     render(<ImportWizard />)
-    await fillAndSubmitAuth()
+    await advanceToSheetStep()
 
-    await user.type(getInput('Spreadsheet ID'), 'sheet123')
+    await user.type(getInput(SPREADSHEET_LABEL), 'sheet123')
     await user.click(screen.getByLabelText('Load sheets'))
     await waitFor(() => expect(screen.getByText('Leads')).toBeInTheDocument())
 
@@ -205,7 +201,11 @@ describe('ImportWizard', () => {
     })
   })
 
-  it('disables save button when required fields are not mapped', async () => {
+  it('enables save button once a sheet is selected (no required fields configured)', async () => {
+    // The current DATABASE_FIELDS list has no entries marked required, so the
+    // save button is enabled as soon as headers are loaded. This replaces the
+    // previous "disables save button when required fields are not mapped"
+    // test, which relied on a required-field check that no longer exists.
     vi.mocked(leadService.listSheets).mockResolvedValue({
       spreadsheet_id: 'sheet123',
       sheets: mockSheets,
@@ -218,15 +218,15 @@ describe('ImportWizard', () => {
     })
 
     render(<ImportWizard />)
-    await fillAndSubmitAuth()
+    await advanceToSheetStep()
 
-    await user.type(getInput('Spreadsheet ID'), 'sheet123')
+    await user.type(getInput(SPREADSHEET_LABEL), 'sheet123')
     await user.click(screen.getByLabelText('Load sheets'))
     await waitFor(() => expect(screen.getByText('Leads')).toBeInTheDocument())
     await user.click(screen.getByLabelText('Select sheet Leads'))
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Save mapping and continue')).toBeDisabled()
+      expect(screen.getByLabelText('Save mapping and continue')).toBeEnabled()
     })
   })
 
@@ -249,10 +249,10 @@ describe('ImportWizard', () => {
     render(<ImportWizard onComplete={onComplete} />)
 
     // Step 0 → 1
-    await fillAndSubmitAuth()
+    await advanceToSheetStep()
 
     // Step 1 → load sheets
-    await user.type(getInput('Spreadsheet ID'), 'sheet123')
+    await user.type(getInput(SPREADSHEET_LABEL), 'sheet123')
     await user.click(screen.getByLabelText('Load sheets'))
     await waitFor(() => expect(screen.getByText('Leads')).toBeInTheDocument())
 

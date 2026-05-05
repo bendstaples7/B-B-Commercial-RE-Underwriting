@@ -8,6 +8,9 @@ import type {
   StepResult,
   ErrorResponse,
   Report,
+  LeadScoreResponse,
+  RecalculateRequest,
+  RecalculateResponse,
 } from '@/types'
 
 // Create axios instance with default config
@@ -162,6 +165,20 @@ export const analysisService = {
     )
     return response.data
   },
+}
+
+/**
+ * Lead scoring API service
+ *
+ * Backend endpoints are mounted at `/api/lead-scores`. Since the axios
+ * instance's baseURL is `/api`, request paths here are relative to that
+ * (e.g. `/lead-scores/:leadId`).
+ */
+export const leadScoreService = {
+  getLeadScore: (leadId: number) =>
+    api.get<LeadScoreResponse>(`/lead-scores/${leadId}`),
+  recalculate: (params: RecalculateRequest) =>
+    api.post<RecalculateResponse>('/lead-scores/recalculate', params),
 }
 
 // Retry configuration for React Query
