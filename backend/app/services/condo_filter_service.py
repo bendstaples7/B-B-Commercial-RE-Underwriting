@@ -340,10 +340,12 @@ class CondoFilterService:
         """
         analysis = db.session.get(AddressGroupAnalysis, analysis_id)
 
-        # Update override fields
+        # Update override fields on the analysis record itself
         analysis.manual_override_status = status
         analysis.manual_override_reason = reason
         analysis.manually_reviewed = True
+        analysis.condo_risk_status = status
+        analysis.building_sale_possible = building_sale
 
         # Cascade to linked leads
         for lead in analysis.leads.all():

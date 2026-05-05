@@ -65,6 +65,14 @@ export const CondoDetailView: React.FC<CondoDetailViewProps> = ({
   const [overrideReason, setOverrideReason] = useState('')
   const [overrideError, setOverrideError] = useState<string | null>(null)
 
+  // Reset form state when a different analysis is opened
+  React.useEffect(() => {
+    setOverrideStatus('needs_review')
+    setOverrideBuildingSale('unknown')
+    setOverrideReason('')
+    setOverrideError(null)
+  }, [analysisId])
+
   const { data: detail, isLoading, error } = useQuery({
     queryKey: ['condoFilterDetail', analysisId],
     queryFn: () => condoFilterService.getDetail(analysisId!),

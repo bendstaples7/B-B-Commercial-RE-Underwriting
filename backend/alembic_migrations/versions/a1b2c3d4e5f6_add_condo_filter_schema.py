@@ -66,11 +66,16 @@ def upgrade():
             ['condo_analysis_id'],
             ['id'],
         )
+        batch_op.create_index(
+            'ix_leads_condo_analysis_id',
+            ['condo_analysis_id'],
+        )
 
 
 def downgrade():
     # Remove condo filter columns from leads table
     with op.batch_alter_table('leads', schema=None) as batch_op:
+        batch_op.drop_index('ix_leads_condo_analysis_id')
         batch_op.drop_constraint('fk_leads_condo_analysis_id', type_='foreignkey')
         batch_op.drop_column('condo_analysis_id')
         batch_op.drop_column('building_sale_possible')

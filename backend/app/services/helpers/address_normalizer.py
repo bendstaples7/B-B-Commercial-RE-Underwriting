@@ -7,20 +7,24 @@ filter analysis.
 import re
 
 
-# Patterns for unit markers followed by a value (e.g., "unit 4", "apt 2b", "#301")
+# Patterns for unit markers followed by a unit identifier value.
+# Requires:
+# 1. \b before AND after keyword ensures it's a standalone word
+#    (won't match inside "Stephen" or "Aptos")
+# 2. Value is a single alphanumeric token bounded by \b
 _UNIT_MARKER_PATTERN = re.compile(
-    r'\b(?:unit|apt|apartment|suite|ste)\s*[#.]?\s*\S+',
+    r'\b(?:unit|apt|apartment|suite|ste)\b\s*[#.]?\s*[a-zA-Z0-9][-a-zA-Z0-9]*\b',
     re.IGNORECASE,
 )
 
-# Pattern for # followed by a value (e.g., "#4", "# 301")
+# Pattern for # followed by an alphanumeric value (e.g., "#4", "# 301", "#2b")
 _HASH_UNIT_PATTERN = re.compile(
-    r'#\s*\S+',
+    r'#\s*[a-zA-Z0-9][-a-zA-Z0-9]*\b',
     re.IGNORECASE,
 )
 
 # Pattern for trailing alphanumeric unit suffix (e.g., "123 main st 1a")
-# Matches a trailing token that is a digit followed by a letter
+# Matches a trailing token that is a digit followed by a letter at end of string
 _TRAILING_UNIT_SUFFIX_PATTERN = re.compile(
     r'\s+\d+[a-zA-Z]$',
 )
