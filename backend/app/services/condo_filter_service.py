@@ -1,5 +1,18 @@
 """Condo Filter Service for commercial property analysis.
 
+SHELVED — This feature is fully implemented and tested but currently ineffective
+because the classification engine depends on data fields (county_assessor_pin,
+owner names, property_type/assessor_class) that are mostly null in the current
+dataset. With incomplete data, nearly all groups classify as "needs_review".
+
+Prerequisites to make this useful:
+  1. Public records integration (county assessor data with PINs, owners, property classes)
+  2. Skip tracing interface (fills in owner/contact data)
+  3. ~80%+ of commercial leads should have non-null county_assessor_pin and owner names
+
+Once those data sources are connected, re-enable the "Condo Analysis" tab in
+frontend/src/components/LeadListPage.tsx — the backend requires no changes.
+
 Orchestrates the full condo filter analysis pipeline: queries commercial
 and mixed-use leads, normalizes addresses, groups by building-level address,
 computes ownership/PIN metrics, detects condo indicators, applies

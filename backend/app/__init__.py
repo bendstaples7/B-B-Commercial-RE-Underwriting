@@ -29,6 +29,15 @@ def create_app(config_name='development'):
     migrate.init_app(app, db, directory='alembic_migrations')
     CORS(app)
     limiter.init_app(app)
+
+    # Auto-apply pending migrations in development
+    if os.getenv('FLASK_ENV', 'development') == 'development':
+        with app.app_context():
+            try:
+                from flask_migrate import upgrade
+                upgrade(directory='alembic_migrations')
+            except Exception as e:
+                app.logger.warning("Auto-migrate skipped: %s", e)
     
     # Configure logging
     from app.logging_config import setup_logging
