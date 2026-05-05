@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "name": "Investigate Before Implementing",
+  "description": "Before any write operation, remind the agent to first investigate the problem, provide a clear problem analysis, and recommend a solution before making changes.",
+  "version": "1",
+  "when": {
+    "type": "preToolUse",
+    "toolTypes": [
+      "write",
+      "createHook",
+      "shell"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "STOP. Before writing any code, you MUST first provide the user with:\n\n1. **Problem Analysis** — What is the root cause of the issue or the core requirement? Summarize what you investigated and what you found.\n2. **Recommended Solution** — What approach do you recommend and why? Mention any tradeoffs or alternatives you considered.\n3. **Implementation Plan** — List the specific files and changes you intend to make.\n\nOnly proceed with the write operation after you have clearly presented this analysis.\n\nCRITICAL: If your earlier analysis turned out to be WRONG or INCOMPLETE (e.g., you deployed a fix and it didn't work, or you discovered new information that changes the root cause), you MUST present a NEW analysis before proceeding. Do NOT reuse a previous analysis that has been invalidated by new evidence. The phrase 'analysis provided and approved' is NOT a valid reason to skip this step when the situation has changed."
+  }
+}

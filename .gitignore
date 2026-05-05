@@ -67,4 +67,5 @@ backend/logs/
 
 # Google credentials
 credentials.json
+credentials.json.json
 token.json

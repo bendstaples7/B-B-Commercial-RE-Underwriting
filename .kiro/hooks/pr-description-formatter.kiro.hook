@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "PR Description Formatter",
+  "description": "When user asks for PR description or mentions committing/pushing to GitHub, format the entire description in markdown code blocks for easy copy-paste",
+  "version": "1",
+  "when": {
+    "type": "promptSubmit"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "If the user is asking for a PR description, commit message, or mentions pushing to GitHub, ensure you format the ENTIRE PR description inside a markdown code block (```markdown ... ```) so it can be easily copied and pasted into GitHub. Include all sections like title, description, changes, and any other relevant information within the code block."
+  }
+}

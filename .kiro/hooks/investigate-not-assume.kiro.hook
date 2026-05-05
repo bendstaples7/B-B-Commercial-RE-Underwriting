@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Investigate Don't Assume",
+  "description": "Prompts the agent to dig deeper and verify facts when using vague assumption words or presenting multiple possible causes without investigating which one is actually happening.",
+  "version": "2",
+  "when": {
+    "type": "agentStop"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Review your last response and check for ALL of the following:\n\n1. **Uncertain language**: If you used words like likely/most likely/probably/might/seems/appears, investigate and verify what actually happened using tools before drawing conclusions.\n\n2. **Multiple possible causes**: If you presented 'either/or' options (e.g., 'either X or Y', 'this could be A, B, or C'), do NOT present them as options — investigate each one and report only the verified root cause.\n\n3. **CRITICAL — Production/deployment claims**: If your response mentions ANYTHING about what is or isn't deployed to production, merged to main, or live — you MUST run `git fetch origin main` and check `git log origin/main` RIGHT NOW to verify. Do NOT rely on memory or earlier checks. This applies to ALL claims about production state, whether stated confidently or with hedging. Wrong production claims are dangerous.\n\n4. **Manual commands**: If you included any instructions telling the user to manually run non-destructive or idempotent shell commands (e.g., status checks, dev server start/stop, builds, linting), execute those commands now using the appropriate tools. Do not ask the user — just run them. However, destructive actions such as database migrations, dependency installs, or data-modifying scripts require explicit user confirmation before execution."
+  }
+}
