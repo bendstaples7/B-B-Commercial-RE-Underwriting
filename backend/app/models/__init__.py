@@ -19,6 +19,9 @@ from app.models.lead_scoring import ScoringWeights
 from app.models.enrichment import DataSource, EnrichmentRecord
 from app.models.marketing import MarketingList, MarketingListMember
 
+# Condo filter models
+from app.models.address_group_analysis import AddressGroupAnalysis
+
 __all__ = [
     'PropertyFacts',
     'PropertyType',
@@ -46,4 +49,6 @@ __all__ = [
     'EnrichmentRecord',
     'MarketingList',
     'MarketingListMember',
+    # Condo filter
+    'AddressGroupAnalysis',
 ]

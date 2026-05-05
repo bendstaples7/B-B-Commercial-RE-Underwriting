@@ -54,6 +54,9 @@ def create_app(config_name='development'):
     from app.controllers.marketing_controller import marketing_bp
     app.register_blueprint(marketing_bp, url_prefix='/api/leads/marketing')
     
+    from app.controllers.condo_filter_controller import condo_filter_bp
+    app.register_blueprint(condo_filter_bp, url_prefix='/api/condo-filter')
+    
     app.logger.info("Flask application initialized successfully")
     
     return app

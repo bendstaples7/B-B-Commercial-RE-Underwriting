@@ -487,3 +487,77 @@ export interface LeadListFilters {
   sort_by?: 'lead_score' | 'created_at' | 'property_street'
   sort_order?: 'asc' | 'desc'
 }
+
+// ---------------------------------------------------------------------------
+// Condo Filter Types
+// ---------------------------------------------------------------------------
+
+export type CondoRiskStatus = 'likely_condo' | 'likely_not_condo' | 'partial_condo_possible' | 'needs_review' | 'unknown'
+export type BuildingSalePossible = 'yes' | 'no' | 'maybe' | 'unknown'
+
+export interface AddressGroupAnalysis {
+  id: number
+  normalized_address: string
+  source_type: string | null
+  property_count: number
+  pin_count: number
+  owner_count: number
+  has_unit_number: boolean
+  has_condo_language: boolean
+  missing_pin_count: number
+  missing_owner_count: number
+  condo_risk_status: CondoRiskStatus
+  building_sale_possible: BuildingSalePossible
+  analysis_details: {
+    triggered_rules: string[]
+    reason: string
+    confidence: string
+  } | null
+  manually_reviewed: boolean
+  manual_override_status: string | null
+  manual_override_reason: string | null
+  analyzed_at: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface AddressGroupDetail extends AddressGroupAnalysis {
+  leads: AddressGroupLead[]
+}
+
+export interface AddressGroupLead {
+  id: number
+  property_street: string
+  county_assessor_pin: string | null
+  owner_first_name: string | null
+  owner_last_name: string | null
+  owner_2_first_name: string | null
+  owner_2_last_name: string | null
+  property_type: string | null
+  assessor_class: string | null
+}
+
+export interface CondoFilterResultsResponse extends PaginatedResponse {
+  results: AddressGroupAnalysis[]
+}
+
+export interface CondoAnalysisSummary {
+  total_groups: number
+  total_properties: number
+  by_status: Record<CondoRiskStatus, number>
+  by_building_sale: Record<BuildingSalePossible, number>
+}
+
+export interface CondoFilterParams {
+  condo_risk_status?: CondoRiskStatus
+  building_sale_possible?: BuildingSalePossible
+  manually_reviewed?: boolean
+  page?: number
+  per_page?: number
+}
+
+export interface CondoOverrideRequest {
+  condo_risk_status: CondoRiskStatus
+  building_sale_possible: BuildingSalePossible
+  reason: string
+}

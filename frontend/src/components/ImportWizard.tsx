@@ -662,7 +662,7 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({ onComplete, onCancel
               <Box sx={{ maxHeight: 200, overflowY: 'auto', bgcolor: 'grey.50', borderRadius: 1, p: 1 }}>
                 {importJob.error_log.map((entry, idx) => (
                   <Typography key={idx} variant="body2" sx={{ fontSize: '0.8rem', fontFamily: 'monospace', mb: 0.5 }}>
-                    Row {entry.row}: {typeof entry.error === 'string' ? entry.error : (Array.isArray(entry.errors) ? entry.errors.join('; ') : JSON.stringify(entry))}
+                    Row {entry.row}: {entry.error}
                   </Typography>
                 ))}
               </Box>
