@@ -98,3 +98,19 @@ def bulk_enrich_task(lead_ids: list[int], source_name: str) -> int:
         connector = DataSourceConnector()
         records = connector.bulk_enrich(lead_ids, source_name)
         return len(records)
+
+
+@celery.task(name='multifamily.recompute_all_deals')
+def multifamily_recompute_all_task() -> int:
+    """Celery task wrapper for bulk multifamily pro forma recomputation.
+
+    Iterates all active Deals and forces a cache warm by calling
+    DashboardService.get_dashboard for each.
+
+    Returns
+    -------
+    int
+        Number of deals processed.
+    """
+    from app.tasks.multifamily_recompute import recompute_all_deals
+    return recompute_all_deals()

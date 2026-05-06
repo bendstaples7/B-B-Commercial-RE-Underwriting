@@ -20,8 +20,13 @@ import {
 } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
+import HomeWorkIcon from '@mui/icons-material/HomeWork'
+import ApartmentIcon from '@mui/icons-material/Apartment'
+import { useMutation } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import type { LeadDetail, EnrichmentRecord, LeadMarketingListMembership } from '@/types'
 import { leadService } from '@/services/leadApi'
+import { multifamilyService } from '@/services/api'
 
 /** Props accepted by LeadDetailPage. */
 export interface LeadDetailPageProps {
@@ -386,10 +391,18 @@ const MarketingTab: React.FC<{ memberships: LeadMarketingListMembership[] }> = (
 /** Analysis tab — linked analysis session info or start-analysis button. */
 const AnalysisTab: React.FC<{
   lead: LeadDetail
-  onStartAnalysis: () => void
+  onStartSingleFamily: () => void
+  onStartMultifamily: () => void
   analysisLoading: boolean
-}> = ({ lead, onStartAnalysis, analysisLoading }) => {
+  multifamilyLoading: boolean
+}> = ({ lead, onStartSingleFamily, onStartMultifamily, analysisLoading, multifamilyLoading }) => {
   const session = lead.analysis_session
+  const units = lead.units
+
+  // Determine which buttons to show based on unit count
+  const showMultifamily = units !== null && units >= 5
+  const showSingleFamily = units === null || units < 5
+  const showBoth = units === null // unknown — show both options
 
   if (!session) {
     return (
@@ -397,16 +410,58 @@ const AnalysisTab: React.FC<{
         <Typography variant="body1" gutterBottom>
           No analysis has been started for this lead yet.
         </Typography>
-        <Button
-          variant="contained"
-          startIcon={analysisLoading ? <CircularProgress size={18} /> : <PlayArrowIcon />}
-          onClick={onStartAnalysis}
-          disabled={analysisLoading}
-          aria-label="Start analysis from this lead"
-          sx={{ mt: 1 }}
-        >
-          Start Analysis
-        </Button>
+
+        {/* Show both options when units is unknown */}
+        {showBoth && (
+          <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', mt: 2, flexWrap: 'wrap' }}>
+            <Button
+              variant="outlined"
+              startIcon={analysisLoading ? <CircularProgress size={18} /> : <HomeWorkIcon />}
+              onClick={onStartSingleFamily}
+              disabled={analysisLoading || multifamilyLoading}
+              aria-label="Start single-family analysis from this lead"
+            >
+              Start Single-Family Analysis
+            </Button>
+            <Button
+              variant="contained"
+              startIcon={multifamilyLoading ? <CircularProgress size={18} /> : <ApartmentIcon />}
+              onClick={onStartMultifamily}
+              disabled={analysisLoading || multifamilyLoading}
+              aria-label="Start multifamily analysis from this lead"
+            >
+              Start Multifamily Analysis
+            </Button>
+          </Box>
+        )}
+
+        {/* Single-family only */}
+        {showSingleFamily && !showBoth && (
+          <Button
+            variant="contained"
+            startIcon={analysisLoading ? <CircularProgress size={18} /> : <HomeWorkIcon />}
+            onClick={onStartSingleFamily}
+            disabled={analysisLoading}
+            aria-label="Start single-family analysis from this lead"
+            sx={{ mt: 1 }}
+          >
+            Start Single-Family Analysis
+          </Button>
+        )}
+
+        {/* Multifamily only */}
+        {showMultifamily && !showBoth && (
+          <Button
+            variant="contained"
+            startIcon={multifamilyLoading ? <CircularProgress size={18} /> : <ApartmentIcon />}
+            onClick={onStartMultifamily}
+            disabled={multifamilyLoading}
+            aria-label="Start multifamily analysis from this lead"
+            sx={{ mt: 1 }}
+          >
+            Start Multifamily Analysis
+          </Button>
+        )}
       </Box>
     )
   }
@@ -457,6 +512,7 @@ export const LeadDetailPage: React.FC<LeadDetailPageProps> = ({
   onBack,
   onAnalysisStarted,
 }) => {
+  const navigate = useNavigate()
   const [lead, setLead] = useState<LeadDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -484,8 +540,8 @@ export const LeadDetailPage: React.FC<LeadDetailPageProps> = ({
     }
   }, [leadId])
 
-  // Start analysis from lead
-  const handleStartAnalysis = async () => {
+  // Start single-family ARV analysis from lead
+  const handleStartSingleFamily = async () => {
     setAnalysisLoading(true)
     try {
       const result = await leadService.analyzeLead(leadId)
@@ -499,6 +555,30 @@ export const LeadDetailPage: React.FC<LeadDetailPageProps> = ({
       setAnalysisLoading(false)
     }
   }
+
+  // Start multifamily pro-forma analysis from lead
+  const multifamilyMutation = useMutation({
+    mutationFn: async () => {
+      if (!lead) throw new Error('Lead not loaded')
+      // 1. Create the deal
+      const deal = await multifamilyService.createDeal({
+        property_address: lead.property_street,
+        unit_count: lead.units ?? 5,
+        purchase_price: 0,
+        close_date: new Date().toISOString().split('T')[0],
+      })
+      // 2. Link the deal to this lead
+      await multifamilyService.linkDealToLead(deal.id, lead.id)
+      return deal
+    },
+    onSuccess: (deal) => {
+      onAnalysisStarted?.(String(deal.id))
+      navigate(`/multifamily/deals/${deal.id}`)
+    },
+    onError: (err: any) => {
+      setError(err.message || 'Failed to start multifamily analysis.')
+    },
+  })
 
   // Loading state
   if (loading) {
@@ -594,8 +674,10 @@ export const LeadDetailPage: React.FC<LeadDetailPageProps> = ({
         <TabPanel value={tabIndex} index={4}>
           <AnalysisTab
             lead={lead}
-            onStartAnalysis={handleStartAnalysis}
+            onStartSingleFamily={handleStartSingleFamily}
+            onStartMultifamily={() => multifamilyMutation.mutate()}
             analysisLoading={analysisLoading}
+            multifamilyLoading={multifamilyMutation.isPending}
           />
         </TabPanel>
       </Paper>

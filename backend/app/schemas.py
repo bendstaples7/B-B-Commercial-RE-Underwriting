@@ -524,3 +524,307 @@ class CondoFilterOverrideSchema(Schema):
         validate=validate.OneOf(VALID_BUILDING_SALE_POSSIBLE),
     )
     reason = fields.Str(required=True, validate=validate.Length(min=1, max=1000))
+
+
+# ---------------------------------------------------------------------------
+# Multifamily Underwriting Schemas
+# ---------------------------------------------------------------------------
+
+VALID_OCCUPANCY_STATUSES = ['Occupied', 'Vacant', 'Down']
+VALID_LENDER_TYPES = ['Construction_To_Perm', 'Self_Funded_Reno']
+VALID_FUNDING_SOURCE_TYPES = ['Cash', 'HELOC_1', 'HELOC_2']
+
+
+class DealCreateSchema(Schema):
+    """Schema for creating a multifamily deal."""
+    # Required fields
+    property_address = fields.Str(required=True, validate=validate.Length(min=1, max=500))
+    unit_count = fields.Int(required=True, validate=validate.Range(min=5))
+    purchase_price = fields.Float(required=True, validate=validate.Range(min=0, min_inclusive=False))
+    close_date = fields.Date(required=True)
+
+    # Optional fields
+    property_city = fields.Str(load_default=None, validate=validate.Length(max=100))
+    property_state = fields.Str(load_default=None, validate=validate.Length(max=50))
+    property_zip = fields.Str(load_default=None, validate=validate.Length(max=20))
+    closing_costs = fields.Float(load_default=0, validate=validate.Range(min=0))
+    vacancy_rate = fields.Float(load_default=0.05, validate=validate.Range(min=0, max=1))
+    other_income_monthly = fields.Float(load_default=0, validate=validate.Range(min=0))
+    management_fee_rate = fields.Float(load_default=0.08, validate=validate.Range(min=0, max=0.30))
+    reserve_per_unit_per_year = fields.Float(load_default=250, validate=validate.Range(min=0))
+    property_taxes_annual = fields.Float(load_default=None, validate=validate.Range(min=0))
+    insurance_annual = fields.Float(load_default=None, validate=validate.Range(min=0))
+    utilities_annual = fields.Float(load_default=None, validate=validate.Range(min=0))
+    repairs_and_maintenance_annual = fields.Float(load_default=None, validate=validate.Range(min=0))
+    admin_and_marketing_annual = fields.Float(load_default=None, validate=validate.Range(min=0))
+    payroll_annual = fields.Float(load_default=None, validate=validate.Range(min=0))
+    other_opex_annual = fields.Float(load_default=None, validate=validate.Range(min=0))
+    interest_reserve_amount = fields.Float(load_default=0, validate=validate.Range(min=0))
+    custom_cap_rate = fields.Float(
+        load_default=None, allow_none=True,
+        validate=validate.Range(min=0, max=0.25),
+    )
+    status = fields.Str(load_default='draft', validate=validate.Length(max=50))
+
+
+class DealUpdateSchema(Schema):
+    """Schema for updating a multifamily deal (all fields optional)."""
+    property_address = fields.Str(validate=validate.Length(min=1, max=500))
+    unit_count = fields.Int(validate=validate.Range(min=5))
+    purchase_price = fields.Float(validate=validate.Range(min=0, min_inclusive=False))
+    close_date = fields.Date()
+    property_city = fields.Str(allow_none=True, validate=validate.Length(max=100))
+    property_state = fields.Str(allow_none=True, validate=validate.Length(max=50))
+    property_zip = fields.Str(allow_none=True, validate=validate.Length(max=20))
+    closing_costs = fields.Float(validate=validate.Range(min=0))
+    vacancy_rate = fields.Float(validate=validate.Range(min=0, max=1))
+    other_income_monthly = fields.Float(validate=validate.Range(min=0))
+    management_fee_rate = fields.Float(validate=validate.Range(min=0, max=0.30))
+    reserve_per_unit_per_year = fields.Float(validate=validate.Range(min=0))
+    property_taxes_annual = fields.Float(allow_none=True, validate=validate.Range(min=0))
+    insurance_annual = fields.Float(allow_none=True, validate=validate.Range(min=0))
+    utilities_annual = fields.Float(allow_none=True, validate=validate.Range(min=0))
+    repairs_and_maintenance_annual = fields.Float(allow_none=True, validate=validate.Range(min=0))
+    admin_and_marketing_annual = fields.Float(allow_none=True, validate=validate.Range(min=0))
+    payroll_annual = fields.Float(allow_none=True, validate=validate.Range(min=0))
+    other_opex_annual = fields.Float(allow_none=True, validate=validate.Range(min=0))
+    interest_reserve_amount = fields.Float(validate=validate.Range(min=0))
+    custom_cap_rate = fields.Float(
+        allow_none=True,
+        validate=validate.Range(min=0, max=0.25),
+    )
+    status = fields.Str(validate=validate.Length(max=50))
+
+
+class DealResponseSchema(Schema):
+    """Schema for serializing a deal response (dump only)."""
+    id = fields.Int(dump_only=True)
+    property_address = fields.Str(dump_only=True)
+    property_city = fields.Str(dump_only=True, allow_none=True)
+    property_state = fields.Str(dump_only=True, allow_none=True)
+    property_zip = fields.Str(dump_only=True, allow_none=True)
+    unit_count = fields.Int(dump_only=True)
+    purchase_price = fields.Float(dump_only=True)
+    closing_costs = fields.Float(dump_only=True)
+    close_date = fields.Date(dump_only=True)
+    vacancy_rate = fields.Float(dump_only=True)
+    other_income_monthly = fields.Float(dump_only=True)
+    management_fee_rate = fields.Float(dump_only=True)
+    reserve_per_unit_per_year = fields.Float(dump_only=True)
+    property_taxes_annual = fields.Float(dump_only=True, allow_none=True)
+    insurance_annual = fields.Float(dump_only=True, allow_none=True)
+    utilities_annual = fields.Float(dump_only=True, allow_none=True)
+    repairs_and_maintenance_annual = fields.Float(dump_only=True, allow_none=True)
+    admin_and_marketing_annual = fields.Float(dump_only=True, allow_none=True)
+    payroll_annual = fields.Float(dump_only=True, allow_none=True)
+    other_opex_annual = fields.Float(dump_only=True, allow_none=True)
+    interest_reserve_amount = fields.Float(dump_only=True)
+    custom_cap_rate = fields.Float(dump_only=True, allow_none=True)
+    status = fields.Str(dump_only=True)
+    created_at = fields.DateTime(dump_only=True)
+    updated_at = fields.DateTime(dump_only=True, allow_none=True)
+    deleted_at = fields.DateTime(dump_only=True, allow_none=True)
+    # Include units list for Req 1.4 (complete Deal record)
+    units = fields.Method('get_units', dump_only=True)
+
+    def get_units(self, deal):
+        """Return the list of units for this deal."""
+        unit_list = deal.units.all() if hasattr(deal.units, 'all') else list(deal.units)
+        return [
+            {
+                'id': u.id,
+                'deal_id': u.deal_id,
+                'unit_identifier': u.unit_identifier,
+                'unit_type': u.unit_type,
+                'beds': u.beds,
+                'baths': float(u.baths) if u.baths is not None else None,
+                'sqft': u.sqft,
+                'occupancy_status': u.occupancy_status,
+            }
+            for u in unit_list
+        ]
+
+
+class UnitCreateSchema(Schema):
+    """Schema for adding a unit to a deal."""
+    unit_identifier = fields.Str(required=True, validate=validate.Length(min=1, max=50))
+    unit_type = fields.Str(required=True, validate=validate.Length(min=1, max=50))
+    beds = fields.Int(required=True, validate=validate.Range(min=0))
+    baths = fields.Float(required=True, validate=validate.Range(min=0))
+    sqft = fields.Int(required=True, validate=validate.Range(min=1))
+    occupancy_status = fields.Str(
+        required=True,
+        validate=validate.OneOf(VALID_OCCUPANCY_STATUSES),
+    )
+
+
+class UnitUpdateSchema(Schema):
+    """Schema for updating a unit (all fields optional)."""
+    unit_identifier = fields.Str(validate=validate.Length(min=1, max=50))
+    unit_type = fields.Str(validate=validate.Length(min=1, max=50))
+    beds = fields.Int(validate=validate.Range(min=0))
+    baths = fields.Float(validate=validate.Range(min=0))
+    sqft = fields.Int(validate=validate.Range(min=1))
+    occupancy_status = fields.Str(validate=validate.OneOf(VALID_OCCUPANCY_STATUSES))
+
+
+class RentRollEntrySchema(Schema):
+    """Schema for setting a rent roll entry on a unit."""
+    current_rent = fields.Float(required=True, validate=validate.Range(min=0))
+    lease_start_date = fields.Date(load_default=None)
+    lease_end_date = fields.Date(load_default=None)
+    notes = fields.Str(load_default=None)
+
+    @validates_schema
+    def validate_lease_dates(self, data, **kwargs):
+        """Enforce lease_end_date >= lease_start_date when both are provided."""
+        start = data.get('lease_start_date')
+        end = data.get('lease_end_date')
+        if start is not None and end is not None:
+            if end < start:
+                raise ValidationError(
+                    'lease_end_date must be on or after lease_start_date',
+                    field_name='lease_end_date',
+                )
+
+
+class MarketRentAssumptionSchema(Schema):
+    """Schema for setting a market rent assumption for a unit type."""
+    unit_type = fields.Str(required=True, validate=validate.Length(min=1, max=50))
+    target_rent = fields.Float(load_default=None, validate=validate.Range(min=0))
+    post_reno_target_rent = fields.Float(load_default=None, validate=validate.Range(min=0))
+
+
+class RentCompCreateSchema(Schema):
+    """Schema for adding a rent comparable."""
+    address = fields.Str(required=True, validate=validate.Length(min=1, max=500))
+    unit_type = fields.Str(required=True, validate=validate.Length(min=1, max=50))
+    observed_rent = fields.Float(required=True, validate=validate.Range(min=0))
+    sqft = fields.Int(required=True, validate=validate.Range(min=1))
+    observation_date = fields.Date(required=True)
+    neighborhood = fields.Str(load_default=None, validate=validate.Length(max=200))
+    source_url = fields.Str(load_default=None, validate=validate.Length(max=1000))
+
+
+class RentCompResponseSchema(Schema):
+    """Schema for serializing a rent comp response (dump only)."""
+    id = fields.Int(dump_only=True)
+    address = fields.Str(dump_only=True)
+    unit_type = fields.Str(dump_only=True)
+    observed_rent = fields.Float(dump_only=True)
+    sqft = fields.Int(dump_only=True)
+    observation_date = fields.Date(dump_only=True)
+    neighborhood = fields.Str(dump_only=True, allow_none=True)
+    source_url = fields.Str(dump_only=True, allow_none=True)
+    rent_per_sqft = fields.Float(dump_only=True)
+    created_at = fields.DateTime(dump_only=True)
+
+
+class SaleCompCreateSchema(Schema):
+    """Schema for adding a sale comparable."""
+    address = fields.Str(required=True, validate=validate.Length(min=1, max=500))
+    unit_count = fields.Int(required=True, validate=validate.Range(min=1))
+    sale_price = fields.Float(required=True, validate=validate.Range(min=0, min_inclusive=False))
+    close_date = fields.Date(required=True)
+    observed_cap_rate = fields.Float(
+        required=True,
+        validate=validate.Range(min=0, max=0.25, min_inclusive=False),
+    )
+    status = fields.Str(load_default=None, validate=validate.Length(max=50))
+    distance_miles = fields.Float(load_default=None, validate=validate.Range(min=0))
+
+
+class SaleCompResponseSchema(Schema):
+    """Schema for serializing a sale comp response (dump only)."""
+    id = fields.Int(dump_only=True)
+    address = fields.Str(dump_only=True)
+    unit_count = fields.Int(dump_only=True)
+    sale_price = fields.Float(dump_only=True)
+    close_date = fields.Date(dump_only=True)
+    observed_cap_rate = fields.Float(dump_only=True)
+    status = fields.Str(dump_only=True, allow_none=True)
+    distance_miles = fields.Float(dump_only=True, allow_none=True)
+    observed_ppu = fields.Float(dump_only=True)
+    created_at = fields.DateTime(dump_only=True)
+
+
+class RehabPlanEntrySchema(Schema):
+    """Schema for setting a rehab plan entry on a unit."""
+    renovate_flag = fields.Bool(required=True)
+    current_rent = fields.Float(load_default=None, validate=validate.Range(min=0))
+    suggested_post_reno_rent = fields.Float(load_default=None, validate=validate.Range(min=0))
+    underwritten_post_reno_rent = fields.Float(load_default=None, validate=validate.Range(min=0))
+    rehab_start_month = fields.Int(load_default=None, validate=validate.Range(min=1, max=24))
+    downtime_months = fields.Int(load_default=None, validate=validate.Range(min=0))
+    rehab_budget = fields.Float(load_default=None, validate=validate.Range(min=0))
+    scope_notes = fields.Str(load_default=None)
+
+
+class LenderProfileCreateSchema(Schema):
+    """Schema for creating a lender profile."""
+    # Common required fields
+    company = fields.Str(required=True, validate=validate.Length(min=1, max=200))
+    lender_type = fields.Str(required=True, validate=validate.OneOf(VALID_LENDER_TYPES))
+    origination_fee_rate = fields.Float(required=True, validate=validate.Range(min=0, max=0.30))
+
+    # Common optional
+    prepay_penalty_description = fields.Str(load_default=None)
+
+    # Construction_To_Perm fields
+    ltv_total_cost = fields.Float(load_default=None, validate=validate.Range(min=0, max=1))
+    construction_rate = fields.Float(load_default=None, validate=validate.Range(min=0, max=0.30))
+    construction_io_months = fields.Int(load_default=None, validate=validate.Range(min=1))
+    construction_term_months = fields.Int(load_default=None, validate=validate.Range(min=1))
+    perm_rate = fields.Float(load_default=None, validate=validate.Range(min=0, max=0.30))
+    perm_amort_years = fields.Int(load_default=None, validate=validate.Range(min=1))
+    min_interest_or_yield = fields.Float(load_default=None, validate=validate.Range(min=0))
+
+    # Self_Funded_Reno fields
+    max_purchase_ltv = fields.Float(load_default=None, validate=validate.Range(min=0, max=1))
+    treasury_5y_rate = fields.Float(load_default=None, validate=validate.Range(min=0, max=0.30))
+    spread_bps = fields.Int(load_default=None, validate=validate.Range(min=0))
+    term_years = fields.Int(load_default=None, validate=validate.Range(min=1))
+    amort_years = fields.Int(load_default=None, validate=validate.Range(min=1))
+
+    @validates_schema
+    def validate_lender_type_fields(self, data, **kwargs):
+        """Enforce required fields based on lender_type."""
+        lender_type = data.get('lender_type')
+
+        if lender_type == 'Construction_To_Perm':
+            required_fields = [
+                'ltv_total_cost', 'construction_rate', 'construction_io_months',
+                'construction_term_months', 'perm_rate', 'perm_amort_years',
+            ]
+            for field_name in required_fields:
+                if data.get(field_name) is None:
+                    raise ValidationError(
+                        f'{field_name} is required for Construction_To_Perm lender type',
+                        field_name=field_name,
+                    )
+
+        elif lender_type == 'Self_Funded_Reno':
+            required_fields = [
+                'max_purchase_ltv', 'treasury_5y_rate', 'spread_bps',
+                'term_years', 'amort_years',
+            ]
+            for field_name in required_fields:
+                if data.get(field_name) is None:
+                    raise ValidationError(
+                        f'{field_name} is required for Self_Funded_Reno lender type',
+                        field_name=field_name,
+                    )
+
+
+class DealLenderSelectionSchema(Schema):
+    """Schema for attaching a lender profile to a deal scenario."""
+    lender_profile_id = fields.Int(required=True, validate=validate.Range(min=1))
+    is_primary = fields.Bool(load_default=False)
+
+
+class FundingSourceSchema(Schema):
+    """Schema for adding or updating a funding source on a deal."""
+    source_type = fields.Str(required=True, validate=validate.OneOf(VALID_FUNDING_SOURCE_TYPES))
+    total_available = fields.Float(required=True, validate=validate.Range(min=0))
+    interest_rate = fields.Float(load_default=0, validate=validate.Range(min=0, max=0.30))
+    origination_fee_rate = fields.Float(load_default=0, validate=validate.Range(min=0, max=0.30))

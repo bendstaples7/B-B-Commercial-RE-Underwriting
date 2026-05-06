@@ -30,6 +30,7 @@ interface PropertyFactsFormProps {
   onAddressSubmit: (address: string) => void
   loading?: boolean
   error?: string
+  initialAddress?: string
 }
 
 export const PropertyFactsForm: React.FC<PropertyFactsFormProps> = ({
@@ -38,10 +39,20 @@ export const PropertyFactsForm: React.FC<PropertyFactsFormProps> = ({
   onAddressSubmit,
   loading = false,
   error,
+  initialAddress,
 }) => {
-  const [address, setAddress] = useState('')
+  const [address, setAddress] = useState(initialAddress ?? '')
   const [editedFacts, setEditedFacts] = useState<Partial<PropertyFacts>>({})
   const [showFactsTable, setShowFactsTable] = useState(false)
+
+  // Auto-submit when an address is pre-filled from the New Analysis dialog
+  useEffect(() => {
+    if (initialAddress?.trim()) {
+      onAddressSubmit(initialAddress.trim())
+    }
+    // Only run on mount — intentionally omitting onAddressSubmit from deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (propertyFacts) {

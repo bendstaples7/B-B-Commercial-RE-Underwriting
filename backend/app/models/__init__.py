@@ -22,6 +22,21 @@ from app.models.marketing import MarketingList, MarketingListMember
 # Condo filter models
 from app.models.address_group_analysis import AddressGroupAnalysis
 
+# Multifamily underwriting models
+from app.models.deal import Deal
+from app.models.unit import Unit
+from app.models.rent_roll_entry import RentRollEntry
+from app.models.market_rent_assumption import MarketRentAssumption
+from app.models.rent_comp import RentComp
+from app.models.sale_comp import SaleComp
+from app.models.rehab_plan_entry import RehabPlanEntry
+from app.models.lender_profile import LenderProfile
+from app.models.deal_lender_selection import DealLenderSelection
+from app.models.funding_source import FundingSource
+from app.models.pro_forma_result import ProFormaResult
+from app.models.lead_deal_link import LeadDealLink
+from app.models.deal_audit_trail import DealAuditTrail
+
 __all__ = [
     'PropertyFacts',
     'PropertyType',
@@ -51,4 +66,18 @@ __all__ = [
     'MarketingListMember',
     # Condo filter
     'AddressGroupAnalysis',
+    # Multifamily underwriting
+    'Deal',
+    'Unit',
+    'RentRollEntry',
+    'MarketRentAssumption',
+    'RentComp',
+    'SaleComp',
+    'RehabPlanEntry',
+    'LenderProfile',
+    'DealLenderSelection',
+    'FundingSource',
+    'ProFormaResult',
+    'LeadDealLink',
+    'DealAuditTrail',
 ]

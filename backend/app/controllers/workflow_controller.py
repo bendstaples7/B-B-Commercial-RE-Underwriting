@@ -37,36 +37,118 @@ class WorkflowController:
     def start_analysis(self, address: str, user_id: str) -> Dict[str, Any]:
         """
         Initialize new analysis session with property address.
-        
+
+        Attempts to pre-populate property facts from the Cook County Assessor
+        API.  If the lookup fails or returns no data the session is still
+        created and ``property_facts`` in the response will be ``None`` so the
+        frontend can show an empty form for manual entry.
+
         Args:
             address: Property address to analyze
             user_id: User identifier
-            
+
         Returns:
-            Dictionary containing session_id and initial state
+            Dictionary containing session_id, initial state, and optional
+            property_facts populated from the Cook County Assessor API.
         """
-        # Generate unique session ID
         session_id = str(uuid.uuid4())
-        
-        # Create new analysis session
+
         session = AnalysisSession(
             session_id=session_id,
             user_id=user_id,
             current_step=WorkflowStep.PROPERTY_FACTS,
             created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            updated_at=datetime.utcnow(),
         )
-        
         db.session.add(session)
         db.session.commit()
-        
+
+        # Attempt to fetch real property data; never let errors bubble up
+        serialized_facts = None
+        try:
+            facts_data = self.property_service.fetch_property_facts(address)
+            if facts_data and facts_data.get('address'):
+                # Return the raw data to the frontend for review — do NOT
+                # persist to DB here. The PropertyFacts record is created
+                # correctly when the user confirms via PUT /step/1.
+                serialized_facts = facts_data
+        except Exception as exc:
+            print(f"Property data fetch error for {address!r}: {exc}")
+
         return {
             'session_id': session_id,
             'user_id': user_id,
             'current_step': WorkflowStep.PROPERTY_FACTS.name,
             'created_at': session.created_at.isoformat(),
-            'status': 'initialized'
+            'status': 'initialized',
+            'property_facts': serialized_facts,
         }
+
+    def _create_property_facts_from_data(
+        self, session: AnalysisSession, data: Dict[str, Any]
+    ) -> Optional['PropertyFacts']:
+        """
+        Persist a PropertyFacts record from raw API data.
+
+        Only creates the record when at least one meaningful field was
+        returned.  Returns None (without raising) if the data is empty or
+        a required enum value is missing.
+        """
+        # Require at minimum an address
+        address = data.get('address')
+        if not address:
+            return None
+
+        # Resolve enums with safe fallbacks
+        try:
+            prop_type_raw = data.get('property_type') or 'SINGLE_FAMILY'
+            # Try by name first (e.g. 'SINGLE_FAMILY'), then by value (e.g. 'single_family')
+            try:
+                property_type = PropertyType[prop_type_raw]
+            except KeyError:
+                property_type = PropertyType(prop_type_raw)
+        except (ValueError, KeyError):
+            property_type = PropertyType.SINGLE_FAMILY
+
+        try:
+            constr_raw = data.get('construction_type') or 'FRAME'
+            try:
+                construction_type = ConstructionType[constr_raw]
+            except KeyError:
+                construction_type = ConstructionType(constr_raw)
+        except (ValueError, KeyError):
+            construction_type = ConstructionType.FRAME
+
+        try:
+            property_facts = PropertyFacts(
+                session_id=session.id,
+                address=address,
+                property_type=property_type,
+                units=data.get('units') or 1,
+                bedrooms=data.get('bedrooms') or 0,
+                bathrooms=data.get('bathrooms') or 0.0,
+                square_footage=data.get('square_footage') or 0,
+                lot_size=data.get('lot_size') or 0,
+                year_built=data.get('year_built') or 0,
+                construction_type=construction_type,
+                basement=data.get('basement', False),
+                parking_spaces=data.get('parking_spaces', 0),
+                assessed_value=data.get('assessed_value') or 0.0,
+                annual_taxes=data.get('annual_taxes') or 0.0,
+                zoning=data.get('zoning') or '',
+                interior_condition=InteriorCondition.AVERAGE,
+                latitude=data.get('latitude'),
+                longitude=data.get('longitude'),
+                data_source=data.get('data_source', 'cook_county_assessor'),
+                user_modified_fields=data.get('user_modified_fields', []),
+            )
+            db.session.add(property_facts)
+            db.session.commit()
+            return property_facts
+        except Exception as exc:
+            db.session.rollback()
+            print(f"PropertyFacts creation error: {exc}")
+            return None
     
     def get_session_state(self, session_id: str) -> Dict[str, Any]:
         """

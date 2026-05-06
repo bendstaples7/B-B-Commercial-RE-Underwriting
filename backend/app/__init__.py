@@ -23,6 +23,10 @@ def create_app(config_name='development'):
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key')
     app.config['REDIS_URL'] = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+    # Disable rate limiting in tests so performance tests can create many resources
+    if config_name == 'testing':
+        app.config['RATELIMIT_ENABLED'] = False
     
     # Initialize extensions
     db.init_app(app)
@@ -69,6 +73,40 @@ def create_app(config_name='development'):
     
     from app.controllers.condo_filter_controller import condo_filter_bp
     app.register_blueprint(condo_filter_bp, url_prefix='/api/condo-filter')
+    
+    # Multifamily underwriting blueprints
+    from app.controllers.multifamily_deal_controller import multifamily_deal_bp
+    app.register_blueprint(multifamily_deal_bp, url_prefix='/api/multifamily')
+    
+    from app.controllers.multifamily_rent_roll_controller import multifamily_rent_roll_bp
+    app.register_blueprint(multifamily_rent_roll_bp, url_prefix='/api/multifamily')
+    
+    from app.controllers.multifamily_market_rent_controller import multifamily_market_rent_bp
+    app.register_blueprint(multifamily_market_rent_bp, url_prefix='/api/multifamily')
+    
+    from app.controllers.multifamily_sale_comp_controller import multifamily_sale_comp_bp
+    app.register_blueprint(multifamily_sale_comp_bp, url_prefix='/api/multifamily')
+    
+    from app.controllers.multifamily_rehab_controller import multifamily_rehab_bp
+    app.register_blueprint(multifamily_rehab_bp, url_prefix='/api/multifamily')
+    
+    from app.controllers.multifamily_lender_controller import multifamily_lender_bp
+    app.register_blueprint(multifamily_lender_bp, url_prefix='/api/multifamily')
+    
+    from app.controllers.multifamily_funding_controller import multifamily_funding_bp
+    app.register_blueprint(multifamily_funding_bp, url_prefix='/api/multifamily')
+    
+    from app.controllers.multifamily_pro_forma_controller import multifamily_pro_forma_bp
+    app.register_blueprint(multifamily_pro_forma_bp, url_prefix='/api/multifamily')
+    
+    from app.controllers.multifamily_dashboard_controller import multifamily_dashboard_bp
+    app.register_blueprint(multifamily_dashboard_bp, url_prefix='/api/multifamily')
+    
+    from app.controllers.multifamily_import_export_controller import multifamily_import_export_bp
+    app.register_blueprint(multifamily_import_export_bp, url_prefix='/api/multifamily')
+    
+    from app.tasks.multifamily_recompute import multifamily_admin_bp
+    app.register_blueprint(multifamily_admin_bp, url_prefix='/api/multifamily')
     
     app.logger.info("Flask application initialized successfully")
     

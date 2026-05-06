@@ -316,7 +316,7 @@ def test_commercial_property_report_terminology(app):
         
         # Verify commercial property doesn't include bedrooms/bathrooms in main data
         # (they may be 0 but shouldn't be prominently displayed for commercial)
-        assert section_a['property_type'] == 'commercial'
+        assert section_a['property_type'] == 'COMMERCIAL'
         assert 'Property Type' in section_a['data']
         assert section_a['data']['Property Type'] == 'Commercial'
         
@@ -352,7 +352,7 @@ def test_commercial_property_report_terminology(app):
         section_d = generator.format_section_d(valuation_result, PropertyType.COMMERCIAL)
         
         # Verify commercial terminology is used
-        assert section_d['property_type'] == 'commercial'
+        assert section_d['property_type'] == 'COMMERCIAL'
         valuation = section_d['valuations'][0]
         
         # Check that "Income Capitalization" is used instead of "Price per Bedroom"
@@ -389,7 +389,7 @@ def test_residential_property_report_terminology(app):
         section_a = generator.format_section_a(subject)
         
         # Verify residential property includes bedrooms/bathrooms
-        assert section_a['property_type'] == 'single_family'
+        assert section_a['property_type'] == 'SINGLE_FAMILY'
         assert 'Bedrooms' in section_a['data']
         assert 'Bathrooms' in section_a['data']
         assert 'Basement' in section_a['data']
@@ -426,7 +426,7 @@ def test_residential_property_report_terminology(app):
         section_d = generator.format_section_d(valuation_result, PropertyType.SINGLE_FAMILY)
         
         # Verify residential terminology is used
-        assert section_d['property_type'] == 'single_family'
+        assert section_d['property_type'] == 'SINGLE_FAMILY'
         valuation = section_d['valuations'][0]
         
         # Check that "Price per Bedroom" is used for residential
