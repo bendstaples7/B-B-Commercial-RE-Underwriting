@@ -12,6 +12,15 @@ from app.controllers.marketing_controller import marketing_bp
 from app.controllers.condo_filter_controller import condo_filter_bp
 from app.controllers.lead_score_controller import lead_score_bp
 
+# Multifamily underwriting controllers
+from app.controllers.multifamily_deal_controller import multifamily_deal_bp
+from app.controllers.multifamily_rent_roll_controller import multifamily_rent_roll_bp
+from app.controllers.multifamily_market_rent_controller import multifamily_market_rent_bp
+from app.controllers.multifamily_sale_comp_controller import multifamily_sale_comp_bp
+from app.controllers.multifamily_rehab_controller import multifamily_rehab_bp
+from app.controllers.multifamily_lender_controller import multifamily_lender_bp
+from app.controllers.multifamily_funding_controller import multifamily_funding_bp
+
 __all__ = [
     'api_bp',
     'WorkflowController',
@@ -21,4 +30,12 @@ __all__ = [
     'marketing_bp',
     'condo_filter_bp',
     'lead_score_bp',
+    # Multifamily underwriting
+    'multifamily_deal_bp',
+    'multifamily_rent_roll_bp',
+    'multifamily_market_rent_bp',
+    'multifamily_sale_comp_bp',
+    'multifamily_rehab_bp',
+    'multifamily_lender_bp',
+    'multifamily_funding_bp',
 ]

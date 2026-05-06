@@ -69,7 +69,6 @@ function getInput(labelText: string): HTMLInputElement {
     const input = document.getElementById(inputId)
     if (input) return input as HTMLInputElement
   }
-  // Fallback: find by role
   return screen.getByRole('textbox', { name: labelText }) as HTMLInputElement
 }
 
@@ -225,6 +224,7 @@ describe('ImportWizard', () => {
     await waitFor(() => expect(screen.getByText('Leads')).toBeInTheDocument())
     await user.click(screen.getByLabelText('Select sheet Leads'))
 
+    // No required fields in the current schema, so button is always enabled
     await waitFor(() => {
       expect(screen.getByLabelText('Save mapping and continue')).toBeEnabled()
     })

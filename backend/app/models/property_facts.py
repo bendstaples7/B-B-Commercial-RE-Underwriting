@@ -7,23 +7,23 @@ import enum
 
 class PropertyType(enum.Enum):
     """Property type enumeration."""
-    SINGLE_FAMILY = 'single_family'
-    MULTI_FAMILY = 'multi_family'
-    COMMERCIAL = 'commercial'
+    SINGLE_FAMILY = 'SINGLE_FAMILY'
+    MULTI_FAMILY = 'MULTI_FAMILY'
+    COMMERCIAL = 'COMMERCIAL'
 
 class ConstructionType(enum.Enum):
     """Construction type enumeration."""
-    FRAME = 'frame'
-    BRICK = 'brick'
-    MASONRY = 'masonry'
+    FRAME = 'FRAME'
+    BRICK = 'BRICK'
+    MASONRY = 'MASONRY'
 
 class InteriorCondition(enum.Enum):
     """Interior condition enumeration."""
-    NEEDS_GUT = 'needs_gut'
-    POOR = 'poor'
-    AVERAGE = 'average'
-    NEW_RENO = 'new_reno'
-    HIGH_END = 'high_end'
+    NEEDS_GUT = 'NEEDS_GUT'
+    POOR = 'POOR'
+    AVERAGE = 'AVERAGE'
+    NEW_RENO = 'NEW_RENO'
+    HIGH_END = 'HIGH_END'
 
 class PropertyFacts(db.Model):
     """Property facts model with comprehensive property details."""

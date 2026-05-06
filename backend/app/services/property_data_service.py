@@ -1,454 +1,487 @@
-"""Property Data Service with multi-source integration and fallback logic."""
+"""Property Data Service — Cook County Assessor API integration with fallback logic.
+
+All Socrata queries use urllib.request (not requests) so that $where, $limit,
+and $order parameter names are never percent-encoded.  urllib.parse.quote()
+with no safe override is used to encode the $where *value* — Socrata accepts
+%20 for spaces, %27 for quotes, %25 for the LIKE wildcard %, etc.
+
+Dataset schemas verified against live API responses:
+
+  c49d-89sn  (Parcel Addresses)
+    Columns: pin, property_address, property_city, property_zip, ...
+    Query:   $where=property_address='1443 W FOSTER AVE'
+
+  bcnq-qi2z  (Single & Multi-Family Improvement Characteristics)
+    Columns: pin, apts, beds, fbath, hbath, bldg_sf, age, ext_wall,
+             modeling_group, rooms, ...
+    Query:   $where=pin='14083010190000'
+
+  uzyt-m557  (Assessed Values)
+    Columns: pin, year, certified_tot, mailed_tot, board_tot, ...
+    Query:   $where=pin='14083010190000'&$order=year DESC
+"""
 import os
-import redis
+import re
 import json
+import redis
 import requests
-from typing import Optional, Dict, Any, List, Tuple
-from datetime import datetime, timedelta
+import urllib.request
+import urllib.parse
+import urllib.error
+from datetime import datetime
+from typing import Optional, Dict, Any
 from app.models.property_facts import PropertyFacts, PropertyType, ConstructionType, InteriorCondition
 
 
+# Cook County Socrata dataset endpoints (public, no key required)
+_PARCEL_ADDRESSES_URL  = "https://datacatalog.cookcountyil.gov/resource/c49d-89sn.json"
+_IMPROVEMENT_CHARS_URL = "https://datacatalog.cookcountyil.gov/resource/bcnq-qi2z.json"
+_ASSESSED_VALUES_URL   = "https://datacatalog.cookcountyil.gov/resource/uzyt-m557.json"
+
+# ext_wall code → ConstructionType value (verified from dataset)
+_EXT_WALL_MAP: Dict[int, str] = {
+    1: ConstructionType.FRAME.value,
+    2: ConstructionType.FRAME.value,
+    3: ConstructionType.BRICK.value,
+    4: ConstructionType.BRICK.value,
+    5: ConstructionType.MASONRY.value,
+    6: ConstructionType.MASONRY.value,
+    7: ConstructionType.MASONRY.value,
+}
+
+# Street-type suffixes to strip when normalising the address for lookup
+_STREET_SUFFIXES = {
+    'ST', 'STREET', 'AVE', 'AVENUE', 'BLVD', 'BOULEVARD', 'DR', 'DRIVE',
+    'RD', 'ROAD', 'LN', 'LANE', 'CT', 'COURT', 'PL', 'PLACE', 'WAY',
+    'TER', 'TERRACE', 'CIR', 'CIRCLE', 'PKWY', 'PARKWAY', 'HWY', 'HIGHWAY',
+}
+
+
 class PropertyDataService:
-    """Service for retrieving property data from multiple sources with fallback logic."""
-    
+    """Service for retrieving property data from Cook County Assessor with fallback logic."""
+
     def __init__(self):
-        """Initialize the service with API keys and Redis connection."""
-        self.mls_api_key = os.getenv('MLS_API_KEY')
-        self.tax_assessor_api_key = os.getenv('TAX_ASSESSOR_API_KEY')
         self.google_maps_api_key = os.getenv('GOOGLE_MAPS_API_KEY')
+        self.socrata_app_token   = os.getenv('SOCRATA_APP_TOKEN')
+
+        # Legacy keys kept for compatibility
+        self.mls_api_key          = os.getenv('MLS_API_KEY')
+        self.tax_assessor_api_key = os.getenv('TAX_ASSESSOR_API_KEY')
         self.chicago_data_api_key = os.getenv('CHICAGO_DATA_API_KEY')
-        
-        # Initialize Redis for caching
+
         redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
         self.redis_client = redis.from_url(redis_url, decode_responses=True)
-        
-        # Cache TTL settings
-        self.property_cache_ttl = 86400  # 24 hours
-        self.geocoding_cache_ttl = None  # Permanent (no expiry)
-    
+
+        self.property_cache_ttl  = 86400  # 24 hours
+        self.geocoding_cache_ttl = None   # permanent
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     def fetch_property_facts(self, address: str) -> Dict[str, Any]:
         """
-        Fetch comprehensive property facts with fallback logic.
-        
-        Args:
-            address: Property address to look up
-            
-        Returns:
-            Dictionary containing property facts with data source tracking
+        Fetch property facts from Cook County Assessor public datasets.
+
+        Returns a dict with all known fields populated where available.
+        Any field that cannot be determined is set to None.
+        Never raises — all errors are caught and logged.
         """
-        # Check cache first
-        cache_key = f"property_facts:{address}"
-        cached_data = self._get_from_cache(cache_key)
-        if cached_data:
-            return cached_data
-        
-        # Initialize result dictionary
-        property_data = {
+        cache_key = "property_facts:" + address
+        cached = self._get_from_cache(cache_key)
+        if cached:
+            return cached
+
+        result: Dict[str, Any] = {
             'address': address,
-            'data_source': 'composite',
-            'user_modified_fields': []
+            'property_type': None,
+            'units': None,
+            'bedrooms': None,
+            'bathrooms': None,
+            'square_footage': None,
+            'lot_size': None,
+            'year_built': None,
+            'construction_type': None,
+            'basement': False,
+            'parking_spaces': 0,
+            'assessed_value': None,
+            'annual_taxes': None,
+            'zoning': None,
+            'latitude': None,
+            'longitude': None,
+            'data_source': 'cook_county_assessor',
+            'user_modified_fields': [],
+            'pin': None,
         }
-        
-        # Geocode the address first (needed for distance calculations)
-        coordinates = self.geocode_address(address)
-        if coordinates:
-            property_data['latitude'] = coordinates['lat']
-            property_data['longitude'] = coordinates['lng']
-        
-        # Try MLS API first (primary source)
-        mls_data = self._fetch_from_mls(address)
-        if mls_data:
-            property_data.update(mls_data)
-        
-        # Apply fallback logic for missing fields
-        property_data = self._apply_fallback_logic(address, property_data)
-        
-        # Cache the result
-        self._set_in_cache(cache_key, property_data, self.property_cache_ttl)
-        
-        return property_data
-    
-    def fetch_with_fallback(self, address: str, field: str) -> Optional[Any]:
-        """
-        Fetch a specific field with fallback sequence.
-        
-        Args:
-            address: Property address
-            field: Field name to retrieve
-            
-        Returns:
-            Field value or None if not found
-        """
-        # Try each source in priority order
-        sources = [
-            self._fetch_from_mls,
-            self._fetch_from_chicago_data,
-            self._fetch_from_tax_assessor,
-            self._fetch_from_municipal
-        ]
-        
-        for source_func in sources:
-            try:
-                data = source_func(address)
-                if data and field in data and data[field] is not None:
-                    return data[field]
-            except Exception as e:
-                # Log error and continue to next source
-                print(f"Error fetching {field} from {source_func.__name__}: {e}")
-                continue
-        
-        return None
-    
+
+        # Step 1 — geocode via Google Maps (uses requests, which is fine here)
+        coords = self.geocode_address(address)
+        if coords:
+            result['latitude']  = coords['lat']
+            result['longitude'] = coords['lng']
+
+        # Step 2 — address → PIN (14-digit)
+        pin = self._lookup_pin(address)
+        if not pin:
+            self._set_in_cache(cache_key, result, self.property_cache_ttl)
+            return result
+
+        result['pin'] = pin
+
+        # Step 3 — PIN → improvement characteristics
+        chars = self._fetch_improvement_chars(pin)
+        if chars:
+            result.update(chars)
+
+        # Step 4 — PIN → assessed value
+        assessed = self._fetch_assessed_value(pin)
+        if assessed:
+            result.update(assessed)
+
+        self._set_in_cache(cache_key, result, self.property_cache_ttl)
+        return result
+
+    def fetch_with_fallback(self, address: str, field: str) -> Any:
+        """Return a single field from the full property facts dict."""
+        return self.fetch_property_facts(address).get(field)
+
     def geocode_address(self, address: str) -> Optional[Dict[str, float]]:
+        """Geocode via Google Maps API with permanent caching.
+
+        Uses requests here because the Google Maps API uses standard params
+        with no '$' prefix — requests encodes them correctly.
         """
-        Geocode an address using Google Maps API with permanent caching.
-        
-        Args:
-            address: Address to geocode
-            
-        Returns:
-            Dictionary with 'lat' and 'lng' keys, or None if geocoding fails
-        """
-        # Check cache first (permanent cache for geocoding)
-        cache_key = f"geocode:{address}"
-        cached_coords = self._get_from_cache(cache_key)
-        if cached_coords:
-            return cached_coords
-        
+        cache_key = "geocode:" + address
+        cached = self._get_from_cache(cache_key)
+        if cached:
+            return cached
+
+        if not self.google_maps_api_key:
+            return None
+
         try:
-            url = "https://maps.googleapis.com/maps/api/geocode/json"
-            params = {
-                'address': address,
-                'key': self.google_maps_api_key
-            }
-            
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            
-            data = response.json()
-            if data['status'] == 'OK' and data['results']:
-                location = data['results'][0]['geometry']['location']
-                coordinates = {
-                    'lat': location['lat'],
-                    'lng': location['lng']
-                }
-                
-                # Cache permanently (no TTL)
-                self._set_in_cache(cache_key, coordinates, self.geocoding_cache_ttl)
-                
-                return coordinates
-        except Exception as e:
-            print(f"Geocoding error for {address}: {e}")
-        
+            resp = requests.get(
+                "https://maps.googleapis.com/maps/api/geocode/json",
+                params={'address': address, 'key': self.google_maps_api_key},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get('status') == 'OK' and data.get('results'):
+                loc = data['results'][0]['geometry']['location']
+                coords = {'lat': loc['lat'], 'lng': loc['lng']}
+                self._set_in_cache(cache_key, coords, self.geocoding_cache_ttl)
+                return coords
+        except Exception as exc:
+            print("Geocoding error for " + repr(address) + ": " + str(exc))
+
         return None
-    
+
     def validate_property_data(self, property_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Validate property data and identify missing required fields.
-        
-        Args:
-            property_data: Property data dictionary
-            
-        Returns:
-            Dictionary with 'valid' boolean and 'missing_fields' list
-        """
-        required_fields = [
+        """Identify missing required fields."""
+        required = [
             'property_type', 'units', 'bedrooms', 'bathrooms', 'square_footage',
             'lot_size', 'year_built', 'construction_type', 'assessed_value',
-            'annual_taxes', 'zoning'
+            'annual_taxes', 'zoning',
         ]
-        
-        missing_fields = [
-            field for field in required_fields 
-            if field not in property_data or property_data[field] is None
-        ]
-        
-        return {
-            'valid': len(missing_fields) == 0,
-            'missing_fields': missing_fields
-        }
-    
-    # Private methods for data source adapters
-    
-    def _fetch_from_mls(self, address: str) -> Optional[Dict[str, Any]]:
-        """
-        Fetch property data from MLS API.
-        
-        Args:
-            address: Property address
-            
-        Returns:
-            Dictionary of property data or None
-        """
-        if not self.mls_api_key:
-            return None
-        
+        missing = [f for f in required if not property_data.get(f)]
+        return {'valid': len(missing) == 0, 'missing_fields': missing}
+
+    def invalidate_cache(self, address: str) -> None:
+        """Invalidate cached property data for an address."""
         try:
-            # Mock MLS API endpoint (replace with actual MLS API)
-            url = "https://api.mls-provider.com/v1/property"
-            headers = {'Authorization': f'Bearer {self.mls_api_key}'}
-            params = {'address': address}
-            
-            response = requests.get(url, headers=headers, params=params, timeout=10)
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            # Transform MLS response to our format
-            return self._transform_mls_data(data)
-        except Exception as e:
-            print(f"MLS API error: {e}")
-            return None
-    
-    def _fetch_from_tax_assessor(self, address: str) -> Optional[Dict[str, Any]]:
+            self.redis_client.delete("property_facts:" + address)
+        except Exception as exc:
+            print("Cache invalidation error: " + str(exc))
+
+    # ------------------------------------------------------------------
+    # urllib-based Socrata helper
+    # ------------------------------------------------------------------
+
+    def _socrata_get(self, url: str) -> list:
         """
-        Fetch property data from county tax assessor API.
-        
-        Args:
-            address: Property address
-            
-        Returns:
-            Dictionary of property data or None
+        Fetch a Socrata JSON endpoint using urllib.request.
+
+        urllib.request sends the URL exactly as given — no re-encoding of
+        '$' in parameter names.  The caller is responsible for encoding
+        the $where *value* using urllib.parse.quote() with no safe override,
+        which produces %20 for spaces, %27 for quotes, %25 for %, etc.
+        Socrata decodes these correctly on its end.
+
+        Returns parsed JSON list, or empty list on any error.
         """
-        if not self.tax_assessor_api_key:
-            return None
-        
+        headers = {}
+        if self.socrata_app_token:
+            headers['X-App-Token'] = self.socrata_app_token
+
         try:
-            # Mock tax assessor API endpoint
-            url = "https://api.county-assessor.gov/property"
-            headers = {'X-API-Key': self.tax_assessor_api_key}
-            params = {'address': address}
-            
-            response = requests.get(url, headers=headers, params=params, timeout=10)
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            # Transform assessor response to our format
-            return self._transform_assessor_data(data)
-        except Exception as e:
-            print(f"Tax assessor API error: {e}")
-            return None
-    
-    def _fetch_from_chicago_data(self, address: str) -> Optional[Dict[str, Any]]:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode('utf-8')[:200]
+            except Exception:
+                pass
+            print("Socrata HTTP " + str(exc.code) + " for " + repr(url) + ": " + body)
+        except urllib.error.URLError as exc:
+            print("Socrata URL error for " + repr(url) + ": " + str(exc.reason))
+        except Exception as exc:
+            print("Socrata error for " + repr(url) + ": " + str(exc))
+
+        return []
+
+    # ------------------------------------------------------------------
+    # Address normalisation
+    # ------------------------------------------------------------------
+
+    def _normalise_address(self, address: str) -> str:
         """
-        Fetch property data from Chicago city data portal (square footage fallback).
-        
-        Args:
-            address: Property address
-            
-        Returns:
-            Dictionary of property data or None
+        Normalise an address to match Cook County Assessor format.
+
+        "1443 W Foster Ave, Chicago, IL 60640" → "1443 W FOSTER AVE"
+
+        The dataset stores addresses as "NUMBER DIRECTION STREET SUFFIX"
+        in uppercase, without city/state/zip.
         """
-        if not self.chicago_data_api_key:
+        # Take only the street portion (before the first comma)
+        street_part = address.split(',')[0].strip().upper()
+        return street_part
+
+    # ------------------------------------------------------------------
+    # Cook County Socrata lookups (verified column names)
+    # ------------------------------------------------------------------
+
+    def _lookup_pin(self, address: str) -> Optional[str]:
+        """Step 1: address → 14-digit PIN via Cook County parcel addresses dataset.
+
+        Dataset: c49d-89sn
+        Column:  property_address (full uppercase street address, e.g. "1443 W FOSTER AVE")
+        Returns: pin (14-digit string)
+        """
+        normalised = self._normalise_address(address)
+        if not normalised:
             return None
-        
+
+        # Exact match first
+        where = "property_address='" + normalised + "'"
+        url = _PARCEL_ADDRESSES_URL + "?$where=" + urllib.parse.quote(where) + "&$limit=5"
+        results = self._socrata_get(url)
+
+        if not results:
+            # Try LIKE match in case the suffix differs (e.g. AVE vs AVENUE)
+            # Use just the number + direction + street name without suffix
+            tokens = normalised.split()
+            if len(tokens) >= 2:
+                prefix = ' '.join(tokens[:3]) if len(tokens) >= 3 else ' '.join(tokens[:2])
+                where2 = "property_address like '" + prefix + "%'"
+                url2 = _PARCEL_ADDRESSES_URL + "?$where=" + urllib.parse.quote(where2) + "&$limit=10"
+                results = self._socrata_get(url2)
+
+        if not results:
+            print("PIN lookup: no results for " + repr(address))
+            return None
+
+        # Prefer Chicago results
+        chicago = [r for r in results if r.get('property_city', '').upper() == 'CHICAGO']
+        row = chicago[0] if chicago else results[0]
+        pin = row.get('pin')
+        if pin:
+            print("PIN lookup: found pin=" + str(pin) + " for " + repr(address))
+        return pin
+
+    def _fetch_improvement_chars(self, pin: str) -> Optional[Dict[str, Any]]:
+        """Step 2: PIN → building characteristics.
+
+        Dataset: bcnq-qi2z
+        Column:  pin (14-digit)
+        Key fields returned:
+          apts          — number of apartment units
+          beds          — total bedrooms across all units
+          fbath/hbath   — full/half baths
+          bldg_sf       — building square footage
+          age           — years since built (subtract from current year)
+          ext_wall      — construction type code (1-7)
+          modeling_group — 'SF' or 'MF'
+        """
+        where = "pin='" + pin + "'"
+        url = _IMPROVEMENT_CHARS_URL + "?$where=" + urllib.parse.quote(where) + "&$limit=1"
+        results = self._socrata_get(url)
+
+        if not results:
+            return None
+
+        row = results[0]
+        out: Dict[str, Any] = {}
+
+        # Square footage
+        bldg_sf = row.get('bldg_sf')
+        if bldg_sf is not None:
+            try:
+                out['square_footage'] = int(float(bldg_sf))
+            except (ValueError, TypeError):
+                pass
+
+        # Bedrooms
+        beds = row.get('beds')
+        if beds is not None:
+            try:
+                out['bedrooms'] = int(float(beds))
+            except (ValueError, TypeError):
+                pass
+
+        # Bathrooms: full + 0.5 * half
+        fbath = row.get('fbath')
+        hbath = row.get('hbath')
         try:
-            # Chicago Data Portal API for building footprints
-            url = "https://data.cityofchicago.org/resource/building-footprints.json"
-            params = {
-                'address': address,
-                '$$app_token': self.chicago_data_api_key
-            }
-            
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            # Transform Chicago data response
-            return self._transform_chicago_data(data)
-        except Exception as e:
-            print(f"Chicago data API error: {e}")
+            full = float(fbath) if fbath is not None else 0.0
+            half = float(hbath) if hbath is not None else 0.0
+            if fbath is not None or hbath is not None:
+                out['bathrooms'] = full + 0.5 * half
+        except (ValueError, TypeError):
+            pass
+
+        # Year built: 'age' is years-since-built
+        age = row.get('age')
+        if age is not None:
+            try:
+                out['year_built'] = datetime.now().year - int(float(age))
+            except (ValueError, TypeError):
+                pass
+
+        # Construction type from ext_wall code
+        ext_wall = row.get('ext_wall')
+        if ext_wall is not None:
+            try:
+                code = int(float(ext_wall))
+                out['construction_type'] = _EXT_WALL_MAP.get(code, ConstructionType.FRAME.value)
+            except (ValueError, TypeError):
+                out['construction_type'] = ConstructionType.FRAME.value
+
+        # Unit count from 'apts' field
+        apts = row.get('apts')
+        if apts is not None:
+            try:
+                apt_count = int(float(apts))
+                if apt_count > 0:
+                    out['units'] = apt_count
+            except (ValueError, TypeError):
+                pass
+
+        # Property type: modeling_group is most reliable
+        modeling_group = (row.get('modeling_group') or '').upper()
+        if modeling_group == 'MF':
+            out['property_type'] = PropertyType.MULTI_FAMILY.value
+        elif modeling_group == 'SF':
+            out['property_type'] = PropertyType.SINGLE_FAMILY.value
+        else:
+            class_desc = (row.get('class_description') or '').upper()
+            out['property_type'] = self._map_class_description(class_desc)
+
+        return out if out else None
+
+    def _fetch_assessed_value(self, pin: str) -> Optional[Dict[str, Any]]:
+        """Step 3: PIN → most recent assessed value.
+
+        Dataset: uzyt-m557
+        Column:  pin (14-digit), year, certified_tot
+        Fetches up to 5 records and picks the most recent year client-side.
+        """
+        where = "pin='" + pin + "'"
+        url = _ASSESSED_VALUES_URL + "?$where=" + urllib.parse.quote(where) + "&$limit=5"
+        results = self._socrata_get(url)
+
+        if not results:
             return None
-    
-    def _fetch_from_municipal(self, address: str) -> Optional[Dict[str, Any]]:
-        """
-        Fetch property data from municipal databases (building permits, zoning).
-        
-        Args:
-            address: Property address
-            
-        Returns:
-            Dictionary of property data or None
-        """
-        try:
-            # Mock municipal API endpoint
-            url = "https://api.municipal-data.gov/property"
-            params = {'address': address}
-            
-            response = requests.get(url, params=params, timeout=10)
-            response.raise_for_status()
-            
-            data = response.json()
-            
-            # Transform municipal response
-            return self._transform_municipal_data(data)
-        except Exception as e:
-            print(f"Municipal API error: {e}")
-            return None
-    
-    def _apply_fallback_logic(self, address: str, property_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Apply fallback sequence for missing fields.
-        
-        Fallback order: primary → Chicago → tax assessor → municipal → manual
-        
-        Args:
-            address: Property address
-            property_data: Current property data
-            
-        Returns:
-            Updated property data with fallback values
-        """
-        # Define critical fields that need fallback
-        fallback_fields = {
-            'square_footage': ['_fetch_from_chicago_data', '_fetch_from_tax_assessor', '_fetch_from_municipal'],
-            'lot_size': ['_fetch_from_tax_assessor', '_fetch_from_municipal'],
-            'year_built': ['_fetch_from_tax_assessor', '_fetch_from_municipal'],
-            'zoning': ['_fetch_from_municipal', '_fetch_from_tax_assessor'],
-            'assessed_value': ['_fetch_from_tax_assessor'],
-            'annual_taxes': ['_fetch_from_tax_assessor']
-        }
-        
-        for field, source_methods in fallback_fields.items():
-            if field not in property_data or property_data[field] is None:
-                # Try each fallback source
-                for method_name in source_methods:
-                    method = getattr(self, method_name)
-                    try:
-                        data = method(address)
-                        if data and field in data and data[field] is not None:
-                            property_data[field] = data[field]
-                            property_data['data_source'] = f"composite:{method_name}"
-                            break
-                    except Exception as e:
-                        print(f"Fallback error for {field} from {method_name}: {e}")
-                        continue
-        
-        return property_data
-    
-    # Data transformation methods
-    
-    def _transform_mls_data(self, mls_response: Dict[str, Any]) -> Dict[str, Any]:
-        """Transform MLS API response to internal format."""
-        # Mock transformation - adjust based on actual MLS API structure
-        return {
-            'property_type': self._map_property_type(mls_response.get('propertyType')),
-            'units': mls_response.get('units', 1),
-            'bedrooms': mls_response.get('bedrooms', 0),
-            'bathrooms': mls_response.get('bathrooms', 0),
-            'square_footage': mls_response.get('squareFeet'),
-            'lot_size': mls_response.get('lotSize'),
-            'year_built': mls_response.get('yearBuilt'),
-            'construction_type': self._map_construction_type(mls_response.get('construction')),
-            'basement': mls_response.get('hasBasement', False),
-            'parking_spaces': mls_response.get('parkingSpaces', 0),
-            'last_sale_price': mls_response.get('lastSalePrice'),
-            'last_sale_date': mls_response.get('lastSaleDate'),
-            'assessed_value': mls_response.get('assessedValue'),
-            'annual_taxes': mls_response.get('annualTaxes'),
-            'zoning': mls_response.get('zoning', 'Unknown')
-        }
-    
-    def _transform_assessor_data(self, assessor_response: Dict[str, Any]) -> Dict[str, Any]:
-        """Transform tax assessor API response to internal format."""
-        return {
-            'assessed_value': assessor_response.get('assessed_value'),
-            'annual_taxes': assessor_response.get('annual_taxes'),
-            'square_footage': assessor_response.get('building_sqft'),
-            'lot_size': assessor_response.get('lot_sqft'),
-            'year_built': assessor_response.get('year_built'),
-            'property_type': self._map_property_type(assessor_response.get('property_class')),
-            'construction_type': self._map_construction_type(assessor_response.get('construction_type'))
-        }
-    
-    def _transform_chicago_data(self, chicago_response: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Transform Chicago data portal response to internal format."""
-        if not chicago_response:
-            return {}
-        
-        # Take first matching result
-        data = chicago_response[0]
-        return {
-            'square_footage': data.get('sq_ft'),
-            'year_built': data.get('year_built')
-        }
-    
-    def _transform_municipal_data(self, municipal_response: Dict[str, Any]) -> Dict[str, Any]:
-        """Transform municipal API response to internal format."""
-        return {
-            'zoning': municipal_response.get('zoning_classification'),
-            'year_built': municipal_response.get('year_constructed'),
-            'lot_size': municipal_response.get('parcel_size_sqft')
-        }
-    
-    # Mapping helper methods
-    
+
+        def _year(r):
+            try:
+                return int(r.get('year', 0))
+            except (ValueError, TypeError):
+                return 0
+
+        row = max(results, key=_year)
+
+        # certified_tot is the final assessed value after board review
+        assessed_value = row.get('certified_tot') or row.get('mailed_tot') or row.get('board_tot')
+        if assessed_value is not None:
+            try:
+                return {'assessed_value': float(assessed_value)}
+            except (ValueError, TypeError):
+                pass
+
+        return None
+
+    # ------------------------------------------------------------------
+    # Mapping helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _map_class_description(class_desc: str) -> str:
+        """Map Cook County class_description to internal PropertyType value."""
+        multi_keywords = ('2-6', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX')
+        single_keywords = ('SINGLE', 'ONE')
+
+        for kw in multi_keywords:
+            if kw in class_desc:
+                return PropertyType.MULTI_FAMILY.value
+        for kw in single_keywords:
+            if kw in class_desc:
+                return PropertyType.SINGLE_FAMILY.value
+
+        return PropertyType.SINGLE_FAMILY.value
+
     def _map_property_type(self, external_type: Optional[str]) -> Optional[str]:
-        """Map external property type to internal enum value."""
         if not external_type:
             return None
-        
-        type_mapping = {
-            'single family': PropertyType.SINGLE_FAMILY.value,
-            'single-family': PropertyType.SINGLE_FAMILY.value,
-            'sfr': PropertyType.SINGLE_FAMILY.value,
-            'multi family': PropertyType.MULTI_FAMILY.value,
-            'multi-family': PropertyType.MULTI_FAMILY.value,
-            'multifamily': PropertyType.MULTI_FAMILY.value,
-            'commercial': PropertyType.COMMERCIAL.value,
-            'retail': PropertyType.COMMERCIAL.value,
-            'office': PropertyType.COMMERCIAL.value
+        mapping = {
+            'single family':  PropertyType.SINGLE_FAMILY.value,
+            'single-family':  PropertyType.SINGLE_FAMILY.value,
+            'sfr':            PropertyType.SINGLE_FAMILY.value,
+            'multi family':   PropertyType.MULTI_FAMILY.value,
+            'multi-family':   PropertyType.MULTI_FAMILY.value,
+            'multifamily':    PropertyType.MULTI_FAMILY.value,
+            'commercial':     PropertyType.COMMERCIAL.value,
+            'retail':         PropertyType.COMMERCIAL.value,
+            'office':         PropertyType.COMMERCIAL.value,
         }
-        
-        return type_mapping.get(external_type.lower())
-    
+        return mapping.get(external_type.lower())
+
     def _map_construction_type(self, external_construction: Optional[str]) -> Optional[str]:
-        """Map external construction type to internal enum value."""
         if not external_construction:
             return None
-        
-        construction_mapping = {
-            'frame': ConstructionType.FRAME.value,
-            'wood': ConstructionType.FRAME.value,
-            'wood frame': ConstructionType.FRAME.value,
-            'brick': ConstructionType.BRICK.value,
+        mapping = {
+            'frame':        ConstructionType.FRAME.value,
+            'wood':         ConstructionType.FRAME.value,
+            'wood frame':   ConstructionType.FRAME.value,
+            'brick':        ConstructionType.BRICK.value,
             'brick veneer': ConstructionType.BRICK.value,
-            'masonry': ConstructionType.MASONRY.value,
-            'concrete': ConstructionType.MASONRY.value,
-            'stone': ConstructionType.MASONRY.value
+            'masonry':      ConstructionType.MASONRY.value,
+            'concrete':     ConstructionType.MASONRY.value,
+            'stone':        ConstructionType.MASONRY.value,
         }
-        
-        return construction_mapping.get(external_construction.lower())
-    
-    # Cache helper methods
-    
+        return mapping.get(external_construction.lower())
+
+    # ------------------------------------------------------------------
+    # Cache helpers
+    # ------------------------------------------------------------------
+
     def _get_from_cache(self, key: str) -> Optional[Dict[str, Any]]:
-        """Retrieve data from Redis cache."""
         try:
             cached = self.redis_client.get(key)
             if cached:
                 return json.loads(cached)
-        except Exception as e:
-            print(f"Cache retrieval error: {e}")
+        except Exception as exc:
+            print("Cache retrieval error: " + str(exc))
         return None
-    
-    def _set_in_cache(self, key: str, data: Dict[str, Any], ttl: Optional[int] = None):
-        """Store data in Redis cache with optional TTL."""
+
+    def _set_in_cache(self, key: str, data: Dict[str, Any], ttl: Optional[int] = None) -> None:
         try:
             serialized = json.dumps(data, default=str)
             if ttl:
                 self.redis_client.setex(key, ttl, serialized)
             else:
                 self.redis_client.set(key, serialized)
-        except Exception as e:
-            print(f"Cache storage error: {e}")
-    
-    def invalidate_cache(self, address: str):
-        """Invalidate cached property data for an address."""
-        cache_key = f"property_facts:{address}"
-        try:
-            self.redis_client.delete(cache_key)
-        except Exception as e:
-            print(f"Cache invalidation error: {e}")
+        except Exception as exc:
+            print("Cache storage error: " + str(exc))

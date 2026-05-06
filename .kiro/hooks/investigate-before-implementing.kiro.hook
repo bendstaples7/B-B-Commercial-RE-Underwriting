@@ -1,15 +1,11 @@
 {
-  "enabled": true,
+  "enabled": false,
   "name": "Investigate Before Implementing",
   "description": "Before any write operation, remind the agent to first investigate the problem, provide a clear problem analysis, and recommend a solution before making changes.",
-  "version": "1",
+  "version": "2",
   "when": {
     "type": "preToolUse",
-    "toolTypes": [
-      "write",
-      "createHook",
-      "shell"
-    ]
+    "toolTypes": []
   },
   "then": {
     "type": "askAgent",

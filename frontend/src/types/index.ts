@@ -210,6 +210,7 @@ export interface StartAnalysisRequest {
 export interface StartAnalysisResponse {
   sessionId: string
   message: string
+  propertyFacts?: Record<string, any>
 }
 
 export interface UpdateStepDataRequest {
@@ -597,6 +598,395 @@ export interface CondoOverrideRequest {
   condo_risk_status: CondoRiskStatus
   building_sale_possible: BuildingSalePossible
   reason: string
+}
+
+// ---------------------------------------------------------------------------
+// Multifamily Underwriting Pro Forma Types
+// ---------------------------------------------------------------------------
+
+export enum OccupancyStatus {
+  OCCUPIED = 'Occupied',
+  VACANT = 'Vacant',
+  DOWN = 'Down',
+}
+
+export enum MFLenderType {
+  CONSTRUCTION_TO_PERM = 'Construction_To_Perm',
+  SELF_FUNDED_RENO = 'Self_Funded_Reno',
+}
+
+export enum FundingSourceType {
+  CASH = 'Cash',
+  HELOC_1 = 'HELOC_1',
+  HELOC_2 = 'HELOC_2',
+}
+
+export enum DealScenario {
+  A = 'A',
+  B = 'B',
+}
+
+export interface Deal {
+  id: number
+  created_by_user_id: string
+  property_address: string
+  property_city: string | null
+  property_state: string | null
+  property_zip: string | null
+  unit_count: number
+  purchase_price: string // Decimal serialized as string
+  closing_costs: string
+  close_date: string | null
+  vacancy_rate: string
+  other_income_monthly: string
+  management_fee_rate: string
+  reserve_per_unit_per_year: string
+  property_taxes_annual: string | null
+  insurance_annual: string | null
+  utilities_annual: string | null
+  repairs_and_maintenance_annual: string | null
+  admin_and_marketing_annual: string | null
+  payroll_annual: string | null
+  other_opex_annual: string | null
+  interest_reserve_amount: string
+  custom_cap_rate: string | null
+  status: string
+  created_at: string | null
+  updated_at: string | null
+  deleted_at: string | null
+}
+
+export interface DealSummary {
+  id: number
+  property_address: string
+  unit_count: number
+  purchase_price: string
+  status: string
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface DealCreatePayload {
+  property_address: string
+  unit_count: number
+  purchase_price: number
+  close_date?: string
+  property_city?: string
+  property_state?: string
+  property_zip?: string
+  closing_costs?: number
+  vacancy_rate?: number
+  other_income_monthly?: number
+  management_fee_rate?: number
+  reserve_per_unit_per_year?: number
+  property_taxes_annual?: number
+  insurance_annual?: number
+  utilities_annual?: number
+  repairs_and_maintenance_annual?: number
+  admin_and_marketing_annual?: number
+  payroll_annual?: number
+  other_opex_annual?: number
+  interest_reserve_amount?: number
+  custom_cap_rate?: number
+  status?: string
+}
+
+export interface MFUnit {
+  id: number
+  deal_id: number
+  unit_identifier: string
+  unit_type: string
+  beds: number
+  baths: number
+  sqft: number
+  occupancy_status: OccupancyStatus
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface RentRollEntry {
+  id: number
+  unit_id: number
+  current_rent: string
+  lease_start_date: string | null
+  lease_end_date: string | null
+  notes: string | null
+}
+
+export interface RentRollSummary {
+  total_unit_count: number
+  occupied_unit_count: number
+  vacant_unit_count: number
+  occupancy_rate: number
+  total_in_place_rent: string
+  average_rent_per_occupied_unit: string | null
+  rent_roll_incomplete: boolean
+}
+
+export interface MarketRentAssumption {
+  id: number
+  deal_id: number
+  unit_type: string
+  target_rent: string | null
+  post_reno_target_rent: string | null
+}
+
+export interface RentComp {
+  id: number
+  deal_id: number
+  address: string
+  neighborhood: string | null
+  unit_type: string
+  observed_rent: string
+  sqft: number
+  rent_per_sqft: string
+  observation_date: string
+  source_url: string | null
+}
+
+export interface RentCompRollup {
+  unit_type: string
+  average_observed_rent: string | null
+  median_observed_rent: string | null
+  average_rent_per_sqft: string | null
+  comps: RentComp[]
+}
+
+export interface MFSaleComp {
+  id: number
+  deal_id: number
+  address: string
+  unit_count: number
+  status: string
+  sale_price: string
+  close_date: string
+  observed_cap_rate: string
+  observed_ppu: string
+  distance_miles: string | null
+}
+
+export interface SaleCompRollup {
+  cap_rate_min: string | null
+  cap_rate_median: string | null
+  cap_rate_average: string | null
+  cap_rate_max: string | null
+  ppu_min: string | null
+  ppu_median: string | null
+  ppu_average: string | null
+  ppu_max: string | null
+  sale_comps_insufficient: boolean
+  comps: MFSaleComp[]
+}
+
+export interface RehabPlanEntry {
+  id: number
+  unit_id: number
+  renovate_flag: boolean
+  current_rent: string
+  suggested_post_reno_rent: string | null
+  underwritten_post_reno_rent: string | null
+  rehab_start_month: number | null
+  downtime_months: number | null
+  stabilized_month: number | null
+  rehab_budget: string
+  scope_notes: string | null
+  stabilizes_after_horizon: boolean
+}
+
+export interface RehabMonthlyRollup {
+  month: number
+  units_starting_rehab_count: number
+  units_offline_count: number
+  units_stabilizing_count: number
+  capex_spend: string
+}
+
+export interface LenderProfile {
+  id: number
+  created_by_user_id: string
+  company: string
+  lender_type: MFLenderType
+  origination_fee_rate: string
+  prepay_penalty_description: string | null
+  // Construction_To_Perm fields
+  ltv_total_cost: string | null
+  construction_rate: string | null
+  construction_io_months: number | null
+  construction_term_months: number | null
+  perm_rate: string | null
+  perm_amort_years: number | null
+  min_interest_or_yield: string | null
+  // Self_Funded_Reno fields
+  max_purchase_ltv: string | null
+  treasury_5y_rate: string | null
+  spread_bps: number | null
+  term_years: number | null
+  amort_years: number | null
+  all_in_rate: string | null // computed
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface DealLenderSelection {
+  id: number
+  deal_id: number
+  lender_profile_id: number
+  scenario: DealScenario
+  is_primary: boolean
+  lender_profile?: LenderProfile
+}
+
+export interface FundingSource {
+  id: number
+  deal_id: number
+  source_type: FundingSourceType
+  total_available: string
+  interest_rate: string
+  origination_fee_rate: string
+}
+
+export interface FundingDrawPlan {
+  cash_draw: string
+  heloc_1_draw: string
+  heloc_2_draw: string
+  shortfall: string
+  origination_fees: string
+  insufficient_funding: boolean
+}
+
+export interface OpExBreakdown {
+  property_taxes: string
+  insurance: string
+  utilities: string
+  repairs_and_maintenance: string
+  admin_and_marketing: string
+  payroll: string
+  other_opex: string
+  management_fee: string
+}
+
+export interface MonthlyRow {
+  month: number
+  gsr: string
+  vacancy_loss: string
+  other_income: string
+  egi: string
+  opex_breakdown: OpExBreakdown
+  opex_total: string
+  noi: string
+  replacement_reserves: string
+  net_cash_flow: string
+  debt_service_a: string | null
+  debt_service_b: string | null
+  cash_flow_after_debt_a: string | null
+  cash_flow_after_debt_b: string | null
+  capex_spend: string
+  cash_flow_after_capex_a: string | null
+  cash_flow_after_capex_b: string | null
+}
+
+export interface SourcesAndUses {
+  // Uses
+  purchase_price: string
+  closing_costs: string
+  rehab_budget_total: string
+  loan_origination_fees: string
+  funding_source_origination_fees: string
+  interest_reserve: string
+  total_uses: string
+  // Sources
+  loan_amount: string
+  cash_draw: string
+  heloc_1_draw: string
+  heloc_2_draw: string
+  total_sources: string
+  initial_cash_investment: string
+}
+
+export interface ProFormaSummary {
+  in_place_noi: string | null
+  stabilized_noi: string | null
+  in_place_dscr_a: string | null
+  stabilized_dscr_a: string | null
+  in_place_dscr_b: string | null
+  stabilized_dscr_b: string | null
+  cash_on_cash_a: string | null
+  cash_on_cash_b: string | null
+  warnings: string[]
+}
+
+export interface ProFormaResult {
+  deal_id: number
+  inputs_hash: string
+  computed_at: string
+  monthly_schedule: MonthlyRow[]
+  summary: ProFormaSummary
+  sources_and_uses_a: SourcesAndUses | null
+  sources_and_uses_b: SourcesAndUses | null
+  missing_inputs_a: string[]
+  missing_inputs_b: string[]
+}
+
+export interface MFValuation {
+  valuation_at_cap_rate_min: string | null
+  valuation_at_cap_rate_median: string | null
+  valuation_at_cap_rate_average: string | null
+  valuation_at_cap_rate_max: string | null
+  valuation_at_ppu_min: string | null
+  valuation_at_ppu_median: string | null
+  valuation_at_ppu_average: string | null
+  valuation_at_ppu_max: string | null
+  valuation_at_custom_cap_rate: string | null
+  price_to_rent_ratio: string | null
+  warnings: string[]
+}
+
+export interface DashboardScenario {
+  scenario: DealScenario
+  purchase_price: string
+  loan_amount: string | null
+  interest_rate: string | null
+  amort_years: number | null
+  io_period_months: number | null
+  in_place_noi: string | null
+  stabilized_noi: string | null
+  in_place_dscr: string | null
+  stabilized_dscr: string | null
+  price_to_rent_ratio: string | null
+  valuation_at_cap_rate_min: string | null
+  valuation_at_cap_rate_median: string | null
+  valuation_at_cap_rate_average: string | null
+  valuation_at_cap_rate_max: string | null
+  valuation_at_ppu_min: string | null
+  valuation_at_ppu_median: string | null
+  valuation_at_ppu_average: string | null
+  valuation_at_ppu_max: string | null
+  sources_and_uses: SourcesAndUses | null
+  initial_cash_investment: string | null
+  month_1_net_cash_flow: string | null
+  month_24_net_cash_flow: string | null
+  cash_on_cash_return: string | null
+  missing_inputs: string[]
+}
+
+export interface Dashboard {
+  deal_id: number
+  scenario_a: DashboardScenario
+  scenario_b: DashboardScenario
+}
+
+export interface MFImportResult {
+  deal_id: number
+  parse_report: Array<{
+    sheet: string
+    rows_parsed: number
+    rows_skipped: number
+    warnings: string[]
+  }>
+}
+
+export interface DealListResponse {
+  deals: DealSummary[]
 }
 
 // ---------------------------------------------------------------------------

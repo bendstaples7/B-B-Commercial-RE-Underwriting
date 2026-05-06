@@ -138,3 +138,81 @@ class AuthorizationException(RealEstateAnalysisException):
         self.payload = {
             'error_type': 'authorization_error'
         }
+
+
+# ---------------------------------------------------------------------------
+# Multifamily Underwriting Exceptions
+# ---------------------------------------------------------------------------
+
+
+class DealValidationError(RealEstateAnalysisException):
+    """Exception raised when deal validation fails (e.g., unit_count < 5, non-positive purchase_price)."""
+
+    def __init__(self, message: str, field: str, constraint: str = None):
+        super().__init__(message, status_code=400)
+        self.payload = {
+            'error_type': 'deal_validation_error',
+            'field': field,
+            'constraint': constraint,
+        }
+
+
+class DuplicateUnitIdentifierError(RealEstateAnalysisException):
+    """Exception raised when a duplicate unit_identifier is added within the same deal."""
+
+    def __init__(self, message: str, deal_id: int, unit_identifier: str):
+        super().__init__(message, status_code=409)
+        self.payload = {
+            'error_type': 'duplicate_unit_identifier',
+            'deal_id': deal_id,
+            'unit_identifier': unit_identifier,
+        }
+
+
+class DuplicateFundingSourceError(RealEstateAnalysisException):
+    """Exception raised when a duplicate source_type is added within the same deal."""
+
+    def __init__(self, message: str, deal_id: int, source_type: str):
+        super().__init__(message, status_code=409)
+        self.payload = {
+            'error_type': 'duplicate_funding_source',
+            'deal_id': deal_id,
+            'source_type': source_type,
+        }
+
+
+class LenderAttachmentLimitError(RealEstateAnalysisException):
+    """Exception raised when exceeding the maximum lender profiles per scenario."""
+
+    def __init__(self, message: str, deal_id: int, scenario: str, limit: int = 3):
+        super().__init__(message, status_code=400)
+        self.payload = {
+            'error_type': 'lender_attachment_limit',
+            'deal_id': deal_id,
+            'scenario': scenario,
+            'limit': limit,
+        }
+
+
+class ProFormaMissingInputsError(RealEstateAnalysisException):
+    """Exception raised when required pro forma inputs are missing."""
+
+    def __init__(self, message: str, missing_inputs: list):
+        super().__init__(message, status_code=422)
+        self.payload = {
+            'error_type': 'pro_forma_missing_inputs',
+            'missing_inputs': missing_inputs,
+        }
+
+
+class UnsupportedImportFormatError(RealEstateAnalysisException):
+    """Exception raised when an import workbook has format issues (missing sheet or column)."""
+
+    def __init__(self, message: str, missing_sheet: str = None, missing_column: str = None, sheet: str = None):
+        super().__init__(message, status_code=422)
+        self.payload = {
+            'error_type': 'unsupported_import_format',
+            'missing_sheet': missing_sheet,
+            'missing_column': missing_column,
+            'sheet': sheet,
+        }
