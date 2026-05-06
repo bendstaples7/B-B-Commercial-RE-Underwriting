@@ -24,14 +24,25 @@ import type {
   LeadSummary,
   LeadListFilters,
   LeadListResponse,
+  LeadScoreRecord,
+  LeadScoreResponse,
   MarketingList,
   CondoFilterParams,
 } from '@/types'
 import { leadService } from '@/services/leadApi'
-import { useQueryClient } from '@tanstack/react-query'
+import { leadScoreService } from '@/services/api'
+import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { CondoResultsTable } from '@/components/CondoResultsTable'
 import { CondoDetailView } from '@/components/CondoDetailView'
 import { condoFilterService } from '@/services/condoFilterApi'
+import { LeadScoreBadge } from '@/components/LeadScoreBadge'
+import {
+  ScoreFilterPanel,
+  EMPTY_SCORE_FILTERS,
+  type ScoreFilters,
+} from '@/components/ScoreFilterPanel'
+import { RecalculateButton } from '@/components/RecalculateButton'
+import { ScoreLegend } from '@/components/ScoreLegend'
 
 // Register AG Grid community modules
 ModuleRegistry.registerModules([AllCommunityModule])
@@ -53,8 +64,102 @@ const PROPERTY_TYPE_OPTIONS = [
 
 const PER_PAGE = 20
 
+/**
+ * Row shape used by the AG Grid table. Extends LeadSummary with the
+ * most-recent LeadScoreRecord fields, flattened so AG Grid `valueGetter`s
+ * can be avoided. `latest_score` is the raw record (or null when the lead
+ * has never been scored).
+ */
+export interface LeadRow extends LeadSummary {
+  latest_score: LeadScoreRecord | null
+  total_score: number | null
+  score_tier: LeadScoreRecord['score_tier'] | null
+  data_quality_score: number | null
+  recommended_action: LeadScoreRecord['recommended_action'] | null
+  top_signal: string | null
+  missing_data_count: number | null
+}
+
+/** Human-readable labels for the recommended-action values. */
+const ACTION_LABELS: Record<NonNullable<LeadRow['recommended_action']>, string> = {
+  review_now: 'Review Now',
+  enrich_data: 'Enrich Data',
+  mail_ready: 'Mail Ready',
+  call_ready: 'Call Ready',
+  valuation_needed: 'Valuation Needed',
+  suppress: 'Suppress',
+  nurture: 'Nurture',
+  needs_manual_review: 'Needs Manual Review',
+}
+
+/** Convert a snake_case dimension key to a human-readable label. */
+function humanizeDimension(key: string): string {
+  if (!key) return ''
+  return key
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ')
+}
+
+/**
+ * Tier-badge cell renderer. AG Grid passes the row via `params.data`; we
+ * render `LeadScoreBadge`, which handles the "Not scored" case when tier
+ * is null.
+ */
+const TierCellRenderer: React.FC<{ data?: LeadRow }> = ({ data }) => (
+  <LeadScoreBadge tier={data?.score_tier ?? null} size="small" />
+)
+
 /** AG Grid column definitions */
-const COLUMN_DEFS: ColDef<LeadSummary>[] = [
+const COLUMN_DEFS: ColDef<LeadRow>[] = [
+  // ---- Score columns (task 8.1 / Req 10.1, 10.3, 10.4) ----
+  {
+    field: 'score_tier',
+    headerName: 'Tier',
+    width: 90,
+    sortable: true,
+    pinned: 'left',
+    cellRenderer: TierCellRenderer,
+  },
+  {
+    field: 'total_score',
+    headerName: 'Score',
+    width: 85,
+    sortable: true,
+    pinned: 'left',
+    valueFormatter: (p) => (p.value == null ? '—' : String(Math.round(p.value))),
+  },
+  {
+    field: 'data_quality_score',
+    headerName: 'Data Quality',
+    width: 110,
+    sortable: true,
+    valueFormatter: (p) => (p.value == null ? '—' : String(Math.round(p.value))),
+  },
+  {
+    field: 'recommended_action',
+    headerName: 'Recommended',
+    width: 160,
+    sortable: true,
+    valueFormatter: (p) =>
+      p.value == null ? '—' : ACTION_LABELS[p.value as keyof typeof ACTION_LABELS] ?? p.value,
+  },
+  {
+    field: 'top_signal',
+    headerName: 'Top Signal',
+    width: 180,
+    valueFormatter: (p) => (p.value == null ? '—' : p.value),
+  },
+  {
+    field: 'missing_data_count',
+    headerName: 'Missing Data',
+    width: 110,
+    sortable: true,
+    valueFormatter: (p) => (p.value == null ? '—' : String(p.value)),
+  },
+
+  // ---- Existing columns ----
   { field: 'property_street', headerName: 'Property Street', width: 200, sortable: true },
   { field: 'property_city', headerName: 'Property City', width: 130 },
   { field: 'property_state', headerName: 'State', width: 70 },
@@ -147,6 +252,122 @@ export const LeadListPage: React.FC<LeadListPageProps> = ({ onLeadSelect }) => {
   // Marketing lists for filter dropdown
   const [marketingLists, setMarketingLists] = useState<MarketingList[]>([])
 
+  // Score filter state (task 8.1 / Req 13.1 – 13.7)
+  const [scoreFilters, setScoreFilters] = useState<ScoreFilters>(EMPTY_SCORE_FILTERS)
+
+  // Fetch the latest score for each visible lead in parallel. Uses
+  // `useQueries` so React Query caches each response under its own key
+  // and repeat renders / recalculations refresh only what changed.
+  const scoreQueries = useQueries({
+    queries: leads.map((lead) => ({
+      queryKey: ['leadScore', lead.id] as const,
+      queryFn: async (): Promise<LeadScoreResponse> => {
+        const response = await leadScoreService.getLeadScore(lead.id)
+        return response.data
+      },
+      staleTime: 60_000,
+      retry: false,
+      refetchOnWindowFocus: false,
+    })),
+  })
+
+  /**
+   * Merge each lead with its latest LeadScoreRecord and flatten the
+   * score fields into the row. Leads whose score fetch is still in-flight
+   * (or failed) fall through with null score fields, which the column
+   * renderers handle via "Not scored" / "—".
+   */
+  const rows = useMemo<LeadRow[]>(() => {
+    return leads.map((lead, idx) => {
+      const query = scoreQueries[idx]
+      const latest: LeadScoreRecord | null =
+        (query?.data?.latest as LeadScoreRecord | null | undefined) ?? null
+
+      if (!latest) {
+        return {
+          ...lead,
+          latest_score: null,
+          total_score: null,
+          score_tier: null,
+          data_quality_score: null,
+          recommended_action: null,
+          top_signal: null,
+          missing_data_count: null,
+        }
+      }
+
+      const topSignalKey = latest.top_signals?.[0]?.dimension
+      return {
+        ...lead,
+        latest_score: latest,
+        total_score: latest.total_score,
+        score_tier: latest.score_tier,
+        data_quality_score: latest.data_quality_score,
+        recommended_action: latest.recommended_action,
+        top_signal: topSignalKey ? humanizeDimension(topSignalKey) : null,
+        missing_data_count: Array.isArray(latest.missing_data)
+          ? latest.missing_data.length
+          : 0,
+      }
+    })
+    // scoreQueries is a new array each render, so depend on its data
+    // payloads to avoid tight re-render loops.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leads, scoreQueries.map((q) => q.data).join('|')])
+
+  /**
+   * Apply score filters (task 8.1 / Req 13.1 – 13.7) to the current page
+   * of rows. Score filters operate client-side because the backend
+   * `GET /api/leads/` endpoint does not currently support filtering by
+   * LeadScoreRecord fields.
+   */
+  const displayedRows = useMemo<LeadRow[]>(() => {
+    const {
+      tiers,
+      actions,
+      lowDataQuality,
+      missingPin,
+      missingOwnerMailing,
+      condoNeedsReview,
+      condoLikelyCondo,
+    } = scoreFilters
+
+    const anyFilterActive =
+      tiers.length > 0 ||
+      actions.length > 0 ||
+      lowDataQuality ||
+      missingPin ||
+      missingOwnerMailing ||
+      condoNeedsReview ||
+      condoLikelyCondo
+
+    if (!anyFilterActive) return rows
+
+    return rows.filter((row) => {
+      const score = row.latest_score
+      if (tiers.length > 0 && (!score || !tiers.includes(score.score_tier))) return false
+      if (actions.length > 0 && (!score || !actions.includes(score.recommended_action)))
+        return false
+      if (lowDataQuality && (!score || score.data_quality_score >= 70)) return false
+      if (missingPin && !(score?.missing_data?.includes('pin') ?? false)) return false
+      if (
+        missingOwnerMailing &&
+        !(score?.missing_data?.includes('owner_mailing_address') ?? false)
+      )
+        return false
+      // Condo-risk filters check the score's recommended_action since the
+      // DeterministicScoringEngine maps these condo states to dedicated
+      // actions (see spec Req 6.8, 6.9).
+      if (
+        condoNeedsReview &&
+        !(score?.recommended_action === 'needs_manual_review')
+      )
+        return false
+      if (condoLikelyCondo && !(score?.recommended_action === 'suppress')) return false
+      return true
+    })
+  }, [rows, scoreFilters])
+
   // AG Grid default column settings
   const defaultColDef = useMemo<ColDef>(() => ({
     sortable: false,
@@ -224,6 +445,7 @@ export const LeadListPage: React.FC<LeadListPageProps> = ({ onLeadSelect }) => {
     setOwnerName('')
     setScoreRange([0, 100])
     setMarketingListId('')
+    setScoreFilters(EMPTY_SCORE_FILTERS)
     setPage(1)
   }
 
@@ -274,9 +496,18 @@ export const LeadListPage: React.FC<LeadListPageProps> = ({ onLeadSelect }) => {
             <Typography variant="body2" color="text.secondary">
               {totalLeads} lead{totalLeads !== 1 ? 's' : ''} found
             </Typography>
-            <Button variant="outlined" startIcon={<FilterListIcon />} onClick={() => setFiltersOpen((p) => !p)} aria-expanded={filtersOpen}>
-              Filters
-            </Button>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <RecalculateButton mode="bulk-all" />
+              <Button variant="outlined" startIcon={<FilterListIcon />} onClick={() => setFiltersOpen((p) => !p)} aria-expanded={filtersOpen}>
+                Filters
+              </Button>
+            </Box>
+          </Box>
+
+          {/* Column legend — collapsible reference for Tier/Score/Quality/
+              Action/Top Signal/Missing columns. */}
+          <Box sx={{ mb: 2 }}>
+            <ScoreLegend />
           </Box>
 
           <Collapse in={filtersOpen}>
@@ -317,14 +548,20 @@ export const LeadListPage: React.FC<LeadListPageProps> = ({ onLeadSelect }) => {
                 <Button variant="contained" onClick={handleApplyFilters}>Apply</Button>
               </Box>
             </Paper>
+
+            {/* Score-based filter panel (task 8.1 / Req 13.1 – 13.7).
+                Operates client-side over the current page of rows. */}
+            <Box sx={{ mb: 2 }}>
+              <ScoreFilterPanel filters={scoreFilters} onChange={setScoreFilters} />
+            </Box>
           </Collapse>
 
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
           <Paper sx={{ flex: 1, minHeight: 500, width: '100%' }}>
             <div style={{ height: '100%', width: '100%', minHeight: 500 }}>
-              <AgGridReact<LeadSummary>
-                rowData={leads}
+              <AgGridReact<LeadRow>
+                rowData={displayedRows}
                 columnDefs={COLUMN_DEFS}
                 defaultColDef={defaultColDef}
                 loading={loading}

@@ -16,17 +16,26 @@ import {
   CircularProgress,
   Alert,
   Divider,
-  LinearProgress,
 } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import HomeWorkIcon from '@mui/icons-material/HomeWork'
 import ApartmentIcon from '@mui/icons-material/Apartment'
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import type { LeadDetail, EnrichmentRecord, LeadMarketingListMembership } from '@/types'
+import type {
+  LeadDetail,
+  EnrichmentRecord,
+  LeadMarketingListMembership,
+  LeadScoreResponse,
+} from '@/types'
 import { leadService } from '@/services/leadApi'
-import { multifamilyService } from '@/services/api'
+import { multifamilyService, leadScoreService } from '@/services/api'
+import { LeadScoreBadge } from '@/components/LeadScoreBadge'
+import { ScoreBreakdownCard } from '@/components/ScoreBreakdownCard'
+import { ScoreHistoryTimeline } from '@/components/ScoreHistoryTimeline'
+import { RecalculateButton } from '@/components/RecalculateButton'
+import { ScoreLegend } from '@/components/ScoreLegend'
 
 /** Props accepted by LeadDetailPage. */
 export interface LeadDetailPageProps {
@@ -231,71 +240,65 @@ const InfoTab: React.FC<{ lead: LeadDetail }> = ({ lead }) => {
   )
 }
 
-/** Score tab — score value and breakdown placeholder. */
-const ScoreTab: React.FC<{ lead: LeadDetail }> = ({ lead }) => {
-  const score = lead.lead_score ?? 0
+/**
+ * Score tab — new deterministic lead-score UI.
+ *
+ * Fetches `/api/lead-scores/:leadId` via React Query. When a score record
+ * exists we render the full `ScoreBreakdownCard` plus a
+ * `ScoreHistoryTimeline` of past records. When no score record exists yet
+ * we show a "Not scored" empty state. The single-lead `RecalculateButton`
+ * is always rendered so the user can trigger a (re)calculation from any
+ * state. A successful recalculation invalidates the query cache, which
+ * triggers a refetch and replaces the empty state with real data.
+ *
+ * Satisfies Requirements 11.1, 11.2, 11.3, 11.4, 11.5.
+ */
+const ScoreTab: React.FC<{ leadId: number }> = ({ leadId }) => {
+  const { data, isLoading, error } = useQuery<LeadScoreResponse>({
+    queryKey: ['leadScore', leadId],
+    queryFn: async () => {
+      const response = await leadScoreService.getLeadScore(leadId)
+      return response.data
+    },
+  })
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
-        <Typography variant="h3" component="span" fontWeight="bold">
-          {score.toFixed(1)}
-        </Typography>
-        <Chip
-          label={score >= 70 ? 'High' : score >= 40 ? 'Medium' : 'Low'}
-          color={getScoreColor(score)}
-          size="medium"
-        />
+      <Box sx={{ mb: 2, display: 'flex', justifyContent: 'flex-end' }}>
+        <RecalculateButton mode="single" leadId={leadId} />
       </Box>
 
-      <Box sx={{ mb: 3 }}>
-        <LinearProgress
-          variant="determinate"
-          value={score}
-          color={score >= 70 ? 'success' : score >= 40 ? 'warning' : 'primary'}
-          sx={{ height: 10, borderRadius: 5 }}
-          aria-label={`Lead score ${score.toFixed(1)} out of 100`}
-        />
+      <Box sx={{ mb: 2 }}>
+        <ScoreLegend />
       </Box>
 
-      <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
-        Score Breakdown
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        The lead score is computed from four weighted criteria. Adjust weights in the Scoring
-        Weights editor to change how leads are prioritized.
-      </Typography>
+      {isLoading && (
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+          <CircularProgress size={32} aria-label="Loading score" />
+        </Box>
+      )}
 
-      <TableContainer component={Paper} variant="outlined">
-        <Table size="small" aria-label="Score breakdown">
-          <TableHead>
-            <TableRow>
-              <TableCell sx={{ fontWeight: 'bold' }}>Criterion</TableCell>
-              <TableCell sx={{ fontWeight: 'bold' }} align="right">
-                Description
-              </TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            <TableRow>
-              <TableCell>Property Characteristics</TableCell>
-              <TableCell align="right">Property type, condition, equity estimate</TableCell>
-            </TableRow>
-            <TableRow>
-              <TableCell>Data Completeness</TableCell>
-              <TableCell align="right">Percentage of fields populated</TableCell>
-            </TableRow>
-            <TableRow>
-              <TableCell>Owner Situation</TableCell>
-              <TableCell align="right">Length of ownership, absentee status</TableCell>
-            </TableRow>
-            <TableRow>
-              <TableCell>Location Desirability</TableCell>
-              <TableCell align="right">Market area attractiveness</TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-      </TableContainer>
+      {error && !isLoading && (
+        <Alert severity="error" sx={{ mb: 2 }} role="alert">
+          {error instanceof Error ? error.message : 'Failed to load score.'}
+        </Alert>
+      )}
+
+      {!isLoading && !error && data && !data.latest && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          This lead has not been scored yet. Use the Recalculate button above
+          to generate the first score.
+        </Alert>
+      )}
+
+      {!isLoading && !error && data?.latest && (
+        <>
+          <Box sx={{ mb: 2 }}>
+            <ScoreBreakdownCard score={data.latest} />
+          </Box>
+          <ScoreHistoryTimeline history={data.history} />
+        </>
+      )}
     </Box>
   )
 }
@@ -519,6 +522,16 @@ export const LeadDetailPage: React.FC<LeadDetailPageProps> = ({
   const [tabIndex, setTabIndex] = useState(0)
   const [analysisLoading, setAnalysisLoading] = useState(false)
 
+  // Fetch the latest score record so the header can show the current tier.
+  // The ScoreTab component also reads this cache key, so both stay in sync.
+  const { data: scoreData } = useQuery<LeadScoreResponse>({
+    queryKey: ['leadScore', leadId],
+    queryFn: async () => {
+      const response = await leadScoreService.getLeadScore(leadId)
+      return response.data
+    },
+  })
+
   // Fetch lead detail
   useEffect(() => {
     let cancelled = false
@@ -620,11 +633,21 @@ export const LeadDetailPage: React.FC<LeadDetailPageProps> = ({
           <Typography variant="h5" id="lead-detail-heading" component="h2">
             {lead.property_street}
           </Typography>
-          <Chip
-            label={`Score: ${lead.lead_score.toFixed(1)}`}
-            color={getScoreColor(lead.lead_score)}
-            size="medium"
-          />
+          {scoreData?.latest ? (
+            <>
+              <Chip
+                label={`Score: ${Math.round(scoreData.latest.total_score)}`}
+                size="medium"
+              />
+              <LeadScoreBadge tier={scoreData.latest.score_tier} size="medium" />
+            </>
+          ) : (
+            <Chip
+              label={`Score: ${lead.lead_score.toFixed(1)}`}
+              color={getScoreColor(lead.lead_score)}
+              size="medium"
+            />
+          )}
         </Box>
         <Typography variant="body2" color="text.secondary">
           Owner: {lead.owner_first_name} {lead.owner_last_name}
@@ -660,7 +683,7 @@ export const LeadDetailPage: React.FC<LeadDetailPageProps> = ({
         </TabPanel>
 
         <TabPanel value={tabIndex} index={1}>
-          <ScoreTab lead={lead} />
+          <ScoreTab leadId={lead.id} />
         </TabPanel>
 
         <TabPanel value={tabIndex} index={2}>

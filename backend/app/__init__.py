@@ -74,6 +74,9 @@ def create_app(config_name='development'):
     from app.controllers.condo_filter_controller import condo_filter_bp
     app.register_blueprint(condo_filter_bp, url_prefix='/api/condo-filter')
     
+    from app.controllers.lead_score_controller import lead_score_bp
+    app.register_blueprint(lead_score_bp, url_prefix='/api/lead-scores')
+
     # Multifamily underwriting blueprints
     from app.controllers.multifamily_deal_controller import multifamily_deal_bp
     app.register_blueprint(multifamily_deal_bp, url_prefix='/api/multifamily')

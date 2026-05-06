@@ -22,6 +22,9 @@ from app.models.marketing import MarketingList, MarketingListMember
 # Condo filter models
 from app.models.address_group_analysis import AddressGroupAnalysis
 
+# Lead scoring models
+from app.models.lead_score import LeadScore
+
 # Multifamily underwriting models
 from app.models.deal import Deal
 from app.models.unit import Unit
@@ -66,6 +69,8 @@ __all__ = [
     'MarketingListMember',
     # Condo filter
     'AddressGroupAnalysis',
+    # Lead scoring
+    'LeadScore',
     # Multifamily underwriting
     'Deal',
     'Unit',
