@@ -56,14 +56,45 @@ class TestHappyPathWorkflow:
         assert state['current_step'] == 'PROPERTY_FACTS'
         assert state.get('subject_property') is not None
         
-        # Advance to comparable search
+        # Advance to comparable search — now async, returns 202
         response = client.post(
             f'/api/analysis/{session_id}/step/2',
             json={'approval_data': {'approved': True}}
         )
-        assert response.status_code == 200
+        assert response.status_code == 202
         result = response.get_json()
-        assert result['current_step'] == 'COMPARABLE_SEARCH'
+        assert result['status'] == 'accepted'
+
+        # Simulate the Celery worker completing the task
+        from celery_worker import run_comparable_search_task
+        from unittest.mock import patch as _patch
+        from app.services.gemini_comparable_search_service import GeminiComparableSearchService
+        _mock_gemini_result = {
+            "comparables": [
+                {
+                    "address": "456 Oak Ave, Chicago, IL 60601",
+                    "sale_date": "2025-01-15",
+                    "sale_price": 210000.0,
+                    "property_type": "MULTI_FAMILY",
+                    "units": 4,
+                    "bedrooms": 8,
+                    "bathrooms": 4.0,
+                    "square_footage": 3200,
+                    "lot_size": 5000,
+                    "year_built": 1920,
+                    "construction_type": "BRICK",
+                    "interior_condition": "AVERAGE",
+                    "distance_miles": 0.3,
+                    "latitude": 41.879,
+                    "longitude": -87.630,
+                    "similarity_notes": "Similar multi-family property.",
+                }
+            ],
+            "narrative": "Test narrative.",
+        }
+        with _patch("app.create_app", return_value=app), \
+             _patch.object(GeminiComparableSearchService, "search", return_value=_mock_gemini_result):
+            run_comparable_search_task(session_id)
         
         # Get session state - should have comparables
         response = client.get(f'/api/analysis/{session_id}')
@@ -129,12 +160,13 @@ class TestHappyPathWorkflow:
         report = report_data['report']
         
         # Verify all report sections exist
-        assert 'section_a' in report
-        assert 'section_b' in report
-        assert 'section_c' in report
-        assert 'section_d' in report
-        assert 'section_e' in report
-        assert 'section_f' in report
+        report_sections = report.get('sections', report)  # handle both flat and nested structures
+        assert 'section_a' in report_sections
+        assert 'section_b' in report_sections
+        assert 'section_c' in report_sections
+        assert 'section_d' in report_sections
+        assert 'section_e' in report_sections
+        assert 'section_f' in report_sections
 
 
 class TestDataModificationWorkflow:
@@ -602,7 +634,7 @@ class TestValidationGates:
             f'/api/analysis/{session_id}/step/2',
             json={}
         )
-        assert response.status_code in [200, 400]
+        assert response.status_code in [200, 202, 400]
     
     def test_cannot_skip_steps(self, client, seeded_app):
         """Test that workflow steps must be completed in order."""

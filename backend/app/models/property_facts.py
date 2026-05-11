@@ -6,24 +6,24 @@ from datetime import date
 import enum
 
 class PropertyType(enum.Enum):
-    """Property type enumeration."""
-    SINGLE_FAMILY = 'SINGLE_FAMILY'
-    MULTI_FAMILY = 'MULTI_FAMILY'
-    COMMERCIAL = 'COMMERCIAL'
+    """Property type enumeration — values match the PostgreSQL enum."""
+    SINGLE_FAMILY = 'single_family'
+    MULTI_FAMILY = 'multi_family'
+    COMMERCIAL = 'commercial'
 
 class ConstructionType(enum.Enum):
-    """Construction type enumeration."""
-    FRAME = 'FRAME'
-    BRICK = 'BRICK'
-    MASONRY = 'MASONRY'
+    """Construction type enumeration — values match the PostgreSQL enum."""
+    FRAME = 'frame'
+    BRICK = 'brick'
+    MASONRY = 'masonry'
 
 class InteriorCondition(enum.Enum):
-    """Interior condition enumeration."""
-    NEEDS_GUT = 'NEEDS_GUT'
-    POOR = 'POOR'
-    AVERAGE = 'AVERAGE'
-    NEW_RENO = 'NEW_RENO'
-    HIGH_END = 'HIGH_END'
+    """Interior condition enumeration — values match the PostgreSQL enum."""
+    NEEDS_GUT = 'needs_gut'
+    POOR = 'poor'
+    AVERAGE = 'average'
+    NEW_RENO = 'new_reno'
+    HIGH_END = 'high_end'
 
 class PropertyFacts(db.Model):
     """Property facts model with comprehensive property details."""
@@ -31,14 +31,23 @@ class PropertyFacts(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     address = db.Column(db.String(500), nullable=False, index=True)
-    property_type = db.Column(db.Enum(PropertyType), nullable=False)
+    # Use values_callable so SQLAlchemy stores the enum's .value (e.g. 'single_family')
+    # rather than its .name ('SINGLE_FAMILY'). This makes the Python enum the single
+    # source of truth — the DB enum is derived from it, never the other way around.
+    property_type = db.Column(
+        db.Enum(PropertyType, values_callable=lambda x: [e.value for e in x]),
+        nullable=False
+    )
     units = db.Column(db.Integer, nullable=False)
     bedrooms = db.Column(db.Integer, nullable=False)
     bathrooms = db.Column(db.Float, nullable=False)
     square_footage = db.Column(db.Integer, nullable=False)
     lot_size = db.Column(db.Integer, nullable=False)  # in square feet
     year_built = db.Column(db.Integer, nullable=False)
-    construction_type = db.Column(db.Enum(ConstructionType), nullable=False)
+    construction_type = db.Column(
+        db.Enum(ConstructionType, values_callable=lambda x: [e.value for e in x]),
+        nullable=False
+    )
     basement = db.Column(db.Boolean, nullable=False, default=False)
     parking_spaces = db.Column(db.Integer, nullable=False, default=0)
     last_sale_price = db.Column(db.Float, nullable=True)
@@ -46,7 +55,10 @@ class PropertyFacts(db.Model):
     assessed_value = db.Column(db.Float, nullable=False)
     annual_taxes = db.Column(db.Float, nullable=False)
     zoning = db.Column(db.String(50), nullable=False)
-    interior_condition = db.Column(db.Enum(InteriorCondition), nullable=False)
+    interior_condition = db.Column(
+        db.Enum(InteriorCondition, values_callable=lambda x: [e.value for e in x]),
+        nullable=False
+    )
     
     # Geocoding coordinates
     latitude = db.Column(db.Float, nullable=True)

@@ -74,6 +74,127 @@ class TestStartAnalysis:
         
         assert response.status_code == 400
 
+    def test_start_analysis_with_places_coordinates(self, client):
+        """Test that Places coordinates are accepted and returned in property_facts."""
+        payload = {
+            'address': '123 Main St, Chicago, IL 60601',
+            'user_id': 'user123',
+            'latitude': 41.8781,
+            'longitude': -87.6298,
+        }
+
+        response = client.post(
+            '/api/analysis/start',
+            data=json.dumps(payload),
+            content_type='application/json'
+        )
+
+        assert response.status_code == 201
+        data = json.loads(response.data)
+        assert 'session_id' in data
+        # Cook County mock returns coordinates, so they should be present
+        assert data.get('property_facts') is not None
+
+    def test_start_analysis_places_coords_used_when_cook_county_returns_null(self, client, app):
+        """When Cook County returns no coordinates, Places coordinates are used as fallback."""
+        from unittest.mock import patch
+
+        # Mock Cook County returning facts without coordinates
+        mock_facts_no_coords = {
+            'address': '456 Oak Ave, Chicago, IL 60602',
+            'property_type': 'SINGLE_FAMILY',
+            'units': 1,
+            'bedrooms': 3,
+            'bathrooms': 2.0,
+            'square_footage': 1500,
+            'lot_size': 3000,
+            'year_built': 1960,
+            'construction_type': 'FRAME',
+            'basement': False,
+            'parking_spaces': 1,
+            'assessed_value': 200000.0,
+            'annual_taxes': None,
+            'zoning': None,
+            'latitude': None,   # No coordinates from Cook County
+            'longitude': None,
+            'data_source': 'cook_county_assessor',
+            'user_modified_fields': [],
+        }
+
+        with patch(
+            'app.services.property_data_service.PropertyDataService.fetch_property_facts',
+            return_value=mock_facts_no_coords,
+        ):
+            payload = {
+                'address': '456 Oak Ave, Chicago, IL 60602',
+                'user_id': 'user123',
+                'latitude': 41.9000,
+                'longitude': -87.7000,
+            }
+
+            response = client.post(
+                '/api/analysis/start',
+                data=json.dumps(payload),
+                content_type='application/json'
+            )
+
+        assert response.status_code == 201
+        data = json.loads(response.data)
+        facts = data.get('property_facts', {})
+        # Places coordinates should be used as fallback
+        assert facts.get('latitude') == 41.9000
+        assert facts.get('longitude') == -87.7000
+
+    def test_start_analysis_cook_county_coords_take_precedence(self, client, app):
+        """Cook County parcel-level coordinates take precedence over Places coordinates."""
+        from unittest.mock import patch
+
+        # Mock Cook County returning its own coordinates
+        mock_facts_with_coords = {
+            'address': '789 Elm St, Chicago, IL 60603',
+            'property_type': 'SINGLE_FAMILY',
+            'units': 1,
+            'bedrooms': 2,
+            'bathrooms': 1.0,
+            'square_footage': 1200,
+            'lot_size': 2500,
+            'year_built': 1950,
+            'construction_type': 'BRICK',
+            'basement': True,
+            'parking_spaces': 0,
+            'assessed_value': 150000.0,
+            'annual_taxes': None,
+            'zoning': None,
+            'latitude': 41.8500,   # Cook County coordinates
+            'longitude': -87.6500,
+            'data_source': 'cook_county_assessor',
+            'user_modified_fields': [],
+        }
+
+        with patch(
+            'app.services.property_data_service.PropertyDataService.fetch_property_facts',
+            return_value=mock_facts_with_coords,
+        ):
+            payload = {
+                'address': '789 Elm St, Chicago, IL 60603',
+                'user_id': 'user123',
+                'latitude': 41.9999,   # Different Places coordinates
+                'longitude': -87.9999,
+            }
+
+            response = client.post(
+                '/api/analysis/start',
+                data=json.dumps(payload),
+                content_type='application/json'
+            )
+
+        assert response.status_code == 201
+        data = json.loads(response.data)
+        facts = data.get('property_facts', {})
+        # Cook County coordinates should win
+        assert facts.get('latitude') == 41.8500
+        assert facts.get('longitude') == -87.6500
+
 
 class TestGetSessionState:
     """Tests for get session state endpoint."""
@@ -153,11 +274,11 @@ class TestAdvanceToStep:
             content_type='application/json'
         )
         
-        assert response.status_code == 200
+        # Step 2 now returns 202 (async — Celery task enqueued)
+        assert response.status_code == 202
         data = json.loads(response.data)
-        
-        assert data['current_step'] == 'COMPARABLE_SEARCH'
-        assert data['previous_step'] == 'PROPERTY_FACTS'
+        assert data['status'] == 'accepted'
+        assert 'session_id' in data
     
     def test_advance_to_step_invalid_step_number(self, client, app):
         """Test advancing to invalid step number fails."""

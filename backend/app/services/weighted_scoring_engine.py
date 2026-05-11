@@ -3,7 +3,7 @@ from typing import List, Tuple
 from datetime import date, datetime
 from app.models.property_facts import PropertyFacts, ConstructionType, InteriorCondition
 from app.models.comparable_sale import ComparableSale
-from app.models.ranked_comparable import RankedComparable
+from app.services.dto import RankedComparableDTO
 
 
 class WeightedScoringEngine:
@@ -279,16 +279,20 @@ class WeightedScoringEngine:
         self,
         subject: PropertyFacts,
         comparables: List[ComparableSale]
-    ) -> List[RankedComparable]:
+    ) -> List[RankedComparableDTO]:
         """
         Rank all comparables by calculating scores and sorting by total score descending.
-        
+
+        This is a pure computation method — it does not touch the database.
+        The caller is responsible for persisting the returned DTOs as ORM records.
+
         Args:
             subject: Subject property facts
             comparables: List of comparable sales to rank
-            
+
         Returns:
-            List of RankedComparable objects sorted by score (highest first)
+            List of RankedComparableDTO objects sorted by score (highest first),
+            with sequential 1-based ranks assigned.
         """
         if not comparables:
             return []
@@ -305,16 +309,17 @@ class WeightedScoringEngine:
         )
         
         # Calculate scores for all comparables
-        scored_comparables = []
+        scored_comparables: List[RankedComparableDTO] = []
         for comp in comparables:
             total_score, breakdown = self.calculate_score(
                 subject, comp, max_distance, max_units, max_bed_diff, max_bath_diff
             )
             
-            ranked_comp = RankedComparable(
+            dto = RankedComparableDTO(
                 comparable_id=comp.id,
                 session_id=comp.session_id,
                 total_score=total_score,
+                rank=0,  # Will be set after sorting
                 recency_score=breakdown['recency_score'],
                 proximity_score=breakdown['proximity_score'],
                 units_score=breakdown['units_score'],
@@ -322,16 +327,14 @@ class WeightedScoringEngine:
                 sqft_score=breakdown['sqft_score'],
                 construction_score=breakdown['construction_score'],
                 interior_score=breakdown['interior_score'],
-                rank=0  # Will be set after sorting
             )
-            ranked_comp.comparable = comp  # Set relationship
-            scored_comparables.append(ranked_comp)
+            scored_comparables.append(dto)
         
         # Sort by total score descending
         scored_comparables.sort(key=lambda x: x.total_score, reverse=True)
         
-        # Assign ranks
-        for i, ranked_comp in enumerate(scored_comparables, start=1):
-            ranked_comp.rank = i
+        # Assign ranks (dataclasses are mutable by default)
+        for i, dto in enumerate(scored_comparables, start=1):
+            dto.rank = i
         
         return scored_comparables

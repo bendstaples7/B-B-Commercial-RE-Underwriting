@@ -157,7 +157,7 @@ class ReportGenerator:
         return {
             'title': 'Section A: Subject Property Facts',
             'data': data,
-            'property_type': subject.property_type.value
+            'property_type': subject.property_type.name
         }
 
     def format_section_b(self, subject: PropertyFacts, comparables: List[ComparableSale]) -> Dict[str, Any]:
@@ -303,7 +303,7 @@ class ReportGenerator:
         return {
             'title': 'Section D: Valuation Models',
             'valuations': valuations,
-            'property_type': property_type.value if property_type else 'residential'
+            'property_type': property_type.name if property_type else 'residential'
         }
     
     def format_section_e(self, valuation_result: ValuationResult) -> Dict[str, Any]:

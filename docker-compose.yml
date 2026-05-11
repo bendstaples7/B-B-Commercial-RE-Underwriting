@@ -1,0 +1,38 @@
+version: '3.8'
+
+# Development services — starts Redis and a Celery worker automatically.
+# Usage:
+#   docker compose up -d        # start Redis + Celery in the background
+#   docker compose down         # stop and remove containers
+#   docker compose logs celery  # tail Celery worker logs
+#
+# Then start Flask normally: python backend/run.py
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  celery:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    # --pool=solo is required on Windows to avoid a multiprocessing initialization
+    # race condition (ValueError: not enough values to unpack) that crashes workers.
+    command: celery -A celery_worker.celery worker --loglevel=info --concurrency=1 --pool=solo
+    working_dir: /app
+    volumes:
+      - ./backend:/app
+    env_file:
+      - ./backend/.env
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
