@@ -637,7 +637,7 @@ function AnalysisRoute() {
     ? (mapBackendFactsToFrontend(rawPropertyFacts) as PropertyFacts)
     : undefined
 
-  const mutationError = confirmFactsMutation.error || advanceMutation.error
+  const mutationError = confirmFactsMutation.error || advanceMutation.error || goBackMutation.error
   const errorMessage = mutationError
     ? (mutationError as Error).message
     : sessionError
@@ -770,7 +770,38 @@ function AnalysisRoute() {
           {!confirmFactsMutation.isPending && (
             <PropertyFactsForm
               propertyFacts={mappedFacts}
-              onAddressSubmit={() => {}}
+              onAddressSubmit={async (address, coords) => {
+                // If the user manually searches for a new address (e.g. the session
+                // has no pre-loaded property facts), create a new session and navigate to it.
+                try {
+                  const userId = localStorage.getItem('user_id') || 'default'
+                  const resp = await fetch('/api/analysis/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      address,
+                      user_id: userId,
+                      ...(coords ? { latitude: coords.lat, longitude: coords.lng } : {}),
+                    }),
+                  })
+                  if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}))
+                    throw new Error(err?.error?.message || err?.message || 'Failed to start analysis')
+                  }
+                  const data = await resp.json()
+                  queryClient.setQueryData(['session', data.session_id], {
+                    session_id: data.session_id,
+                    current_step: 'PROPERTY_FACTS',
+                    loading: false,
+                    subject_property: data.property_facts ?? null,
+                    step_results: {},
+                    completed_steps: [],
+                  })
+                  navigate(`/analysis/arv/${data.session_id}`)
+                } catch (err: any) {
+                  console.error('[AnalysisRoute] onAddressSubmit failed:', err)
+                }
+              }}
               onSubmit={(facts) => confirmFactsMutation.mutate(facts)}
               loading={isLoading || confirmFactsMutation.isPending}
               error={errorMessage ?? undefined}

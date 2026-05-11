@@ -4,7 +4,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "@modelcontextprotocol/server-puppeteer"
+        "@modelcontextprotocol/server-puppeteer@0.6.2"
       ],
       "disabled": false,
       "autoApprove": [

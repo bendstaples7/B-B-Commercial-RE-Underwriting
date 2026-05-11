@@ -300,9 +300,9 @@ class CookCountySalesDataSource:
                 "AND sale_date >= :cutoff_date "
                 "AND class IN :target_classes "
                 "AND sale_type = 'LAND AND BUILDING' "
-                "AND (is_multisale IS NULL OR is_multisale = 0 OR is_multisale = false) "
-                "AND (sale_filter_less_than_10k IS NULL OR sale_filter_less_than_10k = 0 OR sale_filter_less_than_10k = false) "
-                "AND (sale_filter_deed_type IS NULL OR sale_filter_deed_type = 0 OR sale_filter_deed_type = false)"
+                "AND (is_multisale IS NULL OR is_multisale = false) "
+                "AND (sale_filter_less_than_10k IS NULL OR sale_filter_less_than_10k = false) "
+                "AND (sale_filter_deed_type IS NULL OR sale_filter_deed_type = false)"
             ).bindparams(
                 bindparam('pins', expanding=True),
                 bindparam('target_classes', expanding=True),
@@ -696,7 +696,7 @@ def _transform_mls_sale(sale_response: Dict[str, Any]) -> Dict[str, Any]:
         'latitude': sale_response.get('latitude'),
         'longitude': sale_response.get('longitude'),
         'similarity_notes': '',
-        'pin': None,
+        'pin': None,  # MLS sales have no PIN; deduplication uses address+sale_date
     }
 
 

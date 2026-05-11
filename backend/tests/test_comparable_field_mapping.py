@@ -57,11 +57,15 @@ _VALID_CONSTRUCTION_TYPE_VALUES = {e.value for e in ConstructionType} | {e.name 
 _VALID_INTERIOR_CONDITION_VALUES = {e.value for e in InteriorCondition} | {e.name for e in InteriorCondition}
 
 # All valid enum strings across all three enum types (used for Property 8 filter)
-_ALL_VALID_ENUM_VALUES = (
-    _VALID_PROPERTY_TYPE_VALUES
-    | _VALID_CONSTRUCTION_TYPE_VALUES
-    | _VALID_INTERIOR_CONDITION_VALUES
-)
+# Include both .value and .name (case-insensitive) since _resolve_enum accepts both
+_ALL_VALID_ENUM_VALUES_LOWER = {
+    s.lower()
+    for s in (
+        _VALID_PROPERTY_TYPE_VALUES
+        | _VALID_CONSTRUCTION_TYPE_VALUES
+        | _VALID_INTERIOR_CONDITION_VALUES
+    )
+}
 
 # Strategies for valid enum value strings (by .value, which is what Gemini returns)
 _property_type_values_st = st.sampled_from([e.value for e in PropertyType])
@@ -162,7 +166,7 @@ def test_property_7_field_mapping_preserves_all_valid_fields(comp):
 # Feature: gemini-comparable-search, Property 8: Enum defaults are applied for all unrecognized values
 
 @given(
-    bad_value=st.text().filter(lambda s: s not in _ALL_VALID_ENUM_VALUES)
+    bad_value=st.text().filter(lambda s: s.lower() not in _ALL_VALID_ENUM_VALUES_LOWER)
 )
 @settings(max_examples=100)
 def test_property_8_enum_defaults_on_unrecognized_values(bad_value):

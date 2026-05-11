@@ -16,92 +16,72 @@ depends_on = None
 
 
 def upgrade():
-    # All CREATE statements use IF NOT EXISTS so this migration is safe to run
-    # even if the tables were already created by db.create_all() or a prior
-    # partial migration run.
-
     # 1. parcel_universe_cache
-    op.execute("""
-        CREATE TABLE IF NOT EXISTS parcel_universe_cache (
-            pin VARCHAR(14) NOT NULL,
-            lat NUMERIC(10, 7),
-            lon NUMERIC(10, 7),
-            last_synced_at TIMESTAMP WITH TIME ZONE,
-            PRIMARY KEY (pin)
-        )
-    """)
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS ix_parcel_universe_lat_lon
-        ON parcel_universe_cache (lat, lon)
-    """)
+    op.create_table(
+        'parcel_universe_cache',
+        sa.Column('pin', sa.String(14), nullable=False),
+        sa.Column('lat', sa.Numeric(10, 7), nullable=True),
+        sa.Column('lon', sa.Numeric(10, 7), nullable=True),
+        sa.Column('last_synced_at', sa.DateTime(timezone=True), nullable=True),
+        sa.PrimaryKeyConstraint('pin'),
+    )
+    op.create_index('ix_parcel_universe_lat_lon', 'parcel_universe_cache', ['lat', 'lon'])
 
     # 2. parcel_sales_cache
-    op.execute("""
-        CREATE TABLE IF NOT EXISTS parcel_sales_cache (
-            id SERIAL NOT NULL,
-            pin VARCHAR(14) NOT NULL,
-            sale_date DATE,
-            sale_price NUMERIC(14, 2),
-            class VARCHAR(10),
-            sale_type VARCHAR(50),
-            is_multisale BOOLEAN,
-            sale_filter_less_than_10k BOOLEAN,
-            sale_filter_deed_type BOOLEAN,
-            last_synced_at TIMESTAMP WITH TIME ZONE,
-            PRIMARY KEY (id)
-        )
-    """)
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS ix_parcel_sales_pin_sale_date
-        ON parcel_sales_cache (pin, sale_date)
-    """)
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS ix_parcel_sales_sale_date
-        ON parcel_sales_cache (sale_date)
-    """)
+    op.create_table(
+        'parcel_sales_cache',
+        sa.Column('id', sa.Integer(), nullable=False, autoincrement=True),
+        sa.Column('pin', sa.String(14), nullable=False),
+        sa.Column('sale_date', sa.Date(), nullable=True),
+        sa.Column('sale_price', sa.Numeric(14, 2), nullable=True),
+        sa.Column('class_', sa.String(10), nullable=True),
+        sa.Column('sale_type', sa.String(50), nullable=True),
+        sa.Column('is_multisale', sa.Boolean(), nullable=True),
+        sa.Column('sale_filter_less_than_10k', sa.Boolean(), nullable=True),
+        sa.Column('sale_filter_deed_type', sa.Boolean(), nullable=True),
+        sa.Column('last_synced_at', sa.DateTime(timezone=True), nullable=True),
+        sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index('ix_parcel_sales_pin_sale_date', 'parcel_sales_cache', ['pin', 'sale_date'])
+    op.create_index('ix_parcel_sales_sale_date', 'parcel_sales_cache', ['sale_date'])
 
     # 3. improvement_characteristics_cache
-    op.execute("""
-        CREATE TABLE IF NOT EXISTS improvement_characteristics_cache (
-            pin VARCHAR(14) NOT NULL,
-            bldg_sf INTEGER,
-            beds INTEGER,
-            fbath NUMERIC(4, 1),
-            hbath NUMERIC(4, 1),
-            age INTEGER,
-            ext_wall INTEGER,
-            apts INTEGER,
-            last_synced_at TIMESTAMP WITH TIME ZONE,
-            PRIMARY KEY (pin)
-        )
-    """)
+    op.create_table(
+        'improvement_characteristics_cache',
+        sa.Column('pin', sa.String(14), nullable=False),
+        sa.Column('bldg_sf', sa.Integer(), nullable=True),
+        sa.Column('beds', sa.Integer(), nullable=True),
+        sa.Column('fbath', sa.Numeric(4, 1), nullable=True),
+        sa.Column('hbath', sa.Numeric(4, 1), nullable=True),
+        sa.Column('age', sa.Integer(), nullable=True),
+        sa.Column('ext_wall', sa.Integer(), nullable=True),
+        sa.Column('apts', sa.Integer(), nullable=True),
+        sa.Column('last_synced_at', sa.DateTime(timezone=True), nullable=True),
+        sa.PrimaryKeyConstraint('pin'),
+    )
 
     # 4. sync_log
-    op.execute("""
-        CREATE TABLE IF NOT EXISTS sync_log (
-            id SERIAL NOT NULL,
-            dataset_name VARCHAR(100) NOT NULL,
-            started_at TIMESTAMP WITH TIME ZONE NOT NULL,
-            completed_at TIMESTAMP WITH TIME ZONE,
-            rows_upserted INTEGER,
-            status VARCHAR(10) NOT NULL,
-            error_message TEXT,
-            CONSTRAINT ck_sync_log_status CHECK (status IN ('running', 'success', 'failed')),
-            PRIMARY KEY (id)
-        )
-    """)
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS ix_sync_log_dataset_name
-        ON sync_log (dataset_name)
-    """)
+    op.create_table(
+        'sync_log',
+        sa.Column('id', sa.Integer(), nullable=False, autoincrement=True),
+        sa.Column('dataset_name', sa.String(100), nullable=False),
+        sa.Column('started_at', sa.DateTime(timezone=True), nullable=False),
+        sa.Column('completed_at', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('rows_upserted', sa.Integer(), nullable=True),
+        sa.Column('status', sa.String(10), nullable=False),
+        sa.Column('error_message', sa.Text(), nullable=True),
+        sa.CheckConstraint("status IN ('running', 'success', 'failed')", name='ck_sync_log_status'),
+        sa.PrimaryKeyConstraint('id'),
+    )
+    op.create_index('ix_sync_log_dataset_name', 'sync_log', ['dataset_name'])
 
 
 def downgrade():
-    op.execute("DROP INDEX IF EXISTS ix_sync_log_dataset_name")
-    op.execute("DROP TABLE IF EXISTS sync_log")
-    op.execute("DROP TABLE IF EXISTS improvement_characteristics_cache")
-    op.execute("DROP INDEX IF EXISTS ix_parcel_sales_sale_date")
-    op.execute("DROP INDEX IF EXISTS ix_parcel_sales_pin_sale_date")
-    op.execute("DROP TABLE IF EXISTS parcel_sales_cache")
-    op.execute("DROP INDEX IF EXISTS ix_parcel_universe_lat_lon")
-    op.execute("DROP TABLE IF EXISTS parcel_universe_cache")
+    op.drop_index('ix_sync_log_dataset_name', table_name='sync_log')
+    op.drop_table('sync_log')
+    op.drop_table('improvement_characteristics_cache')
+    op.drop_index('ix_parcel_sales_sale_date', table_name='parcel_sales_cache')
+    op.drop_index('ix_parcel_sales_pin_sale_date', table_name='parcel_sales_cache')
+    op.drop_table('parcel_sales_cache')
+    op.drop_index('ix_parcel_universe_lat_lon', table_name='parcel_universe_cache')
+    op.drop_table('parcel_universe_cache')

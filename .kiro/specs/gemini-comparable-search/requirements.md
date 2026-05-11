@@ -30,8 +30,8 @@ This feature replaces the Cook County Socrata API-based comparable sales search 
 #### Acceptance Criteria
 
 1. THE `Gemini_Service` SHALL expose a `search(property_facts: dict, property_type: PropertyType) -> dict` method that calls the Gemini API and returns a dict with keys `"comparables"` (list) and `"narrative"` (string).
-2. WHEN `property_type` is `SINGLE_FAMILY` or `MULTI_FAMILY`, THE `Gemini_Service` SHALL use the Residential_Prompt template. The Residential_Prompt SHALL NOT be used for `COMMERCIAL` property types unless explicitly overridden by the caller.
-3. WHEN `property_type` is `COMMERCIAL`, THE `Gemini_Service` SHALL use the Commercial_Prompt template by default. Any prompt template MAY be used for any property type as long as the required field mappings in Requirement 3 are satisfied.
+2. WHEN `property_type` is `SINGLE_FAMILY` or `MULTI_FAMILY`, THE `Gemini_Service` SHALL use the Residential_Prompt template.
+3. WHEN `property_type` is `COMMERCIAL`, THE `Gemini_Service` SHALL use the Commercial_Prompt template.
 4. WHEN the Gemini API returns a valid JSON response, THE `Gemini_Service` SHALL parse the `"comparables"` array and `"narrative"` string from the response body.
 5. IF the Gemini API response body is not valid JSON, THEN THE `Gemini_Service` SHALL raise a descriptive exception identifying the parse failure.
 6. IF the Gemini API response JSON is missing the `"comparables"` key or the `"narrative"` key, THEN THE `Gemini_Service` SHALL raise a descriptive exception identifying the missing field.

@@ -407,6 +407,15 @@ class CacheLoaderService:
                 else:
                     output[col] = None
 
+        # Double-check: if a NOT NULL column ended up with a None value, skip the row
+        for col in not_null_cols:
+            if output.get(col) is None:
+                logger.warning(
+                    "NOT NULL column %r has null value for PIN %s — skipping row.",
+                    col, pin,
+                )
+                return None
+
         return output
 
     def _upsert_parcel_universe(self, rows: list[dict]) -> int:

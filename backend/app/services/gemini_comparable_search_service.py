@@ -232,6 +232,12 @@ class GeminiComparableSearchService:
                 f"Raw response (first 500 chars): {raw[:500]}"
             ) from exc
 
+        if not isinstance(data, dict):
+            raise GeminiResponseError(
+                f"Gemini response is not a JSON object. Got {type(data).__name__}: {raw[:200]}",
+                missing_keys=["comparables", "narrative"],
+            )
+
         missing_keys = [
             key for key in ("comparables", "narrative") if key not in data
         ]

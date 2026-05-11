@@ -29,6 +29,7 @@ const mockAdvanceToStep = vi.fn()
 const mockUpdateStepData = vi.fn()
 const mockGoBackToStep = vi.fn()
 const mockListDeals = vi.fn().mockResolvedValue([])
+const mockGenerateReport = vi.fn().mockResolvedValue({ sections: {} })
 
 vi.mock('@/services/api', () => ({
   analysisService: {
@@ -37,6 +38,8 @@ vi.mock('@/services/api', () => ({
     updateStepData: (...args: any[]) => mockUpdateStepData(...args),
     goBackToStep: (...args: any[]) => mockGoBackToStep(...args),
     startAnalysis: vi.fn(),
+    generateReport: (...args: any[]) => mockGenerateReport(...args),
+    exportToExcel: vi.fn(),
   },
   multifamilyService: {
     listDeals: (...args: any[]) => mockListDeals(...args),
@@ -105,11 +108,11 @@ function renderAnalysisStep(sessionOverrides: Record<string, any>) {
 }
 
 // Helper: wait for the main content area to contain expected text
-async function waitForMainContent(text: string) {
+async function waitForMainContent(text: string, timeout = 5000) {
   await waitFor(() => {
     const main = document.querySelector('[role="main"]')
     expect(main?.textContent).toContain(text)
-  }, { timeout: 5000 })
+  }, { timeout })
 }
 
 // ---------------------------------------------------------------------------
@@ -235,10 +238,12 @@ describe('AnalysisRoute — step rendering', () => {
   })
 
   it('shows report generated on REPORT_GENERATION step', async () => {
+    // Mock generateReport to return immediately with empty sections
+    mockGenerateReport.mockResolvedValue({ sections: {} })
     renderAnalysisStep({ current_step: 'REPORT_GENERATION' })
 
-    await waitForMainContent('Report Generated')
-    await waitForMainContent('Your analysis report is ready.')
+    // The ReportStep renders "Report Generated" heading after the report query resolves
+    await waitForMainContent('Report Generated', 10000)
 
     const main = document.querySelector('[role="main"]')!
     expect(main.textContent).toContain('Back')

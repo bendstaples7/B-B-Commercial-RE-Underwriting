@@ -193,9 +193,11 @@ def run_comparable_search_task(session_id: str) -> dict:
         completed_steps = list(session.completed_steps or [])
         if WorkflowStep.PROPERTY_FACTS.name not in completed_steps:
             completed_steps.append(WorkflowStep.PROPERTY_FACTS.name)
+        if WorkflowStep.COMPARABLE_SEARCH.name not in completed_steps:
+            completed_steps.append(WorkflowStep.COMPARABLE_SEARCH.name)
         session.completed_steps = completed_steps
         session.step_results = step_results
-        session.current_step = WorkflowStep.COMPARABLE_SEARCH
+        session.current_step = WorkflowStep.COMPARABLE_REVIEW
         session.loading = False
         session.updated_at = datetime.utcnow()
         db.session.commit()

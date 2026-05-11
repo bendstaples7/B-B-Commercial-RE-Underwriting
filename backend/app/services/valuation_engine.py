@@ -557,8 +557,10 @@ class ValuationEngine:
 
             # Collect scores for confidence calculation (use 50 as neutral default
             # when the ranked comparable doesn't carry individual scores)
-            recency_scores.append(getattr(ranked_comp, 'recency_score', 50.0) or 50.0)
-            proximity_scores.append(getattr(ranked_comp, 'proximity_score', 50.0) or 50.0)
+            recency_val = getattr(ranked_comp, 'recency_score', None)
+            proximity_val = getattr(ranked_comp, 'proximity_score', None)
+            recency_scores.append(recency_val if recency_val is not None else 50.0)
+            proximity_scores.append(proximity_val if proximity_val is not None else 50.0)
             
             # Calculate valuation methods based on property type
             price_per_sqft_val = self.calculate_price_per_sqft(comp, subject)

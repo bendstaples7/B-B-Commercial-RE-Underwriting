@@ -5,7 +5,6 @@ from unittest.mock import patch, MagicMock
 from app import create_app, db
 from tests.e2e_setup import seed_test_data
 from tests.mock_apis import MockAPIFactory
-import celery_worker
 
 # Mock property facts returned by PropertyDataService during tests.
 # Uses uppercase enum values to match the updated Python enum definitions.
@@ -50,11 +49,12 @@ def app():
     # real HTTP calls to the Cook County Assessor API.
     # Also patch run_comparable_search_task.delay so tests never attempt to
     # connect to a Redis broker — the Celery task is a no-op in tests.
+    import celery_worker as _celery_worker
     with patch(
         'app.services.property_data_service.PropertyDataService.fetch_property_facts',
         return_value=_MOCK_PROPERTY_FACTS,
     ), patch.object(
-        celery_worker.run_comparable_search_task,
+        _celery_worker.run_comparable_search_task,
         'delay',
         return_value=MagicMock(),
     ):

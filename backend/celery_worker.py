@@ -20,7 +20,7 @@ load_dotenv(os.path.join(_backend_dir, '.env'))
 
 # Option 3: Assert critical env vars are present before registering tasks.
 # Fails loudly at startup rather than silently mid-task.
-_required_env_vars = ['DATABASE_URL', 'REDIS_URL', 'GOOGLE_AI_API_KEY']
+_required_env_vars = ['DATABASE_URL', 'REDIS_URL']
 _missing = [v for v in _required_env_vars if not os.getenv(v)]
 if _missing:
     raise SystemExit(
@@ -416,6 +416,11 @@ def run_comparable_search_task(session_id: str) -> dict:
         session = AnalysisSession.query.filter_by(session_id=session_id).first()
         if not session:
             return {'error': 'session not found'}
+        if not os.getenv('GOOGLE_AI_API_KEY'):
+            session.loading = False
+            session.step_results = {**(session.step_results or {}), 'COMPARABLE_SEARCH_ERROR': 'GOOGLE_AI_API_KEY is not set.'}
+            db.session.commit()
+            return {'error': 'GOOGLE_AI_API_KEY is not set.'}
         try:
             service = GeminiComparableSearchService()
             result = service.search(
@@ -440,15 +445,18 @@ def run_comparable_search_task(session_id: str) -> dict:
             completed_steps = list(session.completed_steps or [])
             if WorkflowStep.PROPERTY_FACTS.name not in completed_steps:
                 completed_steps.append(WorkflowStep.PROPERTY_FACTS.name)
+            if WorkflowStep.COMPARABLE_SEARCH.name not in completed_steps:
+                completed_steps.append(WorkflowStep.COMPARABLE_SEARCH.name)
             session.completed_steps = completed_steps
             session.step_results = step_results
-            session.current_step = WorkflowStep.COMPARABLE_SEARCH
+            session.current_step = WorkflowStep.COMPARABLE_REVIEW
             session.loading = False
             session.updated_at = datetime.utcnow()
             db.session.commit()
             return step_results['COMPARABLE_SEARCH']
 
         except Exception as exc:
+            db.session.rollback()
             session.loading = False
             session.step_results = {
                 **(session.step_results or {}),

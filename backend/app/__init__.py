@@ -137,8 +137,12 @@ def _warn_missing_optional_keys(app):
         r = _redis.from_url(redis_url)
         r.ping()
     except Exception:
+        # Redact credentials from the URL before logging
+        from urllib.parse import urlparse
+        parsed = urlparse(redis_url)
+        safe_url = f"{parsed.scheme}://{parsed.hostname}:{parsed.port or 6379}"
         warnings.append(
-            f"Redis is not reachable at {redis_url}. "
+            f"Redis is not reachable at {safe_url}. "
             "The Celery worker cannot run — comparable search (Step 2) will fail. "
             "Start Redis with: docker compose up -d"
         )
@@ -192,9 +196,9 @@ def create_app(config_name='development'):
     if effective_env == 'development':
         with app.app_context():
             _assert_single_migration_head(app)
-            _assert_enum_values_match_db(app)
             from flask_migrate import upgrade
             upgrade(directory=migrations_dir)
+            _assert_enum_values_match_db(app)
     
     # Configure logging
     from app.logging_config import setup_logging

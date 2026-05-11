@@ -108,6 +108,7 @@ export const PropertyFactsForm: React.FC<PropertyFactsFormProps> = ({
       onAddressSubmit(description, { lat, lng })
     } catch (err) {
       console.error('Places geocode error:', err)
+      setAutocompleteError('Could not get coordinates for this address. Proceeding without location data.')
       // Fall back to submitting without coordinates
       onAddressSubmit(description)
     }
@@ -266,7 +267,7 @@ export const PropertyFactsForm: React.FC<PropertyFactsFormProps> = ({
                   }}
                   onKeyDown={handleKeyDown}
                   placeholder="123 Main St, Chicago, IL 60601"
-                  disabled={loading || !ready}
+                  disabled={loading}
                   autoComplete="off"
                   inputProps={{
                     'aria-label': 'Property address input',

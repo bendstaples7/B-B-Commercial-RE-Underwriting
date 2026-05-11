@@ -791,6 +791,13 @@ class WorkflowController:
             # they need to re-run Step 2.
             if session.comparables.count() > 0:
                 from app.models.comparable_sale import ComparableSale
+                # Delete downstream rows first to preserve referential integrity:
+                # ranked_comparables and valuation_results reference comparable_sales.
+                if session.valuation_result:
+                    db.session.delete(session.valuation_result)
+                    db.session.flush()
+                RankedComparable.query.filter_by(session_id=session.id).delete()
+                db.session.flush()
                 ComparableSale.query.filter_by(session_id=session.id).delete()
                 db.session.flush()
                 results.append({'action': 'comparables_cleared', 'reason': 'property_facts_modified'})

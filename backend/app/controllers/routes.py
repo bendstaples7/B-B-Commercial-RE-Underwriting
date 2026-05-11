@@ -72,7 +72,7 @@ def handle_errors(f):
             logger.error(f"Unexpected error: {str(e)}", exc_info=True)
             return jsonify({
                 'error': 'Internal server error',
-                'message': str(e)  # Include actual error message for easier debugging
+                'message': 'An unexpected error occurred',
             }), 500
     return decorated_function
 
@@ -194,6 +194,13 @@ def advance_to_step(session_id, step_number):
         if not session:
             return jsonify({'error': 'Session not found'}), 404
 
+        # Enforce sequential step ordering for the async path
+        if session.current_step.value + 1 != WorkflowStep.COMPARABLE_SEARCH.value:
+            return jsonify({
+                'error': 'Invalid request',
+                'message': f'Cannot advance to COMPARABLE_SEARCH from {session.current_step.name}. Must advance sequentially.'
+            }), 400
+
         # Validate step 1 is complete before accepting
         workflow_controller._validate_step_completion(session, WorkflowStep.PROPERTY_FACTS)
 
@@ -216,6 +223,9 @@ def advance_to_step(session_id, step_number):
             except Exception as e:
                 # Celery not available, fall back to synchronous
                 logger.warning(f"Celery unavailable, falling back to synchronous search: {e}")
+                # Reset loading flag that was set before the failed enqueue
+                session.loading = False
+                db.session.commit()
         
         # Run synchronously (either because async is disabled or Celery failed)
         logger.info(f"Running comparable search synchronously for session {session_id}")

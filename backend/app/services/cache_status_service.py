@@ -17,7 +17,10 @@ from app.models.sync_log import SyncLog
 
 logger = logging.getLogger(__name__)
 
-SOCRATA_STALE_DAYS = int(os.environ.get('SOCRATA_STALE_DAYS', '30'))
+try:
+    SOCRATA_STALE_DAYS = int(os.environ.get('SOCRATA_STALE_DAYS', '30'))
+except (ValueError, TypeError):
+    SOCRATA_STALE_DAYS = 30
 
 
 @dataclass
@@ -95,7 +98,10 @@ class CacheStatusService:
         if row_count == 0:
             return 'empty'
 
-        # row_count > 0 — last_success must exist (rows can only come from a sync)
+        # row_count > 0 but no successful sync log (e.g. partial failed load)
+        if last_success is None:
+            return 'stale'
+
         days_since = (
             datetime.now(timezone.utc)
             - last_success.completed_at.replace(tzinfo=timezone.utc)

@@ -7,7 +7,7 @@ persisting them.
 from dataclasses import dataclass
 
 
-@dataclass
+@dataclass(frozen=True)
 class RankedComparableDTO:
     """Immutable result produced by WeightedScoringEngine.rank_comparables.
 
