@@ -773,31 +773,18 @@ function AnalysisRoute() {
               onAddressSubmit={async (address, coords) => {
                 // If the user manually searches for a new address (e.g. the session
                 // has no pre-loaded property facts), create a new session and navigate to it.
+                // Uses analysisService to respect VITE_API_BASE_URL and centralized error handling.
                 try {
-                  const userId = localStorage.getItem('user_id') || 'default'
-                  const resp = await fetch('/api/analysis/start', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      address,
-                      user_id: userId,
-                      ...(coords ? { latitude: coords.lat, longitude: coords.lng } : {}),
-                    }),
-                  })
-                  if (!resp.ok) {
-                    const err = await resp.json().catch(() => ({}))
-                    throw new Error(err?.error?.message || err?.message || 'Failed to start analysis')
-                  }
-                  const data = await resp.json()
-                  queryClient.setQueryData(['session', data.session_id], {
-                    session_id: data.session_id,
+                  const response = await analysisService.startAnalysis(address, coords?.lat, coords?.lng)
+                  queryClient.setQueryData(['session', response.sessionId], {
+                    session_id: response.sessionId,
                     current_step: 'PROPERTY_FACTS',
                     loading: false,
-                    subject_property: data.property_facts ?? null,
+                    subject_property: response.propertyFacts ?? null,
                     step_results: {},
                     completed_steps: [],
                   })
-                  navigate(`/analysis/arv/${data.session_id}`)
+                  navigate(`/analysis/arv/${response.sessionId}`)
                 } catch (err: any) {
                   console.error('[AnalysisRoute] onAddressSubmit failed:', err)
                 }

@@ -34,7 +34,10 @@ def upgrade():
         sa.Column('pin', sa.String(14), nullable=False),
         sa.Column('sale_date', sa.Date(), nullable=True),
         sa.Column('sale_price', sa.Numeric(14, 2), nullable=True),
-        sa.Column('class_', sa.String(10), nullable=True),
+        # 'class' is a Python reserved word; the ORM attribute is class_ but the
+        # physical DB column must be named 'class' to match the model definition:
+        #   class_ = db.Column('class', db.String(10), nullable=True)
+        sa.Column('class', sa.String(10), nullable=True),
         sa.Column('sale_type', sa.String(50), nullable=True),
         sa.Column('is_multisale', sa.Boolean(), nullable=True),
         sa.Column('sale_filter_less_than_10k', sa.Boolean(), nullable=True),

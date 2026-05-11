@@ -137,10 +137,15 @@ def _warn_missing_optional_keys(app):
         r = _redis.from_url(redis_url)
         r.ping()
     except Exception:
-        # Redact credentials from the URL before logging
-        from urllib.parse import urlparse
-        parsed = urlparse(redis_url)
-        safe_url = f"{parsed.scheme}://{parsed.hostname}:{parsed.port or 6379}"
+        # Redact credentials from the URL before logging; fall back to raw URL
+        # if parsing fails (e.g. malformed URL) to avoid turning a connectivity
+        # warning into a startup exception.
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(redis_url)
+            safe_url = f"{parsed.scheme}://{parsed.hostname}:{parsed.port or 6379}"
+        except Exception:
+            safe_url = '<redis-url>'
         warnings.append(
             f"Redis is not reachable at {safe_url}. "
             "The Celery worker cannot run — comparable search (Step 2) will fail. "

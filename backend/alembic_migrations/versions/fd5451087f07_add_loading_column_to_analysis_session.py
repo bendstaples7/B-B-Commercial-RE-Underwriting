@@ -22,16 +22,19 @@ def upgrade():
         batch_op.add_column(sa.Column('loading', sa.Boolean(), nullable=False, server_default=sa.false()))
         try:
             batch_op.drop_constraint('analysis_sessions_session_id_key', type_='unique')
-        except Exception:
-            pass  # Constraint may not exist if already renamed by a prior migration
+        except Exception as e:
+            if 'does not exist' not in str(e).lower():
+                raise
         try:
             batch_op.drop_index('idx_analysis_sessions_session_id')
-        except Exception:
-            pass  # Index may not exist if already renamed by a prior migration
+        except Exception as e:
+            if 'does not exist' not in str(e).lower():
+                raise
         try:
             batch_op.drop_index('idx_analysis_sessions_user_id')
-        except Exception:
-            pass  # Index may not exist if already renamed by a prior migration
+        except Exception as e:
+            if 'does not exist' not in str(e).lower():
+                raise
         batch_op.create_index('ix_analysis_sessions_session_id', ['session_id'], unique=True)
         batch_op.create_index('ix_analysis_sessions_user_id', ['user_id'], unique=False)
 
@@ -39,24 +42,28 @@ def upgrade():
     with op.batch_alter_table('leads', schema=None) as batch_op:
         try:
             batch_op.drop_index('idx_leads_lead_category')
-        except Exception:
-            pass  # Index may not exist if already renamed by a prior migration
+        except Exception as e:
+            if 'does not exist' not in str(e).lower():
+                raise
         try:
             batch_op.drop_index('ix_leads_condo_analysis_id')
-        except Exception:
-            pass  # Index may not exist if already renamed by a prior migration
+        except Exception as e:
+            if 'does not exist' not in str(e).lower():
+                raise
         batch_op.create_index('ix_leads_lead_category', ['lead_category'], unique=False)
 
     # Fix indexes on comparable_sales
     with op.batch_alter_table('comparable_sales', schema=None) as batch_op:
         try:
             batch_op.drop_index('idx_comparable_sales_address')
-        except Exception:
-            pass  # Index may not exist if already renamed by a prior migration
+        except Exception as e:
+            if 'does not exist' not in str(e).lower():
+                raise
         try:
             batch_op.drop_index('idx_comparable_sales_session_id')
-        except Exception:
-            pass  # Index may not exist if already renamed by a prior migration
+        except Exception as e:
+            if 'does not exist' not in str(e).lower():
+                raise
         batch_op.create_index('ix_comparable_sales_address', ['address'], unique=False)
         batch_op.create_index('ix_comparable_sales_session_id', ['session_id'], unique=False)
 
@@ -64,48 +71,55 @@ def upgrade():
     with op.batch_alter_table('comparable_valuations', schema=None) as batch_op:
         try:
             batch_op.drop_index('idx_comparable_valuations_valuation_result_id')
-        except Exception:
-            pass  # Index may not exist if already renamed by a prior migration
+        except Exception as e:
+            if 'does not exist' not in str(e).lower():
+                raise
         batch_op.create_index('ix_comparable_valuations_valuation_result_id', ['valuation_result_id'], unique=False)
 
     # Fix indexes on property_facts
     with op.batch_alter_table('property_facts', schema=None) as batch_op:
         try:
             batch_op.drop_index('idx_property_facts_address')
-        except Exception:
-            pass  # Index may not exist if already renamed by a prior migration
+        except Exception as e:
+            if 'does not exist' not in str(e).lower():
+                raise
         try:
             batch_op.drop_index('idx_property_facts_session_id')
-        except Exception:
-            pass  # Index may not exist if already renamed by a prior migration
+        except Exception as e:
+            if 'does not exist' not in str(e).lower():
+                raise
         batch_op.create_index('ix_property_facts_address', ['address'], unique=False)
 
     # Fix indexes on ranked_comparables
     with op.batch_alter_table('ranked_comparables', schema=None) as batch_op:
         try:
             batch_op.drop_index('idx_ranked_comparables_session_id')
-        except Exception:
-            pass  # Index may not exist if already renamed by a prior migration
+        except Exception as e:
+            if 'does not exist' not in str(e).lower():
+                raise
         batch_op.create_index('ix_ranked_comparables_session_id', ['session_id'], unique=False)
 
     # Fix indexes on scenarios
     with op.batch_alter_table('scenarios', schema=None) as batch_op:
         try:
             batch_op.drop_index('idx_scenarios_session_id')
-        except Exception:
-            pass  # Index may not exist if already renamed by a prior migration
+        except Exception as e:
+            if 'does not exist' not in str(e).lower():
+                raise
         batch_op.create_index('ix_scenarios_session_id', ['session_id'], unique=False)
 
     # Fix indexes on valuation_results
     with op.batch_alter_table('valuation_results', schema=None) as batch_op:
         try:
             batch_op.drop_index('idx_valuation_results_session_id')
-        except Exception:
-            pass  # Index may not exist if already renamed by a prior migration
+        except Exception as e:
+            if 'does not exist' not in str(e).lower():
+                raise
         try:
             batch_op.drop_constraint('valuation_results_session_id_key', type_='unique')
-        except Exception:
-            pass  # Constraint may not exist if already renamed by a prior migration
+        except Exception as e:
+            if 'does not exist' not in str(e).lower():
+                raise
         batch_op.create_index('ix_valuation_results_session_id', ['session_id'], unique=True)
 
 
