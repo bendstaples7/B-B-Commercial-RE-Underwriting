@@ -528,3 +528,215 @@ class TestValuationEngine:
         adjustment_categories = [adj['category'] for adj in adjustments]
         assert 'bedrooms' in adjustment_categories
         assert 'bathrooms' in adjustment_categories
+
+
+# ---------------------------------------------------------------------------
+# Task 5 tests — confidence scoring and adaptive ARV widening
+# ---------------------------------------------------------------------------
+
+class TestConfidenceScoring:
+    """Tests for ValuationEngine.compute_confidence_score and adaptive ARV widening."""
+
+    @pytest.fixture
+    def engine(self):
+        return ValuationEngine()
+
+    # ------------------------------------------------------------------
+    # compute_confidence_score
+    # ------------------------------------------------------------------
+
+    def test_full_confidence_with_5_comps_and_perfect_scores(self, engine):
+        """5 comparables with perfect recency and proximity → confidence = 100."""
+        score = engine.compute_confidence_score(
+            comp_count=5,
+            avg_recency_score=100.0,
+            avg_proximity_score=100.0,
+        )
+        assert score == pytest.approx(100.0)
+
+    def test_confidence_lower_with_fewer_comps(self, engine):
+        """Confidence is lower when fewer comparables are used."""
+        score_5 = engine.compute_confidence_score(5, 100.0, 100.0)
+        score_3 = engine.compute_confidence_score(3, 100.0, 100.0)
+        score_1 = engine.compute_confidence_score(1, 100.0, 100.0)
+
+        assert score_5 > score_3 > score_1
+
+    def test_confidence_zero_with_zero_comps(self, engine):
+        """Zero comparables → confidence = 0."""
+        score = engine.compute_confidence_score(0, 100.0, 100.0)
+        assert score == 0.0
+
+    def test_confidence_in_range_0_to_100(self, engine):
+        """Confidence score is always in [0, 100]."""
+        for count in range(0, 7):
+            for recency in [0.0, 50.0, 100.0]:
+                for proximity in [0.0, 50.0, 100.0]:
+                    score = engine.compute_confidence_score(count, recency, proximity)
+                    assert 0.0 <= score <= 100.0, (
+                        f"Out of range: count={count}, recency={recency}, proximity={proximity} → {score}"
+                    )
+
+    def test_confidence_lower_with_poor_recency(self, engine):
+        """Lower average recency score reduces confidence."""
+        score_high = engine.compute_confidence_score(5, 100.0, 100.0)
+        score_low = engine.compute_confidence_score(5, 20.0, 100.0)
+        assert score_high > score_low
+
+    def test_confidence_lower_with_poor_proximity(self, engine):
+        """Lower average proximity score reduces confidence."""
+        score_high = engine.compute_confidence_score(5, 100.0, 100.0)
+        score_low = engine.compute_confidence_score(5, 100.0, 20.0)
+        assert score_high > score_low
+
+    # ------------------------------------------------------------------
+    # apply_confidence_widening
+    # ------------------------------------------------------------------
+
+    def test_no_widening_at_full_confidence(self, engine):
+        """ARV range is unchanged when confidence = 100."""
+        c, l, a = engine.apply_confidence_widening(300_000, 400_000, 500_000, 100.0)
+        assert c == pytest.approx(300_000)
+        assert l == pytest.approx(400_000)
+        assert a == pytest.approx(500_000)
+
+    def test_widening_at_zero_confidence(self, engine):
+        """ARV range widens maximally when confidence = 0."""
+        c, l, a = engine.apply_confidence_widening(300_000, 400_000, 500_000, 0.0)
+        # Max widen = 20% of likely = 80,000
+        assert c == pytest.approx(300_000 - 80_000)
+        assert l == pytest.approx(400_000)
+        assert a == pytest.approx(500_000 + 80_000)
+
+    def test_likely_arv_never_changes(self, engine):
+        """The likely (median) ARV is never modified by confidence widening."""
+        for confidence in [0.0, 25.0, 50.0, 75.0, 100.0]:
+            _, likely, _ = engine.apply_confidence_widening(300_000, 400_000, 500_000, confidence)
+            assert likely == pytest.approx(400_000)
+
+    def test_wider_range_at_lower_confidence(self, engine):
+        """ARV range (aggressive - conservative) is wider at lower confidence."""
+        _, _, a_high = engine.apply_confidence_widening(300_000, 400_000, 500_000, 80.0)
+        c_high, _, _ = engine.apply_confidence_widening(300_000, 400_000, 500_000, 80.0)
+
+        _, _, a_low = engine.apply_confidence_widening(300_000, 400_000, 500_000, 20.0)
+        c_low, _, _ = engine.apply_confidence_widening(300_000, 400_000, 500_000, 20.0)
+
+        range_high_conf = a_high - c_high
+        range_low_conf = a_low - c_low
+        assert range_low_conf > range_high_conf
+
+    # ------------------------------------------------------------------
+    # calculate_valuations with fewer than 5 comparables
+    # ------------------------------------------------------------------
+
+    def _make_ranked_comp(self, comp_id: int, sale_price: float,
+                          recency_score: float = 80.0,
+                          proximity_score: float = 80.0) -> RankedComparable:
+        """Helper: build a RankedComparable with an attached ComparableSale."""
+        from datetime import date, timedelta
+
+        comp = ComparableSale()
+        comp.id = comp_id
+        comp.address = f"{100 + comp_id} Test St"
+        comp.sale_date = date.today() - timedelta(days=60)
+        comp.sale_price = sale_price
+        comp.property_type = PropertyType.MULTI_FAMILY
+        comp.units = 4
+        comp.bedrooms = 8
+        comp.bathrooms = 4.0
+        comp.square_footage = 3000
+        comp.lot_size = 5000
+        comp.year_built = 1920
+        comp.construction_type = ConstructionType.BRICK
+        comp.interior_condition = InteriorCondition.AVERAGE
+        comp.distance_miles = 0.3
+        comp.basement = True
+        comp.parking_spaces = 2
+
+        ranked = RankedComparable()
+        ranked.id = comp_id
+        ranked.comparable_id = comp.id
+        ranked.session_id = 1
+        ranked.rank = comp_id
+        ranked.total_score = 90.0
+        ranked.recency_score = recency_score
+        ranked.proximity_score = proximity_score
+        ranked.comparable = comp
+        return ranked
+
+    @pytest.fixture
+    def subject_property(self):
+        subject = PropertyFacts()
+        subject.id = 1
+        subject.address = "123 Main St"
+        subject.property_type = PropertyType.MULTI_FAMILY
+        subject.units = 4
+        subject.bedrooms = 8
+        subject.bathrooms = 4.0
+        subject.square_footage = 3200
+        subject.lot_size = 5000
+        subject.year_built = 1920
+        subject.construction_type = ConstructionType.BRICK
+        subject.basement = True
+        subject.parking_spaces = 2
+        subject.assessed_value = 400000
+        subject.annual_taxes = 8000
+        subject.zoning = "R4"
+        subject.interior_condition = InteriorCondition.AVERAGE
+        subject.latitude = 41.8781
+        subject.longitude = -87.6298
+        return subject
+
+    def test_calculate_valuations_succeeds_with_1_comparable(self, engine, subject_property):
+        """calculate_valuations succeeds with only 1 ranked comparable."""
+        ranked_comps = [self._make_ranked_comp(1, 400_000)]
+        result = engine.calculate_valuations(subject_property, ranked_comps, session_id=1)
+
+        assert result is not None
+        assert result.conservative_arv > 0
+        assert result.likely_arv > 0
+        assert result.aggressive_arv > 0
+
+    def test_calculate_valuations_succeeds_with_3_comparables(self, engine, subject_property):
+        """calculate_valuations succeeds with 3 ranked comparables."""
+        ranked_comps = [self._make_ranked_comp(i, 400_000 + i * 10_000) for i in range(1, 4)]
+        result = engine.calculate_valuations(subject_property, ranked_comps, session_id=1)
+
+        assert result is not None
+        assert result.conservative_arv <= result.likely_arv <= result.aggressive_arv
+
+    def test_confidence_score_present_in_result(self, engine, subject_property):
+        """ValuationResult includes a confidence_score field."""
+        ranked_comps = [self._make_ranked_comp(i, 400_000) for i in range(1, 4)]
+        result = engine.calculate_valuations(subject_property, ranked_comps, session_id=1)
+
+        assert result.confidence_score is not None
+        assert 0.0 <= result.confidence_score <= 100.0
+
+    def test_confidence_score_lower_with_fewer_comparables(self, engine, subject_property):
+        """Confidence score is lower when fewer comparables are used."""
+        comps_5 = [self._make_ranked_comp(i, 400_000, recency_score=90.0, proximity_score=90.0)
+                   for i in range(1, 6)]
+        comps_1 = [self._make_ranked_comp(1, 400_000, recency_score=90.0, proximity_score=90.0)]
+
+        result_5 = engine.calculate_valuations(subject_property, comps_5, session_id=1)
+        result_1 = engine.calculate_valuations(subject_property, comps_1, session_id=2)
+
+        assert result_5.confidence_score > result_1.confidence_score
+
+    def test_arv_range_wider_with_lower_confidence(self, engine, subject_property):
+        """ARV range (aggressive - conservative) is wider when confidence is lower."""
+        # 5 comps with high scores → high confidence → narrow range
+        comps_5 = [self._make_ranked_comp(i, 400_000, recency_score=100.0, proximity_score=100.0)
+                   for i in range(1, 6)]
+        # 1 comp with low scores → low confidence → wide range
+        comps_1 = [self._make_ranked_comp(1, 400_000, recency_score=10.0, proximity_score=10.0)]
+
+        result_5 = engine.calculate_valuations(subject_property, comps_5, session_id=1)
+        result_1 = engine.calculate_valuations(subject_property, comps_1, session_id=2)
+
+        range_5 = result_5.aggressive_arv - result_5.conservative_arv
+        range_1 = result_1.aggressive_arv - result_1.conservative_arv
+
+        assert range_1 > range_5

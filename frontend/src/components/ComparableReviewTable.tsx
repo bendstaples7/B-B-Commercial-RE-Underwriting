@@ -32,6 +32,32 @@ import {
   InteriorCondition,
 } from '@/types'
 
+// Feature: gemini-comparable-search, Property 10: Similarity notes truncation threshold
+interface SimilarityNotesCellProps {
+  similarityNotes: string | null | undefined
+}
+
+const SimilarityNotesCell: React.FC<SimilarityNotesCellProps> = ({ similarityNotes }) => {
+  const [expanded, setExpanded] = useState(false)
+
+  if (!similarityNotes) {
+    return <TableCell />
+  }
+
+  if (similarityNotes.length <= 100) {
+    return <TableCell>{similarityNotes}</TableCell>
+  }
+
+  return (
+    <TableCell>
+      {expanded ? similarityNotes : similarityNotes.slice(0, 100)}
+      <Button size="small" onClick={() => setExpanded((prev) => !prev)} sx={{ ml: 0.5 }}>
+        {expanded ? '…less' : '…more'}
+      </Button>
+    </TableCell>
+  )
+}
+
 interface ComparableReviewTableProps {
   comparables: ComparableSale[]
   onComparablesChange: (comparables: ComparableSale[]) => void
@@ -217,6 +243,9 @@ export const ComparableReviewTable: React.FC<ComparableReviewTableProps> = ({
                 <TableCell sx={{ fontWeight: 'bold', minWidth: 100 }} align="right">
                   Distance
                 </TableCell>
+                <TableCell sx={{ fontWeight: 'bold', minWidth: 200 }}>
+                  Similarity Notes
+                </TableCell>
                 <TableCell sx={{ fontWeight: 'bold', minWidth: 100 }} align="center">
                   Actions
                 </TableCell>
@@ -238,6 +267,7 @@ export const ComparableReviewTable: React.FC<ComparableReviewTableProps> = ({
                   <TableCell>{formatConstructionType(comp.constructionType)}</TableCell>
                   <TableCell>{formatInteriorCondition(comp.interiorCondition)}</TableCell>
                   <TableCell align="right">{comp.distanceMiles.toFixed(2)} mi</TableCell>
+                  <SimilarityNotesCell similarityNotes={comp.similarityNotes} />
                   <TableCell align="center">
                     <IconButton
                       size="small"

@@ -1,0 +1,14 @@
+# Development Dockerfile for the Celery worker.
+# Flask itself runs directly via `python run.py` — only Celery runs in Docker.
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Source is mounted as a volume at runtime (see docker-compose.yml),
+# so no COPY of application code here — changes are reflected immediately.
+
+CMD ["celery", "-A", "celery_worker.celery", "worker", "--loglevel=info", "--concurrency=2"]

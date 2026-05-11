@@ -70,6 +70,7 @@ export interface ComparableSale {
   interiorCondition: InteriorCondition
   distanceMiles: number
   coordinates: { lat: number; lng: number }
+  similarityNotes?: string | null
 }
 
 export interface ScoringBreakdown {
@@ -194,6 +195,7 @@ export interface AnalysisSession {
   userId: string
   createdAt: string
   currentStep: WorkflowStep
+  loading: boolean
   subjectProperty?: PropertyFacts
   comparables: ComparableSale[]
   rankedComparables: RankedComparable[]
@@ -205,6 +207,8 @@ export interface AnalysisSession {
 // API Request/Response Types
 export interface StartAnalysisRequest {
   address: string
+  latitude?: number
+  longitude?: number
 }
 
 export interface StartAnalysisResponse {

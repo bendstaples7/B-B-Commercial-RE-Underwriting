@@ -5,7 +5,7 @@
  * Shows existing ARV sessions and multifamily deals side-by-side, plus a
  * "New Analysis" dialog that routes to the correct workflow based on unit count.
  */
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -20,6 +20,10 @@ import {
   DialogTitle,
   Divider,
   Grid,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemText,
   Paper,
   Tab,
   Table,
@@ -40,8 +44,10 @@ import HomeWorkIcon from '@mui/icons-material/HomeWork'
 import ApartmentIcon from '@mui/icons-material/Apartment'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
+import usePlacesAutocomplete from 'use-places-autocomplete'
 import { multifamilyService } from '@/services/api'
 import type { DealCreatePayload, DealSummary } from '@/types'
+import { useGoogleMapsLoaded } from '@/App'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -94,18 +100,37 @@ function detectType(unitCount: number | null): AnalysisType | null {
 interface NewAnalysisDialogProps {
   open: boolean
   onClose: () => void
-  /** Called when a single-family analysis is started (navigates to ARV workflow). */
-  onSingleFamily: (address: string) => void
 }
 
-function NewAnalysisDialog({ open, onClose, onSingleFamily }: NewAnalysisDialogProps) {
+function NewAnalysisDialog({ open, onClose }: NewAnalysisDialogProps) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const suggestionsRef = useRef<HTMLUListElement>(null)
+  const mapsLoaded = useGoogleMapsLoaded()
 
-  const [address, setAddress] = useState('')
   const [unitCount, setUnitCount] = useState<number | ''>('')
   const [overrideType, setOverrideType] = useState<AnalysisType | null>(null)
   const [addressError, setAddressError] = useState('')
+  const [resolvedCoords, setResolvedCoords] = useState<{ lat: number; lng: number } | undefined>()
+
+  const {
+    ready,
+    value: address,
+    suggestions: { status, data },
+    setValue: setAddress,
+    clearSuggestions,
+    init,
+  } = usePlacesAutocomplete({
+    requestOptions: { componentRestrictions: { country: 'us' } },
+    debounce: 300,
+    // Don't try to initialize until the Maps API is loaded
+    initOnMount: false,
+  })
+
+  // Initialize the autocomplete service as soon as the Maps API is ready
+  useEffect(() => {
+    if (mapsLoaded) init()
+  }, [mapsLoaded, init])
 
   const detected = detectType(typeof unitCount === 'number' ? unitCount : null)
   const effectiveType: AnalysisType | null = overrideType ?? detected
@@ -119,14 +144,82 @@ function NewAnalysisDialog({ open, onClose, onSingleFamily }: NewAnalysisDialogP
     },
   })
 
+  // Create a single-family ARV session and navigate to it
+  const createSingleFamilyMutation = useMutation({
+    mutationFn: async ({ address, coords }: { address: string; coords?: { lat: number; lng: number } }) => {
+      const userId = localStorage.getItem('user_id') || 'default'
+      const response = await fetch('/api/analysis/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          address,
+          user_id: userId,
+          ...(coords ? { latitude: coords.lat, longitude: coords.lng } : {}),
+        }),
+      })
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}))
+        throw new Error(err?.error?.message || err?.message || 'Failed to start analysis')
+      }
+      return response.json()
+    },
+    onSuccess: (data) => {
+      // Seed the React Query cache with the start response so AnalysisRoute
+      // can immediately show the pre-fetched Cook County property facts without
+      // a second round-trip to the backend.
+      queryClient.setQueryData(['session', data.session_id], {
+        session_id: data.session_id,
+        current_step: 'PROPERTY_FACTS',
+        loading: false,
+        subject_property: data.property_facts ?? null,
+        step_results: {},
+        completed_steps: [],
+      })
+      handleClose()
+      navigate(`/analysis/arv/${data.session_id}`)
+    },
+  })
+
   const handleClose = () => {
-    if (createDealMutation.isPending) return
+    if (createDealMutation.isPending || createSingleFamilyMutation.isPending) return
     setAddress('')
     setUnitCount('')
     setOverrideType(null)
     setAddressError('')
+    setResolvedCoords(undefined)
+    clearSuggestions()
     createDealMutation.reset()
+    createSingleFamilyMutation.reset()
     onClose()
+  }
+
+  const handleSelect = (description: string, placeId: string) => {
+    setAddress(description, false)
+    clearSuggestions()
+    setAddressError('')
+    // Use PlacesService.getDetails to get coordinates from the place_id.
+    // This uses the Places API (already enabled) — no Geocoding API needed.
+    try {
+      const service = new (window as any).google.maps.places.PlacesService(
+        document.createElement('div')
+      )
+      service.getDetails(
+        { placeId, fields: ['geometry'] },
+        (result: any, status: any) => {
+          if (
+            status === (window as any).google.maps.places.PlacesServiceStatus.OK &&
+            result?.geometry?.location
+          ) {
+            setResolvedCoords({
+              lat: result.geometry.location.lat(),
+              lng: result.geometry.location.lng(),
+            })
+          }
+        }
+      )
+    } catch {
+      setResolvedCoords(undefined)
+    }
   }
 
   const handleStart = () => {
@@ -135,6 +228,11 @@ function NewAnalysisDialog({ open, onClose, onSingleFamily }: NewAnalysisDialogP
       return
     }
     setAddressError('')
+
+    // Use coords resolved from the Places suggestion selection.
+    // If the user typed manually without selecting a suggestion, coords will be
+    // undefined and the backend will fall back to Cook County parcel coordinates.
+    const coords = resolvedCoords
 
     const type = effectiveType ?? (typeof unitCount === 'number' && unitCount >= 5 ? 'multifamily' : 'single-family')
 
@@ -146,8 +244,7 @@ function NewAnalysisDialog({ open, onClose, onSingleFamily }: NewAnalysisDialogP
         close_date: new Date().toISOString().split('T')[0],
       })
     } else {
-      handleClose()
-      onSingleFamily(address.trim())
+      createSingleFamilyMutation.mutate({ address: address.trim(), coords })
     }
   }
 
@@ -164,26 +261,80 @@ function NewAnalysisDialog({ open, onClose, onSingleFamily }: NewAnalysisDialogP
       <DialogTitle id="new-analysis-dialog-title">New Analysis</DialogTitle>
       <DialogContent>
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
-          {createDealMutation.isError && (
+          {(createDealMutation.isError || createSingleFamilyMutation.isError) && (
             <Alert severity="error">
-              {(createDealMutation.error as Error)?.message ?? 'Failed to create deal'}
+              {(createDealMutation.error as Error)?.message ??
+               (createSingleFamilyMutation.error as Error)?.message ??
+               'Failed to start analysis'}
             </Alert>
           )}
 
-          <TextField
-            label="Property Address"
-            value={address}
-            onChange={(e) => {
-              setAddress(e.target.value)
-              if (e.target.value.trim()) setAddressError('')
-            }}
-            error={!!addressError}
-            helperText={addressError}
-            required
-            fullWidth
-            autoFocus
-            inputProps={{ 'aria-label': 'Property address' }}
-          />
+          {/* Address field with Places Autocomplete */}
+          <Box sx={{ position: 'relative' }}>
+            <TextField
+              label="Property Address"
+              value={address}
+              onChange={(e) => {
+                setAddress(e.target.value)
+                setResolvedCoords(undefined)
+                if (e.target.value.trim()) setAddressError('')
+              }}
+              onKeyDown={(e) => { if (e.key === 'Escape') clearSuggestions() }}
+              error={!!addressError}
+              helperText={addressError}
+              required
+              fullWidth
+              autoFocus
+              autoComplete="off"
+              placeholder="123 Main St, Chicago, IL 60601"
+              inputProps={{
+                'aria-label': 'Property address',
+                'aria-autocomplete': 'list',
+                'aria-controls': status === 'OK' ? 'dialog-address-suggestions' : undefined,
+                'aria-expanded': status === 'OK',
+              }}
+            />
+            {status === 'OK' && data.length > 0 && (
+              <List
+                id="dialog-address-suggestions"
+                ref={suggestionsRef}
+                role="listbox"
+                aria-label="Address suggestions"
+                sx={{
+                  position: 'absolute',
+                  top: '100%',
+                  left: 0,
+                  right: 0,
+                  zIndex: 1400,
+                  bgcolor: 'background.paper',
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  borderRadius: 1,
+                  boxShadow: 3,
+                  mt: 0.5,
+                  maxHeight: 240,
+                  overflowY: 'auto',
+                  p: 0,
+                }}
+              >
+                {data.map(({ place_id, description }) => (
+                  <ListItem key={place_id} disablePadding>
+                    <ListItemButton
+                      role="option"
+                      onClick={() => handleSelect(description, place_id)}
+                      aria-label={description}
+                      sx={{ py: 1 }}
+                    >
+                      <ListItemText
+                        primary={description}
+                        primaryTypographyProps={{ variant: 'body2' }}
+                      />
+                    </ListItemButton>
+                  </ListItem>
+                ))}
+              </List>
+            )}
+          </Box>
 
           <TextField
             label="Unit Count"
@@ -263,17 +414,17 @@ function NewAnalysisDialog({ open, onClose, onSingleFamily }: NewAnalysisDialogP
         </Box>
       </DialogContent>
       <DialogActions>
-        <Button onClick={handleClose} disabled={createDealMutation.isPending}>
+        <Button onClick={handleClose} disabled={createDealMutation.isPending || createSingleFamilyMutation.isPending}>
           Cancel
         </Button>
         <Button
           variant="contained"
           onClick={handleStart}
-          disabled={createDealMutation.isPending || !address.trim()}
-          startIcon={createDealMutation.isPending ? <CircularProgress size={16} /> : undefined}
+          disabled={createDealMutation.isPending || createSingleFamilyMutation.isPending || !address.trim()}
+          startIcon={(createDealMutation.isPending || createSingleFamilyMutation.isPending) ? <CircularProgress size={16} /> : undefined}
           aria-label="Start analysis"
         >
-          {createDealMutation.isPending ? 'Creating…' : 'Start Analysis'}
+          {(createDealMutation.isPending || createSingleFamilyMutation.isPending) ? 'Starting…' : 'Start Analysis'}
         </Button>
       </DialogActions>
     </Dialog>
@@ -414,15 +565,9 @@ function MultifamilyPanel() {
 export function AnalysisLandingPage() {
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
-  const navigate = useNavigate()
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [mobileTab, setMobileTab] = useState(0)
-
-  const handleSingleFamily = (address: string) => {
-    // Navigate to the ARV workflow with the address pre-filled via query param
-    navigate(`/analysis/arv?address=${encodeURIComponent(address)}`)
-  }
 
   return (
     <Box>
@@ -532,7 +677,6 @@ export function AnalysisLandingPage() {
       <NewAnalysisDialog
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}
-        onSingleFamily={handleSingleFamily}
       />
     </Box>
   )

@@ -25,7 +25,13 @@ report_generator = ReportGenerator()
 
 
 def handle_errors(f):
-    """Decorator for consistent error handling."""
+    """Decorator for consistent error handling.
+
+    RealEstateAnalysisException subclasses (e.g. GeminiAPIError) are re-raised
+    so Flask's registered error handler (handle_real_estate_exception) can
+    return the correct status code and structured payload.  All other exceptions
+    are caught here and returned as generic 500 responses.
+    """
     @wraps(f)
     def decorated_function(*args, **kwargs):
         try:
@@ -49,6 +55,12 @@ def handle_errors(f):
                 'field': str(e)
             }), 400
         except Exception as e:
+            from app.exceptions import RealEstateAnalysisException
+            # Let domain exceptions propagate to Flask's registered error handler
+            # so they return the correct status code and structured payload.
+            if isinstance(e, RealEstateAnalysisException):
+                raise
+
             # Check if it's an HTTP exception (like UnsupportedMediaType)
             if hasattr(e, 'code') and hasattr(e, 'description'):
                 logger.warning(f"HTTP error {e.code}: {e.description}")
@@ -60,7 +72,7 @@ def handle_errors(f):
             logger.error(f"Unexpected error: {str(e)}", exc_info=True)
             return jsonify({
                 'error': 'Internal server error',
-                'message': 'An unexpected error occurred'
+                'message': 'An unexpected error occurred',
             }), 500
     return decorated_function
 
@@ -100,7 +112,9 @@ def start_analysis():
     # Start analysis
     result = workflow_controller.start_analysis(
         address=data['address'],
-        user_id=data['user_id']
+        user_id=data['user_id'],
+        latitude=data.get('latitude'),
+        longitude=data.get('longitude'),
     )
     
     logger.info(f"Started analysis session {result['session_id']} for user {data['user_id']}")
@@ -169,6 +183,75 @@ def advance_to_step(session_id, step_number):
             'message': f'Step number must be between 1 and 6'
         }), 400
     
+    # Step 2 (COMPARABLE_SEARCH) can run async or sync based on configuration
+    if target_step == WorkflowStep.COMPARABLE_SEARCH:
+        from app.models import AnalysisSession
+        from app import db
+        from datetime import datetime
+        import os
+
+        session = AnalysisSession.query.filter_by(session_id=session_id).first()
+        if not session:
+            return jsonify({'error': 'Session not found'}), 404
+
+        # Enforce sequential step ordering for the async path
+        if session.current_step.value + 1 != WorkflowStep.COMPARABLE_SEARCH.value:
+            return jsonify({
+                'error': 'Invalid request',
+                'message': f'Cannot advance to COMPARABLE_SEARCH from {session.current_step.name}. Must advance sequentially.'
+            }), 400
+
+        # Validate step 1 is complete before accepting
+        workflow_controller._validate_step_completion(session, WorkflowStep.PROPERTY_FACTS)
+
+        # Check if async mode is enabled (defaults to false for ease of setup)
+        use_async = os.getenv('USE_ASYNC_COMPARABLE_SEARCH', 'false').lower() == 'true'
+
+        if use_async:
+            # Try to use Celery for async processing
+            try:
+                from celery_worker import run_comparable_search_task
+                
+                session.loading = True
+                session.updated_at = datetime.utcnow()
+                db.session.commit()
+
+                run_comparable_search_task.delay(session_id)
+
+                logger.info(f"Enqueued comparable search for session {session_id}")
+                return jsonify({'status': 'accepted', 'session_id': session_id}), 202
+            except Exception as e:
+                # Celery not available, fall back to synchronous
+                logger.warning(f"Celery unavailable, falling back to synchronous search: {e}")
+                # Reset loading flag that was set before the failed enqueue
+                session.loading = False
+                db.session.commit()
+        
+        # Run synchronously (either because async is disabled or Celery failed)
+        logger.info(f"Running comparable search synchronously for session {session_id}")
+        result = workflow_controller.advance_to_step(
+            session_id=session_id,
+            target_step=target_step,
+            approval_data=data.get('approval_data')
+        )
+        # After a successful synchronous comparable search, automatically advance
+        # to COMPARABLE_REVIEW so the user lands directly on the review step.
+        if result.get('current_step') == WorkflowStep.COMPARABLE_SEARCH.name:
+            from app.models import AnalysisSession
+            from app import db
+            from datetime import datetime
+            session = AnalysisSession.query.filter_by(session_id=session_id).first()
+            if session:
+                completed_steps = list(session.completed_steps or [])
+                if WorkflowStep.COMPARABLE_SEARCH.name not in completed_steps:
+                    completed_steps.append(WorkflowStep.COMPARABLE_SEARCH.name)
+                session.completed_steps = completed_steps
+                session.current_step = WorkflowStep.COMPARABLE_REVIEW
+                session.updated_at = datetime.utcnow()
+                db.session.commit()
+                result['current_step'] = WorkflowStep.COMPARABLE_REVIEW.name
+        return jsonify(result), 200
+
     # Advance to step
     result = workflow_controller.advance_to_step(
         session_id=session_id,

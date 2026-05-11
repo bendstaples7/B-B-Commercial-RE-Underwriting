@@ -1,7 +1,7 @@
 """Pytest configuration and fixtures."""
 import pytest
 import os
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from app import create_app, db
 from tests.e2e_setup import seed_test_data
 from tests.mock_apis import MockAPIFactory
@@ -34,17 +34,29 @@ _MOCK_PROPERTY_FACTS = {
 @pytest.fixture
 def app():
     """Create application for testing."""
-    # Set environment variable before creating app
+    # Set environment variables before creating app.
+    # FLASK_ENV must be 'testing' so create_app skips the auto-migrate block
+    # (which only runs when effective_env == 'development').  Without this,
+    # celery_worker.py's load_dotenv() sets FLASK_ENV=development from .env,
+    # causing Alembic to run against the empty in-memory SQLite DB and fail.
     os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
+    os.environ['FLASK_ENV'] = 'testing'
 
     app = create_app('testing')
     app.config['TESTING'] = True
 
     # Patch PropertyDataService.fetch_property_facts so tests never make
     # real HTTP calls to the Cook County Assessor API.
+    # Also patch run_comparable_search_task.delay so tests never attempt to
+    # connect to a Redis broker — the Celery task is a no-op in tests.
+    import celery_worker as _celery_worker
     with patch(
         'app.services.property_data_service.PropertyDataService.fetch_property_facts',
         return_value=_MOCK_PROPERTY_FACTS,
+    ), patch.object(
+        _celery_worker.run_comparable_search_task,
+        'delay',
+        return_value=MagicMock(),
     ):
         with app.app_context():
             db.create_all()
@@ -52,9 +64,11 @@ def app():
             db.session.remove()
             db.drop_all()
 
-    # Clean up environment variable
+    # Clean up environment variables
     if 'DATABASE_URL' in os.environ:
         del os.environ['DATABASE_URL']
+    if 'FLASK_ENV' in os.environ:
+        del os.environ['FLASK_ENV']
 
 @pytest.fixture
 def client(app):
@@ -82,3 +96,20 @@ def mock_apis_with_failures(mock_apis):
     MockAPIFactory.configure_failure_scenario(mock_apis, ['mls'])
     yield mock_apis
     MockAPIFactory.reset_all_mocks(mock_apis)
+
+@pytest.fixture
+def db_session(app):
+    """Provide a SQLAlchemy session for direct ORM access in tests.
+
+    Bound to the in-memory SQLite test database created by the ``app``
+    fixture.  All four cache models (ParcelUniverseCache, ParcelSalesCache,
+    ImprovementCharacteristicsCache, SyncLog) are available because
+    ``db.create_all()`` is called inside the ``app`` fixture and all models
+    are registered via ``app/models/__init__.py``.
+
+    The session is rolled back after each test to ensure full isolation —
+    no data written in one test leaks into another.
+    """
+    with app.app_context():
+        yield db.session
+        db.session.rollback()

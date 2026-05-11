@@ -18,8 +18,12 @@ Requirements: 8.1-8.14, 10.6, 10.7
 
 from __future__ import annotations
 
+import logging
+import time
 from decimal import Decimal
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from app.services.multifamily.pro_forma_constants import (
     HORIZON_MONTHS,
@@ -347,7 +351,11 @@ def _compute_summary(
 # ---------------------------------------------------------------------------
 
 
-def compute_pro_forma(inputs: DealInputs) -> ProFormaComputation:
+def compute_pro_forma(
+    inputs: DealInputs,
+    inputs_hash: Optional[str] = None,
+    cache_hit: bool = False,
+) -> ProFormaComputation:
     """Compute the full 24-month pro forma from frozen inputs.
 
     This is a pure function — no database access, no I/O, no mutation of inputs.
@@ -370,10 +378,18 @@ def compute_pro_forma(inputs: DealInputs) -> ProFormaComputation:
 
     Args:
         inputs: Frozen DealInputs snapshot.
+        inputs_hash: Pre-computed SHA-256 hex hash of the inputs (optional).
+            When provided by the caller (e.g. DashboardService), it is
+            included in the INFO log line. If omitted, logged as None.
+        cache_hit: Whether this invocation is serving a cached result.
+            Passed by the caller; always False when the engine is computing
+            fresh results. Included in the INFO log line.
 
     Returns:
         ProFormaComputation with full schedule, summary, and missing-input flags.
     """
+    _start_ms = time.monotonic()
+
     # Step 1: Scan for missing inputs (Req 8.14)
     missing_inputs_a, missing_inputs_b = _scan_missing_inputs(inputs)
 
@@ -387,6 +403,17 @@ def compute_pro_forma(inputs: DealInputs) -> ProFormaComputation:
 
     # Collect all unit_ids from rent_roll (these are the units we compute for)
     all_unit_ids = [rr.unit_id for rr in inputs.rent_roll]
+
+    logger.debug(
+        "compute_pro_forma: deal_id=%s unit_count=%d rent_roll_entries=%d "
+        "rehab_plan_entries=%d missing_a=%s missing_b=%s",
+        inputs.deal.deal_id,
+        inputs.deal.unit_count,
+        len(inputs.rent_roll),
+        len(inputs.rehab_plan),
+        missing_inputs_a,
+        missing_inputs_b,
+    )
 
     # Step 2: Per-unit scheduled rent for months 1..24 (Req 8.1)
     per_unit_schedule: dict[str, tuple[Decimal, ...]] = {}
@@ -548,6 +575,12 @@ def compute_pro_forma(inputs: DealInputs) -> ProFormaComputation:
         )
         monthly_rows.append(row)
 
+        logger.debug(
+            "month=%d gsr=%s vacancy_loss=%s egi=%s opex_total=%s noi=%s "
+            "net_cash_flow=%s ds_a=%s ds_b=%s capex=%s",
+            m, gsr, vacancy_loss, egi, opex_total, noi,
+            net_cash_flow, debt_service_a, debt_service_b, capex_spend,
+        )
     # Step 14: Sources & Uses (Reqs 10.1-10.5)
     su_a: Optional[SourcesAndUses] = None
     if not scenario_a_has_missing and lender_a is not None and loan_amount_a is not None:
@@ -577,6 +610,28 @@ def compute_pro_forma(inputs: DealInputs) -> ProFormaComputation:
     summary, su_warnings = _compute_summary(
         monthly_rows, scenario_a_has_missing, scenario_b_has_missing,
         su_a, su_b,
+    )
+
+    ms_elapsed = int((time.monotonic() - _start_ms) * 1000)
+
+    logger.debug(
+        "compute_pro_forma summary: deal_id=%s in_place_noi=%s stabilized_noi=%s "
+        "in_place_dscr_a=%s stabilized_dscr_a=%s in_place_dscr_b=%s stabilized_dscr_b=%s",
+        inputs.deal.deal_id,
+        summary.in_place_noi,
+        summary.stabilized_noi,
+        summary.in_place_dscr_a,
+        summary.stabilized_dscr_a,
+        summary.in_place_dscr_b,
+        summary.stabilized_dscr_b,
+    )
+
+    logger.info(
+        "compute_pro_forma: deal_id=%s inputs_hash=%s ms_elapsed=%d cache_hit=%s",
+        inputs.deal.deal_id,
+        inputs_hash,
+        ms_elapsed,
+        cache_hit,
     )
 
     return ProFormaComputation(

@@ -25,6 +25,12 @@ from app.models.address_group_analysis import AddressGroupAnalysis
 # Lead scoring models
 from app.models.lead_score import LeadScore
 
+# Chicago Socrata local cache models
+from app.models.parcel_universe_cache import ParcelUniverseCache
+from app.models.parcel_sales_cache import ParcelSalesCache
+from app.models.improvement_characteristics_cache import ImprovementCharacteristicsCache
+from app.models.sync_log import SyncLog
+
 # Multifamily underwriting models
 from app.models.deal import Deal
 from app.models.unit import Unit
@@ -85,4 +91,9 @@ __all__ = [
     'ProFormaResult',
     'LeadDealLink',
     'DealAuditTrail',
+    # Chicago Socrata local cache
+    'ParcelUniverseCache',
+    'ParcelSalesCache',
+    'ImprovementCharacteristicsCache',
+    'SyncLog',
 ]

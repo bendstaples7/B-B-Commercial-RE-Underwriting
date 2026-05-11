@@ -100,7 +100,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <BrowserRouter>
-          <App />
+            <App />
         </BrowserRouter>
       </ThemeProvider>
     </QueryClientProvider>

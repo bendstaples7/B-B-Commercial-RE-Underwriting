@@ -1,5 +1,5 @@
 """Marshmallow schemas for request validation."""
-from marshmallow import Schema, fields, validate, ValidationError, validates_schema, validates
+from marshmallow import Schema, fields, validate, ValidationError, validates_schema, validates, EXCLUDE
 from datetime import datetime
 
 
@@ -7,43 +7,53 @@ class StartAnalysisSchema(Schema):
     """Schema for starting a new analysis."""
     address = fields.Str(required=True, validate=validate.Length(min=5, max=500))
     user_id = fields.Str(required=True, validate=validate.Length(min=1, max=255))
+    latitude = fields.Float(load_default=None, allow_none=True)
+    longitude = fields.Float(load_default=None, allow_none=True)
 
 
 class PropertyFactsSchema(Schema):
-    """Schema for property facts data."""
+    """Schema for property facts data.
+
+    Unknown fields (e.g. user_id injected by middleware) are silently ignored.
+    All fields except address are optional so the endpoint accepts partial
+    updates — the workflow controller merges the diff onto the existing record.
+    """
+    class Meta:
+        unknown = EXCLUDE
+
     address = fields.Str(required=True, validate=validate.Length(min=5, max=500))
-    property_type = fields.Str(required=True, validate=validate.OneOf([
+    property_type = fields.Str(load_default=None, validate=validate.OneOf([
         'SINGLE_FAMILY', 'MULTI_FAMILY', 'COMMERCIAL'
     ]))
-    units = fields.Int(required=True, validate=validate.Range(min=1))
-    bedrooms = fields.Int(required=True, validate=validate.Range(min=0))
-    bathrooms = fields.Float(required=True, validate=validate.Range(min=0))
-    square_footage = fields.Int(required=True, validate=validate.Range(min=1))
-    lot_size = fields.Int(required=True, validate=validate.Range(min=0))
-    year_built = fields.Int(required=True)
-    construction_type = fields.Str(required=True, validate=validate.OneOf([
+    units = fields.Int(load_default=None, validate=validate.Range(min=1))
+    bedrooms = fields.Int(load_default=None, validate=validate.Range(min=0))
+    bathrooms = fields.Float(load_default=None, validate=validate.Range(min=0))
+    square_footage = fields.Int(load_default=None, validate=validate.Range(min=1))
+    lot_size = fields.Int(load_default=None, validate=validate.Range(min=0))
+    year_built = fields.Int(load_default=None)
+    construction_type = fields.Str(load_default=None, validate=validate.OneOf([
         'FRAME', 'BRICK', 'MASONRY', 'CONCRETE', 'STEEL'
     ]))
     basement = fields.Bool(load_default=False)
     parking_spaces = fields.Int(load_default=0, validate=validate.Range(min=0))
-    last_sale_price = fields.Float(allow_none=True)
-    last_sale_date = fields.Date(allow_none=True)
-    assessed_value = fields.Float(required=True, validate=validate.Range(min=0))
-    annual_taxes = fields.Float(required=True, validate=validate.Range(min=0))
-    zoning = fields.Str(required=True, validate=validate.Length(min=1, max=100))
-    interior_condition = fields.Str(required=True, validate=validate.OneOf([
+    last_sale_price = fields.Float(load_default=None, allow_none=True)
+    last_sale_date = fields.Date(load_default=None, allow_none=True)
+    assessed_value = fields.Float(load_default=None, validate=validate.Range(min=0))
+    annual_taxes = fields.Float(load_default=None, validate=validate.Range(min=0))
+    zoning = fields.Str(load_default='', validate=validate.Length(min=0, max=100))
+    interior_condition = fields.Str(load_default=None, validate=validate.OneOf([
         'NEEDS_GUT', 'POOR', 'AVERAGE', 'NEW_RENO', 'HIGH_END'
     ]))
-    latitude = fields.Float(allow_none=True)
-    longitude = fields.Float(allow_none=True)
-    data_source = fields.Str(allow_none=True)
+    latitude = fields.Float(load_default=None, allow_none=True)
+    longitude = fields.Float(load_default=None, allow_none=True)
+    data_source = fields.Str(load_default=None, allow_none=True)
     user_modified_fields = fields.List(fields.Str(), load_default=[])
-    
+
     @validates_schema
     def validate_year_built(self, data, **kwargs):
         """Validate year built is within reasonable range."""
         year_built = data.get('year_built')
-        if year_built and (year_built < 1800 or year_built > datetime.now().year):
+        if year_built and year_built != 0 and (year_built < 1800 or year_built > datetime.now().year):
             raise ValidationError(
                 f'Year built must be between 1800 and {datetime.now().year}',
                 field_name='year_built'
@@ -828,3 +838,53 @@ class FundingSourceSchema(Schema):
     total_available = fields.Float(required=True, validate=validate.Range(min=0))
     interest_rate = fields.Float(load_default=0, validate=validate.Range(min=0, max=0.30))
     origination_fee_rate = fields.Float(load_default=0, validate=validate.Range(min=0, max=0.30))
+
+
+# ---------------------------------------------------------------------------
+# Socrata Cache Schemas
+# ---------------------------------------------------------------------------
+
+ACCEPTED_SYNC_DATASETS = ['all', 'parcel_universe', 'parcel_sales', 'improvement_characteristics']
+
+
+class SocrataSyncRequestSchema(Schema):
+    """Schema for POST /api/cache/socrata/sync request body.
+
+    Validates the ``dataset`` field against the accepted values list.
+    Returns HTTP 400 with ``accepted_values`` in the error payload on invalid input.
+
+    Validates: Requirements 5.6, 5.8, 5.9
+    """
+    dataset = fields.Str(required=True)
+
+    @validates('dataset')
+    def validate_dataset(self, value):
+        """Reject unknown dataset names and include the accepted list in the error."""
+        if value not in ACCEPTED_SYNC_DATASETS:
+            raise ValidationError(
+                f"Invalid dataset '{value}'.",
+                data={'accepted_values': ACCEPTED_SYNC_DATASETS},
+            )
+
+
+class DatasetStatusResponseSchema(Schema):
+    """Schema for serializing a DatasetStatus dataclass instance.
+
+    Serializes the fields returned by CacheStatusService.get_dataset_status():
+      - dataset_name  : str
+      - row_count     : int
+      - last_synced_at: ISO 8601 string or null
+      - status        : str ('empty' | 'fresh' | 'stale' | 'never_synced')
+      - last_error    : str or null
+
+    Validates: Requirements 5.1, 5.7
+    """
+    dataset_name = fields.Str(dump_only=True)
+    row_count = fields.Int(dump_only=True)
+    last_synced_at = fields.DateTime(
+        dump_only=True,
+        allow_none=True,
+        format='iso',  # serializes as ISO 8601 string
+    )
+    status = fields.Str(dump_only=True)
+    last_error = fields.Str(dump_only=True, allow_none=True)

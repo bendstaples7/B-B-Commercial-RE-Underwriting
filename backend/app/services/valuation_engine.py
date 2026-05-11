@@ -6,6 +6,10 @@ from app.models.comparable_sale import ComparableSale
 from app.models.ranked_comparable import RankedComparable
 from app.models.valuation_result import ValuationResult, ComparableValuation
 
+# Full-confidence comparable count — at or above this number the confidence
+# score is driven entirely by recency and proximity quality.
+_FULL_CONFIDENCE_COMP_COUNT = 5
+
 
 class ValuationEngine:
     """
@@ -429,6 +433,87 @@ class ValuationEngine:
         aggressive = statistics.quantiles(sorted_vals, n=4)[2] if len(sorted_vals) >= 4 else sorted_vals[-1]
         
         return conservative, likely, aggressive
+
+    def compute_confidence_score(
+        self,
+        comp_count: int,
+        avg_recency_score: float,
+        avg_proximity_score: float,
+    ) -> float:
+        """Compute a 0–100 confidence score for a valuation.
+
+        The score is the product of three independent factors:
+
+        1. **Count factor** (0–1): scales linearly from 0 at 0 comparables to
+           1.0 at ``_FULL_CONFIDENCE_COMP_COUNT`` (5).  Having fewer than 5
+           comparables proportionally reduces confidence.
+
+        2. **Recency factor** (0–1): the average recency score of the
+           comparables used, normalised to [0, 1].
+
+        3. **Proximity factor** (0–1): the average proximity score of the
+           comparables used, normalised to [0, 1].
+
+        The three factors are multiplied together and scaled to [0, 100].
+
+        Args:
+            comp_count: Number of comparables actually used (≥ 1).
+            avg_recency_score: Average recency score across used comparables (0–100).
+            avg_proximity_score: Average proximity score across used comparables (0–100).
+
+        Returns:
+            Confidence score in the range [0, 100].
+        """
+        if comp_count <= 0:
+            return 0.0
+
+        count_factor = min(comp_count / _FULL_CONFIDENCE_COMP_COUNT, 1.0)
+        recency_factor = max(0.0, min(avg_recency_score / 100.0, 1.0))
+        proximity_factor = max(0.0, min(avg_proximity_score / 100.0, 1.0))
+
+        raw = count_factor * recency_factor * proximity_factor
+        return round(raw * 100.0, 2)
+
+    def apply_confidence_widening(
+        self,
+        conservative: float,
+        likely: float,
+        aggressive: float,
+        confidence_score: float,
+    ) -> Tuple[float, float, float]:
+        """Widen the ARV range proportionally when confidence is below 100.
+
+        When confidence is 100 the range is unchanged.  As confidence falls
+        toward 0 the conservative end decreases and the aggressive end
+        increases, reflecting greater uncertainty.  The likely (median) value
+        is never changed.
+
+        The maximum widening at confidence = 0 is ±20 % of the likely ARV.
+
+        Args:
+            conservative: Conservative ARV estimate.
+            likely: Likely (median) ARV estimate.
+            aggressive: Aggressive ARV estimate.
+            confidence_score: Confidence score in [0, 100].
+
+        Returns:
+            Tuple of (adjusted_conservative, likely, adjusted_aggressive).
+        """
+        if likely <= 0:
+            return conservative, likely, aggressive
+
+        # Fraction of maximum widening to apply (0 at full confidence, 1 at zero confidence)
+        uncertainty = 1.0 - max(0.0, min(confidence_score / 100.0, 1.0))
+
+        # Maximum widening: 20 % of the likely ARV
+        max_widen = likely * 0.20
+
+        widen_amount = uncertainty * max_widen
+
+        adjusted_conservative = conservative - widen_amount
+        adjusted_aggressive = aggressive + widen_amount
+
+        return adjusted_conservative, likely, adjusted_aggressive
     
     def calculate_valuations(
         self,
@@ -437,30 +522,45 @@ class ValuationEngine:
         session_id: int
     ) -> ValuationResult:
         """
-        Generate valuation models using top 5 ranked comparables.
-        
+        Generate valuation models using up to 5 ranked comparables.
+
+        Accepts 1–5 comparables (uses whatever is available).  When fewer than
+        5 are provided the confidence score is reduced proportionally and the
+        ARV range is widened to reflect the greater uncertainty.
+
         Selects valuation methods based on property type:
         - Residential: price per sqft, price per unit, price per bedroom, adjusted value
         - Commercial: price per sqft, income capitalization, price per unit, adjusted value
         
         Args:
             subject: Subject property facts
-            top_comparables: List of top 5 ranked comparables
+            top_comparables: List of ranked comparables (1–5 used)
             session_id: Analysis session ID
             
         Returns:
-            ValuationResult with ARV range and comparable valuations
+            ValuationResult with ARV range, confidence score, and comparable valuations
         """
-        # Take only top 5 comparables
+        # Take up to 5 comparables — whatever is available (minimum 1)
         top_5 = top_comparables[:5]
         
         is_residential = self._is_residential(subject.property_type)
         
         all_valuations = []
         comparable_valuations = []
+
+        # Accumulate scores for confidence calculation
+        recency_scores: List[float] = []
+        proximity_scores: List[float] = []
         
         for ranked_comp in top_5:
             comp = ranked_comp.comparable
+
+            # Collect scores for confidence calculation (use 50 as neutral default
+            # when the ranked comparable doesn't carry individual scores)
+            recency_val = getattr(ranked_comp, 'recency_score', None)
+            proximity_val = getattr(ranked_comp, 'proximity_score', None)
+            recency_scores.append(recency_val if recency_val is not None else 50.0)
+            proximity_scores.append(proximity_val if proximity_val is not None else 50.0)
             
             # Calculate valuation methods based on property type
             price_per_sqft_val = self.calculate_price_per_sqft(comp, subject)
@@ -502,14 +602,29 @@ class ValuationEngine:
             )
             comparable_valuations.append(comp_valuation)
         
-        # Compute ARV range
+        # Compute base ARV range from all valuation estimates
         conservative, likely, aggressive = self.compute_arv_range(all_valuations)
+
+        # Compute confidence score
+        avg_recency = statistics.mean(recency_scores) if recency_scores else 50.0
+        avg_proximity = statistics.mean(proximity_scores) if proximity_scores else 50.0
+        confidence_score = self.compute_confidence_score(
+            comp_count=len(top_5),
+            avg_recency_score=avg_recency,
+            avg_proximity_score=avg_proximity,
+        )
+
+        # Widen ARV range when confidence is below 100
+        conservative, likely, aggressive = self.apply_confidence_widening(
+            conservative, likely, aggressive, confidence_score
+        )
         
         # Generate key drivers (simplified - can be enhanced)
         key_drivers = [
             f"Based on {len(top_5)} top-ranked comparable sales",
             f"Average sale price: ${statistics.mean([c.comparable.sale_price for c in top_5]):,.0f}",
             f"Price range: ${min([c.comparable.sale_price for c in top_5]):,.0f} - ${max([c.comparable.sale_price for c in top_5]):,.0f}",
+            f"Confidence score: {confidence_score:.0f}/100",
         ]
         
         # Create ValuationResult
@@ -519,7 +634,8 @@ class ValuationEngine:
             likely_arv=likely,
             aggressive_arv=aggressive,
             all_valuations=all_valuations,
-            key_drivers=key_drivers
+            key_drivers=key_drivers,
+            confidence_score=confidence_score,
         )
         
         # Associate comparable valuations
