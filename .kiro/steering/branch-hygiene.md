@@ -4,7 +4,7 @@
 
 Before starting any task on a feature branch, run:
 
-```
+```bash
 git fetch origin main
 git log HEAD..origin/main --oneline
 ```
@@ -12,7 +12,7 @@ git log HEAD..origin/main --oneline
 If this shows any commits, those commits are on `main` but NOT on the current branch.
 **You must merge them before writing any code:**
 
-```
+```bash
 git merge origin/main
 ```
 

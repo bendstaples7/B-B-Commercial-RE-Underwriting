@@ -41,18 +41,37 @@ def upgrade():
         batch_op.add_column(
             sa.Column('cap_rate_confidence', sa.Float(), nullable=True)
         )
-        # Drop the cap_rate range CHECK constraint
+        # Drop the old cap_rate range CHECK constraint (was NOT NULL > 0)
         try:
             batch_op.drop_constraint('ck_sale_comps_cap_rate_range', type_='check')
         except Exception:
             # Constraint may not exist in all DB backends (SQLite ignores named constraints)
             pass
+        # Re-create cap_rate range constraint allowing NULL (nullable column)
+        batch_op.create_check_constraint(
+            'ck_sale_comps_cap_rate_range',
+            'observed_cap_rate IS NULL OR (observed_cap_rate > 0 AND observed_cap_rate <= 0.25)',
+        )
+        # Add confidence constraint — must be one of the documented sentinel values
+        batch_op.create_check_constraint(
+            'ck_sale_comps_cap_rate_confidence_values',
+            'cap_rate_confidence IS NULL OR cap_rate_confidence IN (0.0, 0.5, 1.0)',
+        )
 
 
 def downgrade():
     with op.batch_alter_table('sale_comps', schema=None) as batch_op:
         batch_op.drop_column('cap_rate_confidence')
         batch_op.drop_column('noi')
+        # Drop the constraints added in upgrade before restoring the old schema
+        try:
+            batch_op.drop_constraint('ck_sale_comps_cap_rate_confidence_values', type_='check')
+        except Exception:
+            pass
+        try:
+            batch_op.drop_constraint('ck_sale_comps_cap_rate_range', type_='check')
+        except Exception:
+            pass
 
     # Backfill NULL cap rates before restoring NOT NULL constraint.
     # Use 0.065 (6.5%) as a safe default that satisfies the restored CHECK constraint.

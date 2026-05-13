@@ -199,8 +199,13 @@ def fetch_rent_comps_ai(deal_id):
         try:
             service.add_rent_comp(deal_id, comp)
             added += 1
-        except Exception as exc:
+        except (ValueError, KeyError) as exc:
+            # Expected data-quality failures (missing/invalid fields from Gemini)
             errors.append(str(exc))
+        except Exception:
+            # Unexpected error (DB connection, etc.) — roll back and propagate
+            db.session.rollback()
+            raise
 
     db.session.commit()
 

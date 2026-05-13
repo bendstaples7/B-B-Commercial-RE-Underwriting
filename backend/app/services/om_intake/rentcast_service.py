@@ -39,21 +39,21 @@ def _build_cache_key(
     bathrooms: float | None,
     square_footage: int | None,
 ) -> str:
-    """Build a deterministic cache key string from all key fields.
+    """Build a delimiter-safe cache key using JSON serialization.
 
-    NULLs are replaced with empty string so the key is stable and unique
-    even when optional fields are absent. This avoids the SQL NULL != NULL
-    problem that would allow duplicate rows through a multi-column unique
-    constraint on nullable columns.
+    JSON serialization avoids the '|' delimiter collision problem where
+    address_key or unit_type_label values containing '|' would produce
+    identical keys for different inputs.
     """
+    import json
     parts = [
         address_key,
         unit_type_label,
-        str(bedrooms) if bedrooms is not None else '',
-        str(bathrooms) if bathrooms is not None else '',
-        str(square_footage) if square_footage is not None else '',
+        bedrooms,       # None serializes as JSON null — distinct from 0
+        bathrooms,
+        square_footage,
     ]
-    return '|'.join(parts)
+    return json.dumps(parts, separators=(',', ':'), sort_keys=False)
 
 
 class RentCastService:
@@ -220,8 +220,11 @@ class RentCastService:
             try:
                 from app import db
                 db.session.rollback()
-            except Exception:
-                pass
+            except Exception as rollback_exc:
+                logger.error(
+                    "RentCastService: rollback failed after cache write error: %s",
+                    rollback_exc, exc_info=True,
+                )
 
     def _fetch_from_api(
         self,
@@ -257,18 +260,50 @@ class RentCastService:
             return {"market_rent_estimate": None, "market_rent_low": None,
                     "market_rent_high": None, "comparables_count": 0}
         except requests.exceptions.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else "no response"
+            body = exc.response.text[:200] if exc.response is not None else "no response body"
             logger.warning(
                 "RentCastService: HTTP %s for address=%r: %s",
-                exc.response.status_code, address, exc.response.text[:200],
+                status_code, address, body,
+            )
+            return {"market_rent_estimate": None, "market_rent_low": None,
+                    "market_rent_high": None, "comparables_count": 0}
+        except requests.exceptions.RequestException as exc:
+            logger.warning(
+                "RentCastService: connection/network error for address=%r: %s",
+                address, exc,
             )
             return {"market_rent_estimate": None, "market_rent_low": None,
                     "market_rent_high": None, "comparables_count": 0}
 
-        data = response.json()
-        rent = data.get("rent")
-        low = data.get("rentRangeLow")
-        high = data.get("rentRangeHigh")
+        try:
+            data = response.json()
+        except ValueError as exc:
+            logger.warning("RentCastService: invalid JSON response for address=%r: %s", address, exc)
+            return {"market_rent_estimate": None, "market_rent_low": None,
+                    "market_rent_high": None, "comparables_count": 0}
+
+        if not isinstance(data, dict):
+            logger.warning("RentCastService: unexpected response type %s for address=%r", type(data).__name__, address)
+            return {"market_rent_estimate": None, "market_rent_low": None,
+                    "market_rent_high": None, "comparables_count": 0}
+
+        def _safe_float(val: Any) -> float | None:
+            if val is None:
+                return None
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                logger.warning("RentCastService: could not parse numeric value %r", val)
+                return None
+
+        rent = _safe_float(data.get("rent"))
+        low = _safe_float(data.get("rentRangeLow"))
+        high = _safe_float(data.get("rentRangeHigh"))
         comparables = data.get("comparables", [])
+        if not isinstance(comparables, list):
+            logger.warning("RentCastService: 'comparables' is not a list (%s), defaulting to []", type(comparables).__name__)
+            comparables = []
 
         logger.info(
             "RentCastService: API result address=%r estimate=%s low=%s high=%s comps=%d",
@@ -276,8 +311,8 @@ class RentCastService:
         )
 
         return {
-            "market_rent_estimate": float(rent) if rent is not None else None,
-            "market_rent_low": float(low) if low is not None else None,
-            "market_rent_high": float(high) if high is not None else None,
+            "market_rent_estimate": rent,
+            "market_rent_low": low,
+            "market_rent_high": high,
             "comparables_count": len(comparables),
         }

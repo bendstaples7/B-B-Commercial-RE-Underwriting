@@ -128,11 +128,20 @@ def fetch_sale_comps_ai(deal_id):
     added = 0
     errors = []
     for comp in comps:
+        # Use a savepoint so a failed insert doesn't roll back earlier successes
         try:
+            sp = db.session.begin_nested()
             service.add_sale_comp(deal_id, comp)
+            sp.commit()
             added += 1
-        except Exception as exc:
+        except (ValueError, KeyError) as exc:
+            # Expected data-quality failures (missing/invalid fields from Gemini)
+            sp.rollback()
             errors.append(str(exc))
+        except Exception:
+            # Unexpected error — roll back everything and propagate
+            db.session.rollback()
+            raise
 
     db.session.commit()
 
