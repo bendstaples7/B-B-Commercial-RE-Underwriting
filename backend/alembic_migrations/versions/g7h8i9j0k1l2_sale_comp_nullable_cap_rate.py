@@ -53,6 +53,12 @@ def downgrade():
     with op.batch_alter_table('sale_comps', schema=None) as batch_op:
         batch_op.drop_column('cap_rate_confidence')
         batch_op.drop_column('noi')
+
+    # Backfill NULL cap rates before restoring NOT NULL constraint.
+    # Use 0.065 (6.5%) as a safe default that satisfies the restored CHECK constraint.
+    op.execute("UPDATE sale_comps SET observed_cap_rate = 0.065 WHERE observed_cap_rate IS NULL")
+
+    with op.batch_alter_table('sale_comps', schema=None) as batch_op:
         batch_op.alter_column(
             'observed_cap_rate',
             existing_type=sa.Numeric(precision=8, scale=6),

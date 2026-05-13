@@ -512,7 +512,7 @@ def update_scoring_weights():
     owner_situation_weight : float (required)
     location_desirability_weight : float (required)
     """
-    data = request.get_json()
+    data = request.get_json(silent=True)
     if not data:
         return jsonify({
             'error': 'Validation error',

@@ -32,6 +32,30 @@ def _normalize_address(address: str) -> str:
     return re.sub(r'\s+', ' ', address.lower().strip())
 
 
+def _build_cache_key(
+    address_key: str,
+    unit_type_label: str,
+    bedrooms: int | None,
+    bathrooms: float | None,
+    square_footage: int | None,
+) -> str:
+    """Build a deterministic cache key string from all key fields.
+
+    NULLs are replaced with empty string so the key is stable and unique
+    even when optional fields are absent. This avoids the SQL NULL != NULL
+    problem that would allow duplicate rows through a multi-column unique
+    constraint on nullable columns.
+    """
+    parts = [
+        address_key,
+        unit_type_label,
+        str(bedrooms) if bedrooms is not None else '',
+        str(bathrooms) if bathrooms is not None else '',
+        str(square_footage) if square_footage is not None else '',
+    ]
+    return '|'.join(parts)
+
+
 class RentCastService:
     """Fetches rent estimates from the RentCast API with DB caching.
 
@@ -138,15 +162,10 @@ class RentCastService:
         try:
             from app.models.rentcast_cache import RentCastCache
             cutoff = datetime.utcnow() - timedelta(days=_CACHE_TTL_DAYS)
+            cache_key = _build_cache_key(address_key, unit_type_label, bedrooms, bathrooms, square_footage)
             return (
                 RentCastCache.query
-                .filter_by(
-                    address_key=address_key,
-                    unit_type_label=unit_type_label,
-                    bedrooms=bedrooms,
-                    bathrooms=Decimal(str(bathrooms)) if bathrooms is not None else None,
-                    square_footage=square_footage,
-                )
+                .filter_by(cache_key=cache_key)
                 .filter(RentCastCache.fetched_at >= cutoff)
                 .order_by(RentCastCache.fetched_at.desc())
                 .first()
@@ -172,14 +191,10 @@ class RentCastService:
             from app import db
             from app.models.rentcast_cache import RentCastCache
 
+            cache_key = _build_cache_key(address_key, unit_type_label, bedrooms, bathrooms, square_footage)
+
             # Delete any existing entry for this key (upsert via delete+insert)
-            RentCastCache.query.filter_by(
-                address_key=address_key,
-                unit_type_label=unit_type_label,
-                bedrooms=bedrooms,
-                bathrooms=Decimal(str(bathrooms)) if bathrooms is not None else None,
-                square_footage=square_footage,
-            ).delete()
+            RentCastCache.query.filter_by(cache_key=cache_key).delete()
 
             entry = RentCastCache(
                 address_key=address_key,
@@ -187,6 +202,7 @@ class RentCastService:
                 bedrooms=bedrooms,
                 bathrooms=Decimal(str(bathrooms)) if bathrooms is not None else None,
                 square_footage=square_footage,
+                cache_key=cache_key,
                 rent_estimate=Decimal(str(rent_estimate)) if rent_estimate is not None else None,
                 rent_range_low=Decimal(str(rent_range_low)) if rent_range_low is not None else None,
                 rent_range_high=Decimal(str(rent_range_high)) if rent_range_high is not None else None,

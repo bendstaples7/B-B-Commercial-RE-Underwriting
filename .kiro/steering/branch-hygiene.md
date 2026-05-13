@@ -36,10 +36,10 @@ be cherry-picked or re-applied manually.
 
 Pattern that causes regressions:
 1. Branch A opened as PR
-2. More commits added to Branch A after PR opened
-3. PR merged (only includes commits up to when PR was opened)
-4. New branch B created from main — missing the post-PR commits from Branch A
-5. Features from those commits silently disappear
+2. PR merged to main (includes all commits on Branch A at time of merge)
+3. More commits added to Branch A AFTER the merge
+4. New branch B created from main — missing the post-merge commits from Branch A
+5. Features from those post-merge commits silently disappear
 
 ## Rule: `npm install` after any branch switch or merge
 

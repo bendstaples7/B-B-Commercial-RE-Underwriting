@@ -9,7 +9,7 @@ import logging
 
 from flask import Blueprint, jsonify, request
 
-from app import db
+from app import db, limiter
 from app.controllers.multifamily_deal_controller import handle_errors, get_user_id
 from app.schemas import SaleCompCreateSchema
 from app.services.multifamily.deal_service import DealService
@@ -62,6 +62,7 @@ def _check_deal_access(deal_id: int):
 # ---------------------------------------------------------------------------
 
 @multifamily_sale_comp_bp.route('/deals/<int:deal_id>/sale-comps/fetch-ai', methods=['POST'])
+@limiter.limit("10 per hour")
 @handle_errors
 def fetch_sale_comps_ai(deal_id):
     """Use Gemini AI with web search to fetch and bulk-insert sale comps.

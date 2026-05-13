@@ -23,16 +23,17 @@ def upgrade():
         sa.Column('bedrooms', sa.Integer(), nullable=True),
         sa.Column('bathrooms', sa.Numeric(4, 1), nullable=True),
         sa.Column('square_footage', sa.Integer(), nullable=True),
+        # cache_key is a deterministic string combining all key fields (NULLs replaced
+        # with empty string) so the unique constraint works correctly — SQL NULL != NULL
+        # means a UniqueConstraint on nullable columns does not prevent duplicates.
+        sa.Column('cache_key', sa.String(length=700), nullable=False),
         sa.Column('rent_estimate', sa.Numeric(14, 2), nullable=True),
         sa.Column('rent_range_low', sa.Numeric(14, 2), nullable=True),
         sa.Column('rent_range_high', sa.Numeric(14, 2), nullable=True),
         sa.Column('comparables_count', sa.Integer(), nullable=False, server_default='0'),
         sa.Column('fetched_at', sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint('id'),
-        sa.UniqueConstraint(
-            'address_key', 'unit_type_label', 'bedrooms', 'bathrooms', 'square_footage',
-            name='uq_rentcast_cache_key',
-        ),
+        sa.UniqueConstraint('cache_key', name='uq_rentcast_cache_key'),
     )
     op.create_index('ix_rentcast_cache_address_fetched', 'rentcast_cache',
                     ['address_key', 'fetched_at'])

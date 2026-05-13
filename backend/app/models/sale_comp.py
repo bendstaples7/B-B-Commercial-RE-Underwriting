@@ -38,6 +38,14 @@ class SaleComp(db.Model):
 
     __table_args__ = (
         db.CheckConstraint('unit_count > 0', name='ck_sale_comps_unit_count_positive'),
+        db.CheckConstraint(
+            'observed_cap_rate IS NULL OR (observed_cap_rate > 0 AND observed_cap_rate <= 0.25)',
+            name='ck_sale_comps_cap_rate_range',
+        ),
+        db.CheckConstraint(
+            'cap_rate_confidence IS NULL OR cap_rate_confidence IN (0.0, 0.5, 1.0)',
+            name='ck_sale_comps_cap_rate_confidence_values',
+        ),
     )
 
     def __repr__(self):

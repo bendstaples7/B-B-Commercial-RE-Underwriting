@@ -20,6 +20,11 @@ class RentCastCache(db.Model):
     bathrooms = db.Column(db.Numeric(4, 1), nullable=True)
     square_footage = db.Column(db.Integer, nullable=True)
 
+    # Deterministic cache key combining all key fields with NULLs replaced by empty
+    # string. A UniqueConstraint on nullable columns does not prevent duplicates in SQL
+    # (NULL != NULL), so we use this single non-nullable column for the unique index.
+    cache_key = db.Column(db.String(700), nullable=False)
+
     # Cached RentCast response
     rent_estimate = db.Column(db.Numeric(14, 2), nullable=True)
     rent_range_low = db.Column(db.Numeric(14, 2), nullable=True)
@@ -30,10 +35,7 @@ class RentCastCache(db.Model):
     fetched_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     __table_args__ = (
-        db.UniqueConstraint(
-            'address_key', 'unit_type_label', 'bedrooms', 'bathrooms', 'square_footage',
-            name='uq_rentcast_cache_key',
-        ),
+        db.UniqueConstraint('cache_key', name='uq_rentcast_cache_key'),
         db.Index('ix_rentcast_cache_address_fetched', 'address_key', 'fetched_at'),
     )
 

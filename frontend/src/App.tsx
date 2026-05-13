@@ -269,8 +269,13 @@ function App() {
 
   // useLoadScript manages the script tag lifecycle and exposes isLoaded so
   // child components (PropertyFactsForm) know when the Places API is ready.
+  const googleMapsApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
+  if (!googleMapsApiKey) {
+    console.warn('VITE_GOOGLE_MAPS_API_KEY is not set — address autocomplete will not work.')
+  }
+
   const { isLoaded: mapsLoaded } = useLoadScript({
-    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? '',
+    googleMapsApiKey: googleMapsApiKey ?? '',
     libraries: GOOGLE_MAPS_LIBRARIES,
   })
 

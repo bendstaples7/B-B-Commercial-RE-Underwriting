@@ -108,6 +108,5 @@ def get_rehab_rollup(deal_id):
 
     service = RehabService()
     rollup = service.get_monthly_rollup(deal_id)
-    budget_total = service.get_rehab_budget_total(deal_id)
 
     return jsonify(_serialize_monthly_rollup(rollup)), 200
