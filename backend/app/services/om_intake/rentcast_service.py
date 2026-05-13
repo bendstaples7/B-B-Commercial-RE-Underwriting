@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -181,7 +181,7 @@ class RentCastService:
         """Return a fresh RentCastCache row or None."""
         try:
             from app.models.rentcast_cache import RentCastCache
-            cutoff = datetime.utcnow() - timedelta(days=_CACHE_TTL_DAYS)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=_CACHE_TTL_DAYS)
             cache_key = _build_cache_key(address_key, unit_type_label, bedrooms, bathrooms, square_footage, property_type)
             return (
                 RentCastCache.query
@@ -228,7 +228,7 @@ class RentCastService:
                 rent_range_low=Decimal(str(rent_range_low)) if rent_range_low is not None else None,
                 rent_range_high=Decimal(str(rent_range_high)) if rent_range_high is not None else None,
                 comparables_count=comparables_count,
-                fetched_at=datetime.utcnow(),
+                fetched_at=datetime.now(timezone.utc).replace(tzinfo=None),
             )
             db.session.add(entry)
             db.session.commit()
