@@ -654,6 +654,12 @@ export interface Deal {
   created_at: string | null
   updated_at: string | null
   deleted_at: string | null
+  // Nested child records returned by GET /deals/:id
+  units?: MFUnit[]
+  rent_roll_entries?: RentRollEntry[]
+  rehab_plan_entries?: RehabPlanEntry[]
+  funding_sources?: FundingSource[]
+  lender_selections?: DealLenderSelection[]
 }
 
 export interface DealSummary {
@@ -760,9 +766,12 @@ export interface MFSaleComp {
   status: string
   sale_price: string
   close_date: string
-  observed_cap_rate: string
+  observed_cap_rate: string | null
   observed_ppu: string
   distance_miles: string | null
+  noi: string | null
+  /** 1.0 = stated directly, 0.5 = derived from NOI/price, 0.0 = unknown, null = not set */
+  cap_rate_confidence: number | null
 }
 
 export interface SaleCompRollup {
@@ -1043,4 +1052,191 @@ export interface RecalculateResponse {
   message: string
   score?: LeadScoreRecord
   count?: number
+}
+
+// ---------------------------------------------------------------------------
+// Commercial OM PDF Intake Types
+// ---------------------------------------------------------------------------
+
+export enum IntakeStatus {
+  PENDING = 'PENDING',
+  PARSING = 'PARSING',
+  EXTRACTING = 'EXTRACTING',
+  RESEARCHING = 'RESEARCHING',
+  REVIEW = 'REVIEW',
+  CONFIRMED = 'CONFIRMED',
+  FAILED = 'FAILED',
+}
+
+export interface OMFieldValue<T = unknown> {
+  value: T | null
+  confidence: number  // 0.0 to 1.0
+}
+
+export interface UnitMixRow {
+  unit_type_label: OMFieldValue<string>
+  unit_count: OMFieldValue<number>
+  sqft: OMFieldValue<number>
+  current_avg_rent: OMFieldValue<number>
+  proforma_rent: OMFieldValue<number>
+  market_rent_estimate?: OMFieldValue<number>
+  market_rent_low?: OMFieldValue<number>
+  market_rent_high?: OMFieldValue<number>
+}
+
+export interface ExtractedOMData {
+  // Property fields
+  property_address: OMFieldValue<string>
+  property_city: OMFieldValue<string>
+  property_state: OMFieldValue<string>
+  property_zip: OMFieldValue<string>
+  neighborhood: OMFieldValue<string>
+  asking_price: OMFieldValue<number>
+  price_per_unit: OMFieldValue<number>
+  price_per_sqft: OMFieldValue<number>
+  building_sqft: OMFieldValue<number>
+  year_built: OMFieldValue<number>
+  lot_size: OMFieldValue<number>
+  zoning: OMFieldValue<string>
+  unit_count: OMFieldValue<number>
+  // Broker current metrics
+  current_noi: OMFieldValue<number>
+  current_cap_rate: OMFieldValue<number>
+  current_grm: OMFieldValue<number>
+  current_gross_potential_income: OMFieldValue<number>
+  current_effective_gross_income: OMFieldValue<number>
+  current_vacancy_rate: OMFieldValue<number>
+  current_gross_expenses: OMFieldValue<number>
+  // Broker proforma metrics
+  proforma_noi: OMFieldValue<number>
+  proforma_cap_rate: OMFieldValue<number>
+  proforma_grm: OMFieldValue<number>
+  proforma_gross_potential_income: OMFieldValue<number>
+  proforma_effective_gross_income: OMFieldValue<number>
+  proforma_vacancy_rate: OMFieldValue<number>
+  proforma_gross_expenses: OMFieldValue<number>
+  // Unit mix
+  unit_mix: UnitMixRow[]
+  // Income
+  apartment_income_current: OMFieldValue<number>
+  apartment_income_proforma: OMFieldValue<number>
+  other_income_items: Array<{ label: OMFieldValue<string>; annual_amount: OMFieldValue<number> }>
+  // Expenses
+  expense_items: Array<{
+    label: OMFieldValue<string>
+    current_annual_amount: OMFieldValue<number>
+    proforma_annual_amount: OMFieldValue<number>
+  }>
+  // Financing
+  down_payment_pct: OMFieldValue<number>
+  loan_amount: OMFieldValue<number>
+  interest_rate: OMFieldValue<number>
+  amortization_years: OMFieldValue<number>
+  debt_service_annual: OMFieldValue<number>
+  current_dscr: OMFieldValue<number>
+  proforma_dscr: OMFieldValue<number>
+  current_cash_on_cash: OMFieldValue<number>
+  proforma_cash_on_cash: OMFieldValue<number>
+  // Broker/listing
+  listing_broker_name: OMFieldValue<string>
+  listing_broker_company: OMFieldValue<string>
+  listing_broker_phone: OMFieldValue<string>
+  listing_broker_email: OMFieldValue<string>
+}
+
+export interface ScenarioMetrics {
+  gross_potential_income_annual: string | null  // Decimal as string
+  effective_gross_income_annual: string | null
+  gross_expenses_annual: string | null
+  noi_annual: string | null
+  cap_rate: string | null
+  grm: string | null
+  monthly_rent_total: string | null
+  dscr: string | null
+  cash_on_cash: string | null
+}
+
+export interface UnitMixComparisonRow {
+  unit_type_label: string
+  unit_count: number
+  sqft: string | null
+  current_avg_rent: string | null
+  proforma_rent: string | null
+  market_rent_estimate: string | null
+  market_rent_low: string | null
+  market_rent_high: string | null
+}
+
+export interface ScenarioComparison {
+  broker_current: ScenarioMetrics
+  broker_proforma: ScenarioMetrics
+  realistic: ScenarioMetrics
+  unit_mix_comparison: UnitMixComparisonRow[]
+  significant_variance_flag: boolean | null
+  realistic_cap_rate_below_proforma: boolean | null
+}
+
+export interface OMIntakeJob {
+  id: number
+  user_id: string
+  intake_status: IntakeStatus
+  original_filename: string
+  created_at: string
+  updated_at: string
+  expires_at: string
+  error_message: string | null
+  deal_id: number | null
+}
+
+export interface OMIntakeJobListItem {
+  id: number
+  intake_status: IntakeStatus
+  original_filename: string
+  created_at: string
+  deal_id: number | null
+  property_address: string | null
+  asking_price: number | null
+  unit_count: number | null
+}
+
+export interface OMIntakeReviewData {
+  id: number
+  intake_status: IntakeStatus
+  original_filename: string
+  created_at: string
+  updated_at: string
+  extracted_om_data: ExtractedOMData | null
+  scenario_comparison: ScenarioComparison | null
+  consistency_warnings: Array<Record<string, unknown>> | null
+  market_research_warnings: Array<Record<string, unknown>> | null
+  partial_realistic_scenario_warning: boolean | null
+  asking_price_missing_error: boolean | null
+  unit_count_missing_error: boolean | null
+  deal_id: number | null
+}
+
+export interface OMIntakeConfirmRequest {
+  asking_price?: number | null
+  unit_count?: number | null
+  unit_mix?: Array<{
+    unit_type_label: string
+    unit_count: number
+    sqft: number
+    current_avg_rent: number | null
+    proforma_rent: number | null
+    market_rent_estimate?: number | null
+  }>
+  expense_items?: Array<{
+    label: string
+    current_annual_amount: number | null
+    proforma_annual_amount?: number | null
+  }>
+  other_income_items?: Array<{
+    label: string
+    annual_amount: number
+  }>
+  property_address?: string
+  property_city?: string
+  property_state?: string
+  property_zip?: string
 }

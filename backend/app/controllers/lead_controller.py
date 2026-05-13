@@ -13,6 +13,7 @@ from marshmallow import ValidationError
 from sqlalchemy import or_
 
 from app import db, limiter
+from app.api_utils import get_current_user_id
 from app.models import (
     AnalysisSession,
     Lead,
@@ -435,14 +436,13 @@ def analyze_lead(lead_id):
         }), 404
 
     data = request.get_json() or {}
-    user_id = data.get('user_id')
-    if not user_id:
+    from app.api_utils import get_current_user_id
+    user_id = get_current_user_id()
+    if not user_id or user_id == 'anonymous':
         return jsonify({
             'error': 'Validation error',
             'message': 'user_id is required',
         }), 400
-
-    # Create a new AnalysisSession
     session_id = str(uuid.uuid4())
     session = AnalysisSession(
         session_id=session_id,
@@ -512,15 +512,15 @@ def update_scoring_weights():
     owner_situation_weight : float (required)
     location_desirability_weight : float (required)
     """
-    data = request.get_json()
+    data = request.get_json(silent=True)
     if not data:
         return jsonify({
             'error': 'Validation error',
             'message': 'Request body is required',
         }), 400
 
-    user_id = data.get('user_id')
-    if not user_id:
+    user_id = get_current_user_id()
+    if not user_id or user_id == 'anonymous':
         return jsonify({
             'error': 'Validation error',
             'message': 'user_id is required',

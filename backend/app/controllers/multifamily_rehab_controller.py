@@ -46,14 +46,14 @@ def _serialize_rehab_entry(entry) -> dict:
 
 
 def _serialize_monthly_rollup(rollup: list[dict]) -> list[dict]:
-    """Serialize monthly rollup, converting Decimals to floats."""
+    """Serialize monthly rollup, converting Decimals to floats and keys to snake_case."""
     return [
         {
             'month': row['month'],
-            'Units_Starting_Rehab_Count': row['Units_Starting_Rehab_Count'],
-            'Units_Offline_Count': row['Units_Offline_Count'],
-            'Units_Stabilizing_Count': row['Units_Stabilizing_Count'],
-            'CapEx_Spend': float(row['CapEx_Spend']),
+            'units_starting_rehab_count': row['Units_Starting_Rehab_Count'],
+            'units_offline_count': row['Units_Offline_Count'],
+            'units_stabilizing_count': row['Units_Stabilizing_Count'],
+            'capex_spend': float(row['CapEx_Spend']),
         }
         for row in rollup
     ]
@@ -108,9 +108,5 @@ def get_rehab_rollup(deal_id):
 
     service = RehabService()
     rollup = service.get_monthly_rollup(deal_id)
-    budget_total = service.get_rehab_budget_total(deal_id)
 
-    return jsonify({
-        'monthly_rollup': _serialize_monthly_rollup(rollup),
-        'Rehab_Budget_Total': float(budget_total),
-    }), 200
+    return jsonify(_serialize_monthly_rollup(rollup)), 200

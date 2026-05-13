@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { createContext, useContext, useState } from 'react'
 import { Routes, Route, Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useLoadScript } from '@react-google-maps/api'
 import {
   Typography,
   Box,
@@ -39,8 +40,20 @@ import { DealListPage } from './pages/multifamily/DealListPage'
 import { DealDetailPage } from './pages/multifamily/DealDetailPage'
 import { LenderProfilesPage } from './pages/multifamily/LenderProfilesPage'
 import { AnalysisLandingPage } from './pages/AnalysisLandingPage'
+import OMIntakePage from '@/pages/multifamily/OMIntakePage'
 
 const DRAWER_WIDTH = 240
+
+// ---------------------------------------------------------------------------
+// Google Maps context — provides isLoaded state to child components
+// (e.g. PropertyFactsForm uses usePlacesAutocomplete which needs the API ready)
+// ---------------------------------------------------------------------------
+export const GoogleMapsLoadedContext = createContext(false)
+export const useGoogleMapsLoaded = () => useContext(GoogleMapsLoadedContext)
+
+// @react-google-maps/api reloads the script if this array changes identity.
+// Declare it outside the component so it's stable across renders.
+const GOOGLE_MAPS_LIBRARIES: ['places'] = ['places']
 
 /** Navigation items for the sidebar / mobile drawer. */
 const NAV_ITEMS = [
@@ -254,6 +267,18 @@ function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [avatarOpen, setAvatarOpen] = useState(false)
 
+  // useLoadScript manages the script tag lifecycle and exposes isLoaded so
+  // child components (PropertyFactsForm) know when the Places API is ready.
+  const googleMapsApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
+  if (!googleMapsApiKey) {
+    console.warn('VITE_GOOGLE_MAPS_API_KEY is not set — address autocomplete will not work.')
+  }
+
+  const { isLoaded: mapsLoaded } = useLoadScript({
+    googleMapsApiKey: googleMapsApiKey ?? '',
+    libraries: GOOGLE_MAPS_LIBRARIES,
+  })
+
   const toggleDrawer = () => setDrawerOpen((prev) => !prev)
 
   const drawerContent = (
@@ -283,6 +308,7 @@ function App() {
   )
 
   return (
+    <GoogleMapsLoadedContext.Provider value={mapsLoaded}>
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
       {/* App Bar */}
       <AppBar
@@ -402,9 +428,13 @@ function App() {
           <Route path="/multifamily/deals" element={<DealListPage />} />
           <Route path="/multifamily/deals/:dealId" element={<DealDetailPage />} />
           <Route path="/multifamily/lender-profiles" element={<LenderProfilesPage />} />
+          {/* OM Intake routes (Req 12.1, 12.2) */}
+          <Route path="/multifamily/om-intake" element={<OMIntakePage />} />
+          <Route path="/multifamily/om-intake/:jobId" element={<OMIntakePage />} />
         </Routes>
       </Box>
     </Box>
+    </GoogleMapsLoadedContext.Provider>
   )
 }
 

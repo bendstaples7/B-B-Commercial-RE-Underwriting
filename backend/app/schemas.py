@@ -1,12 +1,23 @@
 """Marshmallow schemas for request validation."""
-from marshmallow import Schema, fields, validate, ValidationError, validates_schema, validates
+from marshmallow import Schema, fields, validate, ValidationError, validates_schema, validates, EXCLUDE
 from datetime import datetime
+
+
+class RequestSchema(Schema):
+    """Base class for all API request schemas.
+
+    Silently drops any unknown fields (e.g. ``user_id`` injected by the
+    frontend Axios interceptor) rather than raising a validation error.
+    All request schemas should inherit from this class.
+    """
+
+    class Meta:
+        unknown = EXCLUDE
 
 
 class StartAnalysisSchema(Schema):
     """Schema for starting a new analysis."""
     address = fields.Str(required=True, validate=validate.Length(min=5, max=500))
-    user_id = fields.Str(required=True, validate=validate.Length(min=1, max=255))
 
 
 class PropertyFactsSchema(Schema):
@@ -275,7 +286,7 @@ class LeadDetailResponseSchema(Schema):
 
 class AnalyzeLeadRequestSchema(Schema):
     """Schema for starting an analysis session from a lead (POST /api/leads/{lead_id}/analyze)."""
-    user_id = fields.Str(required=True, validate=validate.Length(min=1, max=255))
+    pass  # user_id is read from X-User-Id header
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +328,6 @@ class FieldMappingRequestSchema(Schema):
     Validates that the mapping is a non-empty dict and that required database
     fields (property_street, owner_first_name, owner_last_name) are present as values in the mapping.
     """
-    user_id = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     spreadsheet_id = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     sheet_name = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     mapping = fields.Dict(keys=fields.Str(), values=fields.Str(), required=True)
@@ -347,7 +357,6 @@ class FieldMappingRequestSchema(Schema):
 
 class ImportStartRequestSchema(Schema):
     """Schema for starting an import job (POST /api/leads/import/start)."""
-    user_id = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     spreadsheet_id = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     sheet_name = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     field_mapping_id = fields.Int(load_default=None, validate=validate.Range(min=1))
@@ -382,7 +391,6 @@ class ScoringWeightsUpdateSchema(Schema):
 
     Validates that all four weights are provided, are non-negative, and sum to 1.0.
     """
-    user_id = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     property_characteristics_weight = fields.Float(
         required=True, validate=validate.Range(min=0.0, max=1.0),
     )
@@ -439,7 +447,6 @@ class BulkEnrichRequestSchema(Schema):
 class MarketingListCreateSchema(Schema):
     """Schema for creating a marketing list (POST /api/leads/marketing/lists)."""
     name = fields.Str(required=True, validate=validate.Length(min=1, max=255))
-    user_id = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     filter_criteria = fields.Dict(load_default=None)
 
 
@@ -626,6 +633,14 @@ class DealResponseSchema(Schema):
     deleted_at = fields.DateTime(dump_only=True, allow_none=True)
     # Include units list for Req 1.4 (complete Deal record)
     units = fields.Method('get_units', dump_only=True)
+    # Include rent roll entries so the frontend can display current rents without a second request
+    rent_roll_entries = fields.Method('get_rent_roll_entries', dump_only=True)
+    # Include rehab plan entries for the Rehab Plan tab
+    rehab_plan_entries = fields.Method('get_rehab_plan_entries', dump_only=True)
+    # Include lender selections for the Lenders tab
+    lender_selections = fields.Method('get_lender_selections', dump_only=True)
+    # Include funding sources for the Funding tab
+    funding_sources = fields.Method('get_funding_sources', dump_only=True)
 
     def get_units(self, deal):
         """Return the list of units for this deal."""
@@ -642,6 +657,75 @@ class DealResponseSchema(Schema):
                 'occupancy_status': u.occupancy_status,
             }
             for u in unit_list
+        ]
+
+    def get_rent_roll_entries(self, deal):
+        """Return rent roll entries for all units in this deal."""
+        unit_list = deal.units.all() if hasattr(deal.units, 'all') else list(deal.units)
+        entries = []
+        for u in unit_list:
+            rr = u.rent_roll_entry
+            if rr is not None:
+                entries.append({
+                    'id': rr.id,
+                    'unit_id': rr.unit_id,
+                    'current_rent': str(rr.current_rent) if rr.current_rent is not None else None,
+                    'lease_start_date': rr.lease_start_date.isoformat() if rr.lease_start_date else None,
+                    'lease_end_date': rr.lease_end_date.isoformat() if rr.lease_end_date else None,
+                    'notes': rr.notes,
+                })
+        return entries
+
+    def get_rehab_plan_entries(self, deal):
+        """Return rehab plan entries for all units in this deal."""
+        unit_list = deal.units.all() if hasattr(deal.units, 'all') else list(deal.units)
+        entries = []
+        for u in unit_list:
+            rpe = u.rehab_plan_entry
+            if rpe is not None:
+                entries.append({
+                    'id': rpe.id,
+                    'unit_id': rpe.unit_id,
+                    'renovate_flag': rpe.renovate_flag,
+                    'current_rent': float(rpe.current_rent) if rpe.current_rent is not None else None,
+                    'suggested_post_reno_rent': float(rpe.suggested_post_reno_rent) if rpe.suggested_post_reno_rent is not None else None,
+                    'underwritten_post_reno_rent': float(rpe.underwritten_post_reno_rent) if rpe.underwritten_post_reno_rent is not None else None,
+                    'rehab_start_month': rpe.rehab_start_month,
+                    'downtime_months': rpe.downtime_months,
+                    'stabilized_month': rpe.stabilized_month,
+                    'rehab_budget': float(rpe.rehab_budget) if rpe.rehab_budget is not None else None,
+                    'scope_notes': rpe.scope_notes,
+                    'stabilizes_after_horizon': rpe.stabilizes_after_horizon,
+                })
+        return entries
+
+    def get_lender_selections(self, deal):
+        """Return lender selections for this deal."""
+        selections = deal.lender_selections.all() if hasattr(deal.lender_selections, 'all') else list(deal.lender_selections)
+        return [
+            {
+                'id': s.id,
+                'deal_id': s.deal_id,
+                'lender_profile_id': s.lender_profile_id,
+                'scenario': s.scenario,
+                'is_primary': s.is_primary,
+            }
+            for s in selections
+        ]
+
+    def get_funding_sources(self, deal):
+        """Return funding sources for this deal."""
+        sources = deal.funding_sources.all() if hasattr(deal.funding_sources, 'all') else list(deal.funding_sources)
+        return [
+            {
+                'id': s.id,
+                'deal_id': s.deal_id,
+                'source_type': s.source_type,
+                'total_available': float(s.total_available) if s.total_available is not None else None,
+                'interest_rate': float(s.interest_rate) if s.interest_rate is not None else None,
+                'origination_fee_rate': float(s.origination_fee_rate) if s.origination_fee_rate is not None else None,
+            }
+            for s in sources
         ]
 
 
@@ -726,10 +810,15 @@ class SaleCompCreateSchema(Schema):
     unit_count = fields.Int(required=True, validate=validate.Range(min=1))
     sale_price = fields.Float(required=True, validate=validate.Range(min=0, min_inclusive=False))
     close_date = fields.Date(required=True)
+    # observed_cap_rate is now optional — many comps don't have cap rate data.
+    # If omitted but noi is provided, cap rate will be derived as noi / sale_price.
     observed_cap_rate = fields.Float(
-        required=True,
-        validate=validate.Range(min=0, max=0.25, min_inclusive=False),
+        load_default=None,
+        allow_none=True,
+        validate=validate.Range(min=0, max=0.25),
     )
+    # Annual NOI — used to derive cap rate when observed_cap_rate is not provided
+    noi = fields.Float(load_default=None, allow_none=True, validate=validate.Range(min=0))
     status = fields.Str(load_default=None, validate=validate.Length(max=50))
     distance_miles = fields.Float(load_default=None, validate=validate.Range(min=0))
 
@@ -828,3 +917,112 @@ class FundingSourceSchema(Schema):
     total_available = fields.Float(required=True, validate=validate.Range(min=0))
     interest_rate = fields.Float(load_default=0, validate=validate.Range(min=0, max=0.30))
     origination_fee_rate = fields.Float(load_default=0, validate=validate.Range(min=0, max=0.30))
+
+
+# ---------------------------------------------------------------------------
+# OM Intake schemas
+# ---------------------------------------------------------------------------
+
+class ScenarioMetricsSchema(Schema):
+    """Schema for a single scenario's computed metrics."""
+    gross_potential_income_annual = fields.Decimal(allow_none=True)
+    effective_gross_income_annual = fields.Decimal(allow_none=True)
+    gross_expenses_annual = fields.Decimal(allow_none=True)
+    noi_annual = fields.Decimal(allow_none=True)
+    cap_rate = fields.Decimal(allow_none=True)
+    grm = fields.Decimal(allow_none=True)
+    monthly_rent_total = fields.Decimal(allow_none=True)
+    dscr = fields.Decimal(allow_none=True)
+    cash_on_cash = fields.Decimal(allow_none=True)
+
+
+class UnitMixComparisonRowSchema(Schema):
+    """Schema for a single row in the unit mix comparison table."""
+    unit_type_label = fields.Str()
+    unit_count = fields.Int()
+    sqft = fields.Decimal(allow_none=True)
+    current_avg_rent = fields.Decimal(allow_none=True)
+    proforma_rent = fields.Decimal(allow_none=True)
+    market_rent_estimate = fields.Decimal(allow_none=True)
+    market_rent_low = fields.Decimal(allow_none=True)
+    market_rent_high = fields.Decimal(allow_none=True)
+
+
+class ScenarioComparisonSchema(Schema):
+    """Schema for the three-scenario comparison result."""
+    broker_current = fields.Nested(ScenarioMetricsSchema)
+    broker_proforma = fields.Nested(ScenarioMetricsSchema)
+    realistic = fields.Nested(ScenarioMetricsSchema)
+    unit_mix_comparison = fields.List(fields.Nested(UnitMixComparisonRowSchema))
+    significant_variance_flag = fields.Bool(allow_none=True)
+    realistic_cap_rate_below_proforma = fields.Bool(allow_none=True)
+
+
+class OMIntakeJobStatusSchema(Schema):
+    """Schema for job status responses (GET /jobs/{id})."""
+    id = fields.Int()
+    intake_status = fields.Str()
+    original_filename = fields.Str()
+    created_at = fields.DateTime()
+    updated_at = fields.DateTime()
+    expires_at = fields.DateTime()
+    error_message = fields.Str(allow_none=True)
+    deal_id = fields.Int(allow_none=True)
+
+
+class OMIntakeJobListSchema(Schema):
+    """Schema for job list items (GET /jobs)."""
+    id = fields.Int()
+    intake_status = fields.Str()
+    original_filename = fields.Str()
+    created_at = fields.DateTime()
+    deal_id = fields.Int(allow_none=True)
+    # Summary fields from extracted_om_data
+    property_address = fields.Str(allow_none=True)
+    asking_price = fields.Decimal(allow_none=True)
+    unit_count = fields.Int(allow_none=True)
+
+
+class OMIntakeReviewSchema(Schema):
+    """Schema for full review data (GET /jobs/{id}/review)."""
+    id = fields.Int()
+    intake_status = fields.Str()
+    original_filename = fields.Str()
+    created_at = fields.DateTime()
+    updated_at = fields.DateTime()
+    extracted_om_data = fields.Raw(allow_none=True)
+    scenario_comparison = fields.Raw(allow_none=True)
+    consistency_warnings = fields.Raw(allow_none=True)
+    market_research_warnings = fields.Raw(allow_none=True)
+    partial_realistic_scenario_warning = fields.Bool(allow_none=True)
+    asking_price_missing_error = fields.Bool(allow_none=True)
+    unit_count_missing_error = fields.Bool(allow_none=True)
+    deal_id = fields.Int(allow_none=True)
+
+
+class OMIntakeJobSchema(Schema):
+    """Schema for full job serialization."""
+    id = fields.Int()
+    user_id = fields.Str()
+    intake_status = fields.Str()
+    original_filename = fields.Str()
+    created_at = fields.DateTime()
+    updated_at = fields.DateTime()
+    expires_at = fields.DateTime()
+    error_message = fields.Str(allow_none=True)
+    deal_id = fields.Int(allow_none=True)
+
+
+class OMIntakeConfirmRequestSchema(RequestSchema):
+    """Schema for the confirm request body (POST /jobs/{id}/confirm)."""
+
+    asking_price = fields.Decimal(allow_none=True)
+    unit_count = fields.Int(allow_none=True)
+    unit_mix = fields.List(fields.Raw(), allow_none=True)
+    expense_items = fields.List(fields.Raw(), allow_none=True)
+    other_income_items = fields.List(fields.Raw(), allow_none=True)
+    property_address = fields.Str(allow_none=True)
+    property_city = fields.Str(allow_none=True)
+    property_state = fields.Str(allow_none=True)
+    property_zip = fields.Str(allow_none=True)
+

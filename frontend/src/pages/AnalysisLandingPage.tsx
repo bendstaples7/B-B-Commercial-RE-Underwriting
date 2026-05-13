@@ -40,6 +40,7 @@ import HomeWorkIcon from '@mui/icons-material/HomeWork'
 import ApartmentIcon from '@mui/icons-material/Apartment'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
+import UploadFileIcon from '@mui/icons-material/UploadFile'
 import { multifamilyService } from '@/services/api'
 import type { DealCreatePayload, DealSummary } from '@/types'
 
@@ -445,14 +446,24 @@ export function AnalysisLandingPage() {
             Single-family ARV and multifamily pro-forma workflows
           </Typography>
         </Box>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => setDialogOpen(true)}
-          aria-label="Start a new analysis"
-        >
-          New Analysis
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            variant="outlined"
+            startIcon={<UploadFileIcon />}
+            onClick={() => navigate('/multifamily/om-intake')}
+            aria-label="Upload an Offering Memorandum PDF"
+          >
+            Upload OM
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => setDialogOpen(true)}
+            aria-label="Start a new analysis"
+          >
+            New Analysis
+          </Button>
+        </Box>
       </Box>
 
       {/* Content — tabbed on mobile, side-by-side on desktop */}

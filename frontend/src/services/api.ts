@@ -22,14 +22,13 @@ const api: AxiosInstance = axios.create({
   timeout: 30000, // 30 second timeout
 })
 
-// Request interceptor for adding auth tokens (future use)
+// Request interceptor — sends user identity via header, not body.
+// Injecting user_id into the request body breaks Marshmallow schemas that
+// don't declare it, causing 400 validation errors on endpoints like /confirm.
 api.interceptors.request.use(
   (config) => {
-    // Add user_id to requests (temporary until OAuth is implemented)
     const userId = localStorage.getItem('user_id') || 'default_user'
-    if (config.data) {
-      config.data.user_id = userId
-    }
+    config.headers['X-User-Id'] = userId
     return config
   },
   (error) => Promise.reject(error)
@@ -383,6 +382,35 @@ export const multifamilyService = {
     await api.delete(`/multifamily/deals/${dealId}/rent-comps/${compId}`)
   },
 
+  /** Fetch rent comps via Gemini AI web search and bulk-insert them (Req 3.2)
+   *
+   * Uses a 120s timeout because Gemini with web search grounding can take
+   * 30–90s. Falls back to polling if the server returns a job_id instead
+   * of an immediate result (Option 2 async path).
+   */
+  fetchRentCompsAI: async (dealId: number): Promise<{ added: number; skipped: number; message: string }> => {
+    const response = await api.post<{ added: number; skipped: number; message: string }>(
+      `/multifamily/deals/${dealId}/rent-comps/fetch-ai`,
+      {},
+      { timeout: 120_000 }
+    )
+    return response.data
+  },
+
+  /** Poll the status of an async AI rent comp fetch job */
+  getRentCompsAIJobStatus: async (dealId: number, jobId: string): Promise<{
+    status: 'pending' | 'running' | 'done' | 'failed'
+    added?: number
+    skipped?: number
+    message?: string
+    error?: string
+  }> => {
+    const response = await api.get(
+      `/multifamily/deals/${dealId}/rent-comps/fetch-ai/status/${jobId}`
+    )
+    return response.data
+  },
+
   /** Get rent comp rollup by unit type (Req 3.4) */
   getRentCompRollup: async (dealId: number, unitType?: string): Promise<RentCompRollup[]> => {
     const params = unitType ? { unit_type: unitType } : {}
@@ -417,6 +445,35 @@ export const multifamilyService = {
   /** Delete a sale comp */
   deleteSaleComp: async (dealId: number, compId: number): Promise<void> => {
     await api.delete(`/multifamily/deals/${dealId}/sale-comps/${compId}`)
+  },
+
+  /** Fetch sale comps via Gemini AI web search and bulk-insert them (Req 4.1)
+   *
+   * Uses a 120s timeout because Gemini with web search grounding can take
+   * 30–90s. Falls back to polling if the server returns a job_id instead
+   * of an immediate result (Option 2 async path).
+   */
+  fetchSaleCompsAI: async (dealId: number): Promise<{ added: number; skipped: number; message: string }> => {
+    const response = await api.post<{ added: number; skipped: number; message: string }>(
+      `/multifamily/deals/${dealId}/sale-comps/fetch-ai`,
+      {},
+      { timeout: 120_000 }
+    )
+    return response.data
+  },
+
+  /** Poll the status of an async AI sale comp fetch job */
+  getSaleCompsAIJobStatus: async (dealId: number, jobId: string): Promise<{
+    status: 'pending' | 'running' | 'done' | 'failed'
+    added?: number
+    skipped?: number
+    message?: string
+    error?: string
+  }> => {
+    const response = await api.get(
+      `/multifamily/deals/${dealId}/sale-comps/fetch-ai/status/${jobId}`
+    )
+    return response.data
   },
 
   /** Get sale comp rollup (Req 4.4) */
@@ -629,6 +686,76 @@ export const multifamilyService = {
   /** Enqueue bulk recompute of all deals (admin) */
   recomputeAllDeals: async (): Promise<{ message: string }> => {
     const response = await api.post<{ message: string }>('/multifamily/admin/recompute-all')
+    return response.data
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Commercial OM PDF Intake API Service
+// ---------------------------------------------------------------------------
+import type {
+  OMIntakeJob,
+  OMIntakeJobListItem,
+  OMIntakeReviewData,
+  OMIntakeConfirmRequest,
+} from '@/types'
+
+export const omIntakeService = {
+  /** Upload an OM PDF and create a new intake job */
+  uploadOMPDF: async (file: File): Promise<{ intake_job_id: number; status: string }> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    const response = await api.post<{ intake_job_id: number; status: string }>(
+      '/om-intake/jobs',
+      formData,
+      { headers: { 'Content-Type': 'multipart/form-data' } }
+    )
+    return response.data
+  },
+
+  /** Get the status and metadata for a single OM intake job */
+  getOMJobStatus: async (jobId: number): Promise<OMIntakeJob> => {
+    const response = await api.get<OMIntakeJob>(`/om-intake/jobs/${jobId}`)
+    return response.data
+  },
+
+  /** Get the full review data for a job in REVIEW or CONFIRMED status */
+  getOMJobReview: async (jobId: number): Promise<OMIntakeReviewData> => {
+    const response = await api.get<OMIntakeReviewData>(`/om-intake/jobs/${jobId}/review`)
+    return response.data
+  },
+
+  /** Confirm an OM intake job and create a Deal */
+  confirmOMJob: async (
+    jobId: number,
+    confirmedData: OMIntakeConfirmRequest
+  ): Promise<{ deal_id: number; status: string }> => {
+    const response = await api.post<{ deal_id: number; status: string }>(
+      `/om-intake/jobs/${jobId}/confirm`,
+      confirmedData
+    )
+    return response.data
+  },
+
+  /** Retry a FAILED OM intake job */
+  retryOMJob: async (jobId: number): Promise<{ intake_job_id: number; status: string }> => {
+    const response = await api.post<{ intake_job_id: number; status: string }>(
+      `/om-intake/jobs/${jobId}/retry`
+    )
+    return response.data
+  },
+
+  /** List the current user's OM intake jobs */
+  listOMJobs: async (
+    page: number = 1,
+    pageSize: number = 25
+  ): Promise<{ jobs: OMIntakeJobListItem[]; total: number; page: number; page_size: number }> => {
+    const response = await api.get<{
+      jobs: OMIntakeJobListItem[]
+      total: number
+      page: number
+      page_size: number
+    }>('/om-intake/jobs', { params: { page, page_size: pageSize } })
     return response.data
   },
 }

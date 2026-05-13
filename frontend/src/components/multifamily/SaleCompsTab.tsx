@@ -12,6 +12,7 @@ import {
   Box,
   Button,
   CircularProgress,
+  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
@@ -30,9 +31,14 @@ import {
   Typography,
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome'
+import CloseIcon from '@mui/icons-material/Close'
 import DeleteIcon from '@mui/icons-material/Delete'
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import { multifamilyService } from '@/services/api'
+import { useAIMutation } from '@/hooks/useAIMutation'
 import type { MFSaleComp, SaleCompRollup } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -55,6 +61,35 @@ function fmtPct(value: string | number | null | undefined): string {
   const num = typeof value === 'string' ? parseFloat(value) : value
   if (isNaN(num)) return '—'
   return `${(num * 100).toFixed(2)}%`
+}
+
+/** Render a cap rate cell with a confidence indicator tooltip. */
+function CapRateCell({ capRate, confidence }: { capRate: string | null; confidence: number | null }) {
+  if (capRate === null || capRate === undefined || capRate === '') {
+    return (
+      <Tooltip title="Cap rate unknown — not enough data to derive">
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 0.5 }}>
+          <Typography variant="body2" color="text.disabled">—</Typography>
+          <HelpOutlineIcon fontSize="small" sx={{ color: 'text.disabled', fontSize: 14 }} />
+        </Box>
+      </Tooltip>
+    )
+  }
+
+  const pct = fmtPct(capRate)
+
+  if (confidence === 0.5) {
+    return (
+      <Tooltip title="Cap rate derived from NOI ÷ sale price — lower confidence">
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 0.5 }}>
+          <Typography variant="body2" color="warning.main">{pct}</Typography>
+          <InfoOutlinedIcon fontSize="small" sx={{ color: 'warning.main', fontSize: 14 }} />
+        </Box>
+      </Tooltip>
+    )
+  }
+
+  return <>{pct}</>
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +143,7 @@ function AddSaleCompDialog({ open, dealId, onClose }: AddSaleCompDialogProps) {
     if (!form.status.trim()) e.status = 'Required'
     if (form.sale_price <= 0) e.sale_price = 'Must be > 0'
     if (!form.close_date) e.close_date = 'Required'
-    if (form.observed_cap_rate <= 0) e.observed_cap_rate = 'Must be > 0'
+    // cap rate is now optional
     setErrors(e)
     return Object.keys(e).length === 0
   }
@@ -194,13 +229,12 @@ function AddSaleCompDialog({ open, dealId, onClose }: AddSaleCompDialogProps) {
           </Box>
           <Box sx={{ display: 'flex', gap: 2 }}>
             <TextField
-              label="Cap Rate (decimal, e.g. 0.065)"
+              label="Cap Rate (decimal, e.g. 0.065) — optional"
               type="number"
               value={form.observed_cap_rate}
               onChange={(e) => setForm((f) => ({ ...f, observed_cap_rate: parseFloat(e.target.value) || 0 }))}
               error={!!errors.observed_cap_rate}
-              helperText={errors.observed_cap_rate}
-              required
+              helperText={errors.observed_cap_rate ?? 'Leave 0 if unknown'}
               inputProps={{ min: 0, step: 0.001, 'aria-label': 'Observed cap rate' }}
               sx={{ flex: 1 }}
             />
@@ -270,6 +304,8 @@ function StatCard({ label, min, median, average, max, formatter }: StatCardProps
 // Main Tab
 // ---------------------------------------------------------------------------
 
+const AI_FETCH_LABELS = ['Searching for comps…', 'Analyzing results…', 'Almost done…']
+
 interface SaleCompsTabProps {
   dealId: number
 }
@@ -277,6 +313,23 @@ interface SaleCompsTabProps {
 export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
   const queryClient = useQueryClient()
   const [addOpen, setAddOpen] = useState(false)
+
+  const { mutation: fetchAIMutation, labelIdx: fetchLabelIdx, labels: fetchLabels, status, setStatus, handleFetch: handleFetchAI } =
+    useAIMutation({
+      mutationFn: () => multifamilyService.fetchSaleCompsAI(dealId),
+      labels: AI_FETCH_LABELS,
+      invalidateKeys: [['deal', dealId, 'sale-comp-rollup']],
+      onSuccess: (result, setStatus) => {
+        if (result.added === 0) {
+          setStatus({
+            message: 'AI research found no sale comps for this property. The area may have limited data — try adding comps manually.',
+            severity: 'warning',
+          })
+        } else {
+          setStatus({ message: result.message, severity: 'success' })
+        }
+      },
+    })
 
   const { data: rollup, isLoading, isError, error } = useQuery({
     queryKey: ['deal', dealId, 'sale-comp-rollup'],
@@ -287,6 +340,7 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
     mutationFn: (compId: number) => multifamilyService.deleteSaleComp(dealId, compId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['deal', dealId, 'sale-comp-rollup'] })
+      setStatus(null)
     },
   })
 
@@ -311,23 +365,61 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
   return (
     <Box>
       {/* Header */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
         <Typography variant="h6">Sale Comps</Typography>
-        <Button
-          variant="contained"
-          size="small"
-          startIcon={<AddIcon />}
-          onClick={() => setAddOpen(true)}
-          aria-label="Add sale comp"
-        >
-          Add Sale Comp
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={fetchAIMutation.isPending ? <CircularProgress size={14} /> : <AutoAwesomeIcon />}
+            onClick={handleFetchAI}
+            disabled={fetchAIMutation.isPending}
+            aria-label="Fetch sale comps with AI"
+          >
+            {fetchAIMutation.isPending ? fetchLabels[fetchLabelIdx] : 'Fetch Comps'}
+          </Button>
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={<AddIcon />}
+            onClick={() => setAddOpen(true)}
+            aria-label="Add sale comp"
+          >
+            Add Sale Comp
+          </Button>
+        </Box>
       </Box>
+
+      {/* Inline status — shown below the header, stays until dismissed */}
+      <Collapse in={!!status}>
+        {status && (
+          <Alert
+            severity={status.severity}
+            sx={{ mb: 2 }}
+            action={
+              <IconButton size="small" onClick={() => setStatus(null)} aria-label="Dismiss">
+                <CloseIcon fontSize="small" />
+              </IconButton>
+            }
+          >
+            {status.message}
+          </Alert>
+        )}
+      </Collapse>
 
       {/* Insufficient warning */}
       {rollup?.sale_comps_insufficient && (
         <Alert severity="warning" icon={<WarningAmberIcon />} sx={{ mb: 2 }}>
           Insufficient sale comps — at least 3 are required for reliable valuation statistics.
+        </Alert>
+      )}
+
+      {/* Missing cap rate warning */}
+      {rollup && comps.some((c) => c.observed_cap_rate === null) && (
+        <Alert severity="info" icon={<InfoOutlinedIcon />} sx={{ mb: 2 }}>
+          {comps.filter((c) => c.observed_cap_rate === null).length} comp(s) are missing cap rate data.
+          Cap rates shown in amber were derived from NOI ÷ sale price (lower confidence).
+          Comps without cap rates are excluded from the cap rate rollup statistics.
         </Alert>
       )}
 
@@ -361,7 +453,7 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
       {comps.length === 0 ? (
         <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
           <Typography color="text.secondary">
-            No sale comps yet. Add comps to compute valuation statistics.
+            No sale comps yet. Click &quot;Fetch Comps&quot; to research with AI, or add manually.
           </Typography>
         </Paper>
       ) : (
@@ -388,7 +480,9 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
                   <TableCell>{comp.status}</TableCell>
                   <TableCell align="right">{fmtCurrency(comp.sale_price)}</TableCell>
                   <TableCell>{comp.close_date}</TableCell>
-                  <TableCell align="right">{fmtPct(comp.observed_cap_rate)}</TableCell>
+                  <TableCell align="right">
+                    <CapRateCell capRate={comp.observed_cap_rate} confidence={comp.cap_rate_confidence} />
+                  </TableCell>
                   <TableCell align="right">{fmtCurrency(comp.observed_ppu)}</TableCell>
                   <TableCell align="right">
                     {comp.distance_miles ? `${parseFloat(comp.distance_miles).toFixed(1)} mi` : '—'}

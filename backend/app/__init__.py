@@ -11,7 +11,10 @@ db = SQLAlchemy()
 migrate = Migrate()
 limiter = Limiter(
     key_func=get_remote_address,
-    default_limits=["200 per day", "50 per hour"]
+    # No global default — limits are applied explicitly per route category.
+    # This prevents legitimate high-frequency reads (SSE, status checks, dashboards)
+    # from being throttled while still protecting expensive write/AI endpoints.
+    default_limits=[],
 )
 
 def create_app(config_name='development'):
@@ -50,7 +53,21 @@ def create_app(config_name='development'):
     # Configure logging
     from app.logging_config import setup_logging
     setup_logging(app)
-    
+
+    # ---------------------------------------------------------------------------
+    # User identity — Option 1: centralise in g.user_id via before_request
+    #
+    # Every request sets g.user_id from the X-User-Id header.  Controllers
+    # read g.user_id instead of parsing the header or request body themselves.
+    # If the header is absent, g.user_id defaults to 'anonymous'.
+    # ---------------------------------------------------------------------------
+    from flask import g, request as _request
+
+    @app.before_request
+    def set_user_identity():
+        """Populate g.user_id from the X-User-Id request header."""
+        g.user_id = _request.headers.get('X-User-Id', 'anonymous')
+
     # Register error handlers
     from app.error_handlers import register_error_handlers
     register_error_handlers(app)
@@ -110,6 +127,10 @@ def create_app(config_name='development'):
     
     from app.tasks.multifamily_recompute import multifamily_admin_bp
     app.register_blueprint(multifamily_admin_bp, url_prefix='/api/multifamily')
+
+    # Commercial OM PDF Intake
+    from app.controllers.om_intake_controller import om_intake_bp
+    app.register_blueprint(om_intake_bp, url_prefix='/api/om-intake')
     
     app.logger.info("Flask application initialized successfully")
     

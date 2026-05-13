@@ -40,6 +40,12 @@ from app.models.pro_forma_result import ProFormaResult
 from app.models.lead_deal_link import LeadDealLink
 from app.models.deal_audit_trail import DealAuditTrail
 
+# Commercial OM PDF intake models
+from app.models.om_intake_job import OMIntakeJob, OMFieldOverride
+
+# RentCast cache
+from app.models.rentcast_cache import RentCastCache
+
 __all__ = [
     'PropertyFacts',
     'PropertyType',
@@ -85,4 +91,9 @@ __all__ = [
     'ProFormaResult',
     'LeadDealLink',
     'DealAuditTrail',
+    # Commercial OM PDF intake
+    'OMIntakeJob',
+    'OMFieldOverride',
+    # RentCast cache
+    'RentCastCache',
 ]
