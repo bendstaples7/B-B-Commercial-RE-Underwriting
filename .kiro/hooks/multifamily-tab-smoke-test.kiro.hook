@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Multifamily Tab Smoke Test",
+  "description": "After any task execution completes, runs the full deal tab smoke test (tab loads + write actions) and contract validator. Catches both frontend-backend contract mismatches AND broken buttons before the user tests manually.",
+  "version": "2",
+  "when": {
+    "type": "postTaskExecution"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A task just finished executing. Run the full multifamily smoke test to verify all 8 deal detail tabs AND their write actions (buttons) work correctly.\n\nSteps:\n1. Check if the Flask server is running on port 5000 by running: `python backend/tests/smoke_test_deal_tabs.py --skip-ai 2>&1` from the project root (--skip-ai skips the Gemini calls for speed). If it fails with a connection error, skip and note the server is not running.\n2. If the smoke test passes, also run: `python backend/tests/validate_api_contracts.py 2>&1`\n3. Report the results clearly: which checks passed, which failed, and any contract violations found.\n4. If any check fails, identify the root cause from the error output and report it — do NOT fix it automatically, just report it so the user can decide.\n\nIMPORTANT — AI feature rule: If the task that just completed implemented or modified any AI-powered feature (Fetch Comps, any Gemini endpoint), you MUST ALSO run the full AI smoke test WITHOUT --skip-ai: `python backend/tests/smoke_test_deal_tabs.py 2>&1`. This verifies the AI button actually works end-to-end, not just that the endpoint returns 200. Do NOT declare an AI feature working until this test passes."
+  }
+}

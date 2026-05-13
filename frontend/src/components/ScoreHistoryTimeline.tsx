@@ -16,7 +16,6 @@
  * Satisfies Requirement 11.4.
  */
 import {
-  Box,
   Card,
   CardContent,
   Divider,

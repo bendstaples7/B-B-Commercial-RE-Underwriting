@@ -71,11 +71,13 @@ def handle_errors(f):
 
 
 def get_user_id() -> str:
-    """Extract user ID from request headers.
+    """Extract user ID from g.user_id (set by before_request hook).
 
-    Falls back to 'anonymous' for development/testing.
+    Falls back to reading the header directly for backwards compatibility,
+    then to 'anonymous' for development/testing.
     """
-    return request.headers.get('X-User-Id', 'anonymous')
+    from app.api_utils import get_current_user_id
+    return get_current_user_id()
 
 
 # ---------------------------------------------------------------------------

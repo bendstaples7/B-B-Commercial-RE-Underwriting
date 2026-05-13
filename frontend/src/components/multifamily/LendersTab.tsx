@@ -313,7 +313,7 @@ export function LendersTab({ dealId }: LendersTabProps) {
     )
   }
 
-  const allSelections: DealLenderSelection[] = (deal as any)?.lender_selections ?? []
+  const allSelections: DealLenderSelection[] = deal?.lender_selections ?? []
   const selectionsA = allSelections.filter((s) => s.scenario === DealScenario.A)
   const selectionsB = allSelections.filter((s) => s.scenario === DealScenario.B)
   const allProfiles = profiles ?? []

@@ -205,23 +205,23 @@ export class MockApiClient {
     });
   }
 
-  async getSession(sessionId: string): Promise<MockAnalysisSession> {
+  async getSession(_sessionId: string): Promise<MockAnalysisSession> {
     return this.simulateDelay(mockAnalysisSession);
   }
 
-  async advanceStep(sessionId: string, step: number): Promise<any> {
+  async advanceStep(_sessionId: string, step: number): Promise<any> {
     return this.simulateDelay({ success: true, current_step: step });
   }
 
-  async updateStepData(sessionId: string, step: number, data: any): Promise<any> {
+  async updateStepData(_sessionId: string, _step: number, data: any): Promise<any> {
     return this.simulateDelay({ success: true, data });
   }
 
-  async goBackToStep(sessionId: string, step: number): Promise<any> {
+  async goBackToStep(_sessionId: string, step: number): Promise<any> {
     return this.simulateDelay({ success: true, current_step: step });
   }
 
-  async getReport(sessionId: string): Promise<any> {
+  async getReport(_sessionId: string): Promise<any> {
     return this.simulateDelay({
       sections: {
         a: mockPropertyFacts,
@@ -234,11 +234,11 @@ export class MockApiClient {
     });
   }
 
-  async exportToExcel(sessionId: string): Promise<Blob> {
+  async exportToExcel(_sessionId: string): Promise<Blob> {
     return this.simulateDelay(new Blob(['mock excel data'], { type: 'application/vnd.ms-excel' }));
   }
 
-  async exportToGoogleSheets(sessionId: string): Promise<{ url: string }> {
+  async exportToGoogleSheets(_sessionId: string): Promise<{ url: string }> {
     return this.simulateDelay({ url: 'https://docs.google.com/spreadsheets/d/mock-sheet-id' });
   }
 }

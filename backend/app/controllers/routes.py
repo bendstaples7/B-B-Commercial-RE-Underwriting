@@ -96,14 +96,18 @@ def start_analysis():
     # Validate request data
     schema = StartAnalysisSchema()
     data = schema.load(request.get_json())
-    
+
+    # Read user identity from g (set by before_request hook)
+    from app.api_utils import get_current_user_id
+    user_id = get_current_user_id()
+
     # Start analysis
     result = workflow_controller.start_analysis(
         address=data['address'],
-        user_id=data['user_id']
+        user_id=user_id
     )
-    
-    logger.info(f"Started analysis session {result['session_id']} for user {data['user_id']}")
+
+    logger.info(f"Started analysis session {result['session_id']} for user {user_id}")
     
     return jsonify(result), 201
 

@@ -1,10 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, within, fireEvent, waitFor } from '@/test/testUtils'
+import { render, screen, within, fireEvent } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
 import {
   FieldMappingEditor,
   validateMapping,
-  DATABASE_FIELDS,
 } from './FieldMappingEditor'
 
 const SAMPLE_HEADERS = ['Address', 'Owner', 'Last Name', 'Type', 'Beds', 'Baths']

@@ -216,3 +216,97 @@ class UnsupportedImportFormatError(RealEstateAnalysisException):
             'missing_column': missing_column,
             'sheet': sheet,
         }
+
+
+# ---------------------------------------------------------------------------
+# Commercial OM PDF Intake Exceptions
+# ---------------------------------------------------------------------------
+
+
+class InvalidFileError(RealEstateAnalysisException):
+    """Exception raised when an uploaded file is invalid, corrupt, or an unsupported MIME type."""
+
+    def __init__(self, message: str, payload: dict = None):
+        super().__init__(message, status_code=422)
+        base_payload = {'error_type': 'invalid_file'}
+        if payload:
+            base_payload.update(payload)
+        self.payload = base_payload
+
+
+class ExternalServiceError(RealEstateAnalysisException):
+    """Exception raised when an external API call fails. Base class for service-specific errors."""
+
+    def __init__(self, message: str, payload: dict = None):
+        super().__init__(message, status_code=502)
+        base_payload = {'error_type': 'external_service_error'}
+        if payload:
+            base_payload.update(payload)
+        self.payload = base_payload
+
+
+class ResourceNotFoundError(RealEstateAnalysisException):
+    """Exception raised when a requested resource is not found or belongs to another user."""
+
+    def __init__(self, message: str, payload: dict = None):
+        super().__init__(message, status_code=404)
+        base_payload = {'error_type': 'resource_not_found'}
+        if payload:
+            base_payload.update(payload)
+        self.payload = base_payload
+
+
+class ConflictError(RealEstateAnalysisException):
+    """Exception raised when a request conflicts with the current state (e.g., re-confirming an already-confirmed job)."""
+
+    def __init__(self, message: str, payload: dict = None):
+        super().__init__(message, status_code=409)
+        base_payload = {'error_type': 'conflict'}
+        if payload:
+            base_payload.update(payload)
+        self.payload = base_payload
+
+
+class GeminiConfigurationError(ExternalServiceError):
+    """Exception raised when the Gemini API key is missing or not configured."""
+
+    def __init__(self, message: str, payload: dict = None):
+        combined_payload = {'error_type': 'gemini_configuration_error'}
+        if payload:
+            combined_payload.update(payload)
+        # Call RealEstateAnalysisException directly to set status_code and payload cleanly
+        RealEstateAnalysisException.__init__(self, message, status_code=502)
+        self.payload = combined_payload
+
+
+class GeminiAPIError(ExternalServiceError):
+    """Exception raised when a network or HTTP error occurs communicating with the Gemini API."""
+
+    def __init__(self, message: str, payload: dict = None):
+        combined_payload = {'error_type': 'gemini_api_error'}
+        if payload:
+            combined_payload.update(payload)
+        RealEstateAnalysisException.__init__(self, message, status_code=502)
+        self.payload = combined_payload
+
+
+class GeminiParseError(ExternalServiceError):
+    """Exception raised when the Gemini API returns a response that is not valid JSON."""
+
+    def __init__(self, message: str, payload: dict = None):
+        combined_payload = {'error_type': 'gemini_parse_error'}
+        if payload:
+            combined_payload.update(payload)
+        RealEstateAnalysisException.__init__(self, message, status_code=502)
+        self.payload = combined_payload
+
+
+class GeminiResponseError(ExternalServiceError):
+    """Exception raised when the Gemini API response is valid JSON but is missing required fields."""
+
+    def __init__(self, message: str, payload: dict = None):
+        combined_payload = {'error_type': 'gemini_response_error'}
+        if payload:
+            combined_payload.update(payload)
+        RealEstateAnalysisException.__init__(self, message, status_code=502)
+        self.payload = combined_payload

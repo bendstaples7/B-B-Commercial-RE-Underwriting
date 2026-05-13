@@ -132,6 +132,53 @@ class MarketRentService:
     # Rollup
     # ------------------------------------------------------------------
 
+    def get_all_comps_rollups(self, deal_id: int) -> list[dict]:
+        """Return rollup statistics for all unit types in a deal.
+
+        Queries all distinct unit types that have rent comps for the given
+        deal and returns a list of rollup dicts (one per unit type), each
+        containing the same fields as ``get_comps_rollup``.
+
+        Args:
+            deal_id: The Deal to query.
+
+        Returns:
+            List of rollup dicts ordered by unit_type, one per distinct
+            unit type that has at least one comp.  Returns an empty list
+            when no comps exist for the deal.
+
+        Requirements: 3.4
+        """
+        # Fetch all comps for the deal in a single query
+        all_comps = RentComp.query.filter_by(deal_id=deal_id).order_by(
+            RentComp.unit_type
+        ).all()
+
+        # Group by unit_type
+        comps_by_type: dict[str, list[RentComp]] = {}
+        for comp in all_comps:
+            comps_by_type.setdefault(comp.unit_type, []).append(comp)
+
+        rollups = []
+        for unit_type in sorted(comps_by_type.keys()):
+            comps = comps_by_type[unit_type]
+            observed_rents = [Decimal(str(c.observed_rent)) for c in comps]
+            rent_per_sqfts = [Decimal(str(c.rent_per_sqft)) for c in comps]
+
+            avg_rent = sum(observed_rents) / len(observed_rents)
+            median_rent = self._compute_median(observed_rents)
+            avg_per_sqft = sum(rent_per_sqfts) / len(rent_per_sqfts)
+
+            rollups.append({
+                "unit_type": unit_type,
+                "Average_Observed_Rent": avg_rent,
+                "Median_Observed_Rent": median_rent,
+                "Average_Rent_Per_SqFt": avg_per_sqft,
+                "comps": comps,
+            })
+
+        return rollups
+
     def get_comps_rollup(self, deal_id: int, unit_type: str) -> dict:
         """Return rollup statistics for rent comps of a given unit type.
 

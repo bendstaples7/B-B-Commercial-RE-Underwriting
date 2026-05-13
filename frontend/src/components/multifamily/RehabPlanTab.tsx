@@ -251,8 +251,8 @@ export function RehabPlanTab({ dealId }: RehabPlanTabProps) {
     )
   }
 
-  const units: MFUnit[] = (deal as any)?.units ?? []
-  const rehabEntries: RehabPlanEntry[] = (deal as any)?.rehab_plan_entries ?? []
+  const units: MFUnit[] = deal?.units ?? []
+  const rehabEntries: RehabPlanEntry[] = deal?.rehab_plan_entries ?? []
   const rehabMap: Record<number, RehabPlanEntry> = {}
   for (const e of rehabEntries) {
     rehabMap[e.unit_id] = e

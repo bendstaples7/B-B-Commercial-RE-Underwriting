@@ -11,6 +11,7 @@ import {
   Box,
   Button,
   CircularProgress,
+  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
@@ -29,9 +30,12 @@ import {
   Typography,
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome'
+import CloseIcon from '@mui/icons-material/Close'
 import DeleteIcon from '@mui/icons-material/Delete'
 import SaveIcon from '@mui/icons-material/Save'
 import { multifamilyService } from '@/services/api'
+import { useAIMutation } from '@/hooks/useAIMutation'
 import type { RentCompRollup, RentComp } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -417,12 +421,31 @@ function UnitTypeGroup({ dealId, rollup, onAddComp }: UnitTypeGroupProps) {
 // Main Tab
 // ---------------------------------------------------------------------------
 
+const AI_FETCH_LABELS = ['Searching for comps…', 'Analyzing results…', 'Almost done…']
+
 interface MarketRentsTabProps {
   dealId: number
 }
 
 export function MarketRentsTab({ dealId }: MarketRentsTabProps) {
   const [addCompOpen, setAddCompOpen] = useState(false)
+
+  const { mutation: fetchAIMutation, labelIdx: fetchLabelIdx, labels: fetchLabels, status, setStatus, handleFetch: handleFetchAI } =
+    useAIMutation({
+      mutationFn: () => multifamilyService.fetchRentCompsAI(dealId),
+      labels: AI_FETCH_LABELS,
+      invalidateKeys: [['deal', dealId, 'rent-comp-rollup']],
+      onSuccess: (result, setStatus) => {
+        if (result.added === 0) {
+          setStatus({
+            message: 'AI research found no rent comps for this property. The area may have limited data — try adding comps manually.',
+            severity: 'warning',
+          })
+        } else {
+          setStatus({ message: result.message, severity: 'success' })
+        }
+      },
+    })
 
   const { data: rollups, isLoading, isError, error } = useQuery({
     queryKey: ['deal', dealId, 'rent-comp-rollup'],
@@ -449,23 +472,52 @@ export function MarketRentsTab({ dealId }: MarketRentsTabProps) {
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
         <Typography variant="h6">Market Rents &amp; Rent Comps</Typography>
-        <Button
-          variant="contained"
-          size="small"
-          startIcon={<AddIcon />}
-          onClick={() => setAddCompOpen(true)}
-          aria-label="Add rent comp"
-        >
-          Add Comp
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            variant="outlined"
+            size="small"
+            startIcon={fetchAIMutation.isPending ? <CircularProgress size={14} /> : <AutoAwesomeIcon />}
+            onClick={handleFetchAI}
+            disabled={fetchAIMutation.isPending}
+            aria-label="Fetch rent comps with AI"
+          >
+            {fetchAIMutation.isPending ? fetchLabels[fetchLabelIdx] : 'Fetch Comps'}
+          </Button>
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={<AddIcon />}
+            onClick={() => setAddCompOpen(true)}
+            aria-label="Add rent comp"
+          >
+            Add Comp
+          </Button>
+        </Box>
       </Box>
+
+      {/* Inline status — shown below the header, stays until dismissed */}
+      <Collapse in={!!status}>
+        {status && (
+          <Alert
+            severity={status.severity}
+            sx={{ mb: 2 }}
+            action={
+              <IconButton size="small" onClick={() => setStatus(null)} aria-label="Dismiss">
+                <CloseIcon fontSize="small" />
+              </IconButton>
+            }
+          >
+            {status.message}
+          </Alert>
+        )}
+      </Collapse>
 
       {groups.length === 0 ? (
         <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
           <Typography color="text.secondary">
-            No rent comps yet. Add comps to see rollup statistics by unit type.
+            No rent comps yet. Click &quot;Fetch Comps&quot; to research with AI, or add manually.
           </Typography>
         </Paper>
       ) : (
