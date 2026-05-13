@@ -15,6 +15,7 @@ Changes:
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.exc import OperationalError, InternalError
 
 
 revision = 'g7h8i9j0k1l2'
@@ -42,11 +43,11 @@ def upgrade():
             sa.Column('cap_rate_confidence', sa.Float(), nullable=True)
         )
         # Drop the old cap_rate range CHECK constraint (was NOT NULL > 0).
-        # Use try/except to tolerate the constraint not existing (e.g. fresh DB,
-        # SQLite which ignores named constraints). batch_op keeps SQLite compat.
+        # Tolerate "constraint does not exist" (fresh DB or SQLite) but let
+        # all other errors (permissions, connection loss, etc.) propagate.
         try:
             batch_op.drop_constraint('ck_sale_comps_cap_rate_range', type_='check')
-        except Exception:
+        except (OperationalError, InternalError):
             pass
         # Re-create cap_rate range constraint allowing NULL (nullable column)
         batch_op.create_check_constraint(
@@ -75,15 +76,14 @@ def downgrade():
 
     with op.batch_alter_table('sale_comps', schema=None) as batch_op:
         # Drop constraints BEFORE dropping the columns they reference.
-        # Use try/except to tolerate the constraint not existing (e.g. fresh DB).
-        # Only suppress OperationalError (constraint not found); other errors propagate.
+        # Tolerate "constraint does not exist" but let all other errors propagate.
         try:
             batch_op.drop_constraint('ck_sale_comps_cap_rate_confidence_values', type_='check')
-        except Exception:
+        except (OperationalError, InternalError):
             pass
         try:
             batch_op.drop_constraint('ck_sale_comps_cap_rate_range', type_='check')
-        except Exception:
+        except (OperationalError, InternalError):
             pass
         batch_op.drop_column('cap_rate_confidence')
         batch_op.drop_column('noi')
