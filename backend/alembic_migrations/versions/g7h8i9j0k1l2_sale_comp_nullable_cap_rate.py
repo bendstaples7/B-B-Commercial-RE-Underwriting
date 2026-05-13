@@ -41,12 +41,10 @@ def upgrade():
         batch_op.add_column(
             sa.Column('cap_rate_confidence', sa.Float(), nullable=True)
         )
-        # Drop the old cap_rate range CHECK constraint (was NOT NULL > 0)
-        try:
-            batch_op.drop_constraint('ck_sale_comps_cap_rate_range', type_='check')
-        except Exception:
-            # Constraint may not exist in all DB backends (SQLite ignores named constraints)
-            pass
+        # Drop the old cap_rate range CHECK constraint (was NOT NULL > 0).
+        # Use raw SQL IF EXISTS so we don't swallow real errors while tolerating
+        # the case where the constraint doesn't exist (e.g. fresh DB, SQLite).
+        op.execute("ALTER TABLE sale_comps DROP CONSTRAINT IF EXISTS ck_sale_comps_cap_rate_range")
         # Re-create cap_rate range constraint allowing NULL (nullable column)
         batch_op.create_check_constraint(
             'ck_sale_comps_cap_rate_range',
@@ -61,21 +59,25 @@ def upgrade():
 
 def downgrade():
     with op.batch_alter_table('sale_comps', schema=None) as batch_op:
-        # Drop constraints BEFORE dropping the columns they reference
-        try:
-            batch_op.drop_constraint('ck_sale_comps_cap_rate_confidence_values', type_='check')
-        except Exception:
-            pass
-        try:
-            batch_op.drop_constraint('ck_sale_comps_cap_rate_range', type_='check')
-        except Exception:
-            pass
+        # Drop constraints BEFORE dropping the columns they reference.
+        # Use raw SQL IF EXISTS so we don't swallow real errors while still
+        # tolerating the case where the constraint was never created (e.g. SQLite).
+        op.execute("ALTER TABLE sale_comps DROP CONSTRAINT IF EXISTS ck_sale_comps_cap_rate_confidence_values")
+        op.execute("ALTER TABLE sale_comps DROP CONSTRAINT IF EXISTS ck_sale_comps_cap_rate_range")
         batch_op.drop_column('cap_rate_confidence')
         batch_op.drop_column('noi')
 
-    # Backfill NULL cap rates before restoring NOT NULL constraint.
-    # Use 0.065 (6.5%) as a safe default that satisfies the restored CHECK constraint.
-    op.execute("UPDATE sale_comps SET observed_cap_rate = 0.065 WHERE observed_cap_rate IS NULL")
+    # Fail fast if any rows have NULL observed_cap_rate — restoring NOT NULL
+    # would invent data. The operator must remediate those rows first.
+    conn = op.get_bind()
+    result = conn.execute(sa.text("SELECT COUNT(*) FROM sale_comps WHERE observed_cap_rate IS NULL"))
+    null_count = result.scalar()
+    if null_count:
+        raise RuntimeError(
+            f"Cannot downgrade: {null_count} row(s) in sale_comps have NULL observed_cap_rate. "
+            "Set observed_cap_rate to a valid value (0 < x <= 0.25) for all affected rows "
+            "before running this downgrade."
+        )
 
     with op.batch_alter_table('sale_comps', schema=None) as batch_op:
         batch_op.alter_column(

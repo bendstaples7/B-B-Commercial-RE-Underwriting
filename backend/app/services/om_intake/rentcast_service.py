@@ -38,17 +38,23 @@ def _build_cache_key(
     bedrooms: int | None,
     bathrooms: float | None,
     square_footage: int | None,
+    property_type: str = "",
 ) -> str:
     """Build a delimiter-safe cache key using JSON serialization.
 
     JSON serialization avoids the '|' delimiter collision problem where
     address_key or unit_type_label values containing '|' would produce
     identical keys for different inputs.
+
+    property_type is included so queries for the same address with different
+    RentCast property types (e.g. "Multi-Family" vs "Single Family") don't
+    collide in the cache.
     """
     import json
     parts = [
         address_key,
         unit_type_label,
+        property_type,
         bedrooms,       # None serializes as JSON null — distinct from 0
         bathrooms,
         square_footage,
@@ -113,7 +119,7 @@ class RentCastService:
         address_key = _normalize_address(address)
 
         # --- Check cache first ---
-        cached = self._get_cached(address_key, unit_type_label, bedrooms, bathrooms, square_footage)
+        cached = self._get_cached(address_key, unit_type_label, bedrooms, bathrooms, square_footage, property_type)
         if cached is not None:
             logger.info(
                 "RentCastService: cache hit for address=%r unit=%r (fetched %s)",
@@ -147,6 +153,7 @@ class RentCastService:
             self._store_cache(
                 address_key=address_key,
                 unit_type_label=unit_type_label,
+                property_type=property_type,
                 bedrooms=bedrooms,
                 bathrooms=bathrooms,
                 square_footage=square_footage,
@@ -169,12 +176,13 @@ class RentCastService:
         bedrooms: int | None,
         bathrooms: float | None,
         square_footage: int | None,
+        property_type: str = "",
     ):
         """Return a fresh RentCastCache row or None."""
         try:
             from app.models.rentcast_cache import RentCastCache
             cutoff = datetime.utcnow() - timedelta(days=_CACHE_TTL_DAYS)
-            cache_key = _build_cache_key(address_key, unit_type_label, bedrooms, bathrooms, square_footage)
+            cache_key = _build_cache_key(address_key, unit_type_label, bedrooms, bathrooms, square_footage, property_type)
             return (
                 RentCastCache.query
                 .filter_by(cache_key=cache_key)
@@ -197,13 +205,14 @@ class RentCastService:
         rent_range_low: float | None,
         rent_range_high: float | None,
         comparables_count: int,
+        property_type: str = "",
     ) -> None:
         """Upsert a RentCastCache row."""
         try:
             from app import db
             from app.models.rentcast_cache import RentCastCache
 
-            cache_key = _build_cache_key(address_key, unit_type_label, bedrooms, bathrooms, square_footage)
+            cache_key = _build_cache_key(address_key, unit_type_label, bedrooms, bathrooms, square_footage, property_type)
 
             # Delete any existing entry for this key (upsert via delete+insert)
             RentCastCache.query.filter_by(cache_key=cache_key).delete()
