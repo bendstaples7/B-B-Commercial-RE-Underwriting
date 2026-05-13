@@ -15,7 +15,16 @@ Changes:
 """
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.exc import OperationalError, InternalError
+from sqlalchemy.exc import OperationalError, InternalError, ProgrammingError
+
+# _CONSTRAINT_NOT_FOUND groups the SQLAlchemy exceptions that indicate a named
+# constraint does not exist. We suppress only these so that real failures
+# (permissions, connection loss, wrong table) still propagate.
+#
+# PostgreSQL raises SQLSTATE 42704 (UndefinedObject) → sqlalchemy ProgrammingError.
+# SQLite raises OperationalError for missing named constraints.
+# Some other backends use InternalError.
+_CONSTRAINT_NOT_FOUND = (OperationalError, InternalError, ProgrammingError)
 
 
 revision = 'g7h8i9j0k1l2'
@@ -47,7 +56,7 @@ def upgrade():
         # all other errors (permissions, connection loss, etc.) propagate.
         try:
             batch_op.drop_constraint('ck_sale_comps_cap_rate_range', type_='check')
-        except (OperationalError, InternalError):
+        except _CONSTRAINT_NOT_FOUND:
             pass
         # Re-create cap_rate range constraint allowing NULL (nullable column)
         batch_op.create_check_constraint(
@@ -79,11 +88,11 @@ def downgrade():
         # Tolerate "constraint does not exist" but let all other errors propagate.
         try:
             batch_op.drop_constraint('ck_sale_comps_cap_rate_confidence_values', type_='check')
-        except (OperationalError, InternalError):
+        except _CONSTRAINT_NOT_FOUND:
             pass
         try:
             batch_op.drop_constraint('ck_sale_comps_cap_rate_range', type_='check')
-        except (OperationalError, InternalError):
+        except _CONSTRAINT_NOT_FOUND:
             pass
         batch_op.drop_column('cap_rate_confidence')
         batch_op.drop_column('noi')
