@@ -181,7 +181,7 @@ class RentCastService:
         """Return a fresh RentCastCache row or None."""
         try:
             from app.models.rentcast_cache import RentCastCache
-            cutoff = datetime.now(timezone.utc) - timedelta(days=_CACHE_TTL_DAYS)
+            cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=_CACHE_TTL_DAYS)
             cache_key = _build_cache_key(address_key, unit_type_label, bedrooms, bathrooms, square_footage, property_type)
             return (
                 RentCastCache.query
