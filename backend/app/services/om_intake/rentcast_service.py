@@ -131,18 +131,30 @@ class RentCastService:
         result = self._fetch_from_api(address, property_type, bedrooms, bathrooms, square_footage)
         result["from_cache"] = False
 
-        # --- Store in cache ---
-        self._store_cache(
-            address_key=address_key,
-            unit_type_label=unit_type_label,
-            bedrooms=bedrooms,
-            bathrooms=bathrooms,
-            square_footage=square_footage,
-            rent_estimate=result.get("market_rent_estimate"),
-            rent_range_low=result.get("market_rent_low"),
-            rent_range_high=result.get("market_rent_high"),
-            comparables_count=result.get("comparables_count", 0),
+        # --- Store in cache — skip fallback payloads (all-None + 0 comps) ---
+        is_fallback = (
+            result.get("market_rent_estimate") is None
+            and result.get("market_rent_low") is None
+            and result.get("market_rent_high") is None
+            and result.get("comparables_count", 0) == 0
         )
+        if is_fallback:
+            logger.info(
+                "RentCastService: skipping cache write for address=%r unit=%r — API returned no data",
+                address_key, unit_type_label,
+            )
+        else:
+            self._store_cache(
+                address_key=address_key,
+                unit_type_label=unit_type_label,
+                bedrooms=bedrooms,
+                bathrooms=bathrooms,
+                square_footage=square_footage,
+                rent_estimate=result.get("market_rent_estimate"),
+                rent_range_low=result.get("market_rent_low"),
+                rent_range_high=result.get("market_rent_high"),
+                comparables_count=result.get("comparables_count", 0),
+            )
 
         return result
 

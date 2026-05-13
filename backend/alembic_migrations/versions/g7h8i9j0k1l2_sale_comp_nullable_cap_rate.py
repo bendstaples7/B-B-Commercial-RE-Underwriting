@@ -61,9 +61,7 @@ def upgrade():
 
 def downgrade():
     with op.batch_alter_table('sale_comps', schema=None) as batch_op:
-        batch_op.drop_column('cap_rate_confidence')
-        batch_op.drop_column('noi')
-        # Drop the constraints added in upgrade before restoring the old schema
+        # Drop constraints BEFORE dropping the columns they reference
         try:
             batch_op.drop_constraint('ck_sale_comps_cap_rate_confidence_values', type_='check')
         except Exception:
@@ -72,6 +70,8 @@ def downgrade():
             batch_op.drop_constraint('ck_sale_comps_cap_rate_range', type_='check')
         except Exception:
             pass
+        batch_op.drop_column('cap_rate_confidence')
+        batch_op.drop_column('noi')
 
     # Backfill NULL cap rates before restoring NOT NULL constraint.
     # Use 0.065 (6.5%) as a safe default that satisfies the restored CHECK constraint.
