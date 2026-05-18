@@ -18,6 +18,8 @@ class TaskAssociation(db.Model):
 
     __table_args__ = (
         db.Index('ix_task_assoc_target', 'target_type', 'target_id'),
+        db.UniqueConstraint('task_id', 'target_type', 'target_id',
+                            name='uq_task_association'),
     )
 
     def __repr__(self):

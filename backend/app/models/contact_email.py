@@ -13,7 +13,7 @@ class ContactEmail(db.Model):
         nullable=False,
         index=True
     )
-    value = db.Column(db.String(255), nullable=False, index=True)
+    value = db.Column(db.String(255), nullable=False)
     label = db.Column(
         db.Enum(
             'personal', 'work', 'other',
@@ -21,6 +21,13 @@ class ContactEmail(db.Model):
         ),
         nullable=False,
         default='other'
+    )
+
+    # Functional index on lower(value) to support case-insensitive email lookups
+    # used by the HubSpot matcher: filter(lower(ContactEmail.value) == email)
+    __table_args__ = (
+        db.Index('ix_contact_emails_value_lower',
+                 db.text('lower(value)')),
     )
 
     def __repr__(self):

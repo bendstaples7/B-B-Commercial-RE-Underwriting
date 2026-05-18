@@ -79,6 +79,7 @@ This is the **recommended way** to run the app locally. It handles everything:
 Then in a separate terminal, start the frontend:
 ```bash
 cd frontend
+npm install
 npm run dev
 ```
 

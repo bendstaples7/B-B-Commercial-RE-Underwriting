@@ -145,7 +145,19 @@ class HubSpotImportService:
         db.session.flush()  # Assign IDs before dispatching tasks
 
         for run in runs:
-            self._dispatch_task(run.object_type, run.id)
+            try:
+                self._dispatch_task(run.object_type, run.id)
+            except Exception as dispatch_exc:
+                logger.warning(
+                    "Failed to dispatch Celery task for %s run_id=%s: %s — marking run as failed.",
+                    run.object_type, run.id, dispatch_exc,
+                )
+                run.status = 'failed'
+                run.end_time = datetime.utcnow()
+                run.error_message = (
+                    f'Task dispatch failed: {dispatch_exc}. '
+                    'Celery may not be running. No data was fetched.'
+                )
 
         db.session.commit()
         logger.info(
@@ -267,8 +279,9 @@ class HubSpotImportService:
         config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
         if config is None:
             return None
-        # Mask the token in-place on the detached/transient copy.
-        # We do NOT flush/commit this change — it is presentation-only.
+        # Expunge from the session before mutating so the masked value is never
+        # accidentally flushed/committed to the database.
+        db.session.expunge(config)
         config.encrypted_token = '***'
         return config
 

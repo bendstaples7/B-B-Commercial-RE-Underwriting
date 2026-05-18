@@ -18,5 +18,10 @@ class PropertyOrganizationLink(db.Model):
     role = db.Column(db.String(100), nullable=False)  # owner, property_manager, broker, attorney, related_party
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
+    __table_args__ = (
+        db.UniqueConstraint('property_id', 'organization_id', 'role',
+                            name='uq_property_org_role'),
+    )
+
     def __repr__(self):
         return f'<PropertyOrganizationLink property_id={self.property_id} org_id={self.organization_id} role={self.role}>'

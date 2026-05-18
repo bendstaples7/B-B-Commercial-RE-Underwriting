@@ -30,6 +30,12 @@ class Task(db.Model):
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow,
                            onupdate=datetime.utcnow)
 
+    __table_args__ = (
+        # Composite index for the frequent overdue predicate:
+        # WHERE status IN ('open','overdue') AND due_date < NOW()
+        db.Index('ix_tasks_status_due_date', 'status', 'due_date'),
+    )
+
     # Relationships
     associations = db.relationship('TaskAssociation', backref='task',
                                    lazy='dynamic', cascade='all, delete-orphan')

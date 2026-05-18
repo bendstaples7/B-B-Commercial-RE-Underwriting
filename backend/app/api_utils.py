@@ -50,14 +50,6 @@ def get_current_user_id() -> str:
     user_id = getattr(g, 'user_id', None)
     if user_id and user_id != 'anonymous':
         return user_id
-    # Fall back to JSON body user_id for backwards compatibility
-    try:
-        body = request.get_json(silent=True) or {}
-        body_user_id = body.get('user_id')
-        if body_user_id:
-            return str(body_user_id)
-    except Exception:
-        pass
     return 'anonymous'
 
 
