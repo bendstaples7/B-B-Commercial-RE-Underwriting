@@ -3,8 +3,8 @@ from app import db
 from datetime import datetime, date
 
 
-class Lead(db.Model):
-    """Lead model representing a property owner who is a potential seller or marketing target."""
+class Property(db.Model):
+    """Property model representing a property owner who is a potential seller or marketing target."""
     __tablename__ = 'leads'
 
     id = db.Column(db.Integer, primary_key=True)
@@ -93,6 +93,13 @@ class Lead(db.Model):
     # Scoring
     lead_score = db.Column(db.Float, default=0)
 
+    # HubSpot CRM — suppression and recommended action
+    suppression_flag = db.Column(db.Boolean, nullable=False, default=False)
+    recommended_action = db.Column(db.Enum(
+        'CONTACT_NOW', 'FOLLOW_UP_LATER', 'REVISIT_OFFER', 'DO_NOT_CONTACT',
+        name='recommended_action_enum'
+    ), nullable=True)
+
     # Metadata
     data_source = db.Column(db.String(100), nullable=True)
     last_import_job_id = db.Column(db.Integer, db.ForeignKey('import_jobs.id'), nullable=True)
@@ -113,9 +120,16 @@ class Lead(db.Model):
     marketing_list_members = db.relationship('MarketingListMember', backref='lead', lazy='dynamic')
     audit_trail = db.relationship('LeadAuditTrail', backref='lead', lazy='dynamic', cascade='all, delete-orphan')
     last_import_job = db.relationship('ImportJob', backref='leads', foreign_keys=[last_import_job_id])
+    property_contacts = db.relationship('PropertyContact', backref='property',
+                                        cascade='all, delete-orphan', lazy='dynamic')
 
     def __repr__(self):
-        return f'<Lead {self.property_street}>'
+        return f'<Property {self.property_street}>'
+
+
+# Backward-compatibility alias — defined immediately after Property so it is
+# available even if the module is only partially loaded during circular imports.
+Lead = Property
 
 
 class LeadAuditTrail(db.Model):

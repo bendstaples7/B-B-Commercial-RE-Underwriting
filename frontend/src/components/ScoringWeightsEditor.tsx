@@ -277,7 +277,7 @@ export const ScoringWeightsEditor: React.FC = () => {
             startIcon={saving ? <CircularProgress size={18} color="inherit" /> : <SaveIcon />}
             onClick={handleSave}
             disabled={!isSumValid || !isDirty || saving}
-            aria-label="Save scoring weights and rescore all leads"
+            aria-label="Save scoring weights and rescore all properties"
           >
             {saving ? 'Saving…' : 'Save & Rescore'}
           </Button>

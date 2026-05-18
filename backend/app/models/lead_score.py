@@ -25,7 +25,7 @@ class LeadScore(db.Model):
 
     # Relationships
     lead = db.relationship(
-        'Lead',
+        'Property',
         backref=db.backref('score_records', lazy='dynamic', order_by='LeadScore.created_at.desc()')
     )
 

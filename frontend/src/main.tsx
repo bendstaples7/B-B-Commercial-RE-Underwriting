@@ -6,6 +6,7 @@ import CssBaseline from '@mui/material/CssBaseline'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import { NotificationProvider, globalNotify } from './context/NotificationContext'
+import { PipelineStatusProvider } from './context/PipelineStatusContext'
 
 // ---------------------------------------------------------------------------
 // Global mutation error handler
@@ -120,7 +121,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
               render MUI components, and inside QueryClientProvider so
               mutations can trigger it. It wires globalNotify on mount. */}
           <NotificationProvider>
-            <App />
+            <PipelineStatusProvider>
+              <App />
+            </PipelineStatusProvider>
           </NotificationProvider>
         </BrowserRouter>
       </ThemeProvider>

@@ -66,6 +66,14 @@ Thumbs.db
 *.log
 backend/logs/
 
+# Celery Beat runtime files
+backend/celerybeat-schedule.bak
+backend/celerybeat-schedule.dat
+backend/celerybeat-schedule.dir
+celerybeat-schedule.bak
+celerybeat-schedule.dat
+celerybeat-schedule.dir
+
 # Google credentials
 credentials.json
 credentials.json.json

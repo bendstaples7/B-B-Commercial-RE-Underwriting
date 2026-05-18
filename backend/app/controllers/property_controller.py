@@ -1,0 +1,892 @@
+"""Property management API endpoints.
+
+Provides endpoints for listing, filtering, and retrieving properties,
+starting analysis sessions from properties, and managing scoring weights.
+
+Renamed from lead_controller.py — the underlying `leads` table is unchanged.
+"""
+import logging
+import uuid
+from datetime import datetime
+from functools import wraps
+
+from flask import Blueprint, jsonify, redirect, request, url_for
+from marshmallow import ValidationError
+from sqlalchemy import or_
+
+from app import db, limiter
+from app.api_utils import get_current_user_id
+from app.models import (
+    AnalysisSession,
+    Lead,
+    LeadAuditTrail,
+    MarketingListMember,
+    ScoringWeights,
+    WorkflowStep,
+)
+from app.models.contact import Contact
+from app.models.property_contact import PropertyContact
+from app.services.lead_scoring_engine import LeadScoringEngine
+
+logger = logging.getLogger(__name__)
+
+properties_bp = Blueprint('properties', __name__)
+leads_legacy_bp = Blueprint('leads_legacy', __name__)
+
+scoring_engine = LeadScoringEngine()
+
+# ---------------------------------------------------------------------------
+# Allowed filter / sort values
+# ---------------------------------------------------------------------------
+
+ALLOWED_SORT_FIELDS = {'lead_score', 'created_at', 'property_street'}
+ALLOWED_SORT_ORDERS = {'asc', 'desc'}
+DEFAULT_PAGE = 1
+DEFAULT_PER_PAGE = 20
+MAX_PER_PAGE = 100
+
+# Deprecated flat contact columns that must NOT be written to the database
+_DEPRECATED_CONTACT_FIELDS = {
+    'owner_first_name', 'owner_last_name',
+    'owner_2_first_name', 'owner_2_last_name',
+    'phone_1', 'phone_2', 'phone_3', 'phone_4', 'phone_5', 'phone_6', 'phone_7',
+    'email_1', 'email_2', 'email_3', 'email_4', 'email_5',
+}
+
+
+# ---------------------------------------------------------------------------
+# Error handling decorator
+# ---------------------------------------------------------------------------
+
+def handle_errors(f):
+    """Decorator for consistent error handling."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        except ValidationError as e:
+            logger.warning("Validation error: %s", e.messages)
+            return jsonify({
+                'error': 'Validation error',
+                'details': e.messages,
+            }), 400
+        except ValueError as e:
+            logger.warning("Value error: %s", str(e))
+            return jsonify({
+                'error': 'Invalid request',
+                'message': str(e),
+            }), 400
+        except Exception as e:
+            if hasattr(e, 'code') and hasattr(e, 'description'):
+                logger.warning("HTTP error %s: %s", e.code, e.description)
+                return jsonify({
+                    'error': getattr(e, 'name', 'HTTP error'),
+                    'message': e.description,
+                }), e.code
+
+            logger.error("Unexpected error: %s", str(e), exc_info=True)
+            return jsonify({
+                'error': 'Internal server error',
+                'message': 'An unexpected error occurred',
+            }), 500
+    return decorated_function
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _parse_pagination(args):
+    """Extract and validate pagination parameters from query string."""
+    try:
+        page = int(args.get('page', DEFAULT_PAGE))
+    except (TypeError, ValueError):
+        page = DEFAULT_PAGE
+    try:
+        per_page = int(args.get('per_page', DEFAULT_PER_PAGE))
+    except (TypeError, ValueError):
+        per_page = DEFAULT_PER_PAGE
+
+    page = max(1, page)
+    per_page = max(1, min(per_page, MAX_PER_PAGE))
+    return page, per_page
+
+
+def _serialize_property_summary(lead):
+    """Serialize a Property (Lead) for list views — includes all spreadsheet fields."""
+    return {
+        'id': lead.id,
+        'lead_category': lead.lead_category,
+        'property_street': lead.property_street,
+        'property_city': lead.property_city,
+        'property_state': lead.property_state,
+        'property_zip': lead.property_zip,
+        'property_type': lead.property_type,
+        'bedrooms': lead.bedrooms,
+        'bathrooms': lead.bathrooms,
+        'square_footage': lead.square_footage,
+        'lot_size': lead.lot_size,
+        'year_built': lead.year_built,
+        'units': lead.units,
+        'units_allowed': lead.units_allowed,
+        'zoning': lead.zoning,
+        'county_assessor_pin': lead.county_assessor_pin,
+        'tax_bill_2021': lead.tax_bill_2021,
+        'most_recent_sale': lead.most_recent_sale,
+        'owner_first_name': lead.owner_first_name,
+        'owner_last_name': lead.owner_last_name,
+        'owner_2_first_name': lead.owner_2_first_name,
+        'owner_2_last_name': lead.owner_2_last_name,
+        'ownership_type': lead.ownership_type,
+        'acquisition_date': lead.acquisition_date.isoformat() if lead.acquisition_date else None,
+        'phone_1': lead.phone_1,
+        'phone_2': lead.phone_2,
+        'phone_3': lead.phone_3,
+        'phone_4': lead.phone_4,
+        'phone_5': lead.phone_5,
+        'phone_6': lead.phone_6,
+        'phone_7': lead.phone_7,
+        'email_1': lead.email_1,
+        'email_2': lead.email_2,
+        'email_3': lead.email_3,
+        'email_4': lead.email_4,
+        'email_5': lead.email_5,
+        'socials': lead.socials,
+        'mailing_address': lead.mailing_address,
+        'mailing_city': lead.mailing_city,
+        'mailing_state': lead.mailing_state,
+        'mailing_zip': lead.mailing_zip,
+        'address_2': lead.address_2,
+        'returned_addresses': lead.returned_addresses,
+        'source': lead.source,
+        'date_identified': lead.date_identified.isoformat() if lead.date_identified else None,
+        'notes': lead.notes,
+        'needs_skip_trace': lead.needs_skip_trace,
+        'skip_tracer': lead.skip_tracer,
+        'date_skip_traced': lead.date_skip_traced.isoformat() if lead.date_skip_traced else None,
+        'date_added_to_hubspot': lead.date_added_to_hubspot.isoformat() if lead.date_added_to_hubspot else None,
+        'up_next_to_mail': lead.up_next_to_mail,
+        'mailer_history': lead.mailer_history,
+        'lead_score': lead.lead_score,
+        'data_source': lead.data_source,
+        'created_at': lead.created_at.isoformat() if lead.created_at else None,
+        'updated_at': lead.updated_at.isoformat() if lead.updated_at else None,
+    }
+
+
+def _serialize_property_detail(lead):
+    """Serialize a Property (Lead) with full detail for the detail view."""
+    data = {
+        'id': lead.id,
+        # Property details
+        'property_street': lead.property_street,
+        'property_city': lead.property_city,
+        'property_state': lead.property_state,
+        'property_zip': lead.property_zip,
+        'property_type': lead.property_type,
+        'bedrooms': lead.bedrooms,
+        'bathrooms': lead.bathrooms,
+        'square_footage': lead.square_footage,
+        'lot_size': lead.lot_size,
+        'year_built': lead.year_built,
+        # Owner information (legacy flat columns — read-only after migration)
+        'owner_first_name': lead.owner_first_name,
+        'owner_last_name': lead.owner_last_name,
+        'ownership_type': lead.ownership_type,
+        'acquisition_date': lead.acquisition_date.isoformat() if lead.acquisition_date else None,
+        'owner_2_first_name': lead.owner_2_first_name,
+        'owner_2_last_name': lead.owner_2_last_name,
+        # Contact information (legacy flat columns — read-only after migration)
+        'phone_1': lead.phone_1,
+        'phone_2': lead.phone_2,
+        'phone_3': lead.phone_3,
+        'email_1': lead.email_1,
+        'email_2': lead.email_2,
+        'phone_4': lead.phone_4,
+        'phone_5': lead.phone_5,
+        'phone_6': lead.phone_6,
+        'phone_7': lead.phone_7,
+        'email_3': lead.email_3,
+        'email_4': lead.email_4,
+        'email_5': lead.email_5,
+        'socials': lead.socials,
+        # Mailing information
+        'mailing_address': lead.mailing_address,
+        'mailing_city': lead.mailing_city,
+        'mailing_state': lead.mailing_state,
+        'mailing_zip': lead.mailing_zip,
+        'address_2': lead.address_2,
+        'returned_addresses': lead.returned_addresses,
+        # Additional property details
+        'units': lead.units,
+        'units_allowed': lead.units_allowed,
+        'zoning': lead.zoning,
+        'county_assessor_pin': lead.county_assessor_pin,
+        'tax_bill_2021': lead.tax_bill_2021,
+        'most_recent_sale': lead.most_recent_sale,
+        # Research tracking
+        'source': lead.source,
+        'date_identified': lead.date_identified.isoformat() if lead.date_identified else None,
+        'notes': lead.notes,
+        'needs_skip_trace': lead.needs_skip_trace,
+        'skip_tracer': lead.skip_tracer,
+        'date_skip_traced': lead.date_skip_traced.isoformat() if lead.date_skip_traced else None,
+        'date_added_to_hubspot': lead.date_added_to_hubspot.isoformat() if lead.date_added_to_hubspot else None,
+        # Mailing tracking
+        'up_next_to_mail': lead.up_next_to_mail,
+        'mailer_history': lead.mailer_history,
+        # Scoring
+        'lead_score': lead.lead_score,
+        # Classification
+        'lead_category': lead.lead_category,
+        # Metadata
+        'data_source': lead.data_source,
+        'last_import_job_id': lead.last_import_job_id,
+        'created_at': lead.created_at.isoformat() if lead.created_at else None,
+        'updated_at': lead.updated_at.isoformat() if lead.updated_at else None,
+        # Analysis link
+        'analysis_session_id': lead.analysis_session_id,
+    }
+
+    # Enrichment records
+    enrichment_records = lead.enrichment_records.all()
+    data['enrichment_records'] = [
+        {
+            'id': er.id,
+            'data_source_id': er.data_source_id,
+            'data_source_name': er.data_source.name if er.data_source else None,
+            'status': er.status,
+            'retrieved_data': er.retrieved_data,
+            'error_reason': er.error_reason,
+            'created_at': er.created_at.isoformat() if er.created_at else None,
+        }
+        for er in enrichment_records
+    ]
+
+    # Marketing list memberships
+    memberships = lead.marketing_list_members.all()
+    data['marketing_lists'] = [
+        {
+            'marketing_list_id': m.marketing_list_id,
+            'marketing_list_name': m.marketing_list.name if m.marketing_list else None,
+            'outreach_status': m.outreach_status,
+            'added_at': m.added_at.isoformat() if m.added_at else None,
+        }
+        for m in memberships
+    ]
+
+    # Linked analysis session
+    if lead.analysis_session:
+        session = lead.analysis_session
+        data['analysis_session'] = {
+            'id': session.id,
+            'session_id': session.session_id,
+            'current_step': session.current_step.name,
+            'created_at': session.created_at.isoformat() if session.created_at else None,
+            'updated_at': session.updated_at.isoformat() if session.updated_at else None,
+        }
+    else:
+        data['analysis_session'] = None
+
+    return data
+
+
+def _serialize_scoring_weights(weights):
+    """Serialize ScoringWeights to dictionary."""
+    return {
+        'id': weights.id,
+        'user_id': weights.user_id,
+        'property_characteristics_weight': weights.property_characteristics_weight,
+        'data_completeness_weight': weights.data_completeness_weight,
+        'owner_situation_weight': weights.owner_situation_weight,
+        'location_desirability_weight': weights.location_desirability_weight,
+        'created_at': weights.created_at.isoformat() if weights.created_at else None,
+        'updated_at': weights.updated_at.isoformat() if weights.updated_at else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Properties Blueprint Routes
+# ---------------------------------------------------------------------------
+
+@properties_bp.route('/', methods=['GET'])
+@limiter.limit("30 per minute")
+@handle_errors
+def list_properties():
+    """List properties with pagination, filtering, and sorting.
+
+    Query parameters
+    ----------------
+    page : int (default 1)
+    per_page : int (default 20, max 100)
+    property_type : str — filter by property type (exact match)
+    city : str — filter by mailing city (case-insensitive)
+    state : str — filter by mailing state (case-insensitive)
+    zip : str — filter by mailing zip (exact match)
+    owner_name : str — filter by contact name via property_contacts join (case-insensitive partial match)
+    score_min : float — minimum lead score
+    score_max : float — maximum lead score
+    marketing_list_id : int — filter by marketing list membership
+    sort_by : str — one of lead_score, created_at, property_street
+    sort_order : str — asc or desc (default desc)
+    """
+    args = request.args
+    page, per_page = _parse_pagination(args)
+
+    query = Lead.query
+
+    # --- Filters ---
+    lead_category = args.get('lead_category')
+    if lead_category:
+        query = query.filter(Lead.lead_category == lead_category)
+
+    property_type = args.get('property_type')
+    if property_type:
+        query = query.filter(Lead.property_type == property_type)
+
+    city = args.get('city')
+    if city:
+        query = query.filter(Lead.mailing_city.ilike(city))
+
+    state = args.get('state')
+    if state:
+        query = query.filter(Lead.mailing_state.ilike(state))
+
+    zip_code = args.get('zip')
+    if zip_code:
+        query = query.filter(Lead.mailing_zip == zip_code)
+
+    owner_name = args.get('owner_name')
+    if owner_name:
+        # Join through property_contacts → contacts for the new contact model
+        query = (
+            query
+            .join(PropertyContact, PropertyContact.property_id == Lead.id)
+            .join(Contact, Contact.id == PropertyContact.contact_id)
+            .filter(or_(
+                Contact.first_name.ilike(f'%{owner_name}%'),
+                Contact.last_name.ilike(f'%{owner_name}%'),
+            ))
+            .distinct()
+        )
+
+    score_min = args.get('score_min')
+    if score_min is not None:
+        try:
+            query = query.filter(Lead.lead_score >= float(score_min))
+        except (TypeError, ValueError):
+            pass
+
+    score_max = args.get('score_max')
+    if score_max is not None:
+        try:
+            query = query.filter(Lead.lead_score <= float(score_max))
+        except (TypeError, ValueError):
+            pass
+
+    marketing_list_id = args.get('marketing_list_id')
+    if marketing_list_id is not None:
+        try:
+            ml_id = int(marketing_list_id)
+            query = query.join(MarketingListMember).filter(
+                MarketingListMember.marketing_list_id == ml_id,
+            )
+        except (TypeError, ValueError):
+            pass
+
+    # --- Sorting ---
+    sort_by = args.get('sort_by', 'created_at')
+    sort_order = args.get('sort_order', 'desc')
+
+    if sort_by not in ALLOWED_SORT_FIELDS:
+        sort_by = 'created_at'
+    if sort_order not in ALLOWED_SORT_ORDERS:
+        sort_order = 'desc'
+
+    sort_column = getattr(Lead, sort_by)
+    if sort_order == 'desc':
+        query = query.order_by(sort_column.desc())
+    else:
+        query = query.order_by(sort_column.asc())
+
+    # --- Pagination ---
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    return jsonify({
+        'leads': [_serialize_property_summary(lead) for lead in pagination.items],
+        'total': pagination.total,
+        'page': pagination.page,
+        'per_page': pagination.per_page,
+        'pages': pagination.pages,
+    }), 200
+
+
+@properties_bp.route('/<int:lead_id>', methods=['GET'])
+@limiter.limit("30 per minute")
+@handle_errors
+def get_property(lead_id):
+    """Get full property detail including score, enrichment records, and analysis links."""
+    lead = db.session.get(Lead, lead_id)
+    if not lead:
+        return jsonify({
+            'error': 'Property not found',
+            'message': f'Property {lead_id} does not exist',
+        }), 404
+
+    return jsonify(_serialize_property_detail(lead)), 200
+
+
+@properties_bp.route('/<int:lead_id>/analyze', methods=['POST'])
+@limiter.limit("10 per minute")
+@handle_errors
+def analyze_property(lead_id):
+    """Create an AnalysisSession pre-populated from property data.
+
+    Request body
+    ------------
+    user_id : str (required)
+
+    Returns the new session details.
+    """
+    lead = db.session.get(Lead, lead_id)
+    if not lead:
+        return jsonify({
+            'error': 'Property not found',
+            'message': f'Property {lead_id} does not exist',
+        }), 404
+
+    data = request.get_json() or {}
+    user_id = get_current_user_id()
+    if not user_id or user_id == 'anonymous':
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'user_id is required',
+        }), 400
+    session_id = str(uuid.uuid4())
+    session = AnalysisSession(
+        session_id=session_id,
+        user_id=user_id,
+        current_step=WorkflowStep.PROPERTY_FACTS,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.session.add(session)
+    db.session.flush()  # get session.id
+
+    # Link lead to the new session
+    lead.analysis_session_id = session.id
+    lead.updated_at = datetime.utcnow()
+
+    db.session.commit()
+
+    logger.info(
+        "Created analysis session %s from property %d for user %s",
+        session_id, lead_id, user_id,
+    )
+
+    return jsonify({
+        'session_id': session_id,
+        'lead_id': lead.id,
+        'user_id': user_id,
+        'current_step': session.current_step.name,
+        'created_at': session.created_at.isoformat(),
+        'pre_populated': {
+            'address': lead.property_street,
+            'property_type': lead.property_type,
+            'bedrooms': lead.bedrooms,
+            'bathrooms': lead.bathrooms,
+            'square_footage': lead.square_footage,
+            'lot_size': lead.lot_size,
+            'year_built': lead.year_built,
+        },
+    }), 201
+
+
+# ---------------------------------------------------------------------------
+# Property View Endpoints (HubSpot CRM Migration — Phase 6)
+# ---------------------------------------------------------------------------
+
+@properties_bp.route('/views/previously-warm', methods=['GET'])
+@limiter.limit("30 per minute")
+@handle_errors
+def view_previously_warm():
+    """Properties that have a PRIOR_WARM_CONVERSATION or APPOINTMENT_OCCURRED signal."""
+    from app.models import HubSpotSignal
+
+    page, per_page = _parse_pagination(request.args)
+
+    query = (
+        Lead.query
+        .join(HubSpotSignal, HubSpotSignal.lead_id == Lead.id)
+        .filter(HubSpotSignal.signal_type.in_(['PRIOR_WARM_CONVERSATION', 'APPOINTMENT_OCCURRED']))
+        .distinct(Lead.id)
+        .order_by(Lead.id, Lead.lead_score.desc())
+    )
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    return jsonify({
+        'leads': [_serialize_property_summary(lead) for lead in pagination.items],
+        'total': pagination.total,
+        'page': pagination.page,
+        'per_page': pagination.per_page,
+        'pages': pagination.pages,
+    }), 200
+
+
+@properties_bp.route('/views/needs-review', methods=['GET'])
+@limiter.limit("30 per minute")
+@handle_errors
+def view_needs_review():
+    """HubSpot-imported properties with UNMATCHED confidence or needs_review status."""
+    from app.models import HubSpotMatch
+
+    page, per_page = _parse_pagination(request.args)
+
+    unmatched_lead_ids = (
+        db.session.query(HubSpotMatch.internal_record_id)
+        .filter(
+            HubSpotMatch.internal_record_type == 'lead',
+            HubSpotMatch.confidence == 'UNMATCHED',
+            HubSpotMatch.internal_record_id.isnot(None),
+        )
+        .subquery()
+    )
+
+    hubspot_no_confirmed_ids = (
+        db.session.query(Lead.id)
+        .outerjoin(
+            HubSpotMatch,
+            (HubSpotMatch.internal_record_id == Lead.id) &
+            (HubSpotMatch.internal_record_type == 'lead') &
+            (HubSpotMatch.status == 'confirmed'),
+        )
+        .filter(
+            Lead.source == 'hubspot_import',
+            HubSpotMatch.id.is_(None),
+        )
+        .subquery()
+    )
+
+    query = (
+        Lead.query
+        .filter(
+            or_(
+                Lead.id.in_(unmatched_lead_ids),
+                Lead.id.in_(hubspot_no_confirmed_ids),
+            )
+        )
+        .order_by(Lead.created_at.desc())
+    )
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    return jsonify({
+        'leads': [_serialize_property_summary(lead) for lead in pagination.items],
+        'total': pagination.total,
+        'page': pagination.page,
+        'per_page': pagination.per_page,
+        'pages': pagination.pages,
+    }), 200
+
+
+@properties_bp.route('/views/follow-up-overdue', methods=['GET'])
+@limiter.limit("30 per minute")
+@handle_errors
+def view_follow_up_overdue():
+    """Properties that have at least one open overdue Task.
+
+    A task is considered overdue if:
+      - status = 'overdue'  (explicitly marked), OR
+      - status = 'open' AND due_date < NOW()  (past due but not yet marked)
+
+    The second condition handles tasks imported from HubSpot that were never
+    individually fetched (which is when mark_overdue_if_needed() runs lazily).
+    """
+    from app.models import Task, TaskAssociation
+    from datetime import datetime as _dt
+
+    page, per_page = _parse_pagination(request.args)
+    now = _dt.utcnow()
+
+    query = (
+        Lead.query
+        .join(TaskAssociation, (TaskAssociation.target_id == Lead.id) & (TaskAssociation.target_type == 'lead'))
+        .join(Task, Task.id == TaskAssociation.task_id)
+        .filter(
+            db.or_(
+                Task.status == 'overdue',
+                db.and_(
+                    Task.status == 'open',
+                    Task.due_date.isnot(None),
+                    Task.due_date < now,
+                )
+            )
+        )
+        .distinct(Lead.id)
+        .order_by(Lead.id, Lead.lead_score.desc())
+    )
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    return jsonify({
+        'leads': [_serialize_property_summary(lead) for lead in pagination.items],
+        'total': pagination.total,
+        'page': pagination.page,
+        'per_page': pagination.per_page,
+        'pages': pagination.pages,
+    }), 200
+
+
+@properties_bp.route('/views/no-next-action', methods=['GET'])
+@limiter.limit("30 per minute")
+@handle_errors
+def view_no_next_action():
+    """Properties with PRIOR_INTERACTION_EXISTS signal, no open Task, and no future Interaction."""
+    from datetime import datetime as dt
+    from app.models import HubSpotSignal, Task, TaskAssociation, Interaction, InteractionAssociation
+
+    page, per_page = _parse_pagination(request.args)
+    now = dt.utcnow()
+
+    prior_interaction_ids = (
+        db.session.query(HubSpotSignal.lead_id)
+        .filter(HubSpotSignal.signal_type == 'PRIOR_INTERACTION_EXISTS')
+        .subquery()
+    )
+
+    has_open_task_ids = (
+        db.session.query(TaskAssociation.target_id)
+        .join(Task, Task.id == TaskAssociation.task_id)
+        .filter(
+            TaskAssociation.target_type == 'lead',
+            Task.status.in_(['open', 'overdue']),
+        )
+        .subquery()
+    )
+
+    has_future_interaction_ids = (
+        db.session.query(InteractionAssociation.target_id)
+        .join(Interaction, Interaction.id == InteractionAssociation.interaction_id)
+        .filter(
+            InteractionAssociation.target_type == 'lead',
+            Interaction.occurred_at > now,
+        )
+        .subquery()
+    )
+
+    query = (
+        Lead.query
+        .filter(Lead.id.in_(prior_interaction_ids))
+        .filter(Lead.id.notin_(has_open_task_ids))
+        .filter(Lead.id.notin_(has_future_interaction_ids))
+        .order_by(Lead.lead_score.desc())
+    )
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    return jsonify({
+        'leads': [_serialize_property_summary(lead) for lead in pagination.items],
+        'total': pagination.total,
+        'page': pagination.page,
+        'per_page': pagination.per_page,
+        'pages': pagination.pages,
+    }), 200
+
+
+@properties_bp.route('/views/do-not-contact', methods=['GET'])
+@limiter.limit("30 per minute")
+@handle_errors
+def view_do_not_contact():
+    """Properties where suppression_flag=True."""
+    page, per_page = _parse_pagination(request.args)
+
+    query = (
+        Lead.query
+        .filter(Lead.suppression_flag == True)  # noqa: E712
+        .order_by(Lead.updated_at.desc())
+    )
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    return jsonify({
+        'leads': [_serialize_property_summary(lead) for lead in pagination.items],
+        'total': pagination.total,
+        'page': pagination.page,
+        'per_page': pagination.per_page,
+        'pages': pagination.pages,
+    }), 200
+
+
+@properties_bp.route('/views/missing-property-match', methods=['GET'])
+@limiter.limit("30 per minute")
+@handle_errors
+def view_missing_property_match():
+    """HubSpot placeholder properties with no confirmed match."""
+    from app.models import HubSpotMatch
+
+    page, per_page = _parse_pagination(request.args)
+
+    confirmed_match_ids = (
+        db.session.query(HubSpotMatch.internal_record_id)
+        .filter(
+            HubSpotMatch.internal_record_type == 'lead',
+            HubSpotMatch.status == 'confirmed',
+            HubSpotMatch.internal_record_id.isnot(None),
+        )
+        .subquery()
+    )
+
+    query = (
+        Lead.query
+        .filter(Lead.source == 'hubspot_import')
+        .filter(Lead.id.notin_(confirmed_match_ids))
+        .order_by(Lead.created_at.desc())
+    )
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    return jsonify({
+        'leads': [_serialize_property_summary(lead) for lead in pagination.items],
+        'total': pagination.total,
+        'page': pagination.page,
+        'per_page': pagination.per_page,
+        'pages': pagination.pages,
+    }), 200
+
+
+@properties_bp.route('/scoring/weights', methods=['GET'])
+@limiter.limit("30 per minute")
+@handle_errors
+def get_scoring_weights():
+    """Get current scoring weights for a user."""
+    user_id = request.args.get('user_id', 'default')
+    weights = scoring_engine.get_weights(user_id)
+    return jsonify(_serialize_scoring_weights(weights)), 200
+
+
+@properties_bp.route('/scoring/weights', methods=['PUT'])
+@limiter.limit("10 per minute")
+@handle_errors
+def update_scoring_weights():
+    """Update scoring weights and trigger bulk rescore."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'Request body is required',
+        }), 400
+
+    user_id = get_current_user_id()
+    if not user_id or user_id == 'anonymous':
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'user_id is required',
+        }), 400
+
+    required_weight_fields = [
+        'property_characteristics_weight',
+        'data_completeness_weight',
+        'owner_situation_weight',
+        'location_desirability_weight',
+    ]
+    for field in required_weight_fields:
+        if field not in data:
+            return jsonify({
+                'error': 'Validation error',
+                'message': f'{field} is required',
+            }), 400
+        try:
+            float(data[field])
+        except (TypeError, ValueError):
+            return jsonify({
+                'error': 'Validation error',
+                'message': f'{field} must be a number',
+            }), 400
+
+    weights = scoring_engine.update_weights(
+        user_id=user_id,
+        property_characteristics_weight=float(data['property_characteristics_weight']),
+        data_completeness_weight=float(data['data_completeness_weight']),
+        owner_situation_weight=float(data['owner_situation_weight']),
+        location_desirability_weight=float(data['location_desirability_weight']),
+    )
+
+    rescored = scoring_engine.bulk_rescore(user_id=user_id)
+
+    logger.info(
+        "Updated scoring weights for user %s, rescored %d properties",
+        user_id, rescored,
+    )
+
+    result = _serialize_scoring_weights(weights)
+    result['leads_rescored'] = rescored
+
+    return jsonify(result), 200
+
+
+# ---------------------------------------------------------------------------
+# Legacy Redirect Blueprint — /api/leads/* → /api/properties/* (HTTP 301)
+# ---------------------------------------------------------------------------
+
+@leads_legacy_bp.route('/', methods=['GET'])
+def legacy_list_properties():
+    return redirect(url_for('properties.list_properties', **request.args), 301)
+
+
+@leads_legacy_bp.route('/<int:lead_id>', methods=['GET'])
+def legacy_get_property(lead_id):
+    return redirect(url_for('properties.get_property', lead_id=lead_id), 301)
+
+
+@leads_legacy_bp.route('/<int:lead_id>/analyze', methods=['POST'])
+def legacy_analyze_property(lead_id):
+    return redirect(url_for('properties.analyze_property', lead_id=lead_id), 301)
+
+
+@leads_legacy_bp.route('/views/previously-warm', methods=['GET'])
+def legacy_view_previously_warm():
+    return redirect(url_for('properties.view_previously_warm', **request.args), 301)
+
+
+@leads_legacy_bp.route('/views/needs-review', methods=['GET'])
+def legacy_view_needs_review():
+    return redirect(url_for('properties.view_needs_review', **request.args), 301)
+
+
+@leads_legacy_bp.route('/views/follow-up-overdue', methods=['GET'])
+def legacy_view_follow_up_overdue():
+    return redirect(url_for('properties.view_follow_up_overdue', **request.args), 301)
+
+
+@leads_legacy_bp.route('/views/no-next-action', methods=['GET'])
+def legacy_view_no_next_action():
+    return redirect(url_for('properties.view_no_next_action', **request.args), 301)
+
+
+@leads_legacy_bp.route('/views/do-not-contact', methods=['GET'])
+def legacy_view_do_not_contact():
+    return redirect(url_for('properties.view_do_not_contact', **request.args), 301)
+
+
+@leads_legacy_bp.route('/views/missing-property-match', methods=['GET'])
+def legacy_view_missing_property_match():
+    return redirect(url_for('properties.view_missing_property_match', **request.args), 301)
+
+
+@leads_legacy_bp.route('/scoring/weights', methods=['GET'])
+def legacy_get_scoring_weights():
+    return redirect(url_for('properties.get_scoring_weights', **request.args), 301)
+
+
+@leads_legacy_bp.route('/scoring/weights', methods=['PUT'])
+def legacy_update_scoring_weights():
+    return redirect(url_for('properties.update_scoring_weights'), 301)
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatibility alias — other modules that import lead_bp
+# ---------------------------------------------------------------------------
+
+# lead_bp is kept as an alias so existing imports don't break during transition.
+lead_bp = properties_bp

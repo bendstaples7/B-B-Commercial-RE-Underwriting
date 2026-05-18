@@ -36,7 +36,7 @@ class AddressGroupAnalysis(db.Model):
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
-    leads = db.relationship('Lead', backref='condo_analysis', lazy='dynamic')
+    leads = db.relationship('Property', backref='condo_analysis', lazy='dynamic')
 
     def __repr__(self):
         return f'<AddressGroupAnalysis {self.normalized_address} ({self.condo_risk_status})>'

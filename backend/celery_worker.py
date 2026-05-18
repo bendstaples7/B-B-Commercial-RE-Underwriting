@@ -30,6 +30,26 @@ celery.conf.update(
     result_serializer='json',
     timezone='UTC',
     enable_utc=True,
+    # Option 2: Celery Beat schedule — run signal extraction nightly at 2am UTC
+    # and rescore leads immediately after. This catches any interactions that
+    # slipped through the inline extraction (Option 3) due to errors.
+    beat_schedule={
+        'hubspot-nightly-signal-extraction': {
+            'task': 'hubspot.extract_signals',
+            'schedule': 86400,  # every 24 hours (seconds)
+            'options': {'expires': 3600},
+        },
+        'hubspot-nightly-rescore': {
+            'task': 'hubspot.rescore_leads',
+            'schedule': 86400,
+            'options': {'expires': 3600},
+        },
+        'tasks-nightly-mark-overdue': {
+            'task': 'tasks.mark_overdue',
+            'schedule': 3600,  # every hour — keeps overdue status current
+            'options': {'expires': 1800},
+        },
+    },
 )
 
 # ---------------------------------------------------------------------------
@@ -515,6 +535,158 @@ def fetch_sale_comps_ai_task(self, deal_id: int, user_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# HubSpot CRM Migration Tasks
+# ---------------------------------------------------------------------------
+
+@celery.task(name='hubspot.import_deals', bind=True, max_retries=3)
+def import_hubspot_deals(self, run_id: int) -> None:
+    """Paginate and UPSERT all HubSpot deals. Retries on rate-limit/service errors."""
+    from app.tasks.hubspot_tasks import run_import_hubspot_deals
+    run_import_hubspot_deals(run_id, self_task=self)
+
+
+@celery.task(name='hubspot.import_contacts', bind=True, max_retries=3)
+def import_hubspot_contacts(self, run_id: int) -> None:
+    """Paginate and UPSERT all HubSpot contacts. Retries on rate-limit/service errors."""
+    from app.tasks.hubspot_tasks import run_import_hubspot_contacts
+    run_import_hubspot_contacts(run_id, self_task=self)
+
+
+@celery.task(name='hubspot.import_companies', bind=True, max_retries=3)
+def import_hubspot_companies(self, run_id: int) -> None:
+    """Paginate and UPSERT all HubSpot companies. Retries on rate-limit/service errors."""
+    from app.tasks.hubspot_tasks import run_import_hubspot_companies
+    run_import_hubspot_companies(run_id, self_task=self)
+
+
+@celery.task(name='hubspot.import_engagements', bind=True, max_retries=3)
+def import_hubspot_engagements(self, run_id: int) -> None:
+    """Paginate and UPSERT all HubSpot engagements. Retries on rate-limit/service errors."""
+    from app.tasks.hubspot_tasks import run_import_hubspot_engagements
+    run_import_hubspot_engagements(run_id, self_task=self)
+
+
+@celery.task(name='hubspot.run_matching')
+def run_hubspot_matching(run_id: int = None) -> None:
+    """Match all unmatched HubSpot records to internal Lead/Organization records."""
+    from app.tasks.hubspot_tasks import run_hubspot_matching as _run
+    _run(run_id)
+
+
+@celery.task(name='hubspot.convert_activities')
+def convert_hubspot_activities(run_id: int = None) -> None:
+    """Convert all unconverted HubSpot engagements to Interactions/Tasks."""
+    from app.tasks.hubspot_tasks import run_convert_hubspot_activities
+    run_convert_hubspot_activities(run_id)
+
+
+@celery.task(name='hubspot.extract_signals')
+def extract_hubspot_signals(run_id: int = None) -> None:
+    """Extract signals from HubSpot-imported Interactions and apply suppression flags."""
+    from app.tasks.hubspot_tasks import run_extract_hubspot_signals
+    run_extract_hubspot_signals(run_id)
+
+
+@celery.task(name='hubspot.rescore_leads')
+def rescore_leads_after_import(user_id: str = 'default') -> int:
+    """Rescore all leads using LeadScoringEngine after HubSpot signal extraction."""
+    from app.tasks.hubspot_tasks import run_rescore_leads_after_import
+    return run_rescore_leads_after_import(user_id)
+
+
+@celery.task(name='hubspot.generate_backup')
+def generate_backup_export() -> str:
+    """Serialize all raw HubSpot tables to a JSON backup file."""
+    from app.tasks.hubspot_tasks import run_generate_backup_export
+    return run_generate_backup_export()
+
+
+@celery.task(name='tasks.mark_overdue')
+def mark_tasks_overdue() -> int:
+    """Bulk-update tasks with status='open' and past due_date to status='overdue'.
+
+    Runs hourly via Celery Beat so the follow-up-overdue view stays current
+    without relying on individual task reads to trigger the lazy update.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    from dotenv import load_dotenv
+    load_dotenv()
+    from app import create_app
+    app = create_app()
+    with app.app_context():
+        from app import db
+        from app.models.task import Task
+        from datetime import datetime
+        updated = Task.query.filter(
+            Task.status == 'open',
+            Task.due_date.isnot(None),
+            Task.due_date < datetime.utcnow(),
+        ).update({'status': 'overdue'}, synchronize_session=False)
+        db.session.commit()
+        if updated:
+            logger.info("mark_tasks_overdue: marked %d task(s) as overdue.", updated)
+        return updated
+
+
+@celery.task(name='hubspot.post_import_pipeline')
+def run_post_import_pipeline(run_ids: list = None) -> None:
+    """Run the full post-import pipeline: matching → convert activities → extract signals → rescore.
+
+    Queued automatically after every HubSpot import trigger.  Polls until all
+    import runs in the batch are finished (success/partial/failed), then runs
+    matching → convert → signals → rescore sequentially.
+    """
+    import logging
+    import time
+    logger = logging.getLogger(__name__)
+    logger.info("Starting post-import pipeline (triggered by run_ids=%s)", run_ids)
+
+    from dotenv import load_dotenv
+    load_dotenv()
+    from app import create_app
+    app = create_app()
+
+    # Wait for all import runs in this batch to reach a terminal state
+    if run_ids:
+        max_wait_seconds = 3600  # 1 hour max
+        poll_interval = 15
+        elapsed = 0
+        with app.app_context():
+            from app.models import HubSpotImportRun
+            while elapsed < max_wait_seconds:
+                runs = HubSpotImportRun.query.filter(HubSpotImportRun.id.in_(run_ids)).all()
+                terminal = {'success', 'partial', 'failed'}
+                if all(r.status in terminal for r in runs):
+                    logger.info("All import runs complete — proceeding with pipeline")
+                    break
+                logger.info("Waiting for import runs to complete (%ds elapsed)...", elapsed)
+                time.sleep(poll_interval)
+                elapsed += poll_interval
+            else:
+                logger.warning("Post-import pipeline timed out waiting for runs %s", run_ids)
+
+    from app.tasks.hubspot_tasks import (
+        run_hubspot_matching,
+        run_convert_hubspot_activities,
+        run_extract_hubspot_signals,
+        run_rescore_leads_after_import,
+    )
+
+    run_hubspot_matching()
+    logger.info("Post-import pipeline: matching complete")
+
+    run_convert_hubspot_activities()
+    logger.info("Post-import pipeline: activity conversion complete")
+
+    run_extract_hubspot_signals()
+    logger.info("Post-import pipeline: signal extraction complete")
+
+    run_rescore_leads_after_import()
+    logger.info("Post-import pipeline: lead rescoring complete")
+
+
+# ---------------------------------------------------------------------------
 # Startup assertion
 # ---------------------------------------------------------------------------
 
@@ -526,6 +698,17 @@ REQUIRED_TASKS = {
     'om_intake.process_pipeline',
     'multifamily.fetch_rent_comps_ai',
     'multifamily.fetch_sale_comps_ai',
+    'hubspot.import_deals',
+    'hubspot.import_contacts',
+    'hubspot.import_companies',
+    'hubspot.import_engagements',
+    'hubspot.run_matching',
+    'hubspot.convert_activities',
+    'hubspot.extract_signals',
+    'hubspot.rescore_leads',
+    'hubspot.generate_backup',
+    'hubspot.post_import_pipeline',
+    'tasks.mark_overdue',
 }
 
 

@@ -23,12 +23,12 @@ import {
   Stack,
   Typography,
 } from '@mui/material'
-import type { LeadScoreRecord, RecommendedAction } from '@/types'
+import type { PropertyScoreRecord, RecommendedAction } from '@/types'
 import { LeadScoreBadge } from './LeadScoreBadge'
 
 export interface ScoreBreakdownCardProps {
   /** The score record to display. */
-  score: LeadScoreRecord
+  score: PropertyScoreRecord
   /** Optional className passthrough. */
   className?: string
 }

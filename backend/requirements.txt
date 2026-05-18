@@ -18,3 +18,4 @@ requests==2.31.0
 cryptography==41.0.7
 PyMuPDF==1.27.2.3
 pdfplumber==0.11.9
+flask-openapi3==4.1.0

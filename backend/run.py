@@ -22,17 +22,28 @@ def _check_redis():
             if s.connect_ex((host, port)) != 0:
                 print(
                     f"\n  ⚠️  WARNING: Redis is not reachable at {host}:{port}.\n"
-                    f"     Celery tasks (PDF parsing, AI extraction) will fail.\n"
-                    f"     Start Redis or run `python dev.py` from the project root.\n"
+                    f"     Celery tasks (PDF parsing, AI extraction, HubSpot imports) will fail.\n"
+                    f"     Run `python dev.py` from the project root to start everything automatically.\n"
                 )
     except Exception:
         pass  # Don't crash startup over a connectivity check
+
+
+def _warn_celery_not_running():
+    """Warn that this script does not start the Celery worker."""
+    print(
+        "\n  ⚠️  NOTE: Running Flask directly via run.py does NOT start the Celery worker.\n"
+        "     Background tasks (HubSpot imports, OM PDF processing, bulk lead rescoring)\n"
+        "     will queue but never execute.\n"
+        "     Use `python dev.py` from the project root to start everything at once.\n"
+    )
 
 
 app = create_app()
 
 if __name__ == '__main__':
     _check_redis()
+    _warn_celery_not_running()
     with app.app_context():
         db.create_all()
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)

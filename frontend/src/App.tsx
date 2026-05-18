@@ -1,5 +1,5 @@
 import { createContext, useContext, useState } from 'react'
-import { Routes, Route, Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Routes, Route, Link, Navigate, useNavigate, useParams, useSearchParams, useLocation } from 'react-router-dom'
 import { useLoadScript } from '@react-google-maps/api'
 import {
   Typography,
@@ -16,6 +16,9 @@ import {
   ListItemText,
   IconButton,
   Divider,
+  Collapse,
+  CircularProgress,
+  Tooltip,
   useMediaQuery,
   useTheme,
   Dialog,
@@ -26,12 +29,24 @@ import PeopleIcon from '@mui/icons-material/People'
 import CloudUploadIcon from '@mui/icons-material/CloudUpload'
 import CampaignIcon from '@mui/icons-material/Campaign'
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance'
+import ApartmentIcon from '@mui/icons-material/Apartment'
+import DescriptionIcon from '@mui/icons-material/Description'
+import HubIcon from '@mui/icons-material/Hub'
+import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment'
+import RateReviewIcon from '@mui/icons-material/RateReview'
+import AlarmIcon from '@mui/icons-material/Alarm'
+import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
+import BlockIcon from '@mui/icons-material/Block'
+import LocationOffIcon from '@mui/icons-material/LocationOff'
+import ExpandLess from '@mui/icons-material/ExpandLess'
+import ExpandMore from '@mui/icons-material/ExpandMore'
+import { usePipelineStatus } from './context/PipelineStatusContext'
 import Avatar from '@mui/material/Avatar'
 import { WorkflowStep, PropertyFacts, PropertyType, ConstructionType, InteriorCondition } from './types'
 import { analysisService } from './services/api'
 import { PropertyFactsForm } from './components/PropertyFactsForm'
-import { LeadListPage } from './components/LeadListPage'
-import { LeadDetailPage } from './components/LeadDetailPage'
+import { PropertyListPage } from './components/PropertyListPage'
+import { PropertyDetailPage } from './components/PropertyDetailPage'
 import { ImportWizard } from './components/ImportWizard'
 import { ImportHistoryTable } from './components/ImportHistoryTable'
 import { MarketingListManager } from './components/MarketingListManager'
@@ -41,6 +56,16 @@ import { DealDetailPage } from './pages/multifamily/DealDetailPage'
 import { LenderProfilesPage } from './pages/multifamily/LenderProfilesPage'
 import { AnalysisLandingPage } from './pages/AnalysisLandingPage'
 import OMIntakePage from '@/pages/multifamily/OMIntakePage'
+import { HubSpotImportArea } from './components/HubSpotImportArea'
+import { ReviewQueue } from './components/ReviewQueue'
+import {
+  PreviouslyWarmLeadsView,
+  NeedsReviewView,
+  FollowUpOverdueView,
+  NoNextActionView,
+  DoNotContactView,
+  MissingPropertyMatchView,
+} from './components/HubSpotLeadViews'
 
 const DRAWER_WIDTH = 240
 
@@ -55,20 +80,57 @@ export const useGoogleMapsLoaded = () => useContext(GoogleMapsLoadedContext)
 // Declare it outside the component so it's stable across renders.
 const GOOGLE_MAPS_LIBRARIES: ['places'] = ['places']
 
-/** Navigation items for the sidebar / mobile drawer. */
-const NAV_ITEMS = [
-  { label: 'Analysis', path: '/analysis', icon: <HomeIcon /> },
-  { label: 'Leads', path: '/leads', icon: <PeopleIcon /> },
-  { label: 'Import', path: '/import', icon: <CloudUploadIcon /> },
-  { label: 'Marketing', path: '/marketing', icon: <CampaignIcon /> },
-  { label: 'Lender Profiles', path: '/multifamily/lender-profiles', icon: <AccountBalanceIcon /> },
-] as const
+/** Nav structure: top-level sections, each with grouped child items. */
+const NAV_SECTIONS = [
+  {
+    label: 'Analysis',
+    path: '/analysis',
+    icon: <HomeIcon />,
+    groups: [
+      {
+        label: null,
+        items: [
+          { label: 'Multifamily Deals', path: '/multifamily/deals', icon: <ApartmentIcon /> },
+          { label: 'Lender Profiles', path: '/multifamily/lender-profiles', icon: <AccountBalanceIcon /> },
+          { label: 'OM Intake', path: '/multifamily/om-intake', icon: <DescriptionIcon /> },
+        ],
+      },
+    ],
+  },
+  {
+    label: 'Properties',
+    path: '/properties',
+    icon: <PeopleIcon />,
+    groups: [
+      {
+        label: null,
+        items: [
+          { label: 'Sheets Import', path: '/import', icon: <CloudUploadIcon /> },
+          { label: 'HubSpot Import', path: '/import/hubspot', icon: <HubIcon /> },
+          { label: 'Review Queue', path: '/import/hubspot/review-queue', icon: <RateReviewIcon /> },
+          { label: 'Marketing', path: '/marketing', icon: <CampaignIcon /> },
+        ],
+      },
+      {
+        label: 'Work Queues',
+        items: [
+          { label: 'Previously Warm', path: '/leads/views/previously-warm', icon: <LocalFireDepartmentIcon /> },
+          { label: 'Follow-Up Overdue', path: '/leads/views/follow-up-overdue', icon: <AlarmIcon /> },
+          { label: 'No Next Action', path: '/leads/views/no-next-action', icon: <RadioButtonUncheckedIcon /> },
+          { label: 'Needs Review', path: '/leads/views/needs-review', icon: <RateReviewIcon /> },
+          { label: 'Do Not Contact', path: '/leads/views/do-not-contact', icon: <BlockIcon /> },
+          { label: 'Missing Property Match', path: '/leads/views/missing-property-match', icon: <LocationOffIcon /> },
+        ],
+      },
+    ],
+  },
+]
 
 // ---------------------------------------------------------------------------
 // Page wrapper components that handle route params / navigation
 // ---------------------------------------------------------------------------
 
-/** Wraps LeadDetailPage to extract leadId from URL params. */
+/** Wraps PropertyDetailPage to extract leadId from URL params. */
 function LeadDetailRoute() {
   const { leadId } = useParams<{ leadId: string }>()
   const navigate = useNavigate()
@@ -77,18 +139,18 @@ function LeadDetailRoute() {
   if (!leadId || Number.isNaN(id)) {
     return (
       <Box sx={{ p: 4 }}>
-        <Typography color="error">Invalid lead ID.</Typography>
-        <Button component={Link} to="/leads" sx={{ mt: 1 }}>
-          Back to Leads
+        <Typography color="error">Invalid property ID.</Typography>
+        <Button component={Link} to="/properties" sx={{ mt: 1 }}>
+          Back to Properties
         </Button>
       </Box>
     )
   }
 
   return (
-    <LeadDetailPage
+    <PropertyDetailPage
       leadId={id}
-      onBack={() => navigate('/leads')}
+      onBack={() => navigate('/properties')}
       onAnalysisStarted={() => {
         // Could navigate to analysis view in the future
       }}
@@ -96,10 +158,16 @@ function LeadDetailRoute() {
   )
 }
 
-/** Wraps LeadListPage to navigate on lead selection. */
+/** Wraps PropertyListPage to navigate on property selection. */
 function LeadListRoute() {
   const navigate = useNavigate()
-  return <LeadListPage onLeadSelect={(id) => navigate(`/leads/${id}`)} />
+  return <PropertyListPage onLeadSelect={(id) => navigate(`/properties/${id}`)} />
+}
+
+/** Redirects /leads/:leadId → /properties/:leadId */
+function LeadDetailRedirect() {
+  const { leadId } = useParams<{ leadId: string }>()
+  return <Navigate to={`/properties/${leadId}`} replace />
 }
 
 /** Wraps ImportWizard + ImportHistoryTable together. */
@@ -266,6 +334,7 @@ function App() {
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [avatarOpen, setAvatarOpen] = useState(false)
+  const pipelineStatus = usePipelineStatus()
 
   // useLoadScript manages the script tag lifecycle and exposes isLoaded so
   // child components (PropertyFactsForm) know when the Places API is ready.
@@ -281,6 +350,18 @@ function App() {
 
   const toggleDrawer = () => setDrawerOpen((prev) => !prev)
 
+  const location = useLocation()
+
+  // Track which top-level sections are expanded; default both open
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    '/analysis': true,
+    '/properties': true,
+  })
+
+  const toggleSection = (path: string) => {
+    setExpandedSections((prev) => ({ ...prev, [path]: !prev[path] }))
+  }
+
   const drawerContent = (
     <Box sx={{ width: DRAWER_WIDTH }} role="navigation" aria-label="Main navigation">
       <Box sx={{ p: 2 }}>
@@ -289,19 +370,76 @@ function App() {
         </Typography>
       </Box>
       <Divider />
-      <List>
-        {NAV_ITEMS.map((item) => (
-          <ListItem key={item.path} disablePadding>
+      <List disablePadding>
+        {NAV_SECTIONS.map((section) => (
+          <Box key={section.path}>
+            {/* Section header */}
             <ListItemButton
-              component={Link}
-              to={item.path}
-              onClick={() => isMobile && setDrawerOpen(false)}
-              aria-label={`Navigate to ${item.label}`}
+              onClick={() => toggleSection(section.path)}
+              sx={{ py: 1.5 }}
             >
-              <ListItemIcon>{item.icon}</ListItemIcon>
-              <ListItemText primary={item.label} />
+              <ListItemIcon sx={{ minWidth: 40 }}>{section.icon}</ListItemIcon>
+              <ListItemText
+                primary={section.label}
+                primaryTypographyProps={{ fontWeight: 600 }}
+              />
+              {expandedSections[section.path] ? <ExpandLess /> : <ExpandMore />}
             </ListItemButton>
-          </ListItem>
+
+            <Collapse in={expandedSections[section.path]} timeout="auto" unmountOnExit>
+              {section.groups.map((group, groupIdx) => (
+                <Box key={groupIdx}>
+                  {/* Optional group label */}
+                  {group.label && (
+                    <Box sx={{ px: 2, pt: 1, pb: 0.25 }}>
+                      <Typography
+                        variant="overline"
+                        sx={{ fontSize: '0.65rem', letterSpacing: 1, color: 'text.disabled', lineHeight: 1 }}
+                      >
+                        {group.label}
+                      </Typography>
+                    </Box>
+                  )}
+                  <List disablePadding>
+                    {group.items.map((item) => {
+                      const isActive = location.pathname === item.path
+                      return (
+                        <ListItemButton
+                          key={item.path}
+                          component={Link}
+                          to={item.path}
+                          onClick={() => isMobile && setDrawerOpen(false)}
+                          selected={isActive}
+                          sx={{
+                            pl: 4,
+                            py: 0.75,
+                            borderLeft: isActive ? '3px solid' : '3px solid transparent',
+                            borderColor: isActive ? 'primary.main' : 'transparent',
+                          }}
+                          aria-label={`Navigate to ${item.label}`}
+                        >
+                          <ListItemIcon sx={{ minWidth: 32, color: isActive ? 'primary.main' : 'text.secondary' }}>
+                            {item.icon}
+                          </ListItemIcon>
+                          <ListItemText
+                            primary={item.label}
+                            primaryTypographyProps={{
+                              variant: 'body2',
+                              fontWeight: isActive ? 600 : 400,
+                            }}
+                          />
+                        </ListItemButton>
+                      )
+                    })}
+                  </List>
+                  {groupIdx < section.groups.length - 1 && (
+                    <Divider sx={{ mx: 2, my: 0.5 }} />
+                  )}
+                </Box>
+              ))}
+            </Collapse>
+            <Divider />
+          </Box>
         ))}
       </List>
     </Box>
@@ -332,6 +470,16 @@ function App() {
           <Typography variant="h6" component="h1" noWrap sx={{ flexGrow: 1 }}>
             Real Estate Analysis Platform
           </Typography>
+          {pipelineStatus?.pipeline_running && (
+            <Tooltip title="HubSpot pipeline processing…">
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mr: 1 }}>
+                <CircularProgress size={18} color="inherit" sx={{ opacity: 0.8 }} />
+                <Typography variant="caption" sx={{ opacity: 0.8, display: { xs: 'none', sm: 'block' } }}>
+                  Processing…
+                </Typography>
+              </Box>
+            </Tooltip>
+          )}
           <Avatar
             src="/images/avatar.png"
             alt="B and B Real Estate"
@@ -419,8 +567,12 @@ function App() {
           <Route path="/analysis" element={<AnalysisLandingPage />} />
           {/* Legacy ARV workflow — still accessible directly */}
           <Route path="/analysis/arv" element={<AnalysisRoute />} />
-          <Route path="/leads" element={<LeadListRoute />} />
-          <Route path="/leads/:leadId" element={<LeadDetailRoute />} />
+          {/* Properties routes (canonical) */}
+          <Route path="/properties" element={<LeadListRoute />} />
+          <Route path="/properties/:leadId" element={<LeadDetailRoute />} />
+          {/* Legacy /leads routes — redirect to /properties */}
+          <Route path="/leads" element={<Navigate to="/properties" replace />} />
+          <Route path="/leads/:leadId" element={<LeadDetailRedirect />} />
           <Route path="/import" element={<ImportRoute />} />
           <Route path="/import/callback" element={<OAuthCallback />} />
           <Route path="/marketing" element={<MarketingListManager />} />
@@ -431,6 +583,15 @@ function App() {
           {/* OM Intake routes (Req 12.1, 12.2) */}
           <Route path="/multifamily/om-intake" element={<OMIntakePage />} />
           <Route path="/multifamily/om-intake/:jobId" element={<OMIntakePage />} />
+          {/* HubSpot CRM routes (Tasks 25.2) */}
+          <Route path="/import/hubspot" element={<HubSpotImportArea />} />
+          <Route path="/import/hubspot/review-queue" element={<ReviewQueue />} />
+          <Route path="/leads/views/previously-warm" element={<PreviouslyWarmLeadsView />} />
+          <Route path="/leads/views/needs-review" element={<NeedsReviewView />} />
+          <Route path="/leads/views/follow-up-overdue" element={<FollowUpOverdueView />} />
+          <Route path="/leads/views/no-next-action" element={<NoNextActionView />} />
+          <Route path="/leads/views/do-not-contact" element={<DoNotContactView />} />
+          <Route path="/leads/views/missing-property-match" element={<MissingPropertyMatchView />} />
         </Routes>
       </Box>
     </Box>

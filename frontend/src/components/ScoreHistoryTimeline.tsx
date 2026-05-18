@@ -25,12 +25,12 @@ import {
   Typography,
 } from '@mui/material'
 import { Fragment } from 'react'
-import type { LeadScoreRecord, RecommendedAction } from '@/types'
+import type { PropertyScoreRecord, RecommendedAction } from '@/types'
 import { LeadScoreBadge } from './LeadScoreBadge'
 
 export interface ScoreHistoryTimelineProps {
-  /** All score records for a lead, in any order. */
-  history: LeadScoreRecord[]
+  /** All score records for a property, in any order. */
+  history: PropertyScoreRecord[]
   /** Optional className passthrough. */
   className?: string
 }
