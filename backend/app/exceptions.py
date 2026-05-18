@@ -310,3 +310,109 @@ class GeminiResponseError(ExternalServiceError):
             combined_payload.update(payload)
         RealEstateAnalysisException.__init__(self, message, status_code=502)
         self.payload = combined_payload
+
+
+# ---------------------------------------------------------------------------
+# HubSpot CRM Migration Exceptions
+# ---------------------------------------------------------------------------
+
+
+class HubSpotReadOnlyViolation(RealEstateAnalysisException):
+    """Exception raised when a code path attempts to call a non-GET HubSpot API endpoint.
+
+    The HubSpot integration is strictly read-only; any write attempt is a
+    programming error and is treated as an internal server error (500).
+    """
+
+    def __init__(self, message: str = "HubSpot integration is read-only; write operations are not permitted"):
+        super().__init__(message, status_code=500)
+        self.payload = {
+            'error_type': 'hubspot_readonly_violation',
+        }
+
+
+class HubSpotAuthenticationError(RealEstateAnalysisException):
+    """Exception raised when the HubSpot API returns a 401 or 403 response.
+
+    Indicates the stored token is invalid, expired, or lacks required scopes.
+    """
+
+    def __init__(self, message: str = "HubSpot authentication failed; check that the token is valid and has the required scopes"):
+        super().__init__(message, status_code=401)
+        self.payload = {
+            'error_type': 'hubspot_authentication_error',
+        }
+
+
+class HubSpotRateLimitError(RealEstateAnalysisException):
+    """Exception raised when the HubSpot API returns a 429 Too Many Requests response.
+
+    The ``retry_after`` field (seconds) is surfaced in the payload so that
+    Celery tasks can schedule an exponential-backoff retry.
+    """
+
+    def __init__(self, message: str = "HubSpot API rate limit exceeded", retry_after: int = None):
+        super().__init__(message, status_code=429)
+        self.payload = {
+            'error_type': 'hubspot_rate_limit_error',
+            'retry_after': retry_after,
+        }
+
+
+class ImportRunNotFoundError(ResourceNotFoundError):
+    """Exception raised when a requested HubSpot import run record does not exist."""
+
+    def __init__(self, message: str, payload: dict = None):
+        combined_payload = {'error_type': 'import_run_not_found'}
+        if payload:
+            combined_payload.update(payload)
+        RealEstateAnalysisException.__init__(self, message, status_code=404)
+        self.payload = combined_payload
+
+
+class MatchNotFoundError(ResourceNotFoundError):
+    """Exception raised when a requested HubSpot match record does not exist."""
+
+    def __init__(self, message: str, payload: dict = None):
+        combined_payload = {'error_type': 'match_not_found'}
+        if payload:
+            combined_payload.update(payload)
+        RealEstateAnalysisException.__init__(self, message, status_code=404)
+        self.payload = combined_payload
+
+
+class OrganizationValidationError(ValidationException):
+    """Exception raised when Organization data fails validation (e.g., empty name)."""
+
+    def __init__(self, message: str, field: str = None, value=None):
+        # Call the grandparent directly so we can set our own error_type
+        RealEstateAnalysisException.__init__(self, message, status_code=400)
+        self.payload = {
+            'error_type': 'organization_validation_error',
+            'field': field,
+            'invalid_value': str(value) if value is not None else None,
+        }
+
+
+class InteractionValidationError(ValidationException):
+    """Exception raised when Interaction data fails validation (e.g., empty body, no association target)."""
+
+    def __init__(self, message: str, field: str = None, value=None):
+        RealEstateAnalysisException.__init__(self, message, status_code=400)
+        self.payload = {
+            'error_type': 'interaction_validation_error',
+            'field': field,
+            'invalid_value': str(value) if value is not None else None,
+        }
+
+
+class TaskValidationError(ValidationException):
+    """Exception raised when Task data fails validation (e.g., empty title)."""
+
+    def __init__(self, message: str, field: str = None, value=None):
+        RealEstateAnalysisException.__init__(self, message, status_code=400)
+        self.payload = {
+            'error_type': 'task_validation_error',
+            'field': field,
+            'invalid_value': str(value) if value is not None else None,
+        }

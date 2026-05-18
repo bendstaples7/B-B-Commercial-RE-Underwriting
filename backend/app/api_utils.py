@@ -31,22 +31,34 @@ No controller should ever read ``X-User-Id`` directly or parse
 """
 from functools import wraps
 
-from flask import g
+from flask import g, request
 
 
 def get_current_user_id() -> str:
     """Return the authenticated user ID for the current request.
 
     Reads from ``g.user_id``, which is set by the ``set_user_identity``
-    before_request hook.  Falls back to 'anonymous' if the hook has not
-    run (e.g. in unit tests that call route functions directly).
+    before_request hook from the ``X-User-Id`` header.  Falls back to
+    the ``user_id`` field in the JSON request body (for backwards
+    compatibility with clients that send it there), then to 'anonymous'.
 
     Returns
     -------
     str
         The user ID string, never None.
     """
-    return getattr(g, 'user_id', 'anonymous')
+    user_id = getattr(g, 'user_id', None)
+    if user_id and user_id != 'anonymous':
+        return user_id
+    # Fall back to JSON body user_id for backwards compatibility
+    try:
+        body = request.get_json(silent=True) or {}
+        body_user_id = body.get('user_id')
+        if body_user_id:
+            return str(body_user_id)
+    except Exception:
+        pass
+    return 'anonymous'
 
 
 def require_user(f):

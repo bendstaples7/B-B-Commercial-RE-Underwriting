@@ -18,7 +18,8 @@
     "react-router-dom": "^6.20.1",
     "recharts": "^2.10.3",
     "typescript": "^5.3.3",
-    "use-places-autocomplete": "4.0.1"
+    "use-places-autocomplete": "4.0.1",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.1.5",
@@ -36,6 +37,7 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^4.6.2",
     "jsdom": "^29.1.1",
+    "openapi-typescript": "^7.4.4",
     "vite": "^5.0.8",
     "vitest": "^1.0.4"
   },
@@ -45,6 +47,7 @@
     "preview": "vite preview",
     "test": "vitest --run",
     "test:watch": "vitest",
+    "generate-types": "openapi-typescript http://localhost:5000/api/openapi.json -o src/types/generated.ts",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "lint:fix": "eslint \"src/**/*.{ts,tsx}\" --fix",
     "lint:strict": "eslint \"src/**/*.{ts,tsx}\" --max-warnings 0"

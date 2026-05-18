@@ -17,6 +17,7 @@ Requirements: 11.1, 11.2, 15.1, 15.2, 15.4
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -73,20 +74,19 @@ class DashboardService:
         # Check for cached result (Req 15.2)
         cached = ProFormaResult.query.filter_by(deal_id=deal_id).first()
 
+        _start_time = time.monotonic()
+
         if cached is not None and cached.inputs_hash == current_hash:
+            _ms_elapsed = int((time.monotonic() - _start_time) * 1000)
             logger.info(
-                "Dashboard cache hit for deal_id=%d, hash=%s",
+                "get_dashboard deal_id=%d inputs_hash=%s ms_elapsed=%d cache_hit=True",
                 deal_id,
-                current_hash[:8],
+                current_hash,
+                _ms_elapsed,
             )
             computation_dict = cached.result_json
         else:
             # Cache miss — recompute (Req 15.4)
-            logger.info(
-                "Dashboard cache miss for deal_id=%d, recomputing (hash=%s)",
-                deal_id,
-                current_hash[:8],
-            )
             computation = compute_pro_forma(deal_inputs)
             computation_dict = computation.to_canonical_dict()
 
@@ -105,6 +105,14 @@ class DashboardService:
                 db.session.add(cached)
 
             db.session.flush()
+
+            _ms_elapsed = int((time.monotonic() - _start_time) * 1000)
+            logger.info(
+                "get_dashboard deal_id=%d inputs_hash=%s ms_elapsed=%d cache_hit=False",
+                deal_id,
+                current_hash,
+                _ms_elapsed,
+            )
 
         # Compose the Dashboard response from the computation dict
         return self._compose_dashboard(deal_id, deal_inputs, computation_dict)
@@ -127,19 +135,18 @@ class DashboardService:
 
         cached = ProFormaResult.query.filter_by(deal_id=deal_id).first()
 
+        _start_time = time.monotonic()
+
         if cached is not None and cached.inputs_hash == current_hash:
+            _ms_elapsed = int((time.monotonic() - _start_time) * 1000)
             logger.info(
-                "Pro forma cache hit for deal_id=%d, hash=%s",
+                "get_pro_forma deal_id=%d inputs_hash=%s ms_elapsed=%d cache_hit=True",
                 deal_id,
-                current_hash[:8],
+                current_hash,
+                _ms_elapsed,
             )
             return cached.result_json
         else:
-            logger.info(
-                "Pro forma cache miss for deal_id=%d, recomputing (hash=%s)",
-                deal_id,
-                current_hash[:8],
-            )
             computation = compute_pro_forma(deal_inputs)
             computation_dict = computation.to_canonical_dict()
 
@@ -157,6 +164,14 @@ class DashboardService:
                 db.session.add(cached)
 
             db.session.flush()
+
+            _ms_elapsed = int((time.monotonic() - _start_time) * 1000)
+            logger.info(
+                "get_pro_forma deal_id=%d inputs_hash=%s ms_elapsed=%d cache_hit=False",
+                deal_id,
+                current_hash,
+                _ms_elapsed,
+            )
             return computation_dict
 
     def force_recompute(self, deal_id: int) -> dict[str, Any]:
@@ -172,6 +187,7 @@ class DashboardService:
         deal_inputs = deal_service.build_inputs_snapshot(deal_id)
         current_hash = compute_inputs_hash(deal_inputs)
 
+        _start_time = time.monotonic()
         computation = compute_pro_forma(deal_inputs)
         computation_dict = computation.to_canonical_dict()
 
@@ -192,10 +208,12 @@ class DashboardService:
 
         db.session.flush()
 
+        _ms_elapsed = int((time.monotonic() - _start_time) * 1000)
         logger.info(
-            "Pro forma force-recomputed for deal_id=%d, hash=%s",
+            "force_recompute deal_id=%d inputs_hash=%s ms_elapsed=%d cache_hit=False",
             deal_id,
-            current_hash[:8],
+            current_hash,
+            _ms_elapsed,
         )
         return computation_dict
 

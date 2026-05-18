@@ -34,9 +34,9 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import type { LeadScoreRecord, RecommendedAction } from '@/types'
+import type { PropertyScoreRecord, RecommendedAction } from '@/types'
 
-export type ScoreTier = LeadScoreRecord['score_tier']
+export type ScoreTier = PropertyScoreRecord['score_tier']
 
 /**
  * All filter values the panel can emit. Parents pass the current value in

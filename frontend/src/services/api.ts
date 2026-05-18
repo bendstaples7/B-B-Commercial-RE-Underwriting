@@ -8,10 +8,18 @@ import type {
   StepResult,
   ErrorResponse,
   Report,
-  LeadScoreResponse,
+  PropertyScoreResponse,
   RecalculateRequest,
   RecalculateResponse,
 } from '@/types'
+import {
+  HubSpotConfigSchema,
+  HubSpotImportRunSchema,
+  HubSpotImportRunListSchema,
+  HubSpotMatchListSchema,
+  LeadListSchema,
+  PipelineStatusSchema,
+} from '@/services/schemas'
 
 // Create axios instance with default config
 const api: AxiosInstance = axios.create({
@@ -181,7 +189,7 @@ export const analysisService = {
  */
 export const leadScoreService = {
   getLeadScore: (leadId: number) =>
-    api.get<LeadScoreResponse>(`/lead-scores/${leadId}`),
+    api.get<PropertyScoreResponse>(`/lead-scores/${leadId}`),
   recalculate: (params: RecalculateRequest) =>
     api.post<RecalculateResponse>('/lead-scores/recalculate', params),
 }
@@ -757,5 +765,467 @@ export const omIntakeService = {
       page_size: number
     }>('/om-intake/jobs', { params: { page, page_size: pageSize } })
     return response.data
+  },
+}
+
+// ---------------------------------------------------------------------------
+// HubSpot CRM Migration API Services (Tasks 20.2, 20.3, 20.4)
+// ---------------------------------------------------------------------------
+import type {
+  HubSpotConfig,
+  HubSpotImportRun,
+  HubSpotMatch,
+  Organization,
+  OrganizationAuditLog,
+  PropertyOrganizationLink,
+  OwnerOrganizationLink,
+  Interaction,
+  TimelineEntry,
+  CRMTask,
+  PropertySummary,
+} from '@/types'
+
+// ---------------------------------------------------------------------------
+// Task 20.2 — HubSpot API methods
+// ---------------------------------------------------------------------------
+
+export const hubSpotService = {
+  /** GET /api/hubspot/config — retrieve current HubSpot config (token masked) */
+  getHubSpotConfig: async (): Promise<HubSpotConfig> => {
+    const response = await api.get<HubSpotConfig>('/hubspot/config')
+    return HubSpotConfigSchema.parse(response.data) as HubSpotConfig
+  },
+
+  /** POST /api/hubspot/config — save HubSpot API token and optional portal ID */
+  saveHubSpotConfig: async (
+    token: string,
+    portalId?: string
+  ): Promise<HubSpotConfig> => {
+    const response = await api.post<HubSpotConfig>('/hubspot/config', {
+      token,
+      portal_id: portalId,
+    })
+    return response.data
+  },
+
+  /** POST /api/hubspot/config/test — test the stored HubSpot connection */
+  testHubSpotConnection: async (): Promise<{
+    success: boolean
+    account_name?: string
+    portal_id?: string
+    error?: string
+  }> => {
+    const response = await api.post<{
+      success: boolean
+      account_name?: string
+      portal_id?: string
+      error?: string
+    }>('/hubspot/config/test')
+    return response.data
+  },
+
+  /** POST /api/hubspot/import/trigger — kick off a HubSpot import */
+  triggerHubSpotImport: async (
+    objectTypes?: string[]
+  ): Promise<{ run_ids: number[]; status: string }> => {
+    const response = await api.post<{ run_ids: number[]; status: string }>(
+      '/hubspot/import/trigger',
+      objectTypes ? { object_types: objectTypes } : {}
+    )
+    return response.data
+  },
+
+  /** GET /api/hubspot/import/runs — paginated list of import runs */
+  listImportRuns: async (
+    page?: number,
+    perPage?: number
+  ): Promise<{ runs: HubSpotImportRun[]; total: number; page: number; per_page: number }> => {
+    const response = await api.get<{
+      runs: HubSpotImportRun[]
+      total: number
+      page: number
+      per_page: number
+    }>('/hubspot/import/runs', {
+      params: { page, per_page: perPage },
+    })
+    return HubSpotImportRunListSchema.parse(response.data) as typeof response.data
+  },
+
+  /** GET /api/hubspot/import/runs/{runId} — get a single import run */
+  getImportRun: async (runId: number): Promise<HubSpotImportRun> => {
+    const response = await api.get<HubSpotImportRun>(`/hubspot/import/runs/${runId}`)
+    return HubSpotImportRunSchema.parse(response.data) as HubSpotImportRun
+  },
+
+  /** GET /api/hubspot/review-queue — filterable list of HubSpot match records */
+  getReviewQueue: async (filters?: {
+    type?: string
+    confidence?: string
+    page?: number
+    per_page?: number
+  }): Promise<{ matches: HubSpotMatch[]; total: number; page: number; per_page: number; pending_count?: number }> => {
+    const response = await api.get<{
+      matches: HubSpotMatch[]
+      total: number
+      page: number
+      per_page: number
+      pending_count?: number
+    }>('/hubspot/review-queue', { params: filters })
+    return HubSpotMatchListSchema.parse(response.data) as typeof response.data
+  },
+
+  /** POST /api/hubspot/review-queue/{matchId}/confirm — confirm a match */
+  confirmMatch: async (
+    matchId: number,
+    internalRecordId?: number
+  ): Promise<HubSpotMatch> => {
+    const response = await api.post<HubSpotMatch>(
+      `/hubspot/review-queue/${matchId}/confirm`,
+      internalRecordId !== undefined ? { internal_record_id: internalRecordId } : {}
+    )
+    return response.data
+  },
+
+  /** POST /api/hubspot/review-queue/{matchId}/reject — reject a match */
+  rejectMatch: async (
+    matchId: number,
+    internalRecordId?: number
+  ): Promise<HubSpotMatch> => {
+    const response = await api.post<HubSpotMatch>(
+      `/hubspot/review-queue/${matchId}/reject`,
+      internalRecordId !== undefined ? { internal_record_id: internalRecordId } : {}
+    )
+    return response.data
+  },
+
+  /** POST /api/hubspot/review-queue/{matchId}/new-record — mark as new record */
+  markMatchAsNewRecord: async (matchId: number): Promise<HubSpotMatch> => {
+    const response = await api.post<HubSpotMatch>(
+      `/hubspot/review-queue/${matchId}/new-record`
+    )
+    return response.data
+  },
+
+  /** POST /api/hubspot/export/backup — trigger a backup export Celery task */
+  triggerBackupExport: async (): Promise<{ task_id: string }> => {
+    const response = await api.post<{ task_id: string }>('/hubspot/export/backup')
+    return response.data
+  },
+
+  /** GET /api/hubspot/export/backup/download — download the backup JSON file */
+  downloadBackupExport: async (): Promise<Blob> => {
+    const response = await api.get('/hubspot/export/backup/download', {
+      responseType: 'blob',
+    })
+    return response.data
+  },
+
+  /** GET /api/hubspot/pipeline/status — current pipeline running state and counts */
+  getPipelineStatus: async (): Promise<{
+    pipeline_running: boolean
+    matches: { total: number; high: number; medium: number; unmatched: number }
+    interactions: number
+    tasks: number
+    signals: number
+  }> => {
+    const response = await api.get('/hubspot/pipeline/status')
+    return PipelineStatusSchema.parse(response.data) as ReturnType<typeof PipelineStatusSchema.parse>
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Task 20.3 — Organization, Interaction, Task, and Timeline API methods
+// ---------------------------------------------------------------------------
+
+export const organizationService = {
+  /** GET /api/organizations — paginated, filterable list */
+  listOrganizations: async (filters?: {
+    name?: string
+    org_type?: string
+    status?: string
+    page?: number
+    per_page?: number
+  }): Promise<{ organizations: Organization[]; total: number; page: number; per_page: number }> => {
+    const response = await api.get<{
+      organizations: Organization[]
+      total: number
+      page: number
+      per_page: number
+    }>('/organizations', { params: filters })
+    return response.data
+  },
+
+  /** POST /api/organizations — create a new organization */
+  createOrganization: async (
+    data: Omit<Organization, 'id' | 'created_at' | 'updated_at'>
+  ): Promise<Organization> => {
+    const response = await api.post<Organization>('/organizations', data)
+    return response.data
+  },
+
+  /** GET /api/organizations/{id} — get a single organization */
+  getOrganization: async (id: number): Promise<Organization> => {
+    const response = await api.get<Organization>(`/organizations/${id}`)
+    return response.data
+  },
+
+  /** PUT /api/organizations/{id} — update an organization */
+  updateOrganization: async (
+    id: number,
+    data: Partial<Omit<Organization, 'id' | 'created_at' | 'updated_at'>>
+  ): Promise<Organization> => {
+    const response = await api.put<Organization>(`/organizations/${id}`, data)
+    return response.data
+  },
+
+  /** DELETE /api/organizations/{id} — soft-delete (sets status=inactive) */
+  deleteOrganization: async (id: number): Promise<void> => {
+    await api.delete(`/organizations/${id}`)
+  },
+
+  /** GET /api/organizations/{id}/audit-log — get audit log entries */
+  getOrganizationAuditLog: async (id: number): Promise<OrganizationAuditLog[]> => {
+    const response = await api.get<{ audit_log: OrganizationAuditLog[]; total: number }>(`/organizations/${id}/audit-log`)
+    return response.data.audit_log
+  },
+
+  /** POST /api/organizations/{orgId}/links/properties — link org to a property */
+  linkOrganizationToProperty: async (
+    orgId: number,
+    propertyId: number,
+    role: string
+  ): Promise<PropertyOrganizationLink> => {
+    const response = await api.post<PropertyOrganizationLink>(
+      `/organizations/${orgId}/links/properties`,
+      { property_id: propertyId, role }
+    )
+    return response.data
+  },
+
+  /** POST /api/organizations/{orgId}/links/owners — link org to an owner */
+  linkOrganizationToOwner: async (
+    orgId: number,
+    ownerId: number,
+    role: string
+  ): Promise<OwnerOrganizationLink> => {
+    const response = await api.post<OwnerOrganizationLink>(
+      `/organizations/${orgId}/links/owners`,
+      { owner_id: ownerId, role }
+    )
+    return response.data
+  },
+}
+
+export const interactionService = {
+  /** POST /api/interactions — create a new interaction */
+  createInteraction: async (
+    data: Omit<Interaction, 'id' | 'created_at' | 'updated_at' | 'is_orphaned'> & {
+      associations: Array<{ target_type: string; target_id: number }>
+    }
+  ): Promise<Interaction> => {
+    const response = await api.post<Interaction>('/interactions', data)
+    return response.data
+  },
+
+  /** PUT /api/interactions/{id} — update an interaction */
+  updateInteraction: async (
+    id: number,
+    data: Partial<Pick<Interaction, 'body' | 'occurred_at' | 'interaction_type'>>
+  ): Promise<Interaction> => {
+    const response = await api.put<Interaction>(`/interactions/${id}`, data)
+    return response.data
+  },
+
+  /** DELETE /api/interactions/{id} — delete an interaction */
+  deleteInteraction: async (id: number): Promise<void> => {
+    await api.delete(`/interactions/${id}`)
+  },
+}
+
+export const crmTaskService = {
+  /** POST /api/tasks — create a new task */
+  createTask: async (
+    data: Omit<CRMTask, 'id' | 'created_at' | 'updated_at' | 'completion_timestamp'> & {
+      associations: Array<{ target_type: string; target_id: number }>
+    }
+  ): Promise<CRMTask> => {
+    const response = await api.post<CRMTask>('/tasks', data)
+    return response.data
+  },
+
+  /** PUT /api/tasks/{id} — update a task */
+  updateTask: async (
+    id: number,
+    data: Partial<Omit<CRMTask, 'id' | 'created_at' | 'updated_at'>>
+  ): Promise<CRMTask> => {
+    const response = await api.put<CRMTask>(`/tasks/${id}`, data)
+    return response.data
+  },
+
+  /** DELETE /api/tasks/{id} — delete a task */
+  deleteTask: async (id: number): Promise<void> => {
+    await api.delete(`/tasks/${id}`)
+  },
+
+  /** POST /api/tasks/{id}/complete — mark a task as completed */
+  completeTask: async (id: number): Promise<CRMTask> => {
+    const response = await api.post<CRMTask>(`/tasks/${id}/complete`)
+    return response.data
+  },
+}
+
+export const timelineService = {
+  /** GET /api/leads/{leadId}/timeline — get timeline entries for a lead */
+  getLeadTimeline: async (
+    leadId: number,
+    filters?: {
+      entry_type?: string
+      subtype?: string
+      date_from?: string
+      date_to?: string
+    }
+  ): Promise<TimelineEntry[]> => {
+    const response = await api.get<{ timeline: TimelineEntry[]; lead_id: number }>(`/leads/${leadId}/timeline`, {
+      params: filters,
+    })
+    return response.data.timeline
+  },
+
+  /** GET /api/organizations/{orgId}/timeline — get timeline entries for an org */
+  getOrganizationTimeline: async (
+    orgId: number,
+    filters?: {
+      entry_type?: string
+      subtype?: string
+      date_from?: string
+      date_to?: string
+    }
+  ): Promise<TimelineEntry[]> => {
+    const response = await api.get<{ timeline: TimelineEntry[]; organization_id: number }>(`/organizations/${orgId}/timeline`, {
+      params: filters,
+    })
+    return response.data.timeline
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Task 20.4 — Lead view API methods
+// ---------------------------------------------------------------------------
+
+export const leadViewService = {
+  /** GET /api/properties/views/previously-warm — leads with warm conversation signals */
+  getPreviouslyWarmLeads: async (): Promise<PropertySummary[]> => {
+    const response = await api.get('/properties/views/previously-warm')
+    const result = LeadListSchema.safeParse(response.data)
+    if (!result.success) {
+      console.error('[Schema] /properties/views/previously-warm parse errors:', result.error.issues)
+    }
+    return (result.success ? result.data : response.data).leads as PropertySummary[]
+  },
+
+  /** GET /api/properties/views/needs-review — HubSpot-imported leads needing review */
+  getNeedsReviewLeads: async (): Promise<PropertySummary[]> => {
+    const response = await api.get('/properties/views/needs-review')
+    const result = LeadListSchema.safeParse(response.data)
+    if (!result.success) {
+      console.error('[Schema] /properties/views/needs-review parse errors:', result.error.issues)
+    }
+    return (result.success ? result.data : response.data).leads as PropertySummary[]
+  },
+
+  /** GET /api/properties/views/follow-up-overdue — leads with overdue open tasks */
+  getFollowUpOverdueLeads: async (): Promise<PropertySummary[]> => {
+    const response = await api.get('/properties/views/follow-up-overdue')
+    const result = LeadListSchema.safeParse(response.data)
+    if (!result.success) {
+      console.error('[Schema] /properties/views/follow-up-overdue parse errors:', result.error.issues)
+    }
+    return (result.success ? result.data : response.data).leads as PropertySummary[]
+  },
+
+  /** GET /api/properties/views/no-next-action — leads with no open task or future interaction */
+  getNoNextActionLeads: async (): Promise<PropertySummary[]> => {
+    const response = await api.get('/properties/views/no-next-action')
+    const result = LeadListSchema.safeParse(response.data)
+    if (!result.success) {
+      console.error('[Schema] /properties/views/no-next-action parse errors:', result.error.issues)
+    }
+    return (result.success ? result.data : response.data).leads as PropertySummary[]
+  },
+
+  /** GET /api/properties/views/do-not-contact — suppressed leads */
+  getDoNotContactLeads: async (): Promise<PropertySummary[]> => {
+    const response = await api.get('/properties/views/do-not-contact')
+    const result = LeadListSchema.safeParse(response.data)
+    if (!result.success) {
+      console.error('[Schema] /properties/views/do-not-contact parse errors:', result.error.issues)
+    }
+    return (result.success ? result.data : response.data).leads as PropertySummary[]
+  },
+
+  /** GET /api/properties/views/missing-property-match — HubSpot placeholder leads with no confirmed match */
+  getMissingPropertyMatchLeads: async (): Promise<PropertySummary[]> => {
+    const response = await api.get('/properties/views/missing-property-match')
+    const result = LeadListSchema.safeParse(response.data)
+    if (!result.success) {
+      console.error('[Schema] /properties/views/missing-property-match parse errors:', result.error.issues)
+    }
+    return (result.success ? result.data : response.data).leads as PropertySummary[]
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Contact API Service (Property-Contact Model)
+// ---------------------------------------------------------------------------
+import type {
+  Contact,
+  PropertyContact,
+  ContactCreatePayload,
+  ContactUpdatePayload,
+  PropertyContactLinkRequest,
+} from '@/types'
+
+export const contactService = {
+  /** POST /api/contacts/ — create a new contact */
+  createContact: async (data: ContactCreatePayload): Promise<Contact> => {
+    const response = await api.post<Contact>('/contacts/', data)
+    return response.data
+  },
+
+  /** GET /api/contacts/{id} — get a contact with phones, emails, and linked properties */
+  getContact: async (id: number): Promise<Contact> => {
+    const response = await api.get<Contact>(`/contacts/${id}`)
+    return response.data
+  },
+
+  /** PUT /api/contacts/{id} — update a contact */
+  updateContact: async (id: number, data: ContactUpdatePayload): Promise<Contact> => {
+    const response = await api.put<Contact>(`/contacts/${id}`, data)
+    return response.data
+  },
+
+  /** DELETE /api/contacts/{id} — delete a contact (cascades to phones, emails, property links) */
+  deleteContact: async (id: number): Promise<void> => {
+    await api.delete(`/contacts/${id}`)
+  },
+
+  /** GET /api/properties/{propertyId}/contacts — list all contacts linked to a property */
+  getPropertyContacts: async (propertyId: number): Promise<PropertyContact[]> => {
+    const response = await api.get<PropertyContact[]>(`/properties/${propertyId}/contacts`)
+    return response.data
+  },
+
+  /** POST /api/properties/{propertyId}/contacts — link a contact to a property */
+  linkContactToProperty: async (
+    propertyId: number,
+    data: PropertyContactLinkRequest
+  ): Promise<PropertyContact> => {
+    const response = await api.post<PropertyContact>(`/properties/${propertyId}/contacts`, data)
+    return response.data
+  },
+
+  /** DELETE /api/properties/{propertyId}/contacts/{contactId} — unlink a contact from a property */
+  unlinkContactFromProperty: async (propertyId: number, contactId: number): Promise<void> => {
+    await api.delete(`/properties/${propertyId}/contacts/${contactId}`)
   },
 }

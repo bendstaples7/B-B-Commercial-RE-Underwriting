@@ -18,6 +18,8 @@ Requirements: 8.1-8.14, 10.6, 10.7
 
 from __future__ import annotations
 
+import logging
+import time
 from decimal import Decimal
 from typing import Optional
 
@@ -49,6 +51,8 @@ from app.services.multifamily.sources_and_uses_service import (
     compute_loan_amount_scenario_a,
     compute_loan_amount_scenario_b,
 )
+
+logger = logging.getLogger(__name__)
 
 ZERO = Decimal("0")
 TWELVE = Decimal("12")
@@ -374,6 +378,9 @@ def compute_pro_forma(inputs: DealInputs) -> ProFormaComputation:
     Returns:
         ProFormaComputation with full schedule, summary, and missing-input flags.
     """
+    # Record start time for elapsed-ms logging (Req 14.4, 15.2)
+    _start_time = time.monotonic()
+
     # Step 1: Scan for missing inputs (Req 8.14)
     missing_inputs_a, missing_inputs_b = _scan_missing_inputs(inputs)
 
@@ -548,6 +555,30 @@ def compute_pro_forma(inputs: DealInputs) -> ProFormaComputation:
         )
         monthly_rows.append(row)
 
+    # DEBUG: log month 1 and month 24 intermediate values for diagnostics
+    if monthly_rows:
+        m1 = monthly_rows[0]
+        logger.debug(
+            "deal_id=%s month=1 gsr=%s egi=%s noi=%s ds_a=%s ds_b=%s",
+            inputs.deal.deal_id,
+            m1.gsr,
+            m1.egi,
+            m1.noi,
+            m1.debt_service_a,
+            m1.debt_service_b,
+        )
+    if len(monthly_rows) >= 24:
+        m24 = monthly_rows[23]
+        logger.debug(
+            "deal_id=%s month=24 gsr=%s egi=%s noi=%s ds_a=%s ds_b=%s",
+            inputs.deal.deal_id,
+            m24.gsr,
+            m24.egi,
+            m24.noi,
+            m24.debt_service_a,
+            m24.debt_service_b,
+        )
+
     # Step 14: Sources & Uses (Reqs 10.1-10.5)
     su_a: Optional[SourcesAndUses] = None
     if not scenario_a_has_missing and lender_a is not None and loan_amount_a is not None:
@@ -577,6 +608,33 @@ def compute_pro_forma(inputs: DealInputs) -> ProFormaComputation:
     summary, su_warnings = _compute_summary(
         monthly_rows, scenario_a_has_missing, scenario_b_has_missing,
         su_a, su_b,
+    )
+
+    # DEBUG: log summary DSCR and NOI values per scenario
+    logger.debug(
+        "deal_id=%s in_place_noi=%s stabilized_noi=%s "
+        "in_place_dscr_a=%s stabilized_dscr_a=%s "
+        "in_place_dscr_b=%s stabilized_dscr_b=%s "
+        "cash_on_cash_a=%s cash_on_cash_b=%s",
+        inputs.deal.deal_id,
+        summary.in_place_noi,
+        summary.stabilized_noi,
+        summary.in_place_dscr_a,
+        summary.stabilized_dscr_a,
+        summary.in_place_dscr_b,
+        summary.stabilized_dscr_b,
+        summary.cash_on_cash_a,
+        summary.cash_on_cash_b,
+    )
+
+    # INFO: one line per invocation with deal_id and elapsed time (Req 14.4, 15.2)
+    _ms_elapsed = int((time.monotonic() - _start_time) * 1000)
+    logger.info(
+        "compute_pro_forma deal_id=%s ms_elapsed=%d missing_a=%s missing_b=%s",
+        inputs.deal.deal_id,
+        _ms_elapsed,
+        missing_inputs_a or None,
+        missing_inputs_b or None,
     )
 
     return ProFormaComputation(

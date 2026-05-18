@@ -7,11 +7,14 @@ and location desirability.  Weights are stored per-user in the
 """
 import logging
 from datetime import datetime, date
-from typing import Optional
+from typing import Optional, List, Union
 
 from app import db
 from app.models.lead import Lead
 from app.models.lead_scoring import ScoringWeights
+from app.models.property_contact import PropertyContact
+from app.models.contact_phone import ContactPhone
+from app.models.contact_email import ContactEmail
 
 logger = logging.getLogger(__name__)
 
@@ -40,17 +43,24 @@ DESIRABLE_PROPERTY_TYPES = {
     "duplex", "triplex", "fourplex",
 }
 
-# All lead fields tracked for data completeness scoring
+# Lead fields tracked for data completeness scoring (non-contact fields only).
+# Contact-related completeness (linked contacts, phones, emails) is checked
+# dynamically via the PropertyContact / ContactPhone / ContactEmail tables.
 COMPLETENESS_FIELDS = [
     "property_street", "property_city", "property_state", "property_zip",
     "property_type", "bedrooms", "bathrooms",
     "square_footage", "lot_size", "year_built",
-    "owner_first_name", "owner_last_name", "ownership_type", "acquisition_date",
-    "phone_1", "phone_2", "email_1",
+    "ownership_type", "acquisition_date",
     "mailing_address", "mailing_city", "mailing_state", "mailing_zip",
     "source", "notes", "units_allowed", "zoning", "county_assessor_pin",
-    "owner_2_first_name", "phone_4", "email_3", "socials",
+    "socials",
 ]
+
+# Number of contact-related "slots" counted toward completeness:
+#   1 = has at least one linked Contact
+#   1 = has at least one ContactPhone
+#   1 = has at least one ContactEmail
+_CONTACT_COMPLETENESS_SLOTS = 3
 
 # Years of ownership that indicate a long-term holder (higher motivation)
 LONG_OWNERSHIP_YEARS = 10
@@ -62,7 +72,27 @@ class LeadScoringEngine:
     Each sub-score is calculated on a 0-100 scale, then combined using
     user-configurable weights that must sum to 1.0.  The final score
     is clamped to [0, 100].
+
+    When HubSpot signals are provided to ``compute_score``, the signal
+    adjustments below are applied to the base weighted score before
+    clamping.  If the lead has ``suppression_flag=True``, the score is
+    additionally capped at 10.0 before the final [0, 100] clamp.
     """
+
+    # Minimum score threshold for active outreach eligibility.
+    ACTIVE_OUTREACH_THRESHOLD: float = 30.0
+
+    # Score adjustments applied per HubSpot signal type.
+    # Keys match the ``signal_type`` values on ``HubSpotSignal``.
+    SIGNAL_ADJUSTMENTS: dict = {
+        "PRIOR_WARM_CONVERSATION": +15.0,
+        "APPOINTMENT_OCCURRED": +20.0,
+        "OFFER_PREVIOUSLY_SENT": +10.0,
+        "SELLER_SAID_MAYBE_LATER": -5.0,
+        "SELLER_NOT_INTERESTED": -40.0,
+        "DO_NOT_CONTACT": -50.0,
+        "WRONG_NUMBER": -30.0,
+    }
 
     # ------------------------------------------------------------------
     # Sub-score: Property Characteristics (0-100)
@@ -131,6 +161,12 @@ class LeadScoringEngine:
     def score_data_completeness(self, lead: Lead) -> float:
         """Score based on the percentage of lead fields that are populated.
 
+        Non-contact fields are checked directly on the lead record.
+        Contact-related completeness is checked via the relational tables:
+          - Has at least one linked Contact (via PropertyContact): +1 slot
+          - Has at least one ContactPhone (via linked contacts): +1 slot
+          - Has at least one ContactEmail (via linked contacts): +1 slot
+
         Parameters
         ----------
         lead : Lead
@@ -140,16 +176,45 @@ class LeadScoringEngine:
         float
             Sub-score between 0 and 100.
         """
-        if not COMPLETENESS_FIELDS:
+        total_slots = len(COMPLETENESS_FIELDS) + _CONTACT_COMPLETENESS_SLOTS
+        if total_slots == 0:
             return 0.0
 
         populated = 0
+
+        # --- Non-contact field checks ---
         for field_name in COMPLETENESS_FIELDS:
             value = getattr(lead, field_name, None)
             if value is not None and value != "":
                 populated += 1
 
-        return (populated / len(COMPLETENESS_FIELDS)) * 100.0
+        # --- Contact-based checks via relational tables ---
+        # Check for at least one linked contact
+        pc = PropertyContact.query.filter_by(property_id=lead.id).first()
+        if pc is not None:
+            populated += 1  # has at least one linked Contact
+
+            # Check for at least one ContactPhone across all linked contacts
+            has_phone = (
+                db.session.query(ContactPhone)
+                .join(PropertyContact, PropertyContact.contact_id == ContactPhone.contact_id)
+                .filter(PropertyContact.property_id == lead.id)
+                .first()
+            )
+            if has_phone is not None:
+                populated += 1
+
+            # Check for at least one ContactEmail across all linked contacts
+            has_email = (
+                db.session.query(ContactEmail)
+                .join(PropertyContact, PropertyContact.contact_id == ContactEmail.contact_id)
+                .filter(PropertyContact.property_id == lead.id)
+                .first()
+            )
+            if has_email is not None:
+                populated += 1
+
+        return (populated / total_slots) * 100.0
 
     # ------------------------------------------------------------------
     # Sub-score: Owner Situation (0-100)
@@ -159,12 +224,12 @@ class LeadScoringEngine:
         """Score based on owner indicators that suggest motivation to sell.
 
         Heuristics:
-        - Has owner name: +15
+        - Has at least one linked Contact (via PropertyContact): +15
         - Has ownership type: +10
         - Has acquisition date: +15
         - Long-term ownership (>= LONG_OWNERSHIP_YEARS): +25
         - Absentee owner (mailing address differs from property address): +20
-        - Has contact info (phone or email): +15
+        - Has contact info (at least one ContactPhone or ContactEmail): +15
 
         Parameters
         ----------
@@ -177,8 +242,9 @@ class LeadScoringEngine:
         """
         score = 0.0
 
-        # Owner name present
-        if lead.owner_first_name or lead.owner_last_name:
+        # Check for linked contacts via PropertyContact
+        pc = PropertyContact.query.filter_by(property_id=lead.id).first()
+        if pc is not None:
             score += 15.0
 
         # Ownership type present
@@ -196,8 +262,20 @@ class LeadScoringEngine:
         if self._is_absentee_owner(lead):
             score += 20.0
 
-        # Contact information available
-        if lead.phone_1 or lead.phone_2 or lead.phone_3 or lead.email_1 or lead.email_2:
+        # Contact information available via relational tables
+        has_phone = (
+            db.session.query(ContactPhone)
+            .join(PropertyContact, PropertyContact.contact_id == ContactPhone.contact_id)
+            .filter(PropertyContact.property_id == lead.id)
+            .first()
+        )
+        has_email = (
+            db.session.query(ContactEmail)
+            .join(PropertyContact, PropertyContact.contact_id == ContactEmail.contact_id)
+            .filter(PropertyContact.property_id == lead.id)
+            .first()
+        )
+        if has_phone is not None or has_email is not None:
             score += 15.0
 
         return min(score, 100.0)
@@ -248,8 +326,22 @@ class LeadScoringEngine:
     # Composite score
     # ------------------------------------------------------------------
 
-    def compute_score(self, lead: Lead, weights: ScoringWeights) -> float:
+    def compute_score(
+        self,
+        lead: Lead,
+        weights: ScoringWeights,
+        signals: Optional[List] = None,
+    ) -> float:
         """Compute the overall lead score as a weighted sum of sub-scores.
+
+        Optionally applies HubSpot signal adjustments to the base score.
+        Each signal in *signals* may be either a ``HubSpotSignal`` model
+        instance (with a ``.signal_type`` attribute) or a plain string
+        signal-type name.  Unrecognised signal types are silently ignored.
+
+        After signal adjustments, if ``lead.suppression_flag`` is ``True``
+        the score is clamped to a maximum of 10.0.  The final score is
+        always clamped to [0.0, 100.0] and rounded to 2 decimal places.
 
         Parameters
         ----------
@@ -257,11 +349,14 @@ class LeadScoringEngine:
             The lead to score.
         weights : ScoringWeights
             User-configured scoring weights (must sum to 1.0).
+        signals : list or None
+            Optional list of ``HubSpotSignal`` instances or signal-type
+            strings to apply as score adjustments.
 
         Returns
         -------
         float
-            Final score clamped to [0, 100].
+            Final score clamped to [0.0, 100.0], rounded to 2 decimal places.
         """
         property_sub = self.score_property_characteristics(lead)
         completeness_sub = self.score_data_completeness(lead)
@@ -275,7 +370,90 @@ class LeadScoringEngine:
             + location_sub * weights.location_desirability_weight
         )
 
+        # Apply signal adjustments when signals are provided
+        if signals:
+            for signal in signals:
+                # Accept both HubSpotSignal model instances and plain strings
+                if isinstance(signal, str):
+                    signal_type = signal
+                else:
+                    signal_type = getattr(signal, "signal_type", None)
+
+                if signal_type and signal_type in self.SIGNAL_ADJUSTMENTS:
+                    total += self.SIGNAL_ADJUSTMENTS[signal_type]
+
+        # Suppression flag: cap score at 10.0 before final clamp
+        if getattr(lead, "suppression_flag", False):
+            total = min(total, 10.0)
+
         return max(0.0, min(round(total, 2), 100.0))
+
+    # ------------------------------------------------------------------
+    # Recommended action
+    # ------------------------------------------------------------------
+
+    def compute_recommended_action(
+        self,
+        signals: Optional[List],
+    ) -> Optional[str]:
+        """Determine the recommended action from a list of signals.
+
+        Signals are evaluated in priority order using the *most recently
+        extracted* signal (i.e. the last element in the list that matches
+        a priority tier).  Priority tiers, from highest to lowest:
+
+        1. DO_NOT_CONTACT → ``'DO_NOT_CONTACT'``
+        2. SELLER_NOT_INTERESTED → ``'DO_NOT_CONTACT'``
+        3. SELLER_SAID_MAYBE_LATER → ``'FOLLOW_UP_LATER'``
+        4. OFFER_PREVIOUSLY_SENT → ``'REVISIT_OFFER'``
+
+        If no signal in the list matches any of the above tiers, ``None``
+        is returned.
+
+        Parameters
+        ----------
+        signals : list or None
+            List of ``HubSpotSignal`` model instances (with a
+            ``.signal_type`` attribute) or plain signal-type strings.
+            The list is assumed to be ordered oldest-first so that the
+            last matching signal is the most recently extracted one.
+
+        Returns
+        -------
+        str or None
+            One of ``'DO_NOT_CONTACT'``, ``'FOLLOW_UP_LATER'``,
+            ``'REVISIT_OFFER'``, or ``None``.
+        """
+        if not signals:
+            return None
+
+        # Priority map: signal_type → (priority_rank, action)
+        # Lower rank number = higher priority.
+        PRIORITY_MAP = {
+            "DO_NOT_CONTACT": (1, "DO_NOT_CONTACT"),
+            "SELLER_NOT_INTERESTED": (1, "DO_NOT_CONTACT"),
+            "SELLER_SAID_MAYBE_LATER": (2, "FOLLOW_UP_LATER"),
+            "OFFER_PREVIOUSLY_SENT": (3, "REVISIT_OFFER"),
+        }
+
+        best_rank: Optional[int] = None
+        best_action: Optional[str] = None
+
+        for signal in signals:
+            if isinstance(signal, str):
+                signal_type = signal
+            else:
+                signal_type = getattr(signal, "signal_type", None)
+
+            if signal_type and signal_type in PRIORITY_MAP:
+                rank, action = PRIORITY_MAP[signal_type]
+                # Use this signal if it has higher priority (lower rank)
+                # or equal priority (most recently seen wins for same rank).
+                if best_rank is None or rank <= best_rank:
+                    best_rank = rank
+                    best_action = action
+
+        return best_action
 
     # ------------------------------------------------------------------
     # Weight management
@@ -377,7 +555,12 @@ class LeadScoringEngine:
     # ------------------------------------------------------------------
 
     def bulk_rescore(self, user_id: str, lead_ids: Optional[list[int]] = None) -> int:
-        """Rescore leads in batches.
+        """Rescore leads in batches, incorporating HubSpot signals.
+
+        For each lead, queries its associated ``HubSpotSignal`` records,
+        passes them to ``compute_score``, computes the recommended action
+        via ``compute_recommended_action``, and persists both
+        ``lead.lead_score`` and ``lead.recommended_action``.
 
         This is the Celery task entry point.  If *lead_ids* is ``None``,
         all leads are rescored.
@@ -394,8 +577,21 @@ class LeadScoringEngine:
         int
             Number of leads rescored.
         """
+        # Lazy import to avoid circular imports at module load time.
+        from app.models.hubspot_signal import HubSpotSignal  # noqa: PLC0415
+
         weights = self.get_weights(user_id)
         rescored = 0
+
+        def _rescore_lead(lead: Lead) -> None:
+            signals = (
+                HubSpotSignal.query
+                .filter_by(lead_id=lead.id)
+                .order_by(HubSpotSignal.extracted_at.asc())
+                .all()
+            )
+            lead.lead_score = self.compute_score(lead, weights, signals=signals)
+            lead.recommended_action = self.compute_recommended_action(signals)
 
         if lead_ids is not None:
             # Process specific leads in batches
@@ -403,7 +599,7 @@ class LeadScoringEngine:
                 batch_ids = lead_ids[i : i + BULK_RESCORE_BATCH_SIZE]
                 leads = Lead.query.filter(Lead.id.in_(batch_ids)).all()
                 for lead in leads:
-                    lead.lead_score = self.compute_score(lead, weights)
+                    _rescore_lead(lead)
                     rescored += 1
                 db.session.commit()
                 logger.info(
@@ -424,7 +620,7 @@ class LeadScoringEngine:
                 if not leads:
                     break
                 for lead in leads:
-                    lead.lead_score = self.compute_score(lead, weights)
+                    _rescore_lead(lead)
                     rescored += 1
                 db.session.commit()
                 logger.info(

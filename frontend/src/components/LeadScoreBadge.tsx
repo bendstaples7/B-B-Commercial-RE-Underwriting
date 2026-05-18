@@ -11,9 +11,9 @@
  * badge renders a neutral "Not scored" indicator.
  */
 import { Chip, ChipProps } from '@mui/material'
-import type { LeadScoreRecord } from '@/types'
+import type { PropertyScoreRecord } from '@/types'
 
-export type ScoreTier = LeadScoreRecord['score_tier']
+export type ScoreTier = PropertyScoreRecord['score_tier']
 
 export interface LeadScoreBadgeProps {
   /** The score tier to display. `null` or `undefined` renders "Not scored". */
@@ -44,7 +44,7 @@ export function LeadScoreBadge({
   className,
 }: LeadScoreBadgeProps) {
   const style = tier ? TIER_STYLES[tier] : NOT_SCORED_STYLE
-  const ariaLabel = tier ? `Lead score tier ${tier}` : 'Lead not scored'
+  const ariaLabel = tier ? `Property score tier ${tier}` : 'Property not scored'
 
   return (
     <Chip

@@ -1,5 +1,23 @@
 /**
  * Core type definitions for the application
+ *
+ * ----------------------------------------------------------------------------
+ * OpenAPI Type Generation Workflow
+ * ----------------------------------------------------------------------------
+ * The backend exposes a machine-readable OpenAPI 3.0 spec at:
+ *   GET /api/openapi.json
+ *
+ * To regenerate TypeScript types from the live spec, run:
+ *   npm run generate-types
+ *
+ * This requires the backend dev server to be running on port 5000:
+ *   python backend/run.py
+ *
+ * The generated types are written to `src/types/generated.ts`.
+ * They are NOT automatically imported here — use them selectively for new
+ * features or when migrating existing types.  The hand-written types in this
+ * file remain the source of truth until a full migration is completed.
+ * ----------------------------------------------------------------------------
  */
 
 export enum PropertyType {
@@ -234,7 +252,7 @@ export interface ErrorResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Lead Management Types
+// Property Management Types (formerly "Lead Management Types")
 // ---------------------------------------------------------------------------
 
 export enum ImportJobStatus {
@@ -252,7 +270,7 @@ export enum OutreachStatus {
   OPTED_OUT = 'opted_out',
 }
 
-export interface Lead {
+export interface Property {
   id: number
   property_street: string
   property_city: string | null
@@ -264,8 +282,8 @@ export interface Lead {
   square_footage: number | null
   lot_size: number | null
   year_built: number | null
-  owner_first_name: string
-  owner_last_name: string
+  owner_first_name: string | null
+  owner_last_name: string | null
   ownership_type: string | null
   acquisition_date: string | null
   phone_1: string | null
@@ -318,10 +336,13 @@ export interface Lead {
   socials: string | null
   // Mailing tracking
   up_next_to_mail: boolean | null
-  mailer_history: Record<string, any> | null
+  mailer_history: Record<string, any> | any[] | string | null
 }
 
-export interface LeadSummary {
+/** @deprecated Use `Property` instead */
+export type Lead = Property
+
+export interface PropertySummary {
   id: number
   property_street: string
   property_city: string | null
@@ -339,8 +360,8 @@ export interface LeadSummary {
   county_assessor_pin: string | null
   tax_bill_2021: number | null
   most_recent_sale: string | null
-  owner_first_name: string
-  owner_last_name: string
+  owner_first_name: string | null
+  owner_last_name: string | null
   owner_2_first_name: string | null
   owner_2_last_name: string | null
   ownership_type: string | null
@@ -377,16 +398,22 @@ export interface LeadSummary {
   date_skip_traced: string | null
   date_added_to_hubspot: string | null
   up_next_to_mail: boolean | null
-  mailer_history: Record<string, any> | null
+  mailer_history: Record<string, any> | any[] | string | null
 }
 
-export interface LeadDetail extends Lead {
+/** @deprecated Use `PropertySummary` instead */
+export type LeadSummary = PropertySummary
+
+export interface PropertyDetail extends Property {
   enrichment_records: EnrichmentRecord[]
-  marketing_lists: LeadMarketingListMembership[]
-  analysis_session: LeadAnalysisSession | null
+  marketing_lists: PropertyMarketingListMembership[]
+  analysis_session: PropertyAnalysisSession | null
 }
 
-export interface LeadAnalysisSession {
+/** @deprecated Use `PropertyDetail` instead */
+export type LeadDetail = PropertyDetail
+
+export interface PropertyAnalysisSession {
   id: number
   session_id: string
   current_step: string
@@ -394,12 +421,18 @@ export interface LeadAnalysisSession {
   updated_at: string | null
 }
 
-export interface LeadMarketingListMembership {
+/** @deprecated Use `PropertyAnalysisSession` instead */
+export type LeadAnalysisSession = PropertyAnalysisSession
+
+export interface PropertyMarketingListMembership {
   marketing_list_id: number
   marketing_list_name: string | null
   outreach_status: string
   added_at: string | null
 }
+
+/** @deprecated Use `PropertyMarketingListMembership` instead */
+export type LeadMarketingListMembership = PropertyMarketingListMembership
 
 export interface ImportJob {
   id: number
@@ -456,7 +489,7 @@ export interface MarketingListMember {
   outreach_status: OutreachStatus
   added_at: string | null
   status_updated_at: string | null
-  lead?: LeadSummary
+  lead?: PropertySummary
 }
 
 export interface EnrichmentRecord {
@@ -492,9 +525,12 @@ export interface PaginatedResponse {
   pages: number
 }
 
-export interface LeadListResponse extends PaginatedResponse {
-  leads: LeadSummary[]
+export interface PropertyListResponse extends PaginatedResponse {
+  leads: PropertySummary[]
 }
+
+/** @deprecated Use `PropertyListResponse` instead */
+export type LeadListResponse = PropertyListResponse
 
 export interface ImportJobListResponse extends PaginatedResponse {
   jobs: ImportJob[]
@@ -510,7 +546,7 @@ export interface MarketingListMembersResponse extends PaginatedResponse {
   members: MarketingListMember[]
 }
 
-export interface LeadListFilters {
+export interface PropertyListFilters {
   page?: number
   per_page?: number
   property_type?: string
@@ -525,6 +561,9 @@ export interface LeadListFilters {
   sort_by?: 'lead_score' | 'created_at' | 'property_street'
   sort_order?: 'asc' | 'desc'
 }
+
+/** @deprecated Use `PropertyListFilters` instead */
+export type LeadListFilters = PropertyListFilters
 
 // ---------------------------------------------------------------------------
 // Condo Filter Types
@@ -999,7 +1038,7 @@ export interface DealListResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Lead Scoring Types
+// Property Scoring Types (formerly "Lead Scoring Types")
 // ---------------------------------------------------------------------------
 
 export type RecommendedAction =
@@ -1017,10 +1056,11 @@ export interface ScoreSignal {
   points: number
 }
 
-export interface LeadScoreRecord {
+export interface PropertyScoreRecord {
   id: number
-  lead_id: number
-  property_id?: number | null
+  property_id: number
+  /** @deprecated Use `property_id` instead */
+  lead_id?: number | null
   score_version: string
   total_score: number
   score_tier: 'A' | 'B' | 'C' | 'D'
@@ -1032,14 +1072,20 @@ export interface LeadScoreRecord {
   created_at: string
 }
 
-export interface LeadScoreResponse {
+/** @deprecated Use `PropertyScoreRecord` instead */
+export type LeadScoreRecord = PropertyScoreRecord
+
+export interface PropertyScoreResponse {
   /**
-   * The most recent LeadScoreRecord for the lead, or `null` when the lead
+   * The most recent PropertyScoreRecord for the property, or `null` when the property
    * has never been scored.
    */
-  latest: LeadScoreRecord | null
-  history: LeadScoreRecord[]
+  latest: PropertyScoreRecord | null
+  history: PropertyScoreRecord[]
 }
+
+/** @deprecated Use `PropertyScoreResponse` instead */
+export type LeadScoreResponse = PropertyScoreResponse
 
 export interface RecalculateRequest {
   lead_id?: number
@@ -1050,7 +1096,7 @@ export interface RecalculateRequest {
 export interface RecalculateResponse {
   success: boolean
   message: string
-  score?: LeadScoreRecord
+  score?: PropertyScoreRecord
   count?: number
 }
 
@@ -1239,4 +1285,288 @@ export interface OMIntakeConfirmRequest {
   property_city?: string
   property_state?: string
   property_zip?: string
+}
+
+// ---------------------------------------------------------------------------
+// HubSpot CRM Migration Types
+// ---------------------------------------------------------------------------
+
+export enum OrgType {
+  LLC = 'llc',
+  TRUST = 'trust',
+  CORPORATION = 'corporation',
+  BROKERAGE = 'brokerage',
+  LAW_FIRM = 'law_firm',
+  PROPERTY_MANAGEMENT = 'property_management',
+  UNKNOWN = 'unknown',
+}
+
+export enum OrgStatus {
+  ACTIVE = 'active',
+  INACTIVE = 'inactive',
+  UNKNOWN = 'unknown',
+}
+
+export enum InteractionType {
+  NOTE = 'note',
+  CALL = 'call',
+  EMAIL = 'email',
+  MEETING = 'meeting',
+  OTHER = 'other',
+}
+
+export enum InteractionSource {
+  MANUAL = 'manual',
+  HUBSPOT_IMPORT = 'hubspot_import',
+}
+
+export enum TaskStatus {
+  OPEN = 'open',
+  COMPLETED = 'completed',
+  CANCELLED = 'cancelled',
+  OVERDUE = 'overdue',
+}
+
+export enum TaskPriority {
+  HIGH = 'high',
+  MEDIUM = 'medium',
+  LOW = 'low',
+}
+
+export enum MatchConfidence {
+  HIGH = 'HIGH',
+  MEDIUM = 'MEDIUM',
+  LOW = 'LOW',
+  UNMATCHED = 'UNMATCHED',
+}
+
+export enum MatchStatus {
+  PENDING = 'pending',
+  CONFIRMED = 'confirmed',
+  REJECTED = 'rejected',
+}
+
+export enum SignalType {
+  PRIOR_INTERACTION_EXISTS = 'PRIOR_INTERACTION_EXISTS',
+  PRIOR_RESPONSE_EXISTS = 'PRIOR_RESPONSE_EXISTS',
+  PRIOR_WARM_CONVERSATION = 'PRIOR_WARM_CONVERSATION',
+  ASKING_PRICE_GIVEN = 'ASKING_PRICE_GIVEN',
+  APPOINTMENT_OCCURRED = 'APPOINTMENT_OCCURRED',
+  OFFER_PREVIOUSLY_SENT = 'OFFER_PREVIOUSLY_SENT',
+  SELLER_SAID_MAYBE_LATER = 'SELLER_SAID_MAYBE_LATER',
+  SELLER_NOT_INTERESTED = 'SELLER_NOT_INTERESTED',
+  WRONG_NUMBER = 'WRONG_NUMBER',
+  DO_NOT_CONTACT = 'DO_NOT_CONTACT',
+  FOLLOW_UP_OVERDUE = 'FOLLOW_UP_OVERDUE',
+  PRIOR_LEAD_SOURCE_KNOWN = 'PRIOR_LEAD_SOURCE_KNOWN',
+}
+
+/** HubSpot-specific recommended action (distinct from the lead-scoring RecommendedAction union type) */
+export enum HubSpotRecommendedAction {
+  CONTACT_NOW = 'CONTACT_NOW',
+  FOLLOW_UP_LATER = 'FOLLOW_UP_LATER',
+  REVISIT_OFFER = 'REVISIT_OFFER',
+  DO_NOT_CONTACT = 'DO_NOT_CONTACT',
+}
+
+export interface Organization {
+  id: number
+  name: string
+  org_type: OrgType
+  status: OrgStatus
+  notes?: string | null
+  source?: string | null
+  hubspot_company_id?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface OrganizationAuditLog {
+  id: number
+  organization_id: number
+  field_name: string
+  old_value?: string | null
+  new_value?: string | null
+  changed_by: string
+  changed_at: string
+}
+
+export interface PropertyOrganizationLink {
+  id: number
+  property_id: number
+  organization_id: number
+  role: string
+  created_at: string
+}
+
+export interface OwnerOrganizationLink {
+  id: number
+  owner_id: number
+  organization_id: number
+  role: string
+  created_at: string
+}
+
+export interface Interaction {
+  id: number
+  interaction_type: InteractionType
+  body: string
+  occurred_at: string
+  source: InteractionSource
+  hubspot_engagement_id?: string | null
+  raw_payload?: Record<string, unknown> | null
+  is_orphaned: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface InteractionAssociation {
+  id: number
+  interaction_id: number
+  target_type: string
+  target_id: number
+}
+
+export interface TimelineEntry {
+  entry_type: string
+  subtype: string
+  date: string
+  body_or_title: string
+  source: string
+  hubspot_engagement_id?: string | null
+}
+
+export interface CRMTask {
+  id: number
+  title: string
+  body?: string | null
+  due_date?: string | null
+  status: TaskStatus
+  priority: TaskPriority
+  source: InteractionSource
+  hubspot_task_id?: string | null
+  raw_payload?: Record<string, unknown> | null
+  completion_timestamp?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface TaskAssociation {
+  id: number
+  task_id: number
+  target_type: string
+  target_id: number
+}
+
+export interface HubSpotConfig {
+  id?: number
+  portal_id?: string | null
+  account_name?: string | null
+  configured?: boolean
+}
+
+export interface HubSpotImportRun {
+  id: number
+  object_type: string
+  status: string
+  start_time: string
+  end_time?: string | null
+  total_fetched: number
+  created_count: number
+  updated_count: number
+  skipped_count: number
+  error_count: number
+  error_message?: string | null
+}
+
+export interface HubSpotMatch {
+  id: number
+  hubspot_record_type: string
+  hubspot_id: string
+  internal_record_type?: string | null
+  internal_record_id?: number | null
+  confidence: MatchConfidence
+  status: MatchStatus
+  matching_criteria?: string | null
+  display_name?: string | null
+  internal_display_name?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface HubSpotSignal {
+  id: number
+  lead_id: number
+  signal_type: SignalType
+  source_engagement_id?: string | null
+  extracted_at: string
+  raw_evidence?: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Contact Model Types
+// ---------------------------------------------------------------------------
+
+export type ContactRole = 'owner' | 'property_manager' | 'attorney' | 'family_member' | 'other'
+
+export type PhoneLabel = 'mobile' | 'home' | 'work' | 'other'
+
+export type EmailLabel = 'personal' | 'work' | 'other'
+
+export interface ContactPhone {
+  id: number
+  contact_id: number
+  value: string
+  label: PhoneLabel
+}
+
+export interface ContactEmail {
+  id: number
+  contact_id: number
+  value: string
+  label: EmailLabel
+}
+
+export interface Contact {
+  id: number
+  first_name: string | null
+  last_name: string | null
+  role: ContactRole
+  role_description: string | null
+  notes: string | null
+  phones: ContactPhone[]
+  emails: ContactEmail[]
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface PropertyContact extends Contact {
+  property_contact_role: ContactRole
+  is_primary: boolean
+}
+
+export interface PropertyContactLinkRequest {
+  contact_id: number
+  role: ContactRole
+  is_primary: boolean
+}
+
+export interface ContactCreatePayload {
+  first_name?: string | null
+  last_name?: string | null
+  role?: ContactRole
+  role_description?: string | null
+  notes?: string | null
+  phones?: Array<{ value: string; label: PhoneLabel }>
+  emails?: Array<{ value: string; label: EmailLabel }>
+}
+
+export interface ContactUpdatePayload {
+  first_name?: string | null
+  last_name?: string | null
+  role?: ContactRole
+  role_description?: string | null
+  notes?: string | null
+  phones?: Array<{ value: string; label: PhoneLabel }>
+  emails?: Array<{ value: string; label: EmailLabel }>
 }

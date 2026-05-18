@@ -129,10 +129,17 @@ def main():
     # ------------------------------------------------------------------
     # 2. Celery worker
     # ------------------------------------------------------------------
-    celery_env = {"PYTHONPATH": BACKEND_DIR}
+    celery_env = {"PYTHONPATH": BACKEND_DIR, "CELERY_WORKER_RUNNING": "1"}
     _start(
         "Celery worker",
-        [sys.executable, "-m", "celery", "-A", "celery_worker", "worker", "--loglevel=info", "--pool=threads", "--concurrency=4"],
+        [sys.executable, "-m", "celery", "-A", "celery_worker", "worker", "--loglevel=info", "--pool=threads", "--concurrency=2"],
+        cwd=BACKEND_DIR,
+        env=celery_env,
+    )
+    # Option 2: also start Celery Beat for scheduled tasks (nightly signal extraction)
+    _start(
+        "Celery beat",
+        [sys.executable, "-m", "celery", "-A", "celery_worker", "beat", "--loglevel=info"],
         cwd=BACKEND_DIR,
         env=celery_env,
     )
