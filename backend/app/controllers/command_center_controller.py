@@ -6,6 +6,7 @@ including recommended action retrieval with signal breakdown.
 Blueprint: command_center_bp, prefix /api/leads
 """
 import logging
+import re
 from functools import wraps
 
 from flask import Blueprint, jsonify, g, request
@@ -463,7 +464,7 @@ def get_command_center(lead_id: int):
                         'occurred_at': row[1].isoformat() if row[1] else '',
                         'source': 'hubspot_import',
                         'actor': 'HubSpot',
-                        'summary': __import__('re').sub(r'<[^>]+>', ' ', row[2] or '').strip()[:500] if row[2] else '',
+                        'summary': re.sub(r'<[^>]+>', ' ', row[2] or '').strip()[:500] if row[2] else '',
                         'metadata': None,
                         'hubspot_activity_id': None,
                     }
@@ -531,7 +532,7 @@ def update_status(lead_id: int):
 
     old_status = lead.lead_status
     new_status = data['status']
-    actor = data.get('actor') or getattr(g, 'user_id', 'anonymous')
+    actor = getattr(g, 'user_id', None) or data.get('actor') or 'anonymous'
 
     lead.lead_status = new_status
 
@@ -561,8 +562,11 @@ def update_status(lead_id: int):
     if new_status not in ('do_not_contact', 'suppressed'):
         try:
             ActionEngineService.recompute_and_persist(lead_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.exception(
+                "ActionEngineService.recompute_and_persist failed for lead %s after status update: %s",
+                lead_id, exc,
+            )
 
     return jsonify({'lead_status': lead.lead_status, 'recommended_action': lead.recommended_action}), 200
 
@@ -811,6 +815,15 @@ def park_lead(lead_id: int):
     db.session.add(entry)
     db.session.commit()
 
+    # Recompute RA — nurture leads get RA=null per Priority 2
+    try:
+        ActionEngineService.recompute_and_persist(lead_id)
+    except Exception as exc:
+        logger.exception(
+            "ActionEngineService.recompute_and_persist failed for lead %s after park: %s",
+            lead_id, exc,
+        )
+
     return jsonify({'lead_status': 'nurture'}), 200
 
 
@@ -850,8 +863,11 @@ def reactivate_lead(lead_id: int):
 
     try:
         ActionEngineService.recompute_and_persist(lead_id)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.exception(
+            "ActionEngineService.recompute_and_persist failed for lead %s after reactivation: %s",
+            lead_id, exc,
+        )
 
     return jsonify({'lead_status': 'active', 'recommended_action': lead.recommended_action}), 200
 

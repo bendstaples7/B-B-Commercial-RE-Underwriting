@@ -81,7 +81,9 @@ export function FollowUpOverdueQueue() {
       icon: <NoteIcon fontSize="small" />,
       testId: 'action-log-note',
       onClick: async (row: QueueRow) => {
-        await callLogService.logNote(row.id, { body: '' })
+        const body = window.prompt('Enter note:')
+        if (!body || !body.trim()) return
+        await callLogService.logNote(row.id, { body: body.trim() })
         queryClient.invalidateQueries({ queryKey: ['queue-follow-up-overdue'] })
       },
     },

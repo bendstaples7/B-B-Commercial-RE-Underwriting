@@ -123,7 +123,7 @@ class TestTodaysActionQueue:
                                due_date=datetime.now(timezone.utc) - timedelta(days=1))
 
             svc = QueueService()
-            rows, total = svc.get_todays_action()
+            rows, _ = svc.get_todays_action()
             ids = [r['id'] for r in rows]
             assert lead.id in ids, f"Lead {lead.id} not in Today's Action. Rows: {ids}"
             assert total >= 1
@@ -136,7 +136,7 @@ class TestTodaysActionQueue:
                               recommended_action='follow_up_now')
 
             svc = QueueService()
-            rows, total = svc.get_todays_action()
+            rows, _ = svc.get_todays_action()
             ids = [r['id'] for r in rows]
             assert lead.id in ids
 

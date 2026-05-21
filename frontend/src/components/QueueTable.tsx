@@ -3,7 +3,7 @@
  *
  * Requirements: 18.1, 18.2, 18.3, 18.4, 18.5, 18.6, 18.7
  */
-import { useState } from 'react'
+import { useState, Fragment } from 'react'
 import { Link as RouterLink, useNavigate } from 'react-router-dom'
 import {
   Alert,
@@ -111,6 +111,7 @@ export function QueueTable({
   const [rowStates, setRowStates] = useState<Record<number, { pending: boolean; error: string | null }>>({})
   // Bulk action result message
   const [bulkMessage, setBulkMessage] = useState<string | null>(null)
+  const [isBulkProcessing, setIsBulkProcessing] = useState(false)
   const navigate = useNavigate()
 
   // ---------------------------------------------------------------------------
@@ -174,18 +175,21 @@ export function QueueTable({
   // ---------------------------------------------------------------------------
 
   const handleBulkAction = async (action: BulkAction) => {
+    if (isBulkProcessing) return
     setBulkMessage(null)
+    setIsBulkProcessing(true)
     try {
       const result = await action.onClick(selectedIds)
       if (result.failures > 0) {
         setBulkMessage(`${result.successes} succeeded, ${result.failures} failed`)
       }
-      // Clear selection after bulk action
       if (onSelectionChange) {
         onSelectionChange([])
       }
     } catch (err) {
       setBulkMessage(err instanceof Error ? err.message : 'Bulk action failed.')
+    } finally {
+      setIsBulkProcessing(false)
     }
   }
 
@@ -227,6 +231,7 @@ export function QueueTable({
               size="small"
               variant="outlined"
               onClick={() => handleBulkAction(action)}
+              disabled={isBulkProcessing}
               data-testid={action.testId ?? `bulk-action-${action.label.toLowerCase().replace(/\s+/g, '-')}`}
             >
               {action.label}
@@ -309,9 +314,8 @@ export function QueueTable({
               const isSelected = selectedIds.includes(row.id)
 
               return (
-                <>
+                <Fragment key={row.id}>
                   <TableRow
-                    key={row.id}
                     selected={isSelected}
                     sx={{ opacity: isPending ? 0.5 : 1, cursor: 'pointer' }}
                     data-testid={`queue-row-${row.id}`}
@@ -438,7 +442,7 @@ export function QueueTable({
                       </TableCell>
                     </TableRow>
                   )}
-                </>
+                </Fragment>
               )
             })}
           </TableBody>

@@ -9,7 +9,10 @@ def recompute_recommended_action(lead_id: int):
     Single-lead Action Engine recomputation task.
     Called when a lead's signals change (e.g., after logging a call, completing a task).
     """
-    ActionEngineService.recompute_and_persist(lead_id)
+    from app import create_app
+    app = create_app()
+    with app.app_context():
+        ActionEngineService.recompute_and_persist(lead_id)
 
 
 @celery.task(name='action_engine.bulk_recompute_all_leads')
@@ -19,4 +22,7 @@ def bulk_recompute_all_leads():
     Processes all leads in batches of 500.
     Target: 10,000 leads in 60 seconds.
     """
-    ActionEngineService.bulk_recompute()
+    from app import create_app
+    app = create_app()
+    with app.app_context():
+        ActionEngineService.bulk_recompute()

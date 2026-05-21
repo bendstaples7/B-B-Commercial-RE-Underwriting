@@ -63,14 +63,14 @@ def upgrade():
         ),
         sa.Column(
             'task_type',
-            sa.Enum(*_TASK_TYPE_VALUES, name=_TASK_TYPE_ENUM_NAME),
+            postgresql.ENUM(*_TASK_TYPE_VALUES, name=_TASK_TYPE_ENUM_NAME, create_type=False),
             nullable=False,
             server_default='custom',
         ),
         sa.Column('title', sa.String(255), nullable=False),
         sa.Column(
             'status',
-            sa.Enum(*_TASK_STATUS_VALUES, name=_TASK_STATUS_ENUM_NAME),
+            postgresql.ENUM(*_TASK_STATUS_VALUES, name=_TASK_STATUS_ENUM_NAME, create_type=False),
             nullable=False,
             server_default='open',
         ),

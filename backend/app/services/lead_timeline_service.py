@@ -43,12 +43,14 @@ class LeadTimelineService:
     ) -> tuple[list, int]:
         """Return a paginated page of timeline entries in reverse-chronological order.
 
-        Excludes soft-deleted entries from display but retains them in DB.
+        Includes soft-deleted entries (displayed with summary == '[deleted]').
         Returns (entries, total_count).
         """
+        page = max(1, page)
+        per_page = max(1, min(per_page, 100))
         query = (
             LeadTimelineEntry.query
-            .filter_by(lead_id=lead_id, is_deleted=False)
+            .filter_by(lead_id=lead_id)
             .order_by(LeadTimelineEntry.occurred_at.desc())
         )
         total = query.count()

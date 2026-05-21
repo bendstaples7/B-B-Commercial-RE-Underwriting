@@ -1509,7 +1509,7 @@ class LeadTaskSchema(Schema):
     created_by = fields.String(dump_only=True)
 
 
-class LeadTaskCreateSchema(Schema):
+class LeadTaskCreateSchema(RequestSchema):
     """Validation schema for creating a LeadTask."""
     title = fields.String(required=True, validate=validate.Length(min=1, max=255))
     task_type = fields.String(
@@ -1519,18 +1519,18 @@ class LeadTaskCreateSchema(Schema):
     due_date = fields.Date(allow_none=True, load_default=None)
 
 
-class LeadTaskUpdateSchema(Schema):
+class LeadTaskUpdateSchema(RequestSchema):
     """Validation schema for updating a LeadTask (partial update)."""
     title = fields.String(validate=validate.Length(min=1, max=255))
     due_date = fields.Date(allow_none=True)
 
 
-class LeadTaskCompleteSchema(Schema):
+class LeadTaskCompleteSchema(RequestSchema):
     """Validation schema for completing a LeadTask (no body required)."""
     pass
 
 
-class LeadTaskSnoozeSchema(Schema):
+class LeadTaskSnoozeSchema(RequestSchema):
     """Validation schema for snoozing a LeadTask."""
     new_due_date = fields.Date(required=True)
 
@@ -1579,7 +1579,7 @@ VALID_LEAD_STATUSES = [
 VALID_CALL_OUTCOMES = ['answered', 'voicemail', 'no_answer', 'busy', 'wrong_number']
 
 
-class LeadStatusUpdateSchema(Schema):
+class LeadStatusUpdateSchema(RequestSchema):
     """Validation schema for PATCH /api/leads/:id/status."""
     status = fields.String(
         required=True,
@@ -1588,13 +1588,13 @@ class LeadStatusUpdateSchema(Schema):
     actor = fields.String(load_default='anonymous')
 
 
-class LogNoteSchema(Schema):
+class LogNoteSchema(RequestSchema):
     """Validation schema for POST /api/leads/:id/notes."""
     body = fields.String(required=True, validate=validate.Length(min=1, max=5000))
     actor = fields.String(load_default='anonymous')
 
 
-class LogCallSchema(Schema):
+class LogCallSchema(RequestSchema):
     """Validation schema for POST /api/leads/:id/calls."""
     outcome = fields.String(
         required=True,
@@ -1609,18 +1609,18 @@ class LogCallSchema(Schema):
     actor = fields.String(load_default='anonymous')
 
 
-class ParkLeadSchema(Schema):
+class ParkLeadSchema(RequestSchema):
     """Validation schema for POST /api/leads/:id/park."""
     reactivation_date = fields.Date(allow_none=True, load_default=None)
     actor = fields.String(load_default='anonymous')
 
 
-class DoNotContactSchema(Schema):
+class DoNotContactSchema(RequestSchema):
     """Validation schema for POST /api/leads/:id/do-not-contact."""
     actor = fields.String(load_default='anonymous')
 
 
-class ReactivateLeadSchema(Schema):
+class ReactivateLeadSchema(RequestSchema):
     """Validation schema for POST /api/leads/:id/reactivate."""
     actor = fields.String(load_default='anonymous')
 
@@ -1689,7 +1689,7 @@ class CommandCenterPayloadSchema(Schema):
 
 # ── Actionable Lead Command Center — Bulk Action Schemas ──────────────────
 
-class BulkActionRequestSchema(Schema):
+class BulkActionRequestSchema(RequestSchema):
     """Validation schema for bulk action requests."""
     lead_ids = fields.List(
         fields.Integer(validate=validate.Range(min=1)),

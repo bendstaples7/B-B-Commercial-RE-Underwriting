@@ -19,6 +19,17 @@ import AddTaskIcon from '@mui/icons-material/AddTask'
 import type { RecommendedActionMeta, LeadStatus, LeadTask, CRMRecommendedAction } from '@/types'
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function humanizeValue(value: string): string {
+  return value
+    .replace(/_/g, ' ')
+    .replace(/-/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+// ---------------------------------------------------------------------------
 // Action button definitions per RA type
 // ---------------------------------------------------------------------------
 
@@ -148,9 +159,10 @@ export function RecommendedActionPanel({
   }
 
   const { value, label, explanation } = recommendedAction
+  const displayLabel = label ?? humanizeValue(value)
   const buttons = ACTION_BUTTONS[value] ?? []
   const hasOpenTasks = openTasks.length > 0
-  const showCreateTaskCTA = value === 'create_task' && !hasOpenTasks
+  const showCreateTaskCTA = value === 'create_task' && !hasOpenTasks && typeof onCreateTask === 'function'
 
   return (
     <Box
@@ -176,7 +188,7 @@ export function RecommendedActionPanel({
         gutterBottom
         data-testid="ra-label"
       >
-        {label}
+        {displayLabel}
       </Typography>
 
       {/* RA explanation (≤ 280 chars per spec) */}

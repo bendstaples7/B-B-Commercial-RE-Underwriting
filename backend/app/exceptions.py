@@ -426,7 +426,7 @@ class LeadTaskValidationError(RealEstateAnalysisException):
 
     def __init__(self, message: str, field: str | None = None):
         super().__init__(message, status_code=400)
-        self.payload = {'field': field} if field else {}
+        self.payload = {'error_type': 'lead_task_validation_error', 'field': field} if field else {'error_type': 'lead_task_validation_error'}
 
 
 class InvalidLeadStatusTransitionError(RealEstateAnalysisException):
@@ -438,6 +438,7 @@ class InvalidLeadStatusTransitionError(RealEstateAnalysisException):
             status_code=422,
         )
         self.payload = {
+            'error_type': 'invalid_lead_status_transition',
             'from_status': from_status,
             'to_status': to_status,
         }
@@ -452,6 +453,7 @@ class InvalidTaskStatusTransitionError(RealEstateAnalysisException):
             status_code=422,
         )
         self.payload = {
+            'error_type': 'invalid_task_status_transition',
             'task_id': task_id,
             'current_status': current_status,
             'attempted_status': attempted_status,
@@ -466,7 +468,7 @@ class DoNotContactViolationError(RealEstateAnalysisException):
             f"Lead {lead_id} is marked Do Not Contact. Outreach actions are not permitted.",
             status_code=403,
         )
-        self.payload = {'lead_id': lead_id}
+        self.payload = {'error_type': 'do_not_contact_violation', 'lead_id': lead_id}
 
 
 class ActionEngineRecomputationError(RealEstateAnalysisException):
@@ -478,6 +480,7 @@ class ActionEngineRecomputationError(RealEstateAnalysisException):
             status_code=500,
         )
         self.payload = {
+            'error_type': 'action_engine_recomputation_error',
             'lead_id': lead_id,
             'reason': reason,
         }

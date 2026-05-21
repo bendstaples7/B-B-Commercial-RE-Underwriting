@@ -148,7 +148,8 @@ describe('QueueTable', () => {
 
       // The active TableSortLabel should have aria-sort="descending"
       const sortLabel = screen.getByTestId('sort-lead_score')
-      expect(sortLabel.closest('span[aria-sort]') ?? sortLabel).toBeTruthy()
+      const sortEl = sortLabel.closest('[aria-sort]') ?? sortLabel
+      expect(sortEl).toHaveAttribute('aria-sort', 'descending')
     })
 
     it('does not render sort labels when onSort is not provided', () => {

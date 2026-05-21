@@ -26,7 +26,7 @@ def handle_errors(f):
             return jsonify({'error': 'Validation error', 'details': e.messages}), 400
         except Exception as e:
             logger.error("Unexpected error: %s", str(e), exc_info=True)
-            return jsonify({'error': 'Internal server error', 'message': str(e)}), 500
+            return jsonify({'error': 'Internal server error'}), 500
     return decorated_function
 
 
@@ -43,7 +43,7 @@ def bulk_suppress():
 
     for lead_id in lead_ids:
         try:
-            lead = Lead.query.get(lead_id)
+            lead = db.session.get(Lead, lead_id)
             if lead is None:
                 failures += 1
                 continue
@@ -90,6 +90,7 @@ def bulk_create_task():
             _lead_task_service.create(lead_id, task_data, actor=actor)
             successes += 1
         except Exception:
+            db.session.rollback()
             failures += 1
 
     return jsonify({'successes': successes, 'failures': failures}), 200
@@ -108,7 +109,7 @@ def bulk_do_not_contact():
 
     for lead_id in lead_ids:
         try:
-            lead = Lead.query.get(lead_id)
+            lead = db.session.get(Lead, lead_id)
             if lead is None:
                 failures += 1
                 continue

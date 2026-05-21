@@ -78,7 +78,7 @@ function SidebarSection({ title, children }: { title: string; children: React.Re
 }
 
 function SidebarRow({ label, value }: { label: string; value: React.ReactNode }) {
-  if (!value) return null
+  if (value == null) return null
   return (
     <Box sx={{ display: 'flex', gap: 1, mb: 0.5 }}>
       <Typography variant="caption" color="text.secondary" sx={{ minWidth: 90, flexShrink: 0 }}>
@@ -209,7 +209,7 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
       setTimelineTotal(data.timeline.total)
       setTasks(data.open_tasks)
     }
-  }, [data?.id])
+  }, [data])
 
   const handleStatusChange = async (newStatus: LeadStatus) => {
     if (!data || newStatus === data.lead_status) return
@@ -253,14 +253,14 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
 
   if (isLoading) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight={200}>
+      <Box display="flex" justifyContent="center" alignItems="center" minHeight={200} data-testid="command-center-loading">
         <CircularProgress />
       </Box>
     )
   }
 
   if (isError || !data) {
-    return <Alert severity="error">{error instanceof Error ? error.message : 'Failed to load lead data.'}</Alert>
+    return <Alert severity="error" data-testid="command-center-error">{error instanceof Error ? error.message : 'Failed to load lead data.'}</Alert>
   }
 
   const ownerName = [data.owner_first_name, data.owner_last_name].filter(Boolean).join(' ') || 'Unknown Owner'
@@ -323,7 +323,7 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
         )}
 
         {/* Lead Header */}
-        <Box sx={{ mb: 3, p: 2, border: 1, borderColor: 'divider', borderRadius: 1 }}>
+        <Box sx={{ mb: 3, p: 2, border: 1, borderColor: 'divider', borderRadius: 1 }} data-testid="lead-header">
           <Stack direction="row" alignItems="flex-start" justifyContent="space-between" flexWrap="wrap" gap={1}>
             <Box>
               <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap">
@@ -344,7 +344,7 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
                 <Typography variant="caption" color="text.secondary">Lead Score</Typography>
                 <Typography variant="h6" fontWeight="bold" data-testid="lead-score">{data.lead_score}</Typography>
               </Box>
-              <FormControl size="small" sx={{ minWidth: 160 }}>
+              <FormControl size="small" sx={{ minWidth: 160 }} data-testid="status-badge-container">
                 <InputLabel id="lead-status-label">Status</InputLabel>
                 <Select
                   labelId="lead-status-label"
@@ -355,7 +355,7 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
                   inputProps={{ 'data-testid': 'status-badge-select' }}
                 >
                   {ALL_LEAD_STATUSES.map((s) => (
-                    <MenuItem key={s} value={s}>{LEAD_STATUS_LABELS[s]}</MenuItem>
+                    <MenuItem key={s} value={s} data-testid={`status-option-${s}`}>{LEAD_STATUS_LABELS[s]}</MenuItem>
                   ))}
                 </Select>
               </FormControl>
@@ -363,19 +363,19 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
           </Stack>
 
           {statusError && (
-            <Alert severity="error" sx={{ mt: 1 }} onClose={() => setStatusError(null)}>
+            <Alert severity="error" sx={{ mt: 1 }} onClose={() => setStatusError(null)} data-testid="status-change-error">
               {statusError}
             </Alert>
           )}
 
-          <Box sx={{ mt: 1.5 }}>
+          <Box sx={{ mt: 1.5 }} data-testid="property-match-status">
             {data.has_property_match ? (
               <Stack direction="row" alignItems="center" spacing={0.5}>
                 <CheckCircleIcon fontSize="small" color="success" />
                 <Typography variant="body2" color="success.main">
                   Matched —{' '}
                   {data.analysis_session_id ? (
-                    <Link component={RouterLink} to={`/analysis/${data.analysis_session_id}`}>View Analysis</Link>
+                    <Link component={RouterLink} to={`/analysis/${data.analysis_session_id}`} data-testid="property-match-link">View Analysis</Link>
                   ) : (
                     <span>Property Matched</span>
                   )}
@@ -386,7 +386,7 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
                 <HelpOutlineIcon fontSize="small" color="warning" />
                 <Typography variant="body2" color="warning.main">
                   Unmatched —{' '}
-                  <Link component={RouterLink} to="/queues/missing-property-match">Find Property Match</Link>
+                  <Link component={RouterLink} to="/queues/missing-property-match" data-testid="missing-match-link">Find Property Match</Link>
                 </Typography>
               </Stack>
             )}
@@ -417,7 +417,7 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
         </Box>
 
         {/* Recommended Action */}
-        <Box sx={{ mb: 3 }}>
+        <Box sx={{ mb: 3 }} data-testid="recommended-action-section">
           <RecommendedActionPanel
             recommendedAction={data.recommended_action}
             leadStatus={data.lead_status}
@@ -427,7 +427,7 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
         </Box>
 
         {/* Open Tasks */}
-        <Box sx={{ mb: 3 }}>
+        <Box sx={{ mb: 3 }} data-testid="tasks-section">
           <LeadTaskList
             leadId={leadId}
             tasks={tasks}
@@ -440,7 +440,7 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
         <Divider sx={{ mb: 3 }} />
 
         {/* Log Note */}
-        <Box sx={{ mb: 3 }}>
+        <Box sx={{ mb: 3 }} data-testid="log-note-section">
           <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>Log Note</Typography>
           <LogNoteForm leadId={leadId} onSaved={handleEntrySaved} />
         </Box>
@@ -448,7 +448,7 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
         <Divider sx={{ mb: 3 }} />
 
         {/* Log Call */}
-        <Box sx={{ mb: 3 }}>
+        <Box sx={{ mb: 3 }} data-testid="log-call-section">
           <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>Log Call</Typography>
           <LogCallForm leadId={leadId} onSaved={handleEntrySaved} />
         </Box>
@@ -456,12 +456,14 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
         <Divider sx={{ mb: 3 }} />
 
         {/* Timeline */}
+        <Box data-testid="timeline-section">
         <LeadTimeline
           leadId={leadId}
           initialEntries={timelineEntries}
           initialTotal={timelineTotal}
           onLoadMore={handleLoadMore}
         />
+        </Box>
       </Box>
 
       {/* ── Sidebar ─────────────────────────────────────────────────────── */}

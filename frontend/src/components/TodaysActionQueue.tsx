@@ -23,7 +23,7 @@ import {
 import type { QueueRow } from '@/types'
 
 export function TodaysActionQueue() {
-  const [page] = useState(1)
+  const [page, setPage] = useState(1)
   const queryClient = useQueryClient()
 
   const { data } = useQuery({
@@ -88,7 +88,7 @@ export function TodaysActionQueue() {
       </Box>
 
       {/* Empty state */}
-      {rows.length === 0 && total === 0 && (
+      {rows.length === 0 && total === 0 ? (
         <Box sx={{ py: 4, textAlign: 'center' }} data-testid="todays-action-empty">
           <Typography variant="body1" color="text.secondary" gutterBottom>
             You're all caught up!
@@ -97,13 +97,13 @@ export function TodaysActionQueue() {
             View leads with no next action →
           </Link>
         </Box>
+      ) : (
+        <QueueTable
+          rows={rows}
+          total={total}
+          rowActions={rowActions}
+        />
       )}
-
-      <QueueTable
-        rows={rows}
-        total={total}
-        rowActions={rowActions}
-      />
     </Box>
   )
 }

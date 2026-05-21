@@ -80,7 +80,9 @@ export function NoNextActionQueue() {
       icon: <NoteIcon fontSize="small" />,
       testId: 'action-log-note',
       onClick: async (row: QueueRow) => {
-        await callLogService.logNote(row.id, { body: '' })
+        const body = window.prompt('Enter note:')
+        if (!body || !body.trim()) return
+        await callLogService.logNote(row.id, { body: body.trim() })
         queryClient.invalidateQueries({ queryKey: ['queue-no-next-action'] })
       },
     },

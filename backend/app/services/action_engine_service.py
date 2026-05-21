@@ -1,7 +1,11 @@
 """Action Engine Service — deterministic recommended action computation."""
+import logging
+
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry
 from app.models.lead_crm_flags_view import LeadCRMFlagsView
+
+logger = logging.getLogger(__name__)
 
 
 TASK_TYPE_TO_RECOMMENDED_ACTION = {
@@ -183,9 +187,9 @@ class ActionEngineService:
                     try:
                         ActionEngineService.recompute_and_persist(lead.id)
                         total_processed += 1
-                    except Exception:
-                        # Log and continue — don't let one bad lead stop the batch
-                        pass
+                    except Exception as exc:
+                        db.session.rollback()
+                        logger.error("Failed to recompute lead %s: %s", lead.id, exc, exc_info=True)
                 offset += CHUNK_SIZE
         else:
             # Process specific lead IDs in chunks
@@ -195,7 +199,8 @@ class ActionEngineService:
                     try:
                         ActionEngineService.recompute_and_persist(lead_id)
                         total_processed += 1
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        db.session.rollback()
+                        logger.error("Failed to recompute lead %s: %s", lead_id, exc, exc_info=True)
 
         return total_processed

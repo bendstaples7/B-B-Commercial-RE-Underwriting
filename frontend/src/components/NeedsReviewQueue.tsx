@@ -53,7 +53,7 @@ export function NeedsReviewQueue() {
       testId: 'action-view-analysis',
       onClick: async (row: QueueRow) => {
         // Navigate to command center — analysis tab
-        navigate(`/leads/${row.id}/command-center`)
+        navigate(`/leads/${row.id}/command-center?tab=analysis`)
       },
     },
     {
@@ -62,7 +62,7 @@ export function NeedsReviewQueue() {
       testId: 'action-view-activity',
       onClick: async (row: QueueRow) => {
         // Navigate to command center — timeline tab
-        navigate(`/leads/${row.id}/command-center`)
+        navigate(`/leads/${row.id}/command-center?tab=timeline`)
       },
     },
   ]

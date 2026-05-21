@@ -73,7 +73,7 @@ class TestBulkSuppress:
             leads = _make_leads_batch(app, 3, base_street='Suppress St')
             response = client.post(
                 '/api/leads/bulk/suppress',
-                data=json.dumps({'lead_ids': [l.id for l in leads]}),
+                data=json.dumps({'lead_ids': [lead.id for lead in leads]}),
                 content_type='application/json',
             )
             assert response.status_code == 200
@@ -82,7 +82,7 @@ class TestBulkSuppress:
         """Bulk suppress sets lead_status to 'suppressed' for all leads."""
         with app.app_context():
             leads = _make_leads_batch(app, 3, base_street='Suppress2 St')
-            lead_ids = [l.id for l in leads]
+            lead_ids = [lead.id for lead in leads]
             client.post(
                 '/api/leads/bulk/suppress',
                 data=json.dumps({'lead_ids': lead_ids}),
@@ -97,7 +97,7 @@ class TestBulkSuppress:
         with app.app_context():
             leads = _make_leads_batch(app, 2, base_street='Suppress3 St',
                                       recommended_action='follow_up_now')
-            lead_ids = [l.id for l in leads]
+            lead_ids = [lead.id for lead in leads]
             client.post(
                 '/api/leads/bulk/suppress',
                 data=json.dumps({'lead_ids': lead_ids}),
@@ -113,7 +113,7 @@ class TestBulkSuppress:
             leads = _make_leads_batch(app, 4, base_street='Suppress4 St')
             response = client.post(
                 '/api/leads/bulk/suppress',
-                data=json.dumps({'lead_ids': [l.id for l in leads]}),
+                data=json.dumps({'lead_ids': [lead.id for lead in leads]}),
                 content_type='application/json',
             )
             data = json.loads(response.data)
@@ -138,7 +138,7 @@ class TestBulkSuppress:
         """Bulk suppress appends a status_changed timeline entry for each lead."""
         with app.app_context():
             leads = _make_leads_batch(app, 2, base_street='Suppress5 St')
-            lead_ids = [l.id for l in leads]
+            lead_ids = [lead.id for lead in leads]
             client.post(
                 '/api/leads/bulk/suppress',
                 data=json.dumps({'lead_ids': lead_ids}),
@@ -173,7 +173,7 @@ class TestBulkCreateTask:
             response = client.post(
                 '/api/leads/bulk/create-task',
                 data=json.dumps({
-                    'lead_ids': [l.id for l in leads],
+                    'lead_ids': [lead.id for lead in leads],
                     'task_data': {'title': 'Bulk task', 'task_type': 'custom'},
                 }),
                 content_type='application/json',
@@ -184,7 +184,7 @@ class TestBulkCreateTask:
         """Bulk create-task creates one task per lead."""
         with app.app_context():
             leads = _make_leads_batch(app, 3, base_street='BulkTask2 St')
-            lead_ids = [l.id for l in leads]
+            lead_ids = [lead.id for lead in leads]
             client.post(
                 '/api/leads/bulk/create-task',
                 data=json.dumps({
@@ -207,7 +207,7 @@ class TestBulkCreateTask:
             response = client.post(
                 '/api/leads/bulk/create-task',
                 data=json.dumps({
-                    'lead_ids': [l.id for l in leads],
+                    'lead_ids': [lead.id for lead in leads],
                     'task_data': {'title': 'Outreach', 'task_type': 'custom'},
                 }),
                 content_type='application/json',
@@ -254,7 +254,7 @@ class TestBulkDoNotContact:
             leads = _make_leads_batch(app, 3, base_street='BulkDNC St')
             response = client.post(
                 '/api/leads/bulk/do-not-contact',
-                data=json.dumps({'lead_ids': [l.id for l in leads]}),
+                data=json.dumps({'lead_ids': [lead.id for lead in leads]}),
                 content_type='application/json',
             )
             assert response.status_code == 200
@@ -263,7 +263,7 @@ class TestBulkDoNotContact:
         """Bulk DNC sets lead_status to 'do_not_contact' for all leads."""
         with app.app_context():
             leads = _make_leads_batch(app, 3, base_street='BulkDNC2 St')
-            lead_ids = [l.id for l in leads]
+            lead_ids = [lead.id for lead in leads]
             client.post(
                 '/api/leads/bulk/do-not-contact',
                 data=json.dumps({'lead_ids': lead_ids}),
@@ -278,7 +278,7 @@ class TestBulkDoNotContact:
         with app.app_context():
             leads = _make_leads_batch(app, 2, base_street='BulkDNC3 St',
                                       recommended_action='follow_up_now')
-            lead_ids = [l.id for l in leads]
+            lead_ids = [lead.id for lead in leads]
             client.post(
                 '/api/leads/bulk/do-not-contact',
                 data=json.dumps({'lead_ids': lead_ids}),
@@ -292,8 +292,8 @@ class TestBulkDoNotContact:
         """Bulk DNC cancels all open tasks for each lead."""
         with app.app_context():
             leads = _make_leads_batch(app, 2, base_street='BulkDNC4 St')
-            tasks = [_make_task(app, l.id) for l in leads]
-            lead_ids = [l.id for l in leads]
+            tasks = [_make_task(app, lead.id) for lead in leads]
+            lead_ids = [lead.id for lead in leads]
             client.post(
                 '/api/leads/bulk/do-not-contact',
                 data=json.dumps({'lead_ids': lead_ids}),
@@ -309,7 +309,7 @@ class TestBulkDoNotContact:
             leads = _make_leads_batch(app, 4, base_street='BulkDNC5 St')
             response = client.post(
                 '/api/leads/bulk/do-not-contact',
-                data=json.dumps({'lead_ids': [l.id for l in leads]}),
+                data=json.dumps({'lead_ids': [lead.id for lead in leads]}),
                 content_type='application/json',
             )
             data = json.loads(response.data)
@@ -333,7 +333,7 @@ class TestBulkDoNotContact:
         """Bulk DNC appends a status_changed timeline entry for each lead."""
         with app.app_context():
             leads = _make_leads_batch(app, 2, base_street='BulkDNC6 St')
-            lead_ids = [l.id for l in leads]
+            lead_ids = [lead.id for lead in leads]
             client.post(
                 '/api/leads/bulk/do-not-contact',
                 data=json.dumps({'lead_ids': lead_ids}),
@@ -425,7 +425,7 @@ class TestBulkRecompute:
                 leads.append(lead)
             db.session.commit()
 
-            lead_ids = [l.id for l in leads]
+            lead_ids = [lead.id for lead in leads]
             ActionEngineService.bulk_recompute(lead_ids)
 
             for lead in leads:
@@ -484,6 +484,6 @@ class TestBulkRecompute:
                 leads.append(lead)
             db.session.commit()
 
-            lead_ids = [l.id for l in leads]
+            lead_ids = [lead.id for lead in leads]
             processed = ActionEngineService.bulk_recompute(lead_ids)
             assert processed == 7

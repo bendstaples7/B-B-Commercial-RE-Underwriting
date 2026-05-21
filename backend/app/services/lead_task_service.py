@@ -1,4 +1,5 @@
 """LeadTaskService — CRM task lifecycle management for leads."""
+import logging
 from datetime import datetime, date, timezone
 
 from sqlalchemy import asc, nullslast
@@ -11,6 +12,8 @@ from app.exceptions import (
     InvalidTaskStatusTransitionError,
     DoNotContactViolationError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class LeadTaskService:
@@ -81,8 +84,11 @@ class LeadTaskService:
         try:
             from app.services.action_engine_service import ActionEngineService
             ActionEngineService.recompute_and_persist(lead_id)
-        except Exception:
-            pass  # RA recomputation failure should not block task creation
+        except Exception as exc:
+            logger.error(
+                "ActionEngineService.recompute_and_persist failed for lead %s: %s",
+                lead_id, exc, exc_info=True,
+            )  # RA recomputation failure should not block task creation
 
         return task
 
@@ -129,8 +135,11 @@ class LeadTaskService:
         try:
             from app.services.action_engine_service import ActionEngineService
             ActionEngineService.recompute_and_persist(lead_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error(
+                "ActionEngineService.recompute_and_persist failed for lead %s: %s",
+                lead_id, exc, exc_info=True,
+            )
 
         return task
 

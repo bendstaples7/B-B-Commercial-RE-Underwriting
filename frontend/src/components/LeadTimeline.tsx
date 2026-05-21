@@ -3,7 +3,7 @@
  *
  * Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8
  */
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Avatar,
   Box,
@@ -166,6 +166,11 @@ export function LeadTimeline({
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setEntries(initialEntries)
+    setTotal(initialTotal)
+  }, [initialEntries, initialTotal])
 
   const hasMore = entries.length < total
 

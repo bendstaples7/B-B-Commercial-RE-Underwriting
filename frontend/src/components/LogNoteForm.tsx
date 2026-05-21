@@ -69,6 +69,7 @@ export function LogNoteForm({ leadId, onSaved, onCancel }: LogNoteFormProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (submitting) return
 
     const error = validate(body)
     if (error) {

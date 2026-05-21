@@ -27,6 +27,7 @@ import os
 @pytest.fixture(autouse=False)
 def app_ctx():
     """Push a minimal Flask app context so DB queries don't raise RuntimeError."""
+    previous_db = os.environ.get('DATABASE_URL')
     os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
     app = create_app('testing')
     with app.app_context():
@@ -34,7 +35,9 @@ def app_ctx():
         yield
         db.session.remove()
         db.drop_all()
-    if 'DATABASE_URL' in os.environ:
+    if previous_db is not None:
+        os.environ['DATABASE_URL'] = previous_db
+    elif 'DATABASE_URL' in os.environ:
         del os.environ['DATABASE_URL']
 
 

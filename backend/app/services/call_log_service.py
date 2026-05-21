@@ -1,4 +1,5 @@
 """CallLogService — native call and note logging for leads."""
+import logging
 from datetime import datetime, date, timezone
 
 from app import db
@@ -7,6 +8,8 @@ from app.exceptions import (
     DoNotContactViolationError,
     LeadTaskValidationError,
 )
+
+logger = logging.getLogger(__name__)
 
 VALID_CALL_OUTCOMES = frozenset(['answered', 'voicemail', 'no_answer', 'busy', 'wrong_number'])
 
@@ -96,8 +99,11 @@ class CallLogService:
         try:
             from app.services.action_engine_service import ActionEngineService
             ActionEngineService.recompute_and_persist(lead_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error(
+                "ActionEngineService.recompute_and_persist failed for lead %s: %s",
+                lead_id, exc, exc_info=True,
+            )
 
         return entry
 
@@ -152,7 +158,10 @@ class CallLogService:
         try:
             from app.services.action_engine_service import ActionEngineService
             ActionEngineService.recompute_and_persist(lead_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error(
+                "ActionEngineService.recompute_and_persist failed for lead %s: %s",
+                lead_id, exc, exc_info=True,
+            )
 
         return entry

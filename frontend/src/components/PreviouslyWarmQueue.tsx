@@ -34,7 +34,7 @@ import {
 import type { QueueRow } from '@/types'
 
 export function PreviouslyWarmQueue() {
-  const [page] = useState(1)
+  const [page, setPage] = useState(1)
   const queryClient = useQueryClient()
   const [suppressTarget, setSuppressTarget] = useState<QueueRow | null>(null)
 
@@ -85,7 +85,9 @@ export function PreviouslyWarmQueue() {
       icon: <NoteIcon fontSize="small" />,
       testId: 'action-log-note',
       onClick: async (row: QueueRow) => {
-        await callLogService.logNote(row.id, { body: '' })
+        const body = window.prompt('Enter note:')
+        if (!body || !body.trim()) return
+        await callLogService.logNote(row.id, { body: body.trim() })
         queryClient.invalidateQueries({ queryKey: ['queue-previously-warm'] })
       },
     },

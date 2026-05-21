@@ -60,7 +60,7 @@ def upgrade():
         ),
         sa.Column(
             'event_type',
-            sa.Enum(*_EVENT_TYPE_VALUES, name=_EVENT_TYPE_ENUM_NAME),
+            postgresql.ENUM(*_EVENT_TYPE_VALUES, name=_EVENT_TYPE_ENUM_NAME, create_type=False),
             nullable=False,
         ),
         sa.Column('occurred_at', sa.DateTime(), nullable=False),
