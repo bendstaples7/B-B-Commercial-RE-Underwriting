@@ -170,6 +170,7 @@ export function LeadTimeline({
   useEffect(() => {
     setEntries(initialEntries)
     setTotal(initialTotal)
+    setPage(1)
   }, [initialEntries, initialTotal])
 
   const hasMore = entries.length < total
