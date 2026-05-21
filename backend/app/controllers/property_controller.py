@@ -841,7 +841,7 @@ def legacy_get_property(lead_id):
 
 @leads_legacy_bp.route('/<int:lead_id>/analyze', methods=['POST'])
 def legacy_analyze_property(lead_id):
-    return redirect(url_for('properties.analyze_property', lead_id=lead_id), 301)
+    return redirect(url_for('properties.analyze_property', lead_id=lead_id), 308)
 
 
 @leads_legacy_bp.route('/views/previously-warm', methods=['GET'])
@@ -881,7 +881,7 @@ def legacy_get_scoring_weights():
 
 @leads_legacy_bp.route('/scoring/weights', methods=['PUT'])
 def legacy_update_scoring_weights():
-    return redirect(url_for('properties.update_scoring_weights'), 301)
+    return redirect(url_for('properties.update_scoring_weights'), 308)
 
 
 # ---------------------------------------------------------------------------

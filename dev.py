@@ -146,7 +146,47 @@ def main():
     time.sleep(1)  # let Celery connect to Redis before Flask starts
 
     # ------------------------------------------------------------------
-    # 3. Flask dev server (foreground — blocks until Ctrl+C)
+    # 3. Migration check — refuse to start Flask if DB is behind head
+    # ------------------------------------------------------------------
+    print("  Checking database migrations...")
+    migration_check = subprocess.run(
+        [sys.executable, "-c",
+         "import sys, os; sys.path.insert(0, '.'); "
+         "from dotenv import load_dotenv; load_dotenv(); "
+         "from alembic.config import Config; "
+         "from alembic.script import ScriptDirectory; "
+         "from alembic.runtime.migration import MigrationContext; "
+         "import sqlalchemy as sa; "
+         "cfg = Config(os.path.join(os.getcwd(), 'alembic_migrations', 'alembic.ini')); "
+         "cfg.set_main_option('script_location', os.path.join(os.getcwd(), 'alembic_migrations')); "
+         "script = ScriptDirectory.from_config(cfg); "
+         "heads = {s.revision for s in script.get_revisions('heads')}; "
+         "engine = sa.create_engine(os.environ.get('DATABASE_URL', 'postgresql://localhost/real_estate_analysis')); "
+         "conn = engine.connect(); "
+         "ctx = MigrationContext.configure(conn); "
+         "current = set(ctx.get_current_heads()); "
+         "conn.close(); "
+         "sys.exit(0 if current == heads else 1)"
+        ],
+        cwd=BACKEND_DIR,
+        env={**os.environ, "PYTHONPATH": BACKEND_DIR},
+        capture_output=True,
+        text=True,
+    )
+    if migration_check.returncode != 0:
+        print("\n  ╔══════════════════════════════════════════════════════════╗")
+        print("  ║  DATABASE MIGRATIONS PENDING — CANNOT START SERVER      ║")
+        print("  ╠══════════════════════════════════════════════════════════╣")
+        print("  ║  The database schema is behind the current codebase.    ║")
+        print("  ║                                                          ║")
+        print("  ║  Fix:  cd backend && flask db upgrade head               ║")
+        print("  ║  Then re-run:  python dev.py                             ║")
+        print("  ╚══════════════════════════════════════════════════════════╝\n")
+        sys.exit(1)
+    print("  Database migrations up to date ✓")
+
+    # ------------------------------------------------------------------
+    # 4. Flask dev server (foreground — blocks until Ctrl+C)
     # ------------------------------------------------------------------
     print(f"\n  Flask starting on http://localhost:{FLASK_PORT}")
     print("  Press Ctrl+C to stop all services.\n")

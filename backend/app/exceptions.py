@@ -418,6 +418,74 @@ class TaskValidationError(ValidationException):
         }
 
 
+# ── Actionable Lead Command Center exceptions ──────────────────────────────
+
+
+class LeadTaskValidationError(RealEstateAnalysisException):
+    """Raised when a LeadTask field fails validation (e.g. title too long, invalid due date)."""
+
+    def __init__(self, message: str, field: str | None = None):
+        super().__init__(message, status_code=400)
+        self.payload = {'error_type': 'lead_task_validation_error', 'field': field} if field else {'error_type': 'lead_task_validation_error'}
+
+
+class InvalidLeadStatusTransitionError(RealEstateAnalysisException):
+    """Raised when a Lead_Status transition is not permitted."""
+
+    def __init__(self, from_status: str, to_status: str):
+        super().__init__(
+            f"Cannot transition lead status from '{from_status}' to '{to_status}'.",
+            status_code=422,
+        )
+        self.payload = {
+            'error_type': 'invalid_lead_status_transition',
+            'from_status': from_status,
+            'to_status': to_status,
+        }
+
+
+class InvalidTaskStatusTransitionError(RealEstateAnalysisException):
+    """Raised when a LeadTask status transition is not permitted (e.g. re-completing a completed task)."""
+
+    def __init__(self, task_id: int, current_status: str, attempted_status: str):
+        super().__init__(
+            f"Cannot transition task {task_id} from '{current_status}' to '{attempted_status}'.",
+            status_code=422,
+        )
+        self.payload = {
+            'error_type': 'invalid_task_status_transition',
+            'task_id': task_id,
+            'current_status': current_status,
+            'attempted_status': attempted_status,
+        }
+
+
+class DoNotContactViolationError(RealEstateAnalysisException):
+    """Raised when an outreach action is attempted on a Do Not Contact lead."""
+
+    def __init__(self, lead_id: int):
+        super().__init__(
+            f"Lead {lead_id} is marked Do Not Contact. Outreach actions are not permitted.",
+            status_code=403,
+        )
+        self.payload = {'error_type': 'do_not_contact_violation', 'lead_id': lead_id}
+
+
+class ActionEngineRecomputationError(RealEstateAnalysisException):
+    """Raised when the Action Engine fails to recompute a recommended action."""
+
+    def __init__(self, lead_id: int, reason: str):
+        super().__init__(
+            f"Action Engine failed to recompute recommended action for lead {lead_id}: {reason}",
+            status_code=500,
+        )
+        self.payload = {
+            'error_type': 'action_engine_recomputation_error',
+            'lead_id': lead_id,
+            'reason': reason,
+        }
+
+
 # ---------------------------------------------------------------------------
 # Chicago Socrata Local Cache Exceptions
 # ---------------------------------------------------------------------------

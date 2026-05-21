@@ -16,6 +16,29 @@ Covers:
 import pytest
 from unittest.mock import MagicMock
 from app.services.lead_scoring_engine import LeadScoringEngine
+from app import create_app, db
+import os
+
+
+# ---------------------------------------------------------------------------
+# App context fixture — required because sub-scorers query the DB
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=False)
+def app_ctx():
+    """Push a minimal Flask app context so DB queries don't raise RuntimeError."""
+    previous_db = os.environ.get('DATABASE_URL')
+    os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
+    app = create_app('testing')
+    with app.app_context():
+        db.create_all()
+        yield
+        db.session.remove()
+        db.drop_all()
+    if previous_db is not None:
+        os.environ['DATABASE_URL'] = previous_db
+    elif 'DATABASE_URL' in os.environ:
+        del os.environ['DATABASE_URL']
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +132,7 @@ class TestSignalAdjustmentsConstant:
 # compute_score — no signals (backward compatibility)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.usefixtures("app_ctx")
 class TestComputeScoreNoSignals:
     def setup_method(self):
         self.engine = LeadScoringEngine()
@@ -167,6 +191,7 @@ class TestComputeScoreNoSignals:
 # compute_score — signal adjustments via string list
 # ---------------------------------------------------------------------------
 
+@pytest.mark.usefixtures("app_ctx")
 class TestComputeScoreStringSignals:
     def setup_method(self):
         self.engine = LeadScoringEngine()
@@ -257,6 +282,7 @@ class TestComputeScoreStringSignals:
 # compute_score — signal adjustments via HubSpotSignal-like objects
 # ---------------------------------------------------------------------------
 
+@pytest.mark.usefixtures("app_ctx")
 class TestComputeScoreObjectSignals:
     def setup_method(self):
         self.engine = LeadScoringEngine()
@@ -292,6 +318,7 @@ class TestComputeScoreObjectSignals:
 # compute_score — mixed list (objects + strings)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.usefixtures("app_ctx")
 class TestComputeScoreMixedSignals:
     def setup_method(self):
         self.engine = LeadScoringEngine()
@@ -311,6 +338,7 @@ class TestComputeScoreMixedSignals:
 # compute_score — suppression_flag clamping
 # ---------------------------------------------------------------------------
 
+@pytest.mark.usefixtures("app_ctx")
 class TestComputeScoreSuppressionFlag:
     def setup_method(self):
         self.engine = LeadScoringEngine()

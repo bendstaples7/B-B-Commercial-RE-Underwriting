@@ -1045,7 +1045,8 @@ export interface DealListResponse {
 // Property Scoring Types (formerly "Lead Scoring Types")
 // ---------------------------------------------------------------------------
 
-export type RecommendedAction =
+/** @deprecated Use `ScoringRecommendedAction` — renamed to avoid conflict with the CRM RecommendedAction type */
+export type ScoringRecommendedAction =
   | 'review_now'
   | 'enrich_data'
   | 'mail_ready'
@@ -1054,6 +1055,9 @@ export type RecommendedAction =
   | 'suppress'
   | 'nurture'
   | 'needs_manual_review'
+
+/** @deprecated Use `ScoringRecommendedAction` instead */
+export type RecommendedAction = ScoringRecommendedAction
 
 export interface ScoreSignal {
   dimension: string
@@ -1573,4 +1577,162 @@ export interface ContactUpdatePayload {
   notes?: string | null
   phones?: Array<{ value: string; label: PhoneLabel }>
   emails?: Array<{ value: string; label: EmailLabel }>
+}
+
+// ── Actionable Lead Command Center Types ──────────────────────────────────
+
+export type LeadStatus =
+  | 'new'
+  | 'active'
+  | 'follow_up'
+  | 'nurture'
+  | 'under_contract'
+  | 'closed'
+  | 'suppressed'
+  | 'do_not_contact';
+
+export type CRMRecommendedAction =
+  | 'enrich_data'
+  | 'resolve_match'
+  | 'analyze_property'
+  | 'follow_up_now'
+  | 'ready_for_outreach'
+  | 'add_contact_info'
+  | 'create_task'
+  | 'nurture'
+  | 'suppress'
+  | 'do_not_contact';
+
+export type LeadTaskType =
+  | 'call_owner_today'
+  | 'research_missing_pin'
+  | 'match_hubspot_deal'
+  | 'run_property_analysis'
+  | 'add_to_mail_batch'
+  | 'skip_trace_owner'
+  | 'custom';
+
+export type LeadTaskStatus = 'open' | 'completed' | 'cancelled';
+
+export type TimelineEventType =
+  | 'note_added'
+  | 'call_logged'
+  | 'task_created'
+  | 'task_completed'
+  | 'task_snoozed'
+  | 'recommended_action_changed'
+  | 'status_changed'
+  | 'hubspot_note'
+  | 'hubspot_call'
+  | 'hubspot_task'
+  | 'hubspot_deal_stage'
+  | 'property_analysis_completed'
+  | 'lead_imported';
+
+export interface LeadTask {
+  id: number;
+  lead_id: number;
+  task_type: LeadTaskType;
+  title: string;
+  status: LeadTaskStatus;
+  due_date: string | null;
+  created_at: string;
+  completed_at: string | null;
+  created_by: string;
+}
+
+export interface LeadTimelineEntry {
+  id: number;
+  lead_id: number;
+  event_type: TimelineEventType;
+  occurred_at: string;
+  source: 'manual' | 'system' | 'hubspot';
+  actor: string;
+  summary: string;
+  metadata: Record<string, unknown> | null;
+  hubspot_activity_id: string | null;
+  is_deleted: boolean;
+  created_at: string;
+}
+
+export interface RecommendedActionMeta {
+  value: CRMRecommendedAction | null;
+  label: string | null;
+  explanation: string | null;
+  signals: Record<string, unknown>;
+}
+
+export interface QueueRow {
+  id: number;
+  owner_first_name: string | null;
+  owner_last_name: string | null;
+  property_street: string | null;
+  property_city: string | null;
+  property_state: string | null;
+  lead_score: number;
+  lead_status: LeadStatus;
+  recommended_action: CRMRecommendedAction | null;
+  has_property_match: boolean;
+  last_contact_date: string | null;
+  last_hubspot_sync_at: string | null;
+  hubspot_deal_stage: string | null;
+  follow_up_overdue: boolean;
+  review_required: boolean;
+  review_reason: string | null;
+  review_triggered_at: string | null;
+  unanswered_call_count: number;
+  is_warm: boolean;
+}
+
+export interface QueuePage {
+  rows: QueueRow[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+export interface QueueCounts {
+  todays_action: number;
+  previously_warm: number;
+  follow_up_overdue: number;
+  no_next_action: number;
+  needs_review: number;
+  do_not_contact: number;
+  missing_property_match: number;
+}
+
+export interface CommandCenterPayload {
+  id: number;
+  owner_first_name: string | null;
+  owner_last_name: string | null;
+  property_street: string | null;
+  property_city: string | null;
+  property_state: string | null;
+  lead_score: number;
+  lead_status: LeadStatus;
+  has_property_match: boolean;
+  analysis_session_id: number | null;
+  recommended_action: RecommendedActionMeta;
+  open_tasks: LeadTask[];
+  timeline: {
+    entries: LeadTimelineEntry[];
+    total: number;
+    page: number;
+    per_page: number;
+  };
+}
+
+export interface LogCallPayload {
+  outcome: 'answered' | 'voicemail' | 'no_answer' | 'busy' | 'wrong_number';
+  duration_minutes?: number | null;
+  notes?: string | null;
+}
+
+export interface LogNotePayload {
+  body: string;
+}
+
+export interface BulkActionResult {
+  successes: number;
+  failures: number;
 }

@@ -93,12 +93,42 @@ class Property(db.Model):
     # Scoring
     lead_score = db.Column(db.Float, default=0)
 
-    # HubSpot CRM — suppression and recommended action
+    # HubSpot CRM — suppression flag
     suppression_flag = db.Column(db.Boolean, nullable=False, default=False)
+
+    # Lead lifecycle status
+    lead_status = db.Column(db.Enum(
+        'new', 'active', 'follow_up', 'nurture',
+        'under_contract', 'closed', 'suppressed', 'do_not_contact',
+        name='lead_status_enum'
+    ), nullable=False, default='new', server_default='new', index=True)
+
+    # Action Engine output
     recommended_action = db.Column(db.Enum(
-        'CONTACT_NOW', 'FOLLOW_UP_LATER', 'REVISIT_OFFER', 'DO_NOT_CONTACT',
-        name='recommended_action_enum'
-    ), nullable=True)
+        'enrich_data', 'resolve_match', 'analyze_property', 'follow_up_now',
+        'ready_for_outreach', 'add_contact_info', 'create_task', 'nurture',
+        'suppress', 'do_not_contact',
+        name='crm_recommended_action_enum'
+    ), nullable=True, index=True)
+
+    # Action Engine signals
+    has_phone = db.Column(db.Boolean, nullable=False, default=False)
+    has_email = db.Column(db.Boolean, nullable=False, default=False)
+    has_property_match = db.Column(db.Boolean, nullable=False, default=False)
+    analysis_complete = db.Column(db.Boolean, nullable=False, default=False)
+    follow_up_overdue = db.Column(db.Boolean, nullable=False, default=False)
+    is_warm = db.Column(db.Boolean, nullable=False, default=False)
+    data_completeness_score = db.Column(db.Float, nullable=False, default=0.0)
+    last_contact_date = db.Column(db.Date, nullable=True)
+    unanswered_call_count = db.Column(db.Integer, nullable=False, default=0)
+    hubspot_deal_stage = db.Column(db.String(100), nullable=True)
+    last_hubspot_sync_at = db.Column(db.DateTime, nullable=True)
+    follow_up_date = db.Column(db.Date, nullable=True)
+
+    # Needs Review flag
+    review_required = db.Column(db.Boolean, nullable=False, default=False)
+    review_reason = db.Column(db.String(255), nullable=True)
+    review_triggered_at = db.Column(db.DateTime, nullable=True)
 
     # Metadata
     data_source = db.Column(db.String(100), nullable=True)

@@ -1249,3 +1249,82 @@ export const contactService = {
     await api.delete(`/properties/${propertyId}/contacts/${contactId}`)
   },
 }
+
+// ── Actionable Lead Command Center API Services ───────────────────────────
+import type {
+  QueueCounts,
+  QueuePage,
+  CommandCenterPayload,
+  LeadTask,
+  LeadTimelineEntry,
+  LogCallPayload,
+  LogNotePayload,
+  BulkActionResult,
+  LeadStatus,
+  CRMRecommendedAction,
+} from '@/types'
+
+export const queueService = {
+  getCounts: (): Promise<QueueCounts> =>
+    api.get('/queues/counts').then(r => r.data),
+  getTodaysAction: (page = 1, perPage = 20): Promise<QueuePage> =>
+    api.get('/queues/todays-action', { params: { page, per_page: perPage } }).then(r => r.data),
+  getPreviouslyWarm: (page = 1, perPage = 20): Promise<QueuePage> =>
+    api.get('/queues/previously-warm', { params: { page, per_page: perPage } }).then(r => r.data),
+  getFollowUpOverdue: (page = 1, perPage = 20): Promise<QueuePage> =>
+    api.get('/queues/follow-up-overdue', { params: { page, per_page: perPage } }).then(r => r.data),
+  getNoNextAction: (page = 1, perPage = 20): Promise<QueuePage> =>
+    api.get('/queues/no-next-action', { params: { page, per_page: perPage } }).then(r => r.data),
+  getNeedsReview: (page = 1, perPage = 20): Promise<QueuePage> =>
+    api.get('/queues/needs-review', { params: { page, per_page: perPage } }).then(r => r.data),
+  getDoNotContact: (page = 1, perPage = 20): Promise<QueuePage> =>
+    api.get('/queues/do-not-contact', { params: { page, per_page: perPage } }).then(r => r.data),
+  getMissingPropertyMatch: (page = 1, perPage = 20): Promise<QueuePage> =>
+    api.get('/queues/missing-property-match', { params: { page, per_page: perPage } }).then(r => r.data),
+}
+
+export const commandCenterService = {
+  getCommandCenter: (leadId: number): Promise<CommandCenterPayload> =>
+    api.get(`/leads/${leadId}/command-center`).then(r => r.data),
+  getRecommendedAction: (leadId: number): Promise<{ recommended_action: CRMRecommendedAction | null }> =>
+    api.get(`/leads/${leadId}/recommended-action`).then(r => r.data),
+  updateStatus: (leadId: number, status: LeadStatus): Promise<unknown> =>
+    api.patch(`/leads/${leadId}/status`, { status }).then(r => r.data),
+  doNotContact: (leadId: number): Promise<unknown> =>
+    api.post(`/leads/${leadId}/do-not-contact`).then(r => r.data),
+  park: (leadId: number, reactivationDate?: string): Promise<unknown> =>
+    api.post(`/leads/${leadId}/park`, { reactivation_date: reactivationDate ?? null }).then(r => r.data),
+  reactivate: (leadId: number): Promise<unknown> =>
+    api.post(`/leads/${leadId}/reactivate`).then(r => r.data),
+  suppress: (leadId: number): Promise<unknown> =>
+    api.post(`/leads/${leadId}/suppress`).then(r => r.data),
+  getTimeline: (leadId: number, page = 1): Promise<{ entries: LeadTimelineEntry[]; total: number; page: number; per_page: number }> =>
+    api.get(`/leads/${leadId}/timeline`, { params: { page } }).then(r => r.data),
+}
+
+export const leadTaskService = {
+  createTask: (leadId: number, data: { title: string; task_type?: string; due_date?: string | null }): Promise<LeadTask> =>
+    api.post(`/leads/${leadId}/tasks`, data).then(r => r.data),
+  updateTask: (leadId: number, taskId: number, data: { title?: string; due_date?: string | null }): Promise<LeadTask> =>
+    api.patch(`/leads/${leadId}/tasks/${taskId}`, data).then(r => r.data),
+  completeTask: (leadId: number, taskId: number): Promise<LeadTask> =>
+    api.post(`/leads/${leadId}/tasks/${taskId}/complete`).then(r => r.data),
+  snoozeTask: (leadId: number, taskId: number, newDueDate: string): Promise<LeadTask> =>
+    api.patch(`/leads/${leadId}/tasks/${taskId}`, { new_due_date: newDueDate }).then(r => r.data),
+}
+
+export const callLogService = {
+  logCall: (leadId: number, payload: LogCallPayload): Promise<LeadTimelineEntry> =>
+    api.post(`/leads/${leadId}/calls`, payload).then(r => r.data),
+  logNote: (leadId: number, payload: LogNotePayload): Promise<LeadTimelineEntry> =>
+    api.post(`/leads/${leadId}/notes`, payload).then(r => r.data),
+}
+
+export const bulkActionService = {
+  bulkSuppress: (leadIds: number[]): Promise<BulkActionResult> =>
+    api.post('/leads/bulk/suppress', { lead_ids: leadIds }).then(r => r.data),
+  bulkCreateTask: (leadIds: number[], taskData: { title: string; task_type?: string }): Promise<BulkActionResult> =>
+    api.post('/leads/bulk/create-task', { lead_ids: leadIds, task_data: taskData }).then(r => r.data),
+  bulkDoNotContact: (leadIds: number[]): Promise<BulkActionResult> =>
+    api.post('/leads/bulk/do-not-contact', { lead_ids: leadIds }).then(r => r.data),
+}

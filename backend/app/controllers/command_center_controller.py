@@ -1,0 +1,909 @@
+"""Command Center API endpoints.
+
+Provides endpoints for the Actionable Lead Command Center feature,
+including recommended action retrieval with signal breakdown.
+
+Blueprint: command_center_bp, prefix /api/leads
+"""
+import logging
+import re
+from functools import wraps
+
+from flask import Blueprint, jsonify, g, request
+from marshmallow import ValidationError
+
+from app.exceptions import RealEstateAnalysisException
+from app.models import Lead, LeadTask, LeadTimelineEntry
+from app.schemas import (
+    LeadTaskCreateSchema, LeadTaskUpdateSchema, LeadTaskSnoozeSchema,
+    LogNoteSchema, LogCallSchema, LeadStatusUpdateSchema,
+    ParkLeadSchema, DoNotContactSchema, ReactivateLeadSchema,
+)
+from app.services.lead_task_service import LeadTaskService
+from app.services.lead_timeline_service import LeadTimelineService
+from app.services.call_log_service import CallLogService
+from app.services.action_engine_service import ActionEngineService, RECOMMENDED_ACTION_METADATA
+
+logger = logging.getLogger(__name__)
+
+command_center_bp = Blueprint('command_center', __name__)
+
+# ---------------------------------------------------------------------------
+# Module-level service instances
+# ---------------------------------------------------------------------------
+
+_lead_task_service = LeadTaskService()
+_lead_timeline_service = LeadTimelineService()
+_call_log_service = CallLogService()
+
+
+# ---------------------------------------------------------------------------
+# Error handling decorator (mirrors property_controller.py pattern)
+# ---------------------------------------------------------------------------
+
+def handle_errors(f):
+    """Decorator for consistent error handling."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        except ValidationError as e:
+            logger.warning("Validation error: %s", e.messages)
+            return jsonify({
+                'error': 'Validation error',
+                'details': e.messages,
+            }), 400
+        except ValueError as e:
+            logger.warning("Value error: %s", str(e))
+            return jsonify({
+                'error': 'Invalid request',
+                'message': str(e),
+            }), 400
+        except RealEstateAnalysisException as e:
+            logger.warning("%s: %s", e.__class__.__name__, e.message)
+            return jsonify({
+                'error': e.__class__.__name__,
+                'message': e.message,
+                **e.payload,
+            }), e.status_code
+        except Exception as e:
+            if hasattr(e, 'code') and hasattr(e, 'description'):
+                logger.warning("HTTP error %s: %s", e.code, e.description)
+                return jsonify({
+                    'error': getattr(e, 'name', 'HTTP error'),
+                    'message': e.description,
+                }), e.code
+
+            logger.error("Unexpected error: %s", str(e), exc_info=True)
+            return jsonify({
+                'error': 'Internal server error',
+                'message': 'An unexpected error occurred',
+            }), 500
+    return decorated_function
+
+
+# ---------------------------------------------------------------------------
+# Signal extraction helpers
+# ---------------------------------------------------------------------------
+
+def _get_winning_rule_signals(lead) -> dict:
+    """
+    Return the signal fields relevant to the winning rule that produced the
+    lead's current recommended_action.
+
+    Mirrors the 11-priority rule chain in ActionEngineService so the caller
+    can see exactly which signals caused the current RA to be assigned.
+    """
+    ra = lead.recommended_action
+
+    # Priority 1 — DNC
+    if lead.lead_status == 'do_not_contact':
+        return {'lead_status': 'do_not_contact'}
+
+    # Priority 2 — suppressed / nurture (RA is None for these)
+    if lead.lead_status in ('suppressed', 'nurture'):
+        return {'lead_status': lead.lead_status}
+
+    # Priority 3 — no contact info
+    if not lead.has_phone and not lead.has_email:
+        return {'has_phone': False, 'has_email': False}
+
+    # Priority 4 — no property match
+    if not lead.has_property_match:
+        return {
+            'has_property_match': False,
+            'property_street': lead.property_street,
+        }
+
+    # Priority 5 — no analysis
+    if lead.has_property_match and not lead.analysis_complete:
+        return {
+            'has_property_match': True,
+            'analysis_complete': False,
+        }
+
+    # Priority 6 — follow-up overdue
+    if lead.follow_up_overdue:
+        return {'follow_up_overdue': True}
+
+    # Priority 7 — warm lead
+    if lead.is_warm:
+        return {'is_warm': True}
+
+    # Priority 8 — ready for outreach (analysis complete + high score + no open tasks)
+    if lead.analysis_complete and lead.lead_score >= 70:
+        open_tasks = LeadTask.query.filter_by(lead_id=lead.id, status='open').count()
+        if open_tasks == 0:
+            return {
+                'analysis_complete': True,
+                'lead_score': lead.lead_score,
+            }
+
+    # Priority 9 — low data completeness
+    if lead.data_completeness_score < 50:
+        return {'data_completeness_score': lead.data_completeness_score}
+
+    # Priority 10 — active/new with no open tasks → create_task
+    if lead.lead_status in ('active', 'new'):
+        open_tasks = LeadTask.query.filter_by(lead_id=lead.id, status='open').count()
+        if open_tasks == 0:
+            return {'lead_status': lead.lead_status}
+
+    # Priority 11 — default (nurture)
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+@command_center_bp.route('/<int:lead_id>/recommended-action', methods=['GET'])
+@handle_errors
+def get_recommended_action(lead_id: int):
+    """
+    GET /api/leads/<lead_id>/recommended-action
+
+    Returns the current recommended_action for a lead along with its
+    human-readable label, explanation, and the signal fields that caused
+    the winning rule to fire.
+
+    Response schema (RecommendedActionResponseSchema — added in task 7.2):
+    {
+        "recommended_action": str | null,
+        "label": str | null,
+        "explanation": str | null,
+        "signals": dict
+    }
+    """
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found', 'message': f'Lead {lead_id} not found'}), 404
+
+    ra = lead.recommended_action
+    metadata = RECOMMENDED_ACTION_METADATA.get(ra, {}) if ra else {}
+    signals = _get_winning_rule_signals(lead)
+
+    return jsonify({
+        'recommended_action': ra,
+        'label': metadata.get('label'),
+        'explanation': metadata.get('explanation'),
+        'signals': signals,
+    }), 200
+
+
+@command_center_bp.route('/<int:lead_id>/command-center', methods=['GET'])
+@handle_errors
+def get_command_center(lead_id: int):
+    """
+    GET /api/leads/<lead_id>/command-center
+
+    Returns the full command center payload for a lead, including recommended
+    action, open tasks, and the first page of the timeline.
+    Clears the review_required flag when the command center is opened.
+    """
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found', 'message': f'Lead {lead_id} not found'}), 404
+
+    # Clear review_required flag when command center is opened
+    if lead.review_required:
+        lead.review_required = False
+        from app import db
+        db.session.add(lead)
+        db.session.commit()
+
+    ra = lead.recommended_action
+    ra_metadata = RECOMMENDED_ACTION_METADATA.get(ra, {}) if ra else {}
+    open_tasks = _lead_task_service.list_open(lead_id)
+    timeline_entries, timeline_total = _lead_timeline_service.get_page(lead_id, page=1, per_page=25)
+
+    # ------------------------------------------------------------------
+    # Collect phones: flat columns + relational contact_phones table
+    # ------------------------------------------------------------------
+    from app import db as _db
+    from sqlalchemy import text as _text
+
+    flat_phones = [
+        p for p in [lead.phone_1, lead.phone_2, lead.phone_3,
+                    lead.phone_4, lead.phone_5, lead.phone_6, lead.phone_7]
+        if p and p.strip()
+    ]
+    relational_phones = [
+        row[0] for row in _db.session.execute(_text("""
+            SELECT cp.value FROM contact_phones cp
+            JOIN property_contacts pc ON pc.contact_id = cp.contact_id
+            WHERE pc.property_id = :lead_id
+        """), {'lead_id': lead_id}).fetchall()
+        if row[0]
+    ]
+    # Merge, deduplicate preserving order
+    seen_phones: set = set()
+    all_phones = []
+    for p in flat_phones + relational_phones:
+        normalized = p.strip()
+        if normalized and normalized not in seen_phones:
+            seen_phones.add(normalized)
+            all_phones.append(normalized)
+
+    # ------------------------------------------------------------------
+    # Collect emails: flat columns + relational contact_emails table
+    # ------------------------------------------------------------------
+    flat_emails = [
+        e for e in [lead.email_1, lead.email_2, lead.email_3,
+                    lead.email_4, lead.email_5]
+        if e and e.strip()
+    ]
+    relational_emails = [
+        row[0] for row in _db.session.execute(_text("""
+            SELECT ce.value FROM contact_emails ce
+            JOIN property_contacts pc ON pc.contact_id = ce.contact_id
+            WHERE pc.property_id = :lead_id
+        """), {'lead_id': lead_id}).fetchall()
+        if row[0]
+    ]
+    seen_emails: set = set()
+    all_emails = []
+    for e in flat_emails + relational_emails:
+        normalized = e.strip().lower()
+        if normalized and normalized not in seen_emails:
+            seen_emails.add(normalized)
+            all_emails.append(e.strip())
+
+    # ------------------------------------------------------------------
+    # Determine if this lead is in Today's Action queue
+    # (has an overdue HubSpot task via task_associations or direct lead_id)
+    # ------------------------------------------------------------------
+    from datetime import datetime as _datetime_cls
+    _now = _datetime_cls.now(_datetime_cls.now().astimezone().tzinfo or __import__('datetime').timezone.utc)
+    overdue_task_row = _db.session.execute(_text("""
+        SELECT t.id, t.title, t.due_date
+        FROM tasks t
+        JOIN task_associations ta ON ta.task_id = t.id
+        WHERE ta.target_type = 'lead' AND ta.target_id = :lead_id
+          AND t.status IN ('open', 'overdue')
+          AND t.due_date <= NOW()
+        LIMIT 1
+    """), {'lead_id': lead_id}).fetchone()
+    if not overdue_task_row:
+        overdue_task_row = _db.session.execute(_text("""
+            SELECT id, title, due_date FROM tasks
+            WHERE lead_id = :lead_id AND status IN ('open', 'overdue') AND due_date <= NOW()
+            LIMIT 1
+        """), {'lead_id': lead_id}).fetchone()
+    has_overdue_hubspot_task = overdue_task_row is not None
+    overdue_task_title = overdue_task_row[1] if overdue_task_row else None
+    overdue_task_due = overdue_task_row[2].isoformat() if overdue_task_row and overdue_task_row[2] else None
+    source = lead.source
+    hubspot_deal_name = None
+    if source == 'hubspot_import' or not source:
+        row = _db.session.execute(_text("""
+            SELECT hd.raw_payload->>'dealname', hd.raw_payload->>'dealstage'
+            FROM hubspot_deals hd
+            JOIN hubspot_matches hm ON hm.hubspot_id = hd.hubspot_id
+                AND hm.hubspot_record_type = 'deal'
+            WHERE hm.internal_record_id = :lead_id
+                AND hm.internal_record_type = 'lead'
+                AND hm.status = 'confirmed'
+            LIMIT 1
+        """), {'lead_id': lead_id}).fetchone()
+        if row and row[0]:
+            hubspot_deal_name = row[0]
+            hubspot_deal_stage = row[1]
+
+    # ------------------------------------------------------------------
+    # HubSpot interactions (calls, emails, notes from HubSpot import)
+    # ------------------------------------------------------------------
+    hs_interactions = _db.session.execute(_text("""
+        SELECT i.interaction_type, i.occurred_at, i.body, i.source
+        FROM interactions i
+        JOIN interaction_associations ia ON ia.interaction_id = i.id
+        WHERE ia.target_type = 'lead' AND ia.target_id = :lead_id
+        ORDER BY i.occurred_at DESC
+        LIMIT 50
+    """), {'lead_id': lead_id}).fetchall()
+
+    # ------------------------------------------------------------------
+    # Marketing list membership
+    # ------------------------------------------------------------------
+    marketing_memberships = _db.session.execute(_text("""
+        SELECT ml.name, mlm.outreach_status, mlm.added_at, mlm.status_updated_at
+        FROM marketing_list_members mlm
+        JOIN marketing_lists ml ON ml.id = mlm.marketing_list_id
+        WHERE mlm.lead_id = :lead_id
+        ORDER BY mlm.added_at DESC
+    """), {'lead_id': lead_id}).fetchall()
+
+    return jsonify({
+        'id': lead.id,
+        'owner_first_name': lead.owner_first_name,
+        'owner_last_name': lead.owner_last_name,
+        'owner_2_first_name': lead.owner_2_first_name,
+        'owner_2_last_name': lead.owner_2_last_name,
+        # Property details
+        'property_street': lead.property_street,
+        'property_city': lead.property_city,
+        'property_state': lead.property_state,
+        'property_zip': lead.property_zip,
+        'property_type': lead.property_type,
+        'bedrooms': lead.bedrooms,
+        'bathrooms': lead.bathrooms,
+        'square_footage': lead.square_footage,
+        'year_built': lead.year_built,
+        'county_assessor_pin': lead.county_assessor_pin,
+        # Mailing address
+        'mailing_address': lead.mailing_address,
+        'mailing_city': lead.mailing_city,
+        'mailing_state': lead.mailing_state,
+        'mailing_zip': lead.mailing_zip,
+        # Contact info — flat columns (kept for backward compat) + merged lists
+        'phone_1': lead.phone_1,
+        'phone_2': lead.phone_2,
+        'phone_3': lead.phone_3,
+        'phone_4': lead.phone_4,
+        'phone_5': lead.phone_5,
+        'phone_6': lead.phone_6,
+        'phone_7': lead.phone_7,
+        'email_1': lead.email_1,
+        'email_2': lead.email_2,
+        'email_3': lead.email_3,
+        'email_4': lead.email_4,
+        'email_5': lead.email_5,
+        # Merged deduplicated lists (flat + relational)
+        'phones': all_phones,
+        'emails': all_emails,
+        # Ownership
+        'ownership_type': lead.ownership_type,
+        'acquisition_date': lead.acquisition_date.isoformat() if lead.acquisition_date else None,
+        # Source / metadata
+        'source': source,
+        'hubspot_deal_name': hubspot_deal_name,
+        'lead_category': lead.lead_category,
+        'notes': lead.notes,
+        'date_added_to_hubspot': lead.date_added_to_hubspot.isoformat() if lead.date_added_to_hubspot else None,
+        # Overdue HubSpot task — drives Today's Action queue membership
+        'has_overdue_hubspot_task': has_overdue_hubspot_task,
+        'overdue_task_title': overdue_task_title,
+        'overdue_task_due': overdue_task_due,
+        # Additional property fields
+        'lot_size': lead.lot_size,
+        'units': lead.units,
+        'units_allowed': lead.units_allowed,
+        'zoning': lead.zoning,
+        'tax_bill_2021': lead.tax_bill_2021,
+        'most_recent_sale': lead.most_recent_sale,
+        'address_2': lead.address_2,
+        'returned_addresses': lead.returned_addresses,
+        # Research / workflow tracking
+        'date_identified': lead.date_identified.isoformat() if lead.date_identified else None,
+        'needs_skip_trace': lead.needs_skip_trace,
+        'skip_tracer': lead.skip_tracer,
+        'date_skip_traced': lead.date_skip_traced.isoformat() if lead.date_skip_traced else None,
+        'up_next_to_mail': lead.up_next_to_mail,
+        'mailer_history': lead.mailer_history,
+        'data_source': lead.data_source,
+        'created_at': lead.created_at.isoformat() if lead.created_at else None,
+        # Outreach signals
+        'socials': lead.socials,
+        'unanswered_call_count': lead.unanswered_call_count,
+        'follow_up_date': lead.follow_up_date.isoformat() if lead.follow_up_date else None,
+        'suppression_flag': lead.suppression_flag,
+        # Scores / flags
+        'lead_score': lead.lead_score,
+        'lead_status': lead.lead_status,
+        'has_property_match': lead.has_property_match,
+        'has_phone': lead.has_phone,
+        'has_email': lead.has_email,
+        'is_warm': lead.is_warm,
+        'follow_up_overdue': lead.follow_up_overdue,
+        'analysis_complete': lead.analysis_complete,
+        'data_completeness_score': lead.data_completeness_score,
+        'analysis_session_id': lead.analysis_session_id,
+        'last_contact_date': lead.last_contact_date.isoformat() if lead.last_contact_date else None,
+        'last_hubspot_sync_at': lead.last_hubspot_sync_at.isoformat() if lead.last_hubspot_sync_at else None,
+        'hubspot_deal_stage': lead.hubspot_deal_stage,
+        'review_required': lead.review_required,
+        'review_reason': lead.review_reason,
+        'recommended_action': {
+            'value': ra,
+            'label': ra_metadata.get('label'),
+            'explanation': ra_metadata.get('explanation'),
+            'signals': _get_winning_rule_signals(lead),
+        },
+        'open_tasks': [
+            {
+                'id': t.id,
+                'task_type': t.task_type,
+                'title': t.title,
+                'status': t.status,
+                'due_date': t.due_date.isoformat() if t.due_date else None,
+                'created_at': t.created_at.isoformat(),
+                'completed_at': t.completed_at.isoformat() if t.completed_at else None,
+                'created_by': t.created_by,
+            }
+            for t in open_tasks
+        ],
+        'timeline': {
+            'entries': sorted(
+                [
+                    {
+                        'id': e.id,
+                        'event_type': e.event_type,
+                        'occurred_at': e.occurred_at.isoformat(),
+                        'source': e.source,
+                        'actor': e.actor,
+                        'summary': e.summary,
+                        'metadata': e.event_metadata,
+                        'hubspot_activity_id': e.hubspot_activity_id,
+                    }
+                    for e in timeline_entries
+                ] + [
+                    # Inject HubSpot interactions as synthetic timeline entries
+                    {
+                        'id': -(i + 1),  # negative IDs to avoid collision
+                        'event_type': row[0] or 'hubspot_activity',
+                        'occurred_at': row[1].isoformat() if row[1] else '',
+                        'source': 'hubspot_import',
+                        'actor': 'HubSpot',
+                        'summary': re.sub(r'<[^>]+>', ' ', row[2] or '').strip()[:500] if row[2] else '',
+                        'metadata': None,
+                        'hubspot_activity_id': None,
+                    }
+                    for i, row in enumerate(hs_interactions)
+                ] + (
+                    # Inject mailer history as a single timeline entry if present
+                    [{
+                        'id': -9999,
+                        'event_type': 'mailer_history',
+                        'occurred_at': lead.created_at.isoformat() if lead.created_at else '',
+                        'source': 'manual',
+                        'actor': 'System',
+                        'summary': f"Mailer history: {lead.mailer_history}",
+                        'metadata': None,
+                        'hubspot_activity_id': None,
+                    }] if lead.mailer_history else []
+                ),
+                key=lambda e: e['occurred_at'],
+                reverse=True,
+            ),
+            'total': timeline_total + len(hs_interactions) + (1 if lead.mailer_history else 0),
+            'page': 1,
+            'per_page': 25,
+        },
+        # HubSpot interaction history (calls, emails, notes)
+        'hubspot_interactions': [
+            {
+                'type': row[0],
+                'occurred_at': row[1].isoformat() if row[1] else None,
+                'body': row[2],
+                'source': row[3],
+            }
+            for row in hs_interactions
+        ],
+        # Marketing list membership
+        'marketing_memberships': [
+            {
+                'list_name': row[0],
+                'outreach_status': row[1],
+                'added_at': row[2].isoformat() if row[2] else None,
+                'status_updated_at': row[3].isoformat() if row[3] else None,
+            }
+            for row in marketing_memberships
+        ],
+    }), 200
+
+
+@command_center_bp.route('/<int:lead_id>/status', methods=['PATCH'])
+@handle_errors
+def update_status(lead_id: int):
+    """
+    PATCH /api/leads/<lead_id>/status
+
+    Update the lead_status of a lead. Handles DNC and suppressed special cases
+    (null RA, cancel open tasks). Appends a status_changed timeline entry.
+    Triggers RA recomputation for non-terminal statuses.
+    """
+    from app import db
+    import datetime as _dt
+
+    data = LeadStatusUpdateSchema().load(request.get_json() or {})
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    old_status = lead.lead_status
+    new_status = data['status']
+    actor = getattr(g, 'user_id', None) or data.get('actor') or 'anonymous'
+
+    lead.lead_status = new_status
+
+    # DNC special case: set RA to null, cancel all open tasks
+    if new_status == 'do_not_contact':
+        lead.recommended_action = None
+        LeadTask.query.filter_by(lead_id=lead_id, status='open').update({'status': 'cancelled'})
+    elif new_status == 'suppressed':
+        lead.recommended_action = None
+
+    db.session.add(lead)
+
+    # Append status_changed timeline entry
+    entry = LeadTimelineEntry(
+        lead_id=lead_id,
+        event_type='status_changed',
+        occurred_at=_dt.datetime.now(_dt.timezone.utc),
+        source='manual',
+        actor=actor,
+        summary=f"Status changed from '{old_status}' to '{new_status}'.",
+        event_metadata={'previous_status': old_status, 'new_status': new_status},
+    )
+    db.session.add(entry)
+    db.session.commit()
+
+    # Trigger RA recomputation (unless DNC/suppressed)
+    if new_status not in ('do_not_contact', 'suppressed'):
+        try:
+            ActionEngineService.recompute_and_persist(lead_id)
+        except Exception as exc:
+            logger.exception(
+                "ActionEngineService.recompute_and_persist failed for lead %s after status update: %s",
+                lead_id, exc,
+            )
+
+    return jsonify({'lead_status': lead.lead_status, 'recommended_action': lead.recommended_action}), 200
+
+
+@command_center_bp.route('/<int:lead_id>/tasks', methods=['POST'])
+@handle_errors
+def create_task(lead_id: int):
+    """
+    POST /api/leads/<lead_id>/tasks
+
+    Create a new LeadTask for a lead.
+    """
+    data = LeadTaskCreateSchema().load(request.get_json() or {})
+    actor = getattr(g, 'user_id', 'anonymous')
+    task = _lead_task_service.create(lead_id, data, actor=actor)
+    return jsonify({
+        'id': task.id,
+        'task_type': task.task_type,
+        'title': task.title,
+        'status': task.status,
+        'due_date': task.due_date.isoformat() if task.due_date else None,
+        'created_at': task.created_at.isoformat(),
+        'created_by': task.created_by,
+    }), 201
+
+
+@command_center_bp.route('/<int:lead_id>/tasks/<int:task_id>', methods=['PATCH'])
+@handle_errors
+def update_task(lead_id: int, task_id: int):
+    """
+    PATCH /api/leads/<lead_id>/tasks/<task_id>
+
+    Snooze (if new_due_date present) or update a task's title/due_date.
+    """
+    actor = getattr(g, 'user_id', 'anonymous')
+    body = request.get_json() or {}
+    if 'new_due_date' in body:
+        data = LeadTaskSnoozeSchema().load(body)
+        task = _lead_task_service.snooze(task_id, lead_id, data['new_due_date'], actor=actor)
+    else:
+        data = LeadTaskUpdateSchema().load(body)
+        from app import db
+        task = LeadTask.query.filter_by(id=task_id, lead_id=lead_id).first()
+        if task is None:
+            return jsonify({'error': 'Not found'}), 404
+        if 'title' in data:
+            task.title = data['title']
+        if 'due_date' in data:
+            task.due_date = data['due_date']
+        db.session.add(task)
+        db.session.commit()
+    return jsonify({
+        'id': task.id,
+        'title': task.title,
+        'status': task.status,
+        'due_date': task.due_date.isoformat() if task.due_date else None,
+    }), 200
+
+
+@command_center_bp.route('/<int:lead_id>/tasks/<int:task_id>/complete', methods=['POST'])
+@handle_errors
+def complete_task(lead_id: int, task_id: int):
+    """
+    POST /api/leads/<lead_id>/tasks/<task_id>/complete
+
+    Mark a LeadTask as completed.
+    """
+    actor = getattr(g, 'user_id', 'anonymous')
+    task = _lead_task_service.complete(task_id, lead_id, actor=actor)
+    return jsonify({
+        'id': task.id,
+        'status': task.status,
+        'completed_at': task.completed_at.isoformat() if task.completed_at else None,
+    }), 200
+
+
+@command_center_bp.route('/<int:lead_id>/timeline', methods=['GET'])
+@handle_errors
+def get_timeline(lead_id: int):
+    """
+    GET /api/leads/<lead_id>/timeline
+
+    Returns a paginated page of timeline entries in reverse-chronological order.
+    Clears the review_required flag when the timeline is viewed.
+    """
+    from app import db
+
+    page = int(request.args.get('page', 1))
+    per_page = int(request.args.get('per_page', 25))
+
+    # Clear review_required flag when timeline is viewed
+    lead = Lead.query.get(lead_id)
+    if lead and lead.review_required:
+        lead.review_required = False
+        db.session.add(lead)
+        db.session.commit()
+
+    entries, total = _lead_timeline_service.get_page(lead_id, page=page, per_page=per_page)
+    return jsonify({
+        'entries': [
+            {
+                'id': e.id,
+                'event_type': e.event_type,
+                'occurred_at': e.occurred_at.isoformat(),
+                'source': e.source,
+                'actor': e.actor,
+                'summary': e.summary,
+                'metadata': e.event_metadata,
+                'hubspot_activity_id': e.hubspot_activity_id,
+            }
+            for e in entries
+        ],
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+    }), 200
+
+
+@command_center_bp.route('/<int:lead_id>/notes', methods=['POST'])
+@handle_errors
+def log_note(lead_id: int):
+    """
+    POST /api/leads/<lead_id>/notes
+
+    Log a free-text note on a lead.
+    """
+    data = LogNoteSchema().load(request.get_json() or {})
+    actor = data.get('actor') or getattr(g, 'user_id', 'anonymous')
+    entry = _call_log_service.log_note(lead_id, data['body'], actor=actor)
+    return jsonify({
+        'id': entry.id,
+        'event_type': entry.event_type,
+        'occurred_at': entry.occurred_at.isoformat(),
+    }), 201
+
+
+@command_center_bp.route('/<int:lead_id>/calls', methods=['POST'])
+@handle_errors
+def log_call(lead_id: int):
+    """
+    POST /api/leads/<lead_id>/calls
+
+    Log a call on a lead with outcome, optional duration, and optional notes.
+    """
+    data = LogCallSchema().load(request.get_json() or {})
+    actor = data.get('actor') or getattr(g, 'user_id', 'anonymous')
+    entry = _call_log_service.log_call(
+        lead_id,
+        data['outcome'],
+        data.get('duration_minutes'),
+        data.get('notes'),
+        actor=actor,
+    )
+    return jsonify({
+        'id': entry.id,
+        'event_type': entry.event_type,
+        'occurred_at': entry.occurred_at.isoformat(),
+    }), 201
+
+
+@command_center_bp.route('/<int:lead_id>/do-not-contact', methods=['POST'])
+@handle_errors
+def do_not_contact(lead_id: int):
+    """
+    POST /api/leads/<lead_id>/do-not-contact
+
+    Mark a lead as Do Not Contact. Sets RA to null and cancels all open tasks.
+    """
+    import datetime as _dt
+    from app import db
+
+    data = DoNotContactSchema().load(request.get_json() or {})
+    actor = data.get('actor') or getattr(g, 'user_id', 'anonymous')
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    old_status = lead.lead_status
+    lead.lead_status = 'do_not_contact'
+    lead.recommended_action = None
+    LeadTask.query.filter_by(lead_id=lead_id, status='open').update({'status': 'cancelled'})
+
+    entry = LeadTimelineEntry(
+        lead_id=lead_id,
+        event_type='status_changed',
+        occurred_at=_dt.datetime.now(_dt.timezone.utc),
+        source='manual',
+        actor=actor,
+        summary=f"Status changed from '{old_status}' to 'do_not_contact'.",
+        event_metadata={'previous_status': old_status, 'new_status': 'do_not_contact'},
+    )
+    db.session.add(lead)
+    db.session.add(entry)
+    db.session.commit()
+
+    return jsonify({'lead_status': 'do_not_contact', 'recommended_action': None}), 200
+
+
+@command_center_bp.route('/<int:lead_id>/park', methods=['POST'])
+@handle_errors
+def park_lead(lead_id: int):
+    """
+    POST /api/leads/<lead_id>/park
+
+    Park a lead by setting its status to 'nurture'. Optionally sets a
+    reactivation_date (must be a future date, max 365 days from today).
+    """
+    import datetime as _dt
+    from datetime import date, timedelta
+    from app import db
+
+    data = ParkLeadSchema().load(request.get_json() or {})
+    actor = data.get('actor') or getattr(g, 'user_id', 'anonymous')
+    reactivation_date = data.get('reactivation_date')
+
+    if reactivation_date:
+        today = date.today()
+        if reactivation_date <= today:
+            return jsonify({'error': 'reactivation_date must be a future date'}), 400
+        if reactivation_date > today + timedelta(days=365):
+            return jsonify({'error': 'reactivation_date cannot be more than 365 days from today'}), 400
+
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    old_status = lead.lead_status
+    lead.lead_status = 'nurture'
+    if reactivation_date:
+        lead.follow_up_date = reactivation_date
+
+    entry = LeadTimelineEntry(
+        lead_id=lead_id,
+        event_type='status_changed',
+        occurred_at=_dt.datetime.now(_dt.timezone.utc),
+        source='manual',
+        actor=actor,
+        summary="Lead parked (status: nurture).",
+        event_metadata={
+            'previous_status': old_status,
+            'new_status': 'nurture',
+            'reactivation_date': reactivation_date.isoformat() if reactivation_date else None,
+        },
+    )
+    db.session.add(lead)
+    db.session.add(entry)
+    db.session.commit()
+
+    # Recompute RA — nurture leads get RA=null per Priority 2
+    try:
+        ActionEngineService.recompute_and_persist(lead_id)
+    except Exception as exc:
+        logger.exception(
+            "ActionEngineService.recompute_and_persist failed for lead %s after park: %s",
+            lead_id, exc,
+        )
+
+    return jsonify({'lead_status': 'nurture'}), 200
+
+
+@command_center_bp.route('/<int:lead_id>/reactivate', methods=['POST'])
+@handle_errors
+def reactivate_lead(lead_id: int):
+    """
+    POST /api/leads/<lead_id>/reactivate
+
+    Reactivate a DNC or suppressed lead by setting its status to 'active'.
+    Triggers RA recomputation.
+    """
+    import datetime as _dt
+    from app import db
+
+    data = ReactivateLeadSchema().load(request.get_json() or {})
+    actor = data.get('actor') or getattr(g, 'user_id', 'anonymous')
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    old_status = lead.lead_status
+    lead.lead_status = 'active'
+
+    entry = LeadTimelineEntry(
+        lead_id=lead_id,
+        event_type='status_changed',
+        occurred_at=_dt.datetime.now(_dt.timezone.utc),
+        source='manual',
+        actor=actor,
+        summary="Lead reactivated (status: active).",
+        event_metadata={'previous_status': old_status, 'new_status': 'active'},
+    )
+    db.session.add(lead)
+    db.session.add(entry)
+    db.session.commit()
+
+    try:
+        ActionEngineService.recompute_and_persist(lead_id)
+    except Exception as exc:
+        logger.exception(
+            "ActionEngineService.recompute_and_persist failed for lead %s after reactivation: %s",
+            lead_id, exc,
+        )
+
+    return jsonify({'lead_status': 'active', 'recommended_action': lead.recommended_action}), 200
+
+
+@command_center_bp.route('/<int:lead_id>/suppress', methods=['POST'])
+@handle_errors
+def suppress_lead(lead_id: int):
+    """
+    POST /api/leads/<lead_id>/suppress
+
+    Suppress a lead by setting its status to 'suppressed' and nulling the RA.
+    """
+    import datetime as _dt
+    from app import db
+
+    data = DoNotContactSchema().load(request.get_json() or {})
+    actor = data.get('actor') or getattr(g, 'user_id', 'anonymous')
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    old_status = lead.lead_status
+    lead.lead_status = 'suppressed'
+    lead.recommended_action = None
+
+    entry = LeadTimelineEntry(
+        lead_id=lead_id,
+        event_type='status_changed',
+        occurred_at=_dt.datetime.now(_dt.timezone.utc),
+        source='manual',
+        actor=actor,
+        summary="Lead suppressed.",
+        event_metadata={'previous_status': old_status, 'new_status': 'suppressed'},
+    )
+    db.session.add(lead)
+    db.session.add(entry)
+    db.session.commit()
+
+    return jsonify({'lead_status': 'suppressed', 'recommended_action': None}), 200

@@ -25,6 +25,10 @@ class Task(db.Model):
     ), nullable=False, default='manual')
     hubspot_task_id = db.Column(db.String(50), nullable=True, unique=True, index=True)
     raw_payload = db.Column(db.JSON, nullable=True)
+    # CRM task unification — direct lead FK (set for manually-created CRM tasks)
+    lead_id = db.Column(db.Integer, db.ForeignKey('leads.id', ondelete='CASCADE'), nullable=True, index=True)
+    # CRM task type classification (mirrors LeadTask.task_type for tasks created via UI)
+    task_type = db.Column(db.String(50), nullable=True)
     completion_timestamp = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow,

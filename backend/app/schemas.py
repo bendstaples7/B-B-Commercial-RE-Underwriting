@@ -1484,501 +1484,221 @@ class PropertyContactResponseSchema(ContactResponseSchema):
     """
     property_contact_role = fields.Str()
     is_primary = fields.Bool()
-# ---------------------------------------------------------------------------
-
-class ScenarioMetricsSchema(Schema):
-    """Schema for a single scenario's computed metrics."""
-    gross_potential_income_annual = fields.Decimal(allow_none=True)
-    effective_gross_income_annual = fields.Decimal(allow_none=True)
-    gross_expenses_annual = fields.Decimal(allow_none=True)
-    noi_annual = fields.Decimal(allow_none=True)
-    cap_rate = fields.Decimal(allow_none=True)
-    grm = fields.Decimal(allow_none=True)
-    monthly_rent_total = fields.Decimal(allow_none=True)
-    dscr = fields.Decimal(allow_none=True)
-    cash_on_cash = fields.Decimal(allow_none=True)
 
 
-class UnitMixComparisonRowSchema(Schema):
-    """Schema for a single row in the unit mix comparison table."""
-    unit_type_label = fields.Str()
-    unit_count = fields.Int()
-    sqft = fields.Decimal(allow_none=True)
-    current_avg_rent = fields.Decimal(allow_none=True)
-    proforma_rent = fields.Decimal(allow_none=True)
-    market_rent_estimate = fields.Decimal(allow_none=True)
-    market_rent_low = fields.Decimal(allow_none=True)
-    market_rent_high = fields.Decimal(allow_none=True)
+# ── Actionable Lead Command Center — Task Schemas ─────────────────────────
+
+VALID_TASK_TYPES = [
+    'call_owner_today', 'research_missing_pin', 'match_hubspot_deal',
+    'run_property_analysis', 'add_to_mail_batch', 'skip_trace_owner', 'custom',
+]
+
+VALID_TASK_STATUSES = ['open', 'completed', 'cancelled']
 
 
-class ScenarioComparisonSchema(Schema):
-    """Schema for the three-scenario comparison result."""
-    broker_current = fields.Nested(ScenarioMetricsSchema)
-    broker_proforma = fields.Nested(ScenarioMetricsSchema)
-    realistic = fields.Nested(ScenarioMetricsSchema)
-    unit_mix_comparison = fields.List(fields.Nested(UnitMixComparisonRowSchema))
-    significant_variance_flag = fields.Bool(allow_none=True)
-    realistic_cap_rate_below_proforma = fields.Bool(allow_none=True)
+class LeadTaskSchema(Schema):
+    """Serialization schema for a LeadTask (response)."""
+    id = fields.Integer(dump_only=True)
+    lead_id = fields.Integer(dump_only=True)
+    task_type = fields.String(dump_only=True)
+    title = fields.String(dump_only=True)
+    status = fields.String(dump_only=True)
+    due_date = fields.Date(dump_only=True, allow_none=True)
+    created_at = fields.DateTime(dump_only=True)
+    completed_at = fields.DateTime(dump_only=True, allow_none=True)
+    created_by = fields.String(dump_only=True)
 
 
-class OMIntakeJobStatusSchema(Schema):
-    """Schema for job status responses (GET /jobs/{id})."""
-    id = fields.Int()
-    intake_status = fields.Str()
-    original_filename = fields.Str()
-    created_at = fields.DateTime()
-    updated_at = fields.DateTime()
-    expires_at = fields.DateTime()
-    error_message = fields.Str(allow_none=True)
-    deal_id = fields.Int(allow_none=True)
+class LeadTaskCreateSchema(RequestSchema):
+    """Validation schema for creating a LeadTask."""
+    title = fields.String(required=True, validate=validate.Length(min=1, max=255))
+    task_type = fields.String(
+        load_default='custom',
+        validate=validate.OneOf(VALID_TASK_TYPES),
+    )
+    due_date = fields.Date(allow_none=True, load_default=None)
 
 
-class OMIntakeJobListSchema(Schema):
-    """Schema for job list items (GET /jobs)."""
-    id = fields.Int()
-    intake_status = fields.Str()
-    original_filename = fields.Str()
-    created_at = fields.DateTime()
-    deal_id = fields.Int(allow_none=True)
-    # Summary fields from extracted_om_data
-    property_address = fields.Str(allow_none=True)
-    asking_price = fields.Decimal(allow_none=True)
-    unit_count = fields.Int(allow_none=True)
+class LeadTaskUpdateSchema(RequestSchema):
+    """Validation schema for updating a LeadTask (partial update)."""
+    title = fields.String(validate=validate.Length(min=1, max=255))
+    due_date = fields.Date(allow_none=True)
 
 
-class OMIntakeReviewSchema(Schema):
-    """Schema for full review data (GET /jobs/{id}/review)."""
-    id = fields.Int()
-    intake_status = fields.Str()
-    original_filename = fields.Str()
-    created_at = fields.DateTime()
-    updated_at = fields.DateTime()
-    extracted_om_data = fields.Raw(allow_none=True)
-    scenario_comparison = fields.Raw(allow_none=True)
-    consistency_warnings = fields.Raw(allow_none=True)
-    market_research_warnings = fields.Raw(allow_none=True)
-    partial_realistic_scenario_warning = fields.Bool(allow_none=True)
-    asking_price_missing_error = fields.Bool(allow_none=True)
-    unit_count_missing_error = fields.Bool(allow_none=True)
-    deal_id = fields.Int(allow_none=True)
+class LeadTaskCompleteSchema(RequestSchema):
+    """Validation schema for completing a LeadTask (no body required)."""
+    pass
 
 
-class OMIntakeJobSchema(Schema):
-    """Schema for full job serialization."""
-    id = fields.Int()
-    user_id = fields.Str()
-    intake_status = fields.Str()
-    original_filename = fields.Str()
-    created_at = fields.DateTime()
-    updated_at = fields.DateTime()
-    expires_at = fields.DateTime()
-    error_message = fields.Str(allow_none=True)
-    deal_id = fields.Int(allow_none=True)
+class LeadTaskSnoozeSchema(RequestSchema):
+    """Validation schema for snoozing a LeadTask."""
+    new_due_date = fields.Date(required=True)
+
+# ── Actionable Lead Command Center — Timeline Schemas ─────────────────────
+
+VALID_TIMELINE_EVENT_TYPES = [
+    'note_added', 'call_logged', 'task_created', 'task_completed',
+    'task_snoozed', 'recommended_action_changed', 'status_changed',
+    'hubspot_note', 'hubspot_call', 'hubspot_task', 'hubspot_deal_stage',
+    'property_analysis_completed', 'lead_imported',
+]
+
+VALID_TIMELINE_SOURCES = ['manual', 'system', 'hubspot']
 
 
-class OMIntakeConfirmRequestSchema(RequestSchema):
-    """Schema for the confirm request body (POST /jobs/{id}/confirm)."""
+class LeadTimelineEntrySchema(Schema):
+    """Serialization schema for a LeadTimelineEntry (response)."""
+    id = fields.Integer(dump_only=True)
+    lead_id = fields.Integer(dump_only=True)
+    event_type = fields.String(dump_only=True)
+    occurred_at = fields.DateTime(dump_only=True)
+    source = fields.String(dump_only=True)
+    actor = fields.String(dump_only=True)
+    summary = fields.String(dump_only=True)
+    metadata = fields.Dict(dump_only=True, allow_none=True)
+    hubspot_activity_id = fields.String(dump_only=True, allow_none=True)
+    is_deleted = fields.Boolean(dump_only=True)
+    created_at = fields.DateTime(dump_only=True)
 
-    asking_price = fields.Decimal(allow_none=True)
-    unit_count = fields.Int(allow_none=True)
-    unit_mix = fields.List(fields.Raw(), allow_none=True)
-    expense_items = fields.List(fields.Raw(), allow_none=True)
-    other_income_items = fields.List(fields.Raw(), allow_none=True)
-    property_address = fields.Str(allow_none=True)
-    property_city = fields.Str(allow_none=True)
-    property_state = fields.Str(allow_none=True)
-    property_zip = fields.Str(allow_none=True)
+
+class LeadTimelinePageSchema(Schema):
+    """Pagination wrapper for a page of LeadTimelineEntry records."""
+    entries = fields.List(fields.Nested(LeadTimelineEntrySchema), dump_only=True)
+    total = fields.Integer(dump_only=True)
+    page = fields.Integer(dump_only=True)
+    per_page = fields.Integer(dump_only=True)
+    pages = fields.Integer(dump_only=True)
+
+# ── Actionable Lead Command Center — Lead Action Schemas ──────────────────
+
+VALID_LEAD_STATUSES = [
+    'new', 'active', 'follow_up', 'nurture',
+    'under_contract', 'closed', 'suppressed', 'do_not_contact',
+]
+
+VALID_CALL_OUTCOMES = ['answered', 'voicemail', 'no_answer', 'busy', 'wrong_number']
 
 
-
-# ---------------------------------------------------------------------------
-# HubSpot CRM Migration Schemas — Interaction / Timeline
-# ---------------------------------------------------------------------------
-
-class InteractionSchema(Schema):
-    """Schema for serializing and deserializing Interaction records.
-
-    Used for both request validation (create/update) and response serialization.
-    id, created_at, updated_at are dump_only (server-generated).
-    """
-    id = fields.Int(dump_only=True)
-    interaction_type = fields.Str(
+class LeadStatusUpdateSchema(RequestSchema):
+    """Validation schema for PATCH /api/leads/:id/status."""
+    status = fields.String(
         required=True,
-        validate=validate.OneOf(['note', 'call', 'email', 'meeting', 'other']),
+        validate=validate.OneOf(VALID_LEAD_STATUSES),
     )
-    body = fields.Str(required=True, validate=validate.Length(min=1))
-    occurred_at = fields.DateTime(required=True)
-    source = fields.Str(
-        load_default='manual',
-        validate=validate.OneOf(['manual', 'hubspot_import']),
-    )
-    hubspot_engagement_id = fields.Str(allow_none=True, load_default=None)
-    raw_payload = fields.Dict(allow_none=True, load_default=None)
-    is_orphaned = fields.Bool(load_default=False)
-    created_at = fields.DateTime(dump_only=True)
-    updated_at = fields.DateTime(dump_only=True)
+    actor = fields.String(load_default='anonymous')
 
 
-class InteractionAssociationSchema(Schema):
-    """Schema for serializing and deserializing InteractionAssociation records.
+class LogNoteSchema(RequestSchema):
+    """Validation schema for POST /api/leads/:id/notes."""
+    body = fields.String(required=True, validate=validate.Length(min=1, max=5000))
+    actor = fields.String(load_default='anonymous')
 
-    Links an Interaction to a target record (lead, organization, or contact).
-    id is dump_only (server-generated).
-    """
-    id = fields.Int(dump_only=True)
-    interaction_id = fields.Int(required=True, validate=validate.Range(min=1))
-    target_type = fields.Str(
+
+class LogCallSchema(RequestSchema):
+    """Validation schema for POST /api/leads/:id/calls."""
+    outcome = fields.String(
         required=True,
-        validate=validate.OneOf(['lead', 'organization', 'contact']),
+        validate=validate.OneOf(VALID_CALL_OUTCOMES),
     )
-    target_id = fields.Int(required=True, validate=validate.Range(min=1))
-
-
-class TimelineEntrySchema(Schema):
-    """Schema for a unified timeline entry returned by TimelineService.
-
-    Not model-based — represents a merged view of Interactions and Tasks
-    sorted by date for display in the timeline panel.
-    """
-    entry_type = fields.Str(required=True)          # 'interaction' or 'task'
-    subtype = fields.Str(required=True)              # interaction_type or task status/priority
-    date = fields.DateTime(required=True)            # occurred_at for interactions, due_date for tasks
-    body_or_title = fields.Str(required=True)        # body for interactions, title for tasks
-    source = fields.Str(required=True)               # 'manual' or 'hubspot_import'
-    hubspot_engagement_id = fields.Str(allow_none=True)
-
-# ---------------------------------------------------------------------------
-# HubSpot CRM — Task Schemas
-# ---------------------------------------------------------------------------
-
-class TaskSchema(Schema):
-    """Schema for serializing and deserializing Task records.
-
-    Requirements: 3.1
-    """
-    id = fields.Int(dump_only=True)
-    title = fields.Str(required=True, validate=validate.Length(min=1, max=500))
-    body = fields.Str(allow_none=True)
-    due_date = fields.DateTime(allow_none=True)
-    status = fields.Str(
-        load_default='open',
-        validate=validate.OneOf(['open', 'completed', 'cancelled', 'overdue']),
-    )
-    priority = fields.Str(
-        load_default='medium',
-        validate=validate.OneOf(['high', 'medium', 'low']),
-    )
-    source = fields.Str(
-        load_default='manual',
-        validate=validate.OneOf(['manual', 'hubspot_import']),
-    )
-    hubspot_task_id = fields.Str(allow_none=True)
-    raw_payload = fields.Dict(allow_none=True)
-    completion_timestamp = fields.DateTime(dump_only=True, allow_none=True)
-    created_at = fields.DateTime(dump_only=True)
-    updated_at = fields.DateTime(dump_only=True)
-
-
-class TaskAssociationSchema(Schema):
-    """Schema for serializing and deserializing TaskAssociation records.
-
-    Requirements: 3.1
-    """
-    id = fields.Int(dump_only=True)
-    task_id = fields.Int(required=True)
-    target_type = fields.Str(
-        required=True,
-        validate=validate.OneOf(['lead', 'organization']),
-    )
-    target_id = fields.Int(required=True)
-
-
-# ---------------------------------------------------------------------------
-# HubSpot CRM Migration Schemas — Organization
-# ---------------------------------------------------------------------------
-
-VALID_ORG_TYPES = ['llc', 'trust', 'corporation', 'brokerage', 'law_firm', 'property_management', 'unknown']
-VALID_ORG_STATUSES = ['active', 'inactive', 'unknown']
-
-
-class OrganizationSchema(Schema):
-    """Schema for serializing and deserializing Organization records.
-
-    dump_only fields: id, created_at, updated_at (server-managed).
-    required fields: name (must be non-empty).
-    """
-    id = fields.Int(dump_only=True)
-    name = fields.Str(required=True, validate=validate.Length(min=1, max=500))
-    org_type = fields.Str(
-        load_default='unknown',
-        validate=validate.OneOf(VALID_ORG_TYPES),
-    )
-    status = fields.Str(
-        load_default='unknown',
-        validate=validate.OneOf(VALID_ORG_STATUSES),
-    )
-    notes = fields.Str(allow_none=True, load_default=None)
-    source = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=100))
-    hubspot_company_id = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=50))
-    created_at = fields.DateTime(dump_only=True)
-    updated_at = fields.DateTime(dump_only=True)
-
-
-class OrganizationAuditLogSchema(Schema):
-    """Schema for serializing OrganizationAuditLog records (read-only responses).
-
-    All fields are dump_only — audit log entries are created by the service layer,
-    never directly via API input.
-    """
-    id = fields.Int(dump_only=True)
-    organization_id = fields.Int(dump_only=True)
-    field_name = fields.Str(dump_only=True)
-    old_value = fields.Str(dump_only=True, allow_none=True)
-    new_value = fields.Str(dump_only=True, allow_none=True)
-    changed_by = fields.Str(dump_only=True)
-    changed_at = fields.DateTime(dump_only=True)
-
-
-class PropertyOrganizationLinkSchema(Schema):
-    """Schema for creating and serializing PropertyOrganizationLink records.
-
-    dump_only fields: id, created_at (server-managed).
-    required fields: property_id, organization_id, role.
-    """
-    id = fields.Int(dump_only=True)
-    property_id = fields.Int(required=True, validate=validate.Range(min=1))
-    organization_id = fields.Int(required=True, validate=validate.Range(min=1))
-    role = fields.Str(required=True, validate=validate.Length(min=1, max=100))
-    created_at = fields.DateTime(dump_only=True)
-
-
-class OwnerOrganizationLinkSchema(Schema):
-    """Schema for creating and serializing OwnerOrganizationLink records.
-
-    dump_only fields: id, created_at (server-managed).
-    required fields: owner_id, organization_id, role.
-    """
-    id = fields.Int(dump_only=True)
-    owner_id = fields.Int(required=True, validate=validate.Range(min=1))
-    organization_id = fields.Int(required=True, validate=validate.Range(min=1))
-    role = fields.Str(required=True, validate=validate.Length(min=1, max=100))
-    created_at = fields.DateTime(dump_only=True)
-
-
-# ---------------------------------------------------------------------------
-# HubSpot CRM Migration Schemas — Config, ImportRun, Match, Signal
-# ---------------------------------------------------------------------------
-
-class HubSpotConfigSchema(Schema):
-    """Schema for serializing HubSpotConfig records.
-
-    The ``encrypted_token`` field is intentionally excluded from all output
-    (load_only=True) so the raw or encrypted token is never returned to clients.
-    Requirements: 6.2
-    """
-    id = fields.Int(dump_only=True)
-    # encrypted_token is load_only — accepted on input but NEVER serialized in output
-    encrypted_token = fields.Str(load_only=True)
-    portal_id = fields.Str(allow_none=True)
-    account_name = fields.Str(allow_none=True, validate=validate.Length(max=255))
-    created_at = fields.DateTime(dump_only=True)
-    updated_at = fields.DateTime(dump_only=True)
-
-
-class HubSpotImportRunSchema(Schema):
-    """Schema for serializing HubSpotImportRun records.
-
-    Tracks the status and counts for a single HubSpot object-type import run.
-    Requirements: 7.6
-    """
-    id = fields.Int(dump_only=True)
-    object_type = fields.Str(
-        required=True,
-        validate=validate.OneOf(['deals', 'contacts', 'companies', 'engagements']),
-    )
-    status = fields.Str(
-        load_default='running',
-        validate=validate.OneOf(['running', 'success', 'partial', 'failed']),
-    )
-    start_time = fields.DateTime(dump_only=True)
-    end_time = fields.DateTime(dump_only=True, allow_none=True)
-    total_fetched = fields.Int(dump_only=True)
-    created_count = fields.Int(dump_only=True)
-    updated_count = fields.Int(dump_only=True)
-    skipped_count = fields.Int(dump_only=True)
-    error_count = fields.Int(dump_only=True)
-    error_message = fields.Str(dump_only=True, allow_none=True)
-
-
-class HubSpotMatchSchema(Schema):
-    """Schema for serializing HubSpotMatch records.
-
-    Represents the match relationship between a HubSpot record and an internal
-    lead or organization record, including confidence level and review status.
-    Requirements: 13.2
-    """
-    id = fields.Int(dump_only=True)
-    hubspot_record_type = fields.Str(
-        required=True,
-        validate=validate.OneOf(['deal', 'contact', 'company']),
-    )
-    hubspot_id = fields.Str(required=True, validate=validate.Length(min=1, max=50))
-    internal_record_type = fields.Str(
+    duration_minutes = fields.Integer(
         allow_none=True,
-        validate=validate.OneOf(['lead', 'organization']),
+        load_default=None,
+        validate=validate.Range(min=1, max=999),
     )
-    internal_record_id = fields.Int(allow_none=True)
-    confidence = fields.Str(
+    notes = fields.String(allow_none=True, load_default=None, validate=validate.Length(max=2000))
+    actor = fields.String(load_default='anonymous')
+
+
+class ParkLeadSchema(RequestSchema):
+    """Validation schema for POST /api/leads/:id/park."""
+    reactivation_date = fields.Date(allow_none=True, load_default=None)
+    actor = fields.String(load_default='anonymous')
+
+
+class DoNotContactSchema(RequestSchema):
+    """Validation schema for POST /api/leads/:id/do-not-contact."""
+    actor = fields.String(load_default='anonymous')
+
+
+class ReactivateLeadSchema(RequestSchema):
+    """Validation schema for POST /api/leads/:id/reactivate."""
+    actor = fields.String(load_default='anonymous')
+
+
+class RecommendedActionResponseSchema(Schema):
+    """Response schema for GET /api/leads/:id/recommended-action."""
+    recommended_action = fields.String(dump_only=True, allow_none=True)
+    label = fields.String(dump_only=True, allow_none=True)
+    explanation = fields.String(dump_only=True, allow_none=True)
+    signals = fields.Dict(dump_only=True)
+
+# ── Actionable Lead Command Center — Queue Schemas ────────────────────────
+
+class QueueRowSchema(Schema):
+    """Serialization schema for a single queue row (lead summary)."""
+    id = fields.Integer(dump_only=True)
+    owner_first_name = fields.String(dump_only=True, allow_none=True)
+    owner_last_name = fields.String(dump_only=True, allow_none=True)
+    property_street = fields.String(dump_only=True, allow_none=True)
+    property_city = fields.String(dump_only=True, allow_none=True)
+    property_state = fields.String(dump_only=True, allow_none=True)
+    lead_score = fields.Float(dump_only=True)
+    lead_status = fields.String(dump_only=True)
+    recommended_action = fields.String(dump_only=True, allow_none=True)
+    has_property_match = fields.Boolean(dump_only=True)
+    last_contact_date = fields.String(dump_only=True, allow_none=True)
+    last_hubspot_sync_at = fields.String(dump_only=True, allow_none=True)
+    hubspot_deal_stage = fields.String(dump_only=True, allow_none=True)
+    follow_up_overdue = fields.Boolean(dump_only=True)
+    review_required = fields.Boolean(dump_only=True)
+    review_reason = fields.String(dump_only=True, allow_none=True)
+    review_triggered_at = fields.String(dump_only=True, allow_none=True)
+    unanswered_call_count = fields.Integer(dump_only=True)
+    is_warm = fields.Boolean(dump_only=True)
+
+
+class QueuePageSchema(Schema):
+    """Pagination wrapper for a page of queue rows."""
+    rows = fields.List(fields.Nested(QueueRowSchema), dump_only=True)
+    total = fields.Integer(dump_only=True)
+    page = fields.Integer(dump_only=True)
+    per_page = fields.Integer(dump_only=True)
+
+
+# ── Actionable Lead Command Center — Command Center Payload Schema ─────────
+
+class CommandCenterPayloadSchema(Schema):
+    """Response schema documenting the full command center payload shape.
+
+    Returned by GET /api/leads/:id/command-center.
+    """
+    id = fields.Integer(dump_only=True)
+    owner_first_name = fields.String(dump_only=True, allow_none=True)
+    owner_last_name = fields.String(dump_only=True, allow_none=True)
+    property_street = fields.String(dump_only=True, allow_none=True)
+    property_city = fields.String(dump_only=True, allow_none=True)
+    property_state = fields.String(dump_only=True, allow_none=True)
+    lead_score = fields.Float(dump_only=True)
+    lead_status = fields.String(dump_only=True)
+    has_property_match = fields.Boolean(dump_only=True)
+    analysis_session_id = fields.Integer(dump_only=True, allow_none=True)
+    recommended_action = fields.Dict(dump_only=True, allow_none=True)
+    open_tasks = fields.List(fields.Dict(), dump_only=True)
+    timeline = fields.Dict(dump_only=True)
+
+
+# ── Actionable Lead Command Center — Bulk Action Schemas ──────────────────
+
+class BulkActionRequestSchema(RequestSchema):
+    """Validation schema for bulk action requests."""
+    lead_ids = fields.List(
+        fields.Integer(validate=validate.Range(min=1)),
         required=True,
-        validate=validate.OneOf(['HIGH', 'MEDIUM', 'LOW', 'UNMATCHED']),
+        validate=validate.Length(min=1),
     )
-    status = fields.Str(
-        load_default='pending',
-        validate=validate.OneOf(['pending', 'confirmed', 'rejected']),
-    )
-    matching_criteria = fields.Str(allow_none=True, validate=validate.Length(max=100))
-    created_at = fields.DateTime(dump_only=True)
-    updated_at = fields.DateTime(dump_only=True)
 
 
-class HubSpotSignalSchema(Schema):
-    """Schema for serializing HubSpotSignal records.
-
-    Represents a derived signal extracted from HubSpot engagement history,
-    linked to a Lead record.
-    Requirements: 13.2
-    """
-    id = fields.Int(dump_only=True)
-    lead_id = fields.Int(required=True, validate=validate.Range(min=1))
-    signal_type = fields.Str(
-        required=True,
-        validate=validate.OneOf([
-            'PRIOR_INTERACTION_EXISTS',
-            'PRIOR_RESPONSE_EXISTS',
-            'PRIOR_WARM_CONVERSATION',
-            'ASKING_PRICE_GIVEN',
-            'APPOINTMENT_OCCURRED',
-            'OFFER_PREVIOUSLY_SENT',
-            'SELLER_SAID_MAYBE_LATER',
-            'SELLER_NOT_INTERESTED',
-            'WRONG_NUMBER',
-            'DO_NOT_CONTACT',
-            'FOLLOW_UP_OVERDUE',
-            'PRIOR_LEAD_SOURCE_KNOWN',
-        ]),
-    )
-    source_engagement_id = fields.Str(allow_none=True, validate=validate.Length(max=50))
-    extracted_at = fields.DateTime(dump_only=True)
-    raw_evidence = fields.Str(allow_none=True)
-
-
-# ---------------------------------------------------------------------------
-# Contact Model Schemas
-# ---------------------------------------------------------------------------
-
-VALID_CONTACT_ROLES = ['owner', 'property_manager', 'attorney', 'family_member', 'other']
-VALID_PHONE_LABELS = ['mobile', 'home', 'work', 'other']
-VALID_EMAIL_LABELS = ['personal', 'work', 'other']
-
-
-class ContactPhoneSchema(Schema):
-    """Schema for ContactPhone records.
-
-    dump_only: id, contact_id (server-managed).
-    required on load: value, label.
-    """
-    id = fields.Int(dump_only=True)
-    contact_id = fields.Int(dump_only=True)
-    value = fields.Str(required=True)
-    label = fields.Str(required=True, validate=validate.OneOf(VALID_PHONE_LABELS))
-
-
-class ContactEmailSchema(Schema):
-    """Schema for ContactEmail records.
-
-    dump_only: id, contact_id (server-managed).
-    required on load: value, label.
-    """
-    id = fields.Int(dump_only=True)
-    contact_id = fields.Int(dump_only=True)
-    value = fields.Str(required=True)
-    label = fields.Str(required=True, validate=validate.OneOf(VALID_EMAIL_LABELS))
-
-
-class ContactCreateSchema(Schema):
-    """Schema for creating a Contact record.
-
-    Validator: at least one of first_name/last_name must be non-empty/non-whitespace.
-    phones and emails default to empty lists when not provided.
-    role defaults to 'owner' when not provided.
-    """
-    first_name = fields.Str(allow_none=True, dump_default=None)
-    last_name = fields.Str(allow_none=True, dump_default=None)
-    role = fields.Str(
-        load_default='owner',
-        validate=validate.OneOf(VALID_CONTACT_ROLES),
-    )
-    role_description = fields.Str(allow_none=True, dump_default=None)
-    notes = fields.Str(allow_none=True, dump_default=None)
-    phones = fields.List(fields.Nested(ContactPhoneSchema), load_default=[])
-    emails = fields.List(fields.Nested(ContactEmailSchema), load_default=[])
-
-    @validates_schema
-    def validate_name_present(self, data, **kwargs):
-        """Ensure at least one of first_name or last_name is non-empty/non-whitespace."""
-        first_name = data.get('first_name') or ''
-        last_name = data.get('last_name') or ''
-        if not first_name.strip() and not last_name.strip():
-            raise ValidationError('At least one of first_name or last_name is required')
-
-
-class ContactUpdateSchema(Schema):
-    """Schema for updating a Contact record (all fields optional).
-
-    Same fields as ContactCreateSchema but none are required.
-    """
-    first_name = fields.Str(allow_none=True, dump_default=None)
-    last_name = fields.Str(allow_none=True, dump_default=None)
-    role = fields.Str(validate=validate.OneOf(VALID_CONTACT_ROLES))
-    role_description = fields.Str(allow_none=True, dump_default=None)
-    notes = fields.Str(allow_none=True, dump_default=None)
-    phones = fields.List(fields.Nested(ContactPhoneSchema), load_default=[])
-    emails = fields.List(fields.Nested(ContactEmailSchema), load_default=[])
-
-
-class ContactResponseSchema(Schema):
-    """Schema for serializing a full Contact response.
-
-    dump_only: id, created_at, updated_at (server-managed).
-    Includes nested phones and emails lists.
-    """
-    id = fields.Int(dump_only=True)
-    first_name = fields.Str(allow_none=True)
-    last_name = fields.Str(allow_none=True)
-    role = fields.Str()
-    role_description = fields.Str(allow_none=True)
-    notes = fields.Str(allow_none=True)
-    phones = fields.List(fields.Nested(ContactPhoneSchema))
-    emails = fields.List(fields.Nested(ContactEmailSchema))
-    created_at = fields.DateTime(dump_only=True)
-    updated_at = fields.DateTime(dump_only=True, allow_none=True)
-
-
-class PropertyContactLinkSchema(Schema):
-    """Schema for linking an existing Contact to a Property.
-
-    All three fields are required: contact_id, role, is_primary.
-    """
-    contact_id = fields.Int(required=True, validate=validate.Range(min=1))
-    role = fields.Str(required=True, validate=validate.OneOf(VALID_CONTACT_ROLES))
-    is_primary = fields.Bool(required=True)
-
-
-class PropertyContactResponseSchema(ContactResponseSchema):
-    """Schema for serializing a Contact as returned from a Property's contact list.
-
-    Extends ContactResponseSchema with join-record fields:
-    property_contact_role and is_primary from the PropertyContact record.
-    """
-    property_contact_role = fields.Str()
-    is_primary = fields.Bool()
+class BulkActionResultSchema(Schema):
+    """Response schema for bulk action results."""
+    successes = fields.Integer(dump_only=True)
+    failures = fields.Integer(dump_only=True)
