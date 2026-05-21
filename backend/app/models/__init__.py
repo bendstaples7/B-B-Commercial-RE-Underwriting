@@ -12,8 +12,14 @@ from app.models.scenario import (
     BuyHoldScenario
 )
 
+# Contact model
+from app.models.contact import Contact
+from app.models.contact_phone import ContactPhone
+from app.models.contact_email import ContactEmail
+from app.models.property_contact import PropertyContact
+
 # Lead management models
-from app.models.lead import Lead, LeadAuditTrail
+from app.models.lead import Property, Lead, LeadAuditTrail
 from app.models.import_job import ImportJob, FieldMapping, OAuthToken
 from app.models.lead_scoring import ScoringWeights
 from app.models.enrichment import DataSource, EnrichmentRecord
@@ -46,6 +52,51 @@ from app.models.pro_forma_result import ProFormaResult
 from app.models.lead_deal_link import LeadDealLink
 from app.models.deal_audit_trail import DealAuditTrail
 
+# Commercial OM PDF intake models
+from app.models.om_intake_job import OMIntakeJob, OMFieldOverride
+
+# RentCast cache
+from app.models.rentcast_cache import RentCastCache
+
+# HubSpot CRM migration — Organization models
+from app.models.organization import Organization
+from app.models.organization_audit_log import OrganizationAuditLog
+from app.models.property_organization_link import PropertyOrganizationLink
+from app.models.owner_organization_link import OwnerOrganizationLink
+
+# HubSpot CRM migration — Interaction models
+from app.models.interaction import Interaction
+from app.models.interaction_association import InteractionAssociation
+
+# HubSpot CRM migration — Task models
+from app.models.task import Task
+from app.models.task_association import TaskAssociation
+
+# HubSpot CRM migration — raw HubSpot object models
+from app.models.hubspot_company import HubSpotCompany
+from app.models.hubspot_contact import HubSpotContact
+
+# HubSpot CRM migration — Config model
+from app.models.hubspot_config import HubSpotConfig
+
+# HubSpot CRM migration — Import run tracking
+from app.models.hubspot_import_run import HubSpotImportRun
+
+# HubSpot CRM migration — Match tracking
+from app.models.hubspot_match import HubSpotMatch
+
+# HubSpot CRM migration — Engagement records
+from app.models.hubspot_engagement import HubSpotEngagement
+
+# HubSpot CRM migration — Deal records
+from app.models.hubspot_deal import HubSpotDeal
+
+# HubSpot CRM migration — Signal extraction
+from app.models.hubspot_signal import HubSpotSignal
+
+# HubSpot CRM migration — Signal dictionary
+from app.models.hubspot_signal_dictionary import HubSpotSignalDictionary
+
 __all__ = [
     'PropertyFacts',
     'PropertyType',
@@ -62,7 +113,13 @@ __all__ = [
     'WholesaleScenario',
     'FixFlipScenario',
     'BuyHoldScenario',
+    # Contact model
+    'Contact',
+    'ContactPhone',
+    'ContactEmail',
+    'PropertyContact',
     # Lead management
+    'Property',
     'Lead',
     'LeadAuditTrail',
     'ImportJob',
@@ -96,4 +153,35 @@ __all__ = [
     'ParcelSalesCache',
     'ImprovementCharacteristicsCache',
     'SyncLog',
+    # Commercial OM PDF intake
+    'OMIntakeJob',
+    'OMFieldOverride',
+    # RentCast cache
+    'RentCastCache',
+    # HubSpot CRM migration — Organization
+    'Organization',
+    'OrganizationAuditLog',
+    'PropertyOrganizationLink',
+    'OwnerOrganizationLink',
+    # HubSpot CRM migration — Interaction
+    'Interaction',
+    'InteractionAssociation',
+    # HubSpot CRM migration — Task
+    'Task',
+    'TaskAssociation',
+    # HubSpot CRM migration — Import run tracking
+    'HubSpotImportRun',
+    # HubSpot CRM migration — Config
+    'HubSpotConfig',
+    # HubSpot CRM migration — Engagement records
+    'HubSpotEngagement',
+    # HubSpot CRM migration — raw HubSpot objects
+    'HubSpotCompany',
+    'HubSpotDeal',
+    'HubSpotContact',
+    'HubSpotMatch',
+    # HubSpot CRM migration — Signal extraction
+    'HubSpotSignal',
+    # HubSpot CRM migration — Signal dictionary
+    'HubSpotSignalDictionary',
 ]

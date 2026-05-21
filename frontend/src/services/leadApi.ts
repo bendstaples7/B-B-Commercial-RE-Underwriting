@@ -2,10 +2,11 @@
  * Lead management API service layer
  */
 import api from '@/services/api'
+import { LeadListSchema } from '@/services/schemas'
 import type {
-  LeadListFilters,
-  LeadListResponse,
-  LeadDetail,
+  PropertyListFilters,
+  PropertyListResponse,
+  PropertyDetail,
   ScoringWeights,
   SheetInfo,
   FieldMapping,
@@ -34,16 +35,16 @@ export const leadService = {
   /**
    * List leads with optional filtering, sorting, and pagination.
    */
-  async listLeads(filters?: LeadListFilters): Promise<LeadListResponse> {
-    const response = await api.get<LeadListResponse>('/leads/', { params: filters })
-    return response.data
+  async listLeads(filters?: PropertyListFilters): Promise<PropertyListResponse> {
+    const response = await api.get<PropertyListResponse>('/properties/', { params: filters })
+    return LeadListSchema.parse(response.data) as PropertyListResponse
   },
 
   /**
    * Get full lead detail including enrichment records, marketing lists, and analysis session.
    */
-  async getLeadDetail(leadId: number): Promise<LeadDetail> {
-    const response = await api.get<LeadDetail>(`/leads/${leadId}`)
+  async getLeadDetail(leadId: number): Promise<PropertyDetail> {
+    const response = await api.get<PropertyDetail>(`/properties/${leadId}`)
     return response.data
   },
 
@@ -51,7 +52,7 @@ export const leadService = {
    * Start an analysis session from a lead record.
    */
   async analyzeLead(leadId: number): Promise<{ session_id: string; lead_id: number; [key: string]: any }> {
-    const response = await api.post(`/leads/${leadId}/analyze`)
+    const response = await api.post(`/properties/${leadId}/analyze`)
     return response.data
   },
 
@@ -63,7 +64,7 @@ export const leadService = {
    * Get current scoring weights for a user.
    */
   async getScoringWeights(userId?: string): Promise<ScoringWeights> {
-    const response = await api.get<ScoringWeights>('/leads/scoring/weights', {
+    const response = await api.get<ScoringWeights>('/properties/scoring/weights', {
       params: { user_id: userId || getUserId() },
     })
     return response.data
@@ -79,7 +80,7 @@ export const leadService = {
     location_desirability_weight: number
   }): Promise<ScoringWeights & { leads_rescored: number }> {
     const response = await api.put<ScoringWeights & { leads_rescored: number }>(
-      '/leads/scoring/weights',
+      '/properties/scoring/weights',
       weights,
     )
     return response.data
@@ -348,3 +349,9 @@ export const leadService = {
     return response.data
   },
 }
+
+/**
+ * Alias for `leadService` using the new "property" naming convention.
+ * Use `propertyService` in new code; `leadService` is kept for backward compatibility.
+ */
+export const propertyService = leadService

@@ -1,8 +1,8 @@
 /**
  * Sample end-to-end test demonstrating the frontend test environment setup
  */
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, waitFor } from './testUtils'
+import { describe, it, expect } from 'vitest'
+import { render, screen } from './testUtils'
 import {
   mockApiClient,
   mockPropertyFacts,

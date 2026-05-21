@@ -58,33 +58,34 @@ copy .env.example .env
 # Edit .env with your configuration
 ```
 
-4. Initialize database:
+4. Apply database migrations:
 ```bash
-python run.py
+flask db upgrade
 ```
 
-The backend will run on http://localhost:5000
+### Running the Full Dev Environment
 
-### Frontend Setup
+Use the single-command launcher from the **project root** — it starts Redis, the Celery worker, and Flask automatically:
 
-1. Install dependencies:
+```bash
+python dev.py
+```
+
+This is the **recommended way** to run the app locally. It handles everything:
+- Starts Redis (or detects it's already running)
+- Starts the Celery worker (required for background tasks: imports, AI extraction, lead scoring)
+- Starts the Flask dev server on http://localhost:5000
+
+Then in a separate terminal, start the frontend:
 ```bash
 cd frontend
 npm install
-```
-
-2. Configure environment variables:
-```bash
-copy .env.example .env
-# Edit .env with your configuration
-```
-
-3. Start development server:
-```bash
 npm run dev
 ```
 
 The frontend will run on http://localhost:3000
+
+> **Note:** Do not use `python backend/run.py` directly — it starts Flask but not the Celery worker, so background tasks (HubSpot imports, OM PDF processing, bulk lead rescoring) will queue but never execute.
 
 ### Database Setup
 
@@ -93,11 +94,14 @@ The frontend will run on http://localhost:3000
 CREATE DATABASE real_estate_analysis;
 ```
 
-2. Run migrations (tables will be created automatically on first run)
+2. Run migrations:
+```bash
+flask db upgrade
+```
 
 ### Redis Setup
 
-Ensure Redis is running on localhost:6379 or configure REDIS_URL in .env
+Redis is started automatically by `python dev.py`. If you need to run it manually, ensure Redis is running on localhost:6379 or configure `REDIS_URL` in `.env`.
 
 ## Running Tests
 

@@ -562,17 +562,17 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({ onComplete, onCancel
       {!importJob && !importError && (
         <>
           <Typography variant="body1">
-            Ready to import from sheet &quot;{selectedSheet?.title}&quot;. Select a lead category
+            Ready to import from sheet &quot;{selectedSheet?.title}&quot;. Select a property category
             and click Start Import to begin.
           </Typography>
           <FormControl size="small" sx={{ maxWidth: 240 }}>
-            <InputLabel id="lead-category-label">Lead Category</InputLabel>
+            <InputLabel id="lead-category-label">Property Category</InputLabel>
             <Select
               labelId="lead-category-label"
               value={leadCategory}
-              label="Lead Category"
+              label="Property Category"
               onChange={(e) => setLeadCategory(e.target.value as 'residential' | 'commercial')}
-              aria-label="Select lead category"
+              aria-label="Select property category"
             >
               <MenuItem value="residential">Residential</MenuItem>
               <MenuItem value="commercial">Commercial</MenuItem>

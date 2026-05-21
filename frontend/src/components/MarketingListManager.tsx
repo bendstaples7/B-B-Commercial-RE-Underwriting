@@ -457,7 +457,7 @@ export const MarketingListManager: React.FC = () => {
                               )
                             }
                             disabled={statusUpdating === member.lead_id}
-                            aria-label={`Outreach status for ${lead?.property_street || `Lead #${member.lead_id}`}`}
+                          aria-label={`Outreach status for ${lead?.property_street || `Property #${member.lead_id}`}`}
                             renderValue={(value) => (
                               <Chip
                                 label={

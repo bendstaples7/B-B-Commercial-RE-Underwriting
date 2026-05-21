@@ -31,6 +31,7 @@ import {
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
+import UploadFileIcon from '@mui/icons-material/UploadFile'
 import { multifamilyService } from '@/services/api'
 import type { DealCreatePayload, DealSummary } from '@/types'
 
@@ -361,14 +362,24 @@ export function DealListPage() {
             Underwrite apartment properties (5+ units)
           </Typography>
         </Box>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => setCreateOpen(true)}
-          aria-label="Create new deal"
-        >
-          Create Deal
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            variant="outlined"
+            startIcon={<UploadFileIcon />}
+            onClick={() => navigate('/multifamily/om-intake')}
+            aria-label="Upload OM PDF"
+          >
+            Upload OM
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => setCreateOpen(true)}
+            aria-label="Create new deal"
+          >
+            Create Deal
+          </Button>
+        </Box>
       </Box>
 
       {/* Content */}

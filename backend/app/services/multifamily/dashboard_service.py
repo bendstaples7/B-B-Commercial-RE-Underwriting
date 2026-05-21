@@ -74,15 +74,20 @@ class DashboardService:
         # Check for cached result (Req 15.2)
         cached = ProFormaResult.query.filter_by(deal_id=deal_id).first()
 
-        _start_ms = time.monotonic()
+        _start_time = time.monotonic()
 
         if cached is not None and cached.inputs_hash == current_hash:
-            cache_hit = True
+            _ms_elapsed = int((time.monotonic() - _start_time) * 1000)
+            logger.info(
+                "get_dashboard deal_id=%d inputs_hash=%s ms_elapsed=%d cache_hit=True",
+                deal_id,
+                current_hash,
+                _ms_elapsed,
+            )
             computation_dict = cached.result_json
         else:
             # Cache miss — recompute (Req 15.4)
-            cache_hit = False
-            computation = compute_pro_forma(deal_inputs, inputs_hash=current_hash, cache_hit=False)
+            computation = compute_pro_forma(deal_inputs)
             computation_dict = computation.to_canonical_dict()
 
             # Upsert the cache row (Req 15.1)
@@ -101,15 +106,13 @@ class DashboardService:
 
             db.session.flush()
 
-        ms_elapsed = int((time.monotonic() - _start_ms) * 1000)
-
-        logger.info(
-            "get_dashboard: deal_id=%d inputs_hash=%s ms_elapsed=%d cache_hit=%s",
-            deal_id,
-            current_hash,
-            ms_elapsed,
-            cache_hit,
-        )
+            _ms_elapsed = int((time.monotonic() - _start_time) * 1000)
+            logger.info(
+                "get_dashboard deal_id=%d inputs_hash=%s ms_elapsed=%d cache_hit=False",
+                deal_id,
+                current_hash,
+                _ms_elapsed,
+            )
 
         # Compose the Dashboard response from the computation dict
         return self._compose_dashboard(deal_id, deal_inputs, computation_dict)
@@ -132,42 +135,44 @@ class DashboardService:
 
         cached = ProFormaResult.query.filter_by(deal_id=deal_id).first()
 
-        _start_ms = time.monotonic()
+        _start_time = time.monotonic()
 
         if cached is not None and cached.inputs_hash == current_hash:
-            cache_hit = True
-            result = cached.result_json
+            _ms_elapsed = int((time.monotonic() - _start_time) * 1000)
+            logger.info(
+                "get_pro_forma deal_id=%d inputs_hash=%s ms_elapsed=%d cache_hit=True",
+                deal_id,
+                current_hash,
+                _ms_elapsed,
+            )
+            return cached.result_json
         else:
-            cache_hit = False
-            computation = compute_pro_forma(deal_inputs, inputs_hash=current_hash, cache_hit=False)
-            result = computation.to_canonical_dict()
+            computation = compute_pro_forma(deal_inputs)
+            computation_dict = computation.to_canonical_dict()
 
             if cached is not None:
                 cached.inputs_hash = current_hash
                 cached.computed_at = datetime.utcnow()
-                cached.result_json = result
+                cached.result_json = computation_dict
             else:
                 cached = ProFormaResult(
                     deal_id=deal_id,
                     inputs_hash=current_hash,
                     computed_at=datetime.utcnow(),
-                    result_json=result,
+                    result_json=computation_dict,
                 )
                 db.session.add(cached)
 
             db.session.flush()
 
-        ms_elapsed = int((time.monotonic() - _start_ms) * 1000)
-
-        logger.info(
-            "get_pro_forma: deal_id=%d inputs_hash=%s ms_elapsed=%d cache_hit=%s",
-            deal_id,
-            current_hash,
-            ms_elapsed,
-            cache_hit,
-        )
-
-        return result
+            _ms_elapsed = int((time.monotonic() - _start_time) * 1000)
+            logger.info(
+                "get_pro_forma deal_id=%d inputs_hash=%s ms_elapsed=%d cache_hit=False",
+                deal_id,
+                current_hash,
+                _ms_elapsed,
+            )
+            return computation_dict
 
     def force_recompute(self, deal_id: int) -> dict[str, Any]:
         """Force recompute the pro forma, ignoring any cached result.
@@ -182,9 +187,8 @@ class DashboardService:
         deal_inputs = deal_service.build_inputs_snapshot(deal_id)
         current_hash = compute_inputs_hash(deal_inputs)
 
-        _start_ms = time.monotonic()
-
-        computation = compute_pro_forma(deal_inputs, inputs_hash=current_hash, cache_hit=False)
+        _start_time = time.monotonic()
+        computation = compute_pro_forma(deal_inputs)
         computation_dict = computation.to_canonical_dict()
 
         # Upsert the cache row
@@ -204,13 +208,12 @@ class DashboardService:
 
         db.session.flush()
 
-        ms_elapsed = int((time.monotonic() - _start_ms) * 1000)
-
+        _ms_elapsed = int((time.monotonic() - _start_time) * 1000)
         logger.info(
-            "force_recompute: deal_id=%d inputs_hash=%s ms_elapsed=%d cache_hit=False",
+            "force_recompute deal_id=%d inputs_hash=%s ms_elapsed=%d cache_hit=False",
             deal_id,
             current_hash,
-            ms_elapsed,
+            _ms_elapsed,
         )
         return computation_dict
 

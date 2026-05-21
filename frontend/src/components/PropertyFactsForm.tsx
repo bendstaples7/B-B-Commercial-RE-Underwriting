@@ -204,10 +204,10 @@ export const PropertyFactsForm: React.FC<PropertyFactsFormProps> = ({
           <Typography variant="body2" fontWeight="medium" component="label" htmlFor={`field-${field}`}>
             {label}
             {isModified && (
-              <Chip 
-                label="Modified" 
-                size="small" 
-                color="primary" 
+              <Chip
+                label="Modified"
+                size="small"
+                color="primary"
                 sx={{ ml: 1 }}
                 aria-label="This field has been manually modified"
               />
@@ -249,10 +249,10 @@ export const PropertyFactsForm: React.FC<PropertyFactsFormProps> = ({
             <Typography variant="body1" gutterBottom>
               Enter the property address to begin analysis
             </Typography>
-            <Box sx={{ 
-              display: 'flex', 
+            <Box sx={{
+              display: 'flex',
               flexDirection: { xs: 'column', sm: 'row' },
-              gap: 2, 
+              gap: 2,
               mt: 2,
               position: 'relative',
             }}>
@@ -267,7 +267,7 @@ export const PropertyFactsForm: React.FC<PropertyFactsFormProps> = ({
                   }}
                   onKeyDown={handleKeyDown}
                   placeholder="123 Main St, Chicago, IL 60601"
-                  disabled={loading}
+                  disabled={loading || !ready}
                   autoComplete="off"
                   inputProps={{
                     'aria-label': 'Property address input',
@@ -404,12 +404,12 @@ export const PropertyFactsForm: React.FC<PropertyFactsFormProps> = ({
             </Table>
           </TableContainer>
 
-          <Box sx={{ 
-            mt: 3, 
-            display: 'flex', 
+          <Box sx={{
+            mt: 3,
+            display: 'flex',
             flexDirection: { xs: 'column', sm: 'row' },
-            justifyContent: 'flex-end', 
-            gap: 2 
+            justifyContent: 'flex-end',
+            gap: 2
           }}>
             <Button
               variant="outlined"

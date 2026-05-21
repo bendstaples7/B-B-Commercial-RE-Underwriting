@@ -42,5 +42,5 @@ global.ResizeObserver = class ResizeObserver {
 } as any
 
 // Mock scrollTo
-window.scrollTo = vi.fn()
+window.scrollTo = vi.fn() as unknown as typeof window.scrollTo
 

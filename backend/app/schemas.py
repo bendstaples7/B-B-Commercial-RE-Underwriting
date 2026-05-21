@@ -3,6 +3,18 @@ from marshmallow import Schema, fields, validate, ValidationError, validates_sch
 from datetime import datetime
 
 
+class RequestSchema(Schema):
+    """Base class for all API request schemas.
+
+    Silently drops any unknown fields (e.g. ``user_id`` injected by the
+    frontend Axios interceptor) rather than raising a validation error.
+    All request schemas should inherit from this class.
+    """
+
+    class Meta:
+        unknown = EXCLUDE
+
+
 class StartAnalysisSchema(Schema):
     """Schema for starting a new analysis."""
     address = fields.Str(required=True, validate=validate.Length(min=5, max=500))
@@ -327,7 +339,7 @@ class FieldMappingRequestSchema(Schema):
     Validates that the mapping is a non-empty dict and that required database
     fields (property_street, owner_first_name, owner_last_name) are present as values in the mapping.
     """
-    user_id = fields.Str(required=True, validate=validate.Length(min=1, max=255))
+    user_id = fields.Str(load_default='default', validate=validate.Length(min=1, max=255))
     spreadsheet_id = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     sheet_name = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     mapping = fields.Dict(keys=fields.Str(), values=fields.Str(), required=True)
@@ -357,7 +369,7 @@ class FieldMappingRequestSchema(Schema):
 
 class ImportStartRequestSchema(Schema):
     """Schema for starting an import job (POST /api/leads/import/start)."""
-    user_id = fields.Str(required=True, validate=validate.Length(min=1, max=255))
+    user_id = fields.Str(load_default='default', validate=validate.Length(min=1, max=255))
     spreadsheet_id = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     sheet_name = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     field_mapping_id = fields.Int(load_default=None, validate=validate.Range(min=1))
@@ -448,8 +460,8 @@ class BulkEnrichRequestSchema(Schema):
 
 class MarketingListCreateSchema(Schema):
     """Schema for creating a marketing list (POST /api/leads/marketing/lists)."""
+    user_id = fields.Str(load_default='default', validate=validate.Length(min=1, max=255))
     name = fields.Str(required=True, validate=validate.Length(min=1, max=255))
-    user_id = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     filter_criteria = fields.Dict(load_default=None)
 
 
@@ -636,6 +648,14 @@ class DealResponseSchema(Schema):
     deleted_at = fields.DateTime(dump_only=True, allow_none=True)
     # Include units list for Req 1.4 (complete Deal record)
     units = fields.Method('get_units', dump_only=True)
+    # Include rent roll entries so the frontend can display current rents without a second request
+    rent_roll_entries = fields.Method('get_rent_roll_entries', dump_only=True)
+    # Include rehab plan entries for the Rehab Plan tab
+    rehab_plan_entries = fields.Method('get_rehab_plan_entries', dump_only=True)
+    # Include lender selections for the Lenders tab
+    lender_selections = fields.Method('get_lender_selections', dump_only=True)
+    # Include funding sources for the Funding tab
+    funding_sources = fields.Method('get_funding_sources', dump_only=True)
 
     def get_units(self, deal):
         """Return the list of units for this deal."""
@@ -652,6 +672,75 @@ class DealResponseSchema(Schema):
                 'occupancy_status': u.occupancy_status,
             }
             for u in unit_list
+        ]
+
+    def get_rent_roll_entries(self, deal):
+        """Return rent roll entries for all units in this deal."""
+        unit_list = deal.units.all() if hasattr(deal.units, 'all') else list(deal.units)
+        entries = []
+        for u in unit_list:
+            rr = u.rent_roll_entry
+            if rr is not None:
+                entries.append({
+                    'id': rr.id,
+                    'unit_id': rr.unit_id,
+                    'current_rent': str(rr.current_rent) if rr.current_rent is not None else None,
+                    'lease_start_date': rr.lease_start_date.isoformat() if rr.lease_start_date else None,
+                    'lease_end_date': rr.lease_end_date.isoformat() if rr.lease_end_date else None,
+                    'notes': rr.notes,
+                })
+        return entries
+
+    def get_rehab_plan_entries(self, deal):
+        """Return rehab plan entries for all units in this deal."""
+        unit_list = deal.units.all() if hasattr(deal.units, 'all') else list(deal.units)
+        entries = []
+        for u in unit_list:
+            rpe = u.rehab_plan_entry
+            if rpe is not None:
+                entries.append({
+                    'id': rpe.id,
+                    'unit_id': rpe.unit_id,
+                    'renovate_flag': rpe.renovate_flag,
+                    'current_rent': float(rpe.current_rent) if rpe.current_rent is not None else None,
+                    'suggested_post_reno_rent': float(rpe.suggested_post_reno_rent) if rpe.suggested_post_reno_rent is not None else None,
+                    'underwritten_post_reno_rent': float(rpe.underwritten_post_reno_rent) if rpe.underwritten_post_reno_rent is not None else None,
+                    'rehab_start_month': rpe.rehab_start_month,
+                    'downtime_months': rpe.downtime_months,
+                    'stabilized_month': rpe.stabilized_month,
+                    'rehab_budget': float(rpe.rehab_budget) if rpe.rehab_budget is not None else None,
+                    'scope_notes': rpe.scope_notes,
+                    'stabilizes_after_horizon': rpe.stabilizes_after_horizon,
+                })
+        return entries
+
+    def get_lender_selections(self, deal):
+        """Return lender selections for this deal."""
+        selections = deal.lender_selections.all() if hasattr(deal.lender_selections, 'all') else list(deal.lender_selections)
+        return [
+            {
+                'id': s.id,
+                'deal_id': s.deal_id,
+                'lender_profile_id': s.lender_profile_id,
+                'scenario': s.scenario,
+                'is_primary': s.is_primary,
+            }
+            for s in selections
+        ]
+
+    def get_funding_sources(self, deal):
+        """Return funding sources for this deal."""
+        sources = deal.funding_sources.all() if hasattr(deal.funding_sources, 'all') else list(deal.funding_sources)
+        return [
+            {
+                'id': s.id,
+                'deal_id': s.deal_id,
+                'source_type': s.source_type,
+                'total_available': float(s.total_available) if s.total_available is not None else None,
+                'interest_rate': float(s.interest_rate) if s.interest_rate is not None else None,
+                'origination_fee_rate': float(s.origination_fee_rate) if s.origination_fee_rate is not None else None,
+            }
+            for s in sources
         ]
 
 
@@ -736,10 +825,15 @@ class SaleCompCreateSchema(Schema):
     unit_count = fields.Int(required=True, validate=validate.Range(min=1))
     sale_price = fields.Float(required=True, validate=validate.Range(min=0, min_inclusive=False))
     close_date = fields.Date(required=True)
+    # observed_cap_rate is now optional — many comps don't have cap rate data.
+    # If omitted but noi is provided, cap rate will be derived as noi / sale_price.
     observed_cap_rate = fields.Float(
-        required=True,
-        validate=validate.Range(min=0, max=0.25, min_inclusive=False),
+        load_default=None,
+        allow_none=True,
+        validate=validate.Range(min=0, max=0.25),
     )
+    # Annual NOI — used to derive cap rate when observed_cap_rate is not provided
+    noi = fields.Float(load_default=None, allow_none=True, validate=validate.Range(min=0))
     status = fields.Str(load_default=None, validate=validate.Length(max=50))
     distance_miles = fields.Float(load_default=None, validate=validate.Range(min=0))
 
@@ -888,3 +982,1003 @@ class DatasetStatusResponseSchema(Schema):
     )
     status = fields.Str(dump_only=True)
     last_error = fields.Str(dump_only=True, allow_none=True)
+
+
+# ---------------------------------------------------------------------------
+# OM Intake schemas
+# ---------------------------------------------------------------------------
+
+class ScenarioMetricsSchema(Schema):
+    """Schema for a single scenario's computed metrics."""
+    gross_potential_income_annual = fields.Decimal(allow_none=True)
+    effective_gross_income_annual = fields.Decimal(allow_none=True)
+    gross_expenses_annual = fields.Decimal(allow_none=True)
+    noi_annual = fields.Decimal(allow_none=True)
+    cap_rate = fields.Decimal(allow_none=True)
+    grm = fields.Decimal(allow_none=True)
+    monthly_rent_total = fields.Decimal(allow_none=True)
+    dscr = fields.Decimal(allow_none=True)
+    cash_on_cash = fields.Decimal(allow_none=True)
+
+
+class UnitMixComparisonRowSchema(Schema):
+    """Schema for a single row in the unit mix comparison table."""
+    unit_type_label = fields.Str()
+    unit_count = fields.Int()
+    sqft = fields.Decimal(allow_none=True)
+    current_avg_rent = fields.Decimal(allow_none=True)
+    proforma_rent = fields.Decimal(allow_none=True)
+    market_rent_estimate = fields.Decimal(allow_none=True)
+    market_rent_low = fields.Decimal(allow_none=True)
+    market_rent_high = fields.Decimal(allow_none=True)
+
+
+class ScenarioComparisonSchema(Schema):
+    """Schema for the three-scenario comparison result."""
+    broker_current = fields.Nested(ScenarioMetricsSchema)
+    broker_proforma = fields.Nested(ScenarioMetricsSchema)
+    realistic = fields.Nested(ScenarioMetricsSchema)
+    unit_mix_comparison = fields.List(fields.Nested(UnitMixComparisonRowSchema))
+    significant_variance_flag = fields.Bool(allow_none=True)
+    realistic_cap_rate_below_proforma = fields.Bool(allow_none=True)
+
+
+class OMIntakeJobStatusSchema(Schema):
+    """Schema for job status responses (GET /jobs/{id})."""
+    id = fields.Int()
+    intake_status = fields.Str()
+    original_filename = fields.Str()
+    created_at = fields.DateTime()
+    updated_at = fields.DateTime()
+    expires_at = fields.DateTime()
+    error_message = fields.Str(allow_none=True)
+    deal_id = fields.Int(allow_none=True)
+
+
+class OMIntakeJobListSchema(Schema):
+    """Schema for job list items (GET /jobs)."""
+    id = fields.Int()
+    intake_status = fields.Str()
+    original_filename = fields.Str()
+    created_at = fields.DateTime()
+    deal_id = fields.Int(allow_none=True)
+    # Summary fields from extracted_om_data
+    property_address = fields.Str(allow_none=True)
+    asking_price = fields.Decimal(allow_none=True)
+    unit_count = fields.Int(allow_none=True)
+
+
+class OMIntakeReviewSchema(Schema):
+    """Schema for full review data (GET /jobs/{id}/review)."""
+    id = fields.Int()
+    intake_status = fields.Str()
+    original_filename = fields.Str()
+    created_at = fields.DateTime()
+    updated_at = fields.DateTime()
+    extracted_om_data = fields.Raw(allow_none=True)
+    scenario_comparison = fields.Raw(allow_none=True)
+    consistency_warnings = fields.Raw(allow_none=True)
+    market_research_warnings = fields.Raw(allow_none=True)
+    partial_realistic_scenario_warning = fields.Bool(allow_none=True)
+    asking_price_missing_error = fields.Bool(allow_none=True)
+    unit_count_missing_error = fields.Bool(allow_none=True)
+    deal_id = fields.Int(allow_none=True)
+
+
+class OMIntakeJobSchema(Schema):
+    """Schema for full job serialization."""
+    id = fields.Int()
+    user_id = fields.Str()
+    intake_status = fields.Str()
+    original_filename = fields.Str()
+    created_at = fields.DateTime()
+    updated_at = fields.DateTime()
+    expires_at = fields.DateTime()
+    error_message = fields.Str(allow_none=True)
+    deal_id = fields.Int(allow_none=True)
+
+
+class OMIntakeConfirmRequestSchema(RequestSchema):
+    """Schema for the confirm request body (POST /jobs/{id}/confirm)."""
+
+    asking_price = fields.Decimal(allow_none=True)
+    unit_count = fields.Int(allow_none=True)
+    unit_mix = fields.List(fields.Raw(), allow_none=True)
+    expense_items = fields.List(fields.Raw(), allow_none=True)
+    other_income_items = fields.List(fields.Raw(), allow_none=True)
+    property_address = fields.Str(allow_none=True)
+    property_city = fields.Str(allow_none=True)
+    property_state = fields.Str(allow_none=True)
+    property_zip = fields.Str(allow_none=True)
+
+
+
+# ---------------------------------------------------------------------------
+# HubSpot CRM Migration Schemas — Interaction / Timeline
+# ---------------------------------------------------------------------------
+
+class InteractionSchema(Schema):
+    """Schema for serializing and deserializing Interaction records.
+
+    Used for both request validation (create/update) and response serialization.
+    id, created_at, updated_at are dump_only (server-generated).
+    """
+    id = fields.Int(dump_only=True)
+    interaction_type = fields.Str(
+        required=True,
+        validate=validate.OneOf(['note', 'call', 'email', 'meeting', 'other']),
+    )
+    body = fields.Str(required=True, validate=validate.Length(min=1))
+    occurred_at = fields.DateTime(required=True)
+    source = fields.Str(
+        load_default='manual',
+        validate=validate.OneOf(['manual', 'hubspot_import']),
+    )
+    hubspot_engagement_id = fields.Str(allow_none=True, load_default=None)
+    raw_payload = fields.Dict(allow_none=True, load_default=None)
+    is_orphaned = fields.Bool(load_default=False)
+    created_at = fields.DateTime(dump_only=True)
+    updated_at = fields.DateTime(dump_only=True)
+
+
+class InteractionAssociationSchema(Schema):
+    """Schema for serializing and deserializing InteractionAssociation records.
+
+    Links an Interaction to a target record (lead, organization, or contact).
+    id is dump_only (server-generated).
+    """
+    id = fields.Int(dump_only=True)
+    interaction_id = fields.Int(required=True, validate=validate.Range(min=1))
+    target_type = fields.Str(
+        required=True,
+        validate=validate.OneOf(['lead', 'organization', 'contact']),
+    )
+    target_id = fields.Int(required=True, validate=validate.Range(min=1))
+
+
+class TimelineEntrySchema(Schema):
+    """Schema for a unified timeline entry returned by TimelineService.
+
+    Not model-based — represents a merged view of Interactions and Tasks
+    sorted by date for display in the timeline panel.
+    """
+    entry_type = fields.Str(required=True)          # 'interaction' or 'task'
+    subtype = fields.Str(required=True)              # interaction_type or task status/priority
+    date = fields.DateTime(required=True)            # occurred_at for interactions, due_date for tasks
+    body_or_title = fields.Str(required=True)        # body for interactions, title for tasks
+    source = fields.Str(required=True)               # 'manual' or 'hubspot_import'
+    hubspot_engagement_id = fields.Str(allow_none=True)
+
+# ---------------------------------------------------------------------------
+# HubSpot CRM — Task Schemas
+# ---------------------------------------------------------------------------
+
+class TaskSchema(Schema):
+    """Schema for serializing and deserializing Task records.
+
+    Requirements: 3.1
+    """
+    id = fields.Int(dump_only=True)
+    title = fields.Str(required=True, validate=validate.Length(min=1, max=500))
+    body = fields.Str(allow_none=True)
+    due_date = fields.DateTime(allow_none=True)
+    status = fields.Str(
+        load_default='open',
+        validate=validate.OneOf(['open', 'completed', 'cancelled', 'overdue']),
+    )
+    priority = fields.Str(
+        load_default='medium',
+        validate=validate.OneOf(['high', 'medium', 'low']),
+    )
+    source = fields.Str(
+        load_default='manual',
+        validate=validate.OneOf(['manual', 'hubspot_import']),
+    )
+    hubspot_task_id = fields.Str(allow_none=True)
+    raw_payload = fields.Dict(allow_none=True)
+    completion_timestamp = fields.DateTime(dump_only=True, allow_none=True)
+    created_at = fields.DateTime(dump_only=True)
+    updated_at = fields.DateTime(dump_only=True)
+
+
+class TaskAssociationSchema(Schema):
+    """Schema for serializing and deserializing TaskAssociation records.
+
+    Requirements: 3.1
+    """
+    id = fields.Int(dump_only=True)
+    task_id = fields.Int(required=True)
+    target_type = fields.Str(
+        required=True,
+        validate=validate.OneOf(['lead', 'organization']),
+    )
+    target_id = fields.Int(required=True)
+
+
+# ---------------------------------------------------------------------------
+# HubSpot CRM Migration Schemas — Organization
+# ---------------------------------------------------------------------------
+
+VALID_ORG_TYPES = ['llc', 'trust', 'corporation', 'brokerage', 'law_firm', 'property_management', 'unknown']
+VALID_ORG_STATUSES = ['active', 'inactive', 'unknown']
+
+
+class OrganizationSchema(Schema):
+    """Schema for serializing and deserializing Organization records.
+
+    dump_only fields: id, created_at, updated_at (server-managed).
+    required fields: name (must be non-empty).
+    """
+    id = fields.Int(dump_only=True)
+    name = fields.Str(required=True, validate=validate.Length(min=1, max=500))
+    org_type = fields.Str(
+        load_default='unknown',
+        validate=validate.OneOf(VALID_ORG_TYPES),
+    )
+    status = fields.Str(
+        load_default='unknown',
+        validate=validate.OneOf(VALID_ORG_STATUSES),
+    )
+    notes = fields.Str(allow_none=True, load_default=None)
+    source = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=100))
+    hubspot_company_id = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=50))
+    created_at = fields.DateTime(dump_only=True)
+    updated_at = fields.DateTime(dump_only=True)
+
+
+class OrganizationAuditLogSchema(Schema):
+    """Schema for serializing OrganizationAuditLog records (read-only responses).
+
+    All fields are dump_only — audit log entries are created by the service layer,
+    never directly via API input.
+    """
+    id = fields.Int(dump_only=True)
+    organization_id = fields.Int(dump_only=True)
+    field_name = fields.Str(dump_only=True)
+    old_value = fields.Str(dump_only=True, allow_none=True)
+    new_value = fields.Str(dump_only=True, allow_none=True)
+    changed_by = fields.Str(dump_only=True)
+    changed_at = fields.DateTime(dump_only=True)
+
+
+class PropertyOrganizationLinkSchema(Schema):
+    """Schema for creating and serializing PropertyOrganizationLink records.
+
+    dump_only fields: id, created_at (server-managed).
+    required fields: property_id, organization_id, role.
+    """
+    id = fields.Int(dump_only=True)
+    property_id = fields.Int(required=True, validate=validate.Range(min=1))
+    organization_id = fields.Int(required=True, validate=validate.Range(min=1))
+    role = fields.Str(required=True, validate=validate.Length(min=1, max=100))
+    created_at = fields.DateTime(dump_only=True)
+
+
+class OwnerOrganizationLinkSchema(Schema):
+    """Schema for creating and serializing OwnerOrganizationLink records.
+
+    dump_only fields: id, created_at (server-managed).
+    required fields: owner_id, organization_id, role.
+    """
+    id = fields.Int(dump_only=True)
+    owner_id = fields.Int(required=True, validate=validate.Range(min=1))
+    organization_id = fields.Int(required=True, validate=validate.Range(min=1))
+    role = fields.Str(required=True, validate=validate.Length(min=1, max=100))
+    created_at = fields.DateTime(dump_only=True)
+
+
+# ---------------------------------------------------------------------------
+# HubSpot CRM Migration Schemas — Config, ImportRun, Match, Signal
+# ---------------------------------------------------------------------------
+
+class HubSpotConfigSchema(Schema):
+    """Schema for serializing HubSpotConfig records.
+
+    The ``encrypted_token`` field is intentionally excluded from all output
+    (load_only=True) so the raw or encrypted token is never returned to clients.
+    Requirements: 6.2
+    """
+    id = fields.Int(dump_only=True)
+    # encrypted_token is load_only — accepted on input but NEVER serialized in output
+    encrypted_token = fields.Str(load_only=True)
+    portal_id = fields.Str(allow_none=True)
+    account_name = fields.Str(allow_none=True, validate=validate.Length(max=255))
+    created_at = fields.DateTime(dump_only=True)
+    updated_at = fields.DateTime(dump_only=True)
+
+
+class HubSpotImportRunSchema(Schema):
+    """Schema for serializing HubSpotImportRun records.
+
+    Tracks the status and counts for a single HubSpot object-type import run.
+    Requirements: 7.6
+    """
+    id = fields.Int(dump_only=True)
+    object_type = fields.Str(
+        required=True,
+        validate=validate.OneOf(['deals', 'contacts', 'companies', 'engagements']),
+    )
+    status = fields.Str(
+        load_default='running',
+        validate=validate.OneOf(['running', 'success', 'partial', 'failed']),
+    )
+    start_time = fields.DateTime(dump_only=True)
+    end_time = fields.DateTime(dump_only=True, allow_none=True)
+    total_fetched = fields.Int(dump_only=True)
+    created_count = fields.Int(dump_only=True)
+    updated_count = fields.Int(dump_only=True)
+    skipped_count = fields.Int(dump_only=True)
+    error_count = fields.Int(dump_only=True)
+    error_message = fields.Str(dump_only=True, allow_none=True)
+
+
+class HubSpotMatchSchema(Schema):
+    """Schema for serializing HubSpotMatch records.
+
+    Represents the match relationship between a HubSpot record and an internal
+    lead or organization record, including confidence level and review status.
+    Requirements: 13.2
+    """
+    id = fields.Int(dump_only=True)
+    hubspot_record_type = fields.Str(
+        required=True,
+        validate=validate.OneOf(['deal', 'contact', 'company']),
+    )
+    hubspot_id = fields.Str(required=True, validate=validate.Length(min=1, max=50))
+    internal_record_type = fields.Str(
+        allow_none=True,
+        validate=validate.OneOf(['lead', 'organization']),
+    )
+    internal_record_id = fields.Int(allow_none=True)
+    confidence = fields.Str(
+        required=True,
+        validate=validate.OneOf(['HIGH', 'MEDIUM', 'LOW', 'UNMATCHED']),
+    )
+    status = fields.Str(
+        load_default='pending',
+        validate=validate.OneOf(['pending', 'confirmed', 'rejected']),
+    )
+    matching_criteria = fields.Str(allow_none=True, validate=validate.Length(max=100))
+    created_at = fields.DateTime(dump_only=True)
+    updated_at = fields.DateTime(dump_only=True)
+
+
+class HubSpotSignalSchema(Schema):
+    """Schema for serializing HubSpotSignal records.
+
+    Represents a derived signal extracted from HubSpot engagement history,
+    linked to a Lead record.
+    Requirements: 13.2
+    """
+    id = fields.Int(dump_only=True)
+    lead_id = fields.Int(required=True, validate=validate.Range(min=1))
+    signal_type = fields.Str(
+        required=True,
+        validate=validate.OneOf([
+            'PRIOR_INTERACTION_EXISTS',
+            'PRIOR_RESPONSE_EXISTS',
+            'PRIOR_WARM_CONVERSATION',
+            'ASKING_PRICE_GIVEN',
+            'APPOINTMENT_OCCURRED',
+            'OFFER_PREVIOUSLY_SENT',
+            'SELLER_SAID_MAYBE_LATER',
+            'SELLER_NOT_INTERESTED',
+            'WRONG_NUMBER',
+            'DO_NOT_CONTACT',
+            'FOLLOW_UP_OVERDUE',
+            'PRIOR_LEAD_SOURCE_KNOWN',
+        ]),
+    )
+    source_engagement_id = fields.Str(allow_none=True, validate=validate.Length(max=50))
+    extracted_at = fields.DateTime(dump_only=True)
+    raw_evidence = fields.Str(allow_none=True)
+
+
+# ---------------------------------------------------------------------------
+# Contact Model Schemas
+# ---------------------------------------------------------------------------
+
+VALID_CONTACT_ROLES = ['owner', 'property_manager', 'attorney', 'family_member', 'other']
+VALID_PHONE_LABELS = ['mobile', 'home', 'work', 'other']
+VALID_EMAIL_LABELS = ['personal', 'work', 'other']
+
+
+class ContactPhoneSchema(Schema):
+    """Schema for ContactPhone records.
+
+    dump_only: id, contact_id (server-managed).
+    required on load: value, label.
+    """
+    id = fields.Int(dump_only=True)
+    contact_id = fields.Int(dump_only=True)
+    value = fields.Str(required=True)
+    label = fields.Str(required=True, validate=validate.OneOf(VALID_PHONE_LABELS))
+
+
+class ContactEmailSchema(Schema):
+    """Schema for ContactEmail records.
+
+    dump_only: id, contact_id (server-managed).
+    required on load: value, label.
+    """
+    id = fields.Int(dump_only=True)
+    contact_id = fields.Int(dump_only=True)
+    value = fields.Str(required=True)
+    label = fields.Str(required=True, validate=validate.OneOf(VALID_EMAIL_LABELS))
+
+
+class ContactCreateSchema(Schema):
+    """Schema for creating a Contact record.
+
+    Validator: at least one of first_name/last_name must be non-empty/non-whitespace.
+    phones and emails default to empty lists when not provided.
+    role defaults to 'owner' when not provided.
+    """
+    first_name = fields.Str(allow_none=True, dump_default=None)
+    last_name = fields.Str(allow_none=True, dump_default=None)
+    role = fields.Str(
+        load_default='owner',
+        validate=validate.OneOf(VALID_CONTACT_ROLES),
+    )
+    role_description = fields.Str(allow_none=True, dump_default=None)
+    notes = fields.Str(allow_none=True, dump_default=None)
+    phones = fields.List(fields.Nested(ContactPhoneSchema), load_default=[])
+    emails = fields.List(fields.Nested(ContactEmailSchema), load_default=[])
+
+    @validates_schema
+    def validate_name_present(self, data, **kwargs):
+        """Ensure at least one of first_name or last_name is non-empty/non-whitespace."""
+        first_name = data.get('first_name') or ''
+        last_name = data.get('last_name') or ''
+        if not first_name.strip() and not last_name.strip():
+            raise ValidationError('At least one of first_name or last_name is required')
+
+
+class ContactUpdateSchema(Schema):
+    """Schema for updating a Contact record (all fields optional).
+
+    Same fields as ContactCreateSchema but none are required.
+    """
+    first_name = fields.Str(allow_none=True, dump_default=None)
+    last_name = fields.Str(allow_none=True, dump_default=None)
+    role = fields.Str(validate=validate.OneOf(VALID_CONTACT_ROLES))
+    role_description = fields.Str(allow_none=True, dump_default=None)
+    notes = fields.Str(allow_none=True, dump_default=None)
+    phones = fields.List(fields.Nested(ContactPhoneSchema), load_default=[])
+    emails = fields.List(fields.Nested(ContactEmailSchema), load_default=[])
+
+
+class ContactResponseSchema(Schema):
+    """Schema for serializing a full Contact response.
+
+    dump_only: id, created_at, updated_at (server-managed).
+    Includes nested phones and emails lists.
+    """
+    id = fields.Int(dump_only=True)
+    first_name = fields.Str(allow_none=True)
+    last_name = fields.Str(allow_none=True)
+    role = fields.Str()
+    role_description = fields.Str(allow_none=True)
+    notes = fields.Str(allow_none=True)
+    phones = fields.List(fields.Nested(ContactPhoneSchema))
+    emails = fields.List(fields.Nested(ContactEmailSchema))
+    created_at = fields.DateTime(dump_only=True)
+    updated_at = fields.DateTime(dump_only=True, allow_none=True)
+
+
+class PropertyContactLinkSchema(Schema):
+    """Schema for linking an existing Contact to a Property.
+
+    All three fields are required: contact_id, role, is_primary.
+    """
+    contact_id = fields.Int(required=True, validate=validate.Range(min=1))
+    role = fields.Str(required=True, validate=validate.OneOf(VALID_CONTACT_ROLES))
+    is_primary = fields.Bool(required=True)
+
+
+class PropertyContactResponseSchema(ContactResponseSchema):
+    """Schema for serializing a Contact as returned from a Property's contact list.
+
+    Extends ContactResponseSchema with join-record fields:
+    property_contact_role and is_primary from the PropertyContact record.
+    """
+    property_contact_role = fields.Str()
+    is_primary = fields.Bool()
+# ---------------------------------------------------------------------------
+
+class ScenarioMetricsSchema(Schema):
+    """Schema for a single scenario's computed metrics."""
+    gross_potential_income_annual = fields.Decimal(allow_none=True)
+    effective_gross_income_annual = fields.Decimal(allow_none=True)
+    gross_expenses_annual = fields.Decimal(allow_none=True)
+    noi_annual = fields.Decimal(allow_none=True)
+    cap_rate = fields.Decimal(allow_none=True)
+    grm = fields.Decimal(allow_none=True)
+    monthly_rent_total = fields.Decimal(allow_none=True)
+    dscr = fields.Decimal(allow_none=True)
+    cash_on_cash = fields.Decimal(allow_none=True)
+
+
+class UnitMixComparisonRowSchema(Schema):
+    """Schema for a single row in the unit mix comparison table."""
+    unit_type_label = fields.Str()
+    unit_count = fields.Int()
+    sqft = fields.Decimal(allow_none=True)
+    current_avg_rent = fields.Decimal(allow_none=True)
+    proforma_rent = fields.Decimal(allow_none=True)
+    market_rent_estimate = fields.Decimal(allow_none=True)
+    market_rent_low = fields.Decimal(allow_none=True)
+    market_rent_high = fields.Decimal(allow_none=True)
+
+
+class ScenarioComparisonSchema(Schema):
+    """Schema for the three-scenario comparison result."""
+    broker_current = fields.Nested(ScenarioMetricsSchema)
+    broker_proforma = fields.Nested(ScenarioMetricsSchema)
+    realistic = fields.Nested(ScenarioMetricsSchema)
+    unit_mix_comparison = fields.List(fields.Nested(UnitMixComparisonRowSchema))
+    significant_variance_flag = fields.Bool(allow_none=True)
+    realistic_cap_rate_below_proforma = fields.Bool(allow_none=True)
+
+
+class OMIntakeJobStatusSchema(Schema):
+    """Schema for job status responses (GET /jobs/{id})."""
+    id = fields.Int()
+    intake_status = fields.Str()
+    original_filename = fields.Str()
+    created_at = fields.DateTime()
+    updated_at = fields.DateTime()
+    expires_at = fields.DateTime()
+    error_message = fields.Str(allow_none=True)
+    deal_id = fields.Int(allow_none=True)
+
+
+class OMIntakeJobListSchema(Schema):
+    """Schema for job list items (GET /jobs)."""
+    id = fields.Int()
+    intake_status = fields.Str()
+    original_filename = fields.Str()
+    created_at = fields.DateTime()
+    deal_id = fields.Int(allow_none=True)
+    # Summary fields from extracted_om_data
+    property_address = fields.Str(allow_none=True)
+    asking_price = fields.Decimal(allow_none=True)
+    unit_count = fields.Int(allow_none=True)
+
+
+class OMIntakeReviewSchema(Schema):
+    """Schema for full review data (GET /jobs/{id}/review)."""
+    id = fields.Int()
+    intake_status = fields.Str()
+    original_filename = fields.Str()
+    created_at = fields.DateTime()
+    updated_at = fields.DateTime()
+    extracted_om_data = fields.Raw(allow_none=True)
+    scenario_comparison = fields.Raw(allow_none=True)
+    consistency_warnings = fields.Raw(allow_none=True)
+    market_research_warnings = fields.Raw(allow_none=True)
+    partial_realistic_scenario_warning = fields.Bool(allow_none=True)
+    asking_price_missing_error = fields.Bool(allow_none=True)
+    unit_count_missing_error = fields.Bool(allow_none=True)
+    deal_id = fields.Int(allow_none=True)
+
+
+class OMIntakeJobSchema(Schema):
+    """Schema for full job serialization."""
+    id = fields.Int()
+    user_id = fields.Str()
+    intake_status = fields.Str()
+    original_filename = fields.Str()
+    created_at = fields.DateTime()
+    updated_at = fields.DateTime()
+    expires_at = fields.DateTime()
+    error_message = fields.Str(allow_none=True)
+    deal_id = fields.Int(allow_none=True)
+
+
+class OMIntakeConfirmRequestSchema(RequestSchema):
+    """Schema for the confirm request body (POST /jobs/{id}/confirm)."""
+
+    asking_price = fields.Decimal(allow_none=True)
+    unit_count = fields.Int(allow_none=True)
+    unit_mix = fields.List(fields.Raw(), allow_none=True)
+    expense_items = fields.List(fields.Raw(), allow_none=True)
+    other_income_items = fields.List(fields.Raw(), allow_none=True)
+    property_address = fields.Str(allow_none=True)
+    property_city = fields.Str(allow_none=True)
+    property_state = fields.Str(allow_none=True)
+    property_zip = fields.Str(allow_none=True)
+
+
+
+# ---------------------------------------------------------------------------
+# HubSpot CRM Migration Schemas — Interaction / Timeline
+# ---------------------------------------------------------------------------
+
+class InteractionSchema(Schema):
+    """Schema for serializing and deserializing Interaction records.
+
+    Used for both request validation (create/update) and response serialization.
+    id, created_at, updated_at are dump_only (server-generated).
+    """
+    id = fields.Int(dump_only=True)
+    interaction_type = fields.Str(
+        required=True,
+        validate=validate.OneOf(['note', 'call', 'email', 'meeting', 'other']),
+    )
+    body = fields.Str(required=True, validate=validate.Length(min=1))
+    occurred_at = fields.DateTime(required=True)
+    source = fields.Str(
+        load_default='manual',
+        validate=validate.OneOf(['manual', 'hubspot_import']),
+    )
+    hubspot_engagement_id = fields.Str(allow_none=True, load_default=None)
+    raw_payload = fields.Dict(allow_none=True, load_default=None)
+    is_orphaned = fields.Bool(load_default=False)
+    created_at = fields.DateTime(dump_only=True)
+    updated_at = fields.DateTime(dump_only=True)
+
+
+class InteractionAssociationSchema(Schema):
+    """Schema for serializing and deserializing InteractionAssociation records.
+
+    Links an Interaction to a target record (lead, organization, or contact).
+    id is dump_only (server-generated).
+    """
+    id = fields.Int(dump_only=True)
+    interaction_id = fields.Int(required=True, validate=validate.Range(min=1))
+    target_type = fields.Str(
+        required=True,
+        validate=validate.OneOf(['lead', 'organization', 'contact']),
+    )
+    target_id = fields.Int(required=True, validate=validate.Range(min=1))
+
+
+class TimelineEntrySchema(Schema):
+    """Schema for a unified timeline entry returned by TimelineService.
+
+    Not model-based — represents a merged view of Interactions and Tasks
+    sorted by date for display in the timeline panel.
+    """
+    entry_type = fields.Str(required=True)          # 'interaction' or 'task'
+    subtype = fields.Str(required=True)              # interaction_type or task status/priority
+    date = fields.DateTime(required=True)            # occurred_at for interactions, due_date for tasks
+    body_or_title = fields.Str(required=True)        # body for interactions, title for tasks
+    source = fields.Str(required=True)               # 'manual' or 'hubspot_import'
+    hubspot_engagement_id = fields.Str(allow_none=True)
+
+# ---------------------------------------------------------------------------
+# HubSpot CRM — Task Schemas
+# ---------------------------------------------------------------------------
+
+class TaskSchema(Schema):
+    """Schema for serializing and deserializing Task records.
+
+    Requirements: 3.1
+    """
+    id = fields.Int(dump_only=True)
+    title = fields.Str(required=True, validate=validate.Length(min=1, max=500))
+    body = fields.Str(allow_none=True)
+    due_date = fields.DateTime(allow_none=True)
+    status = fields.Str(
+        load_default='open',
+        validate=validate.OneOf(['open', 'completed', 'cancelled', 'overdue']),
+    )
+    priority = fields.Str(
+        load_default='medium',
+        validate=validate.OneOf(['high', 'medium', 'low']),
+    )
+    source = fields.Str(
+        load_default='manual',
+        validate=validate.OneOf(['manual', 'hubspot_import']),
+    )
+    hubspot_task_id = fields.Str(allow_none=True)
+    raw_payload = fields.Dict(allow_none=True)
+    completion_timestamp = fields.DateTime(dump_only=True, allow_none=True)
+    created_at = fields.DateTime(dump_only=True)
+    updated_at = fields.DateTime(dump_only=True)
+
+
+class TaskAssociationSchema(Schema):
+    """Schema for serializing and deserializing TaskAssociation records.
+
+    Requirements: 3.1
+    """
+    id = fields.Int(dump_only=True)
+    task_id = fields.Int(required=True)
+    target_type = fields.Str(
+        required=True,
+        validate=validate.OneOf(['lead', 'organization']),
+    )
+    target_id = fields.Int(required=True)
+
+
+# ---------------------------------------------------------------------------
+# HubSpot CRM Migration Schemas — Organization
+# ---------------------------------------------------------------------------
+
+VALID_ORG_TYPES = ['llc', 'trust', 'corporation', 'brokerage', 'law_firm', 'property_management', 'unknown']
+VALID_ORG_STATUSES = ['active', 'inactive', 'unknown']
+
+
+class OrganizationSchema(Schema):
+    """Schema for serializing and deserializing Organization records.
+
+    dump_only fields: id, created_at, updated_at (server-managed).
+    required fields: name (must be non-empty).
+    """
+    id = fields.Int(dump_only=True)
+    name = fields.Str(required=True, validate=validate.Length(min=1, max=500))
+    org_type = fields.Str(
+        load_default='unknown',
+        validate=validate.OneOf(VALID_ORG_TYPES),
+    )
+    status = fields.Str(
+        load_default='unknown',
+        validate=validate.OneOf(VALID_ORG_STATUSES),
+    )
+    notes = fields.Str(allow_none=True, load_default=None)
+    source = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=100))
+    hubspot_company_id = fields.Str(allow_none=True, load_default=None, validate=validate.Length(max=50))
+    created_at = fields.DateTime(dump_only=True)
+    updated_at = fields.DateTime(dump_only=True)
+
+
+class OrganizationAuditLogSchema(Schema):
+    """Schema for serializing OrganizationAuditLog records (read-only responses).
+
+    All fields are dump_only — audit log entries are created by the service layer,
+    never directly via API input.
+    """
+    id = fields.Int(dump_only=True)
+    organization_id = fields.Int(dump_only=True)
+    field_name = fields.Str(dump_only=True)
+    old_value = fields.Str(dump_only=True, allow_none=True)
+    new_value = fields.Str(dump_only=True, allow_none=True)
+    changed_by = fields.Str(dump_only=True)
+    changed_at = fields.DateTime(dump_only=True)
+
+
+class PropertyOrganizationLinkSchema(Schema):
+    """Schema for creating and serializing PropertyOrganizationLink records.
+
+    dump_only fields: id, created_at (server-managed).
+    required fields: property_id, organization_id, role.
+    """
+    id = fields.Int(dump_only=True)
+    property_id = fields.Int(required=True, validate=validate.Range(min=1))
+    organization_id = fields.Int(required=True, validate=validate.Range(min=1))
+    role = fields.Str(required=True, validate=validate.Length(min=1, max=100))
+    created_at = fields.DateTime(dump_only=True)
+
+
+class OwnerOrganizationLinkSchema(Schema):
+    """Schema for creating and serializing OwnerOrganizationLink records.
+
+    dump_only fields: id, created_at (server-managed).
+    required fields: owner_id, organization_id, role.
+    """
+    id = fields.Int(dump_only=True)
+    owner_id = fields.Int(required=True, validate=validate.Range(min=1))
+    organization_id = fields.Int(required=True, validate=validate.Range(min=1))
+    role = fields.Str(required=True, validate=validate.Length(min=1, max=100))
+    created_at = fields.DateTime(dump_only=True)
+
+
+# ---------------------------------------------------------------------------
+# HubSpot CRM Migration Schemas — Config, ImportRun, Match, Signal
+# ---------------------------------------------------------------------------
+
+class HubSpotConfigSchema(Schema):
+    """Schema for serializing HubSpotConfig records.
+
+    The ``encrypted_token`` field is intentionally excluded from all output
+    (load_only=True) so the raw or encrypted token is never returned to clients.
+    Requirements: 6.2
+    """
+    id = fields.Int(dump_only=True)
+    # encrypted_token is load_only — accepted on input but NEVER serialized in output
+    encrypted_token = fields.Str(load_only=True)
+    portal_id = fields.Str(allow_none=True)
+    account_name = fields.Str(allow_none=True, validate=validate.Length(max=255))
+    created_at = fields.DateTime(dump_only=True)
+    updated_at = fields.DateTime(dump_only=True)
+
+
+class HubSpotImportRunSchema(Schema):
+    """Schema for serializing HubSpotImportRun records.
+
+    Tracks the status and counts for a single HubSpot object-type import run.
+    Requirements: 7.6
+    """
+    id = fields.Int(dump_only=True)
+    object_type = fields.Str(
+        required=True,
+        validate=validate.OneOf(['deals', 'contacts', 'companies', 'engagements']),
+    )
+    status = fields.Str(
+        load_default='running',
+        validate=validate.OneOf(['running', 'success', 'partial', 'failed']),
+    )
+    start_time = fields.DateTime(dump_only=True)
+    end_time = fields.DateTime(dump_only=True, allow_none=True)
+    total_fetched = fields.Int(dump_only=True)
+    created_count = fields.Int(dump_only=True)
+    updated_count = fields.Int(dump_only=True)
+    skipped_count = fields.Int(dump_only=True)
+    error_count = fields.Int(dump_only=True)
+    error_message = fields.Str(dump_only=True, allow_none=True)
+
+
+class HubSpotMatchSchema(Schema):
+    """Schema for serializing HubSpotMatch records.
+
+    Represents the match relationship between a HubSpot record and an internal
+    lead or organization record, including confidence level and review status.
+    Requirements: 13.2
+    """
+    id = fields.Int(dump_only=True)
+    hubspot_record_type = fields.Str(
+        required=True,
+        validate=validate.OneOf(['deal', 'contact', 'company']),
+    )
+    hubspot_id = fields.Str(required=True, validate=validate.Length(min=1, max=50))
+    internal_record_type = fields.Str(
+        allow_none=True,
+        validate=validate.OneOf(['lead', 'organization']),
+    )
+    internal_record_id = fields.Int(allow_none=True)
+    confidence = fields.Str(
+        required=True,
+        validate=validate.OneOf(['HIGH', 'MEDIUM', 'LOW', 'UNMATCHED']),
+    )
+    status = fields.Str(
+        load_default='pending',
+        validate=validate.OneOf(['pending', 'confirmed', 'rejected']),
+    )
+    matching_criteria = fields.Str(allow_none=True, validate=validate.Length(max=100))
+    created_at = fields.DateTime(dump_only=True)
+    updated_at = fields.DateTime(dump_only=True)
+
+
+class HubSpotSignalSchema(Schema):
+    """Schema for serializing HubSpotSignal records.
+
+    Represents a derived signal extracted from HubSpot engagement history,
+    linked to a Lead record.
+    Requirements: 13.2
+    """
+    id = fields.Int(dump_only=True)
+    lead_id = fields.Int(required=True, validate=validate.Range(min=1))
+    signal_type = fields.Str(
+        required=True,
+        validate=validate.OneOf([
+            'PRIOR_INTERACTION_EXISTS',
+            'PRIOR_RESPONSE_EXISTS',
+            'PRIOR_WARM_CONVERSATION',
+            'ASKING_PRICE_GIVEN',
+            'APPOINTMENT_OCCURRED',
+            'OFFER_PREVIOUSLY_SENT',
+            'SELLER_SAID_MAYBE_LATER',
+            'SELLER_NOT_INTERESTED',
+            'WRONG_NUMBER',
+            'DO_NOT_CONTACT',
+            'FOLLOW_UP_OVERDUE',
+            'PRIOR_LEAD_SOURCE_KNOWN',
+        ]),
+    )
+    source_engagement_id = fields.Str(allow_none=True, validate=validate.Length(max=50))
+    extracted_at = fields.DateTime(dump_only=True)
+    raw_evidence = fields.Str(allow_none=True)
+
+
+# ---------------------------------------------------------------------------
+# Contact Model Schemas
+# ---------------------------------------------------------------------------
+
+VALID_CONTACT_ROLES = ['owner', 'property_manager', 'attorney', 'family_member', 'other']
+VALID_PHONE_LABELS = ['mobile', 'home', 'work', 'other']
+VALID_EMAIL_LABELS = ['personal', 'work', 'other']
+
+
+class ContactPhoneSchema(Schema):
+    """Schema for ContactPhone records.
+
+    dump_only: id, contact_id (server-managed).
+    required on load: value, label.
+    """
+    id = fields.Int(dump_only=True)
+    contact_id = fields.Int(dump_only=True)
+    value = fields.Str(required=True)
+    label = fields.Str(required=True, validate=validate.OneOf(VALID_PHONE_LABELS))
+
+
+class ContactEmailSchema(Schema):
+    """Schema for ContactEmail records.
+
+    dump_only: id, contact_id (server-managed).
+    required on load: value, label.
+    """
+    id = fields.Int(dump_only=True)
+    contact_id = fields.Int(dump_only=True)
+    value = fields.Str(required=True)
+    label = fields.Str(required=True, validate=validate.OneOf(VALID_EMAIL_LABELS))
+
+
+class ContactCreateSchema(Schema):
+    """Schema for creating a Contact record.
+
+    Validator: at least one of first_name/last_name must be non-empty/non-whitespace.
+    phones and emails default to empty lists when not provided.
+    role defaults to 'owner' when not provided.
+    """
+    first_name = fields.Str(allow_none=True, dump_default=None)
+    last_name = fields.Str(allow_none=True, dump_default=None)
+    role = fields.Str(
+        load_default='owner',
+        validate=validate.OneOf(VALID_CONTACT_ROLES),
+    )
+    role_description = fields.Str(allow_none=True, dump_default=None)
+    notes = fields.Str(allow_none=True, dump_default=None)
+    phones = fields.List(fields.Nested(ContactPhoneSchema), load_default=[])
+    emails = fields.List(fields.Nested(ContactEmailSchema), load_default=[])
+
+    @validates_schema
+    def validate_name_present(self, data, **kwargs):
+        """Ensure at least one of first_name or last_name is non-empty/non-whitespace."""
+        first_name = data.get('first_name') or ''
+        last_name = data.get('last_name') or ''
+        if not first_name.strip() and not last_name.strip():
+            raise ValidationError('At least one of first_name or last_name is required')
+
+
+class ContactUpdateSchema(Schema):
+    """Schema for updating a Contact record (all fields optional).
+
+    Same fields as ContactCreateSchema but none are required.
+    """
+    first_name = fields.Str(allow_none=True, dump_default=None)
+    last_name = fields.Str(allow_none=True, dump_default=None)
+    role = fields.Str(validate=validate.OneOf(VALID_CONTACT_ROLES))
+    role_description = fields.Str(allow_none=True, dump_default=None)
+    notes = fields.Str(allow_none=True, dump_default=None)
+    phones = fields.List(fields.Nested(ContactPhoneSchema), load_default=[])
+    emails = fields.List(fields.Nested(ContactEmailSchema), load_default=[])
+
+
+class ContactResponseSchema(Schema):
+    """Schema for serializing a full Contact response.
+
+    dump_only: id, created_at, updated_at (server-managed).
+    Includes nested phones and emails lists.
+    """
+    id = fields.Int(dump_only=True)
+    first_name = fields.Str(allow_none=True)
+    last_name = fields.Str(allow_none=True)
+    role = fields.Str()
+    role_description = fields.Str(allow_none=True)
+    notes = fields.Str(allow_none=True)
+    phones = fields.List(fields.Nested(ContactPhoneSchema))
+    emails = fields.List(fields.Nested(ContactEmailSchema))
+    created_at = fields.DateTime(dump_only=True)
+    updated_at = fields.DateTime(dump_only=True, allow_none=True)
+
+
+class PropertyContactLinkSchema(Schema):
+    """Schema for linking an existing Contact to a Property.
+
+    All three fields are required: contact_id, role, is_primary.
+    """
+    contact_id = fields.Int(required=True, validate=validate.Range(min=1))
+    role = fields.Str(required=True, validate=validate.OneOf(VALID_CONTACT_ROLES))
+    is_primary = fields.Bool(required=True)
+
+
+class PropertyContactResponseSchema(ContactResponseSchema):
+    """Schema for serializing a Contact as returned from a Property's contact list.
+
+    Extends ContactResponseSchema with join-record fields:
+    property_contact_role and is_primary from the PropertyContact record.
+    """
+    property_contact_role = fields.Str()
+    is_primary = fields.Bool()

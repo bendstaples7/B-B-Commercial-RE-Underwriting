@@ -219,6 +219,206 @@ class UnsupportedImportFormatError(RealEstateAnalysisException):
 
 
 # ---------------------------------------------------------------------------
+# Commercial OM PDF Intake Exceptions
+# ---------------------------------------------------------------------------
+
+
+class InvalidFileError(RealEstateAnalysisException):
+    """Exception raised when an uploaded file is invalid, corrupt, or an unsupported MIME type."""
+
+    def __init__(self, message: str, payload: dict = None):
+        super().__init__(message, status_code=422)
+        base_payload = {'error_type': 'invalid_file'}
+        if payload:
+            base_payload.update(payload)
+        self.payload = base_payload
+
+
+class ExternalServiceError(RealEstateAnalysisException):
+    """Exception raised when an external API call fails. Base class for service-specific errors."""
+
+    def __init__(self, message: str, payload: dict = None):
+        super().__init__(message, status_code=502)
+        base_payload = {'error_type': 'external_service_error'}
+        if payload:
+            base_payload.update(payload)
+        self.payload = base_payload
+
+
+class ResourceNotFoundError(RealEstateAnalysisException):
+    """Exception raised when a requested resource is not found or belongs to another user."""
+
+    def __init__(self, message: str, payload: dict = None):
+        super().__init__(message, status_code=404)
+        base_payload = {'error_type': 'resource_not_found'}
+        if payload:
+            base_payload.update(payload)
+        self.payload = base_payload
+
+
+class ConflictError(RealEstateAnalysisException):
+    """Exception raised when a request conflicts with the current state (e.g., re-confirming an already-confirmed job)."""
+
+    def __init__(self, message: str, payload: dict = None):
+        super().__init__(message, status_code=409)
+        base_payload = {'error_type': 'conflict'}
+        if payload:
+            base_payload.update(payload)
+        self.payload = base_payload
+
+
+class GeminiConfigurationError(ExternalServiceError):
+    """Exception raised when the Gemini API key is missing or not configured."""
+
+    def __init__(self, message: str, payload: dict = None):
+        combined_payload = {'error_type': 'gemini_configuration_error'}
+        if payload:
+            combined_payload.update(payload)
+        # Call RealEstateAnalysisException directly to set status_code and payload cleanly
+        RealEstateAnalysisException.__init__(self, message, status_code=502)
+        self.payload = combined_payload
+
+
+class GeminiAPIError(ExternalServiceError):
+    """Exception raised when a network or HTTP error occurs communicating with the Gemini API."""
+
+    def __init__(self, message: str, payload: dict = None):
+        combined_payload = {'error_type': 'gemini_api_error'}
+        if payload:
+            combined_payload.update(payload)
+        RealEstateAnalysisException.__init__(self, message, status_code=502)
+        self.payload = combined_payload
+
+
+class GeminiParseError(ExternalServiceError):
+    """Exception raised when the Gemini API returns a response that is not valid JSON."""
+
+    def __init__(self, message: str, payload: dict = None):
+        combined_payload = {'error_type': 'gemini_parse_error'}
+        if payload:
+            combined_payload.update(payload)
+        RealEstateAnalysisException.__init__(self, message, status_code=502)
+        self.payload = combined_payload
+
+
+class GeminiResponseError(ExternalServiceError):
+    """Exception raised when the Gemini API response is valid JSON but is missing required fields."""
+
+    def __init__(self, message: str, payload: dict = None):
+        combined_payload = {'error_type': 'gemini_response_error'}
+        if payload:
+            combined_payload.update(payload)
+        RealEstateAnalysisException.__init__(self, message, status_code=502)
+        self.payload = combined_payload
+
+
+# ---------------------------------------------------------------------------
+# HubSpot CRM Migration Exceptions
+# ---------------------------------------------------------------------------
+
+
+class HubSpotReadOnlyViolation(RealEstateAnalysisException):
+    """Exception raised when a code path attempts to call a non-GET HubSpot API endpoint.
+
+    The HubSpot integration is strictly read-only; any write attempt is a
+    programming error and is treated as an internal server error (500).
+    """
+
+    def __init__(self, message: str = "HubSpot integration is read-only; write operations are not permitted"):
+        super().__init__(message, status_code=500)
+        self.payload = {
+            'error_type': 'hubspot_readonly_violation',
+        }
+
+
+class HubSpotAuthenticationError(RealEstateAnalysisException):
+    """Exception raised when the HubSpot API returns a 401 or 403 response.
+
+    Indicates the stored token is invalid, expired, or lacks required scopes.
+    """
+
+    def __init__(self, message: str = "HubSpot authentication failed; check that the token is valid and has the required scopes"):
+        super().__init__(message, status_code=401)
+        self.payload = {
+            'error_type': 'hubspot_authentication_error',
+        }
+
+
+class HubSpotRateLimitError(RealEstateAnalysisException):
+    """Exception raised when the HubSpot API returns a 429 Too Many Requests response.
+
+    The ``retry_after`` field (seconds) is surfaced in the payload so that
+    Celery tasks can schedule an exponential-backoff retry.
+    """
+
+    def __init__(self, message: str = "HubSpot API rate limit exceeded", retry_after: int = None):
+        super().__init__(message, status_code=429)
+        self.payload = {
+            'error_type': 'hubspot_rate_limit_error',
+            'retry_after': retry_after,
+        }
+
+
+class ImportRunNotFoundError(ResourceNotFoundError):
+    """Exception raised when a requested HubSpot import run record does not exist."""
+
+    def __init__(self, message: str, payload: dict = None):
+        combined_payload = {'error_type': 'import_run_not_found'}
+        if payload:
+            combined_payload.update(payload)
+        RealEstateAnalysisException.__init__(self, message, status_code=404)
+        self.payload = combined_payload
+
+
+class MatchNotFoundError(ResourceNotFoundError):
+    """Exception raised when a requested HubSpot match record does not exist."""
+
+    def __init__(self, message: str, payload: dict = None):
+        combined_payload = {'error_type': 'match_not_found'}
+        if payload:
+            combined_payload.update(payload)
+        RealEstateAnalysisException.__init__(self, message, status_code=404)
+        self.payload = combined_payload
+
+
+class OrganizationValidationError(ValidationException):
+    """Exception raised when Organization data fails validation (e.g., empty name)."""
+
+    def __init__(self, message: str, field: str = None, value=None):
+        # Call the grandparent directly so we can set our own error_type
+        RealEstateAnalysisException.__init__(self, message, status_code=400)
+        self.payload = {
+            'error_type': 'organization_validation_error',
+            'field': field,
+            'invalid_value': str(value) if value is not None else None,
+        }
+
+
+class InteractionValidationError(ValidationException):
+    """Exception raised when Interaction data fails validation (e.g., empty body, no association target)."""
+
+    def __init__(self, message: str, field: str = None, value=None):
+        RealEstateAnalysisException.__init__(self, message, status_code=400)
+        self.payload = {
+            'error_type': 'interaction_validation_error',
+            'field': field,
+            'invalid_value': str(value) if value is not None else None,
+        }
+
+
+class TaskValidationError(ValidationException):
+    """Exception raised when Task data fails validation (e.g., empty title)."""
+
+    def __init__(self, message: str, field: str = None, value=None):
+        RealEstateAnalysisException.__init__(self, message, status_code=400)
+        self.payload = {
+            'error_type': 'task_validation_error',
+            'field': field,
+            'invalid_value': str(value) if value is not None else None,
+        }
+
+
+# ---------------------------------------------------------------------------
 # Chicago Socrata Local Cache Exceptions
 # ---------------------------------------------------------------------------
 
@@ -246,50 +446,4 @@ class InvalidCronExpressionException(RealEstateAnalysisException):
         self.payload = {
             'error_type': 'invalid_cron_expression',
             'expression': expression,
-        }
-
-
-# ---------------------------------------------------------------------------
-# Gemini Comparable Search Exceptions
-# ---------------------------------------------------------------------------
-
-
-class GeminiConfigurationError(RealEstateAnalysisException):
-    """Raised at instantiation when GOOGLE_AI_API_KEY is not set or is empty."""
-
-    def __init__(self, message: str = "GOOGLE_AI_API_KEY is not set or is empty"):
-        super().__init__(message, status_code=500)
-        self.payload = {
-            'error_type': 'gemini_configuration_error',
-        }
-
-
-class GeminiAPIError(RealEstateAnalysisException):
-    """Raised when an HTTP error is returned by the Gemini API."""
-
-    def __init__(self, message: str, status_code: int = 502):
-        super().__init__(message, status_code=status_code)
-        self.payload = {
-            'error_type': 'gemini_api_error',
-        }
-
-
-class GeminiParseError(RealEstateAnalysisException):
-    """Raised when the Gemini API response body is not valid JSON."""
-
-    def __init__(self, message: str):
-        super().__init__(message, status_code=502)
-        self.payload = {
-            'error_type': 'gemini_parse_error',
-        }
-
-
-class GeminiResponseError(RealEstateAnalysisException):
-    """Raised when the Gemini API response JSON is missing required keys."""
-
-    def __init__(self, message: str, missing_keys: list = None):
-        super().__init__(message, status_code=502)
-        self.payload = {
-            'error_type': 'gemini_response_error',
-            'missing_keys': missing_keys or [],
         }

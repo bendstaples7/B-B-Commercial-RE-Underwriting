@@ -11,6 +11,7 @@ from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
 from app import db, limiter
+from app.api_utils import get_current_user_id
 from app.models import ImportJob, FieldMapping, OAuthToken
 from app.services.google_sheets_importer import GoogleSheetsImporter
 
@@ -334,14 +335,14 @@ def save_mapping():
             'message': 'Request body is required',
         }), 400
 
-    user_id = data.get('user_id')
+    user_id = get_current_user_id()
     spreadsheet_id = data.get('spreadsheet_id')
     sheet_name = data.get('sheet_name')
     mapping = data.get('mapping')
 
     # Validate required fields
     missing = []
-    if not user_id:
+    if not user_id or user_id == 'anonymous':
         missing.append('user_id')
     if not spreadsheet_id:
         missing.append('spreadsheet_id')
@@ -426,12 +427,12 @@ def start_import():
             'message': 'Request body is required',
         }), 400
 
-    user_id = data.get('user_id')
+    user_id = get_current_user_id()
     spreadsheet_id = data.get('spreadsheet_id')
     sheet_name = data.get('sheet_name')
 
     missing = []
-    if not user_id:
+    if not user_id or user_id == 'anonymous':
         missing.append('user_id')
     if not spreadsheet_id:
         missing.append('spreadsheet_id')

@@ -57,13 +57,13 @@ def _serialize_rent_roll_entry(entry) -> dict:
 def _serialize_summary(summary: dict) -> dict:
     """Serialize the rent roll summary, converting Decimals to floats."""
     return {
-        'Total_Unit_Count': summary['Total_Unit_Count'],
-        'Occupied_Unit_Count': summary['Occupied_Unit_Count'],
-        'Vacant_Unit_Count': summary['Vacant_Unit_Count'],
-        'Occupancy_Rate': float(summary['Occupancy_Rate']),
-        'Total_In_Place_Rent': float(summary['Total_In_Place_Rent']),
-        'Average_Rent_Per_Occupied_Unit': float(summary['Average_Rent_Per_Occupied_Unit']),
-        'warnings': summary['warnings'],
+        'total_unit_count': summary['Total_Unit_Count'],
+        'occupied_unit_count': summary['Occupied_Unit_Count'],
+        'vacant_unit_count': summary['Vacant_Unit_Count'],
+        'occupancy_rate': float(summary['Occupancy_Rate']),
+        'total_in_place_rent': str(summary['Total_In_Place_Rent']),
+        'average_rent_per_occupied_unit': str(summary['Average_Rent_Per_Occupied_Unit']) if summary['Average_Rent_Per_Occupied_Unit'] is not None else None,
+        'rent_roll_incomplete': bool(summary['warnings']),
     }
 
 

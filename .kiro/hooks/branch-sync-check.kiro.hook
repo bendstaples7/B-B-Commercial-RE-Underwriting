@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Branch Sync Check",
+  "description": "Before any task executes, fetches origin/main and checks if the current branch is missing commits. If the branch is behind, reports the missing commits and blocks work until the branch is merged up to date.",
+  "version": "1",
+  "when": {
+    "type": "preTaskExecution"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A task is about to start. Before doing anything else, check if the current branch is missing commits from origin/main.\n\nRun these two commands:\n1. `git fetch origin main 2>&1`\n2. `git log HEAD..origin/main --oneline 2>&1`\n\nIf command 2 produces ANY output (i.e. there are commits on main not on this branch):\n- Report each missing commit with its hash and message\n- Run `git merge origin/main 2>&1` to bring the branch up to date\n- After merging, run `npm install` in the `frontend/` directory if `package.json` changed\n- Report what was merged and confirm the branch is now current\n- Then proceed with the task\n\nIf command 2 produces NO output, the branch is current — just confirm \"Branch is up to date with origin/main\" and proceed with the task immediately.\n\nThis check prevents the class of regression where features from main are silently missing from the working branch."
+  }
+}

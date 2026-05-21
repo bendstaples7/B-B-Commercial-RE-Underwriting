@@ -1,5 +1,11 @@
 """Services package."""
 from .dto import RankedComparableDTO
+from .hubspot_client_service import HubSpotClientService
+from .hubspot_import_service import HubSpotImportService
+from .hubspot_matcher_service import HubSpotMatcherService
+from .hubspot_activity_converter_service import HubSpotActivityConverterService
+from .hubspot_signal_extractor_service import HubSpotSignalExtractorService
+from .timeline_service import TimelineService
 from .property_data_service import PropertyDataService
 from .comparable_sales_finder import ComparableSalesFinder
 from .weighted_scoring_engine import WeightedScoringEngine
@@ -11,6 +17,10 @@ from .data_source_connector import DataSourceConnector, DataSourcePlugin, Enrich
 from .marketing_manager import MarketingManager
 from .condo_filter_service import CondoFilterService
 from .deterministic_scoring_engine import DeterministicScoringEngine
+from .organization_service import OrganizationService
+from .interaction_service import InteractionService
+from .task_service import TaskService
+from .contact_service import ContactService
 
 from .gemini_comparable_search_service import GeminiComparableSearchService
 
@@ -20,6 +30,16 @@ from .cache_status_service import CacheStatusService, DatasetStatus
 
 __all__ = [
     'RankedComparableDTO',
+    'HubSpotClientService',
+    'HubSpotImportService',
+    'HubSpotMatcherService',
+    'HubSpotActivityConverterService',
+    'HubSpotSignalExtractorService',
+    'TimelineService',
+    'OrganizationService',
+    'InteractionService',
+    'TaskService',
+    'ContactService',
     'PropertyDataService',
     'ComparableSalesFinder',
     'WeightedScoringEngine',

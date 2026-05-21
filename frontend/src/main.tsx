@@ -1,12 +1,29 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, MutationCache } from '@tanstack/react-query'
 import { ThemeProvider, createTheme } from '@mui/material/styles'
 import CssBaseline from '@mui/material/CssBaseline'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
+import { NotificationProvider, globalNotify } from './context/NotificationContext'
+import { PipelineStatusProvider } from './context/PipelineStatusContext'
 
+// ---------------------------------------------------------------------------
+// Global mutation error handler
+//
+// Any useMutation that does NOT define its own onError will fall through here.
+// This ensures no mutation ever fails silently — the user always sees a message.
+// ---------------------------------------------------------------------------
 const queryClient = new QueryClient({
+  mutationCache: new MutationCache({
+    onError: (error, _variables, _context, mutation) => {
+      // Skip if the mutation already has its own onError handler
+      if (mutation.options.onError) return
+
+      const message = (error as Error)?.message ?? 'An unexpected error occurred.'
+      globalNotify.showError(message)
+    },
+  }),
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
@@ -100,7 +117,14 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <ThemeProvider theme={theme}>
         <CssBaseline />
         <BrowserRouter>
-            <App />
+          {/* NotificationProvider must be inside BrowserRouter so it can
+              render MUI components, and inside QueryClientProvider so
+              mutations can trigger it. It wires globalNotify on mount. */}
+          <NotificationProvider>
+            <PipelineStatusProvider>
+              <App />
+            </PipelineStatusProvider>
+          </NotificationProvider>
         </BrowserRouter>
       </ThemeProvider>
     </QueryClientProvider>

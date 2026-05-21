@@ -275,7 +275,7 @@ export function FundingTab({ dealId }: FundingTabProps) {
     )
   }
 
-  const sources: FundingSource[] = (deal as any)?.funding_sources ?? []
+  const sources: FundingSource[] = deal?.funding_sources ?? []
 
   // Check for insufficient funding from pro forma result if available
   const proFormaResult = (deal as any)?.pro_forma_result

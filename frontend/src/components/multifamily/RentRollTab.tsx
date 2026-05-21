@@ -389,10 +389,10 @@ export function RentRollTab({ dealId, unitCount }: RentRollTabProps) {
   }
 
   // The deal response includes units and rent_roll_entries inline
-  const units: MFUnit[] = (deal as any)?.units ?? []
+  const units: MFUnit[] = deal?.units ?? []
   const rrMap: Record<number, RentRollEntry> = {}
-  if ((deal as any)?.rent_roll_entries) {
-    for (const rr of (deal as any).rent_roll_entries as RentRollEntry[]) {
+  if (deal?.rent_roll_entries) {
+    for (const rr of deal.rent_roll_entries) {
       rrMap[rr.unit_id] = rr
     }
   }

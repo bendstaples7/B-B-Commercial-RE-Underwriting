@@ -11,6 +11,7 @@ from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
 from app import db, limiter
+from app.api_utils import get_current_user_id
 from app.models import Lead, MarketingList, MarketingListMember
 from app.services.marketing_manager import MarketingManager
 
@@ -193,12 +194,12 @@ def create_marketing_list():
         }), 400
 
     name = data.get('name')
-    user_id = data.get('user_id')
+    user_id = get_current_user_id()
 
     missing = []
     if not name:
         missing.append('name')
-    if not user_id:
+    if not user_id or user_id == 'anonymous':
         missing.append('user_id')
     if missing:
         return jsonify({

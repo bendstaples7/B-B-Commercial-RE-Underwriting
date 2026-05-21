@@ -216,7 +216,7 @@ export const CondoDetailView: React.FC<CondoDetailViewProps> = ({
               Linked Properties ({detail.leads.length})
             </Typography>
             <TableContainer component={Paper} variant="outlined" sx={{ mb: 3, maxHeight: 300 }}>
-              <Table size="small" stickyHeader aria-label="Linked lead records">
+              <Table size="small" stickyHeader aria-label="Linked property records">
                 <TableHead>
                   <TableRow>
                     <TableCell>Address</TableCell>
