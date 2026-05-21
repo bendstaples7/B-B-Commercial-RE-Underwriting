@@ -11,15 +11,24 @@ class ComparableSale(db.Model):
     address = db.Column(db.String(500), nullable=False, index=True)
     sale_date = db.Column(db.Date, nullable=False)
     sale_price = db.Column(db.Float, nullable=False)
-    property_type = db.Column(db.Enum(PropertyType), nullable=False)
+    property_type = db.Column(
+        db.Enum(PropertyType, values_callable=lambda x: [e.value for e in x], name='property_type'),
+        nullable=False
+    )
     units = db.Column(db.Integer, nullable=False)
     bedrooms = db.Column(db.Integer, nullable=False)
     bathrooms = db.Column(db.Float, nullable=False)
     square_footage = db.Column(db.Integer, nullable=False)
     lot_size = db.Column(db.Integer, nullable=False)
     year_built = db.Column(db.Integer, nullable=False)
-    construction_type = db.Column(db.Enum(ConstructionType), nullable=False)
-    interior_condition = db.Column(db.Enum(InteriorCondition), nullable=False)
+    construction_type = db.Column(
+        db.Enum(ConstructionType, values_callable=lambda x: [e.value for e in x], name='construction_type'),
+        nullable=False
+    )
+    interior_condition = db.Column(
+        db.Enum(InteriorCondition, values_callable=lambda x: [e.value for e in x], name='interior_condition'),
+        nullable=False
+    )
     
     # Distance from subject property
     distance_miles = db.Column(db.Float, nullable=False)

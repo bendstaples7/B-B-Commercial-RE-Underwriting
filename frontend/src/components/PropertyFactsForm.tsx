@@ -108,6 +108,7 @@ export const PropertyFactsForm: React.FC<PropertyFactsFormProps> = ({
       onAddressSubmit(description, { lat, lng })
     } catch (err) {
       console.error('Places geocode error:', err)
+      setAutocompleteError('Could not get coordinates for this address. Proceeding without location data.')
       // Fall back to submitting without coordinates
       onAddressSubmit(description)
     }

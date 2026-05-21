@@ -49,21 +49,31 @@ api.interceptors.response.use(
     if (error.response) {
       // Server responded with error status
       const errorData = error.response.data
-      console.error('API Error:', errorData)
-      
+      const url = error.config?.url ?? 'unknown'
+      const status = error.response.status
+
+      // Extract the real message — backend wraps errors under error.message
+      // e.g. { success: false, error: { message: "...", status_code: 502 } }
+      const message =
+        (errorData as any)?.error?.message ||
+        errorData?.message ||
+        'An error occurred'
+
+      console.error(`[API] ${status} ${url}:`, message, errorData)
+
       // Handle specific error codes
-      if (error.response.status === 429) {
+      if (status === 429) {
         throw new Error('Rate limit exceeded. Please try again later.')
       }
-      
-      throw new Error(errorData?.message || 'An error occurred')
+
+      throw new Error(message)
     } else if (error.request) {
       // Request made but no response received
-      console.error('Network Error:', error.request)
+      console.error('[API] Network error — no response received:', error.request)
       throw new Error('Network error. Please check your connection.')
     } else {
       // Something else happened
-      console.error('Error:', error.message)
+      console.error('[API] Request setup error:', error.message)
       throw new Error(error.message)
     }
   }
@@ -81,9 +91,12 @@ export const analysisService = {
   /**
    * Start a new analysis session
    */
-  startAnalysis: async (address: string): Promise<StartAnalysisResponse> => {
+  startAnalysis: async (address: string, latitude?: number, longitude?: number): Promise<StartAnalysisResponse> => {
+    const userId = localStorage.getItem('user_id') || 'default'
     const response = await api.post<any>('/analysis/start', {
       address,
+      user_id: userId,
+      ...(latitude != null && longitude != null ? { latitude, longitude } : {}),
     })
     const raw = response.data
     // Map snake_case backend response to camelCase frontend type
@@ -110,10 +123,17 @@ export const analysisService = {
     stepNumber: number,
     approvalData?: Record<string, any>
   ): Promise<StepResult> => {
+    // Step 2 (comparable search) calls Gemini which can take up to 2 minutes
+    const timeout = stepNumber === 2 ? 180000 : 30000
     const response = await api.post<StepResult>(
       `/analysis/${sessionId}/step/${stepNumber}`,
-      { approval_data: approvalData }
+      { approval_data: approvalData },
+      { timeout }
     )
+    // Step 2 returns 202 Accepted — treat as a pending result
+    if (response.status === 202) {
+      return { status: 'accepted', sessionId } as unknown as StepResult
+    }
     return response.data
   },
 

@@ -5,6 +5,18 @@ import socket
 from app import create_app, db
 from dotenv import load_dotenv
 
+# Ensure we're running from the backend directory regardless of where
+# the script was invoked from. This makes `python backend/run.py` from
+# the project root work the same as `python run.py` from backend/.
+backend_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Track whether we changed directories — if we did, disable the reloader
+# to avoid Flask's stat-based reloader trying to find the script at the
+# original (now-wrong) path.
+_changed_dir = os.getcwd() != backend_dir
+if _changed_dir:
+    os.chdir(backend_dir)
+
 load_dotenv()
 
 

@@ -240,13 +240,42 @@ class PropertyDataService:
         """
         Normalise an address to match Cook County Assessor format.
 
-        "1443 W Foster Ave, Chicago, IL 60640" → "1443 W FOSTER AVE"
+        "1443 W Foster Ave, Chicago, IL 60640"       → "1443 W FOSTER AVE"
+        "1443 West Foster Avenue, Chicago, IL, USA"  → "1443 W FOSTER AVE"
 
         The dataset stores addresses as "NUMBER DIRECTION STREET SUFFIX"
-        in uppercase, without city/state/zip.
+        in uppercase, with abbreviated direction and street suffix.
         """
+        import re
         # Take only the street portion (before the first comma)
         street_part = address.split(',')[0].strip().upper()
+
+        # Abbreviate direction words
+        direction_map = {
+            r'\bNORTH\b': 'N',
+            r'\bSOUTH\b': 'S',
+            r'\bEAST\b':  'E',
+            r'\bWEST\b':  'W',
+        }
+        for pattern, abbr in direction_map.items():
+            street_part = re.sub(pattern, abbr, street_part)
+
+        # Abbreviate street suffix words
+        suffix_map = {
+            r'\bAVENUE\b':    'AVE',
+            r'\bBOULEVARD\b': 'BLVD',
+            r'\bCIRCLE\b':    'CIR',
+            r'\bCOURT\b':     'CT',
+            r'\bDRIVE\b':     'DR',
+            r'\bLANE\b':      'LN',
+            r'\bPLACE\b':     'PL',
+            r'\bROAD\b':      'RD',
+            r'\bSTREET\b':    'ST',
+            r'\bTERRACE\b':   'TER',
+        }
+        for pattern, abbr in suffix_map.items():
+            street_part = re.sub(pattern, abbr, street_part)
+
         return street_part
 
     # ------------------------------------------------------------------
