@@ -1,6 +1,7 @@
 import { createContext, useContext, useState } from 'react'
 import { Routes, Route, Link, Navigate, useNavigate, useParams, useSearchParams, useLocation } from 'react-router-dom'
 import { useLoadScript } from '@react-google-maps/api'
+import { useQuery } from '@tanstack/react-query'
 import {
   Typography,
   Box,
@@ -10,7 +11,6 @@ import {
   Button,
   Drawer,
   List,
-  ListItem,
   ListItemButton,
   ListItemIcon,
   ListItemText,
@@ -19,6 +19,7 @@ import {
   Collapse,
   CircularProgress,
   Tooltip,
+  Chip,
   useMediaQuery,
   useTheme,
   Dialog,
@@ -32,18 +33,19 @@ import AccountBalanceIcon from '@mui/icons-material/AccountBalance'
 import ApartmentIcon from '@mui/icons-material/Apartment'
 import DescriptionIcon from '@mui/icons-material/Description'
 import HubIcon from '@mui/icons-material/Hub'
-import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment'
 import RateReviewIcon from '@mui/icons-material/RateReview'
+import LocalFireDepartmentIcon from '@mui/icons-material/LocalFireDepartment'
 import AlarmIcon from '@mui/icons-material/Alarm'
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import BlockIcon from '@mui/icons-material/Block'
 import LocationOffIcon from '@mui/icons-material/LocationOff'
+import TodayIcon from '@mui/icons-material/Today'
 import ExpandLess from '@mui/icons-material/ExpandLess'
 import ExpandMore from '@mui/icons-material/ExpandMore'
 import { usePipelineStatus } from './context/PipelineStatusContext'
 import Avatar from '@mui/material/Avatar'
 import { WorkflowStep, PropertyFacts, PropertyType, ConstructionType, InteriorCondition } from './types'
-import { analysisService } from './services/api'
+import { analysisService, queueService } from './services/api'
 import { PropertyFactsForm } from './components/PropertyFactsForm'
 import { PropertyListPage } from './components/PropertyListPage'
 import { PropertyDetailPage } from './components/PropertyDetailPage'
@@ -58,14 +60,15 @@ import { AnalysisLandingPage } from './pages/AnalysisLandingPage'
 import OMIntakePage from '@/pages/multifamily/OMIntakePage'
 import { HubSpotImportArea } from './components/HubSpotImportArea'
 import { ReviewQueue } from './components/ReviewQueue'
-import {
-  PreviouslyWarmLeadsView,
-  NeedsReviewView,
-  FollowUpOverdueView,
-  NoNextActionView,
-  DoNotContactView,
-  MissingPropertyMatchView,
-} from './components/HubSpotLeadViews'
+import { TodaysActionQueue } from './components/TodaysActionQueue'
+import { PreviouslyWarmQueue } from './components/PreviouslyWarmQueue'
+import { FollowUpOverdueQueue } from './components/FollowUpOverdueQueue'
+import { NoNextActionQueue } from './components/NoNextActionQueue'
+import { NeedsReviewQueue } from './components/NeedsReviewQueue'
+import { DoNotContactQueue } from './components/DoNotContactQueue'
+import { MissingPropertyMatchQueue } from './components/MissingPropertyMatchQueue'
+import { LeadCommandCenter } from './components/LeadCommandCenter'
+import type { QueueCounts } from './types'
 
 const DRAWER_WIDTH = 240
 
@@ -90,9 +93,9 @@ const NAV_SECTIONS = [
       {
         label: null,
         items: [
-          { label: 'Multifamily Deals', path: '/multifamily/deals', icon: <ApartmentIcon /> },
-          { label: 'Lender Profiles', path: '/multifamily/lender-profiles', icon: <AccountBalanceIcon /> },
-          { label: 'OM Intake', path: '/multifamily/om-intake', icon: <DescriptionIcon /> },
+          { label: 'Multifamily Deals', path: '/multifamily/deals', icon: <ApartmentIcon />, badgeKey: null },
+          { label: 'Lender Profiles', path: '/multifamily/lender-profiles', icon: <AccountBalanceIcon />, badgeKey: null },
+          { label: 'OM Intake', path: '/multifamily/om-intake', icon: <DescriptionIcon />, badgeKey: null },
         ],
       },
     ],
@@ -105,21 +108,22 @@ const NAV_SECTIONS = [
       {
         label: null,
         items: [
-          { label: 'Sheets Import', path: '/import', icon: <CloudUploadIcon /> },
-          { label: 'HubSpot Import', path: '/import/hubspot', icon: <HubIcon /> },
-          { label: 'Review Queue', path: '/import/hubspot/review-queue', icon: <RateReviewIcon /> },
-          { label: 'Marketing', path: '/marketing', icon: <CampaignIcon /> },
+          { label: 'Sheets Import', path: '/import', icon: <CloudUploadIcon />, badgeKey: null },
+          { label: 'HubSpot Import', path: '/import/hubspot', icon: <HubIcon />, badgeKey: null },
+          { label: 'Review Queue', path: '/import/hubspot/review-queue', icon: <RateReviewIcon />, badgeKey: null },
+          { label: 'Marketing', path: '/marketing', icon: <CampaignIcon />, badgeKey: null },
         ],
       },
       {
         label: 'Work Queues',
         items: [
-          { label: 'Previously Warm', path: '/leads/views/previously-warm', icon: <LocalFireDepartmentIcon /> },
-          { label: 'Follow-Up Overdue', path: '/leads/views/follow-up-overdue', icon: <AlarmIcon /> },
-          { label: 'No Next Action', path: '/leads/views/no-next-action', icon: <RadioButtonUncheckedIcon /> },
-          { label: 'Needs Review', path: '/leads/views/needs-review', icon: <RateReviewIcon /> },
-          { label: 'Do Not Contact', path: '/leads/views/do-not-contact', icon: <BlockIcon /> },
-          { label: 'Missing Property Match', path: '/leads/views/missing-property-match', icon: <LocationOffIcon /> },
+          { label: "Today's Action",         path: '/',                              icon: <TodayIcon />,                  badgeKey: 'todays_action' as keyof QueueCounts },
+          { label: 'Previously Warm',        path: '/queues/previously-warm',        icon: <LocalFireDepartmentIcon />,    badgeKey: 'previously_warm' as keyof QueueCounts },
+          { label: 'Follow-Up Overdue',      path: '/queues/follow-up-overdue',      icon: <AlarmIcon />,                  badgeKey: 'follow_up_overdue' as keyof QueueCounts },
+          { label: 'No Next Action',         path: '/queues/no-next-action',         icon: <RadioButtonUncheckedIcon />,   badgeKey: 'no_next_action' as keyof QueueCounts },
+          { label: 'Needs Review',           path: '/queues/needs-review',           icon: <RateReviewIcon />,             badgeKey: 'needs_review' as keyof QueueCounts },
+          { label: 'Do Not Contact',         path: '/queues/do-not-contact',         icon: <BlockIcon />,                  badgeKey: 'do_not_contact' as keyof QueueCounts },
+          { label: 'Missing Property Match', path: '/queues/missing-property-match', icon: <LocationOffIcon />,            badgeKey: 'missing_property_match' as keyof QueueCounts },
         ],
       },
     ],
@@ -168,6 +172,25 @@ function LeadListRoute() {
 function LeadDetailRedirect() {
   const { leadId } = useParams<{ leadId: string }>()
   return <Navigate to={`/properties/${leadId}`} replace />
+}
+
+/** Wraps LeadCommandCenter to extract :id from URL params. */
+function LeadCommandCenterRoute() {
+  const { id } = useParams<{ id: string }>()
+  const numericId = Number(id)
+
+  if (!id || Number.isNaN(numericId)) {
+    return (
+      <Box sx={{ p: 4 }}>
+        <Typography color="error">Invalid lead ID.</Typography>
+        <Button component={Link} to="/" sx={{ mt: 1 }}>
+          Back to Queue
+        </Button>
+      </Box>
+    )
+  }
+
+  return <LeadCommandCenter leadId={numericId} />
 }
 
 /** Wraps ImportWizard + ImportHistoryTable together. */
@@ -352,6 +375,13 @@ function App() {
 
   const location = useLocation()
 
+  // Live badge counts for Work Queue nav items — polled every 60s
+  const { data: queueCounts } = useQuery<QueueCounts>({
+    queryKey: ['queue-counts'],
+    queryFn: () => queueService.getCounts(),
+    refetchInterval: 60_000,
+  })
+
   // Track which top-level sections are expanded; default both open
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     '/analysis': true,
@@ -403,6 +433,7 @@ function App() {
                   <List disablePadding>
                     {group.items.map((item) => {
                       const isActive = location.pathname === item.path
+                      const badgeCount = item.badgeKey ? (queueCounts?.[item.badgeKey] ?? 0) : 0
                       return (
                         <ListItemButton
                           key={item.path}
@@ -428,6 +459,14 @@ function App() {
                               fontWeight: isActive ? 600 : 400,
                             }}
                           />
+                          {badgeCount > 0 && (
+                            <Chip
+                              label={badgeCount}
+                              size="small"
+                              color={isActive ? 'default' : 'primary'}
+                              sx={{ ml: 0.5, height: 18, fontSize: '0.65rem', minWidth: 24 }}
+                            />
+                          )}
                         </ListItemButton>
                       )
                     })}
@@ -561,8 +600,17 @@ function App() {
         }}
       >
         <Routes>
-          {/* Redirect root to unified analysis landing page */}
-          <Route path="/" element={<Navigate to="/analysis" replace />} />
+          {/* Default landing page — Today's Action Queue */}
+          <Route path="/" element={<TodaysActionQueue />} />
+          {/* Queue routes */}
+          <Route path="/queues/previously-warm" element={<PreviouslyWarmQueue />} />
+          <Route path="/queues/follow-up-overdue" element={<FollowUpOverdueQueue />} />
+          <Route path="/queues/no-next-action" element={<NoNextActionQueue />} />
+          <Route path="/queues/needs-review" element={<NeedsReviewQueue />} />
+          <Route path="/queues/do-not-contact" element={<DoNotContactQueue />} />
+          <Route path="/queues/missing-property-match" element={<MissingPropertyMatchQueue />} />
+          {/* Lead Command Center */}
+          <Route path="/leads/:id/command-center" element={<LeadCommandCenterRoute />} />
           {/* Unified analysis landing page */}
           <Route path="/analysis" element={<AnalysisLandingPage />} />
           {/* Legacy ARV workflow — still accessible directly */}
@@ -586,12 +634,13 @@ function App() {
           {/* HubSpot CRM routes (Tasks 25.2) */}
           <Route path="/import/hubspot" element={<HubSpotImportArea />} />
           <Route path="/import/hubspot/review-queue" element={<ReviewQueue />} />
-          <Route path="/leads/views/previously-warm" element={<PreviouslyWarmLeadsView />} />
-          <Route path="/leads/views/needs-review" element={<NeedsReviewView />} />
-          <Route path="/leads/views/follow-up-overdue" element={<FollowUpOverdueView />} />
-          <Route path="/leads/views/no-next-action" element={<NoNextActionView />} />
-          <Route path="/leads/views/do-not-contact" element={<DoNotContactView />} />
-          <Route path="/leads/views/missing-property-match" element={<MissingPropertyMatchView />} />
+          {/* Old /leads/views/* — redirect to new /queues/* routes */}
+          <Route path="/leads/views/previously-warm" element={<Navigate to="/queues/previously-warm" replace />} />
+          <Route path="/leads/views/needs-review" element={<Navigate to="/queues/needs-review" replace />} />
+          <Route path="/leads/views/follow-up-overdue" element={<Navigate to="/queues/follow-up-overdue" replace />} />
+          <Route path="/leads/views/no-next-action" element={<Navigate to="/queues/no-next-action" replace />} />
+          <Route path="/leads/views/do-not-contact" element={<Navigate to="/queues/do-not-contact" replace />} />
+          <Route path="/leads/views/missing-property-match" element={<Navigate to="/queues/missing-property-match" replace />} />
         </Routes>
       </Box>
     </Box>

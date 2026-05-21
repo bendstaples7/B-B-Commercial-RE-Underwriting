@@ -91,6 +91,11 @@ from app.models.hubspot_signal import HubSpotSignal
 # HubSpot CRM migration — Signal dictionary
 from app.models.hubspot_signal_dictionary import HubSpotSignalDictionary
 
+# Actionable Lead Command Center models
+from app.models.lead_task import LeadTask
+from app.models.lead_timeline_entry import LeadTimelineEntry
+from app.models.lead_crm_flags_view import LeadCRMFlagsView
+
 __all__ = [
     'PropertyFacts',
     'PropertyType',
@@ -173,4 +178,8 @@ __all__ = [
     'HubSpotSignal',
     # HubSpot CRM migration — Signal dictionary
     'HubSpotSignalDictionary',
+    # Actionable Lead Command Center
+    'LeadTask',
+    'LeadTimelineEntry',
+    'LeadCRMFlagsView',
 ]

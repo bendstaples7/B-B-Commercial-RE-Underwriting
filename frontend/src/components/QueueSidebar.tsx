@@ -1,0 +1,111 @@
+/**
+ * QueueSidebar — sidebar navigation with 7 queue links and live badge counts.
+ *
+ * Polls /api/queues/counts every 60 seconds via React Query.
+ * Highlights the active queue using useLocation.
+ *
+ * Requirements: 18.1, 18.2
+ */
+import { List, ListItem, ListItemButton, ListItemText, Badge, Chip, Box, Typography } from '@mui/material'
+import { Link, useLocation } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import { queueService } from '@/services/api'
+import type { QueueCounts } from '@/types'
+
+// ---------------------------------------------------------------------------
+// Queue link definitions
+// ---------------------------------------------------------------------------
+
+interface QueueLink {
+  label: string
+  path: string
+  badgeKey: keyof QueueCounts
+}
+
+const QUEUE_LINKS: QueueLink[] = [
+  { label: "Today's Action",         path: '/',                              badgeKey: 'todays_action' },
+  { label: 'Previously Warm',        path: '/queues/previously-warm',        badgeKey: 'previously_warm' },
+  { label: 'Follow-Up Overdue',      path: '/queues/follow-up-overdue',      badgeKey: 'follow_up_overdue' },
+  { label: 'No Next Action',         path: '/queues/no-next-action',         badgeKey: 'no_next_action' },
+  { label: 'Needs Review',           path: '/queues/needs-review',           badgeKey: 'needs_review' },
+  { label: 'Do Not Contact',         path: '/queues/do-not-contact',         badgeKey: 'do_not_contact' },
+  { label: 'Missing Property Match', path: '/queues/missing-property-match', badgeKey: 'missing_property_match' },
+]
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+/**
+ * QueueSidebar renders a vertical nav list of the 7 CRM queues.
+ * Badge counts are fetched from the API and refreshed every 60 seconds.
+ * The currently active queue is highlighted based on the current URL path.
+ */
+export function QueueSidebar() {
+  const location = useLocation()
+
+  const { data: counts } = useQuery<QueueCounts>({
+    queryKey: ['queue-counts'],
+    queryFn: () => queueService.getCounts(),
+    refetchInterval: 60_000,
+  })
+
+  return (
+    <Box
+      component="nav"
+      aria-label="Queue navigation"
+      data-testid="queue-sidebar"
+      sx={{ width: 240, flexShrink: 0 }}
+    >
+      <Typography
+        variant="overline"
+        sx={{ px: 2, pt: 2, pb: 0.5, display: 'block', color: 'text.secondary' }}
+      >
+        Queues
+      </Typography>
+
+      <List disablePadding>
+        {QUEUE_LINKS.map(({ label, path, badgeKey }) => {
+          const isActive = location.pathname === path
+          const count = counts?.[badgeKey] ?? 0
+
+          return (
+            <ListItem key={path} disablePadding>
+              <ListItemButton
+                component={Link}
+                to={path}
+                selected={isActive}
+                data-testid={`queue-link-${badgeKey}`}
+                sx={{
+                  borderRadius: 1,
+                  mx: 0.5,
+                  '&.Mui-selected': {
+                    bgcolor: 'primary.main',
+                    color: 'primary.contrastText',
+                    '&:hover': { bgcolor: 'primary.dark' },
+                  },
+                }}
+              >
+                <ListItemText
+                  primary={label}
+                  primaryTypographyProps={{ variant: 'body2', noWrap: true }}
+                />
+                {count > 0 && (
+                  <Chip
+                    label={count}
+                    size="small"
+                    color={isActive ? 'default' : 'primary'}
+                    data-testid={`queue-badge-${badgeKey}`}
+                    sx={{ ml: 1, height: 20, fontSize: '0.7rem' }}
+                  />
+                )}
+              </ListItemButton>
+            </ListItem>
+          )
+        })}
+      </List>
+    </Box>
+  )
+}
+
+export default QueueSidebar

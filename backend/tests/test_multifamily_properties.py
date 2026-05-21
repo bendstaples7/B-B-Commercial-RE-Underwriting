@@ -1302,7 +1302,10 @@ class TestFundingWaterfallInvariants:
         expected_shortfall = quantize_money(
             max(Decimal("0"), required_equity - total_drawn)
         )
-        assert abs(plan.shortfall - expected_shortfall) <= Decimal("0.01"), (
+        # Tolerance: each draw is quantized to 2dp, so shortfall can differ by
+        # up to 0.01 per source due to rounding.
+        shortfall_tolerance = Decimal("0.01") * len(sources)
+        assert abs(plan.shortfall - expected_shortfall) <= shortfall_tolerance, (
             f"Invariant 4 (shortfall) failed: got {plan.shortfall}, "
             f"expected {expected_shortfall}. E={required_equity}, "
             f"total_drawn={total_drawn}"

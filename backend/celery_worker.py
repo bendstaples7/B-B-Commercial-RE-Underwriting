@@ -601,6 +601,15 @@ def generate_backup_export() -> str:
     return run_generate_backup_export()
 
 
+# ---------------------------------------------------------------------------
+# Action Engine Tasks
+#
+# Imported here so Celery discovers the @celery.task decorators defined in
+# app/tasks/action_engine_tasks.py at worker startup.
+# ---------------------------------------------------------------------------
+import app.tasks.action_engine_tasks  # noqa: F401  (side-effect import)
+
+
 @celery.task(name='tasks.mark_overdue')
 def mark_tasks_overdue() -> int:
     """Bulk-update tasks with status='open' and past due_date to status='overdue'.
@@ -709,6 +718,8 @@ REQUIRED_TASKS = {
     'hubspot.generate_backup',
     'hubspot.post_import_pipeline',
     'tasks.mark_overdue',
+    'action_engine.recompute_recommended_action',
+    'action_engine.bulk_recompute_all_leads',
 }
 
 

@@ -67,7 +67,57 @@ def create_app(config_name='development'):
                 from flask_migrate import upgrade
                 upgrade(directory='alembic_migrations')
             except Exception as e:
-                app.logger.warning("Auto-migrate skipped: %s", e)
+                # ---------------------------------------------------------------------------
+                # LOUD FAILURE: a migration error means the DB schema is out of sync with
+                # the code. Silently continuing causes every request to 500 with
+                # "column does not exist" errors that are very hard to diagnose.
+                #
+                # Instead, we assert the DB is at the expected head revision and raise
+                # a RuntimeError that prevents the app from starting in a broken state.
+                # ---------------------------------------------------------------------------
+                app.logger.error(
+                    "Migration failed during startup: %s\n"
+                    "The database schema is out of sync with the application code.\n"
+                    "Run:  cd backend && flask db upgrade head\n"
+                    "Then restart the server.",
+                    e,
+                )
+                # Verify whether the DB is actually at head despite the error
+                # (e.g. the error was a no-op like a duplicate index that already exists)
+                try:
+                    from alembic.runtime.migration import MigrationContext
+                    from alembic.script import ScriptDirectory
+                    from flask_migrate import _get_config  # type: ignore[attr-defined]
+                    alembic_cfg = _get_config('alembic_migrations')
+                    script = ScriptDirectory.from_config(alembic_cfg)
+                    head_revisions = {s.revision for s in script.get_revisions('heads')}
+                    with db.engine.connect() as conn:
+                        context = MigrationContext.configure(conn)
+                        current_revisions = context.get_current_heads()
+                    if set(current_revisions) != head_revisions:
+                        raise RuntimeError(
+                            f"\n\n"
+                            f"  ╔══════════════════════════════════════════════════════════╗\n"
+                            f"  ║  DATABASE SCHEMA OUT OF SYNC — SERVER WILL NOT START    ║\n"
+                            f"  ╠══════════════════════════════════════════════════════════╣\n"
+                            f"  ║  Current DB revision : {str(current_revisions):<34} ║\n"
+                            f"  ║  Expected head       : {str(head_revisions):<34} ║\n"
+                            f"  ╠══════════════════════════════════════════════════════════╣\n"
+                            f"  ║  Fix:  cd backend && flask db upgrade head               ║\n"
+                            f"  ╚══════════════════════════════════════════════════════════╝\n"
+                        ) from e
+                    else:
+                        # DB is at head — the migration error was a harmless no-op
+                        # (e.g. duplicate index/enum that already existed). Log and continue.
+                        app.logger.warning(
+                            "Migration raised an error but DB is already at head revision %s. "
+                            "This is likely a harmless duplicate-object error. Continuing.",
+                            current_revisions,
+                        )
+                except RuntimeError:
+                    raise
+                except Exception as check_err:
+                    app.logger.warning("Could not verify migration head: %s", check_err)
     
     # Configure logging
     from app.logging_config import setup_logging
@@ -170,6 +220,19 @@ def create_app(config_name='development'):
     # Contact management (CRUD + property-contact nested routes)
     from app.controllers.contact_controller import contacts_bp
     app.register_blueprint(contacts_bp, url_prefix='')
+
+    # Actionable Lead Command Center — Queue endpoints
+    from app.controllers.queue_controller import queue_bp
+    app.register_blueprint(queue_bp, url_prefix='/api/queues')
+
+    # Actionable Lead Command Center — Bulk Action endpoints (registered BEFORE
+    # command_center_bp to avoid route conflicts with /api/leads/<int:lead_id>/*)
+    from app.controllers.bulk_action_controller import bulk_action_bp
+    app.register_blueprint(bulk_action_bp, url_prefix='/api/leads/bulk')
+
+    # Actionable Lead Command Center — Command Center endpoints
+    from app.controllers.command_center_controller import command_center_bp
+    app.register_blueprint(command_center_bp, url_prefix='/api/leads')
 
     # OpenAPI spec endpoint
     from app.openapi import openapi_bp
@@ -487,6 +550,145 @@ def create_app(config_name='development'):
 
             except Exception as e:
                 app.logger.warning("Startup import-run cleanup skipped: %s", e)
+
+        # ---------------------------------------------------------------------------
+        # CRM field backfill + Action Engine — runs automatically on first startup
+        # after CRM columns were added to the leads table.
+        #
+        # Three-phase backfill (runs in a background thread so startup is not blocked):
+        #   Phase 1: Backfill has_phone / has_email from existing flat columns
+        #   Phase 2: Backfill has_property_match from confirmed HubSpot matches
+        #   Phase 3: Run Action Engine bulk_recompute to set recommended_action
+        #
+        # Guard: only runs when any lead has recommended_action IS NULL.
+        # After the first run, all leads have recommended_action set, so this
+        # block becomes a no-op on subsequent startups.
+        # ---------------------------------------------------------------------------
+        with app.app_context():
+            try:
+                unclassified_count = db.session.execute(
+                    db.text("SELECT COUNT(*) FROM leads WHERE recommended_action IS NULL")
+                ).scalar()
+
+                if unclassified_count > 0:
+                    app.logger.info(
+                        "Startup: %d unclassified leads detected. "
+                        "Spawning background thread for CRM field backfill + Action Engine.",
+                        unclassified_count,
+                    )
+                    import threading as _crm_threading
+
+                    def _crm_backfill(flask_app):
+                        """Backfill CRM fields and run Action Engine for all unclassified leads."""
+                        with flask_app.app_context():
+                            try:
+                                from app import db as _db
+
+                                # --------------------------------------------------
+                                # Phase 1: Backfill has_phone / has_email
+                                # Uses the flat phone_1..phone_7 / email_1..email_5
+                                # columns that were populated during import.
+                                # Also checks the contact_phones / contact_emails
+                                # relational tables for leads migrated to the new model.
+                                # --------------------------------------------------
+                                flask_app.logger.info("CRM backfill: Phase 1 — has_phone / has_email")
+
+                                phone_updated = _db.session.execute(_db.text("""
+                                    UPDATE leads
+                                    SET has_phone = TRUE
+                                    WHERE has_phone = FALSE
+                                    AND (
+                                        phone_1 IS NOT NULL AND phone_1 != ''
+                                        OR phone_2 IS NOT NULL AND phone_2 != ''
+                                        OR phone_3 IS NOT NULL AND phone_3 != ''
+                                        OR phone_4 IS NOT NULL AND phone_4 != ''
+                                        OR phone_5 IS NOT NULL AND phone_5 != ''
+                                        OR phone_6 IS NOT NULL AND phone_6 != ''
+                                        OR phone_7 IS NOT NULL AND phone_7 != ''
+                                        OR EXISTS (
+                                            SELECT 1 FROM property_contacts pc
+                                            JOIN contact_phones cp ON cp.contact_id = pc.contact_id
+                                            WHERE pc.property_id = leads.id
+                                        )
+                                    )
+                                """)).rowcount
+                                _db.session.commit()
+                                flask_app.logger.info(
+                                    "CRM backfill: has_phone set TRUE for %d leads", phone_updated
+                                )
+
+                                email_updated = _db.session.execute(_db.text("""
+                                    UPDATE leads
+                                    SET has_email = TRUE
+                                    WHERE has_email = FALSE
+                                    AND (
+                                        email_1 IS NOT NULL AND email_1 != ''
+                                        OR email_2 IS NOT NULL AND email_2 != ''
+                                        OR email_3 IS NOT NULL AND email_3 != ''
+                                        OR email_4 IS NOT NULL AND email_4 != ''
+                                        OR email_5 IS NOT NULL AND email_5 != ''
+                                        OR EXISTS (
+                                            SELECT 1 FROM property_contacts pc
+                                            JOIN contact_emails ce ON ce.contact_id = pc.contact_id
+                                            WHERE pc.property_id = leads.id
+                                        )
+                                    )
+                                """)).rowcount
+                                _db.session.commit()
+                                flask_app.logger.info(
+                                    "CRM backfill: has_email set TRUE for %d leads", email_updated
+                                )
+
+                                # --------------------------------------------------
+                                # Phase 2: Backfill has_property_match
+                                # A lead has a property match if there is a confirmed
+                                # HubSpot match record linking it to a deal.
+                                # --------------------------------------------------
+                                flask_app.logger.info("CRM backfill: Phase 2 — has_property_match")
+
+                                match_updated = _db.session.execute(_db.text("""
+                                    UPDATE leads
+                                    SET has_property_match = TRUE
+                                    WHERE has_property_match = FALSE
+                                    AND EXISTS (
+                                        SELECT 1 FROM hubspot_matches hm
+                                        WHERE hm.internal_record_id = leads.id
+                                        AND hm.internal_record_type = 'lead'
+                                        AND hm.status = 'confirmed'
+                                    )
+                                """)).rowcount
+                                _db.session.commit()
+                                flask_app.logger.info(
+                                    "CRM backfill: has_property_match set TRUE for %d leads", match_updated
+                                )
+
+                                # --------------------------------------------------
+                                # Phase 3: Run Action Engine bulk recompute
+                                # Now that has_phone, has_email, has_property_match
+                                # are accurate, the engine can classify correctly.
+                                # --------------------------------------------------
+                                flask_app.logger.info("CRM backfill: Phase 3 — Action Engine bulk recompute")
+                                from app.services.action_engine_service import ActionEngineService
+                                total = ActionEngineService.bulk_recompute()
+                                flask_app.logger.info(
+                                    "CRM backfill: Action Engine classified %d leads.", total
+                                )
+
+                            except Exception as exc:
+                                flask_app.logger.error(
+                                    "CRM backfill failed: %s", exc, exc_info=True
+                                )
+
+                    crm_thread = _crm_threading.Thread(
+                        target=_crm_backfill,
+                        args=(app,),
+                        daemon=True,
+                        name="crm-startup-backfill",
+                    )
+                    crm_thread.start()
+
+            except Exception as e:
+                app.logger.warning("CRM backfill check skipped: %s", e)
 
     app.logger.info("Flask application initialized successfully")
     

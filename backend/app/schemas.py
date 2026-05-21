@@ -1424,3 +1424,221 @@ class PropertyContactResponseSchema(ContactResponseSchema):
     """
     property_contact_role = fields.Str()
     is_primary = fields.Bool()
+
+
+# ── Actionable Lead Command Center — Task Schemas ─────────────────────────
+
+VALID_TASK_TYPES = [
+    'call_owner_today', 'research_missing_pin', 'match_hubspot_deal',
+    'run_property_analysis', 'add_to_mail_batch', 'skip_trace_owner', 'custom',
+]
+
+VALID_TASK_STATUSES = ['open', 'completed', 'cancelled']
+
+
+class LeadTaskSchema(Schema):
+    """Serialization schema for a LeadTask (response)."""
+    id = fields.Integer(dump_only=True)
+    lead_id = fields.Integer(dump_only=True)
+    task_type = fields.String(dump_only=True)
+    title = fields.String(dump_only=True)
+    status = fields.String(dump_only=True)
+    due_date = fields.Date(dump_only=True, allow_none=True)
+    created_at = fields.DateTime(dump_only=True)
+    completed_at = fields.DateTime(dump_only=True, allow_none=True)
+    created_by = fields.String(dump_only=True)
+
+
+class LeadTaskCreateSchema(Schema):
+    """Validation schema for creating a LeadTask."""
+    title = fields.String(required=True, validate=validate.Length(min=1, max=255))
+    task_type = fields.String(
+        load_default='custom',
+        validate=validate.OneOf(VALID_TASK_TYPES),
+    )
+    due_date = fields.Date(allow_none=True, load_default=None)
+
+
+class LeadTaskUpdateSchema(Schema):
+    """Validation schema for updating a LeadTask (partial update)."""
+    title = fields.String(validate=validate.Length(min=1, max=255))
+    due_date = fields.Date(allow_none=True)
+
+
+class LeadTaskCompleteSchema(Schema):
+    """Validation schema for completing a LeadTask (no body required)."""
+    pass
+
+
+class LeadTaskSnoozeSchema(Schema):
+    """Validation schema for snoozing a LeadTask."""
+    new_due_date = fields.Date(required=True)
+
+# ── Actionable Lead Command Center — Timeline Schemas ─────────────────────
+
+VALID_TIMELINE_EVENT_TYPES = [
+    'note_added', 'call_logged', 'task_created', 'task_completed',
+    'task_snoozed', 'recommended_action_changed', 'status_changed',
+    'hubspot_note', 'hubspot_call', 'hubspot_task', 'hubspot_deal_stage',
+    'property_analysis_completed', 'lead_imported',
+]
+
+VALID_TIMELINE_SOURCES = ['manual', 'system', 'hubspot']
+
+
+class LeadTimelineEntrySchema(Schema):
+    """Serialization schema for a LeadTimelineEntry (response)."""
+    id = fields.Integer(dump_only=True)
+    lead_id = fields.Integer(dump_only=True)
+    event_type = fields.String(dump_only=True)
+    occurred_at = fields.DateTime(dump_only=True)
+    source = fields.String(dump_only=True)
+    actor = fields.String(dump_only=True)
+    summary = fields.String(dump_only=True)
+    metadata = fields.Dict(dump_only=True, allow_none=True)
+    hubspot_activity_id = fields.String(dump_only=True, allow_none=True)
+    is_deleted = fields.Boolean(dump_only=True)
+    created_at = fields.DateTime(dump_only=True)
+
+
+class LeadTimelinePageSchema(Schema):
+    """Pagination wrapper for a page of LeadTimelineEntry records."""
+    entries = fields.List(fields.Nested(LeadTimelineEntrySchema), dump_only=True)
+    total = fields.Integer(dump_only=True)
+    page = fields.Integer(dump_only=True)
+    per_page = fields.Integer(dump_only=True)
+    pages = fields.Integer(dump_only=True)
+
+# ── Actionable Lead Command Center — Lead Action Schemas ──────────────────
+
+VALID_LEAD_STATUSES = [
+    'new', 'active', 'follow_up', 'nurture',
+    'under_contract', 'closed', 'suppressed', 'do_not_contact',
+]
+
+VALID_CALL_OUTCOMES = ['answered', 'voicemail', 'no_answer', 'busy', 'wrong_number']
+
+
+class LeadStatusUpdateSchema(Schema):
+    """Validation schema for PATCH /api/leads/:id/status."""
+    status = fields.String(
+        required=True,
+        validate=validate.OneOf(VALID_LEAD_STATUSES),
+    )
+    actor = fields.String(load_default='anonymous')
+
+
+class LogNoteSchema(Schema):
+    """Validation schema for POST /api/leads/:id/notes."""
+    body = fields.String(required=True, validate=validate.Length(min=1, max=5000))
+    actor = fields.String(load_default='anonymous')
+
+
+class LogCallSchema(Schema):
+    """Validation schema for POST /api/leads/:id/calls."""
+    outcome = fields.String(
+        required=True,
+        validate=validate.OneOf(VALID_CALL_OUTCOMES),
+    )
+    duration_minutes = fields.Integer(
+        allow_none=True,
+        load_default=None,
+        validate=validate.Range(min=1, max=999),
+    )
+    notes = fields.String(allow_none=True, load_default=None, validate=validate.Length(max=2000))
+    actor = fields.String(load_default='anonymous')
+
+
+class ParkLeadSchema(Schema):
+    """Validation schema for POST /api/leads/:id/park."""
+    reactivation_date = fields.Date(allow_none=True, load_default=None)
+    actor = fields.String(load_default='anonymous')
+
+
+class DoNotContactSchema(Schema):
+    """Validation schema for POST /api/leads/:id/do-not-contact."""
+    actor = fields.String(load_default='anonymous')
+
+
+class ReactivateLeadSchema(Schema):
+    """Validation schema for POST /api/leads/:id/reactivate."""
+    actor = fields.String(load_default='anonymous')
+
+
+class RecommendedActionResponseSchema(Schema):
+    """Response schema for GET /api/leads/:id/recommended-action."""
+    recommended_action = fields.String(dump_only=True, allow_none=True)
+    label = fields.String(dump_only=True, allow_none=True)
+    explanation = fields.String(dump_only=True, allow_none=True)
+    signals = fields.Dict(dump_only=True)
+
+# ── Actionable Lead Command Center — Queue Schemas ────────────────────────
+
+class QueueRowSchema(Schema):
+    """Serialization schema for a single queue row (lead summary)."""
+    id = fields.Integer(dump_only=True)
+    owner_first_name = fields.String(dump_only=True, allow_none=True)
+    owner_last_name = fields.String(dump_only=True, allow_none=True)
+    property_street = fields.String(dump_only=True, allow_none=True)
+    property_city = fields.String(dump_only=True, allow_none=True)
+    property_state = fields.String(dump_only=True, allow_none=True)
+    lead_score = fields.Float(dump_only=True)
+    lead_status = fields.String(dump_only=True)
+    recommended_action = fields.String(dump_only=True, allow_none=True)
+    has_property_match = fields.Boolean(dump_only=True)
+    last_contact_date = fields.String(dump_only=True, allow_none=True)
+    last_hubspot_sync_at = fields.String(dump_only=True, allow_none=True)
+    hubspot_deal_stage = fields.String(dump_only=True, allow_none=True)
+    follow_up_overdue = fields.Boolean(dump_only=True)
+    review_required = fields.Boolean(dump_only=True)
+    review_reason = fields.String(dump_only=True, allow_none=True)
+    review_triggered_at = fields.String(dump_only=True, allow_none=True)
+    unanswered_call_count = fields.Integer(dump_only=True)
+    is_warm = fields.Boolean(dump_only=True)
+
+
+class QueuePageSchema(Schema):
+    """Pagination wrapper for a page of queue rows."""
+    rows = fields.List(fields.Nested(QueueRowSchema), dump_only=True)
+    total = fields.Integer(dump_only=True)
+    page = fields.Integer(dump_only=True)
+    per_page = fields.Integer(dump_only=True)
+
+
+# ── Actionable Lead Command Center — Command Center Payload Schema ─────────
+
+class CommandCenterPayloadSchema(Schema):
+    """Response schema documenting the full command center payload shape.
+
+    Returned by GET /api/leads/:id/command-center.
+    """
+    id = fields.Integer(dump_only=True)
+    owner_first_name = fields.String(dump_only=True, allow_none=True)
+    owner_last_name = fields.String(dump_only=True, allow_none=True)
+    property_street = fields.String(dump_only=True, allow_none=True)
+    property_city = fields.String(dump_only=True, allow_none=True)
+    property_state = fields.String(dump_only=True, allow_none=True)
+    lead_score = fields.Float(dump_only=True)
+    lead_status = fields.String(dump_only=True)
+    has_property_match = fields.Boolean(dump_only=True)
+    analysis_session_id = fields.Integer(dump_only=True, allow_none=True)
+    recommended_action = fields.Dict(dump_only=True, allow_none=True)
+    open_tasks = fields.List(fields.Dict(), dump_only=True)
+    timeline = fields.Dict(dump_only=True)
+
+
+# ── Actionable Lead Command Center — Bulk Action Schemas ──────────────────
+
+class BulkActionRequestSchema(Schema):
+    """Validation schema for bulk action requests."""
+    lead_ids = fields.List(
+        fields.Integer(validate=validate.Range(min=1)),
+        required=True,
+        validate=validate.Length(min=1),
+    )
+
+
+class BulkActionResultSchema(Schema):
+    """Response schema for bulk action results."""
+    successes = fields.Integer(dump_only=True)
+    failures = fields.Integer(dump_only=True)

@@ -35,6 +35,7 @@ def _json(client, method, path, body=None):
     kwargs = {
         "headers": HEADERS,
         "content_type": "application/json",
+        "follow_redirects": True,
     }
     if body is not None:
         kwargs["data"] = json.dumps(body)

@@ -20,6 +20,12 @@ from .organization_service import OrganizationService
 from .interaction_service import InteractionService
 from .task_service import TaskService
 from .contact_service import ContactService
+from .action_engine_service import ActionEngineService
+from .queue_service import QueueService
+from .lead_task_service import LeadTaskService
+from .lead_timeline_service import LeadTimelineService
+from .call_log_service import CallLogService
+from .hubspot_timeline_import_service import HubSpotTimelineImportService
 
 __all__ = [
     'HubSpotClientService',
@@ -45,4 +51,10 @@ __all__ = [
     'MarketingManager',
     'CondoFilterService',
     'DeterministicScoringEngine',
+    'ActionEngineService',
+    'QueueService',
+    'LeadTaskService',
+    'LeadTimelineService',
+    'CallLogService',
+    'HubSpotTimelineImportService',
 ]

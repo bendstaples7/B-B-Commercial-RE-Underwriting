@@ -67,8 +67,101 @@ def handle_errors(f):
 
 @api_bp.route('/health', methods=['GET'])
 def health_check():
-    """Health check endpoint."""
-    return jsonify({'status': 'healthy'})
+    """Health check endpoint — verifies DB connectivity, migration state, and data integrity.
+
+    Returns HTTP 200 with status='healthy' when all checks pass.
+    Returns HTTP 503 with status='degraded' and a list of failing checks otherwise.
+
+    Checks:
+      1. DB connectivity — can we execute a simple query?
+      2. Migration head — is alembic_version at the expected head revision?
+      3. Unclassified leads — are there leads with recommended_action IS NULL?
+         (indicates the Action Engine backfill hasn't run)
+      4. Queue counts — do the 7 queue counts return without error?
+    """
+    import os
+    from app import db
+
+    checks = {}
+    degraded = False
+
+    # ------------------------------------------------------------------
+    # Check 1: DB connectivity
+    # ------------------------------------------------------------------
+    try:
+        db.session.execute(db.text('SELECT 1'))
+        checks['db_connectivity'] = 'ok'
+    except Exception as e:
+        checks['db_connectivity'] = f'FAIL: {e}'
+        degraded = True
+
+    # ------------------------------------------------------------------
+    # Check 2: Migration head
+    # ------------------------------------------------------------------
+    try:
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+        from alembic.runtime.migration import MigrationContext
+
+        alembic_cfg = Config(
+            os.path.join(os.path.dirname(__file__), '..', '..', 'alembic_migrations', 'alembic.ini')
+        )
+        alembic_cfg.set_main_option(
+            'script_location',
+            os.path.join(os.path.dirname(__file__), '..', '..', 'alembic_migrations'),
+        )
+        script = ScriptDirectory.from_config(alembic_cfg)
+        expected_heads = {s.revision for s in script.get_revisions('heads')}
+
+        with db.engine.connect() as conn:
+            ctx = MigrationContext.configure(conn)
+            current_heads = set(ctx.get_current_heads())
+
+        if current_heads == expected_heads:
+            checks['migration_head'] = f'ok ({", ".join(current_heads)})'
+        else:
+            checks['migration_head'] = (
+                f'FAIL: DB at {current_heads}, expected {expected_heads}. '
+                f'Run: flask db upgrade head'
+            )
+            degraded = True
+    except Exception as e:
+        checks['migration_head'] = f'FAIL: {e}'
+        degraded = True
+
+    # ------------------------------------------------------------------
+    # Check 3: Unclassified leads
+    # ------------------------------------------------------------------
+    try:
+        unclassified = db.session.execute(
+            db.text('SELECT COUNT(*) FROM leads WHERE recommended_action IS NULL')
+        ).scalar()
+        if unclassified == 0:
+            checks['action_engine'] = 'ok (all leads classified)'
+        else:
+            checks['action_engine'] = (
+                f'WARN: {unclassified} leads have recommended_action=NULL. '
+                f'Action Engine backfill may still be running.'
+            )
+            # Warn but don't degrade — backfill runs in background on startup
+    except Exception as e:
+        checks['action_engine'] = f'FAIL: {e}'
+        degraded = True
+
+    # ------------------------------------------------------------------
+    # Check 4: Queue counts
+    # ------------------------------------------------------------------
+    try:
+        from app.services.queue_service import QueueService
+        counts = QueueService().get_counts()
+        checks['queue_counts'] = f'ok ({counts})'
+    except Exception as e:
+        checks['queue_counts'] = f'FAIL: {e}'
+        degraded = True
+
+    status = 'degraded' if degraded else 'healthy'
+    http_status = 503 if degraded else 200
+    return jsonify({'status': status, 'checks': checks}), http_status
 
 
 @api_bp.route('/analysis/start', methods=['POST'])
