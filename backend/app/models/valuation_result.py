@@ -19,9 +19,21 @@ class ValuationResult(db.Model):
     
     # Key drivers (stored as JSON array of strings)
     key_drivers = db.Column(JSON, nullable=True)
+
+    # Confidence score (0–100): reflects number of comparables, recency, and proximity.
+    # Lower when fewer comparables are used; also drives ARV range widening.
+    confidence_score = db.Column(db.Float, nullable=True)
     
-    # Relationship to comparable valuations
-    comparable_valuations = db.relationship('ComparableValuation', backref='valuation_result', lazy='dynamic')
+    # Relationship to comparable valuations — cascade ensures child rows are
+    # deleted automatically when this ValuationResult is deleted, preventing
+    # NOT NULL constraint violations on valuation_result_id when re-running
+    # valuation on a session that already has one.
+    comparable_valuations = db.relationship(
+        'ComparableValuation',
+        backref='valuation_result',
+        lazy='dynamic',
+        cascade='all, delete-orphan',
+    )
     
     def __repr__(self):
         return f'<ValuationResult ARV: ${self.conservative_arv:.0f} - ${self.likely_arv:.0f} - ${self.aggressive_arv:.0f}>'
@@ -31,7 +43,12 @@ class ComparableValuation(db.Model):
     __tablename__ = 'comparable_valuations'
     
     id = db.Column(db.Integer, primary_key=True)
-    valuation_result_id = db.Column(db.Integer, db.ForeignKey('valuation_results.id'), nullable=False, index=True)
+    valuation_result_id = db.Column(
+        db.Integer,
+        db.ForeignKey('valuation_results.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
     comparable_id = db.Column(db.Integer, db.ForeignKey('comparable_sales.id'), nullable=False)
     
     # Valuation methods

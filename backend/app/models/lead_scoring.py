@@ -13,6 +13,10 @@ class ScoringWeights(db.Model):
     data_completeness_weight = db.Column(db.Float, nullable=False, default=0.20)
     owner_situation_weight = db.Column(db.Float, nullable=False, default=0.30)
     location_desirability_weight = db.Column(db.Float, nullable=False, default=0.20)
+    # Minimum number of comparable sales required before the user is warned
+    # during the COMPARABLE_REVIEW step.  Defaults to 10 (production standard).
+    # Users can lower this to proceed with fewer comparables when data is sparse.
+    min_comparables = db.Column(db.Integer, nullable=False, default=10)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 

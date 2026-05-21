@@ -23,6 +23,8 @@ import time
 from decimal import Decimal
 from typing import Optional
 
+logger = logging.getLogger(__name__)
+
 from app.services.multifamily.pro_forma_constants import (
     HORIZON_MONTHS,
     STABILIZED_MONTHS,
@@ -351,7 +353,9 @@ def _compute_summary(
 # ---------------------------------------------------------------------------
 
 
-def compute_pro_forma(inputs: DealInputs) -> ProFormaComputation:
+def compute_pro_forma(
+    inputs: DealInputs,
+) -> ProFormaComputation:
     """Compute the full 24-month pro forma from frozen inputs.
 
     This is a pure function — no database access, no I/O, no mutation of inputs.
@@ -394,6 +398,17 @@ def compute_pro_forma(inputs: DealInputs) -> ProFormaComputation:
 
     # Collect all unit_ids from rent_roll (these are the units we compute for)
     all_unit_ids = [rr.unit_id for rr in inputs.rent_roll]
+
+    logger.debug(
+        "compute_pro_forma: deal_id=%s unit_count=%d rent_roll_entries=%d "
+        "rehab_plan_entries=%d missing_a=%s missing_b=%s",
+        inputs.deal.deal_id,
+        inputs.deal.unit_count,
+        len(inputs.rent_roll),
+        len(inputs.rehab_plan),
+        missing_inputs_a,
+        missing_inputs_b,
+    )
 
     # Step 2: Per-unit scheduled rent for months 1..24 (Req 8.1)
     per_unit_schedule: dict[str, tuple[Decimal, ...]] = {}

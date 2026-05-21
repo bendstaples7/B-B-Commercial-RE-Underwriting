@@ -1,0 +1,212 @@
+# Analysis Flow Fix Tasks
+
+Ordered task list to get the full 6-step property analysis workflow functional end-to-end.
+Each task unblocks the next step in the flow. Tasks must be completed in order.
+
+## Tasks
+
+- [x] 0. Pre-flight: Verify Google Places API is configured
+  - [x] 0.1 Check whether `VITE_GOOGLE_MAPS_API_KEY` exists in `frontend/.env`
+    - Currently missing — `frontend/.env` only contains `VITE_API_URL`
+    - The backend `GOOGLE_MAPS_API_KEY` is still the placeholder value `your-google-maps-api-key`
+  - [x] 0.2 Confirm with user which key to use (existing backend key or a new browser-restricted key)
+  - [x] 0.3 Verify in Google Cloud Console that Maps JavaScript API and Places API are enabled
+  - [x] 0.4 Add `VITE_GOOGLE_MAPS_API_KEY=<key>` to `frontend/.env` and `frontend/.env.example`
+  - [x] 0.5 Confirm the key works with a test Places Autocomplete request
+    - If key is configured and APIs are enabled → proceed to Task 1 (Option A)
+    - If key cannot be configured → proceed to Task 1 (Option B: backend geocoding fallback)
+
+- [x] 1. Fix: No coordinates → comparable search crashes
+  - **Selected approach: Option A — Google Places Autocomplete on address entry**
+  - [x] 1.1 Install `@react-google-maps/api` or `use-places-autocomplete` in the frontend
+  - [x] 1.2 Replace the plain text address input in `PropertyFactsForm` with a Places Autocomplete input
+    - On address selection, capture `geometry.location` (lat/lng) from the Places API response
+    - Pass `latitude` and `longitude` alongside `address` in the `POST /analysis/start` request
+  - [x] 1.3 Update `StartAnalysisSchema` in `backend/app/schemas.py` to accept optional `latitude` and `longitude` fields
+  - [x] 1.4 Update `WorkflowController.start_analysis` to store the Places coordinates on the `PropertyFacts` record
+    - If Cook County API also returns coordinates, Cook County takes precedence (parcel-level precision)
+    - Places coordinates are the fallback when Cook County returns null
+  - [x] 1.5 Add tests verifying that coordinates from Places are persisted when Cook County returns null
+
+- [x] 2. Fix: No comparable sales data source → 0 comparables returned
+  - **Selected approach: Cook County Assessor Parcel Sales open dataset**
+  - The Cook County Assessor publishes a free, public parcel sales dataset via the Socrata API at `data.cookcountyil.gov` — the same platform already used by `PropertyDataService`. It covers all Cook County property sales from 1999 to present and is the same data the Assessor uses for its own comparable property modeling. No API key required (anonymous access supported; app token optional for higher rate limits).
+  - [x] 2.1 Research the Cook County Parcel Sales dataset schema
+    - Identify the Socrata dataset ID and available fields: `sale_price`, `sale_date`, `pin`, property class, address
+    - Determine how to join with the parcel addresses/proximity dataset to get lat/lng (same join pattern used in `PropertyDataService`)
+    - Confirm the `$where` query parameters available for filtering by date range and geography
+    - **FINDINGS** (verified against live Socrata API metadata):
+      - **Parcel Sales dataset ID**: `wvhk-k5uv`
+        - Endpoint: `https://datacatalog.cookcountyil.gov/resource/wvhk-k5uv.json`
+        - Key fields (verified `fieldName` values):
+          - `pin` — 14-digit Parcel Identification Number (text)
+          - `sale_date` — Sale date, recorded date (calendar_date, ISO format `2024-03-15T00:00:00.000`)
+          - `sale_price` — Sale price in dollars (number)
+          - `class` — Property class code (text, e.g. `"203"` = 2-flat, `"211"` = 3-flat, `"299"` = condo, `"202"` = single-family)
+          - `deed_type` — `"Warranty"`, `"Trustee"`, `"Quit claim"`, `"Executor"`, `"Other"`
+          - `sale_type` — `"LAND AND BUILDING"` or `"LAND"` (filter to `LAND AND BUILDING`)
+          - `is_multisale` — boolean; true if sold as part of a multi-parcel bundle
+          - `sale_filter_less_than_10k` — boolean; true if price < $10k (filter these out)
+          - `sale_filter_deed_type` — boolean; true for quit claim / executor / beneficial interest (filter these out)
+          - `sale_filter_same_sale_within_365` — boolean; true for duplicate same-price sale within 365 days
+          - `nbhd` — Assessor neighborhood code (first 2 digits = township)
+          - `township_code` — Township code (text)
+          - `year` — Year of sale (number)
+        - **No lat/lng in this dataset** — coordinates must be joined from a separate dataset
+        - Dataset covers 1999–present, updated monthly; ~2.6M rows total
+      - **Parcel Universe (Current Year Only) dataset ID**: `pabr-t5kh`
+        - Endpoint: `https://datacatalog.cookcountyil.gov/resource/pabr-t5kh.json`
+        - Key fields for the join:
+          - `pin` — 14-digit PIN (text, same key as Parcel Sales)
+          - `lon` — Parcel centroid longitude (number, fieldName `lon`)
+          - `lat` — Parcel centroid latitude (number, fieldName `lat`)
+        - ~1.86M rows (current year only); ~306 parcels missing coordinates
+        - Updated monthly
+      - **Join strategy** (same pattern as `PropertyDataService`):
+        1. Query `wvhk-k5uv` (Parcel Sales) filtered by `sale_date`, `class`, and arm's-length filters
+        2. Collect the list of PINs from the results
+        3. Query `pabr-t5kh` (Parcel Universe) with `$where=pin in ('pin1','pin2',...)` to get `lat`/`lon` for each PIN
+        4. Merge coordinates into the sale records in Python; discard sales with no coordinates
+        5. Apply bounding-box filter in Python using the Haversine distance already in `ComparableSalesFinder._calculate_distance`
+        - **Alternative**: Query Parcel Universe first with a bounding box (`lat` between X and Y AND `lon` between A and B), collect PINs, then query Sales by those PINs. This avoids fetching all sales and is more efficient for dense areas. Preferred approach for task 2.2.
+      - **`$where` filter parameters for Parcel Sales**:
+        - Date range: `sale_date >= '2023-01-01T00:00:00.000' AND sale_date <= '2024-12-31T00:00:00.000'`
+        - Arm's-length filter: `sale_filter_less_than_10k=false AND sale_filter_deed_type=false`
+        - Property type by class: `class in ('202','203','204','205','206','207','208','211','212')` (residential classes)
+          - Single-family classes: `202`, `203` (2-flat), `204` (3-flat), `205` (4-flat), `206` (5-flat), `207` (6-flat), `208` (7+ units)
+          - Condo: `299`, `295`, `278`, `234`
+          - Note: class `203` is the most common (2-flat/multi-family), `202` is single-family
+        - Land+building only: `sale_type='LAND AND BUILDING'`
+        - Exclude multi-parcel bundles: `is_multisale=false`
+      - **`$where` filter parameters for Parcel Universe (bounding box)**:
+        - `lat >= 41.85 AND lat <= 41.95 AND lon >= -87.70 AND lon <= -87.60`
+        - Bounding box is computed from subject property coordinates ± radius in degrees
+      - **Property class → PropertyType mapping** (for task 2.2):
+        - Classes `202`: single-family
+        - Classes `203`–`208`: multi-family (2–7+ units)
+        - Classes `299`, `295`, `278`, `234`, `241`: condo/commercial — exclude from residential comps
+        - The `class` field in Parcel Sales matches the `class` field in the improvement characteristics dataset (`bcnq-qi2z`) already used by `PropertyDataService`
+      - **App token**: Use `COOK_COUNTY_APP_TOKEN` env var (same as `SOCRATA_APP_TOKEN` already in `PropertyDataService`) — pass as `X-App-Token` header; anonymous access works but is rate-limited to 1,000 req/day
+  - [x] 2.2 Implement `CookCountySalesDataSource` in `backend/app/services/comparable_sales_finder.py`
+    - Query the Socrata API for sales within a bounding box around the subject property's coordinates
+    - Filter by: sale date within `max_age_months`, property class matching subject type, arm's-length sales only
+    - Join with parcel characteristics dataset to get sqft, bedrooms, bathrooms, year built, construction type
+    - Map response fields to the internal comparable dict format expected by `ComparableSalesFinder`
+  - [x] 2.3 Register `CookCountySalesDataSource` as the primary data source in `ComparableSalesFinder`
+    - Replace the existing `MLSDataSource` placeholder with `CookCountySalesDataSource`
+    - Keep the pluggable source registry architecture from the original Option A design so MLS can be added later when a license is obtained
+  - [x] 2.4 Add `COOK_COUNTY_APP_TOKEN` to `backend/.env.example` (optional — increases rate limit from 1,000 to 50,000 requests/day)
+  - [x] 2.5 Add tests verifying comparable sales are fetched and mapped correctly from the Cook County API
+    - Mock the Socrata HTTP response
+    - Verify field mapping, date filtering, and property type filtering
+
+- [x] 3. Fix: Step 2→3 requires exactly 10 comparables
+  - All three fixes will be implemented together — they layer cleanly and each addresses a different dimension of the problem.
+  - [x] 3.1 Add `MIN_COMPARABLES` to `app.config` defaulting to `10` in production and `1` in development/testing
+    - Replace hardcoded `10` in `_validate_step_completion` with `current_app.config['MIN_COMPARABLES']`
+    - Apply the same pattern to all other hardcoded thresholds in the workflow controller (e.g. `MIN_VALUATION_COMPARABLES`)
+  - [x] 3.2 Refactor `_validate_step_completion` to distinguish hard errors from quality warnings
+    - Hard errors: session is in an invalid state and cannot proceed (no property facts, no session found)
+    - Soft warnings: data quality is below ideal but the user can still proceed (fewer than 10 comparables)
+    - The comparable count check becomes a warning, not a blocker
+    - Step result includes a `warnings: List[str]` field that the frontend displays to the user
+  - [x] 3.3 Add `min_comparables` as a user-configurable setting
+    - Add field to the existing `ScoringWeights` model (or a new `AnalysisSettings` model), default `10`
+    - Workflow controller reads the setting for the current user at validation time
+    - Mirrors the existing pattern of user-configurable scoring weights
+  - [x] 3.4 Add tests verifying:
+    - Advancement is allowed with fewer than 10 comparables in development mode
+    - Warnings are returned when below the threshold
+    - User-configured minimum is respected
+
+- [x] 4. Fix: `_execute_weighted_scoring` treats ORM objects as dicts
+  - All three fixes will be implemented together — they address the immediate crash, the service boundary, and the type contract.
+  - [x] 4.1 Fix attribute access in `_execute_weighted_scoring` (`workflow_controller.py`)
+    - Replace `rank_data['comparable_id']` → `rank_data.comparable_id`
+    - Replace `rank_data['total_score']` → `rank_data.total_score`
+    - Replace `rank_data['rank']` → `rank_data.rank`
+    - Replace `rank_data['score_breakdown']['recency_score']` → `rank_data.recency_score` (and all other score fields)
+    - Replace `ranked_data[0]['total_score']` → `ranked_data[0].total_score`
+  - [x] 4.2 Introduce a `RankedComparableDTO` dataclass in `backend/app/services/dto.py`
+    - Fields: `comparable_id`, `session_id`, `total_score`, `rank`, `recency_score`, `proximity_score`, `units_score`, `beds_baths_score`, `sqft_score`, `construction_score`, `interior_score`
+    - Change `WeightedScoringEngine.rank_comparables` to return `List[RankedComparableDTO]` instead of unsaved ORM objects
+    - Update `_execute_weighted_scoring` to create `RankedComparable` ORM records from the DTOs
+    - Decouples the scoring engine from the persistence layer — the engine becomes a pure computation service
+  - [x] 4.3 Add return type annotations throughout the scoring engine and workflow controller
+    - `rank_comparables() -> List[RankedComparableDTO]`
+    - `_execute_weighted_scoring() -> Dict[str, Any]`
+    - Enables mypy/pyright to catch any future dict-vs-object confusion at development time
+  - [x] 4.4 Add a test that calls `_execute_weighted_scoring` end-to-end and verifies ranked comparables are saved to the DB
+
+- [x] 5. Fix: Valuation step hard-requires 5 ranked comparables
+  - All three fixes will be implemented together — they remove the hard block, add confidence transparency, and make the threshold configurable consistently with Task 3.
+  - [x] 5.1 Remove the hard `< 5` check in `_execute_valuation_models`
+    - Use `ranked[:5]` (up to 5, whatever is available, minimum 1)
+    - Add a `warnings: List[str]` to the step result when fewer than 5 comparables are used
+    - `ValuationEngine.compute_arv_range` already handles variable-length input via `statistics.quantiles`
+  - [x] 5.2 Add adaptive confidence scoring to `ValuationEngine`
+    - Compute a `confidence_score` (0–100) based on: number of comparables used, average recency score, average proximity score
+    - When fewer than 5 comparables are used, the ARV range widens proportionally (conservative decreases, aggressive increases)
+    - Include `confidence_score` in the `ValuationResult` and step result so the frontend and report can display it
+  - [x] 5.3 Add `MIN_VALUATION_COMPARABLES` to `app.config`
+    - Default `5` in production, `1` in development/testing
+    - Replace hardcoded `5` with `current_app.config['MIN_VALUATION_COMPARABLES']`
+    - Consistent with `MIN_COMPARABLES` from Task 3 — all workflow thresholds configurable in one place
+  - [x] 5.4 Add tests verifying:
+    - Valuation succeeds with fewer than 5 ranked comparables
+    - Warnings are returned when below the threshold
+    - Confidence score is lower when fewer comparables are used
+    - ARV range is wider when confidence is lower
+
+- [x] 6. Fix: Step 3→4 validation check for ranked comparables
+  - All three fixes will be implemented together — A is the immediate fix, B and C add progressively more robust state tracking.
+  - [x] 6.1 Verify `session.ranked_comparables.all()` returns saved records after Task 4 fix
+    - The existing `if not ranked: raise ValueError` check is structurally correct — it just never had data because Task 4's bug prevented records from being saved
+    - Confirm the check passes correctly once Task 4 is complete
+    - Add a regression test for the full step 3→4 transition
+  - [x] 6.2 Add `completed_steps` JSON column to `AnalysisSession`
+    - Records which steps have been fully executed (e.g. `["PROPERTY_FACTS", "COMPARABLE_SEARCH", "WEIGHTED_SCORING"]`)
+    - `_validate_step_completion` checks this list in addition to querying child records
+    - More reliable than inferring completion from child record presence alone — a step could run and produce no records in edge cases, or records could be deleted without the step being "un-completed"
+    - Makes the session state machine explicit and auditable
+    - Requires an Alembic migration to add the column
+  - [x] 6.3 Add `step_results` JSON column to `AnalysisSession`
+    - Stores the result dict from each `_execute_step` call, keyed by step name
+    - `_validate_step_completion` can check whether a result exists for the current step as a secondary signal
+    - Decouples completion detection from data existence entirely
+    - Makes the full workflow history self-contained in the session record — useful for debugging and audit trails
+    - Requires an Alembic migration to add the column
+  - [x] 6.4 Add tests verifying:
+    - Step 3→4 transition succeeds after weighted scoring runs
+    - `completed_steps` is updated correctly after each step
+    - `step_results` contains the correct result for each completed step
+
+- [x] 7. Add integration tests for steps 2–6
+  - **Selected approach: Option C — Property-based tests using Hypothesis**
+  - Hypothesis is already installed and used in the project. Property-based tests catch edge cases that hand-written tests miss: zero sqft, identical properties, single comparable, all same construction type, extreme price variance.
+  - [x] 7.1 Add property-based tests for `WeightedScoringEngine`
+    - Use `@given` to generate random `PropertyFacts` and `ComparableSale` inputs
+    - Invariants to verify:
+      - `rank_comparables` never raises for any valid input
+      - All scores are in range 0–100
+      - Returned list is sorted by `total_score` descending
+      - Ranks are sequential starting from 1
+      - Returns a `RankedComparableDTO` (after Task 4) not a raw dict or ORM object
+  - [x] 7.2 Add property-based tests for `ValuationEngine`
+    - Use `@given` to generate random `PropertyFacts` and lists of `RankedComparableDTO`
+    - Invariants to verify:
+      - `calculate_valuations` never raises for any valid input (1–5 comparables)
+      - `conservative_arv` ≤ `likely_arv` ≤ `aggressive_arv`
+      - `confidence_score` is in range 0–100 (after Task 5)
+      - `confidence_score` is lower when fewer comparables are used
+      - All valuation amounts are positive
+  - [x] 7.3 Add property-based tests for `ComparableSalesFinder`
+    - Invariants to verify:
+      - `find_comparables` never raises when coordinates are present
+      - Returned comparables all have `distance_miles` populated
+      - Returned list length ≤ `min_count`
+      - All returned comparables match the subject's property type
+  - [x] 7.4 Add the full end-to-end flow test `test_complete_analysis_flow` to `test_analysis_flow.py`
+    - Runs all 6 steps in sequence with mocked external services
+    - Verifies each step transition returns 2xx and advances session state
+    - Acts as the regression test that catches any future breakage in the step sequencing

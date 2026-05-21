@@ -1,4 +1,5 @@
 """Services package."""
+from .dto import RankedComparableDTO
 from .hubspot_client_service import HubSpotClientService
 from .hubspot_import_service import HubSpotImportService
 from .hubspot_matcher_service import HubSpotMatcherService
@@ -21,7 +22,14 @@ from .interaction_service import InteractionService
 from .task_service import TaskService
 from .contact_service import ContactService
 
+from .gemini_comparable_search_service import GeminiComparableSearchService
+
+# Chicago Socrata local cache services
+from .cache_loader_service import CacheLoaderService, SyncResult
+from .cache_status_service import CacheStatusService, DatasetStatus
+
 __all__ = [
+    'RankedComparableDTO',
     'HubSpotClientService',
     'HubSpotImportService',
     'HubSpotMatcherService',
@@ -45,4 +53,10 @@ __all__ = [
     'MarketingManager',
     'CondoFilterService',
     'DeterministicScoringEngine',
+    'GeminiComparableSearchService',
+    # Chicago Socrata local cache
+    'CacheLoaderService',
+    'SyncResult',
+    'CacheStatusService',
+    'DatasetStatus',
 ]

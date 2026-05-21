@@ -451,9 +451,11 @@ class TestWeightedScoringEngine:
         assert abs(ranked[0].total_score - ranked[1].total_score) < 0.01
     
     def test_rank_comparables_sets_relationship(self, engine, subject_property, comparable_sale):
-        """Test that rank_comparables sets the comparable relationship."""
+        """Test that rank_comparables returns a DTO with the correct comparable_id."""
         ranked = engine.rank_comparables(subject_property, [comparable_sale])
-        
-        assert ranked[0].comparable is not None
-        assert ranked[0].comparable.id == comparable_sale.id
-        assert ranked[0].comparable.address == comparable_sale.address
+
+        # The engine now returns RankedComparableDTO objects — pure data, no ORM relationship.
+        # The controller is responsible for creating RankedComparable ORM records from the DTOs.
+        assert len(ranked) == 1
+        assert ranked[0].comparable_id == comparable_sale.id
+        assert ranked[0].session_id == comparable_sale.session_id

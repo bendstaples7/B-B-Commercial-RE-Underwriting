@@ -2,6 +2,7 @@
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import uuid
+from flask import current_app
 from app import db
 from app.models import (
     AnalysisSession,
@@ -13,13 +14,14 @@ from app.models import (
     ComparableSale,
     RankedComparable,
     ValuationResult,
+    ScoringWeights,
 )
 from app.services.property_data_service import PropertyDataService
-from app.services.comparable_sales_finder import ComparableSalesFinder
 from app.services.weighted_scoring_engine import WeightedScoringEngine
 from app.services.valuation_engine import ValuationEngine
 from app.services.scenario_analysis_engine import ScenarioAnalysisEngine
 from app.services.report_generator import ReportGenerator
+from app.services.dto import RankedComparableDTO
 
 
 class WorkflowController:
@@ -28,13 +30,12 @@ class WorkflowController:
     def __init__(self):
         """Initialize workflow controller with service dependencies."""
         self.property_service = PropertyDataService()
-        self.comparable_finder = ComparableSalesFinder()
         self.scoring_engine = WeightedScoringEngine()
         self.valuation_engine = ValuationEngine()
         self.scenario_engine = ScenarioAnalysisEngine()
         self.report_generator = ReportGenerator()
     
-    def start_analysis(self, address: str, user_id: str) -> Dict[str, Any]:
+    def start_analysis(self, address: str, user_id: str, latitude: Optional[float] = None, longitude: Optional[float] = None) -> Dict[str, Any]:
         """
         Initialize new analysis session with property address.
 
@@ -43,9 +44,16 @@ class WorkflowController:
         created and ``property_facts`` in the response will be ``None`` so the
         frontend can show an empty form for manual entry.
 
+        When ``latitude`` and ``longitude`` are provided (from Google Places
+        Autocomplete), they are used as a fallback if the Cook County API does
+        not return coordinates.  Cook County parcel-level coordinates take
+        precedence when available.
+
         Args:
             address: Property address to analyze
             user_id: User identifier
+            latitude: Optional latitude from Google Places Autocomplete
+            longitude: Optional longitude from Google Places Autocomplete
 
         Returns:
             Dictionary containing session_id, initial state, and optional
@@ -68,12 +76,29 @@ class WorkflowController:
         try:
             facts_data = self.property_service.fetch_property_facts(address)
             if facts_data and facts_data.get('address'):
+                # Apply Places coordinates as fallback when Cook County returns null.
+                # Cook County parcel-level coordinates take precedence when present.
+                if latitude is not None and longitude is not None:
+                    if facts_data.get('latitude') is None:
+                        facts_data['latitude'] = latitude
+                    if facts_data.get('longitude') is None:
+                        facts_data['longitude'] = longitude
                 # Return the raw data to the frontend for review — do NOT
                 # persist to DB here. The PropertyFacts record is created
                 # correctly when the user confirms via PUT /step/1.
                 serialized_facts = facts_data
         except Exception as exc:
             print(f"Property data fetch error for {address!r}: {exc}")
+
+        # If Cook County returned nothing but we have Places coordinates,
+        # surface them so the frontend can pre-populate the form.
+        if serialized_facts is None and latitude is not None and longitude is not None:
+            serialized_facts = {
+                'address': address,
+                'latitude': latitude,
+                'longitude': longitude,
+                'data_source': 'google_places',
+            }
 
         return {
             'session_id': session_id,
@@ -174,6 +199,9 @@ class WorkflowController:
             'current_step': session.current_step.name,
             'created_at': session.created_at.isoformat(),
             'updated_at': session.updated_at.isoformat(),
+            'completed_steps': list(session.completed_steps or []),
+            'step_results': dict(session.step_results or {}),
+            'loading': session.loading,
         }
         
         # Add subject property if available
@@ -232,12 +260,32 @@ class WorkflowController:
                 f"Must advance sequentially."
             )
         
-        # Validate current step is complete before advancing
-        self._validate_step_completion(session, session.current_step)
+        # Validate current step is complete before advancing.
+        # Returns a list of soft warnings (data quality issues the user can
+        # proceed past) — hard errors are still raised as ValueError.
+        warnings = self._validate_step_completion(session, session.current_step)
         
         # Execute step-specific logic
         result = self._execute_step(session, target_step, approval_data)
         
+        # Attach any validation warnings to the step result so the frontend
+        # can surface them to the user without blocking progression.
+        if warnings:
+            result['warnings'] = warnings
+
+        # Record the completed step and its result in the session audit trail.
+        # completed_steps tracks which steps have been fully executed.
+        # step_results stores the full result dict for each step.
+        completed_steps = list(session.completed_steps or [])
+        step_name = session.current_step.name
+        if step_name not in completed_steps:
+            completed_steps.append(step_name)
+        session.completed_steps = completed_steps
+
+        step_results = dict(session.step_results or {})
+        step_results[target_step.name] = result
+        session.step_results = step_results
+
         # Update session state
         session.current_step = target_step
         session.updated_at = datetime.utcnow()
@@ -248,6 +296,7 @@ class WorkflowController:
             'current_step': target_step.name,
             'previous_step': WorkflowStep(current_step_value).name,
             'result': result,
+            'warnings': warnings,
             'updated_at': session.updated_at.isoformat()
         }
     
@@ -333,30 +382,75 @@ class WorkflowController:
     
     # Private helper methods
     
-    def _validate_step_completion(self, session: AnalysisSession, step: WorkflowStep) -> None:
-        """Validate that current step is complete before advancing."""
+    def _get_min_comparables(self, user_id: str) -> int:
+        """Return the effective min_comparables threshold for a user.
+
+        Checks the user's ``ScoringWeights`` record for a custom value.
+        Falls back to ``current_app.config['MIN_COMPARABLES']`` when no
+        record exists (or the stored value is None/zero), which is
+        environment-aware: 10 in production, 1 in development/testing.
+        """
+        weights = ScoringWeights.query.filter_by(user_id=user_id).first()
+        if weights and weights.min_comparables:
+            return weights.min_comparables
+        return current_app.config['MIN_COMPARABLES']
+
+    def _validate_step_completion(self, session: AnalysisSession, step: WorkflowStep) -> List[str]:
+        """Validate that current step is complete before advancing.
+
+        Returns a list of soft warning messages for data-quality issues that
+        the user can acknowledge and proceed past.  Hard errors — where the
+        session is in an invalid state and genuinely cannot continue — are
+        still raised as ``ValueError``.
+
+        Hard errors (raise ValueError):
+          - No property facts confirmed (PROPERTY_FACTS step)
+          - No comparable sales found at all (COMPARABLE_SEARCH step)
+          - No ranked comparables (WEIGHTED_SCORING step)
+          - No valuation result (VALUATION_MODELS step)
+
+        Soft warnings (returned in list, do not block):
+          - Fewer than MIN_COMPARABLES comparables available (COMPARABLE_REVIEW step)
+
+        ``completed_steps`` is used as a secondary signal: if a step is
+        recorded there, the child-record checks are skipped (the step ran
+        successfully and its data may have been modified since).
+        """
+        warnings: List[str] = []
+        completed = list(session.completed_steps or [])
+
         if step == WorkflowStep.PROPERTY_FACTS:
-            if not session.subject_property:
+            # completed_steps secondary signal: if PROPERTY_FACTS is recorded, trust it
+            if step.name not in completed and not session.subject_property:
                 raise ValueError("Property facts must be retrieved and confirmed before advancing")
-        
+
         elif step == WorkflowStep.COMPARABLE_SEARCH:
             comparables = session.comparables.all()
-            if not comparables:
+            if step.name not in completed and not comparables:
                 raise ValueError("Comparable sales must be found before advancing")
-        
+
         elif step == WorkflowStep.COMPARABLE_REVIEW:
             comparables = session.comparables.all()
-            if len(comparables) < 10:
-                raise ValueError("At least 10 comparables required before advancing")
-        
+            # Prefer the user's own min_comparables setting when one exists;
+            # fall back to the app-level config (which is environment-aware:
+            # 10 in production, 1 in development/testing).
+            min_comparables = self._get_min_comparables(session.user_id)
+            if len(comparables) < min_comparables:
+                warnings.append(
+                    f"Only {len(comparables)} comparable(s) available — {min_comparables} recommended "
+                    f"for a reliable valuation. You may proceed, but results may be less accurate."
+                )
+
         elif step == WorkflowStep.WEIGHTED_SCORING:
             ranked = session.ranked_comparables.all()
-            if not ranked:
+            if step.name not in completed and not ranked:
                 raise ValueError("Comparables must be scored and ranked before advancing")
-        
+
         elif step == WorkflowStep.VALUATION_MODELS:
-            if not session.valuation_result:
+            if step.name not in completed and not session.valuation_result:
                 raise ValueError("Valuation models must be calculated before advancing")
+
+        return warnings
     
     def _execute_step(self, session: AnalysisSession, step: WorkflowStep, data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Execute step-specific logic when advancing to a new step."""
@@ -380,45 +474,35 @@ class WorkflowController:
 
     
     def _execute_comparable_search(self, session: AnalysisSession) -> Dict[str, Any]:
-        """Execute comparable sales search."""
+        """Execute comparable search using GeminiComparableSearchService.
+
+        This is the synchronous implementation used when Celery is not available
+        or when USE_ASYNC_COMPARABLE_SEARCH is set to false.
+        """
         if not session.subject_property:
             raise ValueError("Subject property required for comparable search")
         
-        # Find comparables
-        comparables_data = self.comparable_finder.find_comparables(
-            subject=session.subject_property,
-            min_count=10,
-            max_age_months=12
+        from app.services.gemini_comparable_search_service import GeminiComparableSearchService
+        
+        service = GeminiComparableSearchService()
+        result = service.search(
+            property_facts=self._serialize_property_facts(session.subject_property),
+            property_type=session.subject_property.property_type,
         )
         
-        # Save comparables to database
-        for comp_data in comparables_data:
-            comparable = ComparableSale(
-                session_id=session.id,
-                address=comp_data['address'],
-                sale_date=comp_data['sale_date'],
-                sale_price=comp_data['sale_price'],
-                property_type=comp_data['property_type'],
-                units=comp_data['units'],
-                bedrooms=comp_data['bedrooms'],
-                bathrooms=comp_data['bathrooms'],
-                square_footage=comp_data['square_footage'],
-                lot_size=comp_data['lot_size'],
-                year_built=comp_data['year_built'],
-                construction_type=comp_data['construction_type'],
-                interior_condition=comp_data['interior_condition'],
-                distance_miles=comp_data['distance_miles'],
-                latitude=comp_data.get('latitude'),
-                longitude=comp_data.get('longitude')
-            )
+        # Persist comparables
+        for comp_dict in result['comparables']:
+            # Use the same mapping function as the Celery task
+            from celery_worker import _map_comparable_to_model
+            comparable = _map_comparable_to_model(comp_dict, session.id)
             db.session.add(comparable)
         
         db.session.commit()
         
         return {
-            'comparable_count': len(comparables_data),
-            'search_radius': comparables_data[0].get('search_radius') if comparables_data else None,
-            'status': 'complete'
+            'comparable_count': len(result['comparables']),
+            'narrative': result['narrative'],
+            'status': 'complete',
         }
     
     def _execute_weighted_scoring(self, session: AnalysisSession) -> Dict[str, Any]:
@@ -433,26 +517,27 @@ class WorkflowController:
         # Clear existing ranked comparables
         RankedComparable.query.filter_by(session_id=session.id).delete()
         
-        # Calculate scores and rank
-        ranked_data = self.scoring_engine.rank_comparables(
+        # Calculate scores and rank — returns List[RankedComparableDTO] (pure computation,
+        # no DB access inside the engine)
+        ranked_data: List[RankedComparableDTO] = self.scoring_engine.rank_comparables(
             subject=session.subject_property,
             comparables=comparables
         )
         
-        # Save ranked comparables
+        # Persist DTOs as RankedComparable ORM records
         for rank_data in ranked_data:
             ranked = RankedComparable(
                 session_id=session.id,
-                comparable_id=rank_data['comparable_id'],
-                total_score=rank_data['total_score'],
-                rank=rank_data['rank'],
-                recency_score=rank_data['score_breakdown']['recency_score'],
-                proximity_score=rank_data['score_breakdown']['proximity_score'],
-                units_score=rank_data['score_breakdown']['units_score'],
-                beds_baths_score=rank_data['score_breakdown']['beds_baths_score'],
-                sqft_score=rank_data['score_breakdown']['sqft_score'],
-                construction_score=rank_data['score_breakdown']['construction_score'],
-                interior_score=rank_data['score_breakdown']['interior_score']
+                comparable_id=rank_data.comparable_id,
+                total_score=rank_data.total_score,
+                rank=rank_data.rank,
+                recency_score=rank_data.recency_score,
+                proximity_score=rank_data.proximity_score,
+                units_score=rank_data.units_score,
+                beds_baths_score=rank_data.beds_baths_score,
+                sqft_score=rank_data.sqft_score,
+                construction_score=rank_data.construction_score,
+                interior_score=rank_data.interior_score,
             )
             db.session.add(ranked)
         
@@ -460,7 +545,7 @@ class WorkflowController:
         
         return {
             'ranked_count': len(ranked_data),
-            'top_score': ranked_data[0]['total_score'] if ranked_data else None,
+            'top_score': ranked_data[0].total_score if ranked_data else None,
             'status': 'complete'
         }
     
@@ -469,9 +554,24 @@ class WorkflowController:
         if not session.subject_property:
             raise ValueError("Subject property required for valuation")
         
-        ranked = session.ranked_comparables.order_by(RankedComparable.rank).limit(5).all()
-        if len(ranked) < 5:
-            raise ValueError("At least 5 ranked comparables required for valuation")
+        # Use up to MIN_VALUATION_COMPARABLES (default 5 in prod, 1 in dev/test).
+        # We never hard-block here — if at least 1 ranked comparable exists we
+        # proceed and surface a warning when below the recommended threshold.
+        min_val_comps = current_app.config['MIN_VALUATION_COMPARABLES']
+        ranked = session.ranked_comparables.order_by(RankedComparable.rank).all()
+        if not ranked:
+            raise ValueError("At least 1 ranked comparable is required for valuation")
+
+        # Take up to 5 (whatever is available)
+        top_ranked = ranked[:5]
+
+        warnings: List[str] = []
+        if len(top_ranked) < min_val_comps:
+            warnings.append(
+                f"Only {len(top_ranked)} ranked comparable(s) available — "
+                f"{min_val_comps} recommended for a reliable valuation. "
+                f"Results may be less accurate."
+            )
         
         # Clear existing valuation result
         if session.valuation_result:
@@ -481,23 +581,27 @@ class WorkflowController:
         # Calculate valuations - returns ValuationResult object
         valuation_result = self.valuation_engine.calculate_valuations(
             subject=session.subject_property,
-            top_comparables=ranked,
+            top_comparables=top_ranked,
             session_id=session.id
         )
         
         # Add to session
         db.session.add(valuation_result)
         db.session.commit()
-        
-        return {
+
+        result: Dict[str, Any] = {
             'arv_range': {
                 'conservative': valuation_result.conservative_arv,
                 'likely': valuation_result.likely_arv,
                 'aggressive': valuation_result.aggressive_arv
             },
+            'confidence_score': valuation_result.confidence_score,
             'comparable_valuations_count': len(valuation_result.comparable_valuations.all()),
             'status': 'complete'
         }
+        if warnings:
+            result['warnings'] = warnings
+        return result
     
     def _execute_report_generation(self, session: AnalysisSession) -> Dict[str, Any]:
         """Execute report generation."""
@@ -510,27 +614,26 @@ class WorkflowController:
         }
     
     def _validate_step_data(self, step: WorkflowStep, data: Dict[str, Any]) -> None:
-        """Validate data for a specific step."""
+        """Validate data for a specific step.
+
+        For PROPERTY_FACTS only address is required — all other fields are
+        optional because the endpoint accepts partial updates.
+        """
         if step == WorkflowStep.PROPERTY_FACTS:
-            required_fields = [
-                'address', 'property_type', 'units', 'bedrooms', 'bathrooms',
-                'square_footage', 'lot_size', 'year_built', 'construction_type',
-                'assessed_value', 'annual_taxes', 'zoning', 'interior_condition'
-            ]
-            for field in required_fields:
-                if field not in data:
-                    raise ValueError(f"Missing required field: {field}")
-            
-            # Validate numeric ranges
-            if data['units'] < 1:
+            if not data.get('address'):
+                raise ValueError("Missing required field: address")
+
+            # Validate numeric ranges only when the field is present
+            if data.get('units') is not None and data['units'] < 1:
                 raise ValueError("Units must be at least 1")
-            if data['bedrooms'] < 0:
+            if data.get('bedrooms') is not None and data['bedrooms'] < 0:
                 raise ValueError("Bedrooms cannot be negative")
-            if data['bathrooms'] < 0:
+            if data.get('bathrooms') is not None and data['bathrooms'] < 0:
                 raise ValueError("Bathrooms cannot be negative")
-            if data['square_footage'] < 1:
+            if data.get('square_footage') is not None and data['square_footage'] < 1:
                 raise ValueError("Square footage must be positive")
-            if data['year_built'] < 1800 or data['year_built'] > datetime.now().year:
+            year_built = data.get('year_built')
+            if year_built and year_built != 0 and (year_built < 1800 or year_built > datetime.now().year):
                 raise ValueError(f"Year built must be between 1800 and {datetime.now().year}")
     
     def _update_step_data_internal(self, session: AnalysisSession, step: WorkflowStep, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -544,28 +647,34 @@ class WorkflowController:
         return {}
     
     def _update_property_facts(self, session: AnalysisSession, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Update property facts data."""
+        """Update property facts data.
+
+        Accepts a partial payload — only fields present in ``data`` are written.
+        This means the frontend only needs to send what it has; the backend
+        fills in any gaps from the existing record (or leaves them as defaults
+        for a brand-new record).
+        """
         if not session.subject_property:
-            # Create new property facts
+            # Create new property facts — use safe defaults for any missing fields
             property_facts = PropertyFacts(
                 session_id=session.id,
                 address=data['address'],
-                property_type=PropertyType[data['property_type']],
-                units=data['units'],
-                bedrooms=data['bedrooms'],
-                bathrooms=data['bathrooms'],
-                square_footage=data['square_footage'],
-                lot_size=data['lot_size'],
-                year_built=data['year_built'],
-                construction_type=ConstructionType[data['construction_type']],
+                property_type=PropertyType[data['property_type']] if data.get('property_type') else PropertyType.SINGLE_FAMILY,
+                units=data.get('units') or 1,
+                bedrooms=data.get('bedrooms') or 0,
+                bathrooms=data.get('bathrooms') or 0.0,
+                square_footage=data.get('square_footage') or 0,
+                lot_size=data.get('lot_size') or 0,
+                year_built=data.get('year_built') or 0,
+                construction_type=ConstructionType[data['construction_type']] if data.get('construction_type') else ConstructionType.FRAME,
                 basement=data.get('basement', False),
                 parking_spaces=data.get('parking_spaces', 0),
                 last_sale_price=data.get('last_sale_price'),
                 last_sale_date=data.get('last_sale_date'),
-                assessed_value=data['assessed_value'],
-                annual_taxes=data['annual_taxes'],
-                zoning=data['zoning'],
-                interior_condition=InteriorCondition[data['interior_condition']],
+                assessed_value=data.get('assessed_value') or 0.0,
+                annual_taxes=data.get('annual_taxes') or 0.0,
+                zoning=data.get('zoning') or '',
+                interior_condition=InteriorCondition[data['interior_condition']] if data.get('interior_condition') else InteriorCondition.AVERAGE,
                 latitude=data.get('latitude'),
                 longitude=data.get('longitude'),
                 data_source=data.get('data_source'),
@@ -573,22 +682,58 @@ class WorkflowController:
             )
             db.session.add(property_facts)
         else:
-            # Update existing property facts
+            # Merge partial update onto existing record
             property_facts = session.subject_property
-            modified_fields = property_facts.user_modified_fields or []
-            
-            for field, value in data.items():
-                if hasattr(property_facts, field):
-                    old_value = getattr(property_facts, field)
-                    if old_value != value:
-                        setattr(property_facts, field, value)
-                        if field not in modified_fields:
-                            modified_fields.append(field)
-            
+            modified_fields = list(property_facts.user_modified_fields or [])
+
+            # Scalar field mapping: payload key → (model attr, optional enum class)
+            field_map = [
+                ('address',            'address',            None),
+                ('units',              'units',              None),
+                ('bedrooms',           'bedrooms',           None),
+                ('bathrooms',          'bathrooms',          None),
+                ('square_footage',     'square_footage',     None),
+                ('lot_size',           'lot_size',           None),
+                ('year_built',         'year_built',         None),
+                ('basement',           'basement',           None),
+                ('parking_spaces',     'parking_spaces',     None),
+                ('last_sale_price',    'last_sale_price',    None),
+                ('last_sale_date',     'last_sale_date',     None),
+                ('assessed_value',     'assessed_value',     None),
+                ('annual_taxes',       'annual_taxes',       None),
+                ('zoning',             'zoning',             None),
+                ('latitude',           'latitude',           None),
+                ('longitude',          'longitude',          None),
+                ('data_source',        'data_source',        None),
+                ('property_type',      'property_type',      PropertyType),
+                ('construction_type',  'construction_type',  ConstructionType),
+                ('interior_condition', 'interior_condition', InteriorCondition),
+            ]
+
+            for payload_key, model_attr, enum_cls in field_map:
+                if payload_key not in data:
+                    continue
+                raw_value = data[payload_key]
+                # Skip None values for non-nullable fields — writing None would
+                # violate the NOT NULL constraint. The existing DB value is kept.
+                if raw_value is None:
+                    continue
+                value = enum_cls[raw_value] if (enum_cls and raw_value) else raw_value
+                old_value = getattr(property_facts, model_attr)
+                if old_value != value:
+                    setattr(property_facts, model_attr, value)
+                    if model_attr not in modified_fields:
+                        modified_fields.append(model_attr)
+
+            # user_modified_fields is merged, not replaced
+            incoming_modified = data.get('user_modified_fields', [])
+            for f in incoming_modified:
+                if f not in modified_fields:
+                    modified_fields.append(f)
+
             property_facts.user_modified_fields = modified_fields
-        
+
         db.session.commit()
-        
         return self._serialize_property_facts(property_facts)
     
     def _update_comparables(self, session: AnalysisSession, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -640,9 +785,22 @@ class WorkflowController:
         
         # If property facts modified, recalculate everything
         if modified_step == WorkflowStep.PROPERTY_FACTS:
-            # Clear and recalculate comparables if they exist
+            # Comparable search is now async (via run_comparable_search_task /
+            # GeminiComparableSearchService).  We cannot re-run it synchronously
+            # here.  Instead, clear any existing comparables so the user knows
+            # they need to re-run Step 2.
             if session.comparables.count() > 0:
-                results.append(self._execute_comparable_search(session))
+                from app.models.comparable_sale import ComparableSale
+                # Delete downstream rows first to preserve referential integrity:
+                # ranked_comparables and valuation_results reference comparable_sales.
+                if session.valuation_result:
+                    db.session.delete(session.valuation_result)
+                    db.session.flush()
+                RankedComparable.query.filter_by(session_id=session.id).delete()
+                db.session.flush()
+                ComparableSale.query.filter_by(session_id=session.id).delete()
+                db.session.flush()
+                results.append({'action': 'comparables_cleared', 'reason': 'property_facts_modified'})
             
             # Clear and recalculate scoring if it exists
             if session.ranked_comparables.count() > 0:
@@ -743,7 +901,8 @@ class WorkflowController:
             'likely_arv': valuation.likely_arv,
             'aggressive_arv': valuation.aggressive_arv,
             'all_valuations': valuation.all_valuations,
-            'key_drivers': valuation.key_drivers
+            'key_drivers': valuation.key_drivers,
+            'confidence_score': valuation.confidence_score,
         }
     
     def _serialize_scenario(self, scenario) -> Dict[str, Any]:

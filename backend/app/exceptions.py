@@ -416,3 +416,34 @@ class TaskValidationError(ValidationException):
             'field': field,
             'invalid_value': str(value) if value is not None else None,
         }
+
+
+# ---------------------------------------------------------------------------
+# Chicago Socrata Local Cache Exceptions
+# ---------------------------------------------------------------------------
+
+
+class CacheSyncException(RealEstateAnalysisException):
+    """Raised when a cache sync operation fails unrecoverably."""
+
+    def __init__(self, message: str, dataset: str, page_offset: int = None):
+        super().__init__(message, status_code=503)
+        self.payload = {
+            'error_type': 'cache_sync_error',
+            'dataset': dataset,
+            'page_offset': page_offset,
+        }
+
+
+class InvalidCronExpressionException(RealEstateAnalysisException):
+    """Raised at startup when SOCRATA_SYNC_SCHEDULE contains an invalid cron expression."""
+
+    def __init__(self, expression: str):
+        super().__init__(
+            f"Invalid cron expression in SOCRATA_SYNC_SCHEDULE: {expression!r}",
+            status_code=500,
+        )
+        self.payload = {
+            'error_type': 'invalid_cron_expression',
+            'expression': expression,
+        }
