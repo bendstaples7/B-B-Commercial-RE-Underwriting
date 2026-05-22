@@ -1,188 +1,145 @@
-# Kanban View with Pipeline-Based Scoring - Technical Design Document
+# Revised Design: Kanban View with Pipeline-Based Scoring
 
-## 1. Introduction
+## 1. Introduction & Goals
 
-This document outlines the technical design for the "Kanban View with Pipeline-Based Scoring" feature. The goal is to provide users with a visual representation of deals in a Kanban board, where each card's score is dynamically influenced by its current pipeline stage. This feature aims to enhance deal management, prioritization, and overall user experience by integrating scoring directly into the workflow.
+This document outlines the revised design for the 'Kanban View with Pipeline-Based Scoring' feature, incorporating detailed analysis of the existing `B-B-Commercial-RE-Underwriting` codebase and aligning with the approved requirements. The primary goals are to provide a visual, interactive Kanban board for deal management and to integrate a robust, configurable pipeline-based scoring mechanism to prioritize deals. This design emphasizes seamless integration with existing data models and API endpoints, while proposing new frontend components and state management for the Kanban interface.
 
-## 2. Goals
+## 2. Revised Data Model
 
-*   **Visualize Deals:** Display deals in a Kanban board format, categorized by pipeline stages.
-*   **Pipeline-Based Scoring:** Implement a scoring mechanism where the deal's score is influenced by its current pipeline stage, in addition to existing scoring factors.
-*   **Real-time Updates:** Ensure that score changes and card movements are reflected in real-time.
-*   **Robustness:** Design a resilient system capable of handling various data scenarios and user interactions.
-*   **Simplicity:** Maintain a straightforward and easy-to-understand design for development and maintenance.
-*   **Seamless Integration:** Integrate the new feature smoothly with the existing B-B-Commercial-RE-Underwriting codebase.
+**Confirmed Assumption:** The existing `Deal` model's `status` field (`backend/app/models/deal.py`, line 45: `status = db.Column(db.String(50), nullable=False, default='draft')`) will be leveraged to represent the pipeline stage of a deal. This avoids modifying the core `Deal` table structure.
 
-## 3. Data Models
+**Proposed Integration Point:**
+*   **Pipeline Stage Definitions & Weights:**
+    *   **Assumption:** Pipeline stages (e.g., 'Lead', 'Qualification', 'Proposal', 'Negotiation', 'Closed Won', 'Closed Lost') will be managed as a predefined, ordered list on the frontend initially.
+    *   **Integration:** For administrator-configurable scoring weights per stage (AC 3.2.7), a new database table, e.g., `PipelineStageConfig`, is proposed. This table would store `stage_name` (string, unique), `order` (integer), and `weight` (float/decimal). This allows the backend to serve the configurable weights and stage order to the frontend, and to use these weights in scoring calculations.
 
-### 3.1 Existing Data Models (Assumed)
+**Data Model Changes (Proposed):**
+*   **`PipelineStageConfig` (New Model):**
+    ```python
+    # backend/app/models/pipeline_stage_config.py (New File)
+    from app import db
+    from datetime import datetime
 
-*   **Deal:** Represents an underwriting deal.
-    *   `id`: String (Unique identifier)
-    *   `name`: String
-    *   `description`: String
-    *   `current_pipeline_stage_id`: String (Foreign key to PipelineStage)
-    *   `score`: Integer (Current deal score, will be updated by pipeline stage)
-    *   `...` (Other deal-related attributes)
+    class PipelineStageConfig(db.Model):
+        __tablename__ = 'pipeline_stage_config'
 
-*   **PipelineStage:** Represents a stage in the underwriting pipeline.
-    *   `id`: String (Unique identifier)
-    *   `name`: String
-    *   `order`: Integer (For display order)
-    *   `...` (Other stage-related attributes)
+        id = db.Column(db.Integer, primary_key=True)
+        stage_name = db.Column(db.String(50), unique=True, nullable=False, index=True)
+        order = db.Column(db.Integer, nullable=False, unique=True)
+        weight = db.Column(db.Numeric(8, 6), nullable=False, default=1.0) # For scoring
+        created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+        updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-### 3.2 New/Modified Data Models
+        def __repr__(self):
+            return f'<PipelineStageConfig {self.stage_name} (Order: {self.order}, Weight: {self.weight})>'
+    ```
+*   **`Deal` Model Enhancement (Implicit):** The `Deal.status` field will now store one of the `stage_name` values defined in `PipelineStageConfig`.
 
-*   **PipelineStageScoring (New Field on PipelineStage Model):**
-    *   `score_influence`: Integer (Represents the score boost/penalty for deals in this stage. Can be positive, negative, or zero.)
+## 3. API Endpoints & Integration
 
-    *Rationale:* Embedding `score_influence` directly into the `PipelineStage` model simplifies data retrieval and ensures that the scoring logic is tightly coupled with the pipeline stage definition. This avoids the need for a separate junction table.
+**Confirmed Integration Points:**
+*   **Fetching Deals for Kanban Columns:**
+    *   **Endpoint:** `GET /deals` (`backend/app/controllers/multifamily_deal_controller.py`, `list_deals`)
+    *   **Assumption Confirmed:** This endpoint already supports filtering by `status` (line 123-124), allowing the frontend to fetch deals for specific pipeline stages by providing `?status=<stage_name>`.
+    *   **Integration:** The frontend will make multiple `GET /deals` requests, one for each pipeline stage, to populate the respective Kanban columns.
+*   **Updating Deal Stage (Drag-and-Drop):**
+    *   **Endpoint:** `PATCH /deals/<int:deal_id>` (`backend/app/controllers/multifamily_deal_controller.py`, `update_deal`)
+    *   **Assumption Confirmed:** The `DealUpdateSchema` (`backend/app/schemas.py`, line 613) includes the `status` field, and `DealService.update_deal` (`backend/app/services/multifamily/deal_service.py`, line 190) allows its modification.
+    *   **Integration:** When a user drags and drops a deal card, the frontend will send a `PATCH` request to this endpoint with the `deal_id` and the new `status` (stage name).
 
-## 4. API Endpoints
+**Proposed New API Endpoints:**
+*   **Get Pipeline Stage Configuration:**
+    *   **Endpoint:** `GET /pipeline-stages`
+    *   **Purpose:** To retrieve the ordered list of pipeline stage names and their associated weights, as defined in `PipelineStageConfig`. This will be used by the frontend to render the Kanban columns and calculate scores.
+    *   **Controller:** A new controller (e.g., `pipeline_config_controller.py`) and service (e.g., `PipelineConfigService.py`) would be created.
+*   **Update Pipeline Stage Weights (Admin):**
+    *   **Endpoint:** `PUT /pipeline-stages/weights`
+    *   **Purpose:** To allow administrators to configure the scoring weights for each pipeline stage (AC 3.2.7).
+    *   **Controller:** Part of the new `pipeline_config_controller.py`.
 
-### 4.1 Existing API Endpoints (Assumed)
+## 4. Frontend Architecture
 
-*   `/api/deals`:
-    *   `GET`: Retrieve all deals.
-    *   `GET /api/deals/{id}`: Retrieve a specific deal.
-    *   `PUT /api/deals/{id}`: Update a specific deal.
+The Kanban view will be a new top-level page/component, likely `DealKanbanPage.tsx`, within `frontend/src/pages/` or `frontend/src/components/`.
 
-*   `/api/pipeline-stages`:
-    *   `GET`: Retrieve all pipeline stages.
+**New Components:**
+*   **`DealKanbanPage.tsx`:** The main container for the Kanban board, responsible for orchestrating data fetching, state management, and rendering `KanbanColumn` components.
+*   **`KanbanColumn.tsx`:** Represents a single pipeline stage. It will receive a list of deals for its stage and render `DealCard` components. It will also handle drop events for deals being moved into its column.
+*   **`DealCard.tsx`:** Represents an individual deal on the Kanban board. It will display key deal information (Deal Name, Deal Value, Assigned User, Priority Score - AC 3.1.3). It will be draggable.
 
-### 4.2 New/Modified API Endpoints
+**Reused Elements:**
+*   **Data Fetching Logic:** The patterns used in `PropertyListPage.tsx` for fetching data (using `useQueries` or similar hooks with `dealService.listDeals`) can be adapted.
+*   **`LeadScoreBadge.tsx`:** Can be directly reused or adapted to display the `Priority Score` on `DealCard` components.
+*   **Filtering and Sorting Controls:** The filtering and sorting mechanisms from `PropertyListPage.tsx` can be adapted and integrated into `DealKanbanPage.tsx` to meet AC 3.1.6 and 3.1.7.
 
-*   **`GET /api/kanban-deals` (New):**
-    *   **Description:** Retrieves all deals, organized by pipeline stage, along with stage-specific scoring influence. This endpoint will provide all necessary data for the Kanban board in a single request.
-    *   **Response Structure:**
-        ```json
-        [
-            {
-                "id": "stage1_id",
-                "name": "Prospecting",
-                "order": 1,
-                "score_influence": 10,
-                "deals": [
-                    {
-                        "id": "deal1_id",
-                        "name": "Deal A",
-                        "description": "...",
-                        "current_pipeline_stage_id": "stage1_id",
-                        "score": 85,
-                        "...": "..."
-                    },
-                    {
-                        "id": "deal2_id",
-                        "name": "Deal B",
-                        "description": "...",
-                        "current_pipeline_stage_id": "stage1_id",
-                        "score": 70,
-                        "...": "..."
-                    }
-                ]
-            },
-            // ... other stages
-        ]
+**Data Flow (Frontend):**
+1.  `DealKanbanPage` fetches the `PipelineStageConfig` (ordered stages and weights) from the new `GET /pipeline-stages` endpoint.
+2.  For each stage, `DealKanbanPage` or a child component makes a `GET /deals?status=<stage_name>` request to retrieve deals for that column.
+3.  Deals are then passed down to `KanbanColumn` components, which in turn render `DealCard` components.
+4.  Drag-and-drop actions on `DealCard`s trigger an update:
+    *   The new `status` (stage name) is extracted.
+    *   A `PATCH /deals/<int:deal_id>` request is sent to the backend with the updated status.
+    *   On successful update, the frontend state is updated to reflect the deal's new position, potentially refetching deals for the affected columns or optimistically updating the UI.
+
+## 5. State Management
+
+**Proposed New State Management:**
+Given that the existing `PipelineStatusContext` is for HubSpot, a new, dedicated state management solution will be implemented for the Kanban board.
+
+*   **Option 1 (React Context API):** A new `DealKanbanContext.tsx` can be created to manage the overall state of the Kanban board, including:
+    *   The list of pipeline stages (from `PipelineStageConfig`).
+    *   A dictionary or map of deals, organized by their current stage.
+    *   State for active filters and sort order.
+    *   Functions for updating deal status (which will call the backend API) and managing UI re-renders.
+*   **Option 2 (Redux Toolkit / Zustand):** For more complex state management, especially if the Kanban board becomes highly interactive with many concurrent updates or complex business logic on the frontend, a state management library like Redux Toolkit or Zustand could be considered. However, for initial V1, React Context with `useReducer` or `useState` might suffice for simplicity.
+
+**Decision for V1:** Start with a dedicated React Context (`DealKanbanContext`) for simplicity and evaluate the need for a more robust library if complexity increases.
+
+## 6. Scoring Integration
+
+**Confirmed Assumption:** The `Deal` model already includes fields like `purchase_price` and `unit_count` that can contribute to a comprehensive `Priority Score`.
+
+**Proposed Integration Points:**
+*   **Stage Score Calculation:** The `Stage Score` (AC 3.2.2) will be derived directly from the `weight` associated with the deal's `status` (pipeline stage), as retrieved from the `PipelineStageConfig` via the `GET /pipeline-stages` endpoint.
+*   **Overall Priority Score (Backend):**
+    *   **Assumption:** The overall `Priority Score` will be calculated on the backend.
+    *   **Integration:** A new field, e.g., `priority_score` (numeric), will be added to the `Deal` model. A new service method (e.g., `DealService.calculate_priority_score`) will be responsible for calculating this score based on the `Deal.status` (using `PipelineStageConfig.weight`) and other deal attributes (e.g., deal value, time in stage, etc., as per AC 3.2.3).
+    *   This score will be recalculated whenever the `Deal.status` is updated or other relevant deal fields change.
+    *   **`Deal` Model Enhancement (Proposed):**
+        ```python
+        # In backend/app/models/deal.py
+        class Deal(db.Model):
+            # ... existing fields ...
+            priority_score = db.Column(db.Numeric(10, 2), nullable=False, default=0.0)
+            # ... existing fields ...
         ```
-    *   **Implementation Notes:**
-        *   This endpoint will join `Deal` and `PipelineStage` data.
-        *   The `score` for each deal returned will be its *final* score, after applying the `score_influence` from its current `PipelineStage`.
+*   **Admin Interface for Weights:**
+    *   **Frontend:** A new admin-only page/component will be created to list and update the `PipelineStageConfig` (stage names, order, weights). This will use the new `GET /pipeline-stages` and `PUT /pipeline-stages/weights` API endpoints.
+    *   **Backend:** `PipelineConfigService` will handle the business logic for managing `PipelineStageConfig`.
+*   **Displaying Priority Score:** The `DealCard.tsx` component will display the `priority_score` using a `LeadScoreBadge` or a similar visual indicator (AC 3.2.5).
 
-*   **`PUT /api/deals/{id}/move-stage` (Modified/New Action):**
-    *   **Description:** Updates a deal's pipeline stage and recalculates its score based on the new stage's influence.
-    *   **Request Body:**
-        ```json
-        {
-            "new_pipeline_stage_id": "new_stage_id"
-        }
-        ```
-    *   **Response:** Updated `Deal` object.
-    *   **Implementation Notes:**
-        *   When a deal's stage is updated, the backend will:
-            1.  Retrieve the `new_pipeline_stage_id`.
-            2.  Fetch the `score_influence` for the new stage.
-            3.  Recalculate the deal's base score (if applicable) and then apply the `score_influence`.
-            4.  Update the `deal.current_pipeline_stage_id` and `deal.score` in the database.
+## 7. Assumptions & Confirmations
 
-## 5. Frontend Components
+**Confirmed Assumptions/Integration Points:**
+*   **Deal Status as Pipeline Stage:** The `Deal.status` field is confirmed as the mechanism for tracking pipeline stages.
+*   **Existing API for Status Update:** The `PATCH /deals/<int:deal_id>` endpoint is confirmed for updating deal status.
+*   **Existing API for Filtering by Status:** The `GET /deals` endpoint supports filtering by `status` for populating Kanban columns.
+*   **Reusable Frontend Data Logic:** Data fetching and basic filtering patterns from `PropertyListPage.tsx` can be adapted.
+*   **Reusable Frontend Scoring Component:** `LeadScoreBadge.tsx` can be reused for displaying scores.
 
-### 5.1 Kanban Board Component
+**Proposed Integration Points/Assumptions Requiring New Development:**
+*   **New `PipelineStageConfig` Model and CRUD API:** For configurable stage names, order, and weights.
+*   **Backend `priority_score` field in `Deal` model:** To store the calculated priority score.
+*   **Backend `DealService` method for `priority_score` calculation:** To update the score based on stage weights and other factors.
+*   **New Frontend Kanban Components:** `DealKanbanPage.tsx`, `KanbanColumn.tsx`, `DealCard.tsx`.
+*   **New Frontend State Management:** A dedicated `DealKanbanContext` for the Kanban board.
+*   **New Frontend Admin Interface:** For configuring pipeline stage weights.
+*   **Drag-and-Drop Library:** A suitable frontend library (e.g., `react-beautiful-dnd` or `dnd-kit`) will be needed to implement the drag-and-drop functionality for `DealCard`s between `KanbanColumn`s.
 
-*   **Purpose:** Displays pipeline stages as columns and deals as draggable cards within those columns.
-*   **Features:**
-    *   **Drag-and-Drop:** Users can drag deal cards between pipeline stage columns. This action will trigger the `PUT /api/deals/{id}/move-stage` API call.
-    *   **Deal Card Display:** Each card will show key deal information, including its name, a brief description, and its calculated score. The score will be prominently displayed.
-    *   **Stage Columns:** Each column represents a `PipelineStage` and will display its name and potentially a count of deals within that stage.
-    *   **Real-time Updates (Optional, but Recommended for Robustness):** Implement WebSockets or long-polling to reflect changes from other users or backend processes without requiring a full page refresh. This will ensure scores and card positions are always up-to-date.
+## 8. Next Steps
 
-### 5.2 Deal Card Component
-
-*   **Purpose:** Displays individual deal information within a Kanban column.
-*   **Features:**
-    *   Deal Name
-    *   Brief Description
-    *   **Calculated Score:** Clearly displays the deal's score, which includes the pipeline stage's influence.
-    *   (Optional) Tooltip/hover functionality to show more detailed deal information or a breakdown of the score.
-
-## 6. Scoring Mechanism - Pipeline Influence
-
-The scoring mechanism for a deal will be a combination of its intrinsic value (based on existing criteria) and the influence of its current pipeline stage.
-
-### 6.1 Score Calculation Logic
-
-`Final Deal Score = (Base Deal Score) + (PipelineStage.score_influence)`
-
-*   **Base Deal Score:** This is the score derived from existing underwriting criteria, independent of the pipeline stage. It represents the inherent quality or potential of the deal. The details of this calculation are outside the scope of this document but are assumed to exist.
-*   **PipelineStage.score_influence:** This is the integer value defined in the `PipelineStage` model.
-    *   A positive `score_influence` will boost the deal's score when it is in that stage.
-    *   A negative `score_influence` will penalize the deal's score.
-    *   A `score_influence` of zero will have no impact.
-
-### 6.2 Example
-
-| Pipeline Stage | `score_influence` | Base Deal Score | Final Deal Score |
-| :------------- | :---------------- | :-------------- | :--------------- |
-| Prospecting    | +10               | 75              | 85               |
-| Due Diligence  | +20               | 75              | 95               |
-| Negotiation    | +5                | 75              | 80               |
-| Closed Won     | +0                | 75              | 75               |
-| Closed Lost    | -10               | 75              | 65               |
-
-### 6.3 Implementation Details (Backend)
-
-*   The `score_influence` will be directly managed by administrators or through configuration settings, allowing flexibility in adjusting its impact.
-*   Any API endpoint that retrieves or updates a deal's score should incorporate this calculation. The `GET /api/kanban-deals` endpoint will return the final calculated score. The `PUT /api/deals/{id}/move-stage` will trigger the recalculation and update the stored `score` in the `Deal` model.
-
-## 7. Robustness and Simplicity
-
-### 7.1 Data Validation
-
-*   Implement server-side validation for all API inputs (e.g., ensuring `new_pipeline_stage_id` is a valid existing stage).
-*   Ensure `score_influence` is an integer.
-
-### 7.2 Error Handling
-
-*   Implement comprehensive error handling for API endpoints, returning meaningful error messages and appropriate HTTP status codes (e.g., 400 Bad Request, 404 Not Found, 500 Internal Server Error).
-*   Frontend should gracefully handle API errors and provide user feedback.
-
-### 7.3 Performance Considerations
-
-*   **Database Indexing:** Ensure appropriate indexes on `Deal.current_pipeline_stage_id` and `PipelineStage.id` for efficient data retrieval in `GET /api/kanban-deals`.
-*   **API Optimization:** The `GET /api/kanban-deals` endpoint should be optimized for a single, efficient database query to minimize latency.
-
-### 7.4 Code Reusability
-
-*   Abstract the score calculation logic into a dedicated utility function or service to be reused across different parts of the backend (e.g., when a deal is created, updated, or moved).
-
-## 8. Integration with Existing Codebase
-
-*   **API Layer:** Extend existing API controllers or create new ones, ensuring consistent naming conventions and authentication/authorization mechanisms.
-*   **Service Layer:** Modify existing deal services or create new ones to encapsulate the business logic related to moving deals between stages and recalculating scores.
-*   **Database Layer:** Update existing data access objects (DAOs) or repositories to include the `score_influence` field in `PipelineStage` and handle the score updates in `Deal`.
-*   **Frontend Framework:** Utilize the existing frontend framework (e.g., React, Angular, Vue.js) components, styling, and state management solutions to ensure a cohesive user experience and development workflow.
-
-## 9. Future Considerations
-
-*   **Customizable Scoring Rules:** Allow users with appropriate permissions to define more complex scoring rules based on various deal attributes in addition to pipeline stage.
-*   **Historical Scoring:** Track the history of a deal's score as it moves through stages and its attributes change.
-*   **Analytics and Reporting:** Generate reports based on deal scores and pipeline movement to identify bottlenecks or high-performing stages.
+1.  Implement the `PipelineStageConfig` model and associated backend service and API endpoints.
+2.  Add `priority_score` field to the `Deal` model and implement the calculation logic in `DealService`.
+3.  Develop the frontend `DealKanbanPage`, `KanbanColumn`, and `DealCard` components.
+4.  Integrate drag-and-drop functionality for updating deal statuses.
+5.  Implement the admin interface for configuring pipeline stage weights.
+6.  Thorough testing of both backend and frontend components, especially for data consistency and real-time updates.
