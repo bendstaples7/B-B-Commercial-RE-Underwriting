@@ -939,3 +939,73 @@ def suppress_lead(lead_id: int):
     db.session.commit()
 
     return jsonify({'lead_status': 'suppressed', 'recommended_action': None}), 200
+
+
+@command_center_bp.route('/<int:lead_id>/hubspot-tasks/<int:task_id>/done', methods=['POST'])
+@handle_errors
+def mark_hubspot_task_done(lead_id: int, task_id: int):
+    """
+    POST /api/leads/<lead_id>/hubspot-tasks/<task_id>/done
+
+    Mark a HubSpot-imported task as completed locally.
+    This does NOT sync back to HubSpot — the integration is read-only.
+    Sets tasks.status = 'completed' and appends a task_completed timeline entry.
+    Triggers RA recomputation so the lead may leave Today's Action queue.
+    """
+    import datetime as _dt
+    from app import db
+    from app.models.task import Task
+
+    actor = getattr(g, 'user_id', 'anonymous')
+
+    # Verify the task is linked to this lead
+    task = db.session.execute(
+        db.text("""
+            SELECT t.id, t.title, t.status FROM tasks t
+            WHERE t.id = :task_id
+              AND t.status IN ('open', 'overdue')
+              AND (
+                t.lead_id = :lead_id
+                OR EXISTS (
+                    SELECT 1 FROM task_associations ta
+                    WHERE ta.task_id = t.id
+                      AND ta.target_type = 'lead'
+                      AND ta.target_id = :lead_id
+                )
+              )
+        """),
+        {'task_id': task_id, 'lead_id': lead_id}
+    ).fetchone()
+
+    if task is None:
+        return jsonify({'error': 'Not found', 'message': f'Task {task_id} not found for lead {lead_id}'}), 404
+
+    # Mark completed locally
+    db.session.execute(
+        db.text("UPDATE tasks SET status = 'completed', updated_at = NOW() WHERE id = :task_id"),
+        {'task_id': task_id}
+    )
+
+    # Append timeline entry
+    entry = LeadTimelineEntry(
+        lead_id=lead_id,
+        event_type='task_completed',
+        occurred_at=_dt.datetime.now(_dt.timezone.utc),
+        source='manual',
+        actor=actor,
+        summary=f"HubSpot task marked done locally: {task[1]}",
+        event_metadata={'task_id': task_id, 'title': task[1], 'note': 'Marked done locally — not synced to HubSpot'},
+    )
+    db.session.add(entry)
+    db.session.commit()
+
+    # Trigger RA recomputation — lead may leave Today's Action queue
+    try:
+        ActionEngineService.recompute_and_persist(lead_id)
+    except Exception as exc:
+        logger.exception(
+            "ActionEngineService.recompute_and_persist failed for lead %s after hubspot task done: %s",
+            lead_id, exc,
+        )
+
+    return jsonify({'task_id': task_id, 'status': 'completed'}), 200

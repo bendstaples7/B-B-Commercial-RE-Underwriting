@@ -1318,6 +1318,8 @@ export const callLogService = {
     api.post(`/leads/${leadId}/calls`, payload).then(r => r.data),
   logNote: (leadId: number, payload: LogNotePayload): Promise<LeadTimelineEntry> =>
     api.post(`/leads/${leadId}/notes`, payload).then(r => r.data),
+  markHubSpotTaskDone: (leadId: number, taskId: number): Promise<{ task_id: number; status: string }> =>
+    api.post(`/leads/${leadId}/hubspot-tasks/${taskId}/done`).then(r => r.data),
 }
 
 export const bulkActionService = {

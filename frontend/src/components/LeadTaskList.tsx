@@ -25,7 +25,7 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import AddTaskIcon from '@mui/icons-material/AddTask'
 import HubIcon from '@mui/icons-material/Hub'
 import type { LeadTask, CRMRecommendedAction } from '@/types'
-import { leadTaskService } from '@/services/api'
+import { leadTaskService, callLogService } from '@/services/api'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -68,6 +68,7 @@ export interface LeadTaskListProps {
   recommendedAction?: CRMRecommendedAction | null
   onTaskCreated: (task: LeadTask) => void
   onTaskCompleted?: (taskId: number | string) => void
+  onHubSpotTaskDone?: (taskId: number) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +86,7 @@ export function LeadTaskList({
   recommendedAction,
   onTaskCreated,
   onTaskCompleted,
+  onHubSpotTaskDone,
 }: LeadTaskListProps) {
   const [formOpen, setFormOpen] = useState(false)
   const [title, setTitle] = useState('')
@@ -92,8 +94,9 @@ export function LeadTaskList({
   const [titleError, setTitleError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [markingDone, setMarkingDone] = useState<number | null>(null)
 
-  const openTasks = tasks.filter((t) => t.status === 'open')
+  const openTasks = tasks.filter((t) => t.status === 'open' || t.status === 'overdue')
   const sortedTasks = sortTasks(openTasks)
   const nativeTasks = sortedTasks.filter((t) => t.source !== 'hubspot')
   const hubspotTasks = sortedTasks.filter((t) => t.source === 'hubspot')
@@ -222,6 +225,34 @@ export function LeadTaskList({
                       >
                         <CheckCircleOutlineIcon fontSize="small" />
                       </IconButton>
+                    ) : isHubSpot ? (
+                      <Tooltip title="Mark as done locally — does not update HubSpot">
+                        <span>
+                          <IconButton
+                            edge="end"
+                            aria-label={`Mark HubSpot task done: ${task.title}`}
+                            onClick={async () => {
+                              const numericId = parseInt(String(task.id).replace('hs-', ''), 10)
+                              setMarkingDone(numericId)
+                              try {
+                                await callLogService.markHubSpotTaskDone(leadId, numericId)
+                                if (onHubSpotTaskDone) onHubSpotTaskDone(numericId)
+                                if (onTaskCompleted) onTaskCompleted(task.id)
+                              } finally {
+                                setMarkingDone(null)
+                              }
+                            }}
+                            disabled={markingDone === parseInt(String(task.id).replace('hs-', ''), 10)}
+                            data-testid={`mark-done-btn-${task.id}`}
+                            size="small"
+                          >
+                            {markingDone === parseInt(String(task.id).replace('hs-', ''), 10)
+                              ? <CircularProgress size={14} />
+                              : <CheckCircleOutlineIcon fontSize="small" />
+                            }
+                          </IconButton>
+                        </span>
+                      </Tooltip>
                     ) : undefined
                   }
                 >

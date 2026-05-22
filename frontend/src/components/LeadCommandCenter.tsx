@@ -437,6 +437,7 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
             recommendedAction={data.recommended_action?.value ?? null}
             onTaskCreated={handleTaskCreated}
             onTaskCompleted={handleTaskCompleted}
+            onHubSpotTaskDone={() => queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })}
           />
         </Box>
 
