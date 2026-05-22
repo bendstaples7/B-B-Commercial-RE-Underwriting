@@ -115,7 +115,7 @@ function NewAnalysisDialog({ open, onClose }: NewAnalysisDialogProps) {
   const [resolvedCoords, setResolvedCoords] = useState<{ lat: number; lng: number } | undefined>()
 
   const {
-    ready,
+    ready: _ready,
     value: address,
     suggestions: { status, data },
     setValue: setAddress,
@@ -566,6 +566,7 @@ function MultifamilyPanel() {
 export function AnalysisLandingPage() {
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
+  const navigate = useNavigate()
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [mobileTab, setMobileTab] = useState(0)

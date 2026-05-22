@@ -18,13 +18,15 @@ import {
   ListItemText,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import AddTaskIcon from '@mui/icons-material/AddTask'
+import HubIcon from '@mui/icons-material/Hub'
 import type { LeadTask, CRMRecommendedAction } from '@/types'
-import { leadTaskService } from '@/services/api'
+import { leadTaskService, callLogService } from '@/services/api'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -66,7 +68,8 @@ export interface LeadTaskListProps {
   tasks: LeadTask[]
   recommendedAction?: CRMRecommendedAction | null
   onTaskCreated: (task: LeadTask) => void
-  onTaskCompleted?: (taskId: number) => void
+  onTaskCompleted?: (taskId: number | string) => void
+  onHubSpotTaskDone?: (taskId: number) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +87,7 @@ export function LeadTaskList({
   recommendedAction,
   onTaskCreated,
   onTaskCompleted,
+  onHubSpotTaskDone,
 }: LeadTaskListProps) {
   const [formOpen, setFormOpen] = useState(false)
   const [title, setTitle] = useState('')
@@ -91,8 +95,9 @@ export function LeadTaskList({
   const [titleError, setTitleError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [markingDone, setMarkingDone] = useState<number | null>(null)
 
-  const openTasks = tasks.filter((t) => t.status === 'open')
+  const openTasks = tasks.filter((t) => t.status === 'open' || t.status === 'overdue')
   const sortedTasks = sortTasks(openTasks)
   const showCreateTaskCTA = recommendedAction === 'create_task' && openTasks.length === 0
 
@@ -170,8 +175,7 @@ export function LeadTaskList({
               data-testid="task-count-badge"
             />
           )}
-        </Typography>
-        {!formOpen && (
+        </Typography>        {!formOpen && (
           <Button
             size="small"
             startIcon={<AddIcon />}
@@ -203,27 +207,74 @@ export function LeadTaskList({
         <List dense disablePadding data-testid="task-list">
           {sortedTasks.map((task, index) => {
             const overdue = isDueDateOverdue(task.due_date)
+            const isHubSpot = task.source === 'hubspot'
             return (
               <Box key={task.id}>
                 {index > 0 && <Divider component="li" />}
                 <ListItem
                   data-testid={`task-item-${task.id}`}
                   secondaryAction={
-                    onTaskCompleted ? (
+                    !isHubSpot && onTaskCompleted ? (
                       <IconButton
                         edge="end"
                         aria-label={`Complete task: ${task.title}`}
-                        onClick={() => onTaskCompleted(task.id)}
+                        onClick={() => onTaskCompleted(task.id as number)}
                         data-testid={`complete-task-btn-${task.id}`}
                         size="small"
                       >
                         <CheckCircleOutlineIcon fontSize="small" />
                       </IconButton>
+                    ) : isHubSpot ? (
+                      <Tooltip title="Mark as done locally — does not update HubSpot">
+                        <span>
+                          <IconButton
+                            edge="end"
+                            aria-label={`Mark HubSpot task done: ${task.title}`}
+                            onClick={async () => {
+                              const numericId = parseInt(String(task.id).replace('hs-', ''), 10)
+                              setMarkingDone(numericId)
+                              try {
+                                await callLogService.markHubSpotTaskDone(leadId, numericId)
+                                if (onHubSpotTaskDone) onHubSpotTaskDone(numericId)
+                                if (onTaskCompleted) onTaskCompleted(task.id)
+                              } finally {
+                                setMarkingDone(null)
+                              }
+                            }}
+                            disabled={markingDone === parseInt(String(task.id).replace('hs-', ''), 10)}
+                            data-testid={`mark-done-btn-${task.id}`}
+                            size="small"
+                          >
+                            {markingDone === parseInt(String(task.id).replace('hs-', ''), 10)
+                              ? <CircularProgress size={14} />
+                              : <CheckCircleOutlineIcon fontSize="small" />
+                            }
+                          </IconButton>
+                        </span>
+                      </Tooltip>
                     ) : undefined
                   }
                 >
                   <ListItemText
-                    primary={task.title}
+                    primary={
+                      <Stack direction="row" alignItems="center" spacing={0.75}>
+                        <span>{task.title}</span>
+                        {isHubSpot && (
+                          <Chip
+                            icon={<HubIcon sx={{ fontSize: '12px !important' }} />}
+                            label="HubSpot"
+                            size="small"
+                            sx={{
+                              height: 18,
+                              fontSize: '0.65rem',
+                              bgcolor: '#ff7a59',
+                              color: '#fff',
+                              '& .MuiChip-icon': { color: '#fff' },
+                            }}
+                          />
+                        )}
+                      </Stack>
+                    }
                     secondary={
                       task.due_date ? (
                         <Typography

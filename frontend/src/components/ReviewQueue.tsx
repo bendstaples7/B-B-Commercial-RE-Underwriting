@@ -66,23 +66,6 @@ interface RelinkDialogState {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function getConfidenceColor(
-  confidence: MatchConfidence
-): 'success' | 'warning' | 'error' | 'default' {
-  switch (confidence) {
-    case MatchConfidence.HIGH:
-      return 'success'
-    case MatchConfidence.MEDIUM:
-      return 'warning'
-    case MatchConfidence.LOW:
-      return 'error'
-    case MatchConfidence.UNMATCHED:
-      return 'error'
-    default:
-      return 'default'
-  }
-}
-
 function getConfidenceSx(confidence: MatchConfidence): Record<string, string> {
   switch (confidence) {
     case MatchConfidence.HIGH:

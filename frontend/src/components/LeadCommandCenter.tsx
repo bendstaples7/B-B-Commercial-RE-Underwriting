@@ -233,13 +233,16 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
 
   const handleTaskCreated = (task: LeadTask) => setTasks((prev) => [...prev, task])
 
-  const handleTaskCompleted = async (taskId: number) => {
+  const handleTaskCompleted = async (taskId: number | string) => {
     setTasks((prev) => prev.filter((t) => t.id !== taskId))
-    try {
-      await leadTaskService.completeTask(leadId, taskId)
-      await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
-    } catch {
-      await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+    // Only native tasks (numeric IDs) can be completed from the platform
+    if (typeof taskId === 'number') {
+      try {
+        await leadTaskService.completeTask(leadId, taskId)
+        await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+      } catch {
+        await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+      }
     }
   }
 
@@ -434,6 +437,7 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
             recommendedAction={data.recommended_action?.value ?? null}
             onTaskCreated={handleTaskCreated}
             onTaskCompleted={handleTaskCompleted}
+            onHubSpotTaskDone={() => queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })}
           />
         </Box>
 

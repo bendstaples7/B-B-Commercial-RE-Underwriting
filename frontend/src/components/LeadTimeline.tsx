@@ -148,8 +148,6 @@ export interface LeadTimelineProps {
 // Component
 // ---------------------------------------------------------------------------
 
-const PAGE_SIZE = 25
-
 /**
  * LeadTimeline renders a paginated, reverse-chronological activity timeline.
  * - Entries are displayed newest-first (the backend returns them in that order).

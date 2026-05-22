@@ -1612,7 +1612,7 @@ export type LeadTaskType =
   | 'skip_trace_owner'
   | 'custom';
 
-export type LeadTaskStatus = 'open' | 'completed' | 'cancelled';
+export type LeadTaskStatus = 'open' | 'completed' | 'cancelled' | 'overdue';
 
 export type TimelineEventType =
   | 'note_added'
@@ -1630,7 +1630,7 @@ export type TimelineEventType =
   | 'lead_imported';
 
 export interface LeadTask {
-  id: number;
+  id: number | string;
   lead_id: number;
   task_type: LeadTaskType;
   title: string;
@@ -1639,6 +1639,8 @@ export interface LeadTask {
   created_at: string;
   completed_at: string | null;
   created_by: string;
+  /** 'native' for tasks created in the platform, 'hubspot' for tasks imported from HubSpot */
+  source?: 'native' | 'hubspot';
 }
 
 export interface LeadTimelineEntry {
@@ -1646,7 +1648,7 @@ export interface LeadTimelineEntry {
   lead_id: number;
   event_type: TimelineEventType;
   occurred_at: string;
-  source: 'manual' | 'system' | 'hubspot';
+  source: 'manual' | 'system' | 'hubspot' | 'hubspot_import';
   actor: string;
   summary: string;
   metadata: Record<string, unknown> | null;
@@ -1705,13 +1707,45 @@ export interface CommandCenterPayload {
   id: number;
   owner_first_name: string | null;
   owner_last_name: string | null;
+  owner_2_first_name?: string | null;
+  owner_2_last_name?: string | null;
   property_street: string | null;
   property_city: string | null;
   property_state: string | null;
+  property_type?: string | null;
+  bedrooms?: number | null;
+  bathrooms?: number | null;
+  square_footage?: number | null;
+  year_built?: number | null;
+  county_assessor_pin?: string | null;
+  ownership_type?: string | null;
+  acquisition_date?: string | null;
+  mailing_address?: string | null;
+  mailing_city?: string | null;
+  mailing_state?: string | null;
+  mailing_zip?: string | null;
+  phone_1?: string | null;
+  phone_2?: string | null;
+  phone_3?: string | null;
+  phone_4?: string | null;
+  phone_5?: string | null;
+  phone_6?: string | null;
+  phone_7?: string | null;
+  email_1?: string | null;
+  email_2?: string | null;
+  email_3?: string | null;
+  email_4?: string | null;
+  email_5?: string | null;
+  notes?: string | null;
   lead_score: number;
   lead_status: LeadStatus;
+  lead_category?: string;
   has_property_match: boolean;
   analysis_session_id: number | null;
+  hubspot_deal_stage?: string | null;
+  last_hubspot_sync_at?: string | null;
+  last_contact_date?: string | null;
+  date_added_to_hubspot?: string | null;
   recommended_action: RecommendedActionMeta;
   open_tasks: LeadTask[];
   timeline: {
@@ -1720,6 +1754,7 @@ export interface CommandCenterPayload {
     page: number;
     per_page: number;
   };
+  data_completeness_score?: number | null;
 }
 
 export interface LogCallPayload {

@@ -1,5 +1,5 @@
-import React from 'react'
-import { render, screen, within } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
 import * as fc from 'fast-check'
 import { ComparableReviewTable } from './ComparableReviewTable'
@@ -67,13 +67,12 @@ describe('Property 10: Similarity notes truncation threshold', () => {
   it('always shows first 100 chars and a "…more" affordance for strings longer than 100 chars', () => {
     // fc.property(fc.string({ minLength: 101 }), ...)
     fc.assert(
-      fc.property(fc.string({ minLength: 101 }), (notes) => {
+      fc.property(fc.string({ minLength: 101 }), (notes: string) => {
         const { unmount, container } = renderTable([
           makeComparable({ id: 'p10', similarityNotes: notes }),
         ])
 
         const expected100 = notes.slice(0, 100)
-        const beyond100 = notes.slice(100)
 
         // A "…more" button must be present (truncation affordance)
         const moreButton = screen.getByRole('button', { name: /…more/i })

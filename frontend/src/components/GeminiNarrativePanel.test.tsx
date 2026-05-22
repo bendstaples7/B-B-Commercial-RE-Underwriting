@@ -1,5 +1,5 @@
-import React from 'react'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect } from 'vitest'
+import { render, screen } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
 import * as fc from 'fast-check'
 import { GeminiNarrativePanel } from './GeminiNarrativePanel'
@@ -16,7 +16,7 @@ describe('Property 11: Narrative whitespace preservation', () => {
       fc.property(
         // Generate non-empty strings (filter out empty/whitespace-only to match "non-empty narrative")
         fc.string({ minLength: 1 }),
-        (narrative) => {
+        (narrative: string) => {
           const { unmount, container } = render(<GeminiNarrativePanel narrative={narrative} />)
 
           // The panel must render (non-empty narrative)

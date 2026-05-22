@@ -38,6 +38,7 @@ function makeTask(id: number): LeadTask {
     created_at: '2024-01-01T00:00:00Z',
     completed_at: null,
     created_by: 'user',
+    source: 'native',
   }
 }
 

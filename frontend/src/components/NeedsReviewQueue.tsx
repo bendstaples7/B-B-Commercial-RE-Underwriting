@@ -8,7 +8,7 @@
  */
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Box, Button, Typography } from '@mui/material'
+import { Box, Typography } from '@mui/material'
 import AnalyticsIcon from '@mui/icons-material/Analytics'
 import HistoryIcon from '@mui/icons-material/History'
 import { useNavigate } from 'react-router-dom'
