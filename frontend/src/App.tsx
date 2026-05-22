@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, Component } from 'react'
-import { Routes, Route, Link, Navigate, useNavigate, useParams, useSearchParams, useLocation } from 'react-router-dom'
+import { Routes, Route, Link, Navigate, useNavigate, useParams, useLocation } from 'react-router-dom'
 import { useLoadScript } from '@react-google-maps/api'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {

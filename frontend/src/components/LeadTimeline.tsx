@@ -81,7 +81,7 @@ interface TimelineEntryRowProps {
 }
 
 function TimelineEntryRow({ entry }: TimelineEntryRowProps) {
-  const isHubSpot = entry.source === 'hubspot' || entry.source === 'hubspot_import'
+  const isHubSpot = entry.source === 'hubspot'
 
   return (
     <ListItem
@@ -147,8 +147,6 @@ export interface LeadTimelineProps {
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
-
-const PAGE_SIZE = 25
 
 /**
  * LeadTimeline renders a paginated, reverse-chronological activity timeline.

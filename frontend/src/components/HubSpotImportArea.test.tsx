@@ -11,7 +11,7 @@
  * - Review Queue badge shows pending count
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@/test/testUtils'
+import { render, screen, waitFor } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
 import { HubSpotImportArea } from './HubSpotImportArea'
 import { hubSpotService } from '@/services/api'
@@ -282,7 +282,7 @@ describe('HubSpotImportArea', () => {
     it('calls triggerHubSpotImport with selected object types', async () => {
       vi.mocked(hubSpotService.getHubSpotConfig).mockResolvedValue(mockConfig)
       vi.mocked(hubSpotService.triggerHubSpotImport).mockResolvedValue({
-        run_id: 42,
+        run_ids: [42],
         status: 'running',
       })
 
@@ -304,7 +304,7 @@ describe('HubSpotImportArea', () => {
     it('calls triggerHubSpotImport with only selected types when some are unchecked', async () => {
       vi.mocked(hubSpotService.getHubSpotConfig).mockResolvedValue(mockConfig)
       vi.mocked(hubSpotService.triggerHubSpotImport).mockResolvedValue({
-        run_id: 43,
+        run_ids: [43],
         status: 'running',
       })
 
@@ -335,7 +335,7 @@ describe('HubSpotImportArea', () => {
     it('shows progress indicator after import is triggered', async () => {
       vi.mocked(hubSpotService.getHubSpotConfig).mockResolvedValue(mockConfig)
       vi.mocked(hubSpotService.triggerHubSpotImport).mockResolvedValue({
-        run_id: 44,
+        run_ids: [44],
         status: 'running',
       })
 
@@ -373,7 +373,7 @@ describe('HubSpotImportArea', () => {
     it('updates progress bar per object type from SSE events', async () => {
       vi.mocked(hubSpotService.getHubSpotConfig).mockResolvedValue(mockConfig)
       vi.mocked(hubSpotService.triggerHubSpotImport).mockResolvedValue({
-        run_id: 45,
+        run_ids: [45],
         status: 'running',
       })
 

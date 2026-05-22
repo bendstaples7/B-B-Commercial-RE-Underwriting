@@ -34,7 +34,7 @@ import {
 import type { QueueRow } from '@/types'
 
 export function PreviouslyWarmQueue() {
-  const [page, setPage] = useState(1)
+  const [page] = useState(1)
   const queryClient = useQueryClient()
   const [suppressTarget, setSuppressTarget] = useState<QueueRow | null>(null)
 

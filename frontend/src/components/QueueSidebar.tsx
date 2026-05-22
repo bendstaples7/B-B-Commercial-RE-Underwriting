@@ -6,7 +6,7 @@
  *
  * Requirements: 18.1, 18.2
  */
-import { List, ListItem, ListItemButton, ListItemText, Badge, Chip, Box, Typography } from '@mui/material'
+import { List, ListItem, ListItemButton, ListItemText, Chip, Box, Typography } from '@mui/material'
 import { Link, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { queueService } from '@/services/api'

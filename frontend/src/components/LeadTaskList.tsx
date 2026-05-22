@@ -18,6 +18,7 @@ import {
   ListItemText,
   Stack,
   TextField,
+  Tooltip,
   Typography,
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
@@ -98,8 +99,6 @@ export function LeadTaskList({
 
   const openTasks = tasks.filter((t) => t.status === 'open' || t.status === 'overdue')
   const sortedTasks = sortTasks(openTasks)
-  const nativeTasks = sortedTasks.filter((t) => t.source !== 'hubspot')
-  const hubspotTasks = sortedTasks.filter((t) => t.source === 'hubspot')
   const showCreateTaskCTA = recommendedAction === 'create_task' && openTasks.length === 0
 
   // ---------------------------------------------------------------------------

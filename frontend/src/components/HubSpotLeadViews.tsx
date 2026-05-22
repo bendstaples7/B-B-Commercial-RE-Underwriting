@@ -11,14 +11,12 @@
  *
  * Requirements: 18.1, 18.2, 18.3, 18.4, 18.5, 18.6, 18.7
  */
-import React from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Box,
   Typography,
   CircularProgress,
   Alert,
-  Button,
   Table,
   TableHead,
   TableBody,

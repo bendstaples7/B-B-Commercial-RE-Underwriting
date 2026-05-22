@@ -23,7 +23,7 @@ import {
 import type { QueueRow } from '@/types'
 
 export function TodaysActionQueue() {
-  const [page, setPage] = useState(1)
+  const [page] = useState(1)
   const queryClient = useQueryClient()
 
   const { data } = useQuery({

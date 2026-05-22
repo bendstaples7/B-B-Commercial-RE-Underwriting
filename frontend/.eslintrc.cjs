@@ -42,6 +42,7 @@ module.exports = {
     // -----------------------------------------------------------------------
     'react/react-in-jsx-scope': 'off', // not needed with React 17+ JSX transform
     'react/prop-types': 'off',         // TypeScript handles this
+    'react/jsx-no-undef': 'error',     // catch missing imports like <Tooltip> before runtime
     'react-hooks/rules-of-hooks': 'error',
     'react-hooks/exhaustive-deps': 'warn',
   },
