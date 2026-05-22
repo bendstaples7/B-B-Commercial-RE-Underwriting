@@ -1195,14 +1195,6 @@ function App() {
     libraries: GOOGLE_MAPS_LIBRARIES,
   })
 
-  // Load the Google Maps JS API (with Places library) via @react-google-maps/api.
-  // useLoadScript manages the script tag lifecycle and exposes isLoaded so
-  // components can gate autocomplete on actual API readiness.
-  const { isLoaded: mapsLoaded } = useLoadScript({
-    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? '',
-    libraries: GOOGLE_MAPS_LIBRARIES,
-  })
-
   const toggleDrawer = () => setDrawerOpen((prev) => !prev)
 
   const location = useLocation()

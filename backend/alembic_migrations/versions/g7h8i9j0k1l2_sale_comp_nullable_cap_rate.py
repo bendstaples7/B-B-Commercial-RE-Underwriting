@@ -28,7 +28,7 @@ _CONSTRAINT_NOT_FOUND = (OperationalError, InternalError, ProgrammingError)
 
 
 revision = 'g7h8i9j0k1l2'
-down_revision = 'f6g7h8i9j0k1'
+down_revision = 'f6g7h8i9j0k1c'
 branch_labels = None
 depends_on = None
 

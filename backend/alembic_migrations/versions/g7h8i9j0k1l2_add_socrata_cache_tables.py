@@ -1,6 +1,6 @@
 """add socrata cache tables
 
-Revision ID: g7h8i9j0k1l2
+Revision ID: g7h8i9j0k1l2b
 Revises: fd5451087f07
 Create Date: 2026-05-20 10:00:00.000000
 
@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision = 'g7h8i9j0k1l2'
+revision = 'g7h8i9j0k1l2b'
 down_revision = 'fd5451087f07'
 branch_labels = None
 depends_on = None
