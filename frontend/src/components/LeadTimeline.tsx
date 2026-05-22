@@ -81,7 +81,7 @@ interface TimelineEntryRowProps {
 }
 
 function TimelineEntryRow({ entry }: TimelineEntryRowProps) {
-  const isHubSpot = entry.source === 'hubspot'
+  const isHubSpot = entry.source === 'hubspot' || entry.source === 'hubspot_import'
 
   return (
     <ListItem

@@ -1648,7 +1648,7 @@ export interface LeadTimelineEntry {
   lead_id: number;
   event_type: TimelineEventType;
   occurred_at: string;
-  source: 'manual' | 'system' | 'hubspot';
+  source: 'manual' | 'system' | 'hubspot' | 'hubspot_import';
   actor: string;
   summary: string;
   metadata: Record<string, unknown> | null;

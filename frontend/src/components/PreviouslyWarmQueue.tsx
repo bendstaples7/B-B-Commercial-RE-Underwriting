@@ -34,13 +34,12 @@ import {
 import type { QueueRow } from '@/types'
 
 export function PreviouslyWarmQueue() {
-  const [page] = useState(1)
   const queryClient = useQueryClient()
   const [suppressTarget, setSuppressTarget] = useState<QueueRow | null>(null)
 
   const { data } = useQuery({
-    queryKey: ['queue-previously-warm', page],
-    queryFn: () => queueService.getPreviouslyWarm(page, 20),
+    queryKey: ['queue-previously-warm'],
+    queryFn: () => queueService.getPreviouslyWarm(1, 20),
     refetchInterval: 60_000,
   })
 

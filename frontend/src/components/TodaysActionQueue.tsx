@@ -6,7 +6,6 @@
  *
  * Requirements: 6.3, 18.1
  */
-import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Box, Link, Typography } from '@mui/material'
 import PhoneIcon from '@mui/icons-material/Phone'
@@ -23,12 +22,11 @@ import {
 import type { QueueRow } from '@/types'
 
 export function TodaysActionQueue() {
-  const [page] = useState(1)
   const queryClient = useQueryClient()
 
   const { data } = useQuery({
-    queryKey: ['queue-todays-action', page],
-    queryFn: () => queueService.getTodaysAction(page, 20),
+    queryKey: ['queue-todays-action'],
+    queryFn: () => queueService.getTodaysAction(1, 20),
     refetchInterval: 60_000,
   })
 

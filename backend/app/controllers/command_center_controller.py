@@ -226,6 +226,7 @@ def get_command_center(lead_id: int):
     # ------------------------------------------------------------------
     # Fetch HubSpot tasks linked to this lead (via task_associations or
     # direct lead_id FK) so they appear alongside native tasks in the UI.
+    # Only tasks with source='hubspot_import' are shown as HubSpot tasks.
     # These are read-only — the user cannot complete/snooze them here.
     # ------------------------------------------------------------------
     hubspot_task_rows = _db.session.execute(_text("""
@@ -234,10 +235,13 @@ def get_command_center(lead_id: int):
         JOIN task_associations ta ON ta.task_id = t.id
         WHERE ta.target_type = 'lead' AND ta.target_id = :lead_id
           AND t.status IN ('open', 'overdue')
+          AND t.source = 'hubspot_import'
         UNION
         SELECT id, title, status, due_date, created_at
         FROM tasks
-        WHERE lead_id = :lead_id AND status IN ('open', 'overdue')
+        WHERE lead_id = :lead_id
+          AND status IN ('open', 'overdue')
+          AND source = 'hubspot_import'
         ORDER BY due_date ASC NULLS LAST
     """), {'lead_id': lead_id}).fetchall()
 
@@ -954,47 +958,53 @@ def mark_hubspot_task_done(lead_id: int, task_id: int):
     """
     import datetime as _dt
     from app import db
-    from app.models.task import Task
 
     actor = getattr(g, 'user_id', 'anonymous')
+    now = _dt.datetime.now(_dt.timezone.utc)
 
-    # Verify the task is linked to this lead
-    task = db.session.execute(
+    # Atomically mark the task completed only if it is still open/overdue
+    # and linked to this lead. UPDATE ... RETURNING eliminates the SELECT
+    # then UPDATE race condition where two concurrent requests could both
+    # pass the SELECT check and both write timeline entries.
+    result = db.session.execute(
         db.text("""
-            SELECT t.id, t.title, t.status FROM tasks t
-            WHERE t.id = :task_id
-              AND t.status IN ('open', 'overdue')
+            UPDATE tasks
+            SET status = 'completed',
+                updated_at = NOW(),
+                completion_timestamp = NOW()
+            WHERE id = :task_id
+              AND status IN ('open', 'overdue')
               AND (
-                t.lead_id = :lead_id
+                lead_id = :lead_id
                 OR EXISTS (
                     SELECT 1 FROM task_associations ta
-                    WHERE ta.task_id = t.id
+                    WHERE ta.task_id = tasks.id
                       AND ta.target_type = 'lead'
                       AND ta.target_id = :lead_id
                 )
               )
+            RETURNING id, title
         """),
         {'task_id': task_id, 'lead_id': lead_id}
     ).fetchone()
 
-    if task is None:
-        return jsonify({'error': 'Not found', 'message': f'Task {task_id} not found for lead {lead_id}'}), 404
+    if result is None:
+        # Either task doesn't exist, isn't linked to this lead, or was
+        # already completed by a concurrent request — treat as not found.
+        db.session.rollback()
+        return jsonify({'error': 'Not found', 'message': f'Task {task_id} not found or already completed for lead {lead_id}'}), 404
 
-    # Mark completed locally
-    db.session.execute(
-        db.text("UPDATE tasks SET status = 'completed', updated_at = NOW() WHERE id = :task_id"),
-        {'task_id': task_id}
-    )
+    task_title = result[1]
 
-    # Append timeline entry
+    # Append timeline entry only when the UPDATE succeeded
     entry = LeadTimelineEntry(
         lead_id=lead_id,
         event_type='task_completed',
-        occurred_at=_dt.datetime.now(_dt.timezone.utc),
+        occurred_at=now,
         source='manual',
         actor=actor,
-        summary=f"HubSpot task marked done locally: {task[1]}",
-        event_metadata={'task_id': task_id, 'title': task[1], 'note': 'Marked done locally — not synced to HubSpot'},
+        summary=f"HubSpot task marked done locally: {task_title}",
+        event_metadata={'task_id': task_id, 'title': task_title, 'note': 'Marked done locally — not synced to HubSpot'},
     )
     db.session.add(entry)
     db.session.commit()
