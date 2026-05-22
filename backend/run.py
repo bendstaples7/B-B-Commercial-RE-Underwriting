@@ -1,6 +1,8 @@
 """Application entry point."""
 import os
 import socket
+import glob
+import re
 
 from app import create_app, db
 from dotenv import load_dotenv
@@ -18,6 +20,44 @@ if _changed_dir:
     os.chdir(backend_dir)
 
 load_dotenv()
+
+
+def _check_migration_revision_uniqueness():
+    """Fail fast if any two migration files share the same revision ID.
+
+    Duplicate revision IDs cause Alembic to emit warnings and produce a
+    branched graph, which then causes _assert_single_migration_head to
+    abort startup with a cryptic error.  This check surfaces the problem
+    immediately with the exact filenames involved.
+    """
+    migrations_dir = os.path.join(backend_dir, "alembic_migrations", "versions")
+    revision_pattern = re.compile(r"^revision\s*=\s*'([^']+)'", re.MULTILINE)
+    seen: dict[str, str] = {}
+    duplicates: list[str] = []
+
+    for filepath in glob.glob(os.path.join(migrations_dir, "*.py")):
+        content = open(filepath).read()
+        match = revision_pattern.search(content)
+        if match:
+            rev = match.group(1)
+            filename = os.path.basename(filepath)
+            if rev in seen:
+                duplicates.append(f"  '{rev}' in '{seen[rev]}' AND '{filename}'")
+            else:
+                seen[rev] = filename
+
+    if duplicates:
+        lines = ["", "", "DUPLICATE MIGRATION REVISION IDs — SERVER WILL NOT START", ""]
+        for d in duplicates:
+            lines.append(d)
+        lines += [
+            "",
+            "Fix: rename the duplicate revision ID in one of the listed files,",
+            "then create a merge migration:",
+            "  flask db merge -m 'merge branches' <rev1> <rev2>",
+            "",
+        ]
+        raise SystemExit("\n".join(lines))
 
 
 def _check_redis():
@@ -51,6 +91,7 @@ def _warn_celery_not_running():
     )
 
 
+_check_migration_revision_uniqueness()
 app = create_app()
 
 if __name__ == '__main__':

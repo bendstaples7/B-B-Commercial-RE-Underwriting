@@ -2,7 +2,8 @@
 Development launcher — starts Redis, Celery worker, and Flask in one command.
 
 Usage:
-    python dev.py
+    python dev.py          # start the full dev environment
+    python dev.py check    # run pre-flight checks only (no servers started)
 
 Starts:
     1. Redis server (if not already running)
@@ -83,6 +84,98 @@ def _start(label: str, cmd: list[str], cwd: str = None, env: dict = None) -> sub
 
 
 # ---------------------------------------------------------------------------
+# Pre-flight checks (also called by `main` before starting Flask)
+# ---------------------------------------------------------------------------
+
+def run_checks() -> bool:
+    """Run all pre-flight checks. Returns True if everything passes.
+
+    Checks:
+      1. No duplicate Alembic revision IDs in migration files
+      2. Migration chain has exactly one head (no branches)
+      3. Frontend package.json dependencies are installed (node_modules exists)
+
+    Run standalone with:  python dev.py check
+    """
+    import glob
+    import re
+
+    frontend_dir = os.path.join(os.path.dirname(__file__), "frontend")
+    migrations_dir = os.path.join(BACKEND_DIR, "alembic_migrations")
+    passed = True
+
+    print("\n  Running pre-flight checks...")
+    print("  " + "-" * 50)
+
+    # ------------------------------------------------------------------
+    # Check 1: No duplicate revision IDs
+    # ------------------------------------------------------------------
+    revision_pattern = re.compile(r"^revision\s*=\s*'([^']+)'", re.MULTILINE)
+    seen: dict[str, str] = {}
+    duplicates: list[str] = []
+
+    for filepath in glob.glob(os.path.join(migrations_dir, "versions", "*.py")):
+        content = open(filepath).read()
+        match = revision_pattern.search(content)
+        if match:
+            rev = match.group(1)
+            filename = os.path.basename(filepath)
+            if rev in seen:
+                duplicates.append(f"    '{rev}' in '{seen[rev]}' AND '{filename}'")
+            else:
+                seen[rev] = filename
+
+    if duplicates:
+        print("  ✗ Duplicate Alembic revision IDs:")
+        for d in duplicates:
+            print(d)
+        print("    Fix: rename the duplicate revision ID in one of the listed files.")
+        passed = False
+    else:
+        print(f"  ✓ Migration revision IDs are unique ({len(seen)} migrations)")
+
+    # ------------------------------------------------------------------
+    # Check 2: Single migration head
+    # ------------------------------------------------------------------
+    try:
+        sys.path.insert(0, BACKEND_DIR)
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
+
+        cfg = Config()
+        cfg.set_main_option("script_location", migrations_dir)
+        script = ScriptDirectory.from_config(cfg)
+        heads = script.get_heads()
+
+        if len(heads) != 1:
+            print(f"  ✗ Migration chain has {len(heads)} heads: {heads}")
+            print("    Fix: flask db merge -m 'merge branches' " + " ".join(heads))
+            passed = False
+        else:
+            print(f"  ✓ Migration chain has a single head ({heads[0]})")
+    except Exception as e:
+        print(f"  ⚠ Could not check migration heads: {e}")
+
+    # ------------------------------------------------------------------
+    # Check 3: Frontend node_modules installed
+    # ------------------------------------------------------------------
+    node_modules = os.path.join(frontend_dir, "node_modules")
+    if not os.path.isdir(node_modules):
+        print("  ✗ frontend/node_modules not found — run: cd frontend && npm install")
+        passed = False
+    else:
+        print("  ✓ frontend/node_modules present")
+
+    print("  " + "-" * 50)
+    if passed:
+        print("  All checks passed ✓\n")
+    else:
+        print("  One or more checks failed. Fix the issues above before starting.\n")
+
+    return passed
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -146,44 +239,10 @@ def main():
     time.sleep(1)  # let Celery connect to Redis before Flask starts
 
     # ------------------------------------------------------------------
-    # 3. Migration check — refuse to start Flask if DB is behind head
+    # 3. Pre-flight checks — refuse to start Flask if anything is wrong
     # ------------------------------------------------------------------
-    print("  Checking database migrations...")
-    migration_check = subprocess.run(
-        [sys.executable, "-c",
-         "import sys, os; sys.path.insert(0, '.'); "
-         "from dotenv import load_dotenv; load_dotenv(); "
-         "from alembic.config import Config; "
-         "from alembic.script import ScriptDirectory; "
-         "from alembic.runtime.migration import MigrationContext; "
-         "import sqlalchemy as sa; "
-         "cfg = Config(os.path.join(os.getcwd(), 'alembic_migrations', 'alembic.ini')); "
-         "cfg.set_main_option('script_location', os.path.join(os.getcwd(), 'alembic_migrations')); "
-         "script = ScriptDirectory.from_config(cfg); "
-         "heads = {s.revision for s in script.get_revisions('heads')}; "
-         "engine = sa.create_engine(os.environ.get('DATABASE_URL', 'postgresql://localhost/real_estate_analysis')); "
-         "conn = engine.connect(); "
-         "ctx = MigrationContext.configure(conn); "
-         "current = set(ctx.get_current_heads()); "
-         "conn.close(); "
-         "sys.exit(0 if current == heads else 1)"
-        ],
-        cwd=BACKEND_DIR,
-        env={**os.environ, "PYTHONPATH": BACKEND_DIR},
-        capture_output=True,
-        text=True,
-    )
-    if migration_check.returncode != 0:
-        print("\n  ╔══════════════════════════════════════════════════════════╗")
-        print("  ║  DATABASE MIGRATIONS PENDING — CANNOT START SERVER      ║")
-        print("  ╠══════════════════════════════════════════════════════════╣")
-        print("  ║  The database schema is behind the current codebase.    ║")
-        print("  ║                                                          ║")
-        print("  ║  Fix:  cd backend && flask db upgrade head               ║")
-        print("  ║  Then re-run:  python dev.py                             ║")
-        print("  ╚══════════════════════════════════════════════════════════╝\n")
+    if not run_checks():
         sys.exit(1)
-    print("  Database migrations up to date ✓")
 
     # ------------------------------------------------------------------
     # 4. Flask dev server (foreground — blocks until Ctrl+C)
@@ -200,4 +259,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "check":
+        run_checks()
+    else:
+        main()
