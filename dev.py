@@ -115,7 +115,12 @@ def run_checks() -> bool:
     duplicates: list[str] = []
 
     for filepath in glob.glob(os.path.join(migrations_dir, "versions", "*.py")):
-        content = open(filepath).read()
+        try:
+            with open(filepath, encoding="utf-8") as f:
+                content = f.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            duplicates.append(f"    WARNING: could not read '{os.path.basename(filepath)}': {exc}")
+            continue
         match = revision_pattern.search(content)
         if match:
             rev = match.group(1)
@@ -154,10 +159,48 @@ def run_checks() -> bool:
         else:
             print(f"  ✓ Migration chain has a single head ({heads[0]})")
     except Exception as e:
-        print(f"  ⚠ Could not check migration heads: {e}")
+        print(f"  ✗ Could not check migration heads: {e}")
+        passed = False
 
     # ------------------------------------------------------------------
-    # Check 3: Frontend node_modules installed
+    # Check 3: Database is at migration head
+    # ------------------------------------------------------------------
+    try:
+        import sqlalchemy as sa
+        from alembic.runtime.migration import MigrationContext
+        from dotenv import load_dotenv as _load_dotenv
+        _load_dotenv(os.path.join(BACKEND_DIR, ".env"))
+
+        db_url = os.environ.get("DATABASE_URL", "postgresql://localhost/real_estate_analysis")
+        engine = sa.create_engine(db_url)
+        with engine.connect() as conn:
+            ctx = MigrationContext.configure(conn)
+            current_heads = set(ctx.get_current_heads())
+
+        # Re-use the already-loaded script if available
+        try:
+            expected_heads = set(script.get_heads())
+        except NameError:
+            from alembic.config import Config as _Config
+            from alembic.script import ScriptDirectory as _SD
+            _cfg = _Config()
+            _cfg.set_main_option("script_location", migrations_dir)
+            expected_heads = set(_SD.from_config(_cfg).get_heads())
+
+        if current_heads == expected_heads:
+            print(f"  ✓ Database is at migration head ({', '.join(expected_heads)})")
+        else:
+            print(f"  ✗ Database schema is out of date")
+            print(f"    Current : {current_heads or '(none — fresh DB)' }")
+            print(f"    Expected: {expected_heads}")
+            print("    Fix: cd backend && flask db upgrade head")
+            passed = False
+    except Exception as e:
+        print(f"  ✗ Could not verify database migration head: {e}")
+        passed = False
+
+    # ------------------------------------------------------------------
+    # Check 4: Frontend node_modules installed
     # ------------------------------------------------------------------
     node_modules = os.path.join(frontend_dir, "node_modules")
     if not os.path.isdir(node_modules):
@@ -260,6 +303,6 @@ def main():
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "check":
-        run_checks()
+        sys.exit(0 if run_checks() else 1)
     else:
         main()

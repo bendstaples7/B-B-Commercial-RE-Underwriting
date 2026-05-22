@@ -36,7 +36,12 @@ def _check_migration_revision_uniqueness():
     duplicates: list[str] = []
 
     for filepath in glob.glob(os.path.join(migrations_dir, "*.py")):
-        content = open(filepath).read()
+        try:
+            with open(filepath, encoding='utf-8') as f:
+                content = f.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            print(f"  WARNING: Could not read migration file '{os.path.basename(filepath)}': {exc} — skipping")
+            continue
         match = revision_pattern.search(content)
         if match:
             rev = match.group(1)
