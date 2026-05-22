@@ -1,7 +1,7 @@
 """add_hubspot_crm_tables
 
 Revision ID: h8i9j0k1l2m3
-Revises: g7h8i9j0k1l2
+Revises: g7h8i9j0k1l2c
 Create Date: 2026-05-14 00:00:00.000000
 
 Changes:
@@ -32,7 +32,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = 'h8i9j0k1l2m3'
-down_revision = 'g7h8i9j0k1l2'
+down_revision = 'g7h8i9j0k1l2c'
 branch_labels = None
 depends_on = None
 

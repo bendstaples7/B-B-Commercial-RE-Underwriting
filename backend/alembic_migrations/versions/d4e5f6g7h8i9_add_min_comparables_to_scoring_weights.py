@@ -1,6 +1,6 @@
 """add min_comparables to scoring_weights
 
-Revision ID: d4e5f6g7h8i9
+Revision ID: d4e5f6g7h8i9b
 Revises: c3d4e5f6g7h8
 Create Date: 2026-05-10 10:00:00.000000
 
@@ -14,7 +14,7 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision = 'd4e5f6g7h8i9'
+revision = 'd4e5f6g7h8i9b'
 down_revision = 'c3d4e5f6g7h8'
 branch_labels = None
 depends_on = None

@@ -1,6 +1,6 @@
 """add completed_steps and step_results to analysis_sessions
 
-Revision ID: e5f6g7h8i9j0
+Revision ID: e5f6g7h8i9j0b
 Revises: d4e5f6g7h8i9
 Create Date: 2026-05-07 12:00:00.000000
 
@@ -22,7 +22,7 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision = 'e5f6g7h8i9j0'
+revision = 'e5f6g7h8i9j0b'
 down_revision = 'd4e5f6g7h8i9'
 branch_labels = None
 depends_on = None

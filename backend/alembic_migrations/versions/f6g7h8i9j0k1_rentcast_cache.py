@@ -1,6 +1,6 @@
 """add rentcast_cache table
 
-Revision ID: f6g7h8i9j0k1
+Revision ID: f6g7h8i9j0k1b
 Revises: e5f6g7h8i9j0
 Create Date: 2026-05-12 18:00:00.000000
 
@@ -8,7 +8,7 @@ Create Date: 2026-05-12 18:00:00.000000
 from alembic import op
 import sqlalchemy as sa
 
-revision = 'f6g7h8i9j0k1'
+revision = 'f6g7h8i9j0k1b'
 down_revision = 'e5f6g7h8i9j0'
 branch_labels = None
 depends_on = None
