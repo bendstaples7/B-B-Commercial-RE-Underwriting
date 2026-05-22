@@ -23,6 +23,7 @@ import {
 import AddIcon from '@mui/icons-material/Add'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import AddTaskIcon from '@mui/icons-material/AddTask'
+import HubIcon from '@mui/icons-material/Hub'
 import type { LeadTask, CRMRecommendedAction } from '@/types'
 import { leadTaskService } from '@/services/api'
 
@@ -66,7 +67,7 @@ export interface LeadTaskListProps {
   tasks: LeadTask[]
   recommendedAction?: CRMRecommendedAction | null
   onTaskCreated: (task: LeadTask) => void
-  onTaskCompleted?: (taskId: number) => void
+  onTaskCompleted?: (taskId: number | string) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +95,8 @@ export function LeadTaskList({
 
   const openTasks = tasks.filter((t) => t.status === 'open')
   const sortedTasks = sortTasks(openTasks)
+  const nativeTasks = sortedTasks.filter((t) => t.source !== 'hubspot')
+  const hubspotTasks = sortedTasks.filter((t) => t.source === 'hubspot')
   const showCreateTaskCTA = recommendedAction === 'create_task' && openTasks.length === 0
 
   // ---------------------------------------------------------------------------
@@ -170,8 +173,7 @@ export function LeadTaskList({
               data-testid="task-count-badge"
             />
           )}
-        </Typography>
-        {!formOpen && (
+        </Typography>        {!formOpen && (
           <Button
             size="small"
             startIcon={<AddIcon />}
@@ -203,17 +205,18 @@ export function LeadTaskList({
         <List dense disablePadding data-testid="task-list">
           {sortedTasks.map((task, index) => {
             const overdue = isDueDateOverdue(task.due_date)
+            const isHubSpot = task.source === 'hubspot'
             return (
               <Box key={task.id}>
                 {index > 0 && <Divider component="li" />}
                 <ListItem
                   data-testid={`task-item-${task.id}`}
                   secondaryAction={
-                    onTaskCompleted ? (
+                    !isHubSpot && onTaskCompleted ? (
                       <IconButton
                         edge="end"
                         aria-label={`Complete task: ${task.title}`}
-                        onClick={() => onTaskCompleted(task.id)}
+                        onClick={() => onTaskCompleted(task.id as number)}
                         data-testid={`complete-task-btn-${task.id}`}
                         size="small"
                       >
@@ -223,7 +226,25 @@ export function LeadTaskList({
                   }
                 >
                   <ListItemText
-                    primary={task.title}
+                    primary={
+                      <Stack direction="row" alignItems="center" spacing={0.75}>
+                        <span>{task.title}</span>
+                        {isHubSpot && (
+                          <Chip
+                            icon={<HubIcon sx={{ fontSize: '12px !important' }} />}
+                            label="HubSpot"
+                            size="small"
+                            sx={{
+                              height: 18,
+                              fontSize: '0.65rem',
+                              bgcolor: '#ff7a59',
+                              color: '#fff',
+                              '& .MuiChip-icon': { color: '#fff' },
+                            }}
+                          />
+                        )}
+                      </Stack>
+                    }
                     secondary={
                       task.due_date ? (
                         <Typography

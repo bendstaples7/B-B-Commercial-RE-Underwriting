@@ -223,6 +223,24 @@ def get_command_center(lead_id: int):
     from app import db as _db
     from sqlalchemy import text as _text
 
+    # ------------------------------------------------------------------
+    # Fetch HubSpot tasks linked to this lead (via task_associations or
+    # direct lead_id FK) so they appear alongside native tasks in the UI.
+    # These are read-only — the user cannot complete/snooze them here.
+    # ------------------------------------------------------------------
+    hubspot_task_rows = _db.session.execute(_text("""
+        SELECT t.id, t.title, t.status, t.due_date, t.created_at
+        FROM tasks t
+        JOIN task_associations ta ON ta.task_id = t.id
+        WHERE ta.target_type = 'lead' AND ta.target_id = :lead_id
+          AND t.status IN ('open', 'overdue')
+        UNION
+        SELECT id, title, status, due_date, created_at
+        FROM tasks
+        WHERE lead_id = :lead_id AND status IN ('open', 'overdue')
+        ORDER BY due_date ASC NULLS LAST
+    """), {'lead_id': lead_id}).fetchall()
+
     flat_phones = [
         p for p in [lead.phone_1, lead.phone_2, lead.phone_3,
                     lead.phone_4, lead.phone_5, lead.phone_6, lead.phone_7]
@@ -439,8 +457,22 @@ def get_command_center(lead_id: int):
                 'created_at': t.created_at.isoformat(),
                 'completed_at': t.completed_at.isoformat() if t.completed_at else None,
                 'created_by': t.created_by,
+                'source': 'native',
             }
             for t in open_tasks
+        ] + [
+            {
+                'id': f'hs-{row[0]}',  # prefix to avoid ID collision with native tasks
+                'task_type': 'custom',
+                'title': row[1] or 'HubSpot Task',
+                'status': row[2],
+                'due_date': row[3].strftime('%Y-%m-%d') if row[3] else None,
+                'created_at': row[4].isoformat() if row[4] else None,
+                'completed_at': None,
+                'created_by': 'HubSpot',
+                'source': 'hubspot',
+            }
+            for row in hubspot_task_rows
         ],
         'timeline': {
             'entries': sorted(

@@ -1630,7 +1630,7 @@ export type TimelineEventType =
   | 'lead_imported';
 
 export interface LeadTask {
-  id: number;
+  id: number | string;
   lead_id: number;
   task_type: LeadTaskType;
   title: string;
@@ -1639,6 +1639,8 @@ export interface LeadTask {
   created_at: string;
   completed_at: string | null;
   created_by: string;
+  /** 'native' for tasks created in the platform, 'hubspot' for tasks imported from HubSpot */
+  source: 'native' | 'hubspot';
 }
 
 export interface LeadTimelineEntry {
