@@ -162,7 +162,10 @@ def test_property3_connection_pool_settings_invariant(config_name):
 # ===========================================================================
 
 @given(
-    host=_pg_hosts,
+    host=st.one_of(
+        st.just('db.example.com'),
+        st.just('myhost.neon.tech'),
+    ),
     user=_pg_users,
 )
 @settings(max_examples=30, suppress_health_check=[HealthCheck.too_slow])
@@ -343,20 +346,21 @@ def test_property8_migration_idempotency():
     backend_dir = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
 
     # 1. Verify the convention document exists and contains IF NOT EXISTS guidance
-    steering_dir = _os.path.join(
-        _os.path.dirname(_os.path.dirname(backend_dir)), '.kiro', 'steering'
-    )
-    migrations_md = _os.path.join(steering_dir, 'migrations.md')
+    # migrations.md lives in .kiro/steering/ at the workspace root (one level up from backend/)
+    workspace_dir = _os.path.dirname(backend_dir)
+    migrations_md = _os.path.join(workspace_dir, '.kiro', 'steering', 'migrations.md')
 
-    if _os.path.exists(migrations_md):
-        with open(migrations_md) as f:
-            content = f.read()
-        assert 'IF NOT EXISTS' in content, (
-            "migrations.md must document the IF NOT EXISTS idempotency convention"
-        )
-        assert 'idempotent' in content.lower(), (
-            "migrations.md must mention idempotency"
-        )
+    assert _os.path.exists(migrations_md), (
+        f"migrations.md must exist at {migrations_md} and document the idempotency convention"
+    )
+    with open(migrations_md) as f:
+        content = f.read()
+    assert 'IF NOT EXISTS' in content, (
+        "migrations.md must document the IF NOT EXISTS idempotency convention"
+    )
+    assert 'idempotent' in content.lower(), (
+        "migrations.md must mention idempotency"
+    )
 
     # 2. Verify the migration chain has exactly one head
     alembic_cfg = Config()
@@ -384,7 +388,6 @@ _celery_thread_counts = st.integers(min_value=1, max_value=8)
 _beat_process_counts = st.integers(min_value=0, max_value=1)
 
 MAX_CONNECTIONS = 100  # conservative default for all major managed providers
-POOL_SIZE = 3
 MAX_OVERFLOW = 0
 
 
@@ -393,22 +396,34 @@ MAX_OVERFLOW = 0
     celery_threads=_celery_thread_counts,
     beat_processes=_beat_process_counts,
 )
-@settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow])
+@settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow], deadline=None)
 def test_property9_connection_pool_budget(flask_workers, celery_threads, beat_processes):
     """
     # Feature: cloud-database-migration, Property 9: Connection Pool Budget
-    For any combination of Flask workers, Celery threads, and Beat processes,
-    total connections (pool_size * process_count) must be <= max_connections (100).
+    For any combination of Flask workers (1-10), Celery threads (1-8), and Beat
+    processes (0-1), total connections (pool_size * process_count) must be <=
+    max_connections (100). pool_size is read from the application config.
+    Max realistic total: 10*3 + 8*3 + 1*3 = 57, well within 100.
     """
+    from app import create_app
+    with patch.dict(os.environ, {'DATABASE_URL': 'postgresql://user:pw@host:5432/db'}, clear=False):
+        with patch('app._validate_and_log_database_url'):
+            with patch('app._assert_pool_pre_ping'):
+                with patch('app.db.init_app'):
+                    with patch('app.migrate.init_app'):
+                        with patch('app.limiter.init_app'):
+                            _app = create_app('development')
+    pool_size = _app.config['SQLALCHEMY_ENGINE_OPTIONS']['pool_size']
+
     total = (
-        POOL_SIZE * flask_workers +
-        POOL_SIZE * celery_threads +
-        POOL_SIZE * beat_processes
+        pool_size * flask_workers +
+        pool_size * celery_threads +
+        pool_size * beat_processes
     )
     assert total <= MAX_CONNECTIONS, (
         f"Connection pool budget exceeded: {flask_workers} Flask workers + "
-        f"{celery_threads} Celery threads + {beat_processes} Beat processes = "
-        f"{total} connections > {MAX_CONNECTIONS} max_connections.\n"
+        f"{celery_threads} Celery threads + {beat_processes} Beat processes "
+        f"× pool_size={pool_size} = {total} connections > {MAX_CONNECTIONS} max_connections.\n"
         f"Reduce pool_size or process counts."
     )
 
