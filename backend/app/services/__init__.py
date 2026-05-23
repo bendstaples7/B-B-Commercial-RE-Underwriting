@@ -27,6 +27,7 @@ from .lead_task_service import LeadTaskService
 from .lead_timeline_service import LeadTimelineService
 from .call_log_service import CallLogService
 from .hubspot_timeline_import_service import HubSpotTimelineImportService
+from .hubspot_webhook_service import HubSpotWebhookService
 
 from .gemini_comparable_search_service import GeminiComparableSearchService
 
@@ -65,6 +66,7 @@ __all__ = [
     'LeadTimelineService',
     'CallLogService',
     'HubSpotTimelineImportService',
+    'HubSpotWebhookService',
     'GeminiComparableSearchService',
     # Chicago Socrata local cache
     'CacheLoaderService',

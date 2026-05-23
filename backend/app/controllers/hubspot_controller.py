@@ -28,8 +28,11 @@ from app.schemas import (
     HubSpotConfigSchema,
     HubSpotImportRunSchema,
     HubSpotMatchSchema,
+    WebhookLogSchema,
+    WebhookLogSummarySchema,
 )
 from app.services.hubspot_import_service import HubSpotImportService
+from app.services import HubSpotWebhookService
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,8 @@ _import_service = HubSpotImportService()
 _config_schema = HubSpotConfigSchema()
 _run_schema = HubSpotImportRunSchema()
 _match_schema = HubSpotMatchSchema()
+_webhook_log_schema = WebhookLogSchema()
+_webhook_log_summary_schema = WebhookLogSummarySchema()
 
 DEFAULT_PAGE = 1
 DEFAULT_PER_PAGE = 20
@@ -125,39 +130,61 @@ def _parse_pagination(args):
 def get_config():
     """Return the current HubSpot configuration with the token masked.
 
-    Returns 200 with ``{portal_id, account_name, configured_at}`` when a
-    config exists, or 200 with ``{configured: false}`` when none has been
-    saved yet.
+    Returns 200 with ``{portal_id, account_name, configured_at, has_client_secret}``
+    when a config exists, or 200 with ``{configured: false}`` when none has been
+    saved yet.  The raw or encrypted client secret is NEVER returned.
     """
     config = _import_service.get_config()
     if config is None:
         return jsonify({'configured': False}), 200
 
-    return jsonify(_config_schema.dump(config)), 200
+    data = _config_schema.dump(config)
+    data['has_client_secret'] = config.encrypted_client_secret is not None
+    return jsonify(data), 200
 
 
 @hubspot_bp.route('/config', methods=['POST'])
 @handle_errors
 def save_config():
-    """Save or update the HubSpot API token and portal ID.
+    """Save or update the HubSpot API token, portal ID, and optional client secret.
 
     Request body
     ------------
-    token : str (required) — raw HubSpot private-app token
+    token : str (optional) — raw HubSpot private-app token (required unless updating client_secret only)
     portal_id : str (optional) — HubSpot portal ID
+    client_secret : str (optional) — HubSpot client secret for webhook signature
+        verification.  Fernet-encrypted before storage; never returned in responses.
 
-    The token is Fernet-encrypted before storage; the plaintext value is
-    never persisted.
+    When only ``client_secret`` is provided (no ``token``), the existing config
+    is loaded and only the client secret is updated.
     """
+    from app.models.hubspot_config import HubSpotConfig
+    from app import db
+    from app.services.hubspot_client_service import HubSpotClientService
+
     data = request.json or {}
     token = data.get('token')
     portal_id = data.get('portal_id')
+    client_secret = data.get('client_secret')
 
-    if not token:
-        return jsonify({'error': 'Validation error', 'message': 'token is required'}), 400
+    if token:
+        # Full config save with token
+        config = _import_service.save_config(token=token, portal_id=portal_id)
+    elif client_secret:
+        # Client-secret-only update — load existing config
+        config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
+        if config is None:
+            return jsonify({'error': 'Validation error', 'message': 'No HubSpot configuration found. Save a token first.'}), 400
+    else:
+        return jsonify({'error': 'Validation error', 'message': 'token or client_secret is required'}), 400
 
-    config = _import_service.save_config(token=token, portal_id=portal_id)
-    return jsonify(_config_schema.dump(config)), 200
+    if client_secret:
+        config.encrypted_client_secret = HubSpotClientService.encrypt_token(client_secret)
+        db.session.commit()
+
+    result = _config_schema.dump(config)
+    result['has_client_secret'] = config.encrypted_client_secret is not None
+    return jsonify(result), 200
 
 
 @hubspot_bp.route('/config/test', methods=['POST'])
@@ -630,3 +657,99 @@ def mark_match_as_new_record(match_id):
     db.session.commit()
 
     return jsonify({'success': True, 'match': _match_schema.dump(match)}), 200
+
+
+# ---------------------------------------------------------------------------
+# Webhook log routes
+# ---------------------------------------------------------------------------
+
+@hubspot_bp.route('/webhook-log', methods=['GET'])
+@handle_errors
+def list_webhook_logs():
+    """List recent HubSpot webhook log entries (paginated).
+
+    Query parameters
+    ----------------
+    page : int (default 1)
+    per_page : int (default 20, max 100)
+    status : str (optional) — filter by status
+        (pending/processing/processed/failed/deduplicated/loop_suppressed)
+    object_type : str (optional) — filter by hubspot_object_type
+
+    Returns
+    -------
+    ``{logs: [...], total, page, per_page, pages}``
+    """
+    from app.models import HubSpotWebhookLog
+    from app import db
+
+    page, per_page = _parse_pagination(request.args)
+    status_filter = request.args.get('status')
+    object_type_filter = request.args.get('object_type')
+
+    query = db.session.query(HubSpotWebhookLog)
+
+    if status_filter:
+        query = query.filter(HubSpotWebhookLog.status == status_filter)
+    if object_type_filter:
+        query = query.filter(HubSpotWebhookLog.hubspot_object_type == object_type_filter)
+
+    total = query.count()
+    logs = (
+        query
+        .order_by(HubSpotWebhookLog.received_at.desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+        .all()
+    )
+
+    return jsonify({
+        'logs': [_webhook_log_schema.dump(log) for log in logs],
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+        'pages': (total + per_page - 1) // per_page if per_page > 0 else 0,
+    }), 200
+
+
+@hubspot_bp.route('/webhook-log/summary', methods=['GET'])
+@handle_errors
+def get_webhook_log_summary():
+    """Return a 24-hour summary of webhook log statuses.
+
+    Returns
+    -------
+    ``{processed_count, failed_count, deduplicated_count, last_synced_at}``
+    """
+    summary = HubSpotWebhookService().get_log_summary()
+    return jsonify(_webhook_log_summary_schema.dump(summary)), 200
+
+
+@hubspot_bp.route('/webhook-log/<int:log_id>/retry', methods=['POST'])
+@handle_errors
+def retry_webhook_log(log_id):
+    """Manually retry a failed webhook log entry.
+
+    Re-dispatches the Celery task for the given log entry.  The log must
+    be in ``failed`` status; otherwise a 400 is returned.
+
+    Parameters
+    ----------
+    log_id : int — primary key of the ``HubSpotWebhookLog`` to retry
+
+    Returns
+    -------
+    ``{success: true}`` on success.
+    404 if the log is not found.
+    400 if the log is not in ``failed`` status.
+    """
+    try:
+        HubSpotWebhookService().retry_failed_event(log_id)
+    except ValueError as exc:
+        msg = str(exc)
+        if 'not found' in msg.lower():
+            return jsonify({'error': 'Not found', 'message': msg}), 404
+        # "expected 'failed'" or similar status mismatch
+        return jsonify({'error': 'Invalid request', 'message': msg}), 400
+
+    return jsonify({'success': True}), 200

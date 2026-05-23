@@ -102,6 +102,11 @@ from app.models.lead_task import LeadTask
 from app.models.lead_timeline_entry import LeadTimelineEntry
 from app.models.lead_crm_flags_view import LeadCRMFlagsView
 
+# HubSpot webhook sync models
+from app.models.hubspot_webhook_log import HubSpotWebhookLog
+from app.models.hubspot_sync_run import HubSpotSyncRun
+from app.models.hubspot_platform_write import HubSpotPlatformWrite
+
 __all__ = [
     'PropertyFacts',
     'PropertyType',
@@ -193,4 +198,8 @@ __all__ = [
     'LeadTask',
     'LeadTimelineEntry',
     'LeadCRMFlagsView',
+    # HubSpot webhook sync
+    'HubSpotWebhookLog',
+    'HubSpotSyncRun',
+    'HubSpotPlatformWrite',
 ]
