@@ -191,7 +191,7 @@ def _validate_and_log_database_url(app):
             "DATABASE_URL is missing or malformed. Provide a valid PostgreSQL "
             "connection string in backend/.env. Error: %s", exc
         )
-        raise SystemExit(1)
+        raise SystemExit(1) from exc
 
 
 def _assert_pool_pre_ping(app):
@@ -222,7 +222,13 @@ def _assert_not_superuser(app):
     Requirements: 7.4, 7.5
     """
     db_url = app.config.get('SQLALCHEMY_DATABASE_URI', '')
-    if 'postgresql' not in db_url:
+    # Skip for SQLite (tests) — check both postgresql:// and postgres:// schemes
+    from urllib.parse import urlparse as _urlparse
+    try:
+        _scheme = _urlparse(db_url).scheme
+    except Exception:
+        _scheme = ''
+    if _scheme not in ('postgresql', 'postgres'):
         return  # SQLite in tests — skip
 
     # Skip for local development connections
