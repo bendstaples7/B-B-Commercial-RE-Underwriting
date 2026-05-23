@@ -159,6 +159,127 @@ def _warn_missing_optional_keys(app):
         app.logger.warning("*** STARTUP WARNING: %s", w)
 
 
+def _validate_and_log_database_url(app):
+    """
+    Validate DATABASE_URL at startup and log the resolved host with credentials redacted.
+    Aborts startup if the URL is missing or not a valid PostgreSQL connection string.
+    Requirements: 7.8, 8.1, 8.2
+    """
+    # Skip validation in testing mode — tests use SQLite in-memory
+    if app.config.get('TESTING'):
+        return
+
+    from urllib.parse import urlparse
+    raw_url = os.getenv('DATABASE_URL', '')
+    if not raw_url:
+        app.logger.error(
+            "DATABASE_URL is not set. Set DATABASE_URL in backend/.env to a valid "
+            "PostgreSQL connection string and restart."
+        )
+        raise SystemExit(1)
+
+    try:
+        parsed = urlparse(raw_url)
+        if parsed.scheme not in ('postgresql', 'postgres'):
+            raise ValueError(f"Unsupported scheme: {parsed.scheme!r}")
+        safe_host = f"{parsed.scheme}://{parsed.hostname}:{parsed.port or 5432}/{parsed.path.lstrip('/')}"
+        app.logger.info("Database host resolved: %s", safe_host)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        app.logger.error(
+            "DATABASE_URL is missing or malformed. Provide a valid PostgreSQL "
+            "connection string in backend/.env. Error: %s", exc
+        )
+        raise SystemExit(1) from exc
+
+
+def _assert_pool_pre_ping(app):
+    """
+    Raise RuntimeError if pool_pre_ping is absent from engine options
+    when not running in test mode. Stale connections silently fail without it.
+    Requirements: 8.4, 8.5
+    """
+    if app.config.get('TESTING'):
+        return
+    engine_opts = app.config.get('SQLALCHEMY_ENGINE_OPTIONS', {})
+    if not engine_opts.get('pool_pre_ping'):
+        raise RuntimeError(
+            "pool_pre_ping=True is required in SQLALCHEMY_ENGINE_OPTIONS when "
+            "TESTING is not True. Add it to create_app() and restart."
+        )
+
+
+def _assert_not_superuser(app):
+    """
+    Refuse to operate if the connected database user has superuser privileges
+    on a non-localhost database. Superuser access to a cloud/remote database
+    violates the principle of least privilege and is a security risk.
+
+    Skipped for localhost/127.0.0.1 connections (local development) since
+    developers commonly run as a superuser locally. Only enforced for remote
+    (cloud) database connections.
+    Requirements: 7.4, 7.5
+    """
+    db_url = app.config.get('SQLALCHEMY_DATABASE_URI', '')
+    # Skip for SQLite (tests) — check both postgresql:// and postgres:// schemes
+    from urllib.parse import urlparse as _urlparse
+    try:
+        _scheme = _urlparse(db_url).scheme
+    except Exception:
+        _scheme = ''
+    if _scheme not in ('postgresql', 'postgres'):
+        return  # SQLite in tests — skip
+
+    # Skip for local development connections
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(db_url)
+        hostname = parsed.hostname or ''
+        if hostname in ('localhost', '127.0.0.1', ''):
+            return  # local DB — superuser is fine
+    except Exception:
+        return  # can't parse URL, skip check
+
+    try:
+        from sqlalchemy import text
+        with app.app_context():
+            result = db.session.execute(
+                text("SELECT usesuper FROM pg_user WHERE usename = current_user")
+            ).fetchone()
+            if result and result[0]:
+                raise SystemExit(
+                    "\n\n*** SECURITY ERROR: The database user configured in DATABASE_URL "
+                    "has superuser privileges.\n"
+                    "Create a dedicated application user with minimum required privileges "
+                    "(SELECT, INSERT, UPDATE, DELETE, schema modification for migrations) "
+                    "and update DATABASE_URL in backend/.env.\n"
+                )
+    except SystemExit:
+        raise
+    except Exception as e:
+        app.logger.warning("Could not verify superuser status: %s", e)
+
+
+def _warn_provider_dashboard(app):
+    """
+    Log a startup warning pointing operators to the provider's performance dashboard.
+    The dashboard URL is read from PROVIDER_DASHBOARD_URL env var if set.
+    Requirements: 8.3
+    """
+    dashboard_url = os.getenv('PROVIDER_DASHBOARD_URL', '')
+    if dashboard_url:
+        app.logger.warning(
+            "*** OBSERVABILITY: Provider performance dashboard available at %s — "
+            "monitor slow queries and connection counts here.", dashboard_url
+        )
+    else:
+        app.logger.warning(
+            "*** OBSERVABILITY: Set PROVIDER_DASHBOARD_URL in backend/.env to enable "
+            "startup logging of the provider's performance dashboard URL."
+        )
+
+
 def create_app(config_name='development'):
     """Create and configure Flask application."""
     app = Flask(__name__)
@@ -179,6 +300,7 @@ def create_app(config_name='development'):
     if config_name == 'testing':
         from sqlalchemy.pool import NullPool
         app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'poolclass': NullPool}
+        app.config['TESTING'] = True  # set early so guards can check it
     else:
         app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
             'pool_size': 3,
@@ -186,6 +308,8 @@ def create_app(config_name='development'):
             'pool_pre_ping': True,   # discard stale connections silently
             'pool_timeout': 30,      # wait up to 30s for a free connection
         }
+
+    _assert_pool_pre_ping(app)
 
     # Disable rate limiting in tests so performance tests can create many resources
     if config_name == 'testing':
@@ -207,7 +331,15 @@ def create_app(config_name='development'):
     # (parent of app/ is backend/, then join with alembic_migrations)
     backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     migrations_dir = os.path.join(backend_dir, 'alembic_migrations')
-    
+
+    # Configure logging early so all startup guard messages appear in the console
+    from app.logging_config import setup_logging
+    setup_logging(app)
+
+    # Validate DATABASE_URL and log the resolved host (credentials redacted).
+    # Must run after SQLALCHEMY_DATABASE_URI is set and before db.init_app.
+    _validate_and_log_database_url(app)
+
     # Initialize extensions
     db.init_app(app)
     migrate.init_app(app, db, directory=migrations_dir)
@@ -279,14 +411,18 @@ def create_app(config_name='development'):
                 except Exception as check_err:
                     app.logger.warning("Could not verify migration head: %s", check_err)
             _assert_enum_values_match_db(app)
-    
-    # Configure logging
-    from app.logging_config import setup_logging
-    setup_logging(app)
+            _assert_not_superuser(app)
+    elif effective_env != 'testing' and not _is_celery:
+        # In production (and any non-development, non-testing env), run the
+        # superuser check without auto-migration. This ensures the security
+        # guard fires on every production startup, not just development.
+        with app.app_context():
+            _assert_not_superuser(app)
 
     # Warn about missing env vars that will cause mid-workflow failures
     if effective_env == 'development':
         _warn_missing_optional_keys(app)
+        _warn_provider_dashboard(app)
 
     # ---------------------------------------------------------------------------
     # User identity — Option 1: centralise in g.user_id via before_request
