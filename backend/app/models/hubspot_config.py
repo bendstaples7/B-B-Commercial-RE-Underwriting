@@ -10,6 +10,8 @@ class HubSpotConfig(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     # Token stored as Fernet-encrypted bytes, base64-encoded
     encrypted_token = db.Column(db.Text, nullable=False)
+    # Fernet-encrypted HubSpot client secret for webhook signature verification
+    encrypted_client_secret = db.Column(db.Text, nullable=True)
     portal_id = db.Column(db.String(50), nullable=True)
     account_name = db.Column(db.String(255), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)

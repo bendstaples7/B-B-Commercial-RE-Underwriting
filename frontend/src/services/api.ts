@@ -803,6 +803,8 @@ import type {
   TimelineEntry,
   CRMTask,
   PropertySummary,
+  WebhookLogSummary,
+  WebhookLogListResponse,
 } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -950,6 +952,43 @@ export const hubSpotService = {
   }> => {
     const response = await api.get('/hubspot/pipeline/status')
     return PipelineStatusSchema.parse(response.data) as ReturnType<typeof PipelineStatusSchema.parse>
+  },
+
+  /** GET /api/hubspot/webhook-log — paginated list of webhook logs */
+  getWebhookLog: async (params?: {
+    page?: number
+    per_page?: number
+    status?: string
+    object_type?: string
+  }): Promise<WebhookLogListResponse> => {
+    const response = await api.get<WebhookLogListResponse>('/hubspot/webhook-log', { params })
+    return response.data
+  },
+
+  /** GET /api/hubspot/webhook-log/summary — 24-hour summary */
+  getWebhookLogSummary: async (): Promise<WebhookLogSummary> => {
+    const response = await api.get<WebhookLogSummary>('/hubspot/webhook-log/summary')
+    return response.data
+  },
+
+  /** POST /api/hubspot/webhook-log/{logId}/retry — retry a failed event */
+  retryWebhookEvent: async (logId: number): Promise<{ success: boolean }> => {
+    const response = await api.post<{ success: boolean }>(`/hubspot/webhook-log/${logId}/retry`)
+    return response.data
+  },
+
+  /** POST /api/hubspot/config — extended to include optional client_secret */
+  saveHubSpotConfigWithSecret: async (
+    token: string,
+    portalId?: string,
+    clientSecret?: string
+  ): Promise<HubSpotConfig> => {
+    const response = await api.post<HubSpotConfig>('/hubspot/config', {
+      token,
+      portal_id: portalId,
+      ...(clientSecret ? { client_secret: clientSecret } : {}),
+    })
+    return response.data
   },
 }
 

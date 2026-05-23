@@ -46,6 +46,7 @@ import RateReviewIcon from '@mui/icons-material/RateReview'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hubSpotService } from '@/services/api'
 import type { HubSpotConfig, HubSpotImportRun } from '@/types'
+import { WebhookSyncPanel } from '@/components/WebhookSyncPanel'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -685,7 +686,7 @@ export const HubSpotImportArea: React.FC = () => {
       </Paper>
 
       {/* ── Section 5: Backup Export ── */}
-      <Paper sx={{ p: 3 }} aria-labelledby="backup-section-heading">
+      <Paper sx={{ p: 3, mb: 3 }} aria-labelledby="backup-section-heading">
         <Typography variant="h6" id="backup-section-heading" gutterBottom>
           Backup Export
         </Typography>
@@ -738,6 +739,19 @@ export const HubSpotImportArea: React.FC = () => {
           </Alert>
         )}
       </Paper>
+
+      {/* ── Section 6: Webhook Sync ── */}
+      <Box aria-labelledby="webhook-sync-section-heading">
+        <Typography variant="h6" id="webhook-sync-section-heading" sx={{ mb: 2 }}>
+          Webhook Sync
+        </Typography>
+        <WebhookSyncPanel
+          hasClientSecret={config?.has_client_secret ?? false}
+          onClientSecretSaved={() =>
+            queryClient.invalidateQueries({ queryKey: ['hubspot', 'config'] })
+          }
+        />
+      </Box>
 
       {/* Bottom spacer */}
       <Box sx={{ height: 32 }} />

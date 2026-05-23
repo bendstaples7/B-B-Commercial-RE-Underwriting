@@ -1702,3 +1702,40 @@ class BulkActionResultSchema(Schema):
     """Response schema for bulk action results."""
     successes = fields.Integer(dump_only=True)
     failures = fields.Integer(dump_only=True)
+
+# HubSpot webhook sync schemas
+
+class WebhookLogSchema(Schema):
+    """Schema for serializing HubSpotWebhookLog records.
+
+    All fields are dump_only — this is a read-only response schema.
+    received_at and processed_at are serialized as ISO 8601 strings.
+    """
+    id = fields.Int(dump_only=True)
+    hubspot_object_type = fields.Str(dump_only=True)
+    hubspot_object_id = fields.Str(dump_only=True)
+    event_type = fields.Str(dump_only=True)
+    status = fields.Str(dump_only=True)
+    error_message = fields.Str(dump_only=True, allow_none=True)
+    received_at = fields.DateTime(dump_only=True, format='iso')
+    processed_at = fields.DateTime(dump_only=True, allow_none=True, format='iso')
+
+
+class WebhookLogSummarySchema(Schema):
+    """Schema for serializing the 24-hour webhook log summary.
+
+    Not tied to a model — used for plain dict serialization.
+    """
+    processed_count = fields.Integer()
+    failed_count = fields.Integer()
+    deduplicated_count = fields.Integer()
+    last_synced_at = fields.DateTime(allow_none=True)
+
+
+class HubSpotConfigUpdateSchema(Schema):
+    """Schema for the HubSpot config update request body.
+
+    Accepts an optional client_secret for webhook signature verification.
+    The secret is load_only and never returned in responses.
+    """
+    client_secret = fields.Str(load_only=True, allow_none=True, required=False)

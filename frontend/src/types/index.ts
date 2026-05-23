@@ -1471,6 +1471,7 @@ export interface HubSpotConfig {
   portal_id?: string | null
   account_name?: string | null
   configured?: boolean
+  has_client_secret?: boolean
 }
 
 export interface HubSpotImportRun {
@@ -1770,4 +1771,42 @@ export interface LogNotePayload {
 export interface BulkActionResult {
   successes: number;
   failures: number;
+}
+
+// ---------------------------------------------------------------------------
+// HubSpot Webhook Sync Types
+// ---------------------------------------------------------------------------
+
+export type WebhookLogStatus =
+  | 'pending'
+  | 'processing'
+  | 'processed'
+  | 'failed'
+  | 'deduplicated'
+  | 'loop_suppressed'
+
+export interface WebhookLog {
+  id: number
+  hubspot_object_type: string
+  hubspot_object_id: string
+  event_type: string
+  status: WebhookLogStatus
+  error_message: string | null
+  received_at: string
+  processed_at: string | null
+}
+
+export interface WebhookLogSummary {
+  processed_count: number
+  failed_count: number
+  deduplicated_count: number
+  last_synced_at: string | null
+}
+
+export interface WebhookLogListResponse {
+  logs: WebhookLog[]
+  total: number
+  page: number
+  per_page: number
+  pages: number
 }
