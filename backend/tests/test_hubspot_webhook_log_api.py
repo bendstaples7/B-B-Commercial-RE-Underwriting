@@ -229,12 +229,10 @@ class TestRetryWebhookLog:
 
         mock_task = MagicMock()
         mock_task.delay = MagicMock()
-        # The service does: from app.tasks.hubspot_webhook_tasks import process_webhook_event
-        # That name doesn't exist in the module, so we patch it in with create=True
+        # The service does: from celery_worker import process_webhook_event
         with patch(
-            'app.tasks.hubspot_webhook_tasks.process_webhook_event',
+            'celery_worker.process_webhook_event',
             mock_task,
-            create=True,
         ):
             resp = log_client.post(f'/api/hubspot/webhook-log/{log_id}/retry')
 
@@ -249,9 +247,8 @@ class TestRetryWebhookLog:
         mock_task = MagicMock()
         mock_task.delay = MagicMock()
         with patch(
-            'app.tasks.hubspot_webhook_tasks.process_webhook_event',
+            'celery_worker.process_webhook_event',
             mock_task,
-            create=True,
         ):
             resp = log_client.post(f'/api/hubspot/webhook-log/{log_id}/retry')
 

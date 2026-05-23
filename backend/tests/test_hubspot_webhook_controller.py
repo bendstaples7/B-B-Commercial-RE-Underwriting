@@ -5,6 +5,7 @@ Tests cover:
 2. POST with invalid signature → 401, no WebhookLog created
 3. POST with wrong content type → 400
 """
+import base64
 import hashlib
 import hmac
 import json
@@ -27,7 +28,8 @@ def _make_signature(secret: str, method: str, uri: str, body: bytes, ts: str) ->
     """Compute the expected HubSpot v3 HMAC-SHA256 signature."""
     body_str = body.decode('utf-8')
     message = f"{method}{uri}{body_str}{ts}".encode('utf-8')
-    return hmac.new(secret.encode('utf-8'), message, hashlib.sha256).hexdigest()
+    digest = hmac.new(secret.encode('utf-8'), message, hashlib.sha256).digest()
+    return base64.b64encode(digest).decode('utf-8')
 
 
 def _encrypt_secret(raw_secret: str, fernet_key: str) -> str:
@@ -43,6 +45,7 @@ def _encrypt_secret(raw_secret: str, fernet_key: str) -> str:
 
 CLIENT_SECRET = 'test-client-secret-abc123'
 WEBHOOK_URI = '/api/hubspot/webhook'
+WEBHOOK_FULL_URL = 'http://localhost/api/hubspot/webhook'
 
 
 @pytest.fixture(scope='module')
@@ -121,7 +124,7 @@ class TestValidSignedPayload:
             {'subscriptionType': 'deal.creation', 'objectId': 42}
         ]).encode('utf-8')
         ts = str(int(time.time()))
-        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_URI, body, ts)
+        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_FULL_URL, body, ts)
 
         # Patch Celery dispatch so we don't need a real broker.
         # The service does a lazy import inside handle_batch; patch the module
@@ -141,7 +144,7 @@ class TestValidSignedPayload:
             {'subscriptionType': 'contact.creation', 'objectId': 99}
         ]).encode('utf-8')
         ts = str(int(time.time()))
-        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_URI, body, ts)
+        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_FULL_URL, body, ts)
 
         with webhook_app.app_context():
             initial_count = HubSpotWebhookLog.query.count()
@@ -168,7 +171,7 @@ class TestValidSignedPayload:
             {'subscriptionType': 'deal.propertyChange', 'objectId': 3},
         ]).encode('utf-8')
         ts = str(int(time.time()))
-        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_URI, body, ts)
+        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_FULL_URL, body, ts)
 
         mock_task = MagicMock()
         mock_task.delay = MagicMock()
@@ -185,7 +188,7 @@ class TestValidSignedPayload:
             {'subscriptionType': 'deal.creation', 'objectId': 77}
         ).encode('utf-8')
         ts = str(int(time.time()))
-        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_URI, body, ts)
+        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_FULL_URL, body, ts)
 
         mock_task = MagicMock()
         mock_task.delay = MagicMock()

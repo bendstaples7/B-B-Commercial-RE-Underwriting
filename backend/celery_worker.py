@@ -151,13 +151,11 @@ def _parse_socrata_schedule() -> crontab:
 
 _socrata_schedule = _parse_socrata_schedule()
 
-celery.conf.beat_schedule = {
-    'socrata-cache-refresh': {
-        'task': 'socrata_cache.refresh',
-        'schedule': _socrata_schedule,
-        'args': (),
-        'kwargs': {'dataset': 'all'},
-    },
+celery.conf.beat_schedule['socrata-cache-refresh'] = {
+    'task': 'socrata_cache.refresh',
+    'schedule': _socrata_schedule,
+    'args': (),
+    'kwargs': {'dataset': 'all'},
 }
 
 
@@ -1141,18 +1139,7 @@ def mark_tasks_overdue() -> int:
 
 @celery.task(name='hubspot.scheduled_engagement_sync')
 def scheduled_engagement_sync() -> None:
-    """Scheduled task: import new HubSpot engagements and run the full pipeline.
-
-    Runs on a configurable schedule (default: every hour) to keep notes, calls,
-    and tasks from HubSpot in sync without requiring manual import triggers.
-    Engagements cannot be delivered via webhook (HubSpot legacy app limitation),
-    so this scheduled sync is the mechanism for near-real-time engagement updates.
-
-    Steps:
-    1. Create a HubSpotImportRun for 'engagements'
-    2. Run the engagement import (fetch + upsert)
-    3. Run the full post-import pipeline (matching → convert → signals → rescore)
-    """
+    """Scheduled task: import new HubSpot engagements and run the full pipeline."""
     import logging
     logger = logging.getLogger(__name__)
     logger.info("Starting scheduled engagement sync")
@@ -1163,18 +1150,14 @@ def scheduled_engagement_sync() -> None:
     app = create_app()
 
     with app.app_context():
-        from app import db
-        from app.models import HubSpotConfig, HubSpotImportRun
+        from app.models import HubSpotConfig
         from app.services import HubSpotImportService
-        from datetime import datetime
 
-        # Check that HubSpot is configured before attempting sync
         config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
         if config is None:
             logger.info("Scheduled engagement sync skipped: no HubSpot config found")
             return
 
-        # Create an import run for engagements
         svc = HubSpotImportService()
         try:
             runs = svc.start_import(object_types=['engagements'])
@@ -1184,18 +1167,10 @@ def scheduled_engagement_sync() -> None:
             logger.error("Scheduled engagement sync: failed to start import: %s", exc)
             return
 
-    # Dispatch the engagement import tasks
-    from app.tasks.hubspot_tasks import run_import_hubspot_engagements
-    for run in runs:
-        try:
-            import_hubspot_engagements.delay(run.id)
-        except Exception as exc:
-            logger.error("Scheduled engagement sync: failed to dispatch import task: %s", exc)
-            return
-
     # Chain to post-import pipeline after import completes
+    # start_import already dispatched the import tasks; pipeline waits for them
     run_post_import_pipeline.delay(run_ids)
-    logger.info("Scheduled engagement sync: import + pipeline dispatched")
+    logger.info("Scheduled engagement sync: pipeline dispatched for run_ids=%s", run_ids)
 
 
 @celery.task(name='hubspot.post_import_pipeline')

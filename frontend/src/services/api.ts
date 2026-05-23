@@ -990,6 +990,14 @@ export const hubSpotService = {
     })
     return response.data
   },
+
+  /** POST /api/hubspot/config — update only the client secret (no token required) */
+  saveClientSecret: async (clientSecret: string): Promise<HubSpotConfig> => {
+    const response = await api.post<HubSpotConfig>('/hubspot/config', {
+      client_secret: clientSecret,
+    })
+    return response.data
+  },
 }
 
 // ---------------------------------------------------------------------------

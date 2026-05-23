@@ -150,13 +150,13 @@ def save_config():
 
     Request body
     ------------
-    token : str (required) — raw HubSpot private-app token
+    token : str (optional) — raw HubSpot private-app token (required unless updating client_secret only)
     portal_id : str (optional) — HubSpot portal ID
     client_secret : str (optional) — HubSpot client secret for webhook signature
         verification.  Fernet-encrypted before storage; never returned in responses.
 
-    The token and client_secret are Fernet-encrypted before storage; the
-    plaintext values are never persisted.
+    When only ``client_secret`` is provided (no ``token``), the existing config
+    is loaded and only the client secret is updated.
     """
     from app.models.hubspot_config import HubSpotConfig
     from app import db
@@ -167,12 +167,17 @@ def save_config():
     portal_id = data.get('portal_id')
     client_secret = data.get('client_secret')
 
-    if not token:
-        return jsonify({'error': 'Validation error', 'message': 'token is required'}), 400
+    if token:
+        # Full config save with token
+        config = _import_service.save_config(token=token, portal_id=portal_id)
+    elif client_secret:
+        # Client-secret-only update — load existing config
+        config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
+        if config is None:
+            return jsonify({'error': 'Validation error', 'message': 'No HubSpot configuration found. Save a token first.'}), 400
+    else:
+        return jsonify({'error': 'Validation error', 'message': 'token or client_secret is required'}), 400
 
-    config = _import_service.save_config(token=token, portal_id=portal_id)
-
-    # Optionally encrypt and store the client secret for webhook verification
     if client_secret:
         config.encrypted_client_secret = HubSpotClientService.encrypt_token(client_secret)
         db.session.commit()
