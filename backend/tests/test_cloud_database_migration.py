@@ -400,10 +400,9 @@ MAX_OVERFLOW = 0
 def test_property9_connection_pool_budget(flask_workers, celery_threads, beat_processes):
     """
     # Feature: cloud-database-migration, Property 9: Connection Pool Budget
-    For any combination of Flask workers (1-10), Celery threads (1-8), and Beat
-    processes (0-1), total connections (pool_size * process_count) must be <=
+    For any combination within the deployment envelope (1-10 Flask workers,
+    1-8 Celery threads, 0-1 Beat processes), total connections must be <=
     max_connections (100). pool_size is read from the application config.
-    Max realistic total: 10*3 + 8*3 + 1*3 = 57, well within 100.
     """
     from app import create_app
     with patch.dict(os.environ, {'DATABASE_URL': 'postgresql://user:pw@host:5432/db'}, clear=False):
@@ -425,6 +424,38 @@ def test_property9_connection_pool_budget(flask_workers, celery_threads, beat_pr
         f"{celery_threads} Celery threads + {beat_processes} Beat processes "
         f"× pool_size={pool_size} = {total} connections > {MAX_CONNECTIONS} max_connections.\n"
         f"Reduce pool_size or process counts."
+    )
+
+
+def test_property9_connection_pool_budget_boundary():
+    """
+    # Feature: cloud-database-migration, Property 9: Connection Pool Budget (boundary)
+    Explicitly verify the worst-case deployment (10 Flask + 8 Celery + 1 Beat)
+    stays within MAX_CONNECTIONS, and verify that exceeding the envelope
+    (34 Flask + 34 Celery) would exceed MAX_CONNECTIONS — confirming the
+    assertion is not vacuous.
+    """
+    from app import create_app
+    with patch.dict(os.environ, {'DATABASE_URL': 'postgresql://user:pw@host:5432/db'}, clear=False):
+        with patch('app._validate_and_log_database_url'):
+            with patch('app._assert_pool_pre_ping'):
+                with patch('app.db.init_app'):
+                    with patch('app.migrate.init_app'):
+                        with patch('app.limiter.init_app'):
+                            _app = create_app('development')
+    pool_size = _app.config['SQLALCHEMY_ENGINE_OPTIONS']['pool_size']
+
+    # Worst-case within deployment envelope: must pass
+    worst_case = pool_size * 10 + pool_size * 8 + pool_size * 1
+    assert worst_case <= MAX_CONNECTIONS, (
+        f"Worst-case deployment ({worst_case} connections) exceeds MAX_CONNECTIONS={MAX_CONNECTIONS}"
+    )
+
+    # Verify the assertion is non-vacuous: exceeding the envelope does exceed the budget
+    over_budget = pool_size * 34 + pool_size * 34
+    assert over_budget > MAX_CONNECTIONS, (
+        f"Expected over-budget scenario ({over_budget}) to exceed MAX_CONNECTIONS={MAX_CONNECTIONS} "
+        f"— if this fails, pool_size has changed and the test ranges need updating"
     )
 
 

@@ -412,6 +412,12 @@ def create_app(config_name='development'):
                     app.logger.warning("Could not verify migration head: %s", check_err)
             _assert_enum_values_match_db(app)
             _assert_not_superuser(app)
+    elif effective_env != 'testing' and not _is_celery:
+        # In production (and any non-development, non-testing env), run the
+        # superuser check without auto-migration. This ensures the security
+        # guard fires on every production startup, not just development.
+        with app.app_context():
+            _assert_not_superuser(app)
 
     # Warn about missing env vars that will cause mid-workflow failures
     if effective_env == 'development':
