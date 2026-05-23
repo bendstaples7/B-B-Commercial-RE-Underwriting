@@ -1,4 +1,5 @@
 """Unit tests for HubSpotWebhookService.verify_signature."""
+import base64
 import hashlib
 import hmac
 import os
@@ -20,7 +21,8 @@ def _make_signature(secret: str, method: str, uri: str, body: bytes, ts: str) ->
     """Compute the expected HubSpot v3 HMAC-SHA256 signature."""
     body_str = body.decode('utf-8')
     message = f"{method}{uri}{body_str}{ts}".encode('utf-8')
-    return hmac.new(secret.encode('utf-8'), message, hashlib.sha256).hexdigest()
+    digest = hmac.new(secret.encode('utf-8'), message, hashlib.sha256).digest()
+    return base64.b64encode(digest).decode('utf-8')
 
 
 def _encrypt_secret(raw_secret: str) -> str:

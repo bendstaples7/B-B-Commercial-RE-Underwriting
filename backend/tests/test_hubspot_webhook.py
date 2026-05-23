@@ -12,6 +12,7 @@ Three tests:
 """
 import hashlib
 import hmac
+import base64
 import json
 import os
 import time
@@ -35,6 +36,7 @@ from app.models.lead import Lead
 
 CLIENT_SECRET = 'integration-test-secret-xyz'
 WEBHOOK_URI = '/api/hubspot/webhook'
+WEBHOOK_FULL_URL = 'http://localhost/api/hubspot/webhook'
 ENGAGEMENT_HUBSPOT_ID = '9001'
 DEAL_HUBSPOT_ID = '5001'
 
@@ -47,7 +49,8 @@ def _make_signature(secret: str, method: str, uri: str, body: bytes, ts: str) ->
     """Compute the expected HubSpot v3 HMAC-SHA256 signature."""
     body_str = body.decode('utf-8')
     message = f"{method}{uri}{body_str}{ts}".encode('utf-8')
-    return hmac.new(secret.encode('utf-8'), message, hashlib.sha256).hexdigest()
+    digest = hmac.new(secret.encode('utf-8'), message, hashlib.sha256).digest()
+    return base64.b64encode(digest).decode('utf-8')
 
 
 def _encrypt(value: str, fernet_key: str) -> str:
@@ -156,16 +159,15 @@ class TestFullPipeline:
         events = [{'subscriptionType': 'engagement.creation', 'objectId': int(ENGAGEMENT_HUBSPOT_ID)}]
         body = json.dumps(events).encode('utf-8')
         ts = str(int(time.time()))
-        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_URI, body, ts)
+        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_FULL_URL, body, ts)
 
         # --- Step 1: POST to the webhook endpoint ---
         # Patch Celery dispatch inside handle_batch so we don't need a broker
         mock_process_task = MagicMock()
         mock_process_task.delay = MagicMock()
         with patch(
-            'app.services.hubspot_webhook_service.process_webhook_event',
+            'celery_worker.process_webhook_event',
             mock_process_task,
-            create=True,
         ):
             resp = integration_client.post(
                 WEBHOOK_URI,

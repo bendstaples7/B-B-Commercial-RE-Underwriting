@@ -194,16 +194,20 @@ class HubSpotWebhookService:
         # Dispatch Celery tasks after successful commit
         for log in logs:
             try:
-                # Lazy import to avoid circular imports (tasks import services)
                 from celery_worker import process_webhook_event
                 process_webhook_event.delay(log.id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "Failed to dispatch process_webhook_event for log_id=%s: %s",
+                    "Failed to dispatch process_webhook_event for log_id=%s: %s — marking as failed",
                     log.id,
                     exc,
                 )
-                # Do not re-raise — events are stored; worker will pick them up
+                log.status = 'failed'
+                log.error_message = f"Celery dispatch failed: {exc}"
+                try:
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
 
         return logs
 
@@ -270,10 +274,10 @@ class HubSpotWebhookService:
                 f"Cannot retry log id={log_id}: status is '{log.status}', expected 'failed'"
             )
 
+        # Enqueue first — only commit the status change if dispatch succeeds
+        from celery_worker import process_webhook_event
+        process_webhook_event.delay(log_id)
+
         log.status = 'pending'
         log.error_message = None
         db.session.commit()
-
-        # Lazy import to avoid circular imports
-        from app.tasks.hubspot_webhook_tasks import process_webhook_event
-        process_webhook_event.delay(log_id)

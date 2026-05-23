@@ -57,7 +57,10 @@ def receive_webhook():
     forwarded_host = request.headers.get('X-Forwarded-Host') or request.headers.get('X-Original-Host')
     forwarded_proto = request.headers.get('X-Forwarded-Proto', 'https')
     if forwarded_host:
-        full_uri = f"{forwarded_proto}://{forwarded_host}{request.path}"
+        # Use full_path which includes query string (e.g. /api/hubspot/webhook?foo=bar)
+        # Strip trailing '?' if query string is empty
+        path_with_qs = request.full_path.rstrip('?')
+        full_uri = f"{forwarded_proto}://{forwarded_host}{path_with_qs}"
     else:
         full_uri = request.url
 

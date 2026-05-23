@@ -137,6 +137,7 @@ export const WebhookSyncPanel: React.FC<WebhookSyncPanelProps> = ({
   const {
     data: summary,
     isLoading: summaryLoading,
+    isError: summaryIsError,
   } = useQuery({
     queryKey: ['hubspot', 'webhook-summary'],
     queryFn: () => hubSpotService.getWebhookLogSummary(),
@@ -146,8 +147,7 @@ export const WebhookSyncPanel: React.FC<WebhookSyncPanelProps> = ({
   // ── Mutations ────────────────────────────────────────────────────────────
 
   const saveSecretMutation = useMutation({
-    mutationFn: () =>
-      hubSpotService.saveHubSpotConfigWithSecret('', undefined, clientSecretInput),
+    mutationFn: () => hubSpotService.saveClientSecret(clientSecretInput),
     onSuccess: () => {
       setClientSecretInput('')
       onClientSecretSaved()
@@ -338,8 +338,14 @@ export const WebhookSyncPanel: React.FC<WebhookSyncPanelProps> = ({
 
         {summaryLoading && <CircularProgress size={20} sx={{ mb: 2 }} />}
 
+        {summaryIsError && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            Failed to load sync status.
+          </Alert>
+        )}
+
         {/* Stale warning */}
-        {!summaryLoading && stale && (
+        {!summaryLoading && !summaryIsError && stale && (
           <Alert
             severity="warning"
             icon={<WarningAmberIcon />}
