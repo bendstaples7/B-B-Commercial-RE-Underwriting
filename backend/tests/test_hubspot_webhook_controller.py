@@ -257,7 +257,7 @@ class TestInvalidSignature:
             {'subscriptionType': 'deal.creation', 'objectId': 42}
         ]).encode('utf-8')
         stale_ts = str(int(time.time()) - 400)  # 6+ minutes ago
-        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_URI, body, stale_ts)
+        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_FULL_URL, body, stale_ts)
 
         resp = _post_webhook(webhook_client, body, sig, stale_ts)
 
@@ -271,7 +271,7 @@ class TestInvalidSignature:
             {'subscriptionType': 'deal.creation', 'objectId': 999}
         ]).encode('utf-8')
         ts = str(int(time.time()))
-        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_URI, original_body, ts)
+        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_FULL_URL, original_body, ts)
 
         resp = _post_webhook(webhook_client, tampered_body, sig, ts)
 
@@ -288,7 +288,7 @@ class TestWrongContentType:
     def test_text_plain_returns_400(self, webhook_app, webhook_client):
         body = b'some plain text'
         ts = str(int(time.time()))
-        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_URI, body, ts)
+        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_FULL_URL, body, ts)
 
         resp = _post_webhook(webhook_client, body, sig, ts,
                              content_type='text/plain')
@@ -300,7 +300,7 @@ class TestWrongContentType:
     def test_form_encoded_returns_400(self, webhook_app, webhook_client):
         body = b'key=value'
         ts = str(int(time.time()))
-        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_URI, body, ts)
+        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_FULL_URL, body, ts)
 
         resp = _post_webhook(webhook_client, body, sig, ts,
                              content_type='application/x-www-form-urlencoded')
@@ -310,7 +310,7 @@ class TestWrongContentType:
     def test_wrong_content_type_creates_no_webhook_log(self, webhook_app, webhook_client):
         body = b'not json'
         ts = str(int(time.time()))
-        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_URI, body, ts)
+        sig = _make_signature(CLIENT_SECRET, 'POST', WEBHOOK_FULL_URL, body, ts)
 
         with webhook_app.app_context():
             count_before = HubSpotWebhookLog.query.count()
