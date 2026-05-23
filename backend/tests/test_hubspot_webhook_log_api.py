@@ -224,7 +224,7 @@ class TestRetryWebhookLog:
     """Tests for POST /api/hubspot/webhook-log/{log_id}/retry."""
 
     def test_retry_success(self, log_app, log_client):
-        """Retrying a failed log returns 200 {success: true}."""
+        """Retrying a failed log returns 200 {success: true} and enqueues the task."""
         log_id = _create_log(log_app, object_type='deal', object_id='401', status='failed')
 
         mock_task = MagicMock()
@@ -239,9 +239,10 @@ class TestRetryWebhookLog:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['success'] is True
+        mock_task.delay.assert_called_once_with(log_id)
 
     def test_retry_resets_status_to_pending(self, log_app, log_client):
-        """After a successful retry, the log status is reset to pending."""
+        """After a successful retry, the log status is reset to pending and task is enqueued."""
         log_id = _create_log(log_app, object_type='deal', object_id='402', status='failed')
 
         mock_task = MagicMock()
@@ -257,6 +258,8 @@ class TestRetryWebhookLog:
         with log_app.app_context():
             log = HubSpotWebhookLog.query.get(log_id)
             assert log.status == 'pending'
+
+        mock_task.delay.assert_called_once_with(log_id)
 
     def test_retry_not_found_returns_404(self, log_app, log_client):
         """Retrying a non-existent log_id returns 404."""
