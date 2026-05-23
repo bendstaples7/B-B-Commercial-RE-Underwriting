@@ -40,9 +40,11 @@ cd backend && pytest
 # Run specific test file
 cd backend && pytest tests/test_lead_controller.py -v
 
-# Optional: Start Redis and Celery worker for async comparable search
-# (Not required - comparable search runs synchronously by default)
-docker compose up -d
+# Start Redis (required for Celery/async tasks) — use WSL Ubuntu, NOT Docker:
+wsl -d Ubuntu -- redis-server --daemonize yes
+
+# Start Celery worker (required for async task processing):
+cd backend && celery -A celery_worker.celery worker --loglevel=info --pool=threads --concurrency=4
 ```
 
 ### Frontend
@@ -63,27 +65,14 @@ cd frontend && npm test
 cd frontend && npm run test:watch
 ```
 
-## Async Processing (Optional)
+## Async Processing
 
-By default, the comparable search (Step 2 of the analysis workflow) runs **synchronously** 
-for easier local development. This means it works immediately without any infrastructure setup.
+Celery with Redis is used for async task processing (webhook events, comparable search, lead rescoring).
 
-To enable **async mode** for better performance in production:
+**Redis**: Run natively via WSL Ubuntu — `wsl -d Ubuntu -- redis-server --daemonize yes`  
+**Celery worker**: `cd backend && celery -A celery_worker.celery worker --loglevel=info --pool=threads --concurrency=4`
 
-1. Start Redis and Celery worker:
-   ```bash
-   docker compose up -d
-   ```
-
-2. Set environment variable in `backend/.env`:
-   ```
-   USE_ASYNC_COMPARABLE_SEARCH=true
-   ```
-
-3. Restart the backend server
-
-**Async mode benefits**: Non-blocking API responses, better for multiple concurrent users  
-**Sync mode benefits**: Zero infrastructure required, works out of the box
+> **IMPORTANT**: Docker is NOT used in this project. Never suggest `docker compose`, `docker run`, or any Docker command. Redis runs via WSL Ubuntu. There is no Docker setup.
 
 ## Environment
 

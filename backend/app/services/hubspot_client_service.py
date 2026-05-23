@@ -82,6 +82,52 @@ class HubSpotClientService:
         f = Fernet(raw_key.encode())
         return f.encrypt(raw_token.encode()).decode()
 
+    @staticmethod
+    def encrypt_client_secret(raw_secret: str) -> str:
+        """Fernet-encrypt a HubSpot client secret for storage.
+
+        Delegates to :meth:`encrypt_token` since both the API token and the
+        client secret use the same ``HUBSPOT_ENCRYPTION_KEY``.
+
+        Returns the encrypted secret as a UTF-8 string suitable for storage in
+        ``HubSpotConfig.encrypted_client_secret``.
+
+        Raises ``ExternalServiceError`` if the environment variable is missing.
+        """
+        return HubSpotClientService.encrypt_token(raw_secret)
+
+    @staticmethod
+    def decrypt_client_secret(encrypted_secret: str) -> str:
+        """Fernet-decrypt a stored HubSpot client secret.
+
+        Args:
+            encrypted_secret: The Fernet-encrypted client secret string as
+                stored in ``HubSpotConfig.encrypted_client_secret``.
+
+        Returns:
+            The plaintext client secret.
+
+        Raises:
+            ``ExternalServiceError`` if ``HUBSPOT_ENCRYPTION_KEY`` is not set
+            or the token cannot be decrypted.
+        """
+        from cryptography.fernet import Fernet, InvalidToken
+
+        raw_key = os.environ.get("HUBSPOT_ENCRYPTION_KEY")
+        if not raw_key:
+            raise ExternalServiceError(
+                "HUBSPOT_ENCRYPTION_KEY environment variable is not set",
+                payload={"error_type": "hubspot_config_error"},
+            )
+        try:
+            f = Fernet(raw_key.encode())
+            return f.decrypt(encrypted_secret.encode()).decode()
+        except (InvalidToken, Exception) as exc:
+            raise ExternalServiceError(
+                f"Failed to decrypt HubSpot client secret: {exc}",
+                payload={"error_type": "hubspot_config_error"},
+            ) from exc
+
     # ------------------------------------------------------------------ #
     # Read-only enforcement                                                #
     # ------------------------------------------------------------------ #

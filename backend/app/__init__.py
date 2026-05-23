@@ -384,6 +384,10 @@ def create_app(config_name='development'):
     from app.controllers.hubspot_controller import hubspot_bp
     app.register_blueprint(hubspot_bp, url_prefix='/api/hubspot')
 
+    # HubSpot Webhook Receiver — unauthenticated endpoint, isolated from hubspot_bp
+    from app.controllers.hubspot_webhook_controller import hubspot_webhook_bp
+    app.register_blueprint(hubspot_webhook_bp, url_prefix='/api/hubspot')
+
     # Contact management (CRUD + property-contact nested routes)
     from app.controllers.contact_controller import contacts_bp
     app.register_blueprint(contacts_bp, url_prefix='')
@@ -405,6 +409,31 @@ def create_app(config_name='development'):
     from app.openapi import openapi_bp
     app.register_blueprint(openapi_bp, url_prefix='/api')
     
+    # ---------------------------------------------------------------------------
+    # Auto-configure HubSpot client secret from environment variable.
+    #
+    # If HUBSPOT_CLIENT_SECRET is set in .env and a HubSpotConfig row exists
+    # but has no encrypted_client_secret yet, encrypt and store it automatically
+    # at startup. This means the user never has to enter the secret in the UI —
+    # just set the env var and restart the server.
+    # ---------------------------------------------------------------------------
+    if config_name != 'testing':
+        with app.app_context():
+            try:
+                hs_client_secret = os.environ.get('HUBSPOT_CLIENT_SECRET', '').strip()
+                if hs_client_secret:
+                    from app.models.hubspot_config import HubSpotConfig as _HubSpotConfig
+                    from app.services.hubspot_client_service import HubSpotClientService as _HCS
+                    _config = _HubSpotConfig.query.order_by(_HubSpotConfig.id.desc()).first()
+                    if _config and not _config.encrypted_client_secret:
+                        _config.encrypted_client_secret = _HCS.encrypt_client_secret(hs_client_secret)
+                        db.session.commit()
+                        app.logger.info(
+                            "Startup: auto-configured HubSpot client secret from HUBSPOT_CLIENT_SECRET env var."
+                        )
+            except Exception as _e:
+                app.logger.warning("Startup: could not auto-configure HubSpot client secret: %s", _e)
+
     # ---------------------------------------------------------------------------
     # Startup cleanup — mark any import runs stuck in 'running' as 'failed'.
     # This happens when the server was restarted without a Celery worker running,

@@ -44,13 +44,33 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from celery import Celery
-from celery.signals import worker_ready
+from celery.signals import worker_ready, worker_init
 
 celery = Celery(
     'real_estate_analysis',
     broker=os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0'),
     backend=os.getenv('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0'),
 )
+
+# ---------------------------------------------------------------------------
+# Push a Flask app context when the Celery worker starts.
+# This allows task functions to use Flask-SQLAlchemy models and services
+# without calling create_app() themselves — which is critical for the
+# threads pool on Windows where multiple create_app() calls in the same
+# process cause DB connection pool exhaustion.
+# ---------------------------------------------------------------------------
+_flask_app = None
+_flask_ctx = None
+
+@worker_init.connect
+def init_worker(**kwargs):
+    global _flask_app, _flask_ctx
+    from app import create_app
+    _flask_app = create_app()
+    _flask_ctx = _flask_app.app_context()
+    _flask_ctx.push()
+    import logging
+    logging.getLogger(__name__).info("Flask app context pushed for Celery worker.")
 
 celery.conf.update(
     task_serializer='json',
@@ -76,6 +96,19 @@ celery.conf.update(
             'task': 'tasks.mark_overdue',
             'schedule': 3600,  # every hour — keeps overdue status current
             'options': {'expires': 1800},
+        },
+        'hubspot-webhook-log-cleanup': {
+            'task': 'hubspot_webhook.purge_logs',
+            'schedule': crontab(hour=3, minute=0),  # daily at 3 AM UTC
+        },
+        # Scheduled engagement sync — imports new HubSpot notes/calls/tasks hourly.
+        # Engagements cannot be delivered via webhook (HubSpot legacy app limitation),
+        # so this scheduled job is the mechanism for near-real-time engagement updates.
+        # Interval is configurable via HUBSPOT_ENGAGEMENT_SYNC_INTERVAL_MINUTES (default: 60).
+        'hubspot-scheduled-engagement-sync': {
+            'task': 'hubspot.scheduled_engagement_sync',
+            'schedule': int(os.environ.get('HUBSPOT_ENGAGEMENT_SYNC_INTERVAL_MINUTES', 60)) * 60,
+            'options': {'expires': 3300},  # expire if not consumed within 55 min
         },
     },
 )
@@ -1017,6 +1050,59 @@ def generate_backup_export() -> str:
 
 
 # ---------------------------------------------------------------------------
+# HubSpot Webhook Processing Tasks
+# ---------------------------------------------------------------------------
+
+@celery.task(name='hubspot_webhook.process_event', bind=True, max_retries=3)
+def process_webhook_event(self, log_id: int):
+    """Process a single webhook event: dedup check, loop guard, then fetch+upsert."""
+    from app.tasks.hubspot_webhook_tasks import run_process_webhook_event
+    run_process_webhook_event(log_id, self_task=self)
+
+
+@celery.task(name='hubspot_webhook.fetch_and_upsert', bind=True, max_retries=3)
+def fetch_and_upsert_record(self, object_type: str, object_id: str, log_id: int):
+    """Fetch the full record from HubSpot API and upsert into the raw table."""
+    from app.tasks.hubspot_webhook_tasks import run_fetch_and_upsert_record
+    run_fetch_and_upsert_record(object_type, object_id, log_id, self_task=self)
+
+
+@celery.task(name='hubspot_webhook.incremental_matching')
+def run_incremental_matching(object_type: str, object_id: str):
+    """Run HubSpotMatcherService for the updated record."""
+    from app.tasks.hubspot_webhook_tasks import run_incremental_matching as _run
+    _run(object_type, object_id)
+
+
+@celery.task(name='hubspot_webhook.convert_activity')
+def convert_incremental_activity(engagement_id: str):
+    """Run HubSpotActivityConverterService for a single engagement."""
+    from app.tasks.hubspot_webhook_tasks import run_convert_incremental_activity
+    run_convert_incremental_activity(engagement_id)
+
+
+@celery.task(name='hubspot_webhook.extract_signals')
+def extract_incremental_signals(engagement_id: str, lead_id: int):
+    """Run HubSpotSignalExtractorService for a single engagement."""
+    from app.tasks.hubspot_webhook_tasks import run_extract_incremental_signals
+    run_extract_incremental_signals(engagement_id, lead_id)
+
+
+@celery.task(name='hubspot_webhook.rescore_lead')
+def rescore_lead(lead_id: int):
+    """Run LeadScoringEngine for a single lead."""
+    from app.tasks.hubspot_webhook_tasks import run_rescore_lead
+    run_rescore_lead(lead_id)
+
+
+@celery.task(name='hubspot_webhook.purge_logs')
+def purge_old_webhook_logs():
+    """Delete HubSpotWebhookLog records older than 30 days."""
+    from app.tasks.hubspot_webhook_tasks import run_purge_old_webhook_logs
+    return run_purge_old_webhook_logs()
+
+
+# ---------------------------------------------------------------------------
 # Action Engine Tasks
 #
 # Imported here so Celery discovers the @celery.task decorators defined in
@@ -1051,6 +1137,65 @@ def mark_tasks_overdue() -> int:
         if updated:
             logger.info("mark_tasks_overdue: marked %d task(s) as overdue.", updated)
         return updated
+
+
+@celery.task(name='hubspot.scheduled_engagement_sync')
+def scheduled_engagement_sync() -> None:
+    """Scheduled task: import new HubSpot engagements and run the full pipeline.
+
+    Runs on a configurable schedule (default: every hour) to keep notes, calls,
+    and tasks from HubSpot in sync without requiring manual import triggers.
+    Engagements cannot be delivered via webhook (HubSpot legacy app limitation),
+    so this scheduled sync is the mechanism for near-real-time engagement updates.
+
+    Steps:
+    1. Create a HubSpotImportRun for 'engagements'
+    2. Run the engagement import (fetch + upsert)
+    3. Run the full post-import pipeline (matching → convert → signals → rescore)
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info("Starting scheduled engagement sync")
+
+    from dotenv import load_dotenv
+    load_dotenv()
+    from app import create_app
+    app = create_app()
+
+    with app.app_context():
+        from app import db
+        from app.models import HubSpotConfig, HubSpotImportRun
+        from app.services import HubSpotImportService
+        from datetime import datetime
+
+        # Check that HubSpot is configured before attempting sync
+        config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
+        if config is None:
+            logger.info("Scheduled engagement sync skipped: no HubSpot config found")
+            return
+
+        # Create an import run for engagements
+        svc = HubSpotImportService()
+        try:
+            runs = svc.start_import(object_types=['engagements'])
+            run_ids = [r.id for r in runs]
+            logger.info("Scheduled engagement sync: started import run_ids=%s", run_ids)
+        except Exception as exc:
+            logger.error("Scheduled engagement sync: failed to start import: %s", exc)
+            return
+
+    # Dispatch the engagement import tasks
+    from app.tasks.hubspot_tasks import run_import_hubspot_engagements
+    for run in runs:
+        try:
+            import_hubspot_engagements.delay(run.id)
+        except Exception as exc:
+            logger.error("Scheduled engagement sync: failed to dispatch import task: %s", exc)
+            return
+
+    # Chain to post-import pipeline after import completes
+    run_post_import_pipeline.delay(run_ids)
+    logger.info("Scheduled engagement sync: import + pipeline dispatched")
 
 
 @celery.task(name='hubspot.post_import_pipeline')
@@ -1132,9 +1277,17 @@ REQUIRED_TASKS = {
     'hubspot.rescore_leads',
     'hubspot.generate_backup',
     'hubspot.post_import_pipeline',
+    'hubspot.scheduled_engagement_sync',
     'tasks.mark_overdue',
     'action_engine.recompute_recommended_action',
     'action_engine.bulk_recompute_all_leads',
+    'hubspot_webhook.process_event',
+    'hubspot_webhook.fetch_and_upsert',
+    'hubspot_webhook.incremental_matching',
+    'hubspot_webhook.convert_activity',
+    'hubspot_webhook.extract_signals',
+    'hubspot_webhook.rescore_lead',
+    'hubspot_webhook.purge_logs',
 }
 
 
