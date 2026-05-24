@@ -21,12 +21,22 @@ def upgrade():
         ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE
     """)
 
-    # Grant admin privileges to the designated admin user
-    op.execute("""
-        UPDATE users
-        SET is_admin = TRUE
-        WHERE email_lower = 'ben.d.staples.7@gmail.com'
-    """)
+    # Grant admin privileges to the designated admin user.
+    # Fails explicitly if the user doesn't exist so the operator knows to
+    # create the account first (via the seed/bootstrap process).
+    result = op.get_bind().execute(
+        __import__('sqlalchemy').text(
+            "UPDATE users SET is_admin = TRUE "
+            "WHERE email_lower = 'ben.d.staples.7@gmail.com'"
+        )
+    )
+    if result.rowcount == 0:
+        raise RuntimeError(
+            "Migration t0u1v2w3x4y5: no user with email_lower = "
+            "'ben.d.staples.7@gmail.com' found. "
+            "Create the account via the seed/bootstrap process before running "
+            "this migration, then re-run 'flask db upgrade head'."
+        )
 
 
 def downgrade():

@@ -1426,6 +1426,14 @@ function App() {
             src={user?.is_admin ? '/images/avatar.png' : undefined}
             alt={user?.display_name ?? 'User'}
             onClick={() => setAvatarOpen(true)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                setAvatarOpen(true)
+              }
+            }}
+            tabIndex={0}
+            role="button"
             sx={{
               width: 40,
               height: 40,
@@ -1433,6 +1441,7 @@ function App() {
               cursor: 'pointer',
               transition: 'transform 0.2s',
               '&:hover': { transform: 'scale(1.1)' },
+              '&:focus-visible': { outline: '3px solid rgba(255,255,255,0.8)', outlineOffset: '2px' },
             }}
             aria-label="Open user menu"
             aria-haspopup="true"

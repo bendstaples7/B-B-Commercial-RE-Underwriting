@@ -86,6 +86,10 @@ class AdminService:
 
         Raises ValidationError if page_size > 200.
         """
+        if page < 1:
+            raise ValidationError('page must be >= 1.')
+        if page_size < 1:
+            raise ValidationError('page_size must be >= 1.')
         if page_size > 200:
             raise ValidationError('page_size cannot exceed 200.')
 

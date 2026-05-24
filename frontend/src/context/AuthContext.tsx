@@ -64,8 +64,8 @@ export function validateStoredToken(token: string): AuthUser | null {
   const payload = decodeJwtPayload(token)
   if (!payload) return null
 
-  const exp = typeof payload.exp === 'number' ? payload.exp : null
-  const iat = typeof payload.iat === 'number' ? payload.iat : null
+  const exp = Number.isFinite(payload.exp) ? (payload.exp as number) : null
+  const iat = Number.isFinite(payload.iat) ? (payload.iat as number) : null
 
   if (exp === null || iat === null) return null
 
@@ -154,18 +154,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
         display_name: string
       }>('/auth/login', { email, password })
 
-      const { session_token, user_id, email: respEmail, display_name } = response.data
+      const { session_token, user_id } = response.data
+
+      // Validate the token before persisting — rejects malformed/expired tokens
+      // from a compromised or misbehaving server.
+      const validatedUser = validateStoredToken(session_token)
+      if (!validatedUser) {
+        throw new Error('Received an invalid session token from the server. Please try again.')
+      }
 
       localStorage.setItem('session_token', session_token)
       localStorage.setItem('user_id', user_id)
 
-      // Decode is_admin from the token payload (defaults to false if absent)
-      const tokenPayload = decodeJwtPayload(session_token)
-      const rawIsAdmin = tokenPayload?.is_admin
-      const is_admin = typeof rawIsAdmin === 'boolean' ? rawIsAdmin : false
-
       setToken(session_token)
-      setUser({ user_id, email: respEmail, display_name, is_admin })
+      setUser(validatedUser)
     },
     []
   )

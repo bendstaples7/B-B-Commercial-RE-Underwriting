@@ -20,6 +20,14 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import { adminService } from '@/services/api'
 
+/** Format a date string safely. Returns '—' for null/undefined/invalid values. */
+function safeFormatDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return '—'
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return '—'
+  return d.toLocaleDateString()
+}
+
 export default function AdminUserDetail() {
   const { userId } = useParams<{ userId: string }>()
   const navigate = useNavigate()
@@ -140,7 +148,7 @@ export default function AdminUserDetail() {
                 Member Since
               </Typography>
               <Typography variant="body1">
-                {new Date(summary.created_at).toLocaleDateString()}
+                {safeFormatDate(summary.created_at)}
               </Typography>
             </Box>
             <Box>
@@ -193,7 +201,7 @@ export default function AdminUserDetail() {
                   <TableCell>{lead.lead_status}</TableCell>
                   <TableCell align="right">{lead.lead_score}</TableCell>
                   <TableCell>
-                    {new Date(lead.created_at).toLocaleDateString()}
+                    {safeFormatDate(lead.created_at)}
                   </TableCell>
                 </TableRow>
               ))

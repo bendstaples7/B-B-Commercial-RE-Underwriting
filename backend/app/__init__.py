@@ -287,7 +287,15 @@ def create_app(config_name='development'):
     # Load configuration
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'postgresql://localhost/real_estate_analysis')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key')
+
+    # Require a real SECRET_KEY — never allow the insecure default in production.
+    _secret_key = os.getenv('SECRET_KEY', '')
+    if config_name != 'testing' and (not _secret_key or _secret_key == 'dev-secret-key'):
+        raise SystemExit(
+            "FATAL: SECRET_KEY is missing or set to the insecure default 'dev-secret-key'. "
+            "Set a strong random SECRET_KEY in backend/.env before starting the server."
+        )
+    app.config['SECRET_KEY'] = _secret_key or 'dev-secret-key'  # testing only
     app.config['REDIS_URL'] = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 
     # Limit the SQLAlchemy connection pool to prevent exhausting PostgreSQL's

@@ -137,8 +137,9 @@ describe('AdminUserDetail', () => {
     // Admin chip — No
     expect(screen.getByText('No')).toBeInTheDocument()
 
-    // Member Since — formatted date
-    const memberSince = new Date('2024-01-15T10:00:00Z').toLocaleDateString()
+    // Member Since — formatted date (use same formatter as component)
+    const d = new Date('2024-01-15T10:00:00Z')
+    const memberSince = isNaN(d.getTime()) ? '—' : d.toLocaleDateString()
     expect(screen.getByText(memberSince)).toBeInTheDocument()
 
     // Lead count
@@ -183,6 +184,40 @@ describe('AdminUserDetail', () => {
     expect(screen.getByText('Evanston')).toBeInTheDocument()
     expect(screen.getByText('active')).toBeInTheDocument()
     expect(screen.getByText('88')).toBeInTheDocument()
+  })
+
+  // -------------------------------------------------------------------------
+  // Test 4: Error state — getUserSummary fails
+  // -------------------------------------------------------------------------
+  it('shows error alert when getUserSummary fails', async () => {
+    vi.mocked(adminService.getUserSummary).mockRejectedValue(new Error('Summary unavailable'))
+    vi.mocked(adminService.listLeads).mockResolvedValue(mockLeadsResponse)
+
+    renderComponent()
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument()
+    })
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Summary unavailable')
+    expect(screen.queryByText('Alice Smith')).not.toBeInTheDocument()
+  })
+
+  // -------------------------------------------------------------------------
+  // Test 5: Error state — listLeads fails
+  // -------------------------------------------------------------------------
+  it('shows error alert when listLeads fails', async () => {
+    vi.mocked(adminService.getUserSummary).mockResolvedValue(mockSummary)
+    vi.mocked(adminService.listLeads).mockRejectedValue(new Error('Leads unavailable'))
+
+    renderComponent()
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument()
+    })
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Leads unavailable')
+    expect(screen.queryByText('Property Address')).not.toBeInTheDocument()
   })
 
   // -------------------------------------------------------------------------
