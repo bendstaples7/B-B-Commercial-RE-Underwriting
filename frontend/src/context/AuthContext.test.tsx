@@ -15,18 +15,22 @@ import { AuthProvider, useAuth, validateStoredToken } from './AuthContext'
 // ---------------------------------------------------------------------------
 
 /**
+ * UTF-8 safe base64url encoder.
+ * btoa() only handles Latin-1; this handles the full Unicode range.
+ */
+function base64UrlEncode(str: string): string {
+  const bytes = new TextEncoder().encode(str)
+  const binary = Array.from(bytes).map((b) => String.fromCharCode(b)).join('')
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+/**
  * Build a minimal JWT with the given payload claims.
  * The signature is a dummy value — AuthContext only decodes client-side.
  */
 function buildJwt(payload: Record<string, unknown>): string {
-  const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '')
-  const body = btoa(JSON.stringify(payload))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '')
+  const header = base64UrlEncode(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
+  const body = base64UrlEncode(JSON.stringify(payload))
   return `${header}.${body}.fakesignature`
 }
 

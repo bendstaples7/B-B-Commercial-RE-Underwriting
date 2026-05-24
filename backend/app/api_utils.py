@@ -96,6 +96,17 @@ def require_user(f):
     return decorated
 
 
+def _allow_legacy_header() -> bool:
+    """Return True only when the ALLOW_LEGACY_X_USER_ID config flag is set.
+
+    This flag must never be enabled in production. It exists solely to
+    support the transition period where some internal test clients still
+    send X-User-Id instead of a Bearer token.
+    """
+    from flask import current_app
+    return bool(current_app.config.get('ALLOW_LEGACY_X_USER_ID', False))
+
+
 def require_auth(f):
     """Decorator that verifies a Bearer JWT and populates ``g.user_id``.
 
@@ -147,10 +158,11 @@ def require_auth(f):
                 return jsonify({'error': 'Token expired'}), 401
             except jwt.InvalidTokenError:
                 return jsonify({'error': 'Invalid token'}), 401
-        elif request.headers.get('X-User-Id'):
-            # Legacy fallback — only used during transition period.
-            # Bearer token takes precedence when both headers are present.
+        elif request.headers.get('X-User-Id') and _allow_legacy_header():
+            # Legacy fallback — only accepted when ALLOW_LEGACY_X_USER_ID is
+            # explicitly enabled (non-production environments only).
             g.user_id = request.headers.get('X-User-Id')
+            g.is_admin = False
         else:
             return jsonify({'error': 'Authentication required'}), 401
         return f(*args, **kwargs)

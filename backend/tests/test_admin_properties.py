@@ -2,7 +2,6 @@
 
 Feature: admin-panel
 """
-import pytest
 from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 from unittest.mock import MagicMock
@@ -98,7 +97,7 @@ def test_user_list_excludes_credential_fields(user_count, app):
         # Seed users
         for i in range(user_count):
             _make_user(f'test{i}.com')
-        db.session.commit()
+        db.session.flush()
 
         try:
             result = AdminService().list_users()
@@ -137,7 +136,7 @@ def test_user_list_ordering_invariant(user_count, app):
         base_time = datetime.utcnow() - timedelta(seconds=user_count)
         for i in range(user_count):
             _make_user(f'order{i}.com', created_at=base_time + timedelta(seconds=i))
-        db.session.commit()
+        db.session.flush()
 
         try:
             result = AdminService().list_users()
@@ -338,13 +337,12 @@ def test_require_admin_guards_all_routes(route, client, app):
         else:
             response = client.post(path, headers=headers)
 
-        # If the blueprint isn't registered yet (task 4.2 not complete),
-        # the route returns 404. Skip gracefully rather than fail.
-        if response.status_code == 404:
-            pytest.skip(
-                f"Route {method} {path} returned 404 — admin_bp not yet registered. "
-                "This test will pass once task 4.2 (blueprint registration) is complete."
-            )
+        # If the blueprint isn't registered, the route returns 404 — that is a
+        # registration regression and must fail the test immediately.
+        assert response.status_code != 404, (
+            f"Route {method} {path} returned 404 — admin_bp is not registered. "
+            "Ensure admin_bp is imported and registered in app/__init__.py."
+        )
 
         assert response.status_code == 403, (
             f"Expected 403 for {method} {path} with non-admin token, "

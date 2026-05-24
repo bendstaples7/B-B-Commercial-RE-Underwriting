@@ -17,13 +17,12 @@ import {
 import { adminService } from '@/services/api'
 import type { AdminUserSummary } from '@/types'
 
-/** Format an ISO date string as a locale date (no time). */
-function formatDate(dateStr: string): string {
-  try {
-    return new Date(dateStr).toLocaleDateString()
-  } catch {
-    return '—'
-  }
+/** Format an ISO date string as a locale date (no time). Returns '—' for null/undefined/invalid. */
+function formatDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return '—'
+  const d = new Date(dateStr)
+  if (isNaN(d.getTime())) return '—'
+  return d.toLocaleDateString()
 }
 
 /**
@@ -140,7 +139,15 @@ export const AdminPanel: React.FC = () => {
                 <TableRow
                   key={user.user_id}
                   hover
+                  tabIndex={0}
+                  role="button"
                   onClick={() => navigate(`/admin/users/${user.user_id}`)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      navigate(`/admin/users/${user.user_id}`)
+                    }
+                  }}
                   sx={{ cursor: 'pointer' }}
                   aria-label={`View details for ${user.display_name}`}
                 >

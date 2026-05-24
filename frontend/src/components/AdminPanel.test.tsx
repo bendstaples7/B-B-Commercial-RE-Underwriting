@@ -250,8 +250,8 @@ describe('AdminPanel', () => {
         expect(screen.getByText('Alice')).toBeInTheDocument()
       })
 
-      // Click the row — it has aria-label="View details for Alice"
-      const row = screen.getByRole('row', { name: 'View details for Alice' })
+      // Click the row — it has role="button" and aria-label="View details for Alice"
+      const row = screen.getByRole('button', { name: 'View details for Alice' })
       row.click()
 
       expect(mockNavigate).toHaveBeenCalledWith('/admin/users/user-abc-123')
@@ -272,7 +272,7 @@ describe('AdminPanel', () => {
         expect(screen.getByText('Bob')).toBeInTheDocument()
       })
 
-      const bobRow = screen.getByRole('row', { name: 'View details for Bob' })
+      const bobRow = screen.getByRole('button', { name: 'View details for Bob' })
       bobRow.click()
 
       expect(mockNavigate).toHaveBeenCalledWith('/admin/users/user-222')
@@ -384,10 +384,15 @@ describe('Property 10: Admin route access control', () => {
         async (userFields) => {
           const user: AuthUser = { ...userFields, is_admin: true }
 
-          const { queryByTestId, unmount } = renderAdminRouteGuard(user)
+          const { queryByTestId, getByRole, unmount } = renderAdminRouteGuard(user)
 
           // Should NOT have redirected — LocationDisplay is only rendered at "/"
           expect(queryByTestId('location-display')).not.toBeInTheDocument()
+
+          // AdminPanel heading must be present
+          await waitFor(() => {
+            expect(getByRole('heading', { name: /admin panel/i })).toBeInTheDocument()
+          })
 
           unmount()
         }
