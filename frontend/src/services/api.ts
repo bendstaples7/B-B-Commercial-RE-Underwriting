@@ -57,8 +57,10 @@ api.interceptors.response.use(
       const url = error.config?.url ?? 'unknown'
       const status = error.response.status
 
-      // Handle 401 Unauthorized — clear session and redirect to login
-      if (status === 401) {
+      // Handle 401 Unauthorized — clear session and redirect to login.
+      // Exclude /auth/login itself: a 401 there means wrong credentials,
+      // not an expired session, so the LoginPage handles it directly.
+      if (status === 401 && !url.includes('/auth/login')) {
         const returnUrl = window.location.pathname + window.location.search
         localStorage.removeItem('session_token')
         localStorage.removeItem('user_id')

@@ -95,8 +95,9 @@ class AuthService:
         user = User.query.filter_by(email_lower=email.lower()).first()
 
         if user is None:
-            # Run a dummy check to prevent timing attacks
-            bcrypt.checkpw(b"dummy", bcrypt.hashpw(b"dummy", bcrypt.gensalt(rounds=4)))
+            # Run a dummy check at the same cost factor as real password checks
+            # to prevent timing attacks that reveal whether an email exists.
+            bcrypt.checkpw(b"dummy", bcrypt.hashpw(b"dummy", bcrypt.gensalt(rounds=12)))
             return None
 
         if not bcrypt.checkpw(password.encode("utf-8"), user.password_hash.encode("utf-8")):

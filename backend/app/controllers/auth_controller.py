@@ -13,6 +13,7 @@ from functools import wraps
 from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
+from app import limiter
 from app.schemas import LoginSchema
 from app.services.auth_service import AuthService
 
@@ -78,6 +79,7 @@ def handle_errors(f):
 # ---------------------------------------------------------------------------
 
 @auth_bp.route('/login', methods=['POST'])
+@limiter.limit("10 per minute")
 @handle_errors
 def login():
     """Authenticate a user and return a signed JWT.

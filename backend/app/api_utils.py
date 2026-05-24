@@ -158,6 +158,11 @@ def require_auth(f):
                 return jsonify({'error': 'Token expired'}), 401
             except jwt.InvalidTokenError:
                 return jsonify({'error': 'Invalid token'}), 401
+        elif auth_header:
+            # A non-Bearer Authorization header (e.g. Basic) is not supported.
+            # Reject it explicitly rather than falling through to the X-User-Id
+            # fallback, which would allow bypassing JWT verification.
+            return jsonify({'error': 'Authentication required'}), 401
         elif request.headers.get('X-User-Id') and _allow_legacy_header():
             # Legacy fallback — only accepted when ALLOW_LEGACY_X_USER_ID is
             # explicitly enabled (non-production environments only).
