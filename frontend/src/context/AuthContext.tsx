@@ -101,7 +101,7 @@ export function validateStoredToken(token: string): AuthUser | null {
 // Context
 // ---------------------------------------------------------------------------
 
-const AuthContext = createContext<AuthContextValue>({
+export const AuthContext = createContext<AuthContextValue>({
   user: null,
   token: null,
   login: async () => {},
