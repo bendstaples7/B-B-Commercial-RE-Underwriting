@@ -9,11 +9,17 @@
  * - bulk partial failure summary: "X succeeded, Y failed" message shown
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, within } from '@/test/testUtils'
+import { render as baseRender, screen, waitFor, within } from '@/test/testUtils'
+import { MemoryRouter } from 'react-router-dom'
 import userEvent from '@testing-library/user-event'
 import { QueueTable } from './QueueTable'
 import type { QueueRow, BulkActionResult } from '@/types'
 import PhoneIcon from '@mui/icons-material/Phone'
+
+// QueueTable uses useNavigate internally, so all renders need a Router context.
+function render(ui: React.ReactElement, options?: Parameters<typeof baseRender>[1]) {
+  return baseRender(<MemoryRouter>{ui}</MemoryRouter>, options)
+}
 
 // ---------------------------------------------------------------------------
 // Test data helpers
