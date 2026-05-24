@@ -35,6 +35,11 @@ const api: AxiosInstance = axios.create({
 // don't declare it, causing 400 validation errors on endpoints like /confirm.
 api.interceptors.request.use(
   (config) => {
+    const token = localStorage.getItem('session_token')
+    if (token) {
+      config.headers['Authorization'] = `Bearer ${token}`
+    }
+    // Keep X-User-Id for backward compatibility during transition
     const userId = localStorage.getItem('user_id') || 'default_user'
     config.headers['X-User-Id'] = userId
     return config
@@ -51,6 +56,15 @@ api.interceptors.response.use(
       const errorData = error.response.data
       const url = error.config?.url ?? 'unknown'
       const status = error.response.status
+
+      // Handle 401 Unauthorized — clear session and redirect to login
+      if (status === 401) {
+        const returnUrl = window.location.pathname + window.location.search
+        localStorage.removeItem('session_token')
+        localStorage.removeItem('user_id')
+        window.location.href = `/login?returnUrl=${encodeURIComponent(returnUrl)}`
+        return Promise.reject(error)
+      }
 
       // Extract the real message — backend wraps errors under error.message
       // e.g. { success: false, error: { message: "...", status_code: 502 } }
@@ -1376,4 +1390,39 @@ export const bulkActionService = {
     api.post('/leads/bulk/create-task', { lead_ids: leadIds, task_data: taskData }).then(r => r.data),
   bulkDoNotContact: (leadIds: number[]): Promise<BulkActionResult> =>
     api.post('/leads/bulk/do-not-contact', { lead_ids: leadIds }).then(r => r.data),
+}
+
+// ---------------------------------------------------------------------------
+// Admin Panel API Service
+// ---------------------------------------------------------------------------
+import type {
+  AdminUserSummary,
+  AdminLeadParams,
+  AdminLeadListResponse,
+} from '@/types'
+
+export const adminService = {
+  /**
+   * GET /api/admin/users — list all users (admin only)
+   */
+  listUsers: async (): Promise<AdminUserSummary[]> => {
+    const response = await api.get<AdminUserSummary[]>('/admin/users')
+    return response.data
+  },
+
+  /**
+   * GET /api/admin/users/:userId/summary — get per-user activity summary (admin only)
+   */
+  getUserSummary: async (userId: string): Promise<AdminUserSummary> => {
+    const response = await api.get<AdminUserSummary>(`/admin/users/${userId}/summary`)
+    return response.data
+  },
+
+  /**
+   * GET /api/admin/leads — paginated cross-user lead list (admin only)
+   */
+  listLeads: async (params: AdminLeadParams): Promise<AdminLeadListResponse> => {
+    const response = await api.get<AdminLeadListResponse>('/admin/leads', { params })
+    return response.data
+  },
 }

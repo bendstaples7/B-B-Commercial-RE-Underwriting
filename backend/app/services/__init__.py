@@ -1,4 +1,5 @@
 """Services package."""
+from .auth_service import AuthService
 from .dto import RankedComparableDTO
 from .hubspot_client_service import HubSpotClientService
 from .hubspot_import_service import HubSpotImportService
@@ -35,7 +36,11 @@ from .gemini_comparable_search_service import GeminiComparableSearchService
 from .cache_loader_service import CacheLoaderService, SyncResult
 from .cache_status_service import CacheStatusService, DatasetStatus
 
+# Admin panel service
+from .admin_service import AdminService
+
 __all__ = [
+    'AuthService',
     'RankedComparableDTO',
     'HubSpotClientService',
     'HubSpotImportService',
@@ -73,4 +78,6 @@ __all__ = [
     'SyncResult',
     'CacheStatusService',
     'DatasetStatus',
+    # Admin panel
+    'AdminService',
 ]

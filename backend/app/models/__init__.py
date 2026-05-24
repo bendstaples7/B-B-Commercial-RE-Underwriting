@@ -1,4 +1,7 @@
 """Data models package."""
+# Authentication
+from app.models.user import User
+
 from app.models.property_facts import PropertyFacts, PropertyType, ConstructionType, InteriorCondition
 from app.models.comparable_sale import ComparableSale
 from app.models.analysis_session import AnalysisSession, WorkflowStep
@@ -108,6 +111,8 @@ from app.models.hubspot_sync_run import HubSpotSyncRun
 from app.models.hubspot_platform_write import HubSpotPlatformWrite
 
 __all__ = [
+    # Authentication
+    'User',
     'PropertyFacts',
     'PropertyType',
     'ConstructionType',
