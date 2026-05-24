@@ -287,7 +287,15 @@ def create_app(config_name='development'):
     # Load configuration
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'postgresql://localhost/real_estate_analysis')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key')
+
+    # Require a real SECRET_KEY — never allow the insecure default in production.
+    _secret_key = os.getenv('SECRET_KEY', '')
+    if config_name != 'testing' and (not _secret_key or _secret_key == 'dev-secret-key'):
+        raise SystemExit(
+            "FATAL: SECRET_KEY is missing or set to the insecure default 'dev-secret-key'. "
+            "Set a strong random SECRET_KEY in backend/.env before starting the server."
+        )
+    app.config['SECRET_KEY'] = _secret_key or 'dev-secret-key'  # testing only
     app.config['REDIS_URL'] = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 
     # Limit the SQLAlchemy connection pool to prevent exhausting PostgreSQL's
@@ -435,7 +443,17 @@ def create_app(config_name='development'):
 
     @app.before_request
     def set_user_identity():
-        """Populate g.user_id from the X-User-Id request header."""
+        """Populate g.user_id from Bearer JWT (preferred) or X-User-Id header (fallback)."""
+        auth_header = _request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            token = auth_header[7:]
+            try:
+                from app.services.auth_service import AuthService
+                claims = AuthService().verify_token(token)
+                g.user_id = claims['sub']
+                return  # Bearer token wins — skip X-User-Id
+            except Exception:
+                pass  # fall through to X-User-Id
         g.user_id = _request.headers.get('X-User-Id', 'anonymous')
     # Register error handlers
     from app.error_handlers import register_error_handlers
@@ -540,6 +558,14 @@ def create_app(config_name='development'):
     # Actionable Lead Command Center — Command Center endpoints
     from app.controllers.command_center_controller import command_center_bp
     app.register_blueprint(command_center_bp, url_prefix='/api/leads')
+
+    # Authentication endpoints (public — no token required for login)
+    from app.controllers.auth_controller import auth_bp
+    app.register_blueprint(auth_bp, url_prefix='/api/auth')
+
+    # Admin panel endpoints (admin-only, guarded by require_admin)
+    from app.controllers.admin_controller import admin_bp
+    app.register_blueprint(admin_bp, url_prefix='/api/admin')
 
     # OpenAPI spec endpoint
     from app.openapi import openapi_bp
