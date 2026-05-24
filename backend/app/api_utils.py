@@ -147,7 +147,8 @@ def require_auth(f):
         from app.services.auth_service import AuthService
 
         auth_header = request.headers.get('Authorization', '')
-        if auth_header.startswith('Bearer '):
+        auth_header_lower = auth_header.lower()
+        if auth_header_lower.startswith('bearer '):
             token = auth_header[7:]
             try:
                 claims = AuthService().verify_token(token)
@@ -158,7 +159,7 @@ def require_auth(f):
                 return jsonify({'error': 'Token expired'}), 401
             except jwt.InvalidTokenError:
                 return jsonify({'error': 'Invalid token'}), 401
-        elif auth_header:
+        elif auth_header_lower:
             # A non-Bearer Authorization header (e.g. Basic) is not supported.
             # Reject it explicitly rather than falling through to the X-User-Id
             # fallback, which would allow bypassing JWT verification.
