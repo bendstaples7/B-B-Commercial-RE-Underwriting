@@ -7,11 +7,11 @@ import logging
 from datetime import datetime
 from functools import wraps
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 from marshmallow import ValidationError
 
 from app import db, limiter
-from app.api_utils import get_current_user_id
+from app.api_utils import get_current_user_id, require_auth
 from app.models import Lead, MarketingList, MarketingListMember
 from app.services.marketing_manager import MarketingManager
 
@@ -134,27 +134,23 @@ def _serialize_list_member(member):
 @marketing_bp.route('/lists', methods=['GET'])
 @limiter.limit("30 per minute")
 @handle_errors
+@require_auth
 def list_marketing_lists():
-    """List marketing lists with optional user filtering.
+    """List marketing lists for the authenticated user.
 
     Query parameters
     ----------------
-    user_id : str (optional — filter by owner)
     page : int (default 1)
     per_page : int (default 25, max 100)
 
     Returns
     -------
-    200 with paginated list of marketing lists.
+    200 with paginated list of marketing lists owned by the authenticated user.
     """
     args = request.args
     page, per_page = _parse_pagination(args)
 
-    query = MarketingList.query
-
-    user_id = args.get('user_id')
-    if user_id:
-        query = query.filter(MarketingList.user_id == user_id)
+    query = MarketingList.query.filter(MarketingList.user_id == g.user_id)
 
     query = query.order_by(MarketingList.created_at.desc())
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
@@ -171,13 +167,13 @@ def list_marketing_lists():
 @marketing_bp.route('/lists', methods=['POST'])
 @limiter.limit("10 per minute")
 @handle_errors
+@require_auth
 def create_marketing_list():
     """Create a new marketing list.
 
     Request body
     ------------
     name : str (required)
-    user_id : str (required)
     filter_criteria : dict (optional)
         If provided, the list is populated with leads matching the filters.
         Leads with "opted_out" status in any list are excluded.
@@ -194,7 +190,7 @@ def create_marketing_list():
         }), 400
 
     name = data.get('name')
-    user_id = get_current_user_id()
+    user_id = g.user_id
 
     missing = []
     if not name:
@@ -220,6 +216,7 @@ def create_marketing_list():
 @marketing_bp.route('/lists/<int:list_id>', methods=['PUT'])
 @limiter.limit("10 per minute")
 @handle_errors
+@require_auth
 def rename_marketing_list(list_id):
     """Rename an existing marketing list.
 
@@ -230,10 +227,16 @@ def rename_marketing_list(list_id):
     Returns
     -------
     200 with the updated marketing list.
-    404 if list not found.
+    404 if list not found or owned by a different user.
     """
     ml = db.session.get(MarketingList, list_id)
     if not ml:
+        return jsonify({
+            'error': 'Marketing list not found',
+            'message': f'Marketing list {list_id} does not exist',
+        }), 404
+
+    if ml.user_id != g.user_id:
         return jsonify({
             'error': 'Marketing list not found',
             'message': f'Marketing list {list_id} does not exist',
@@ -261,16 +264,23 @@ def rename_marketing_list(list_id):
 @marketing_bp.route('/lists/<int:list_id>', methods=['DELETE'])
 @limiter.limit("10 per minute")
 @handle_errors
+@require_auth
 def delete_marketing_list(list_id):
     """Delete a marketing list and all its memberships.
 
     Returns
     -------
     200 with confirmation message.
-    404 if list not found.
+    404 if list not found or owned by a different user.
     """
     ml = db.session.get(MarketingList, list_id)
     if not ml:
+        return jsonify({
+            'error': 'Marketing list not found',
+            'message': f'Marketing list {list_id} does not exist',
+        }), 404
+
+    if ml.user_id != g.user_id:
         return jsonify({
             'error': 'Marketing list not found',
             'message': f'Marketing list {list_id} does not exist',
@@ -292,6 +302,7 @@ def delete_marketing_list(list_id):
 @marketing_bp.route('/lists/<int:list_id>/members', methods=['GET'])
 @limiter.limit("30 per minute")
 @handle_errors
+@require_auth
 def get_list_members(list_id):
     """Get paginated members of a marketing list.
 
@@ -303,10 +314,16 @@ def get_list_members(list_id):
     Returns
     -------
     200 with paginated list of members including lead data.
-    404 if list not found.
+    404 if list not found or owned by a different user.
     """
     ml = db.session.get(MarketingList, list_id)
     if not ml:
+        return jsonify({
+            'error': 'Marketing list not found',
+            'message': f'Marketing list {list_id} does not exist',
+        }), 404
+
+    if ml.user_id != g.user_id:
         return jsonify({
             'error': 'Marketing list not found',
             'message': f'Marketing list {list_id} does not exist',
@@ -330,6 +347,7 @@ def get_list_members(list_id):
 @marketing_bp.route('/lists/<int:list_id>/members', methods=['POST'])
 @limiter.limit("10 per minute")
 @handle_errors
+@require_auth
 def add_list_members(list_id):
     """Add leads to a marketing list.
 
@@ -340,10 +358,16 @@ def add_list_members(list_id):
     Returns
     -------
     200 with count of leads added.
-    404 if list not found.
+    404 if list not found or owned by a different user.
     """
     ml = db.session.get(MarketingList, list_id)
     if not ml:
+        return jsonify({
+            'error': 'Marketing list not found',
+            'message': f'Marketing list {list_id} does not exist',
+        }), 404
+
+    if ml.user_id != g.user_id:
         return jsonify({
             'error': 'Marketing list not found',
             'message': f'Marketing list {list_id} does not exist',
@@ -389,6 +413,7 @@ def add_list_members(list_id):
 @marketing_bp.route('/lists/<int:list_id>/members', methods=['DELETE'])
 @limiter.limit("10 per minute")
 @handle_errors
+@require_auth
 def remove_list_members(list_id):
     """Remove leads from a marketing list.
 
@@ -399,10 +424,16 @@ def remove_list_members(list_id):
     Returns
     -------
     200 with count of leads removed.
-    404 if list not found.
+    404 if list not found or owned by a different user.
     """
     ml = db.session.get(MarketingList, list_id)
     if not ml:
+        return jsonify({
+            'error': 'Marketing list not found',
+            'message': f'Marketing list {list_id} does not exist',
+        }), 404
+
+    if ml.user_id != g.user_id:
         return jsonify({
             'error': 'Marketing list not found',
             'message': f'Marketing list {list_id} does not exist',
@@ -455,6 +486,7 @@ def remove_list_members(list_id):
 )
 @limiter.limit("20 per minute")
 @handle_errors
+@require_auth
 def update_member_status(list_id, lead_id):
     """Update the outreach status for a lead within a marketing list.
 
@@ -467,10 +499,16 @@ def update_member_status(list_id, lead_id):
     Returns
     -------
     200 with the updated membership record.
-    404 if list or membership not found.
+    404 if list or membership not found, or list owned by a different user.
     """
     ml = db.session.get(MarketingList, list_id)
     if not ml:
+        return jsonify({
+            'error': 'Marketing list not found',
+            'message': f'Marketing list {list_id} does not exist',
+        }), 404
+
+    if ml.user_id != g.user_id:
         return jsonify({
             'error': 'Marketing list not found',
             'message': f'Marketing list {list_id} does not exist',

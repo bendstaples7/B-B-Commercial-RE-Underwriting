@@ -130,6 +130,21 @@ class AuthenticationException(RealEstateAnalysisException):
         }
 
 
+class AuthError(RealEstateAnalysisException):
+    """Exception raised when JWT token verification fails.
+
+    Used by ``AuthService.verify_token`` and the ``require_auth`` decorator to
+    signal that a Bearer token is absent, malformed, has an invalid signature,
+    or has expired.  Always maps to HTTP 401.
+    """
+
+    def __init__(self, message: str = "Authentication required"):
+        super().__init__(message, status_code=401)
+        self.payload = {
+            'error_type': 'auth_error',
+        }
+
+
 class AuthorizationException(RealEstateAnalysisException):
     """Exception raised when authorization fails."""
     
@@ -515,3 +530,24 @@ class InvalidCronExpressionException(RealEstateAnalysisException):
             'error_type': 'invalid_cron_expression',
             'expression': expression,
         }
+
+
+# ---------------------------------------------------------------------------
+# Admin Panel Exceptions
+# ---------------------------------------------------------------------------
+
+
+class NotFoundError(RealEstateAnalysisException):
+    """Raised when a requested resource is not found. Used by AdminService."""
+
+    def __init__(self, message: str):
+        super().__init__(message, status_code=404)
+        self.payload = {'error_type': 'not_found'}
+
+
+class ValidationError(RealEstateAnalysisException):
+    """Raised when request parameters fail validation. Used by AdminService."""
+
+    def __init__(self, message: str):
+        super().__init__(message, status_code=400)
+        self.payload = {'error_type': 'validation_error'}

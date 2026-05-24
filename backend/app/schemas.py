@@ -1739,3 +1739,17 @@ class HubSpotConfigUpdateSchema(Schema):
     The secret is load_only and never returned in responses.
     """
     client_secret = fields.Str(load_only=True, allow_none=True, required=False)
+
+
+# ---------------------------------------------------------------------------
+# Auth Schemas
+# ---------------------------------------------------------------------------
+
+class LoginSchema(RequestSchema):
+    """Schema for POST /api/auth/login request body.
+
+    Both fields are required. Unknown fields are silently dropped (via
+    RequestSchema's Meta.unknown = EXCLUDE).
+    """
+    email = fields.Str(required=True)
+    password = fields.Str(required=True)

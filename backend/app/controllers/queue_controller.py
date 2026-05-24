@@ -2,9 +2,10 @@
 import logging
 from functools import wraps
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 from marshmallow import ValidationError
 
+from app.api_utils import require_auth
 from app.services.queue_service import QueueService
 
 logger = logging.getLogger(__name__)
@@ -42,70 +43,78 @@ def _parse_pagination_params():
 
 @queue_bp.route('/counts', methods=['GET'])
 @handle_errors
+@require_auth
 def get_counts():
     """GET /api/queues/counts — returns badge counts for all 7 queues."""
-    counts = _queue_service.get_counts()
+    counts = _queue_service.get_counts(user_id=g.user_id)
     return jsonify(counts), 200
 
 
 @queue_bp.route('/todays-action', methods=['GET'])
 @handle_errors
+@require_auth
 def get_todays_action():
     """GET /api/queues/todays-action — paginated Today's Action queue."""
     page, per_page, sort_by, sort_order = _parse_pagination_params()
-    rows, total = _queue_service.get_todays_action(page, per_page, sort_by, sort_order)
+    rows, total = _queue_service.get_todays_action(page, per_page, sort_by, sort_order, user_id=g.user_id)
     return jsonify({'rows': rows, 'total': total, 'page': page, 'per_page': per_page}), 200
 
 
 @queue_bp.route('/previously-warm', methods=['GET'])
 @handle_errors
+@require_auth
 def get_previously_warm():
     """GET /api/queues/previously-warm — paginated Previously Warm queue."""
     page, per_page, sort_by, sort_order = _parse_pagination_params()
-    rows, total = _queue_service.get_previously_warm(page, per_page, sort_by, sort_order)
+    rows, total = _queue_service.get_previously_warm(page, per_page, sort_by, sort_order, user_id=g.user_id)
     return jsonify({'rows': rows, 'total': total, 'page': page, 'per_page': per_page}), 200
 
 
 @queue_bp.route('/follow-up-overdue', methods=['GET'])
 @handle_errors
+@require_auth
 def get_follow_up_overdue():
     """GET /api/queues/follow-up-overdue — paginated Follow-Up Overdue queue."""
     page, per_page, sort_by, sort_order = _parse_pagination_params()
-    rows, total = _queue_service.get_follow_up_overdue(page, per_page, sort_by, sort_order)
+    rows, total = _queue_service.get_follow_up_overdue(page, per_page, sort_by, sort_order, user_id=g.user_id)
     return jsonify({'rows': rows, 'total': total, 'page': page, 'per_page': per_page}), 200
 
 
 @queue_bp.route('/no-next-action', methods=['GET'])
 @handle_errors
+@require_auth
 def get_no_next_action():
     """GET /api/queues/no-next-action — paginated No Next Action queue."""
     page, per_page, sort_by, sort_order = _parse_pagination_params()
-    rows, total = _queue_service.get_no_next_action(page, per_page, sort_by, sort_order)
+    rows, total = _queue_service.get_no_next_action(page, per_page, sort_by, sort_order, user_id=g.user_id)
     return jsonify({'rows': rows, 'total': total, 'page': page, 'per_page': per_page}), 200
 
 
 @queue_bp.route('/needs-review', methods=['GET'])
 @handle_errors
+@require_auth
 def get_needs_review():
     """GET /api/queues/needs-review — paginated Needs Review queue."""
     page, per_page, sort_by, sort_order = _parse_pagination_params()
-    rows, total = _queue_service.get_needs_review(page, per_page, sort_by, sort_order)
+    rows, total = _queue_service.get_needs_review(page, per_page, sort_by, sort_order, user_id=g.user_id)
     return jsonify({'rows': rows, 'total': total, 'page': page, 'per_page': per_page}), 200
 
 
 @queue_bp.route('/do-not-contact', methods=['GET'])
 @handle_errors
+@require_auth
 def get_do_not_contact():
     """GET /api/queues/do-not-contact — paginated Do Not Contact queue."""
     page, per_page, sort_by, sort_order = _parse_pagination_params()
-    rows, total = _queue_service.get_do_not_contact(page, per_page, sort_by, sort_order)
+    rows, total = _queue_service.get_do_not_contact(page, per_page, sort_by, sort_order, user_id=g.user_id)
     return jsonify({'rows': rows, 'total': total, 'page': page, 'per_page': per_page}), 200
 
 
 @queue_bp.route('/missing-property-match', methods=['GET'])
 @handle_errors
+@require_auth
 def get_missing_property_match():
     """GET /api/queues/missing-property-match — paginated Missing Property Match queue."""
     page, per_page, sort_by, sort_order = _parse_pagination_params()
-    rows, total = _queue_service.get_missing_property_match(page, per_page, sort_by, sort_order)
+    rows, total = _queue_service.get_missing_property_match(page, per_page, sort_by, sort_order, user_id=g.user_id)
     return jsonify({'rows': rows, 'total': total, 'page': page, 'per_page': per_page}), 200

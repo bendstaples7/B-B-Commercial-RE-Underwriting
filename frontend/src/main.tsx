@@ -5,6 +5,7 @@ import { ThemeProvider, createTheme } from '@mui/material/styles'
 import CssBaseline from '@mui/material/CssBaseline'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
+import { AuthProvider } from './context/AuthContext'
 import { NotificationProvider, globalNotify } from './context/NotificationContext'
 import { PipelineStatusProvider } from './context/PipelineStatusContext'
 
@@ -122,7 +123,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
               mutations can trigger it. It wires globalNotify on mount. */}
           <NotificationProvider>
             <PipelineStatusProvider>
-              <App />
+              <AuthProvider>
+                <App />
+              </AuthProvider>
             </PipelineStatusProvider>
           </NotificationProvider>
         </BrowserRouter>

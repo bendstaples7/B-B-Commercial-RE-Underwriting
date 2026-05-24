@@ -2,7 +2,7 @@
 from flask import jsonify
 from werkzeug.exceptions import HTTPException
 import logging
-from app.exceptions import RealEstateAnalysisException
+from app.exceptions import RealEstateAnalysisException, AuthError
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,30 @@ def format_error_response(error, status_code=500, **kwargs):
         response['error'].update(kwargs)
     
     return response, status_code
+
+
+def handle_auth_error(error: AuthError):
+    """
+    Handle AuthError exceptions — always returns HTTP 401.
+
+    Args:
+        error: AuthError instance
+
+    Returns:
+        Flask JSON response with status 401
+    """
+    logger.warning(f"AuthError: {error.message}")
+
+    response = {
+        'success': False,
+        'error': {
+            'message': error.message,
+            'status_code': 401,
+            **error.payload,
+        }
+    }
+
+    return jsonify(response), 401
 
 
 def handle_real_estate_exception(error: RealEstateAnalysisException):
@@ -142,6 +166,7 @@ def register_error_handlers(app):
         app: Flask application instance
     """
     # Handle custom exceptions
+    app.register_error_handler(AuthError, handle_auth_error)
     app.register_error_handler(RealEstateAnalysisException, handle_real_estate_exception)
     
     # Handle HTTP exceptions

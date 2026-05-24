@@ -130,6 +130,16 @@ class Property(db.Model):
     review_reason = db.Column(db.String(255), nullable=True)
     review_triggered_at = db.Column(db.DateTime, nullable=True)
 
+    # Lead ownership — set by the migration (task 5.1) and enforced by the
+    # lead controller (task 6.1).  nullable=True here so that the SQLite
+    # in-memory test DB (created via db.create_all()) can hold pre-migration
+    # rows without an owner; the migration logic then assigns all NULL rows
+    # to Ben and adds the NOT NULL constraint on PostgreSQL.
+    owner_user_id = db.Column(db.String(36), db.ForeignKey('users.user_id'), nullable=True, index=True)
+
+    # Ownership — set to the user_id of the authenticated user who created/imported this lead
+    owner_user_id = db.Column(db.String(36), db.ForeignKey('users.user_id'), nullable=True, index=True)
+
     # Metadata
     data_source = db.Column(db.String(100), nullable=True)
     last_import_job_id = db.Column(db.Integer, db.ForeignKey('import_jobs.id'), nullable=True)

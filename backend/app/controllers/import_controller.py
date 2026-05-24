@@ -7,11 +7,11 @@ import logging
 from datetime import datetime
 from functools import wraps
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 from marshmallow import ValidationError
 
 from app import db, limiter
-from app.api_utils import get_current_user_id
+from app.api_utils import get_current_user_id, require_auth
 from app.models import ImportJob, FieldMapping, OAuthToken
 from app.services.google_sheets_importer import GoogleSheetsImporter
 
@@ -313,12 +313,12 @@ def read_headers():
 @import_bp.route('/mapping', methods=['POST'])
 @limiter.limit("20 per minute")
 @handle_errors
+@require_auth
 def save_mapping():
     """Save or update a field mapping for a spreadsheet/sheet combination.
 
     Request body
     ------------
-    user_id : str (required)
     spreadsheet_id : str (required)
     sheet_name : str (required)
     mapping : dict (required)
@@ -335,15 +335,13 @@ def save_mapping():
             'message': 'Request body is required',
         }), 400
 
-    user_id = get_current_user_id()
+    user_id = g.user_id
     spreadsheet_id = data.get('spreadsheet_id')
     sheet_name = data.get('sheet_name')
     mapping = data.get('mapping')
 
     # Validate required fields
     missing = []
-    if not user_id or user_id == 'anonymous':
-        missing.append('user_id')
     if not spreadsheet_id:
         missing.append('spreadsheet_id')
     if not sheet_name:
@@ -405,12 +403,12 @@ def save_mapping():
 @import_bp.route('/start', methods=['POST'])
 @limiter.limit("5 per minute")
 @handle_errors
+@require_auth
 def start_import():
     """Create an ImportJob and enqueue the Celery import task.
 
     Request body
     ------------
-    user_id : str (required)
     spreadsheet_id : str (required)
     sheet_name : str (required)
     field_mapping_id : int (optional — if omitted, looks up saved mapping)
@@ -427,13 +425,11 @@ def start_import():
             'message': 'Request body is required',
         }), 400
 
-    user_id = get_current_user_id()
+    user_id = g.user_id
     spreadsheet_id = data.get('spreadsheet_id')
     sheet_name = data.get('sheet_name')
 
     missing = []
-    if not user_id or user_id == 'anonymous':
-        missing.append('user_id')
     if not spreadsheet_id:
         missing.append('spreadsheet_id')
     if not sheet_name:
@@ -524,12 +520,12 @@ def start_import():
 @import_bp.route('/jobs', methods=['GET'])
 @limiter.limit("30 per minute")
 @handle_errors
+@require_auth
 def list_import_jobs():
-    """List import jobs with optional filtering.
+    """List import jobs for the authenticated user.
 
     Query parameters
     ----------------
-    user_id : str (optional — filter by user)
     status : str (optional — filter by status)
     page : int (default 1)
     per_page : int (default 20, max 100)
@@ -543,10 +539,7 @@ def list_import_jobs():
     per_page = max(1, min(int(args.get('per_page', 20)), 100))
 
     query = ImportJob.query
-
-    user_id = args.get('user_id')
-    if user_id:
-        query = query.filter(ImportJob.user_id == user_id)
+    query = query.filter(ImportJob.user_id == g.user_id)
 
     status = args.get('status')
     if status:
@@ -567,16 +560,23 @@ def list_import_jobs():
 @import_bp.route('/jobs/<int:job_id>', methods=['GET'])
 @limiter.limit("30 per minute")
 @handle_errors
+@require_auth
 def get_import_job(job_id):
     """Get import job status and progress.
 
     Returns
     -------
     200 with full import job details including error log.
-    404 if job not found.
+    404 if job not found or belongs to a different user.
     """
     job = db.session.get(ImportJob, job_id)
     if not job:
+        return jsonify({
+            'error': 'Import job not found',
+            'message': f'Import job {job_id} does not exist',
+        }), 404
+
+    if job.user_id != g.user_id:
         return jsonify({
             'error': 'Import job not found',
             'message': f'Import job {job_id} does not exist',
@@ -588,6 +588,7 @@ def get_import_job(job_id):
 @import_bp.route('/jobs/<int:job_id>/rerun', methods=['POST'])
 @limiter.limit("5 per minute")
 @handle_errors
+@require_auth
 def rerun_import(job_id):
     """Re-run a previous import using the same spreadsheet and field mapping.
 
@@ -597,11 +598,17 @@ def rerun_import(job_id):
     Returns
     -------
     201 with the new ImportJob details.
-    404 if original job not found.
+    404 if original job not found or belongs to a different user.
     409 if an import is already in progress for the same spreadsheet.
     """
     original_job = db.session.get(ImportJob, job_id)
     if not original_job:
+        return jsonify({
+            'error': 'Import job not found',
+            'message': f'Import job {job_id} does not exist',
+        }), 404
+
+    if original_job.user_id != g.user_id:
         return jsonify({
             'error': 'Import job not found',
             'message': f'Import job {job_id} does not exist',

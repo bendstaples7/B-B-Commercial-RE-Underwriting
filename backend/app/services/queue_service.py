@@ -77,27 +77,27 @@ class QueueService:
     # Badge counts
     # ------------------------------------------------------------------
 
-    def get_counts(self) -> dict[str, int]:
+    def get_counts(self, user_id: str | None = None) -> dict[str, int]:
         """Return badge counts for all 7 queues as a single dict."""
         today = date.today()
         ninety_days_ago = datetime.now(timezone.utc) - timedelta(days=90)
         seven_days_ago = today - timedelta(days=7)
 
         return {
-            "todays_action": self._count_todays_action(today),
-            "previously_warm": self._count_previously_warm(ninety_days_ago),
-            "follow_up_overdue": self._count_follow_up_overdue(today, seven_days_ago),
-            "no_next_action": self._count_no_next_action(),
-            "needs_review": self._count_needs_review(),
-            "do_not_contact": self._count_do_not_contact(),
-            "missing_property_match": self._count_missing_property_match(),
+            "todays_action": self._count_todays_action(today, user_id),
+            "previously_warm": self._count_previously_warm(ninety_days_ago, user_id),
+            "follow_up_overdue": self._count_follow_up_overdue(today, seven_days_ago, user_id),
+            "no_next_action": self._count_no_next_action(user_id),
+            "needs_review": self._count_needs_review(user_id),
+            "do_not_contact": self._count_do_not_contact(user_id),
+            "missing_property_match": self._count_missing_property_match(user_id),
         }
 
     # ------------------------------------------------------------------
     # Private count helpers
     # ------------------------------------------------------------------
 
-    def _count_todays_action(self, today: date) -> int:
+    def _count_todays_action(self, today: date, user_id: str | None = None) -> int:
         """Today's Action: any lead that needs attention today.
 
         Matches leads where ANY of the following is true:
@@ -117,6 +117,7 @@ class QueueService:
         return (
             db.session.query(Lead)
             .filter(
+                *(([Lead.owner_user_id == user_id]) if user_id else []),
                 or_(
                     # CRM-native path: requires active/follow_up status
                     and_(
@@ -133,20 +134,21 @@ class QueueService:
             .count()
         )
 
-    def _count_previously_warm(self, ninety_days_ago: datetime) -> int:
+    def _count_previously_warm(self, ninety_days_ago: datetime, user_id: str | None = None) -> int:
         """Previously Warm: leads with a PRIOR_WARM_CONVERSATION or APPOINTMENT_OCCURRED signal."""
         subq = (
             select(Lead.id)
             .join(HubSpotSignal, HubSpotSignal.lead_id == Lead.id)
             .filter(
-                HubSpotSignal.signal_type.in_(["PRIOR_WARM_CONVERSATION", "APPOINTMENT_OCCURRED"])
+                HubSpotSignal.signal_type.in_(["PRIOR_WARM_CONVERSATION", "APPOINTMENT_OCCURRED"]),
+                *([Lead.owner_user_id == user_id] if user_id else []),
             )
             .distinct()
             .subquery()
         )
         return db.session.query(func.count()).select_from(subq).scalar()
 
-    def _count_follow_up_overdue(self, today: date, seven_days_ago: date) -> int:
+    def _count_follow_up_overdue(self, today: date, seven_days_ago: date, user_id: str | None = None) -> int:
         """Follow-Up Overdue: any lead with an overdue follow-up.
 
         Matches leads where ANY of the following is true:
@@ -167,6 +169,7 @@ class QueueService:
         return (
             db.session.query(Lead)
             .filter(
+                *(([Lead.owner_user_id == user_id]) if user_id else []),
                 or_(
                     open_lead_task_overdue,
                     and_(
@@ -179,7 +182,7 @@ class QueueService:
             .count()
         )
 
-    def _count_no_next_action(self) -> int:
+    def _count_no_next_action(self, user_id: str | None = None) -> int:
         """No Next Action: lead_status in (active, new) AND
         recommended_action in (null, 'create_task') AND no open tasks.
         """
@@ -207,6 +210,7 @@ class QueueService:
         return (
             db.session.query(Lead)
             .filter(
+                *(([Lead.owner_user_id == user_id]) if user_id else []),
                 Lead.lead_status.in_(['active', 'new']),
                 or_(
                     Lead.recommended_action.is_(None),
@@ -219,15 +223,21 @@ class QueueService:
             .count()
         )
 
-    def _count_needs_review(self) -> int:
+    def _count_needs_review(self, user_id: str | None = None) -> int:
         """Needs Review: review_required = true."""
-        return db.session.query(Lead).filter(Lead.review_required.is_(True)).count()
+        q = db.session.query(Lead).filter(Lead.review_required.is_(True))
+        if user_id:
+            q = q.filter(Lead.owner_user_id == user_id)
+        return q.count()
 
-    def _count_do_not_contact(self) -> int:
+    def _count_do_not_contact(self, user_id: str | None = None) -> int:
         """Do Not Contact: lead_status = 'do_not_contact'."""
-        return db.session.query(Lead).filter(Lead.lead_status == 'do_not_contact').count()
+        q = db.session.query(Lead).filter(Lead.lead_status == 'do_not_contact')
+        if user_id:
+            q = q.filter(Lead.owner_user_id == user_id)
+        return q.count()
 
-    def _count_missing_property_match(self) -> int:
+    def _count_missing_property_match(self, user_id: str | None = None) -> int:
         """Missing Property Match: has_property_match = false AND no research task open."""
         has_research_task = exists().where(
             and_(
@@ -239,6 +249,7 @@ class QueueService:
         return (
             db.session.query(Lead)
             .filter(
+                *(([Lead.owner_user_id == user_id]) if user_id else []),
                 Lead.has_property_match.is_(False),
                 ~has_research_task,
             )
@@ -255,6 +266,7 @@ class QueueService:
         per_page: int = 20,
         sort_by: str = 'lead_score',
         sort_order: str = 'desc',
+        user_id: str | None = None,
     ) -> tuple[list[dict], int]:
         """Today's Action — see _count_todays_action for criteria."""
         today = date.today()
@@ -268,6 +280,7 @@ class QueueService:
         hubspot_task_due_today = _hubspot_task_overdue_subquery(today)
 
         query = db.session.query(Lead).filter(
+            *(([Lead.owner_user_id == user_id]) if user_id else []),
             or_(
                 and_(
                     Lead.lead_status.in_(['active', 'follow_up']),
@@ -291,13 +304,15 @@ class QueueService:
         per_page: int = 20,
         sort_by: str = 'lead_score',
         sort_order: str = 'desc',
+        user_id: str | None = None,
     ) -> tuple[list[dict], int]:
         """Previously Warm: leads with warm HubSpot signals."""
         warm_lead_ids = (
             select(Lead.id)
             .join(HubSpotSignal, HubSpotSignal.lead_id == Lead.id)
             .filter(
-                HubSpotSignal.signal_type.in_(['PRIOR_WARM_CONVERSATION', 'APPOINTMENT_OCCURRED'])
+                HubSpotSignal.signal_type.in_(['PRIOR_WARM_CONVERSATION', 'APPOINTMENT_OCCURRED']),
+                *([Lead.owner_user_id == user_id] if user_id else []),
             )
             .distinct()
             .subquery()
@@ -315,6 +330,7 @@ class QueueService:
         per_page: int = 20,
         sort_by: str = 'last_contact_date',
         sort_order: str = 'asc',
+        user_id: str | None = None,
     ) -> tuple[list[dict], int]:
         """Follow-Up Overdue — see _count_follow_up_overdue for criteria."""
         today = date.today()
@@ -331,6 +347,7 @@ class QueueService:
         hubspot_task_overdue = _hubspot_task_overdue_subquery(yesterday)
 
         query = db.session.query(Lead).filter(
+            *(([Lead.owner_user_id == user_id]) if user_id else []),
             or_(
                 open_lead_task_overdue,
                 and_(
@@ -352,6 +369,7 @@ class QueueService:
         per_page: int = 20,
         sort_by: str = 'lead_score',
         sort_order: str = 'desc',
+        user_id: str | None = None,
     ) -> tuple[list[dict], int]:
         """No Next Action: active/new leads with no recommended action and no open tasks."""
         has_open_lead_task = exists().where(
@@ -375,6 +393,7 @@ class QueueService:
             )
         )
         query = db.session.query(Lead).filter(
+            *(([Lead.owner_user_id == user_id]) if user_id else []),
             Lead.lead_status.in_(['active', 'new']),
             or_(
                 Lead.recommended_action.is_(None),
@@ -400,9 +419,12 @@ class QueueService:
         per_page: int = 20,
         sort_by: str = 'review_triggered_at',
         sort_order: str = 'desc',
+        user_id: str | None = None,
     ) -> tuple[list[dict], int]:
         """Needs Review: review_required = true."""
         query = db.session.query(Lead).filter(Lead.review_required.is_(True))
+        if user_id:
+            query = query.filter(Lead.owner_user_id == user_id)
         total = query.count()
         sort_col = getattr(Lead, sort_by, Lead.review_triggered_at)
         query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
@@ -415,9 +437,12 @@ class QueueService:
         per_page: int = 20,
         sort_by: str = 'lead_score',
         sort_order: str = 'desc',
+        user_id: str | None = None,
     ) -> tuple[list[dict], int]:
         """Do Not Contact: lead_status = 'do_not_contact'."""
         query = db.session.query(Lead).filter(Lead.lead_status == 'do_not_contact')
+        if user_id:
+            query = query.filter(Lead.owner_user_id == user_id)
         total = query.count()
         sort_col = getattr(Lead, sort_by, Lead.lead_score)
         query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
@@ -430,6 +455,7 @@ class QueueService:
         per_page: int = 20,
         sort_by: str = 'lead_score',
         sort_order: str = 'desc',
+        user_id: str | None = None,
     ) -> tuple[list[dict], int]:
         """Missing Property Match: has_property_match = false, no research task open."""
         has_research_task = exists().where(
@@ -440,6 +466,7 @@ class QueueService:
             )
         )
         query = db.session.query(Lead).filter(
+            *(([Lead.owner_user_id == user_id]) if user_id else []),
             Lead.has_property_match.is_(False),
             ~has_research_task,
         )

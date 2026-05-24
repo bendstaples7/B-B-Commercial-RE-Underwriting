@@ -10,12 +10,12 @@ import uuid
 from datetime import datetime
 from functools import wraps
 
-from flask import Blueprint, jsonify, redirect, request, url_for
+from flask import Blueprint, g, jsonify, redirect, request, url_for
 from marshmallow import ValidationError
 from sqlalchemy import or_
 
 from app import db, limiter
-from app.api_utils import get_current_user_id
+from app.api_utils import get_current_user_id, require_auth
 from app.models import (
     AnalysisSession,
     Lead,
@@ -312,6 +312,7 @@ def _serialize_scoring_weights(weights):
 @properties_bp.route('/', methods=['GET'])
 @limiter.limit("30 per minute")
 @handle_errors
+@require_auth
 def list_properties():
     """List properties with pagination, filtering, and sorting.
 
@@ -333,7 +334,8 @@ def list_properties():
     args = request.args
     page, per_page = _parse_pagination(args)
 
-    query = Lead.query
+    # Ownership filter — only return leads owned by the authenticated user
+    query = Lead.query.filter(Lead.owner_user_id == g.user_id)
 
     # --- Filters ---
     lead_category = args.get('lead_category')
@@ -424,10 +426,18 @@ def list_properties():
 @properties_bp.route('/<int:lead_id>', methods=['GET'])
 @limiter.limit("30 per minute")
 @handle_errors
+@require_auth
 def get_property(lead_id):
     """Get full property detail including score, enrichment records, and analysis links."""
     lead = db.session.get(Lead, lead_id)
     if not lead:
+        return jsonify({
+            'error': 'Property not found',
+            'message': f'Property {lead_id} does not exist',
+        }), 404
+
+    # Ownership check — return 404 (not 403) to avoid revealing other users' leads
+    if lead.owner_user_id != g.user_id:
         return jsonify({
             'error': 'Property not found',
             'message': f'Property {lead_id} does not exist',
@@ -439,12 +449,9 @@ def get_property(lead_id):
 @properties_bp.route('/<int:lead_id>/analyze', methods=['POST'])
 @limiter.limit("10 per minute")
 @handle_errors
+@require_auth
 def analyze_property(lead_id):
     """Create an AnalysisSession pre-populated from property data.
-
-    Request body
-    ------------
-    user_id : str (required)
 
     Returns the new session details.
     """
@@ -455,13 +462,15 @@ def analyze_property(lead_id):
             'message': f'Property {lead_id} does not exist',
         }), 404
 
-    data = request.get_json() or {}
-    user_id = get_current_user_id()
-    if not user_id or user_id == 'anonymous':
+    # Ownership check — return 404 (not 403) to avoid revealing other users' leads
+    if lead.owner_user_id != g.user_id:
         return jsonify({
-            'error': 'Validation error',
-            'message': 'user_id is required',
-        }), 400
+            'error': 'Property not found',
+            'message': f'Property {lead_id} does not exist',
+        }), 404
+
+    data = request.get_json() or {}
+    user_id = g.user_id
     session_id = str(uuid.uuid4())
     session = AnalysisSession(
         session_id=session_id,
@@ -758,9 +767,10 @@ def view_missing_property_match():
 @properties_bp.route('/scoring/weights', methods=['GET'])
 @limiter.limit("30 per minute")
 @handle_errors
+@require_auth
 def get_scoring_weights():
     """Get current scoring weights for a user."""
-    user_id = request.args.get('user_id', 'default')
+    user_id = g.user_id
     weights = scoring_engine.get_weights(user_id)
     return jsonify(_serialize_scoring_weights(weights)), 200
 
@@ -768,6 +778,7 @@ def get_scoring_weights():
 @properties_bp.route('/scoring/weights', methods=['PUT'])
 @limiter.limit("10 per minute")
 @handle_errors
+@require_auth
 def update_scoring_weights():
     """Update scoring weights and trigger bulk rescore."""
     data = request.get_json(silent=True)
@@ -777,12 +788,7 @@ def update_scoring_weights():
             'message': 'Request body is required',
         }), 400
 
-    user_id = get_current_user_id()
-    if not user_id or user_id == 'anonymous':
-        return jsonify({
-            'error': 'Validation error',
-            'message': 'user_id is required',
-        }), 400
+    user_id = g.user_id
 
     required_weight_fields = [
         'property_characteristics_weight',

@@ -1810,3 +1810,63 @@ export interface WebhookLogListResponse {
   per_page: number
   pages: number
 }
+
+// ---------------------------------------------------------------------------
+// Authentication Types (multi-user-lead-exclusivity)
+// ---------------------------------------------------------------------------
+
+export interface AuthUser {
+  user_id: string
+  email: string
+  display_name: string
+  is_admin: boolean
+}
+
+export interface AuthContextValue {
+  user: AuthUser | null       // null = unauthenticated
+  token: string | null
+  login: (email: string, password: string) => Promise<void>
+  logout: () => void
+  isLoading: boolean          // true during initial token validation on load
+}
+
+// ---------------------------------------------------------------------------
+// Admin Panel Types
+// ---------------------------------------------------------------------------
+
+export interface AdminUserSummary {
+  user_id: string
+  email: string
+  display_name: string
+  is_active: boolean
+  is_admin: boolean
+  created_at: string
+  lead_count: number
+  marketing_list_count: number
+  import_job_count: number
+}
+
+export interface AdminLead {
+  id: number
+  owner_user_id: string
+  owner_display_name: string
+  property_street: string | null
+  property_city: string | null
+  property_state: string | null
+  lead_status: string
+  lead_score: number
+  created_at: string
+}
+
+export interface AdminLeadParams {
+  owner_user_id?: string
+  page?: number
+  page_size?: number
+}
+
+export interface AdminLeadListResponse {
+  leads: AdminLead[]
+  total_count: number
+  page: number
+  page_size: number
+}

@@ -8,6 +8,16 @@ from app import db
 from app.models import ImportJob, FieldMapping, OAuthToken, Lead
 from app.services.google_sheets_importer import AuthResult, SheetInfo
 
+# ---------------------------------------------------------------------------
+# Test user identity — uses X-User-Id legacy fallback in require_auth
+# ---------------------------------------------------------------------------
+
+TEST_USER_ID = 'import-test-user-001'
+OTHER_USER_ID = 'import-other-user-002'
+
+AUTH_HEADERS = {'X-User-Id': TEST_USER_ID}
+OTHER_AUTH_HEADERS = {'X-User-Id': OTHER_USER_ID}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -209,7 +219,6 @@ class TestSaveMapping:
     def test_save_mapping_create(self, client, app):
         """Creates a new field mapping and returns 201."""
         payload = {
-            'user_id': 'user1',
             'spreadsheet_id': 'sheet123',
             'sheet_name': 'Sheet1',
             'mapping': {'Address': 'property_street', 'First Name': 'owner_first_name', 'Last Name': 'owner_last_name'},
@@ -218,19 +227,19 @@ class TestSaveMapping:
             '/api/leads/import/mapping',
             data=json.dumps(payload),
             content_type='application/json',
+            headers=AUTH_HEADERS,
         )
         assert resp.status_code == 201
         data = json.loads(resp.data)
-        assert data['user_id'] == 'user1'
+        assert data['user_id'] == TEST_USER_ID
         assert data['mapping']['Address'] == 'property_street'
 
     def test_save_mapping_update(self, client, app):
         """Updates an existing field mapping and returns 200."""
         with app.app_context():
-            _create_field_mapping('user1', 'sheet123', 'Sheet1')
+            _create_field_mapping(TEST_USER_ID, 'sheet123', 'Sheet1')
 
         payload = {
-            'user_id': 'user1',
             'spreadsheet_id': 'sheet123',
             'sheet_name': 'Sheet1',
             'mapping': {
@@ -244,6 +253,7 @@ class TestSaveMapping:
             '/api/leads/import/mapping',
             data=json.dumps(payload),
             content_type='application/json',
+            headers=AUTH_HEADERS,
         )
         assert resp.status_code == 200
         data = json.loads(resp.data)
@@ -251,18 +261,18 @@ class TestSaveMapping:
 
     def test_save_mapping_missing_required_fields(self, client, app):
         """Returns 400 when required request fields are missing."""
-        payload = {'user_id': 'user1'}
+        payload = {}
         resp = client.post(
             '/api/leads/import/mapping',
             data=json.dumps(payload),
             content_type='application/json',
+            headers=AUTH_HEADERS,
         )
         assert resp.status_code == 400
 
     def test_save_mapping_no_required_db_fields(self, client, app):
         """Returns 201 when mapping has no required DB fields (none are required now)."""
         payload = {
-            'user_id': 'user1',
             'spreadsheet_id': 'sheet123',
             'sheet_name': 'Sheet1',
             'mapping': {'Phone': 'phone_1'},
@@ -271,13 +281,13 @@ class TestSaveMapping:
             '/api/leads/import/mapping',
             data=json.dumps(payload),
             content_type='application/json',
+            headers=AUTH_HEADERS,
         )
         assert resp.status_code == 201
 
     def test_save_mapping_invalid_mapping_type(self, client, app):
         """Returns 400 when mapping is not a dict."""
         payload = {
-            'user_id': 'user1',
             'spreadsheet_id': 'sheet123',
             'sheet_name': 'Sheet1',
             'mapping': 'not a dict',
@@ -286,6 +296,7 @@ class TestSaveMapping:
             '/api/leads/import/mapping',
             data=json.dumps(payload),
             content_type='application/json',
+            headers=AUTH_HEADERS,
         )
         assert resp.status_code == 400
 
@@ -294,8 +305,23 @@ class TestSaveMapping:
         resp = client.post(
             '/api/leads/import/mapping',
             content_type='application/json',
+            headers=AUTH_HEADERS,
         )
         assert resp.status_code == 400
+
+    def test_save_mapping_no_auth(self, client, app):
+        """Returns 401 when no auth header is provided."""
+        payload = {
+            'spreadsheet_id': 'sheet123',
+            'sheet_name': 'Sheet1',
+            'mapping': {'Address': 'property_street'},
+        }
+        resp = client.post(
+            '/api/leads/import/mapping',
+            data=json.dumps(payload),
+            content_type='application/json',
+        )
+        assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -309,11 +335,10 @@ class TestStartImport:
     def test_start_import_success(self, mock_enqueue, client, app):
         """Creates an ImportJob and returns 201."""
         with app.app_context():
-            _create_oauth_token('user1')
-            fm = _create_field_mapping('user1', 'sheet123', 'Sheet1')
+            _create_oauth_token(TEST_USER_ID)
+            fm = _create_field_mapping(TEST_USER_ID, 'sheet123', 'Sheet1')
 
         payload = {
-            'user_id': 'user1',
             'spreadsheet_id': 'sheet123',
             'sheet_name': 'Sheet1',
         }
@@ -321,31 +346,114 @@ class TestStartImport:
             '/api/leads/import/start',
             data=json.dumps(payload),
             content_type='application/json',
+            headers=AUTH_HEADERS,
         )
         assert resp.status_code == 201
         data = json.loads(resp.data)
-        assert data['user_id'] == 'user1'
+        assert data['user_id'] == TEST_USER_ID
         assert data['spreadsheet_id'] == 'sheet123'
         assert 'id' in data
         mock_enqueue.assert_called_once()
 
     def test_start_import_missing_fields(self, client, app):
         """Returns 400 when required fields are missing."""
-        payload = {'user_id': 'user1'}
+        payload = {}
         resp = client.post(
             '/api/leads/import/start',
             data=json.dumps(payload),
             content_type='application/json',
+            headers=AUTH_HEADERS,
         )
         assert resp.status_code == 400
 
     def test_start_import_no_token(self, client, app):
         """Returns 401 when no OAuth token exists."""
         with app.app_context():
-            _create_field_mapping('user1', 'sheet123', 'Sheet1')
+            _create_field_mapping(TEST_USER_ID, 'sheet123', 'Sheet1')
 
         payload = {
-            'user_id': 'user1',
+            'spreadsheet_id': 'sheet123',
+            'sheet_name': 'Sheet1',
+        }
+        resp = client.post(
+            '/api/leads/import/start',
+            data=json.dumps(payload),
+            content_type='application/json',
+            headers=AUTH_HEADERS,
+        )
+        assert resp.status_code == 401
+
+    def test_start_import_no_mapping(self, client, app):
+        """Returns 400 when no field mapping exists."""
+        with app.app_context():
+            _create_oauth_token(TEST_USER_ID)
+
+        payload = {
+            'spreadsheet_id': 'sheet123',
+            'sheet_name': 'Sheet1',
+        }
+        resp = client.post(
+            '/api/leads/import/start',
+            data=json.dumps(payload),
+            content_type='application/json',
+            headers=AUTH_HEADERS,
+        )
+        assert resp.status_code == 400
+
+    @patch('app.controllers.import_controller._enqueue_import_task')
+    def test_start_import_conflict(self, mock_enqueue, client, app):
+        """Returns 409 when an import is already in progress."""
+        with app.app_context():
+            _create_oauth_token(TEST_USER_ID)
+            fm = _create_field_mapping(TEST_USER_ID, 'sheet123', 'Sheet1')
+            _create_import_job(
+                TEST_USER_ID, 'sheet123', 'Sheet1',
+                status='in_progress',
+                field_mapping_id=fm.id,
+            )
+
+        payload = {
+            'spreadsheet_id': 'sheet123',
+            'sheet_name': 'Sheet1',
+        }
+        resp = client.post(
+            '/api/leads/import/start',
+            data=json.dumps(payload),
+            content_type='application/json',
+            headers=AUTH_HEADERS,
+        )
+        assert resp.status_code == 409
+
+    def test_start_import_no_body(self, client, app):
+        """Returns 400 when request body is empty."""
+        resp = client.post(
+            '/api/leads/import/start',
+            content_type='application/json',
+            headers=AUTH_HEADERS,
+        )
+        assert resp.status_code == 400
+
+    def test_start_import_invalid_mapping_id(self, client, app):
+        """Returns 404 when field_mapping_id doesn't exist."""
+        with app.app_context():
+            _create_oauth_token(TEST_USER_ID)
+
+        payload = {
+            'spreadsheet_id': 'sheet123',
+            'sheet_name': 'Sheet1',
+            'field_mapping_id': 99999,
+        }
+        resp = client.post(
+            '/api/leads/import/start',
+            data=json.dumps(payload),
+            content_type='application/json',
+            headers=AUTH_HEADERS,
+        )
+        assert resp.status_code == 404
+
+    def test_start_import_no_auth(self, client, app):
+        """Returns 401 when no auth header is provided."""
+        payload = {
             'spreadsheet_id': 'sheet123',
             'sheet_name': 'Sheet1',
         }
@@ -355,73 +463,6 @@ class TestStartImport:
             content_type='application/json',
         )
         assert resp.status_code == 401
-
-    def test_start_import_no_mapping(self, client, app):
-        """Returns 400 when no field mapping exists."""
-        with app.app_context():
-            _create_oauth_token('user1')
-
-        payload = {
-            'user_id': 'user1',
-            'spreadsheet_id': 'sheet123',
-            'sheet_name': 'Sheet1',
-        }
-        resp = client.post(
-            '/api/leads/import/start',
-            data=json.dumps(payload),
-            content_type='application/json',
-        )
-        assert resp.status_code == 400
-
-    @patch('app.controllers.import_controller._enqueue_import_task')
-    def test_start_import_conflict(self, mock_enqueue, client, app):
-        """Returns 409 when an import is already in progress."""
-        with app.app_context():
-            _create_oauth_token('user1')
-            fm = _create_field_mapping('user1', 'sheet123', 'Sheet1')
-            _create_import_job(
-                'user1', 'sheet123', 'Sheet1',
-                status='in_progress',
-                field_mapping_id=fm.id,
-            )
-
-        payload = {
-            'user_id': 'user1',
-            'spreadsheet_id': 'sheet123',
-            'sheet_name': 'Sheet1',
-        }
-        resp = client.post(
-            '/api/leads/import/start',
-            data=json.dumps(payload),
-            content_type='application/json',
-        )
-        assert resp.status_code == 409
-
-    def test_start_import_no_body(self, client, app):
-        """Returns 400 when request body is empty."""
-        resp = client.post(
-            '/api/leads/import/start',
-            content_type='application/json',
-        )
-        assert resp.status_code == 400
-
-    def test_start_import_invalid_mapping_id(self, client, app):
-        """Returns 404 when field_mapping_id doesn't exist."""
-        with app.app_context():
-            _create_oauth_token('user1')
-
-        payload = {
-            'user_id': 'user1',
-            'spreadsheet_id': 'sheet123',
-            'sheet_name': 'Sheet1',
-            'field_mapping_id': 99999,
-        }
-        resp = client.post(
-            '/api/leads/import/start',
-            data=json.dumps(payload),
-            content_type='application/json',
-        )
-        assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -433,41 +474,42 @@ class TestListImportJobs:
 
     def test_list_jobs_empty(self, client, app):
         """Empty database returns empty list."""
-        resp = client.get('/api/leads/import/jobs')
+        resp = client.get('/api/leads/import/jobs', headers=AUTH_HEADERS)
         assert resp.status_code == 200
         data = json.loads(resp.data)
         assert data['jobs'] == []
         assert data['total'] == 0
 
     def test_list_jobs_returns_jobs(self, client, app):
-        """Returns created import jobs."""
+        """Returns created import jobs for the authenticated user."""
         with app.app_context():
-            _create_import_job()
+            _create_import_job(user_id=TEST_USER_ID)
 
-        resp = client.get('/api/leads/import/jobs')
+        resp = client.get('/api/leads/import/jobs', headers=AUTH_HEADERS)
         assert resp.status_code == 200
         data = json.loads(resp.data)
         assert data['total'] == 1
         assert data['jobs'][0]['status'] == 'completed'
 
-    def test_list_jobs_filter_by_user(self, client, app):
-        """Filter by user_id."""
+    def test_list_jobs_isolation(self, client, app):
+        """Only returns jobs belonging to the authenticated user."""
         with app.app_context():
-            _create_import_job(user_id='user1', spreadsheet_id='s1')
-            _create_import_job(user_id='user2', spreadsheet_id='s2')
+            _create_import_job(user_id=TEST_USER_ID, spreadsheet_id='s1')
+            _create_import_job(user_id=OTHER_USER_ID, spreadsheet_id='s2')
 
-        resp = client.get('/api/leads/import/jobs?user_id=user1')
+        # Authenticated as TEST_USER_ID — should only see their own job
+        resp = client.get('/api/leads/import/jobs', headers=AUTH_HEADERS)
         data = json.loads(resp.data)
         assert data['total'] == 1
-        assert data['jobs'][0]['user_id'] == 'user1'
+        assert data['jobs'][0]['user_id'] == TEST_USER_ID
 
     def test_list_jobs_filter_by_status(self, client, app):
         """Filter by status."""
         with app.app_context():
-            _create_import_job(spreadsheet_id='s1', status='completed')
-            _create_import_job(spreadsheet_id='s2', status='failed')
+            _create_import_job(user_id=TEST_USER_ID, spreadsheet_id='s1', status='completed')
+            _create_import_job(user_id=TEST_USER_ID, spreadsheet_id='s2', status='failed')
 
-        resp = client.get('/api/leads/import/jobs?status=failed')
+        resp = client.get('/api/leads/import/jobs?status=failed', headers=AUTH_HEADERS)
         data = json.loads(resp.data)
         assert data['total'] == 1
         assert data['jobs'][0]['status'] == 'failed'
@@ -476,13 +518,18 @@ class TestListImportJobs:
         """Pagination works correctly."""
         with app.app_context():
             for i in range(15):
-                _create_import_job(spreadsheet_id=f's{i}')
+                _create_import_job(user_id=TEST_USER_ID, spreadsheet_id=f's{i}')
 
-        resp = client.get('/api/leads/import/jobs?page=1&per_page=10')
+        resp = client.get('/api/leads/import/jobs?page=1&per_page=10', headers=AUTH_HEADERS)
         data = json.loads(resp.data)
         assert len(data['jobs']) == 10
         assert data['total'] == 15
         assert data['pages'] == 2
+
+    def test_list_jobs_no_auth(self, client, app):
+        """Returns 401 when no auth header is provided."""
+        resp = client.get('/api/leads/import/jobs')
+        assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -493,14 +540,15 @@ class TestGetImportJob:
     """Tests for the import job detail endpoint."""
 
     def test_get_job_success(self, client, app):
-        """Returns full job details."""
+        """Returns full job details for the authenticated user's job."""
         with app.app_context():
             job = _create_import_job(
+                user_id=TEST_USER_ID,
                 error_log=[{'row': 3, 'errors': ['Missing required field: owner_name']}],
             )
             job_id = job.id
 
-        resp = client.get(f'/api/leads/import/jobs/{job_id}')
+        resp = client.get(f'/api/leads/import/jobs/{job_id}', headers=AUTH_HEADERS)
         assert resp.status_code == 200
         data = json.loads(resp.data)
         assert data['id'] == job_id
@@ -512,10 +560,25 @@ class TestGetImportJob:
 
     def test_get_job_not_found(self, client, app):
         """Returns 404 for non-existent job."""
-        resp = client.get('/api/leads/import/jobs/99999')
+        resp = client.get('/api/leads/import/jobs/99999', headers=AUTH_HEADERS)
         assert resp.status_code == 404
         data = json.loads(resp.data)
         assert data['error'] == 'Import job not found'
+
+    def test_get_job_cross_user_returns_404(self, client, app):
+        """Returns 404 when accessing another user's job."""
+        with app.app_context():
+            job = _create_import_job(user_id=OTHER_USER_ID)
+            job_id = job.id
+
+        # Authenticated as TEST_USER_ID but job belongs to OTHER_USER_ID
+        resp = client.get(f'/api/leads/import/jobs/{job_id}', headers=AUTH_HEADERS)
+        assert resp.status_code == 404
+
+    def test_get_job_no_auth(self, client, app):
+        """Returns 401 when no auth header is provided."""
+        resp = client.get('/api/leads/import/jobs/1')
+        assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -529,16 +592,19 @@ class TestRerunImport:
     def test_rerun_success(self, mock_enqueue, client, app):
         """Creates a new job from the original and returns 201."""
         with app.app_context():
-            _create_oauth_token('user1')
-            fm = _create_field_mapping('user1', 'sheet123', 'Sheet1')
+            _create_oauth_token(TEST_USER_ID)
+            fm = _create_field_mapping(TEST_USER_ID, 'sheet123', 'Sheet1')
             original = _create_import_job(
-                'user1', 'sheet123', 'Sheet1',
+                TEST_USER_ID, 'sheet123', 'Sheet1',
                 status='completed',
                 field_mapping_id=fm.id,
             )
             original_id = original.id
 
-        resp = client.post(f'/api/leads/import/jobs/{original_id}/rerun')
+        resp = client.post(
+            f'/api/leads/import/jobs/{original_id}/rerun',
+            headers=AUTH_HEADERS,
+        )
         assert resp.status_code == 201
         data = json.loads(resp.data)
         assert data['original_job_id'] == original_id
@@ -548,41 +614,74 @@ class TestRerunImport:
 
     def test_rerun_not_found(self, client, app):
         """Returns 404 for non-existent original job."""
-        resp = client.post('/api/leads/import/jobs/99999/rerun')
+        resp = client.post(
+            '/api/leads/import/jobs/99999/rerun',
+            headers=AUTH_HEADERS,
+        )
+        assert resp.status_code == 404
+
+    def test_rerun_cross_user_returns_404(self, client, app):
+        """Returns 404 when trying to rerun another user's job."""
+        with app.app_context():
+            _create_oauth_token(OTHER_USER_ID)
+            fm = _create_field_mapping(OTHER_USER_ID, 'sheet123', 'Sheet1')
+            original = _create_import_job(
+                OTHER_USER_ID, 'sheet123', 'Sheet1',
+                status='completed',
+                field_mapping_id=fm.id,
+            )
+            original_id = original.id
+
+        # Authenticated as TEST_USER_ID but job belongs to OTHER_USER_ID
+        resp = client.post(
+            f'/api/leads/import/jobs/{original_id}/rerun',
+            headers=AUTH_HEADERS,
+        )
         assert resp.status_code == 404
 
     @patch('app.controllers.import_controller._enqueue_import_task')
     def test_rerun_conflict(self, mock_enqueue, client, app):
         """Returns 409 when an import is already in progress."""
         with app.app_context():
-            _create_oauth_token('user1')
-            fm = _create_field_mapping('user1', 'sheet123', 'Sheet1')
+            _create_oauth_token(TEST_USER_ID)
+            fm = _create_field_mapping(TEST_USER_ID, 'sheet123', 'Sheet1')
             original = _create_import_job(
-                'user1', 'sheet123', 'Sheet1',
+                TEST_USER_ID, 'sheet123', 'Sheet1',
                 status='completed',
                 field_mapping_id=fm.id,
             )
             # Create an active job for the same spreadsheet
             _create_import_job(
-                'user1', 'sheet123', 'Sheet1',
+                TEST_USER_ID, 'sheet123', 'Sheet1',
                 status='in_progress',
                 field_mapping_id=fm.id,
             )
             original_id = original.id
 
-        resp = client.post(f'/api/leads/import/jobs/{original_id}/rerun')
+        resp = client.post(
+            f'/api/leads/import/jobs/{original_id}/rerun',
+            headers=AUTH_HEADERS,
+        )
         assert resp.status_code == 409
 
     def test_rerun_no_token(self, client, app):
         """Returns 401 when OAuth token is missing."""
         with app.app_context():
-            fm = _create_field_mapping('user1', 'sheet123', 'Sheet1')
+            fm = _create_field_mapping(TEST_USER_ID, 'sheet123', 'Sheet1')
             original = _create_import_job(
-                'user1', 'sheet123', 'Sheet1',
+                TEST_USER_ID, 'sheet123', 'Sheet1',
                 status='completed',
                 field_mapping_id=fm.id,
             )
             original_id = original.id
 
-        resp = client.post(f'/api/leads/import/jobs/{original_id}/rerun')
+        resp = client.post(
+            f'/api/leads/import/jobs/{original_id}/rerun',
+            headers=AUTH_HEADERS,
+        )
+        assert resp.status_code == 401
+
+    def test_rerun_no_auth(self, client, app):
+        """Returns 401 when no auth header is provided."""
+        resp = client.post('/api/leads/import/jobs/1/rerun')
         assert resp.status_code == 401

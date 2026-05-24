@@ -12,6 +12,7 @@ from functools import wraps
 from flask import Blueprint, jsonify, g, request
 from marshmallow import ValidationError
 
+from app.api_utils import require_auth
 from app.exceptions import RealEstateAnalysisException
 from app.models import Lead, LeadTask, LeadTimelineEntry
 from app.schemas import (
@@ -157,8 +158,19 @@ def _get_winning_rule_signals(lead) -> dict:
 # Routes
 # ---------------------------------------------------------------------------
 
+def _get_owned_lead(lead_id: int):
+    """Fetch a lead and verify it belongs to the authenticated user.
+    Returns (lead, None) on success or (None, error_response) on failure.
+    """
+    lead = Lead.query.get(lead_id)
+    if lead is None or lead.owner_user_id != g.user_id:
+        return None, (jsonify({'error': 'Not found', 'message': f'Lead {lead_id} not found'}), 404)
+    return lead, None
+
+
 @command_center_bp.route('/<int:lead_id>/recommended-action', methods=['GET'])
 @handle_errors
+@require_auth
 def get_recommended_action(lead_id: int):
     """
     GET /api/leads/<lead_id>/recommended-action
@@ -175,9 +187,9 @@ def get_recommended_action(lead_id: int):
         "signals": dict
     }
     """
-    lead = Lead.query.get(lead_id)
-    if lead is None:
-        return jsonify({'error': 'Not found', 'message': f'Lead {lead_id} not found'}), 404
+    lead, err = _get_owned_lead(lead_id)
+    if err:
+        return err
 
     ra = lead.recommended_action
     metadata = RECOMMENDED_ACTION_METADATA.get(ra, {}) if ra else {}
@@ -193,6 +205,7 @@ def get_recommended_action(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/command-center', methods=['GET'])
 @handle_errors
+@require_auth
 def get_command_center(lead_id: int):
     """
     GET /api/leads/<lead_id>/command-center
@@ -201,9 +214,9 @@ def get_command_center(lead_id: int):
     action, open tasks, and the first page of the timeline.
     Clears the review_required flag when the command center is opened.
     """
-    lead = Lead.query.get(lead_id)
-    if lead is None:
-        return jsonify({'error': 'Not found', 'message': f'Lead {lead_id} not found'}), 404
+    lead, err = _get_owned_lead(lead_id)
+    if err:
+        return err
 
     # Clear review_required flag when command center is opened
     if lead.review_required:
@@ -550,6 +563,7 @@ def get_command_center(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/status', methods=['PATCH'])
 @handle_errors
+@require_auth
 def update_status(lead_id: int):
     """
     PATCH /api/leads/<lead_id>/status
@@ -609,6 +623,7 @@ def update_status(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/tasks', methods=['POST'])
 @handle_errors
+@require_auth
 def create_task(lead_id: int):
     """
     POST /api/leads/<lead_id>/tasks
@@ -631,6 +646,7 @@ def create_task(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/tasks/<int:task_id>', methods=['PATCH'])
 @handle_errors
+@require_auth
 def update_task(lead_id: int, task_id: int):
     """
     PATCH /api/leads/<lead_id>/tasks/<task_id>
@@ -664,6 +680,7 @@ def update_task(lead_id: int, task_id: int):
 
 @command_center_bp.route('/<int:lead_id>/tasks/<int:task_id>/complete', methods=['POST'])
 @handle_errors
+@require_auth
 def complete_task(lead_id: int, task_id: int):
     """
     POST /api/leads/<lead_id>/tasks/<task_id>/complete
@@ -681,6 +698,7 @@ def complete_task(lead_id: int, task_id: int):
 
 @command_center_bp.route('/<int:lead_id>/timeline', methods=['GET'])
 @handle_errors
+@require_auth
 def get_timeline(lead_id: int):
     """
     GET /api/leads/<lead_id>/timeline
@@ -723,6 +741,7 @@ def get_timeline(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/notes', methods=['POST'])
 @handle_errors
+@require_auth
 def log_note(lead_id: int):
     """
     POST /api/leads/<lead_id>/notes
@@ -741,6 +760,7 @@ def log_note(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/calls', methods=['POST'])
 @handle_errors
+@require_auth
 def log_call(lead_id: int):
     """
     POST /api/leads/<lead_id>/calls
@@ -765,6 +785,7 @@ def log_call(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/do-not-contact', methods=['POST'])
 @handle_errors
+@require_auth
 def do_not_contact(lead_id: int):
     """
     POST /api/leads/<lead_id>/do-not-contact
@@ -803,6 +824,7 @@ def do_not_contact(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/park', methods=['POST'])
 @handle_errors
+@require_auth
 def park_lead(lead_id: int):
     """
     POST /api/leads/<lead_id>/park
@@ -865,6 +887,7 @@ def park_lead(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/reactivate', methods=['POST'])
 @handle_errors
+@require_auth
 def reactivate_lead(lead_id: int):
     """
     POST /api/leads/<lead_id>/reactivate
@@ -910,6 +933,7 @@ def reactivate_lead(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/suppress', methods=['POST'])
 @handle_errors
+@require_auth
 def suppress_lead(lead_id: int):
     """
     POST /api/leads/<lead_id>/suppress
@@ -947,6 +971,7 @@ def suppress_lead(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/hubspot-tasks/<int:task_id>/done', methods=['POST'])
 @handle_errors
+@require_auth
 def mark_hubspot_task_done(lead_id: int, task_id: int):
     """
     POST /api/leads/<lead_id>/hubspot-tasks/<task_id>/done
