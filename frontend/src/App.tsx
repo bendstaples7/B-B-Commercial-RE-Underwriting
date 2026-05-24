@@ -1,5 +1,7 @@
 import { createContext, useContext, useState, Component } from 'react'
 import { Routes, Route, Link, Navigate, useNavigate, useParams, useLocation } from 'react-router-dom'
+import { useAuth } from './context/AuthContext'
+import { LoginPage } from './pages/LoginPage'
 import { useLoadScript } from '@react-google-maps/api'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -22,7 +24,8 @@ import {
   Chip,
   useMediaQuery,
   useTheme,
-  Dialog,
+  Menu,
+  MenuItem,
   Alert,
   AlertTitle,
   Stepper,
@@ -39,6 +42,7 @@ import {
   AccordionSummary,
   AccordionDetails,
 } from '@mui/material'
+import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import DownloadIcon from '@mui/icons-material/Download'
@@ -87,6 +91,8 @@ import { NeedsReviewQueue } from './components/NeedsReviewQueue'
 import { DoNotContactQueue } from './components/DoNotContactQueue'
 import { MissingPropertyMatchQueue } from './components/MissingPropertyMatchQueue'
 import { LeadCommandCenter } from './components/LeadCommandCenter'
+import { AdminPanel } from './components/AdminPanel'
+import AdminUserDetail from './components/AdminUserDetail'
 import type { QueueCounts } from './types'
 
 const DRAWER_WIDTH = 240
@@ -1170,6 +1176,43 @@ function AnalysisRoute() {
 }
 
 // ---------------------------------------------------------------------------
+// AuthGuard — redirects unauthenticated users to /login
+// ---------------------------------------------------------------------------
+
+/**
+ * Wraps protected routes. While the auth state is loading (initial token
+ * validation on mount), shows a full-screen spinner. Once resolved:
+ *   - Authenticated: renders children
+ *   - Unauthenticated: redirects to /login, preserving the current location
+ *     in `state.from` so LoginPage can redirect back after a successful login.
+ */
+function AuthGuard({ children }: { children: React.ReactNode }) {
+  const { user, isLoading } = useAuth()
+  const location = useLocation()
+
+  if (isLoading) {
+    return (
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: '100vh',
+        }}
+      >
+        <CircularProgress aria-label="Checking authentication" />
+      </Box>
+    )
+  }
+
+  if (!user) {
+    return <Navigate to="/login" state={{ from: location }} replace />
+  }
+
+  return <>{children}</>
+}
+
+// ---------------------------------------------------------------------------
 // Main App
 // ---------------------------------------------------------------------------
 
@@ -1179,6 +1222,9 @@ function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [avatarOpen, setAvatarOpen] = useState(false)
   const pipelineStatus = usePipelineStatus()
+  const { user, isLoading: authLoading, logout } = useAuth()
+  const location = useLocation()
+  const navigate = useNavigate()
 
   // useLoadScript manages the script tag lifecycle and exposes isLoaded so
   // child components (PropertyFactsForm) know when the Places API is ready.
@@ -1193,8 +1239,6 @@ function App() {
   })
 
   const toggleDrawer = () => setDrawerOpen((prev) => !prev)
-
-  const location = useLocation()
 
   // Live badge counts for Work Queue nav items — polled every 60s
   const { data: queueCounts } = useQuery<QueueCounts>({
@@ -1302,8 +1346,46 @@ function App() {
           </Box>
         ))}
       </List>
+      {user?.is_admin && (
+        <List disablePadding>
+          <ListItemButton
+            component={Link}
+            to="/admin"
+            onClick={() => isMobile && setDrawerOpen(false)}
+            selected={location.pathname.startsWith('/admin')}
+            sx={{
+              py: 1.5,
+              borderLeft: location.pathname.startsWith('/admin') ? '3px solid' : '3px solid transparent',
+              borderColor: location.pathname.startsWith('/admin') ? 'primary.main' : 'transparent',
+            }}
+            aria-label="Navigate to Admin panel"
+          >
+            <ListItemIcon sx={{ minWidth: 40, color: location.pathname.startsWith('/admin') ? 'primary.main' : 'text.secondary' }}>
+              <AdminPanelSettingsIcon />
+            </ListItemIcon>
+            <ListItemText
+              primary="Admin"
+              primaryTypographyProps={{ fontWeight: 600 }}
+            />
+          </ListItemButton>
+        </List>
+      )}
     </Box>
   )
+
+  // On the login page (or while auth is loading), render without the shell
+  // so the nav, sidebar, and queue counts are never visible to unauthenticated users.
+  const isLoginPage = location.pathname === '/login'
+  if (isLoginPage || (authLoading && !user)) {
+    return (
+      <GoogleMapsLoadedContext.Provider value={mapsLoaded}>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/*" element={<LoginPage />} />
+        </Routes>
+      </GoogleMapsLoadedContext.Provider>
+    )
+  }
 
   return (
     <GoogleMapsLoadedContext.Provider value={mapsLoaded}>
@@ -1341,8 +1423,8 @@ function App() {
             </Tooltip>
           )}
           <Avatar
-            src="/images/avatar.png"
-            alt="B and B Real Estate"
+            src={user?.is_admin ? '/images/avatar.png' : undefined}
+            alt={user?.display_name ?? 'User'}
             onClick={() => setAvatarOpen(true)}
             sx={{
               width: 40,
@@ -1352,30 +1434,45 @@ function App() {
               transition: 'transform 0.2s',
               '&:hover': { transform: 'scale(1.1)' },
             }}
-          />
-          <Dialog
+            aria-label="Open user menu"
+            aria-haspopup="true"
+          >
+            {!user?.is_admin && user?.display_name
+              ? user.display_name.charAt(0).toUpperCase()
+              : null}
+          </Avatar>
+          <Menu
             open={avatarOpen}
             onClose={() => setAvatarOpen(false)}
-            maxWidth="sm"
-            PaperProps={{
-              sx: { borderRadius: 3, overflow: 'hidden', background: 'transparent', boxShadow: 'none' },
-            }}
+            anchorReference="anchorPosition"
+            anchorPosition={{ top: 64, left: window.innerWidth }}
+            transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+            PaperProps={{ sx: { minWidth: 220, mt: 0.5 } }}
           >
-            <Box
-              component="img"
-              src="/images/avatar.png"
-              alt="B and B Real Estate"
-              onClick={() => setAvatarOpen(false)}
-              sx={{
-                width: '100%',
-                maxWidth: 400,
-                height: 'auto',
-                display: 'block',
-                cursor: 'pointer',
-                borderRadius: 3,
-              }}
-            />
-          </Dialog>
+            {user && (
+              <Box sx={{ px: 2, py: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
+                <Typography variant="subtitle2" fontWeight={600}>{user.display_name}</Typography>
+                <Typography variant="caption" color="text.secondary">{user.email}</Typography>
+              </Box>
+            )}
+            {user?.is_admin && (
+              <MenuItem
+                onClick={() => { setAvatarOpen(false); navigate('/admin') }}
+                sx={{ mt: 0.5 }}
+              >
+                <ListItemIcon sx={{ minWidth: 32 }}>
+                  <AdminPanelSettingsIcon fontSize="small" />
+                </ListItemIcon>
+                Admin Panel
+              </MenuItem>
+            )}
+            <MenuItem
+              onClick={() => { setAvatarOpen(false); logout() }}
+              sx={{ mt: 0.5 }}
+            >
+              Sign Out
+            </MenuItem>
+          </Menu>
         </Toolbar>
       </AppBar>
 
@@ -1421,6 +1518,13 @@ function App() {
         }}
       >
         <Routes>
+          {/* Public route — no AuthGuard */}
+          <Route path="/login" element={<LoginPage />} />
+
+          {/* All protected routes wrapped in AuthGuard */}
+          <Route path="/*" element={
+            <AuthGuard>
+              <Routes>
           {/* Default landing page — Today's Action Queue */}
           <Route path="/" element={<TodaysActionQueue />} />
           {/* Queue routes */}
@@ -1457,6 +1561,9 @@ function App() {
           {/* HubSpot CRM routes (Tasks 25.2) */}
           <Route path="/import/hubspot" element={<HubSpotImportArea />} />
           <Route path="/import/hubspot/review-queue" element={<ReviewQueue />} />
+          {/* Admin routes — guarded by is_admin claim */}
+          <Route path="/admin" element={user?.is_admin ? <AdminPanel /> : <Navigate to="/" replace />} />
+          <Route path="/admin/users/:userId" element={user?.is_admin ? <AdminUserDetail /> : <Navigate to="/" replace />} />
           {/* Old /leads/views/* — redirect to new /queues/* routes */}
           <Route path="/leads/views/previously-warm" element={<Navigate to="/queues/previously-warm" replace />} />
           <Route path="/leads/views/needs-review" element={<Navigate to="/queues/needs-review" replace />} />
@@ -1464,6 +1571,9 @@ function App() {
           <Route path="/leads/views/no-next-action" element={<Navigate to="/queues/no-next-action" replace />} />
           <Route path="/leads/views/do-not-contact" element={<Navigate to="/queues/do-not-contact" replace />} />
           <Route path="/leads/views/missing-property-match" element={<Navigate to="/queues/missing-property-match" replace />} />
+              </Routes>
+            </AuthGuard>
+          } />
         </Routes>
       </Box>
     </Box>
