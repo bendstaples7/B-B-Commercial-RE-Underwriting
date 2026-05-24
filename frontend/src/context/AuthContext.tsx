@@ -38,16 +38,20 @@ const MAX_TOKEN_LIFETIME_SECONDS = 28800 // 8 hours
 /**
  * Decode the payload of a JWT without verifying the signature.
  * Returns null if the token is malformed.
+ *
+ * Uses TextDecoder to handle the atob binary string as UTF-8 bytes,
+ * preventing corruption of non-ASCII claim values.
  */
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
     const parts = token.split('.')
     if (parts.length !== 3) return null
-    // Base64url → Base64 → JSON
-    // Add padding so atob doesn't throw on unpadded base64url strings
+    // Base64url → Base64 → binary string → UTF-8 bytes → JSON
     let base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
     while (base64.length % 4 !== 0) base64 += '='
-    const json = atob(base64)
+    const binaryStr = atob(base64)
+    const bytes = Uint8Array.from(binaryStr, (c) => c.charCodeAt(0))
+    const json = new TextDecoder('utf-8').decode(bytes)
     return JSON.parse(json) as Record<string, unknown>
   } catch {
     return null

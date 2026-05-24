@@ -1373,10 +1373,12 @@ function App() {
     </Box>
   )
 
-  // On the login page (or while auth is loading), render without the shell
-  // so the nav, sidebar, and queue counts are never visible to unauthenticated users.
+  // Render without the shell when:
+  //   - on the /login page (always show login UI)
+  //   - auth is still loading (avoid flash of authenticated shell)
+  //   - auth has resolved but user is null (unauthenticated — AuthGuard will redirect)
   const isLoginPage = location.pathname === '/login'
-  if (isLoginPage || (authLoading && !user)) {
+  if (isLoginPage || authLoading || !user) {
     return (
       <GoogleMapsLoadedContext.Provider value={mapsLoaded}>
         <Routes>
