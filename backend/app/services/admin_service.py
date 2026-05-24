@@ -115,7 +115,7 @@ class AdminService:
             FROM leads l
             JOIN users u ON u.user_id = l.owner_user_id
             {where_clause}
-            ORDER BY l.created_at DESC
+            ORDER BY l.created_at DESC, l.id DESC
             LIMIT :page_size OFFSET :offset
         """), params)
         rows = leads_result.fetchall()
