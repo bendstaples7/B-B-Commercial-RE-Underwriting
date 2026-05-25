@@ -310,9 +310,9 @@ def dismiss_sale_comp(deal_id, comp_id):
         return resp, status
 
     service = SaleCompService()
-    service.dismiss_comp(deal_id, comp_id)
+    comp = service.dismiss_comp(deal_id, comp_id)
     db.session.commit()
-    return jsonify({'message': 'Comp dismissed'}), 200
+    return jsonify(_serialize_sale_comp(comp)), 200
 
 
 @multifamily_sale_comp_bp.route('/deals/<int:deal_id>/sale-comps/<int:comp_id>', methods=['DELETE'])

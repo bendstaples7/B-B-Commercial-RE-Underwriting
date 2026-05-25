@@ -224,7 +224,7 @@ def _validate_and_log_database_url(app):
     # if it fails (e.g. Neon quota exceeded, network issue).
     # Fallback is only allowed in development mode to prevent silent DB switches
     # in production or testing environments.
-    flask_env = os.getenv('FLASK_ENV', 'production')
+    flask_env = os.getenv('FLASK_ENV', config_name)
     allow_fallback = (
         flask_env == 'development'
         or os.getenv('ALLOW_LOCAL_DB_FALLBACK', '').lower() == 'true'

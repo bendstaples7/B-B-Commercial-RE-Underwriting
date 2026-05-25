@@ -339,69 +339,6 @@ class DashboardService:
         purchase_price = deal_inputs.deal.purchase_price
         min_cf_per_door = Decimal("200")
 
-        def _cf_metrics(cfad_m1_str, cfad_m24_str, loan_amount_str, ltv):
-            """Compute per-door CF and back-solve purchase price for $200/door target."""
-            result = {
-                "cf_per_unit_month_1": None,
-                "cf_per_unit_month_24": None,
-                "cf_needed_for_min": None,
-                "purchase_price_for_min_cf": None,
-            }
-            if unit_count is None or unit_count <= 0:
-                return result
-
-            target_total_cf = min_cf_per_door * Decimal(str(unit_count))
-            result["cf_needed_for_min"] = str(target_total_cf)
-
-            if cfad_m1_str is not None:
-                cfad_m1 = Decimal(str(cfad_m1_str))
-                result["cf_per_unit_month_1"] = str(
-                    (cfad_m1 / Decimal(str(unit_count))).quantize(Decimal("0.01"))
-                )
-
-                # Back-solve: what purchase price gives exactly $200/door CF?
-                # CF shortfall = target - actual
-                # Reducing purchase price by X reduces loan by X*ltv
-                # Reducing loan by L reduces monthly DS by L * monthly_payment_factor
-                # monthly_payment_factor ≈ DS / loan_amount
-                if (
-                    loan_amount_str is not None
-                    and ltv is not None
-                    and ltv > Decimal("0")
-                ):
-                    loan_amount = Decimal(str(loan_amount_str))
-                    if loan_amount > Decimal("0"):
-                        # Get month 1 DS from monthly schedule
-                        ds_key = "debt_service_a" if ltv == deal_inputs.lender_scenario_a and deal_inputs.lender_scenario_a else "debt_service_b"
-                        # Use DS from month 1 schedule
-                        ds_m1 = None
-                        if monthly_schedule:
-                            ds_raw = monthly_schedule[0].get(
-                                "debt_service_a" if "a" in str(result.get("cf_per_unit_month_1", "")) else "debt_service_b"
-                            )
-                            ds_m1 = Decimal(str(ds_raw)) if ds_raw else None
-
-                        if ds_m1 and ds_m1 > Decimal("0"):
-                            monthly_payment_factor = ds_m1 / loan_amount
-                            cf_shortfall = target_total_cf - cfad_m1
-                            # DS reduction needed = cf_shortfall
-                            # Loan reduction needed = cf_shortfall / monthly_payment_factor
-                            loan_reduction = cf_shortfall / monthly_payment_factor
-                            # Purchase price reduction = loan_reduction / ltv
-                            pp_reduction = loan_reduction / ltv
-                            target_pp = purchase_price - pp_reduction
-                            result["purchase_price_for_min_cf"] = str(
-                                target_pp.quantize(Decimal("1"))
-                            )
-
-            if cfad_m24_str is not None:
-                cfad_m24 = Decimal(str(cfad_m24_str))
-                result["cf_per_unit_month_24"] = str(
-                    (cfad_m24 / Decimal(str(unit_count))).quantize(Decimal("0.01"))
-                )
-
-            return result
-
         # LTV for each scenario
         ltv_a = deal_inputs.lender_scenario_a.ltv_total_cost if deal_inputs.lender_scenario_a else None
         ltv_b = deal_inputs.lender_scenario_b.max_purchase_ltv if deal_inputs.lender_scenario_b else None
@@ -410,6 +347,8 @@ class DashboardService:
 
         # Simplified back-solve using DS directly from monthly schedule
         def _back_solve_pp(cfad_m1_str, ds_m1_str, ltv, loan_amount_str):
+            if unit_count is None or unit_count <= 0:
+                return None
             if cfad_m1_str is None or ds_m1_str is None or ltv is None or ltv <= Decimal("0"):
                 return None
             cfad_m1 = Decimal(str(cfad_m1_str))
@@ -568,37 +507,7 @@ class DashboardService:
             }
 
         # Valuation — computed live from sale comp rollup (not stored in pro forma cache)
-        sale_comp_service = SaleCompService()
-        rollup_data = sale_comp_service.get_comps_rollup(deal_id)
-
-        monthly_schedule = computation_dict.get("monthly_schedule", [])
-        summary = computation_dict.get("summary", {})
-        stabilized_noi_str = summary.get("stabilized_noi")
-        stabilized_noi = Decimal(stabilized_noi_str) if stabilized_noi_str else None
-        month_1_gsr = Decimal("0")
-        if monthly_schedule:
-            month_1_gsr = Decimal(monthly_schedule[0].get("gsr", "0"))
-
-        sale_comp_rollup = SaleCompRollup(
-            cap_rate_min=rollup_data.get("Cap_Rate_Min"),
-            cap_rate_median=rollup_data.get("Cap_Rate_Median"),
-            cap_rate_average=rollup_data.get("Cap_Rate_Average"),
-            cap_rate_max=rollup_data.get("Cap_Rate_Max"),
-            ppu_min=rollup_data.get("PPU_Min"),
-            ppu_median=rollup_data.get("PPU_Median"),
-            ppu_average=rollup_data.get("PPU_Average"),
-            ppu_max=rollup_data.get("PPU_Max"),
-        )
-
-        valuation = compute_valuation(
-            stabilized_noi=stabilized_noi,
-            purchase_price=deal_inputs.deal.purchase_price,
-            month_1_gsr=month_1_gsr,
-            unit_count=deal_inputs.deal.unit_count,
-            sale_comp_rollup=sale_comp_rollup,
-            custom_cap_rate=deal_inputs.deal.custom_cap_rate,
-        )
-        valuation_dict = valuation.to_canonical_dict() if valuation else None
+        valuation_dict = self.get_valuation(deal_id)
 
         # Populate valuation fields into scenarios if available
         if valuation_dict:

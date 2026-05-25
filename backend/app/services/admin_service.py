@@ -41,7 +41,7 @@ class AdminService:
     def get_user_summary(self, user_id: str) -> dict:
         """Return a user's profile plus activity counts.
 
-        Raises NotFoundError if the user_id does not exist.
+        Raises ResourceNotFoundError if the user_id does not exist.
         """
         result = db.session.execute(text("""
             SELECT
@@ -84,7 +84,7 @@ class AdminService:
             page: 1-based page number.
             page_size: Number of results per page (max 200).
 
-        Raises ValidationError if page_size > 200.
+        Raises ValidationException if page_size > 200.
         """
         if page < 1:
             raise ValidationException('page must be >= 1.')
