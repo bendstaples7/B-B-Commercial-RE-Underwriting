@@ -37,9 +37,21 @@ export function LoginPage() {
 
   // Redirect destination — check returnUrl query param first (set by 401 interceptor),
   // then fall back to location.state.from (set by ProtectedRoute), then root.
-  // Validate returnUrl: only use it if it's an internal path (starts with / but not // or ://)
+  // Validate returnUrl: only use it if it's a safe internal path.
+  // Parse with URL to isolate the pathname — this prevents query params containing
+  // external URLs (e.g. /path?next=https://evil.com) from being treated as external.
   const rawReturnUrl = new URLSearchParams(location.search).get('returnUrl') ?? ''
-  const isInternalPath = rawReturnUrl.startsWith('/') && !rawReturnUrl.startsWith('//') && !rawReturnUrl.includes('://')
+  const isInternalPath = (() => {
+    if (!rawReturnUrl.startsWith('/') || rawReturnUrl.startsWith('//')) return false
+    try {
+      // Use a dummy base to parse the returnUrl as a relative URL
+      const parsed = new URL(rawReturnUrl, window.location.origin)
+      // Safe if the origin matches (i.e. it's truly a same-origin path)
+      return parsed.origin === window.location.origin
+    } catch {
+      return false
+    }
+  })()
   const from =
     (isInternalPath ? rawReturnUrl : null) ??
     (location.state as { from?: Location })?.from?.pathname ??

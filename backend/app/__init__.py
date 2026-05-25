@@ -159,7 +159,7 @@ def _warn_missing_optional_keys(app):
         app.logger.warning("*** STARTUP WARNING: %s", w)
 
 
-def _validate_and_log_database_url(app):
+def _validate_and_log_database_url(app, config_name='development'):
     """
     Validate DATABASE_URL at startup and log the resolved host with credentials redacted.
 
@@ -413,7 +413,7 @@ def create_app(config_name='development'):
 
     # Validate DATABASE_URL and log the resolved host (credentials redacted).
     # Must run after SQLALCHEMY_DATABASE_URI is set and before db.init_app.
-    _validate_and_log_database_url(app)
+    _validate_and_log_database_url(app, config_name)
 
     # Initialize extensions
     db.init_app(app)
