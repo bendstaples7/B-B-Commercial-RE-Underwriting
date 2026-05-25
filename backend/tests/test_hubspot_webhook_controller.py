@@ -138,6 +138,7 @@ class TestValidSignedPayload:
         data = resp.get_json()
         assert data['status'] == 'accepted'
         assert data['count'] == 1
+        mock_task.delay.assert_called()
 
     def test_creates_webhook_log_record(self, webhook_app, webhook_client):
         body = json.dumps([
@@ -163,6 +164,7 @@ class TestValidSignedPayload:
             assert log.hubspot_object_type == 'contact'
             assert log.hubspot_object_id == '99'
             assert log.status == 'pending'
+        mock_task.delay.assert_called()
 
     def test_accepts_batch_of_multiple_events(self, webhook_app, webhook_client):
         body = json.dumps([
@@ -181,6 +183,7 @@ class TestValidSignedPayload:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['count'] == 3
+        mock_task.delay.assert_called()
 
     def test_wraps_single_object_payload_in_list(self, webhook_app, webhook_client):
         """A single event dict (not a list) should be wrapped and accepted."""
@@ -198,6 +201,7 @@ class TestValidSignedPayload:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data['count'] == 1
+        mock_task.delay.assert_called()
 
 
 # ---------------------------------------------------------------------------

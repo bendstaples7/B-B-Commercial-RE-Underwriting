@@ -296,22 +296,23 @@ def get_command_center(lead_id: int):
     # (has an overdue HubSpot task via task_associations or direct lead_id)
     # ------------------------------------------------------------------
     from datetime import datetime as _datetime_cls
-    _now = _datetime_cls.now(_datetime_cls.now().astimezone().tzinfo or __import__('datetime').timezone.utc)
+    from datetime import datetime as _dt_cls
+    _now = _dt_cls.utcnow()
     overdue_task_row = _db.session.execute(_text("""
         SELECT t.id, t.title, t.due_date
         FROM tasks t
         JOIN task_associations ta ON ta.task_id = t.id
         WHERE ta.target_type = 'lead' AND ta.target_id = :lead_id
           AND t.status IN ('open', 'overdue')
-          AND t.due_date <= NOW()
+          AND t.due_date <= :now
         LIMIT 1
-    """), {'lead_id': lead_id}).fetchone()
+    """), {'lead_id': lead_id, 'now': _now}).fetchone()
     if not overdue_task_row:
         overdue_task_row = _db.session.execute(_text("""
             SELECT id, title, due_date FROM tasks
-            WHERE lead_id = :lead_id AND status IN ('open', 'overdue') AND due_date <= NOW()
+            WHERE lead_id = :lead_id AND status IN ('open', 'overdue') AND due_date <= :now
             LIMIT 1
-        """), {'lead_id': lead_id}).fetchone()
+        """), {'lead_id': lead_id, 'now': _now}).fetchone()
     has_overdue_hubspot_task = overdue_task_row is not None
     overdue_task_title = overdue_task_row[1] if overdue_task_row else None
     overdue_task_due = overdue_task_row[2].isoformat() if overdue_task_row and overdue_task_row[2] else None

@@ -856,10 +856,11 @@ class ComparableSalesFinder:
                     if pin:
                         radius_seen_pins.add(pin)
 
-            # Check if this radius satisfies min_count
-            if len(radius_comparables) >= min_count:
-                radius_comparables.sort(key=lambda x: x['distance_miles'])
-                return radius_comparables[:min_count]
+            # Check if combined accumulated + current radius satisfies min_count
+            combined = comparables + radius_comparables
+            if len(combined) >= min_count:
+                combined.sort(key=lambda x: x['distance_miles'])
+                return combined[:min_count]
 
             # Not enough at this radius — accumulate and try the next
             comparables.extend(radius_comparables)

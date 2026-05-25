@@ -302,19 +302,33 @@ def advance_to_step(session_id, step_number):
         # Validate step 1 is complete before accepting
         workflow_controller._validate_step_completion(session, WorkflowStep.PROPERTY_FACTS)
 
+        # Short-circuit duplicate submissions
+        if session.loading:
+            return jsonify({
+                'error': 'Conflict',
+                'message': 'Comparable search is already in progress for this session.',
+            }), 409
+
         # Set loading=True before enqueuing so the frontend polling hook can
         # detect the in-progress state immediately.
         session.loading = True
         session.updated_at = datetime.utcnow()
         db.session.commit()
 
-        # Enqueue the Celery task; fall back silently if Celery is unavailable.
+        # Enqueue the Celery task; revert loading on failure.
         try:
             from celery_worker import run_comparable_search_task
             run_comparable_search_task.delay(session_id)
             logger.info(f"Enqueued comparable search for session {session_id}")
         except Exception as e:
-            logger.warning(f"Celery unavailable, task not enqueued: {e}")
+            logger.warning(f"Celery unavailable, reverting loading state: {e}")
+            session.loading = False
+            session.updated_at = datetime.utcnow()
+            db.session.commit()
+            return jsonify({
+                'error': 'Service unavailable',
+                'message': 'Comparable search queue is unavailable. Please try again.',
+            }), 503
 
         return jsonify({'status': 'accepted', 'session_id': session_id}), 202
 

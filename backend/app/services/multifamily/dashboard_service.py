@@ -400,6 +400,10 @@ class DashboardService:
                 "month_1_net_cash_flow": None,
                 "month_24_net_cash_flow": None,
                 "cash_on_cash_return": None,
+                "cf_per_unit_month_1": None,
+                "cf_per_unit_month_24": None,
+                "cf_needed_for_min": None,
+                "purchase_price_for_min_cf": None,
                 "missing_inputs": missing_a,
             }
         else:
@@ -465,6 +469,10 @@ class DashboardService:
                 "month_1_net_cash_flow": None,
                 "month_24_net_cash_flow": None,
                 "cash_on_cash_return": None,
+                "cf_per_unit_month_1": None,
+                "cf_per_unit_month_24": None,
+                "cf_needed_for_min": None,
+                "purchase_price_for_min_cf": None,
                 "missing_inputs": missing_b,
             }
         else:

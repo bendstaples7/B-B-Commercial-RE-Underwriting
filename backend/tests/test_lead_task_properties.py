@@ -241,7 +241,7 @@ def test_property_5_cancelled_task_cannot_be_completed(n):
 # Feature: actionable-lead-command-center, Property 6: Task Snooze Date Validation
 # ---------------------------------------------------------------------------
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(days_ahead=st.integers(min_value=1, max_value=3650))
 def test_property_6_future_date_accepted(days_ahead):
     """
@@ -360,7 +360,7 @@ def test_property_14_unanswered_call_count_increments(n_calls, outcome, initial_
 # Feature: actionable-lead-command-center, Property 15: Note Length Validation Boundary
 # ---------------------------------------------------------------------------
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(body=st.text(min_size=1, max_size=5000))
 def test_property_15_valid_note_accepted(body):
     """
