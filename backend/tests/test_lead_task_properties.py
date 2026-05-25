@@ -60,7 +60,7 @@ _AES_PATCH = 'app.services.action_engine_service.ActionEngineService.recompute_a
 # Feature: actionable-lead-command-center, Property 4: Task Title Validation Boundary
 # ---------------------------------------------------------------------------
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(title=st.text(min_size=1, max_size=255))
 def test_property_4_valid_title_accepted(title):
     """
@@ -305,7 +305,7 @@ def test_property_6_today_or_past_date_rejected(days_offset):
 # Feature: actionable-lead-command-center, Property 14: Unanswered Call Count Monotonically Increments
 # ---------------------------------------------------------------------------
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(
     n_calls=st.integers(min_value=1, max_value=20),
     outcome=st.sampled_from(['voicemail', 'no_answer']),

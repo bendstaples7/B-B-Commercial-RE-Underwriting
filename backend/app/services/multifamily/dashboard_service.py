@@ -365,8 +365,8 @@ class DashboardService:
             pp_reduction = loan_reduction / ltv
             return str((purchase_price - pp_reduction).quantize(Decimal("1")))
 
-        ds_m1_a = Decimal(str(monthly_schedule[0].get("debt_service_a", "0"))) if monthly_schedule else None
-        ds_m1_b = Decimal(str(monthly_schedule[0].get("debt_service_b", "0"))) if monthly_schedule else None
+        ds_m1_a = Decimal(str(monthly_schedule[0].get("debt_service_a") or "0")) if monthly_schedule else None
+        ds_m1_b = Decimal(str(monthly_schedule[0].get("debt_service_b") or "0")) if monthly_schedule else None
 
         cf_per_unit_m1_a = str((Decimal(str(month_1_cfad_a)) / Decimal(str(unit_count))).quantize(Decimal("0.01"))) if month_1_cfad_a and unit_count else None
         cf_per_unit_m24_a = str((Decimal(str(month_24_cfad_a)) / Decimal(str(unit_count))).quantize(Decimal("0.01"))) if month_24_cfad_a and unit_count else None

@@ -120,10 +120,12 @@ def compute_valuation(
     valuation_at_ppu_max = _valuation_at_ppu(unit_count, sale_comp_rollup.ppu_max)
 
     # --- Price-to-rent ratio (Req 9.5) ---
-    # price_to_rent_ratio = month_1_gsr / purchase_price
-    # Expresses monthly rent as a fraction of purchase price (e.g. 0.0087 = 0.87%)
+    # price_to_rent_ratio = purchase_price / (month_1_gsr * 12)
+    # Classic price-to-rent ratio: annual purchase price / annual rent
+    # e.g. $100,000 / ($1,000/mo * 12) = 8.33
     if purchase_price > Decimal("0") and month_1_gsr > Decimal("0"):
-        price_to_rent_ratio = (month_1_gsr / purchase_price).quantize(
+        annualized_gsr = month_1_gsr * Decimal("12")
+        price_to_rent_ratio = (purchase_price / annualized_gsr).quantize(
             Decimal("0.000001"), rounding=ROUND_HALF_UP
         )
     else:

@@ -255,6 +255,7 @@ class HubSpotMatcherService:
 
         # --- 1. Email match -------------------------------------------------
         if email:
+            # First check ContactEmail table (normalized contacts)
             contact_email = ContactEmail.query.filter(
                 db.func.lower(ContactEmail.value) == email
             ).first()
@@ -274,6 +275,24 @@ class HubSpotMatcherService:
                     hubspot_id=contact.hubspot_id,
                     internal_record_type="lead",
                     internal_record_id=property_id,
+                    confidence="HIGH",
+                    matching_criteria="email_match",
+                )
+
+            # Also check Lead.email_1 directly (denormalized storage)
+            lead_by_email = Lead.query.filter(
+                db.func.lower(Lead.email_1) == email
+            ).first()
+            if lead_by_email:
+                logger.debug(
+                    "Contact %s matched Lead %s via email_1 '%s'",
+                    contact.hubspot_id, lead_by_email.id, email,
+                )
+                return self._upsert_match(
+                    hubspot_record_type="contact",
+                    hubspot_id=contact.hubspot_id,
+                    internal_record_type="lead",
+                    internal_record_id=lead_by_email.id,
                     confidence="HIGH",
                     matching_criteria="email_match",
                 )
@@ -299,6 +318,23 @@ class HubSpotMatcherService:
                         hubspot_id=contact.hubspot_id,
                         internal_record_type="lead",
                         internal_record_id=property_id,
+                        confidence="HIGH",
+                        matching_criteria="phone_match",
+                    )
+
+            # Also check Lead.phone_1 directly (denormalized storage)
+            all_leads_with_phone = Lead.query.filter(Lead.phone_1.isnot(None)).all()
+            for lead in all_leads_with_phone:
+                if HubSpotMatcherService.normalize_phone(lead.phone_1) == phone_digits:
+                    logger.debug(
+                        "Contact %s matched Lead %s via phone_1 '%s'",
+                        contact.hubspot_id, lead.id, phone_digits,
+                    )
+                    return self._upsert_match(
+                        hubspot_record_type="contact",
+                        hubspot_id=contact.hubspot_id,
+                        internal_record_type="lead",
+                        internal_record_id=lead.id,
                         confidence="HIGH",
                         matching_criteria="phone_match",
                     )
@@ -330,6 +366,29 @@ class HubSpotMatcherService:
                     hubspot_id=contact.hubspot_id,
                     internal_record_type="lead",
                     internal_record_id=property_id,
+                    confidence="MEDIUM",
+                    matching_criteria="name_property_match",
+                )
+
+            # Also check Lead.owner_first_name / owner_last_name directly
+            lead_by_name = (
+                Lead.query
+                .filter(
+                    db.func.lower(Lead.owner_first_name) == first_name.lower(),
+                    db.func.lower(Lead.owner_last_name) == last_name.lower(),
+                )
+                .first()
+            )
+            if lead_by_name:
+                logger.debug(
+                    "Contact %s matched Lead %s via owner name '%s %s'",
+                    contact.hubspot_id, lead_by_name.id, first_name, last_name,
+                )
+                return self._upsert_match(
+                    hubspot_record_type="contact",
+                    hubspot_id=contact.hubspot_id,
+                    internal_record_type="lead",
+                    internal_record_id=lead_by_name.id,
                     confidence="MEDIUM",
                     matching_criteria="name_property_match",
                 )
