@@ -280,7 +280,7 @@ export function QueueTable({
 
               {/* Sortable columns */}
               {SORTABLE_COLUMNS.map((col) => (
-                <TableCell key={col.key}>
+                <TableCell key={col.key} sortDirection={sortBy === col.key ? sortOrder : false}>
                   {onSort ? (
                     <TableSortLabel
                       active={sortBy === col.key}
