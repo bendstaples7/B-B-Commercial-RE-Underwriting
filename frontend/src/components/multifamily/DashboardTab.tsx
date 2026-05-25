@@ -234,19 +234,19 @@ function ScenarioCard({ scenario }: ScenarioCardProps) {
         />
         <FieldRow
           label="CF Per Unit — Month 1"
-          value={computed((scenario as any).cf_per_unit_month_1, fmtCurrency)}
+          value={computed(scenario.cf_per_unit_month_1, fmtCurrency)}
         />
         <FieldRow
           label="CF Per Unit — Month 24"
-          value={computed((scenario as any).cf_per_unit_month_24, fmtCurrency)}
+          value={computed(scenario.cf_per_unit_month_24, fmtCurrency)}
         />
         <FieldRow
           label="CF Needed for $200/Door"
-          value={computed((scenario as any).cf_needed_for_min, fmtCurrency)}
+          value={computed(scenario.cf_needed_for_min, fmtCurrency)}
         />
         <FieldRow
           label="Purchase Price for $200/Door CF"
-          value={computed((scenario as any).purchase_price_for_min_cf, fmtCurrency)}
+          value={computed(scenario.purchase_price_for_min_cf, fmtCurrency)}
         />
         <FieldRow
           label="Cash-on-Cash Return"

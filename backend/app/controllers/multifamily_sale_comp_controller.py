@@ -162,7 +162,7 @@ def fetch_sale_comps_ai(deal_id):
 
     return jsonify({
         'added': added,
-        'skipped': len(errors),
+        'skipped': skipped_dupes + len(errors),
         'message': f'Added {added} sale comp(s) from AI research.',
     }), 200
 
@@ -219,9 +219,8 @@ def confirm_all_sale_comps(deal_id):
     confirmed = _SaleComp.query.filter_by(
         deal_id=deal_id, is_suggested=True, is_dismissed=False
     ).update({'is_suggested': False})
-    db.session.commit()
 
-    # Invalidate pro forma cache
+    # Invalidate pro forma cache then commit once
     from app.services.multifamily.sale_comp_service import SaleCompService
     SaleCompService()._invalidate_cache(deal_id)
     db.session.commit()
@@ -242,9 +241,8 @@ def clear_all_sale_comps(deal_id):
 
     from app.models import SaleComp as _SaleComp
     deleted = _SaleComp.query.filter_by(deal_id=deal_id).delete()
-    db.session.commit()
 
-    # Invalidate pro forma cache
+    # Invalidate pro forma cache then commit once
     from app.services.multifamily.sale_comp_service import SaleCompService
     SaleCompService()._invalidate_cache(deal_id)
     db.session.commit()

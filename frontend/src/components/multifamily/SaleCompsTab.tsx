@@ -352,7 +352,7 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
     queryFn: () => multifamilyService.getSaleCompRollup(dealId),
   })
 
-  const { data: suggestedComps = [] } = useQuery({
+  const { data: suggestedComps, isFetching: isSuggestedFetching, isFetched: isSuggestedFetched } = useQuery({
     queryKey: ['deal', dealId, 'sale-comp-suggested'],
     queryFn: () => multifamilyService.getSuggestedSaleComps(dealId),
   })
@@ -437,7 +437,7 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
             color="error"
             startIcon={<DeleteSweepIcon />}
             onClick={() => setConfirmClearOpen(true)}
-            disabled={clearAllMutation.isPending || (comps.length === 0 && suggestedComps.length === 0)}
+            disabled={clearAllMutation.isPending || (comps.length === 0 && (suggestedComps?.length ?? 0) === 0)}
             aria-label="Clear all sale comps"
           >
             Clear All
@@ -496,14 +496,14 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
       </Collapse>
 
       {/* ── Suggested Comps Section ── */}
-      {suggestedComps.length > 0 && (
+      {(suggestedComps?.length ?? 0) > 0 && (
         <Box sx={{ mb: 3 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
             <AutoAwesomeIcon fontSize="small" color="primary" />
             <Typography variant="subtitle1" fontWeight={600}>
               AI Suggestions
             </Typography>
-            <Chip label={suggestedComps.length} size="small" color="primary" />
+            <Chip label={suggestedComps!.length} size="small" color="primary" />
             <Typography variant="caption" color="text.secondary">
               — Review and add the comps you want to include in your analysis
             </Typography>
@@ -537,7 +537,7 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {suggestedComps.map((comp: MFSaleComp) => (
+                {(suggestedComps ?? []).map((comp: MFSaleComp) => (
                   <TableRow
                     key={comp.id}
                     hover
@@ -562,7 +562,7 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
                     </TableCell>
                     <TableCell align="right">{fmtCurrency(comp.observed_ppu)}</TableCell>
                     <TableCell align="right">
-                      {comp.distance_miles ? `${parseFloat(comp.distance_miles).toFixed(1)} mi` : '—'}
+                      {comp.distance_miles != null ? `${parseFloat(comp.distance_miles).toFixed(1)} mi` : '—'}
                     </TableCell>
                     <TableCell align="center">
                       <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center' }}>
@@ -598,17 +598,17 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
         </Box>
       )}
 
-      {suggestedComps.length > 0 && comps.length > 0 && (
+      {(suggestedComps?.length ?? 0) > 0 && comps.length > 0 && (
         <Divider sx={{ mb: 3 }}>
           <Typography variant="caption" color="text.secondary">Confirmed Comps</Typography>
         </Divider>
       )}
 
       {/* Insufficient warning — suppressed while refetching or when suggestions are pending */}
-      {rollup?.sale_comps_insufficient && !isFetching && suggestedComps.length === 0 && (
+      {rollup?.sale_comps_insufficient && !isFetching && !isSuggestedFetching && isSuggestedFetched && (suggestedComps?.length ?? 0) === 0 && (
         <Alert severity="warning" icon={<WarningAmberIcon />} sx={{ mb: 2 }}>
           Insufficient confirmed sale comps — at least 3 are required for reliable valuation statistics.
-          {suggestedComps.length > 0 && ' Add comps from the AI suggestions above.'}
+          {(suggestedComps?.length ?? 0) > 0 && ' Add comps from the AI suggestions above.'}
         </Alert>
       )}
 
@@ -650,7 +650,7 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
       )}
 
       {/* Confirmed comps table */}
-      {comps.length === 0 && suggestedComps.length === 0 ? (
+      {comps.length === 0 && (suggestedComps?.length ?? 0) === 0 ? (
         <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
           <Typography color="text.secondary">
             No sale comps yet. Click &quot;Fetch Comps&quot; to research with AI, or add manually.
@@ -685,7 +685,7 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
                   </TableCell>
                   <TableCell align="right">{fmtCurrency(comp.observed_ppu)}</TableCell>
                   <TableCell align="right">
-                    {comp.distance_miles ? `${parseFloat(comp.distance_miles).toFixed(1)} mi` : '—'}
+                    {comp.distance_miles != null ? `${parseFloat(comp.distance_miles).toFixed(1)} mi` : '—'}
                   </TableCell>
                   <TableCell align="center">
                     <Tooltip title="Delete sale comp">

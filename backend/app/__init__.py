@@ -222,23 +222,41 @@ def _validate_and_log_database_url(app):
 
     # If the primary URL is remote, test the connection and fall back to local
     # if it fails (e.g. Neon quota exceeded, network issue).
+    # Fallback is only allowed in development mode to prevent silent DB switches
+    # in production or testing environments.
+    flask_env = os.getenv('FLASK_ENV', 'production')
+    allow_fallback = (
+        flask_env == 'development'
+        or os.getenv('ALLOW_LOCAL_DB_FALLBACK', '').lower() == 'true'
+    )
+
     if _is_remote(raw_url):
         if _try_connect(raw_url):
             app.logger.info("Database host resolved: %s", _safe_host(raw_url))
         else:
-            # Primary remote DB is unreachable — fall back to local
-            fallback_url = (
-                os.getenv('LOCAL_DATABASE_URL')
-                or 'postgresql://postgres:postgres@localhost:5432/real_estate_analysis'
-            )
-            app.logger.warning(
-                "*** DATABASE FALLBACK: Primary database at %s is unreachable "
-                "(quota exceeded or network error). Falling back to local database: %s",
-                _safe_host(raw_url),
-                _safe_host(fallback_url),
-            )
-            app.config['SQLALCHEMY_DATABASE_URI'] = fallback_url
-            os.environ['DATABASE_URL'] = fallback_url
+            if allow_fallback:
+                # Primary remote DB is unreachable — fall back to local (dev only)
+                fallback_url = (
+                    os.getenv('LOCAL_DATABASE_URL')
+                    or 'postgresql://postgres:postgres@localhost:5432/real_estate_analysis'
+                )
+                app.logger.warning(
+                    "*** DATABASE FALLBACK: Primary database at %s is unreachable "
+                    "(quota exceeded or network error). Falling back to local database: %s",
+                    _safe_host(raw_url),
+                    _safe_host(fallback_url),
+                )
+                app.config['SQLALCHEMY_DATABASE_URI'] = fallback_url
+                os.environ['DATABASE_URL'] = fallback_url
+            else:
+                app.logger.error(
+                    "Primary database at %s is unreachable and DB fallback is not "
+                    "permitted in FLASK_ENV=%s. Set ALLOW_LOCAL_DB_FALLBACK=true to "
+                    "enable fallback in non-development environments.",
+                    _safe_host(raw_url),
+                    flask_env,
+                )
+                raise SystemExit(1)
     else:
         app.logger.info("Database host resolved: %s", _safe_host(raw_url))
 

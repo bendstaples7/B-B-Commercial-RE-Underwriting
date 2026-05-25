@@ -263,20 +263,9 @@ class OMIntakeService:
                 payload={"job_id": job_id, "intake_status": job.intake_status},
             )
 
-        new_job = OMIntakeJob(
-            user_id=job.user_id,
-            original_filename=job.original_filename,
-            intake_status="PENDING",
-            expires_at=datetime.utcnow() + timedelta(days=_JOB_TTL_DAYS),
-        )
-        db.session.add(new_job)
-        db.session.commit()
-
         # PDF bytes are no longer stored in the DB — the retry endpoint is not
         # supported without re-uploading the file. Raise ConflictError so the
         # caller knows to prompt the user to re-upload.
-        db.session.delete(new_job)
-        db.session.commit()
         raise ConflictError(
             "Retry requires re-uploading the PDF. The original file is not stored "
             "in the database. Please upload the file again.",

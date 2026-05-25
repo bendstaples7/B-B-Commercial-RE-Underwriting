@@ -35,8 +35,12 @@ export function LoginPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Redirect destination — preserved from the route that triggered the redirect
-  const from = (location.state as { from?: Location })?.from?.pathname ?? '/'
+  // Redirect destination — check returnUrl query param first (set by 401 interceptor),
+  // then fall back to location.state.from (set by ProtectedRoute), then root.
+  const from =
+    new URLSearchParams(location.search).get('returnUrl') ??
+    (location.state as { from?: Location })?.from?.pathname ??
+    '/'
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()

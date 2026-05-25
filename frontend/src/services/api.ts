@@ -282,6 +282,46 @@ import type {
   OccupancyStatus,
 } from '@/types'
 
+// ---------------------------------------------------------------------------
+// Shared polling helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Poll an async job until it completes or times out.
+ *
+ * @param statusUrlFn - Function that returns the status URL given the job ID.
+ * @param jobId - The job ID returned by the enqueue step.
+ * @param errorLabel - Human-readable label used in timeout/failure messages.
+ * @returns The final result payload when status === 'done'.
+ * @throws Error when status === 'failed' or max attempts exceeded.
+ */
+async function pollAsyncJob(
+  statusUrlFn: (jobId: string) => string,
+  jobId: string,
+  errorLabel: string
+): Promise<{ added: number; skipped: number; message: string }> {
+  const maxAttempts = 100
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise(resolve => setTimeout(resolve, 3000))
+    const statusResponse = await api.get<{
+      status: 'pending' | 'running' | 'done' | 'failed'
+      added?: number
+      skipped?: number
+      message?: string
+      error?: string
+    }>(statusUrlFn(jobId))
+    const result = statusResponse.data
+    if (result.status === 'done') {
+      return { added: result.added ?? 0, skipped: result.skipped ?? 0, message: result.message ?? '' }
+    }
+    if (result.status === 'failed') {
+      throw new Error(result.error ?? `${errorLabel} failed.`)
+    }
+    // pending or running — keep polling
+  }
+  throw new Error(`${errorLabel} timed out after 5 minutes.`)
+}
+
 export const multifamilyService = {
   // -------------------------------------------------------------------------
   // Deals (Req 1)
@@ -440,27 +480,12 @@ export const multifamilyService = {
     )
     const jobId = startResponse.data.job_id
 
-    // Step 2: poll until done or failed (max 5 minutes, poll every 3s)
-    const maxAttempts = 100
-    for (let i = 0; i < maxAttempts; i++) {
-      await new Promise(resolve => setTimeout(resolve, 3000))
-      const statusResponse = await api.get<{
-        status: 'pending' | 'running' | 'done' | 'failed'
-        added?: number
-        skipped?: number
-        message?: string
-        error?: string
-      }>(`/multifamily/deals/${dealId}/rent-comps/fetch-ai/status/${jobId}`)
-      const result = statusResponse.data
-      if (result.status === 'done') {
-        return { added: result.added ?? 0, skipped: result.skipped ?? 0, message: result.message ?? '' }
-      }
-      if (result.status === 'failed') {
-        throw new Error(result.error ?? 'AI rent comp fetch failed.')
-      }
-      // pending or running — keep polling
-    }
-    throw new Error('AI rent comp fetch timed out after 5 minutes.')
+    // Step 2: poll until done or failed
+    return pollAsyncJob(
+      (id) => `/multifamily/deals/${dealId}/rent-comps/fetch-ai/status/${id}`,
+      jobId,
+      'AI rent comp fetch'
+    )
   },
 
   /** Poll the status of an async AI rent comp fetch job */
@@ -556,27 +581,12 @@ export const multifamilyService = {
     )
     const jobId = startResponse.data.job_id
 
-    // Step 2: poll until done or failed (max 5 minutes, poll every 3s)
-    const maxAttempts = 100
-    for (let i = 0; i < maxAttempts; i++) {
-      await new Promise(resolve => setTimeout(resolve, 3000))
-      const statusResponse = await api.get<{
-        status: 'pending' | 'running' | 'done' | 'failed'
-        added?: number
-        skipped?: number
-        message?: string
-        error?: string
-      }>(`/multifamily/deals/${dealId}/sale-comps/fetch-ai/status/${jobId}`)
-      const result = statusResponse.data
-      if (result.status === 'done') {
-        return { added: result.added ?? 0, skipped: result.skipped ?? 0, message: result.message ?? '' }
-      }
-      if (result.status === 'failed') {
-        throw new Error(result.error ?? 'AI sale comp fetch failed.')
-      }
-      // pending or running — keep polling
-    }
-    throw new Error('AI sale comp fetch timed out after 5 minutes.')
+    // Step 2: poll until done or failed
+    return pollAsyncJob(
+      (id) => `/multifamily/deals/${dealId}/sale-comps/fetch-ai/status/${id}`,
+      jobId,
+      'AI sale comp fetch'
+    )
   },
 
   /** Poll the status of an async AI sale comp fetch job */

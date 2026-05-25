@@ -30,7 +30,7 @@ jobs:
         working-directory: frontend
 
       - name: Run tests (includes App shell smoke test)
-        run: npm test -- --run
+        run: npm test
         working-directory: frontend
 
       - name: Production build
@@ -83,6 +83,7 @@ jobs:
           SECRET_KEY: ci-test-secret-key
           JWT_SECRET_KEY: ci-test-jwt-secret
           CELERY_BROKER_URL: redis://localhost:6379/0
+          REDIS_URL: redis://localhost:6379/0
 
       - name: Run tests
         run: pytest

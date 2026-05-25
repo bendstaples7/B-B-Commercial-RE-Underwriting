@@ -254,14 +254,14 @@ class DashboardService:
         rollup_data = sale_comp_service.get_comps_rollup(deal_id)
 
         sale_comp_rollup = SaleCompRollup(
-            cap_rate_min=rollup_data.get("cap_rate_min"),
-            cap_rate_median=rollup_data.get("cap_rate_median"),
-            cap_rate_average=rollup_data.get("cap_rate_average"),
-            cap_rate_max=rollup_data.get("cap_rate_max"),
-            ppu_min=rollup_data.get("ppu_min"),
-            ppu_median=rollup_data.get("ppu_median"),
-            ppu_average=rollup_data.get("ppu_average"),
-            ppu_max=rollup_data.get("ppu_max"),
+            cap_rate_min=rollup_data.get("Cap_Rate_Min"),
+            cap_rate_median=rollup_data.get("Cap_Rate_Median"),
+            cap_rate_average=rollup_data.get("Cap_Rate_Average"),
+            cap_rate_max=rollup_data.get("Cap_Rate_Max"),
+            ppu_min=rollup_data.get("PPU_Min"),
+            ppu_median=rollup_data.get("PPU_Median"),
+            ppu_average=rollup_data.get("PPU_Average"),
+            ppu_max=rollup_data.get("PPU_Max"),
         )
 
         valuation = compute_valuation(
@@ -409,16 +409,11 @@ class DashboardService:
         loan_b = sources_and_uses_b.get("loan_amount") if sources_and_uses_b else None
 
         # Simplified back-solve using DS directly from monthly schedule
-        def _back_solve_pp(cfad_m1_str, ds_m1_str, ltv):
+        def _back_solve_pp(cfad_m1_str, ds_m1_str, ltv, loan_amount_str):
             if cfad_m1_str is None or ds_m1_str is None or ltv is None or ltv <= Decimal("0"):
                 return None
             cfad_m1 = Decimal(str(cfad_m1_str))
             ds_m1 = Decimal(str(ds_m1_str))
-            loan_amount_str = None
-            if sources_and_uses_a and ltv == ltv_a:
-                loan_amount_str = sources_and_uses_a.get("loan_amount")
-            elif sources_and_uses_b:
-                loan_amount_str = sources_and_uses_b.get("loan_amount")
             if not loan_amount_str:
                 return None
             loan_amount = Decimal(str(loan_amount_str))
@@ -441,8 +436,8 @@ class DashboardService:
 
         target_total_cf = str(min_cf_per_door * Decimal(str(unit_count))) if unit_count else None
 
-        pp_for_min_cf_a = _back_solve_pp(month_1_cfad_a, ds_m1_a, ltv_a)
-        pp_for_min_cf_b = _back_solve_pp(month_1_cfad_b, ds_m1_b, ltv_b)
+        pp_for_min_cf_a = _back_solve_pp(month_1_cfad_a, ds_m1_a, ltv_a, loan_a)
+        pp_for_min_cf_b = _back_solve_pp(month_1_cfad_b, ds_m1_b, ltv_b, loan_b)
 
         # Build Scenario A summary (Req 11.1)
         scenario_a: dict[str, Any]

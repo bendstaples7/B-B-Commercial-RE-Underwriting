@@ -1,5 +1,5 @@
 """Marshmallow schemas for request validation."""
-from marshmallow import Schema, fields, validate, ValidationError, validates_schema, validates, EXCLUDE
+from marshmallow import Schema, fields, validate, ValidationError, validates_schema, validates, EXCLUDE, pre_load
 from datetime import datetime
 
 
@@ -1748,10 +1748,17 @@ class HubSpotConfigUpdateSchema(Schema):
 class LoginSchema(RequestSchema):
     """Validation schema for POST /api/auth/login.
 
-    Both fields are required. Email is normalized to lowercase.
+    Both fields are required. Email is normalized to lowercase and stripped.
     Password length is validated server-side only (no client-side hints).
 
     Requirements: 2.1, 2.2
     """
     email = fields.Email(required=True)
     password = fields.Str(required=True, validate=validate.Length(min=1))
+
+    @pre_load
+    def normalize_email(self, data, **kwargs):
+        """Lowercase and strip the email before validation."""
+        if isinstance(data.get('email'), str):
+            data['email'] = data['email'].strip().lower()
+        return data
