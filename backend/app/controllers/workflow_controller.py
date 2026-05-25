@@ -474,16 +474,131 @@ class WorkflowController:
 
     
     def _execute_comparable_search(self, session: AnalysisSession) -> Dict[str, Any]:
-        """Comparable search is now handled exclusively by the Celery task.
+        """Execute comparable search synchronously.
 
-        This method is intentionally not implemented in WorkflowController.
-        Use ``run_comparable_search_task.delay(session_id)`` via the async
-        route instead.
+        This is the synchronous fallback path used when Celery is unavailable,
+        and is also called internally by ``run_comparable_search_task`` in the
+        Celery worker.  The async route (POST /step/2) enqueues the Celery task
+        which calls this method inside an app context.
+
+        Steps:
+          1. Get the subject property from the session.
+          2. Use GeminiComparableSearchService to find comparables.
+          3. Save them to the DB as ComparableSale records.
+          4. Advance the session to COMPARABLE_SEARCH step.
+          5. Return a result dict.
         """
-        raise NotImplementedError(
-            "_execute_comparable_search is not implemented in WorkflowController. "
-            "Use run_comparable_search_task.delay(session_id) via the async route."
+        from app.services.gemini_comparable_search_service import GeminiComparableSearchService
+        from app.models.comparable_sale import ComparableSale
+        from app.models.property_facts import PropertyType, ConstructionType, InteriorCondition
+        from datetime import date as _date
+        import os
+
+        if not session.subject_property:
+            raise ValueError("Subject property required for comparable search")
+
+        if not os.getenv('GOOGLE_AI_API_KEY'):
+            raise ValueError("GOOGLE_AI_API_KEY is not set — cannot run comparable search")
+
+        subject = session.subject_property
+
+        # Serialize subject property for the Gemini service
+        subject_dict = {
+            'id': subject.id,
+            'address': subject.address,
+            'property_type': subject.property_type.name,
+            'units': subject.units,
+            'bedrooms': subject.bedrooms,
+            'bathrooms': subject.bathrooms,
+            'square_footage': subject.square_footage,
+            'lot_size': subject.lot_size,
+            'year_built': subject.year_built,
+            'construction_type': subject.construction_type.name,
+            'basement': subject.basement,
+            'parking_spaces': subject.parking_spaces,
+            'last_sale_price': subject.last_sale_price,
+            'last_sale_date': subject.last_sale_date.isoformat() if subject.last_sale_date else None,
+            'assessed_value': subject.assessed_value,
+            'annual_taxes': subject.annual_taxes,
+            'zoning': subject.zoning,
+            'interior_condition': subject.interior_condition.name,
+            'latitude': subject.latitude,
+            'longitude': subject.longitude,
+            'data_source': subject.data_source,
+            'user_modified_fields': subject.user_modified_fields or [],
+        }
+
+        service = GeminiComparableSearchService()
+        result = service.search(
+            property_facts=subject_dict,
+            property_type=subject.property_type,
         )
+
+        # Persist comparables as ComparableSale records
+        for comp_dict in result['comparables']:
+            # Parse sale_date
+            try:
+                from datetime import datetime as _dt
+                sale_date = _dt.strptime(comp_dict['sale_date'], '%Y-%m-%d').date()
+            except (KeyError, ValueError, TypeError):
+                sale_date = _date.today()
+
+            # Resolve enums
+            def _resolve_enum(enum_class, value, default):
+                if not isinstance(value, str):
+                    return default
+                try:
+                    return enum_class(value)
+                except (ValueError, KeyError):
+                    pass
+                try:
+                    return enum_class[value.upper()]
+                except (ValueError, KeyError):
+                    pass
+                return default
+
+            comparable = ComparableSale(
+                session_id=session.id,
+                address=str(comp_dict.get('address') or 'Unknown'),
+                sale_date=sale_date,
+                sale_price=float(comp_dict.get('sale_price', 0.0)),
+                property_type=_resolve_enum(PropertyType, comp_dict.get('property_type'), PropertyType.SINGLE_FAMILY),
+                units=int(comp_dict.get('units', 1)),
+                bedrooms=int(comp_dict.get('bedrooms', 0)),
+                bathrooms=float(comp_dict.get('bathrooms', 0.0)),
+                square_footage=int(comp_dict.get('square_footage', 0)),
+                lot_size=int(comp_dict.get('lot_size', 0)),
+                year_built=int(comp_dict.get('year_built', 0)),
+                construction_type=_resolve_enum(ConstructionType, comp_dict.get('construction_type'), ConstructionType.FRAME),
+                interior_condition=_resolve_enum(InteriorCondition, comp_dict.get('interior_condition'), InteriorCondition.AVERAGE),
+                distance_miles=float(comp_dict.get('distance_miles', 0.0)),
+                latitude=float(comp_dict['latitude']) if comp_dict.get('latitude') is not None else None,
+                longitude=float(comp_dict['longitude']) if comp_dict.get('longitude') is not None else None,
+                similarity_notes=str(comp_dict['similarity_notes']) if comp_dict.get('similarity_notes') is not None else None,
+            )
+            db.session.add(comparable)
+
+        # Update session state
+        completed_steps = list(session.completed_steps or [])
+        if 'PROPERTY_FACTS' not in completed_steps:
+            completed_steps.append('PROPERTY_FACTS')
+        if 'COMPARABLE_SEARCH' not in completed_steps:
+            completed_steps.append('COMPARABLE_SEARCH')
+        session.completed_steps = completed_steps
+
+        step_results = dict(session.step_results or {})
+        step_results['COMPARABLE_SEARCH'] = {
+            'comparable_count': len(result['comparables']),
+            'narrative': result.get('narrative', ''),
+            'status': 'complete',
+        }
+        session.step_results = step_results
+        session.current_step = WorkflowStep.COMPARABLE_SEARCH
+        session.loading = False
+        session.updated_at = datetime.utcnow()
+        db.session.commit()
+
+        return step_results['COMPARABLE_SEARCH']
     
     def _execute_weighted_scoring(self, session: AnalysisSession) -> Dict[str, Any]:
         """Execute weighted scoring and ranking."""

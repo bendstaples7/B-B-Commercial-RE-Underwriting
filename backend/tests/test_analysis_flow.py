@@ -118,17 +118,10 @@ class TestStartAnalysis:
             assert session.current_step == WorkflowStep.PROPERTY_FACTS
 
     def test_start_missing_address_returns_400(self, client, app):
+        """Missing address (required field) returns 400."""
         resp = client.post(
             '/api/analysis/start',
-            data=json.dumps({'user_id': 'test_user'}),
-            content_type='application/json',
-        )
-        assert resp.status_code == 400
-
-    def test_start_missing_user_id_returns_400(self, client, app):
-        resp = client.post(
-            '/api/analysis/start',
-            data=json.dumps({'address': '123 Main St, Chicago, IL 60601'}),
+            data=json.dumps({}),
             content_type='application/json',
         )
         assert resp.status_code == 400

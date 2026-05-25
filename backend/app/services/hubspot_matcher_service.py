@@ -400,6 +400,19 @@ class HubSpotMatcherService:
                 )
 
         # --- 4. No match — create a new Contact record and auto-confirm ----
+        # Check if we already have a match for this contact (idempotency guard)
+        existing_match = HubSpotMatch.query.filter_by(
+            hubspot_record_type="contact",
+            hubspot_id=contact.hubspot_id,
+        ).first()
+        if existing_match and existing_match.internal_record_id is not None:
+            # Already processed — return the existing match without creating duplicates
+            logger.debug(
+                "Contact %s already has a match (id=%s); skipping new record creation.",
+                contact.hubspot_id, existing_match.id,
+            )
+            return existing_match
+
         logger.debug(
             "Contact %s unmatched; creating new Contact record.",
             contact.hubspot_id,

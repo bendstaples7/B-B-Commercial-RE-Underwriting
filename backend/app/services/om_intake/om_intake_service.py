@@ -10,12 +10,15 @@ Requirements: 1.1–1.8, 7.1–7.12, 8.1, 8.3, 9.3, 11.1–11.3, 12.4
 from __future__ import annotations
 
 import dataclasses
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from app import db
 from app.exceptions import ConflictError, InvalidFileError, ResourceNotFoundError
+
+logger = logging.getLogger(__name__)
 from app.models import (  # noqa: F401
     Deal,
     MarketRentAssumption,
@@ -134,22 +137,33 @@ class OMIntakeService:
         db.session.flush()  # get job.id without committing
 
         # --- Enqueue Celery task — pass PDF bytes directly, never store in DB ---
+        import base64 as _base64
+        pdf_b64 = _base64.b64encode(file_bytes).decode('ascii')
         try:
-            import base64
             import os
             from celery import Celery as _Celery
             _client = _Celery(broker=os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0'))
             _client.send_task(
                 'om_intake.process_pipeline',
                 args=[job.id],
-                kwargs={'pdf_b64': base64.b64encode(file_bytes).decode('ascii')},
+                kwargs={'pdf_b64': pdf_b64},
             )
             db.session.commit()
         except Exception as dispatch_err:
-            job.intake_status = "FAILED"
-            job.error_message = f"Failed to dispatch processing task: {dispatch_err}"
+            logger.warning(
+                "Celery unavailable for OM intake job %s, running synchronously: %s",
+                job.id, dispatch_err,
+            )
             db.session.commit()
-            raise
+            # Synchronous fallback — run the pipeline in-process
+            try:
+                from celery_worker import om_intake_pipeline_task
+                om_intake_pipeline_task(job.id, pdf_b64=pdf_b64)
+            except Exception as sync_err:
+                logger.error("Synchronous OM intake pipeline failed: %s", sync_err)
+                job.intake_status = "FAILED"
+                job.error_message = f"Pipeline failed: {sync_err}"
+                db.session.commit()
 
         return job
 

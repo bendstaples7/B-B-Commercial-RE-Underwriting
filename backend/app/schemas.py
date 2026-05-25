@@ -1761,7 +1761,9 @@ class LoginSchema(RequestSchema):
 
     @pre_load
     def normalize_email(self, data, **kwargs):
-        """Lowercase and strip the email before validation."""
-        if isinstance(data.get('email'), str):
-            data['email'] = data['email'].strip().lower()
+        if not isinstance(data, dict):
+            return data
+        email = data.get('email')
+        if email and isinstance(email, str):
+            data['email'] = email.strip().lower()
         return data
