@@ -22,7 +22,14 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
-        run: npm ci --include=optional
+        run: npm ci
+        working-directory: frontend
+
+      - name: Install optional native dependencies (Linux CI fix)
+        # package-lock.json was generated on Windows and omits Linux-specific
+        # optional packages. Explicitly install the rollup Linux native binary
+        # so vitest and vite build work on ubuntu-latest runners.
+        run: npm install --no-save @rollup/rollup-linux-x64-gnu
         working-directory: frontend
 
       - name: TypeScript type-check
