@@ -312,5 +312,6 @@ class RateLimitHandler:
             except RateLimitException as exc:
                 if attempt >= self.max_retries:
                     raise
-                retry_after = exc.payload.get('retry_after') or self.base_delay * (2 ** attempt)
+                retry_after_hint = exc.payload.get('retry_after')
+                retry_after = self.base_delay * (2 ** attempt) if retry_after_hint is None else retry_after_hint
                 _time.sleep(float(retry_after))
