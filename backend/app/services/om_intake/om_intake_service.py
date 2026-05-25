@@ -131,18 +131,25 @@ class OMIntakeService:
             expires_at=datetime.utcnow() + timedelta(days=_JOB_TTL_DAYS),
         )
         db.session.add(job)
-        db.session.commit()
+        db.session.flush()  # get job.id without committing
 
         # --- Enqueue Celery task — pass PDF bytes directly, never store in DB ---
-        import base64
-        import os
-        from celery import Celery as _Celery
-        _client = _Celery(broker=os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0'))
-        _client.send_task(
-            'om_intake.process_pipeline',
-            args=[job.id],
-            kwargs={'pdf_b64': base64.b64encode(file_bytes).decode('ascii')},
-        )
+        try:
+            import base64
+            import os
+            from celery import Celery as _Celery
+            _client = _Celery(broker=os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0'))
+            _client.send_task(
+                'om_intake.process_pipeline',
+                args=[job.id],
+                kwargs={'pdf_b64': base64.b64encode(file_bytes).decode('ascii')},
+            )
+            db.session.commit()
+        except Exception as dispatch_err:
+            job.intake_status = "FAILED"
+            job.error_message = f"Failed to dispatch processing task: {dispatch_err}"
+            db.session.commit()
+            raise
 
         return job
 

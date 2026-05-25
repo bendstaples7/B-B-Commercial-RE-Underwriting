@@ -301,25 +301,32 @@ async function pollAsyncJob(
   errorLabel: string
 ): Promise<{ added: number; skipped: number; message: string }> {
   const maxAttempts = 100
+  let lastError: Error | null = null
   for (let i = 0; i < maxAttempts; i++) {
     await new Promise(resolve => setTimeout(resolve, 3000))
-    const statusResponse = await api.get<{
-      status: 'pending' | 'running' | 'done' | 'failed'
-      added?: number
-      skipped?: number
-      message?: string
-      error?: string
-    }>(statusUrlFn(jobId))
-    const result = statusResponse.data
-    if (result.status === 'done') {
-      return { added: result.added ?? 0, skipped: result.skipped ?? 0, message: result.message ?? '' }
+    try {
+      const statusResponse = await api.get<{
+        status: 'pending' | 'running' | 'done' | 'failed'
+        added?: number
+        skipped?: number
+        message?: string
+        error?: string
+      }>(statusUrlFn(jobId))
+      const result = statusResponse.data
+      if (result.status === 'done') {
+        return { added: result.added ?? 0, skipped: result.skipped ?? 0, message: result.message ?? '' }
+      }
+      if (result.status === 'failed') {
+        throw new Error(result.error ?? `${errorLabel} failed.`)
+      }
+      lastError = null  // reset on successful poll
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('failed')) throw err  // re-throw terminal failures
+      lastError = err instanceof Error ? err : new Error(String(err))
+      // continue polling on transient errors
     }
-    if (result.status === 'failed') {
-      throw new Error(result.error ?? `${errorLabel} failed.`)
-    }
-    // pending or running — keep polling
   }
-  throw new Error(`${errorLabel} timed out after 5 minutes.`)
+  throw new Error(`${errorLabel} timed out after 5 minutes.${lastError ? ` Last error: ${lastError.message}` : ''}`)
 }
 
 export const multifamilyService = {
@@ -480,6 +487,10 @@ export const multifamilyService = {
     )
     const jobId = startResponse.data.job_id
 
+    if (!jobId || typeof jobId !== 'string' || jobId.trim() === '') {
+      throw new Error('Server returned an invalid job ID. Please try again.')
+    }
+
     // Step 2: poll until done or failed
     return pollAsyncJob(
       (id) => `/multifamily/deals/${dealId}/rent-comps/fetch-ai/status/${id}`,
@@ -580,6 +591,10 @@ export const multifamilyService = {
       {}
     )
     const jobId = startResponse.data.job_id
+
+    if (!jobId || typeof jobId !== 'string' || jobId.trim() === '') {
+      throw new Error('Server returned an invalid job ID. Please try again.')
+    }
 
     // Step 2: poll until done or failed
     return pollAsyncJob(

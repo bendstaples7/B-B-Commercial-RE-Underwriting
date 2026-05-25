@@ -352,7 +352,7 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
     queryFn: () => multifamilyService.getSaleCompRollup(dealId),
   })
 
-  const { data: suggestedComps, isFetching: isSuggestedFetching, isFetched: isSuggestedFetched } = useQuery({
+  const { data: suggestedComps, isFetching: isSuggestedFetching, isFetched: isSuggestedFetched, isError: isSuggestedError } = useQuery({
     queryKey: ['deal', dealId, 'sale-comp-suggested'],
     queryFn: () => multifamilyService.getSuggestedSaleComps(dealId),
   })
@@ -605,7 +605,7 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
       )}
 
       {/* Insufficient warning — suppressed while refetching or when suggestions are pending */}
-      {rollup?.sale_comps_insufficient && !isFetching && !isSuggestedFetching && isSuggestedFetched && (suggestedComps?.length ?? 0) === 0 && (
+      {rollup?.sale_comps_insufficient && !isFetching && !isSuggestedFetching && isSuggestedFetched && !isSuggestedError && (suggestedComps?.length ?? 0) === 0 && (
         <Alert severity="warning" icon={<WarningAmberIcon />} sx={{ mb: 2 }}>
           Insufficient confirmed sale comps — at least 3 are required for reliable valuation statistics.
           {(suggestedComps?.length ?? 0) > 0 && ' Add comps from the AI suggestions above.'}

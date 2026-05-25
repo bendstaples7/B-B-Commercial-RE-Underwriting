@@ -652,7 +652,7 @@ def process_om_intake_pipeline(self, job_id: int, pdf_b64: str = None) -> None:
                 job = OMIntakeJob.query.get(job_id)
                 if job is None:
                     logger.error("process_om_intake_pipeline: job_id=%d not found", job_id)
-                    return
+                    raise ValueError(f"OMIntakeJob {job_id} not found — cannot process pipeline")
                 pdf_bytes = job.pdf_bytes  # deferred load — only fetched here
                 if not pdf_bytes:
                     service.transition_to_failed(job_id, "No PDF data available for processing.")

@@ -23,12 +23,15 @@ def upgrade():
 
     # Grant admin privileges to the designated admin user if they exist.
     # Skips silently if the user doesn't exist yet (e.g. on a fresh local DB).
-    op.get_bind().execute(
-        __import__('sqlalchemy').text(
-            "UPDATE users SET is_admin = TRUE "
-            "WHERE email_lower = 'ben.d.staples.7@gmail.com'"
+    import os
+    admin_email = os.environ.get('ADMIN_EMAIL', '').lower().strip()
+    if admin_email:
+        op.get_bind().execute(
+            __import__('sqlalchemy').text(
+                "UPDATE users SET is_admin = TRUE WHERE email_lower = :email"
+            ),
+            {'email': admin_email}
         )
-    )
 
 
 def downgrade():

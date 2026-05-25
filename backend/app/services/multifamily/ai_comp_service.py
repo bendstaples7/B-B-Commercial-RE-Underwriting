@@ -100,8 +100,10 @@ def _call_gemini(prompt: str) -> str:
         # Clamp per-attempt read timeout to remaining budget
         elapsed = _time.monotonic() - budget_start
         remaining = _TOTAL_BUDGET_SECONDS - elapsed
-        per_attempt_read = min(_TIMEOUT[1], max(0, remaining - 2))
-        attempt_timeout = (_TIMEOUT[0], per_attempt_read)
+        allowed = max(0, remaining - 2)
+        connect_timeout = min(_TIMEOUT[0], allowed)
+        read_timeout = min(_TIMEOUT[1], max(0, allowed - connect_timeout))
+        attempt_timeout = (connect_timeout, read_timeout)
 
         try:
             response = requests.post(
