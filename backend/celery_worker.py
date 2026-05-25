@@ -1004,10 +1004,13 @@ def fetch_sale_comps_ai_task(self, deal_id: int, user_id: str) -> dict:
             # they appear in rollup statistics.
             comp['is_suggested'] = True
             try:
+                sp = db.session.begin_nested()
                 service.add_sale_comp(deal_id, comp)
+                sp.commit()
                 existing_addresses.add(comp["address"].lower())
                 added += 1
             except Exception as exc:
+                sp.rollback()
                 errors.append(str(exc))
         db.session.commit()
 

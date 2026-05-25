@@ -217,10 +217,24 @@ class SaleCompService:
         return comp
 
     def dismiss_comp(self, deal_id: int, comp_id: int) -> SaleComp:
-        """Dismiss a suggested comp — removes it from the suggested list."""
+        """Dismiss a suggested comp — removes it from the suggested list.
+
+        Only suggested comps (is_suggested=True) may be dismissed. Confirmed
+        comps (is_suggested=False) cannot be dismissed to prevent accidentally
+        hiding them from rollup statistics.
+
+        Raises:
+            ValueError: If the comp does not exist for this deal.
+            ValueError: If the comp is already confirmed (is_suggested=False).
+        """
         comp = SaleComp.query.filter_by(id=comp_id, deal_id=deal_id).first()
         if comp is None:
             raise ValueError(f"Sale comp {comp_id} not found for deal {deal_id}")
+        if not comp.is_suggested:
+            raise ValueError(
+                f"Sale comp {comp_id} is already confirmed and cannot be dismissed. "
+                "Delete it instead if you want to remove it from the rollup."
+            )
         comp.is_dismissed = True
         self._invalidate_cache(deal_id)
         db.session.flush()
