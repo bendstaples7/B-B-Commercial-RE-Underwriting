@@ -286,6 +286,14 @@ import type {
 // Shared polling helper
 // ---------------------------------------------------------------------------
 
+/** Sentinel error thrown when an async job reaches a terminal FAILED state. */
+class AsyncJobTerminalError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'AsyncJobTerminalError'
+  }
+}
+
 /**
  * Poll an async job until it completes or times out.
  *
@@ -317,11 +325,11 @@ async function pollAsyncJob(
         return { added: result.added ?? 0, skipped: result.skipped ?? 0, message: result.message ?? '' }
       }
       if (result.status === 'failed') {
-        throw new Error(result.error ?? `${errorLabel} failed.`)
+        throw new AsyncJobTerminalError(result.error ?? `${errorLabel} failed.`)
       }
       lastError = null  // reset on successful poll
     } catch (err) {
-      if (err instanceof Error && err.message.includes('failed')) throw err  // re-throw terminal failures
+      if (err instanceof AsyncJobTerminalError) throw err  // re-throw terminal failures — never retry
       lastError = err instanceof Error ? err : new Error(String(err))
       // continue polling on transient errors
     }

@@ -102,7 +102,7 @@ def _call_gemini(prompt: str) -> str:
         remaining = _TOTAL_BUDGET_SECONDS - elapsed
         allowed = max(0, remaining - 2)
         connect_timeout = min(_TIMEOUT[0], allowed)
-        read_timeout = min(_TIMEOUT[1], max(0, allowed - connect_timeout))
+        read_timeout = min(_TIMEOUT[1], max(1, allowed - connect_timeout))
         attempt_timeout = (connect_timeout, read_timeout)
 
         try:
