@@ -3,7 +3,7 @@
  *
  * Covers:
  * - Previously Warm Leads view calls getPreviouslyWarmLeads and renders lead list
- * - Needs Review view calls getNeedsReviewLeads
+ * - Needs Review view renders ReviewQueue (which calls hubSpotService.getReviewQueue)
  * - Follow-Up Overdue view calls getFollowUpOverdueLeads
  * - No Current Next Action view calls getNoNextActionLeads
  * - Do Not Contact view calls getDoNotContactLeads
@@ -20,11 +20,11 @@ import {
   DoNotContactView,
   MissingPropertyMatchView,
 } from './HubSpotLeadViews'
-import { leadViewService } from '@/services/api'
+import { leadViewService, hubSpotService } from '@/services/api'
 import type { PropertySummary } from '@/types'
 
 // ---------------------------------------------------------------------------
-// Mock the API service
+// Mock the API services
 // ---------------------------------------------------------------------------
 
 vi.mock('@/services/api', () => ({
@@ -35,6 +35,20 @@ vi.mock('@/services/api', () => ({
     getNoNextActionLeads: vi.fn(),
     getDoNotContactLeads: vi.fn(),
     getMissingPropertyMatchLeads: vi.fn(),
+  },
+  hubSpotService: {
+    getHubSpotConfig: vi.fn(),
+    saveHubSpotConfig: vi.fn(),
+    testHubSpotConnection: vi.fn(),
+    triggerHubSpotImport: vi.fn(),
+    listImportRuns: vi.fn(),
+    getImportRun: vi.fn(),
+    getReviewQueue: vi.fn(),
+    confirmMatch: vi.fn(),
+    rejectMatch: vi.fn(),
+    markMatchAsNewRecord: vi.fn(),
+    triggerBackupExport: vi.fn(),
+    downloadBackupExport: vi.fn(),
   },
 }))
 
@@ -217,34 +231,50 @@ describe('PreviouslyWarmLeadsView', () => {
 })
 
 describe('NeedsReviewView', () => {
-  it('calls getNeedsReviewLeads on mount', async () => {
-    vi.mocked(leadViewService.getNeedsReviewLeads).mockResolvedValue(mockLeads)
+  it('calls getReviewQueue on mount (via ReviewQueue component)', async () => {
+    vi.mocked(hubSpotService.getReviewQueue).mockResolvedValue({
+      matches: [],
+      total: 0,
+      page: 1,
+      per_page: 20,
+    })
 
     render(<NeedsReviewView />)
 
     await waitFor(() => {
-      expect(leadViewService.getNeedsReviewLeads).toHaveBeenCalledOnce()
+      expect(hubSpotService.getReviewQueue).toHaveBeenCalled()
     })
   })
 
-  it('renders the correct page title', async () => {
-    vi.mocked(leadViewService.getNeedsReviewLeads).mockResolvedValue(mockLeads)
+  it('renders the Review Queue heading', async () => {
+    vi.mocked(hubSpotService.getReviewQueue).mockResolvedValue({
+      matches: [],
+      total: 0,
+      page: 1,
+      per_page: 20,
+    })
 
     render(<NeedsReviewView />)
 
     await waitFor(() => {
-      expect(screen.getByText('Needs Review')).toBeInTheDocument()
+      expect(screen.getByText('Review Queue')).toBeInTheDocument()
     })
   })
 
-  it('renders lead list', async () => {
-    vi.mocked(leadViewService.getNeedsReviewLeads).mockResolvedValue(mockLeads)
+  it('renders empty queue message when no matches', async () => {
+    vi.mocked(hubSpotService.getReviewQueue).mockResolvedValue({
+      matches: [],
+      total: 0,
+      page: 1,
+      per_page: 20,
+    })
 
     render(<NeedsReviewView />)
 
     await waitFor(() => {
-      expect(screen.getByText('John')).toBeInTheDocument()
-      expect(screen.getByText('Jane')).toBeInTheDocument()
+      expect(
+        screen.getByText(/No items in the review queue matching the current filters/)
+      ).toBeInTheDocument()
     })
   })
 })
