@@ -333,8 +333,9 @@ class TestAnalyzeLead:
 
         resp = client.post(
             f'/api/properties/{lead_id}/analyze',
-            data=json.dumps({'user_id': 'user1'}),
+            data=json.dumps({}),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 201
         data = json.loads(resp.data)
@@ -349,8 +350,9 @@ class TestAnalyzeLead:
         """Returns 404 for non-existent lead."""
         resp = client.post(
             '/api/properties/99999/analyze',
-            data=json.dumps({'user_id': 'user1'}),
+            data=json.dumps({}),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 404
 
@@ -375,8 +377,9 @@ class TestAnalyzeLead:
 
         resp = client.post(
             f'/api/properties/{lead_id}/analyze',
-            data=json.dumps({'user_id': 'user1'}),
+            data=json.dumps({}),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         data = json.loads(resp.data)
 
@@ -443,6 +446,7 @@ class TestUpdateScoringWeights:
             '/api/properties/scoring/weights',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 200
         data = json.loads(resp.data)
@@ -462,6 +466,7 @@ class TestUpdateScoringWeights:
             '/api/properties/scoring/weights',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 400
 
@@ -475,6 +480,7 @@ class TestUpdateScoringWeights:
             '/api/properties/scoring/weights',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 400
 
@@ -525,6 +531,7 @@ class TestUpdateScoringWeights:
             '/api/properties/scoring/weights',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         data = json.loads(resp.data)
         assert data['leads_rescored'] >= 1

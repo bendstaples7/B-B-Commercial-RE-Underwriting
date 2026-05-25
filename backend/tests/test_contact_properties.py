@@ -805,10 +805,14 @@ def test_unmatched_hubspot_contacts_create_new_contact_records(app, first_name, 
     """
     # Feature: property-contact-model, Property 11: Unmatched HubSpot contacts create new Contact records
     with app.app_context():
-        # Use a unique email and phone that won't match anything
+        # Use a unique email, phone, and name suffix that won't match anything
         unique_suffix = uuid.uuid4().hex[:12]
         unmatched_email = f"unmatched_{unique_suffix}@nowhere-{unique_suffix}.com"
         unmatched_phone = f"9{unique_suffix[:9]}"  # 10 digits, unlikely to match
+        # Append unique suffix to names so the name-match path (step 3) won't
+        # accidentally match a Contact created by a previous test example.
+        unique_first = f"{first_name}{unique_suffix[:6]}"
+        unique_last = f"{last_name}{unique_suffix[6:]}"
 
         count_before = Contact.query.count()
         pc_count_before = PropertyContact.query.count()
@@ -820,8 +824,8 @@ def test_unmatched_hubspot_contacts_create_new_contact_records(app, first_name, 
                 "properties": {
                     "email": unmatched_email,
                     "phone": unmatched_phone,
-                    "firstname": first_name,
-                    "lastname": last_name,
+                    "firstname": unique_first,
+                    "lastname": unique_last,
                 }
             },
         )

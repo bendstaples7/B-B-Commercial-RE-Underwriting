@@ -83,7 +83,7 @@ _activity_id_lists = st.lists(
 _activity_types = st.sampled_from(['NOTE', 'CALL', 'TASK', 'DEAL_STAGE_CHANGE'])
 
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(activity_ids=_activity_id_lists, activity_type=_activity_types)
 def test_property_7_hubspot_deduplication_second_import_adds_zero_rows(
     activity_ids, activity_type

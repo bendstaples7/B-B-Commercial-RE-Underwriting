@@ -474,36 +474,16 @@ class WorkflowController:
 
     
     def _execute_comparable_search(self, session: AnalysisSession) -> Dict[str, Any]:
-        """Execute comparable search using GeminiComparableSearchService.
+        """Comparable search is now handled exclusively by the Celery task.
 
-        This is the synchronous implementation used when Celery is not available
-        or when USE_ASYNC_COMPARABLE_SEARCH is set to false.
+        This method is intentionally not implemented in WorkflowController.
+        Use ``run_comparable_search_task.delay(session_id)`` via the async
+        route instead.
         """
-        if not session.subject_property:
-            raise ValueError("Subject property required for comparable search")
-        
-        from app.services.gemini_comparable_search_service import GeminiComparableSearchService
-        
-        service = GeminiComparableSearchService()
-        result = service.search(
-            property_facts=self._serialize_property_facts(session.subject_property),
-            property_type=session.subject_property.property_type,
+        raise NotImplementedError(
+            "_execute_comparable_search is not implemented in WorkflowController. "
+            "Use run_comparable_search_task.delay(session_id) via the async route."
         )
-        
-        # Persist comparables
-        for comp_dict in result['comparables']:
-            # Use the same mapping function as the Celery task
-            from celery_worker import _map_comparable_to_model
-            comparable = _map_comparable_to_model(comp_dict, session.id)
-            db.session.add(comparable)
-        
-        db.session.commit()
-        
-        return {
-            'comparable_count': len(result['comparables']),
-            'narrative': result['narrative'],
-            'status': 'complete',
-        }
     
     def _execute_weighted_scoring(self, session: AnalysisSession) -> Dict[str, Any]:
         """Execute weighted scoring and ranking."""

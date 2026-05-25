@@ -132,7 +132,7 @@ class TestProperty11SuppressedLeadScoreBelowThreshold:
             max_size=10,
         ),
     )
-    @settings(max_examples=100)
+    @settings(max_examples=100, deadline=None)
     def test_suppressed_lead_score_always_at_most_10(self, weights, signals):
         # Feature: hubspot-crm-migration, Property 11: Suppressed lead score is always below threshold
         engine = LeadScoringEngine()

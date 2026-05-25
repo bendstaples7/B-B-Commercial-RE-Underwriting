@@ -242,8 +242,8 @@ class CookCountySalesDataSource:
         )
 
         where = (
-            f"lat >= {min_lat} AND lat <= {max_lat} "
-            f"AND lon >= {min_lon} AND lon <= {max_lon}"
+            f"lat >= {min_lat:.4f} AND lat <= {max_lat:.4f} "
+            f"AND lon >= {min_lon:.4f} AND lon <= {max_lon:.4f}"
         )
         url = (
             _PARCEL_UNIVERSE_URL
@@ -812,15 +812,13 @@ class ComparableSalesFinder:
         if not subject.latitude or not subject.longitude:
             raise ValueError("Subject property must have geocoded coordinates")
         
-        # Calculate cutoff date for sale filtering
-        cutoff_date = datetime.now() - timedelta(days=max_age_months * 30)
-        
         comparables: List[Dict[str, Any]] = []
         seen_pins: set = set()
 
-        # Try each radius in sequence
+        # Try each radius in sequence; stop at the first that satisfies min_count
         for radius in self.RADIUS_SEQUENCE:
             radius_comparables: List[Dict[str, Any]] = []
+            radius_seen_pins: set = set(seen_pins)
 
             # Query every registered data source
             for source in self._data_sources:
@@ -831,9 +829,8 @@ class ComparableSalesFinder:
                     max_count=min_count * 5,  # fetch generously; we filter below
                 )
 
-                # Filter by property type and sale date
+                # Filter by property type only (data source already filters by date)
                 filtered = self.filter_by_property_type(raw_sales, subject.property_type)
-                filtered = self._filter_by_sale_date(filtered, cutoff_date)
 
                 for sale in filtered:
                     if not (sale.get('latitude') and sale.get('longitude')):
@@ -841,7 +838,7 @@ class ComparableSalesFinder:
 
                     # Deduplicate by PIN (None-PIN sales are always included)
                     pin = sale.get('pin')
-                    if pin and pin in seen_pins:
+                    if pin and pin in radius_seen_pins:
                         continue
 
                     distance = self._calculate_distance(
@@ -857,18 +854,20 @@ class ComparableSalesFinder:
                     sale['distance_miles'] = distance
                     radius_comparables.append(sale)
                     if pin:
-                        seen_pins.add(pin)
+                        radius_seen_pins.add(pin)
 
+            # Check if this radius satisfies min_count
+            if len(radius_comparables) >= min_count:
+                radius_comparables.sort(key=lambda x: x['distance_miles'])
+                return radius_comparables[:min_count]
+
+            # Not enough at this radius — accumulate and try the next
             comparables.extend(radius_comparables)
-
-            # Check if we have enough comparables
-            if len(comparables) >= min_count:
-                comparables.sort(key=lambda x: x['distance_miles'])
-                return comparables[:min_count]
+            seen_pins = radius_seen_pins
         
-        # Exhausted all radii — return whatever we have
+        # Exhausted all radii — return whatever we have (capped at min_count if we have enough)
         comparables.sort(key=lambda x: x['distance_miles'])
-        return comparables
+        return comparables[:min_count] if len(comparables) >= min_count else comparables
     
     def expand_search_radius(self, current_radius: float) -> Optional[float]:
         """

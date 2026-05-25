@@ -131,7 +131,7 @@ class TestValidSignedPayload:
         # attribute that the import resolves to.
         mock_task = MagicMock()
         mock_task.delay = MagicMock()
-        with patch('app.services.hubspot_webhook_service.process_webhook_event', mock_task, create=True):
+        with patch('celery_worker.process_webhook_event', mock_task, create=True):
             resp = _post_webhook(webhook_client, body, sig, ts)
 
         assert resp.status_code == 200
@@ -151,7 +151,7 @@ class TestValidSignedPayload:
 
         mock_task = MagicMock()
         mock_task.delay = MagicMock()
-        with patch('app.services.hubspot_webhook_service.process_webhook_event', mock_task, create=True):
+        with patch('celery_worker.process_webhook_event', mock_task, create=True):
             resp = _post_webhook(webhook_client, body, sig, ts)
 
         assert resp.status_code == 200
@@ -175,7 +175,7 @@ class TestValidSignedPayload:
 
         mock_task = MagicMock()
         mock_task.delay = MagicMock()
-        with patch('app.services.hubspot_webhook_service.process_webhook_event', mock_task, create=True):
+        with patch('celery_worker.process_webhook_event', mock_task, create=True):
             resp = _post_webhook(webhook_client, body, sig, ts)
 
         assert resp.status_code == 200
@@ -192,7 +192,7 @@ class TestValidSignedPayload:
 
         mock_task = MagicMock()
         mock_task.delay = MagicMock()
-        with patch('app.services.hubspot_webhook_service.process_webhook_event', mock_task, create=True):
+        with patch('celery_worker.process_webhook_event', mock_task, create=True):
             resp = _post_webhook(webhook_client, body, sig, ts)
 
         assert resp.status_code == 200

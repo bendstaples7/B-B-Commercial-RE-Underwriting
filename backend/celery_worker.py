@@ -260,7 +260,7 @@ def _map_comparable_to_model(comp_dict: dict, session_id: str):
         PropertyType,
         comp_dict.get('property_type'),
         PropertyType.SINGLE_FAMILY,
-    ).value  # pass the string value, not the enum object
+    )  # store enum instance
 
     # --- units ---
     try:
@@ -303,14 +303,14 @@ def _map_comparable_to_model(comp_dict: dict, session_id: str):
         ConstructionType,
         comp_dict.get('construction_type'),
         ConstructionType.FRAME,
-    ).value  # pass the string value, not the enum object
+    )  # store enum instance
 
     # --- interior_condition ---
     interior_condition = _resolve_enum(
         InteriorCondition,
         comp_dict.get('interior_condition'),
         InteriorCondition.AVERAGE,
-    ).value  # pass the string value, not the enum object
+    )  # store enum instance
 
     # --- distance_miles ---
     try:
@@ -465,7 +465,7 @@ def run_comparable_search_task(session_id: str) -> dict:
                 completed_steps.append(WorkflowStep.COMPARABLE_SEARCH.name)
             session.completed_steps = completed_steps
             session.step_results = step_results
-            session.current_step = WorkflowStep.COMPARABLE_REVIEW
+            session.current_step = WorkflowStep.COMPARABLE_SEARCH
             session.loading = False
             session.updated_at = datetime.utcnow()
             db.session.commit()
