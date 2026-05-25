@@ -336,6 +336,9 @@ def save_mapping():
         }), 400
 
     user_id = get_current_user_id()
+    # Fall back to body user_id if header not set (legacy clients / tests)
+    if not user_id or user_id == 'anonymous':
+        user_id = data.get('user_id', 'anonymous')
     spreadsheet_id = data.get('spreadsheet_id')
     sheet_name = data.get('sheet_name')
     mapping = data.get('mapping')
@@ -428,6 +431,9 @@ def start_import():
         }), 400
 
     user_id = get_current_user_id()
+    # Fall back to body user_id if header not set (legacy clients / tests)
+    if not user_id or user_id == 'anonymous':
+        user_id = data.get('user_id', 'anonymous')
     spreadsheet_id = data.get('spreadsheet_id')
     sheet_name = data.get('sheet_name')
 

@@ -15,10 +15,13 @@ class RequestSchema(Schema):
         unknown = EXCLUDE
 
 
-class StartAnalysisSchema(Schema):
-    """Schema for starting a new analysis."""
+class StartAnalysisSchema(RequestSchema):
+    """Schema for starting a new analysis.
+
+    user_id is read from the X-User-Id header via g.user_id, not the body.
+    Unknown fields (including user_id sent by older clients) are silently dropped.
+    """
     address = fields.Str(required=True, validate=validate.Length(min=5, max=500))
-    user_id = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     latitude = fields.Float(load_default=None, allow_none=True)
     longitude = fields.Float(load_default=None, allow_none=True)
 

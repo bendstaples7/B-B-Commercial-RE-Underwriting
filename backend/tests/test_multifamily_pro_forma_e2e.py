@@ -204,7 +204,8 @@ def _seed_full_deal(client, unit_count=10):
     _attach_lender(client, deal_id, 'A', ctp_id, is_primary=True)
     _attach_lender(client, deal_id, 'B', sfr_id, is_primary=True)
 
-    _add_funding_source(client, deal_id, source_type='Cash', total=400_000.0)
+    # Note: Cash/HELOC funding sources are auto-seeded on deal creation.
+    # No need to call _add_funding_source here.
 
     return deal_id
 
@@ -224,8 +225,7 @@ class TestProFormaE2E:
 
         Requirements: 8.1-8.14
         """
-        with app.app_context():
-            deal_id = _seed_full_deal(client, unit_count=10)
+        deal_id = _seed_full_deal(client, unit_count=10)
 
         resp = _get(client, f'/deals/{deal_id}/pro-forma')
         assert resp.status_code == 200, f"Pro forma failed: {resp.get_json()}"
@@ -280,8 +280,7 @@ class TestProFormaE2E:
 
         Requirements: 11.1, 11.2
         """
-        with app.app_context():
-            deal_id = _seed_full_deal(client, unit_count=10)
+        deal_id = _seed_full_deal(client, unit_count=10)
 
         resp = _get(client, f'/deals/{deal_id}/dashboard')
         assert resp.status_code == 200, f"Dashboard failed: {resp.get_json()}"
@@ -312,12 +311,11 @@ class TestProFormaE2E:
 
         Requirements: 8.14, 11.2
         """
-        with app.app_context():
-            deal_id = _create_deal(client, unit_count=5)
-            for i in range(5):
-                uid = _add_unit(client, deal_id, identifier=f'M{i + 1}')
-                _set_rent_roll(client, deal_id, uid)
-                _set_rehab(client, deal_id, uid)
+        deal_id = _create_deal(client, unit_count=5)
+        for i in range(5):
+            uid = _add_unit(client, deal_id, identifier=f'M{i + 1}')
+            _set_rent_roll(client, deal_id, uid)
+            _set_rehab(client, deal_id, uid)
 
         resp = _get(client, f'/deals/{deal_id}/pro-forma')
         assert resp.status_code == 200
@@ -338,8 +336,7 @@ class TestProFormaE2E:
 
         Requirements: 15.4
         """
-        with app.app_context():
-            deal_id = _seed_full_deal(client, unit_count=5)
+        deal_id = _seed_full_deal(client, unit_count=5)
 
         # Warm the cache
         _get(client, f'/deals/{deal_id}/pro-forma')
@@ -359,8 +356,7 @@ class TestProFormaE2E:
 
         Requirements: 15.1, 15.2
         """
-        with app.app_context():
-            deal_id = _seed_full_deal(client, unit_count=5)
+        deal_id = _seed_full_deal(client, unit_count=5)
 
         resp1 = _get(client, f'/deals/{deal_id}/pro-forma')
         resp2 = _get(client, f'/deals/{deal_id}/pro-forma')
@@ -383,8 +379,7 @@ class TestProFormaE2E:
 
         Requirements: 15.3
         """
-        with app.app_context():
-            deal_id = _seed_full_deal(client, unit_count=5)
+        deal_id = _seed_full_deal(client, unit_count=5)
 
         # Warm cache
         resp_before = _get(client, f'/deals/{deal_id}/pro-forma')
@@ -431,8 +426,7 @@ class TestDashboardPerformance:
 
         Requirements: 11.3
         """
-        with app.app_context():
-            deal_id = _seed_full_deal(client, unit_count=200)
+        deal_id = _seed_full_deal(client, unit_count=200)
 
         # Warm the cache
         warm_resp = _get(client, f'/deals/{deal_id}/pro-forma')
@@ -465,8 +459,7 @@ class TestExcelExportPerformance:
 
         Requirements: 12.4
         """
-        with app.app_context():
-            deal_id = _seed_full_deal(client, unit_count=200)
+        deal_id = _seed_full_deal(client, unit_count=200)
 
         start = time.perf_counter()
         resp = _get(client, f'/deals/{deal_id}/export/excel')
@@ -506,8 +499,7 @@ class TestWritePathTiming:
 
         Requirements: 15.4
         """
-        with app.app_context():
-            deal_id = _seed_full_deal(client, unit_count=200)
+        deal_id = _seed_full_deal(client, unit_count=200)
 
         # Warm the cache so a cached result exists
         _get(client, f'/deals/{deal_id}/pro-forma')
@@ -555,10 +547,10 @@ class TestCeleryBulkRecompute:
 
         Requirements: 15.5
         """
-        with app.app_context():
-            deal_id_1 = _seed_full_deal(client, unit_count=5)
-            deal_id_2 = _seed_full_deal(client, unit_count=5)
+        deal_id_1 = _seed_full_deal(client, unit_count=5)
+        deal_id_2 = _seed_full_deal(client, unit_count=5)
 
+        with app.app_context():
             # Clear any existing cache rows
             from app.models.pro_forma_result import ProFormaResult
             ProFormaResult.query.filter(
@@ -595,12 +587,12 @@ class TestCeleryBulkRecompute:
 
         Requirements: 15.5
         """
-        with app.app_context():
-            deal_id = _seed_full_deal(client, unit_count=5)
+        deal_id = _seed_full_deal(client, unit_count=5)
 
-            # Soft-delete the deal
-            from app.models.deal import Deal
-            from datetime import datetime, timezone
+        # Soft-delete the deal
+        from app.models.deal import Deal
+        from datetime import datetime, timezone
+        with app.app_context():
             deal = Deal.query.get(deal_id)
             deal.deleted_at = datetime.now(timezone.utc)
             db.session.commit()

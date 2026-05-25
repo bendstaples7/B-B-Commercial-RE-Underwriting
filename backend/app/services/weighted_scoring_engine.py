@@ -308,18 +308,26 @@ class WeightedScoringEngine:
             abs(subject.bathrooms - comp.bathrooms) for comp in comparables
         )
         
-        # Calculate scores for all comparables
-        scored_comparables: List[RankedComparableDTO] = []
+        # Calculate scores for all comparables — store as (total_score, breakdown, comp)
+        # so we can sort before constructing the frozen DTOs.
+        scored: List[tuple] = []
         for comp in comparables:
             total_score, breakdown = self.calculate_score(
                 subject, comp, max_distance, max_units, max_bed_diff, max_bath_diff
             )
-            
+            scored.append((total_score, breakdown, comp))
+
+        # Sort by total score descending before assigning ranks
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        # Build frozen DTOs with rank already set (frozen=True forbids post-init mutation)
+        ranked_dtos: List[RankedComparableDTO] = []
+        for rank, (total_score, breakdown, comp) in enumerate(scored, start=1):
             dto = RankedComparableDTO(
                 comparable_id=comp.id,
                 session_id=comp.session_id,
                 total_score=total_score,
-                rank=0,  # Will be set after sorting
+                rank=rank,
                 recency_score=breakdown['recency_score'],
                 proximity_score=breakdown['proximity_score'],
                 units_score=breakdown['units_score'],
@@ -328,13 +336,6 @@ class WeightedScoringEngine:
                 construction_score=breakdown['construction_score'],
                 interior_score=breakdown['interior_score'],
             )
-            scored_comparables.append(dto)
-        
-        # Sort by total score descending
-        scored_comparables.sort(key=lambda x: x.total_score, reverse=True)
-        
-        # Assign ranks (dataclasses are mutable by default)
-        for i, dto in enumerate(scored_comparables, start=1):
-            dto.rank = i
-        
-        return scored_comparables
+            ranked_dtos.append(dto)
+
+        return ranked_dtos

@@ -50,7 +50,7 @@ class LeadTimelineService:
         per_page = max(1, min(per_page, 100))
         query = (
             LeadTimelineEntry.query
-            .filter_by(lead_id=lead_id)
+            .filter_by(lead_id=lead_id, is_deleted=False)
             .order_by(LeadTimelineEntry.occurred_at.desc())
         )
         total = query.count()

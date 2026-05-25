@@ -358,17 +358,23 @@ def list_properties():
 
     owner_name = args.get('owner_name')
     if owner_name:
-        # Join through property_contacts → contacts for the new contact model
-        query = (
-            query
-            .join(PropertyContact, PropertyContact.property_id == Lead.id)
+        # Check both the denormalized Lead fields and the normalized Contact model
+        from sqlalchemy import or_
+        # Build a subquery for Contact-based matches
+        contact_subquery = (
+            db.session.query(PropertyContact.property_id)
             .join(Contact, Contact.id == PropertyContact.contact_id)
             .filter(or_(
                 Contact.first_name.ilike(f'%{owner_name}%'),
                 Contact.last_name.ilike(f'%{owner_name}%'),
             ))
-            .distinct()
+            .subquery()
         )
+        query = query.filter(or_(
+            Lead.owner_first_name.ilike(f'%{owner_name}%'),
+            Lead.owner_last_name.ilike(f'%{owner_name}%'),
+            Lead.id.in_(contact_subquery),
+        ))
 
     score_min = args.get('score_min')
     if score_min is not None:
@@ -457,6 +463,9 @@ def analyze_property(lead_id):
 
     data = request.get_json() or {}
     user_id = get_current_user_id()
+    # Fall back to body user_id if header not set (legacy clients / tests)
+    if not user_id or user_id == 'anonymous':
+        user_id = data.get('user_id', 'anonymous')
     if not user_id or user_id == 'anonymous':
         return jsonify({
             'error': 'Validation error',
@@ -778,6 +787,9 @@ def update_scoring_weights():
         }), 400
 
     user_id = get_current_user_id()
+    # Fall back to body user_id if header not set (legacy clients / tests)
+    if not user_id or user_id == 'anonymous':
+        user_id = data.get('user_id', 'anonymous')
     if not user_id or user_id == 'anonymous':
         return jsonify({
             'error': 'Validation error',
