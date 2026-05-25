@@ -150,18 +150,29 @@ interface MonthlyTableProps {
 
 function MonthlyTable({ rows }: MonthlyTableProps) {
   return (
-    <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 480 }}>
-      <Table size="small" stickyHeader aria-label="Pro forma monthly schedule">
+    <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 480, overflowX: 'auto' }}>
+      <Table size="small" stickyHeader aria-label="Pro forma monthly schedule" sx={{ minWidth: 1400 }}>
         <TableHead>
           <TableRow>
             {[
-              'Month', 'GSR', 'EGI', 'OpEx', 'NOI', 'Reserves',
-              'Net CF', 'DS-A', 'DS-B', 'CFAD-A', 'CFAD-B',
-              'CapEx', 'CFAC-A', 'CFAC-B',
-            ].map((label) => (
+              { key: 'Month', label: 'Month' },
+              { key: 'GSR', label: 'Gross Scheduled Rent' },
+              { key: 'EGI', label: 'Effective Gross Income' },
+              { key: 'OpEx', label: 'Operating Expenses' },
+              { key: 'NOI', label: 'Net Operating Income' },
+              { key: 'Reserves', label: 'Replacement Reserves' },
+              { key: 'Net CF', label: 'Net Cash Flow' },
+              { key: 'DS-A', label: 'Debt Service (Scenario A)' },
+              { key: 'DS-B', label: 'Debt Service (Scenario B)' },
+              { key: 'CFAD-A', label: 'CF After Debt (Scenario A)' },
+              { key: 'CFAD-B', label: 'CF After Debt (Scenario B)' },
+              { key: 'CapEx', label: 'Capital Expenditure' },
+              { key: 'CFAC-A', label: 'CF After CapEx (Scenario A)' },
+              { key: 'CFAC-B', label: 'CF After CapEx (Scenario B)' },
+            ].map(({ key, label }) => (
               <TableCell
-                key={label}
-                align={label === 'Month' ? 'left' : 'right'}
+                key={key}
+                align={key === 'Month' ? 'left' : 'right'}
                 sx={{ whiteSpace: 'nowrap', fontWeight: 600 }}
               >
                 {label}
@@ -289,6 +300,9 @@ export function ProFormaTab({ dealId }: ProFormaTabProps) {
       ) : (
         <>
           <ProFormaChart rows={rows} />
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+            All values are monthly amounts.
+          </Typography>
           <MonthlyTable rows={rows} />
         </>
       )}

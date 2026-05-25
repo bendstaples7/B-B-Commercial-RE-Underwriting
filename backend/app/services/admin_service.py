@@ -4,7 +4,7 @@ Provides read-only access to all users, their activity summaries,
 and their leads. No modification of another user's data is permitted.
 """
 from app import db
-from app.exceptions import NotFoundError, ValidationError
+from app.exceptions import ResourceNotFoundError, ValidationException
 from sqlalchemy import text
 
 
@@ -54,7 +54,7 @@ class AdminService:
         """), {'user_id': user_id})
         row = result.fetchone()
         if row is None:
-            raise NotFoundError(f'User {user_id} not found.')
+            raise ResourceNotFoundError(f'User {user_id} not found.')
         return {
             'user_id': row.user_id,
             'email': row.email,
@@ -87,11 +87,11 @@ class AdminService:
         Raises ValidationError if page_size > 200.
         """
         if page < 1:
-            raise ValidationError('page must be >= 1.')
+            raise ValidationException('page must be >= 1.')
         if page_size < 1:
-            raise ValidationError('page_size must be >= 1.')
+            raise ValidationException('page_size must be >= 1.')
         if page_size > 200:
-            raise ValidationError('page_size cannot exceed 200.')
+            raise ValidationException('page_size cannot exceed 200.')
 
         offset = (page - 1) * page_size
 

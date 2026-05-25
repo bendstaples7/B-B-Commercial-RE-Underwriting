@@ -111,6 +111,34 @@ class DealService:
         db.session.add(deal)
         db.session.flush()
 
+        # Seed default funding sources for every new deal.
+        # These match the user's standard capital stack and can be updated per-deal.
+        default_funding_sources = [
+            FundingSource(
+                deal_id=deal.id,
+                source_type='Cash',
+                total_available=Decimal('280000'),  # Ben $80k + Bessy $200k
+                interest_rate=Decimal('0'),
+                origination_fee_rate=Decimal('0'),
+            ),
+            FundingSource(
+                deal_id=deal.id,
+                source_type='HELOC_1',
+                total_available=Decimal('232000'),   # Clark St Federal Savings
+                interest_rate=Decimal('0.09375'),    # 9.375%
+                origination_fee_rate=Decimal('0.02'), # 2.0%
+            ),
+            FundingSource(
+                deal_id=deal.id,
+                source_type='HELOC_2',
+                total_available=Decimal('300000'),   # Lyndale Federal Savings
+                interest_rate=Decimal('0.09375'),    # 9.375%
+                origination_fee_rate=Decimal('0.02'), # 2.0%
+            ),
+        ]
+        for fs in default_funding_sources:
+            db.session.add(fs)
+
         self._log_audit(deal.id, user_id, "create", payload)
         return deal
 

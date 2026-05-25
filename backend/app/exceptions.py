@@ -515,3 +515,19 @@ class InvalidCronExpressionException(RealEstateAnalysisException):
             'error_type': 'invalid_cron_expression',
             'expression': expression,
         }
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible aliases
+#
+# These names were used in admin_service.py (introduced by the admin-panel
+# branch) but don't match the canonical names defined above. The aliases make
+# the wrong names work correctly so a typo never crashes the Celery worker
+# again. New code should use the canonical names.
+# ---------------------------------------------------------------------------
+
+#: Alias for ResourceNotFoundError — use ResourceNotFoundError in new code.
+NotFoundError = ResourceNotFoundError
+
+#: Alias for ValidationException — use ValidationException in new code.
+ValidationError = ValidationException

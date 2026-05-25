@@ -33,6 +33,15 @@ class SaleComp(db.Model):
     # Confidence in the cap rate: 1.0=stated, 0.5=derived, 0.0=unknown, None=not set
     cap_rate_confidence = db.Column(db.Float, nullable=True)
 
+    # Suggested comps workflow:
+    #   is_suggested=True  — AI-fetched, pending user review
+    #   is_dismissed=True  — user dismissed, excluded from rollup
+    #   out_of_range=True  — unit count outside ±50% of subject; shown with warning badge
+    # Confirmed comps: is_suggested=False AND is_dismissed=False
+    is_suggested = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    is_dismissed = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+    out_of_range = db.Column(db.Boolean, nullable=False, default=False, server_default='false')
+
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 

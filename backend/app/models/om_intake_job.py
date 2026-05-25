@@ -13,7 +13,11 @@ class OMIntakeJob(db.Model):
     intake_status = db.Column(db.String(20), nullable=False, default='PENDING')
 
     # PDF storage and extraction results
-    pdf_bytes = db.Column(db.LargeBinary, nullable=True)
+    # deferred=True means SQLAlchemy will NOT include pdf_bytes in standard
+    # SELECT queries. It is only fetched when explicitly accessed (e.g. in the
+    # Celery task). This prevents the full PDF binary from being transferred
+    # from the cloud database on every status poll.
+    pdf_bytes = db.deferred(db.Column(db.LargeBinary, nullable=True))
     raw_text = db.Column(db.Text, nullable=True)
     tables_json = db.Column(db.JSON, nullable=True)
     table_extraction_warning = db.Column(db.Text, nullable=True)

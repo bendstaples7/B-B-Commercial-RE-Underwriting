@@ -183,8 +183,8 @@ function ScenarioCard({ scenario }: ScenarioCardProps) {
         {/* Ratios */}
         <SectionHeader title="Ratios" />
         <FieldRow
-          label="Price-to-Rent Ratio"
-          value={computed(scenario.price_to_rent_ratio, (v) => fmtNum(v, 2))}
+          label="Monthly Rent / Purchase Price"
+          value={computed(scenario.price_to_rent_ratio, fmtPct)}
         />
 
         {/* Valuation at Cap Rate */}
@@ -223,14 +223,30 @@ function ScenarioCard({ scenario }: ScenarioCardProps) {
         />
 
         {/* Cash Flow */}
-        <SectionHeader title="Cash Flow" />
+        <SectionHeader title="Cash Flow After Debt Service" />
         <FieldRow
-          label="Month 1 Net CF"
+          label="Month 1 CF After Debt"
           value={computed(scenario.month_1_net_cash_flow, fmtCurrency)}
         />
         <FieldRow
-          label="Month 24 Net CF"
+          label="Month 24 CF After Debt"
           value={computed(scenario.month_24_net_cash_flow, fmtCurrency)}
+        />
+        <FieldRow
+          label="CF Per Unit — Month 1"
+          value={computed((scenario as any).cf_per_unit_month_1, fmtCurrency)}
+        />
+        <FieldRow
+          label="CF Per Unit — Month 24"
+          value={computed((scenario as any).cf_per_unit_month_24, fmtCurrency)}
+        />
+        <FieldRow
+          label="CF Needed for $200/Door"
+          value={computed((scenario as any).cf_needed_for_min, fmtCurrency)}
+        />
+        <FieldRow
+          label="Purchase Price for $200/Door CF"
+          value={computed((scenario as any).purchase_price_for_min_cf, fmtCurrency)}
         />
         <FieldRow
           label="Cash-on-Cash Return"
