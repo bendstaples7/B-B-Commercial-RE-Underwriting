@@ -128,17 +128,21 @@ class OMIntakeService:
             user_id=user_id,
             original_filename=filename,
             intake_status="PENDING",
-            pdf_bytes=file_bytes,
             expires_at=datetime.utcnow() + timedelta(days=_JOB_TTL_DAYS),
         )
         db.session.add(job)
         db.session.commit()
 
-        # --- Enqueue Celery task by name ---
+        # --- Enqueue Celery task — pass PDF bytes directly, never store in DB ---
+        import base64
         import os
         from celery import Celery as _Celery
         _client = _Celery(broker=os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0'))
-        _client.send_task('om_intake.process_pipeline', args=[job.id])
+        _client.send_task(
+            'om_intake.process_pipeline',
+            args=[job.id],
+            kwargs={'pdf_b64': base64.b64encode(file_bytes).decode('ascii')},
+        )
 
         return job
 
@@ -263,19 +267,21 @@ class OMIntakeService:
             user_id=job.user_id,
             original_filename=job.original_filename,
             intake_status="PENDING",
-            pdf_bytes=job.pdf_bytes,
             expires_at=datetime.utcnow() + timedelta(days=_JOB_TTL_DAYS),
         )
         db.session.add(new_job)
         db.session.commit()
 
-        # Enqueue parsing for the new job
-        import os
-        from celery import Celery as _Celery
-        _client = _Celery(broker=os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0'))
-        _client.send_task('om_intake.process_pipeline', args=[new_job.id])
-
-        return new_job
+        # PDF bytes are no longer stored in the DB — the retry endpoint is not
+        # supported without re-uploading the file. Raise ConflictError so the
+        # caller knows to prompt the user to re-upload.
+        db.session.delete(new_job)
+        db.session.commit()
+        raise ConflictError(
+            "Retry requires re-uploading the PDF. The original file is not stored "
+            "in the database. Please upload the file again.",
+            payload={"job_id": job_id, "reason": "pdf_not_stored"},
+        )
 
     # ------------------------------------------------------------------
     # Internal state-transition helpers — called by Celery tasks

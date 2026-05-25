@@ -577,8 +577,13 @@ def _parse_unit_type(label: str) -> tuple[int | None, float | None]:
     time_limit=120,         # hard kill after 2 minutes (OS-level SIGKILL)
     soft_time_limit=100,    # raises SoftTimeLimitExceeded at 100s for clean shutdown
 )
-def process_om_intake_pipeline(self, job_id: int) -> None:
+def process_om_intake_pipeline(self, job_id: int, pdf_b64: str = None) -> None:
     """Run the full OM intake pipeline for a single job.
+
+    PDF bytes are passed directly via the Celery task argument (base64-encoded)
+    and are NEVER stored in the database. This prevents the pdf_bytes column
+    from being fetched on every status poll, which was causing excessive
+    network transfer from the cloud database.
 
     Stages:
       1. PDF text/table extraction
@@ -634,16 +639,28 @@ def process_om_intake_pipeline(self, job_id: int) -> None:
             # Stage 1: PDF parsing
             # ----------------------------------------------------------
             from app.services.om_intake.pdf_parser_service import PDFParserService
+            import base64
 
             service.transition_to_parsing(job_id)
 
-            job = OMIntakeJob.query.get(job_id)
-            if job is None:
-                logger.error("process_om_intake_pipeline: job_id=%d not found", job_id)
-                return
+            # PDF bytes are passed via task argument — never stored in the DB.
+            # Fall back to db column (deferred) only for jobs created before
+            # this change was deployed.
+            if pdf_b64:
+                pdf_bytes = base64.b64decode(pdf_b64)
+            else:
+                job = OMIntakeJob.query.get(job_id)
+                if job is None:
+                    logger.error("process_om_intake_pipeline: job_id=%d not found", job_id)
+                    return
+                pdf_bytes = job.pdf_bytes  # deferred load — only fetched here
+                if not pdf_bytes:
+                    service.transition_to_failed(job_id, "No PDF data available for processing.")
+                    return
 
             parser = PDFParserService()
-            parse_result = parser.extract(job.pdf_bytes)
+            parse_result = parser.extract(pdf_bytes)
+            del pdf_bytes  # release memory immediately after parsing
 
             service.store_parsed_text(
                 job_id,
@@ -852,8 +869,8 @@ def process_om_intake_pipeline(self, job_id: int) -> None:
     name='multifamily.fetch_rent_comps_ai',
     bind=True,
     max_retries=0,
-    time_limit=180,
-    soft_time_limit=160,
+    time_limit=1200,
+    soft_time_limit=1100,
 )
 def fetch_rent_comps_ai_task(self, deal_id: int, user_id: str) -> dict:
     """Fetch rent comps via Gemini and insert them into the DB.
@@ -918,8 +935,8 @@ def fetch_rent_comps_ai_task(self, deal_id: int, user_id: str) -> dict:
     name='multifamily.fetch_sale_comps_ai',
     bind=True,
     max_retries=0,
-    time_limit=180,
-    soft_time_limit=160,
+    time_limit=1200,
+    soft_time_limit=1100,
 )
 def fetch_sale_comps_ai_task(self, deal_id: int, user_id: str) -> dict:
     """Fetch sale comps via Gemini and insert them into the DB.
@@ -961,21 +978,46 @@ def fetch_sale_comps_ai_task(self, deal_id: int, user_id: str) -> dict:
 
         comps = fetch_sale_comps(full_address, deal.unit_count, unit_mix)
 
+        # Build set of existing non-dismissed addresses to prevent duplicates.
+        # Dismissed comps are excluded so re-fetching after dismissing works correctly.
+        from app.models import SaleComp as _SaleComp
+        existing_addresses = {
+            c.address.lower()
+            for c in _SaleComp.query.filter_by(deal_id=deal_id, is_dismissed=False)
+            .with_entities(_SaleComp.address).all()
+        }
+
         service = SaleCompService()
         added = 0
+        skipped_dupes = 0
         errors = []
         for comp in comps:
+            # Skip if this address already exists for this deal
+            if comp["address"].lower() in existing_addresses:
+                skipped_dupes += 1
+                logger.info(
+                    "fetch_sale_comps_ai_task: skipping duplicate address: %s",
+                    comp["address"],
+                )
+                continue
+            # Mark all AI-fetched comps as suggested — user must confirm before
+            # they appear in rollup statistics.
+            comp['is_suggested'] = True
             try:
                 service.add_sale_comp(deal_id, comp)
+                existing_addresses.add(comp["address"].lower())
                 added += 1
             except Exception as exc:
                 errors.append(str(exc))
         db.session.commit()
 
-        logger.info("fetch_sale_comps_ai_task: deal_id=%d added=%d skipped=%d", deal_id, added, len(errors))
+        logger.info(
+            "fetch_sale_comps_ai_task: deal_id=%d added=%d dupes_skipped=%d errors=%d",
+            deal_id, added, skipped_dupes, len(errors),
+        )
         return {
             'added': added,
-            'skipped': len(errors),
+            'skipped': len(errors) + skipped_dupes,
             'message': f'Added {added} sale comp(s) from AI research.',
         }
 

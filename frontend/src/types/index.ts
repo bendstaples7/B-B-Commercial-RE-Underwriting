@@ -815,6 +815,12 @@ export interface MFSaleComp {
   noi: string | null
   /** 1.0 = stated directly, 0.5 = derived from NOI/price, 0.0 = unknown, null = not set */
   cap_rate_confidence: number | null
+  /** True = AI-fetched, pending user review. False = confirmed, included in rollup. */
+  is_suggested: boolean
+  /** True = user dismissed, excluded from suggested list. */
+  is_dismissed: boolean
+  /** True = unit count is outside ±50% of subject property unit count. */
+  out_of_range: boolean
 }
 
 export interface SaleCompRollup {

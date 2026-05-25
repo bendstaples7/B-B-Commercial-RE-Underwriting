@@ -70,6 +70,20 @@ jobs:
         run: pip install -r requirements.txt
         working-directory: backend
 
+      - name: Verify Celery worker imports cleanly
+        # Imports celery_worker which transitively loads every service, task,
+        # and model. A broken import (wrong exception name, missing module,
+        # circular dependency) crashes the worker on startup — this catches it
+        # before it can reach production and before pytest even runs.
+        run: python -c "import celery_worker; print('celery_worker imports OK')"
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+          FLASK_ENV: testing
+          SECRET_KEY: ci-test-secret-key
+          JWT_SECRET_KEY: ci-test-jwt-secret
+          CELERY_BROKER_URL: redis://localhost:6379/0
+
       - name: Run tests
         run: pytest
         working-directory: backend

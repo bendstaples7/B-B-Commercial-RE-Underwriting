@@ -428,17 +428,39 @@ export const multifamilyService = {
 
   /** Fetch rent comps via Gemini AI web search and bulk-insert them (Req 3.2)
    *
-   * Uses a 120s timeout because Gemini with web search grounding can take
-   * 30–90s. Falls back to polling if the server returns a job_id instead
-   * of an immediate result (Option 2 async path).
+   * Uses the async Celery path (?async=true): POSTs to start the job (returns
+   * immediately with a job_id), then polls /fetch-ai/status/:job_id until done.
+   * This prevents any HTTP timeout issues regardless of how long Gemini takes.
    */
   fetchRentCompsAI: async (dealId: number): Promise<{ added: number; skipped: number; message: string }> => {
-    const response = await api.post<{ added: number; skipped: number; message: string }>(
-      `/multifamily/deals/${dealId}/rent-comps/fetch-ai`,
-      {},
-      { timeout: 120_000 }
+    // Step 1: enqueue the Celery task
+    const startResponse = await api.post<{ job_id: string; status: string }>(
+      `/multifamily/deals/${dealId}/rent-comps/fetch-ai?async=true`,
+      {}
     )
-    return response.data
+    const jobId = startResponse.data.job_id
+
+    // Step 2: poll until done or failed (max 5 minutes, poll every 3s)
+    const maxAttempts = 100
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise(resolve => setTimeout(resolve, 3000))
+      const statusResponse = await api.get<{
+        status: 'pending' | 'running' | 'done' | 'failed'
+        added?: number
+        skipped?: number
+        message?: string
+        error?: string
+      }>(`/multifamily/deals/${dealId}/rent-comps/fetch-ai/status/${jobId}`)
+      const result = statusResponse.data
+      if (result.status === 'done') {
+        return { added: result.added ?? 0, skipped: result.skipped ?? 0, message: result.message ?? '' }
+      }
+      if (result.status === 'failed') {
+        throw new Error(result.error ?? 'AI rent comp fetch failed.')
+      }
+      // pending or running — keep polling
+    }
+    throw new Error('AI rent comp fetch timed out after 5 minutes.')
   },
 
   /** Poll the status of an async AI rent comp fetch job */
@@ -491,19 +513,70 @@ export const multifamilyService = {
     await api.delete(`/multifamily/deals/${dealId}/sale-comps/${compId}`)
   },
 
+  /** Get AI-suggested comps pending user review */
+  getSuggestedSaleComps: async (dealId: number): Promise<MFSaleComp[]> => {
+    const response = await api.get<MFSaleComp[]>(`/multifamily/deals/${dealId}/sale-comps/suggested`)
+    return response.data
+  },
+
+  /** Confirm a suggested comp — moves it into the confirmed set for rollup stats */
+  confirmSaleComp: async (dealId: number, compId: number): Promise<MFSaleComp> => {
+    const response = await api.post<MFSaleComp>(`/multifamily/deals/${dealId}/sale-comps/${compId}/confirm`)
+    return response.data
+  },
+
+  /** Dismiss a suggested comp — removes it from the suggested list */
+  dismissSaleComp: async (dealId: number, compId: number): Promise<void> => {
+    await api.post(`/multifamily/deals/${dealId}/sale-comps/${compId}/dismiss`)
+  },
+
+  /** Hard-delete ALL sale comps for a deal (suggested, dismissed, and confirmed) */
+  clearAllSaleComps: async (dealId: number): Promise<{ deleted: number }> => {
+    const response = await api.delete<{ deleted: number }>(`/multifamily/deals/${dealId}/sale-comps/clear`)
+    return response.data
+  },
+
+  /** Confirm all pending suggested comps at once */
+  confirmAllSaleComps: async (dealId: number): Promise<{ confirmed: number }> => {
+    const response = await api.post<{ confirmed: number }>(`/multifamily/deals/${dealId}/sale-comps/confirm-all`)
+    return response.data
+  },
+
   /** Fetch sale comps via Gemini AI web search and bulk-insert them (Req 4.1)
    *
-   * Uses a 120s timeout because Gemini with web search grounding can take
-   * 30–90s. Falls back to polling if the server returns a job_id instead
-   * of an immediate result (Option 2 async path).
+   * Uses the async Celery path (?async=true): POSTs to start the job (returns
+   * immediately with a job_id), then polls /fetch-ai/status/:job_id until done.
+   * This prevents any HTTP timeout issues regardless of how long Gemini takes.
    */
   fetchSaleCompsAI: async (dealId: number): Promise<{ added: number; skipped: number; message: string }> => {
-    const response = await api.post<{ added: number; skipped: number; message: string }>(
-      `/multifamily/deals/${dealId}/sale-comps/fetch-ai`,
-      {},
-      { timeout: 120_000 }
+    // Step 1: enqueue the Celery task
+    const startResponse = await api.post<{ job_id: string; status: string }>(
+      `/multifamily/deals/${dealId}/sale-comps/fetch-ai?async=true`,
+      {}
     )
-    return response.data
+    const jobId = startResponse.data.job_id
+
+    // Step 2: poll until done or failed (max 5 minutes, poll every 3s)
+    const maxAttempts = 100
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise(resolve => setTimeout(resolve, 3000))
+      const statusResponse = await api.get<{
+        status: 'pending' | 'running' | 'done' | 'failed'
+        added?: number
+        skipped?: number
+        message?: string
+        error?: string
+      }>(`/multifamily/deals/${dealId}/sale-comps/fetch-ai/status/${jobId}`)
+      const result = statusResponse.data
+      if (result.status === 'done') {
+        return { added: result.added ?? 0, skipped: result.skipped ?? 0, message: result.message ?? '' }
+      }
+      if (result.status === 'failed') {
+        throw new Error(result.error ?? 'AI sale comp fetch failed.')
+      }
+      // pending or running — keep polling
+    }
+    throw new Error('AI sale comp fetch timed out after 5 minutes.')
   },
 
   /** Poll the status of an async AI sale comp fetch job */
