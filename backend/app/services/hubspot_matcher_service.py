@@ -279,10 +279,11 @@ class HubSpotMatcherService:
                     matching_criteria="email_match",
                 )
 
-            # Also check Lead.email_1 directly (denormalized storage)
+            # Also check Lead.email_1 directly (denormalized storage).
+            # Tiebreaker: most recently updated lead wins; fall back to highest id.
             lead_by_email = Lead.query.filter(
                 db.func.lower(Lead.email_1) == email
-            ).first()
+            ).order_by(Lead.updated_at.desc().nullslast(), Lead.id.desc()).first()
             if lead_by_email:
                 logger.debug(
                     "Contact %s matched Lead %s via email_1 '%s'",
@@ -322,8 +323,11 @@ class HubSpotMatcherService:
                         matching_criteria="phone_match",
                     )
 
-            # Also check Lead.phone_1 directly (denormalized storage)
-            all_leads_with_phone = Lead.query.filter(Lead.phone_1.isnot(None)).all()
+            # Also check Lead.phone_1 directly (denormalized storage).
+            # Tiebreaker: most recently updated lead wins; fall back to highest id.
+            all_leads_with_phone = Lead.query.filter(
+                Lead.phone_1.isnot(None)
+            ).order_by(Lead.updated_at.desc().nullslast(), Lead.id.desc()).all()
             for lead in all_leads_with_phone:
                 if HubSpotMatcherService.normalize_phone(lead.phone_1) == phone_digits:
                     logger.debug(
@@ -370,13 +374,15 @@ class HubSpotMatcherService:
                     matching_criteria="name_property_match",
                 )
 
-            # Also check Lead.owner_first_name / owner_last_name directly
+            # Also check Lead.owner_first_name / owner_last_name directly.
+            # Tiebreaker: most recently updated lead wins; fall back to highest id.
             lead_by_name = (
                 Lead.query
                 .filter(
                     db.func.lower(Lead.owner_first_name) == first_name.lower(),
                     db.func.lower(Lead.owner_last_name) == last_name.lower(),
                 )
+                .order_by(Lead.updated_at.desc().nullslast(), Lead.id.desc())
                 .first()
             )
             if lead_by_name:
@@ -393,21 +399,39 @@ class HubSpotMatcherService:
                     matching_criteria="name_property_match",
                 )
 
-        # --- 4. No match — auto-confirm as new record (skip the Review Queue) ----
-        # UNMATCHED contacts have no proposed match to review, so they are
-        # immediately confirmed as new records rather than queued for manual review.
-        # The Review Queue is reserved for HIGH/MEDIUM confidence matches that
-        # need human verification.
+        # --- 4. No match — create a new Contact record and auto-confirm ----
         logger.debug(
-            "Contact %s unmatched; auto-confirming as new record.",
+            "Contact %s unmatched; creating new Contact record.",
             contact.hubspot_id,
         )
+        new_contact = Contact(
+            first_name=first_name or None,
+            last_name=last_name or None,
+            role="owner",
+        )
+        db.session.add(new_contact)
+        db.session.flush()
+
+        # Create a placeholder Lead so the contact has a property anchor,
+        # then link them via PropertyContact (role=owner).
+        placeholder_lead = Lead(source="hubspot_import")
+        db.session.add(placeholder_lead)
+        db.session.flush()
+
+        pc = PropertyContact(
+            property_id=placeholder_lead.id,
+            contact_id=new_contact.id,
+            role="owner",
+            is_primary=True,
+        )
+        db.session.add(pc)
+        db.session.flush()
 
         return self._upsert_match(
             hubspot_record_type="contact",
             hubspot_id=contact.hubspot_id,
-            internal_record_type=None,
-            internal_record_id=None,
+            internal_record_type="contact",
+            internal_record_id=new_contact.id,
             confidence="UNMATCHED",
             matching_criteria=None,
             status="confirmed",

@@ -463,13 +463,10 @@ def analyze_property(lead_id):
 
     data = request.get_json() or {}
     user_id = get_current_user_id()
-    # Fall back to body user_id if header not set (legacy clients / tests)
-    if not user_id or user_id == 'anonymous':
-        user_id = data.get('user_id', 'anonymous')
     if not user_id or user_id == 'anonymous':
         return jsonify({
             'error': 'Validation error',
-            'message': 'user_id is required',
+            'message': 'user_id is required (send X-User-Id header)',
         }), 400
     session_id = str(uuid.uuid4())
     session = AnalysisSession(
@@ -787,13 +784,10 @@ def update_scoring_weights():
         }), 400
 
     user_id = get_current_user_id()
-    # Fall back to body user_id if header not set (legacy clients / tests)
-    if not user_id or user_id == 'anonymous':
-        user_id = data.get('user_id', 'anonymous')
     if not user_id or user_id == 'anonymous':
         return jsonify({
             'error': 'Validation error',
-            'message': 'user_id is required',
+            'message': 'user_id is required (send X-User-Id header)',
         }), 400
 
     required_weight_fields = [
