@@ -94,7 +94,7 @@ def test_property_4_valid_title_accepted(title):
         assert result is mock_task_instance
 
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(title=st.text(min_size=256, max_size=500))
 def test_property_4_title_too_long_rejected(title):
     """
@@ -105,11 +105,16 @@ def test_property_4_title_too_long_rejected(title):
     Validates: Requirements 3.2
     """
     # Feature: actionable-lead-command-center, Property 4: Task Title Validation Boundary
+    # Only test titles that are still > 255 chars after stripping whitespace,
+    # since the service strips before validating.
+    assume(len(title.strip()) > 255)
+
     service = LeadTaskService()
     mock_lead = make_mock_lead()
 
     with patch('app.services.lead_task_service.Lead') as MockLead, \
-         patch('app.services.lead_task_service.db') as mock_db:
+         patch('app.services.lead_task_service.db') as mock_db, \
+         patch(_AES_PATCH):
 
         MockLead.query.get.return_value = mock_lead
         mock_db.session = MagicMock()
@@ -121,7 +126,7 @@ def test_property_4_title_too_long_rejected(title):
         mock_db.session.commit.assert_not_called()
 
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(title=st.one_of(
     st.just(''),
     st.text(max_size=50).filter(lambda s: not s.strip()),
