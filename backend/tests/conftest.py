@@ -2,9 +2,20 @@
 import pytest
 import os
 from unittest.mock import patch, MagicMock
+from hypothesis import settings, HealthCheck
 from app import create_app, db
 from tests.e2e_setup import seed_test_data
 from tests.mock_apis import MockAPIFactory
+
+# ---------------------------------------------------------------------------
+# Hypothesis global settings — suppress deadline for all tests.
+# The default 200ms deadline causes flaky failures on slow CI runners where
+# DB-touching tests regularly take 300-500ms. The deadline catches performance
+# regressions, not correctness bugs, so suppressing it globally is the right
+# tradeoff for this test suite.
+# ---------------------------------------------------------------------------
+settings.register_profile("default", deadline=None)
+settings.load_profile("default")
 
 # Mock property facts returned by PropertyDataService during tests.
 # Uses uppercase enum values to match the updated Python enum definitions.
