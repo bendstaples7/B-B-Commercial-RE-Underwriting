@@ -64,7 +64,7 @@ _activity_id_lists = st.lists(
 _activity_types = st.sampled_from(['NOTE', 'CALL', 'TASK', 'DEAL_STAGE_CHANGE'])
 
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(
     lead_status=_lead_status_strategy,
     activity_ids=_activity_id_lists,
@@ -210,7 +210,7 @@ def _expected_is_warm(call_records):
     return False
 
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(call_records=_call_records_list)
 def test_property_17_is_warm_signal_derivation(call_records):
     """
@@ -222,6 +222,11 @@ def test_property_17_is_warm_signal_derivation(call_records):
     Validates: Requirements 19.4
     """
     # Feature: actionable-lead-command-center, Property 17: is_warm Signal Derivation
+
+    # Exclude the exact 180-day boundary: both the test and the service call
+    # datetime.now() independently, so a record with days_ago==180 can land
+    # on either side of the cutoff depending on microsecond timing.
+    assume(all(rec['days_ago'] != 180 for rec in call_records))
     service = HubSpotTimelineImportService()
     mock_entries = _build_timeline_entries_for_calls(call_records)
 

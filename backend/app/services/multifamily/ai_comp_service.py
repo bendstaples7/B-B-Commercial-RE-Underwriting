@@ -25,11 +25,14 @@ logger = logging.getLogger(__name__)
 
 _GEMINI_API_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
-    "gemini-2.5-flash:generateContent"
+    "gemini-3.5-flash:generateContent"
 )
-_TIMEOUT = (10, 90)  # (connect, read) seconds
+_TIMEOUT = (10, 900)  # (connect, read) seconds — per attempt
 _MAX_RETRIES = 2       # retry up to 2 times after the initial attempt
 _RETRY_BACKOFF = 2.0   # seconds — doubles each retry: 2s, 4s
+_TOTAL_BUDGET_SECONDS = 1000  # hard wall-clock ceiling for the entire call chain
+                               # (connect + all retries + backoff waits)
+                               # Celery task time_limit must be set higher than this
 
 
 def _get_api_key() -> str:
@@ -44,13 +47,19 @@ def _get_api_key() -> str:
 def _call_gemini(prompt: str) -> str:
     """Call Gemini with Google Search grounding and return the text response.
 
+    Enforces a hard total budget of _TOTAL_BUDGET_SECONDS across all attempts
+    and retries. If the budget expires, raises RuntimeError with a clear message
+    so the controller can return a proper 504 instead of dropping the connection.
+
     Retries up to _MAX_RETRIES times on transient failures:
       - Network errors (timeout, connection reset)
       - HTTP 5xx responses (server-side errors)
 
     Does NOT retry on HTTP 4xx (client errors — permanent failures).
     """
+    import time as _time
     api_key = _get_api_key()
+    budget_start = _time.monotonic()
 
     request_body = {
         "contents": [{"parts": [{"text": prompt}]}],
@@ -63,20 +72,45 @@ def _call_gemini(prompt: str) -> str:
     last_error: Exception | None = None
 
     for attempt in range(_MAX_RETRIES + 1):
+        # Check total budget before each attempt
+        elapsed = _time.monotonic() - budget_start
+        remaining = _TOTAL_BUDGET_SECONDS - elapsed
+        if remaining <= 0:
+            raise RuntimeError(
+                f"Gemini API call exceeded the {_TOTAL_BUDGET_SECONDS}s total time budget "
+                f"after {attempt} attempt(s). The AI service is too slow right now — "
+                f"please try again in a few minutes."
+            )
+
         if attempt > 0:
             wait = _RETRY_BACKOFF * (2 ** (attempt - 1))  # 2s, 4s
+            # Don't wait longer than the remaining budget
+            wait = min(wait, remaining - 5)
+            if wait <= 0:
+                raise RuntimeError(
+                    f"Gemini API call exceeded the {_TOTAL_BUDGET_SECONDS}s total time budget "
+                    f"during retry backoff. Please try again in a few minutes."
+                )
             logger.warning(
                 "AICompService: Gemini attempt %d/%d failed, retrying in %.0fs: %s",
                 attempt, _MAX_RETRIES + 1, wait, last_error,
             )
             time.sleep(wait)
 
+        # Clamp per-attempt read timeout to remaining budget
+        elapsed = _time.monotonic() - budget_start
+        remaining = _TOTAL_BUDGET_SECONDS - elapsed
+        allowed = max(0, remaining - 2)
+        connect_timeout = min(_TIMEOUT[0], allowed)
+        read_timeout = min(_TIMEOUT[1], max(1, allowed - connect_timeout))
+        attempt_timeout = (connect_timeout, read_timeout)
+
         try:
             response = requests.post(
                 _GEMINI_API_URL,
                 params={"key": api_key},
                 json=request_body,
-                timeout=_TIMEOUT,
+                timeout=attempt_timeout,
             )
         except requests.exceptions.Timeout as exc:
             last_error = RuntimeError("Gemini API request timed out.")
@@ -269,6 +303,7 @@ def _build_sale_comp_prompt(
     unit_count: int,
     unit_mix: list[dict],
     cutoff_date: str,
+    radius_miles: int = 2,
 ) -> str:
     """Build the Gemini prompt for fetching sale comps."""
     unit_mix_lines = "\n".join(
@@ -277,9 +312,13 @@ def _build_sale_comp_prompt(
         for row in unit_mix
     )
 
+    unit_min = max(1, round(unit_count * 0.5))
+    unit_max = round(unit_count * 1.5)
+    cutoff_year = cutoff_date[:4]
+
     return f"""You are a commercial real estate research assistant with access to Google Search.
 
-I need recent sale comparable data for a multifamily property.
+I am analyzing a multifamily investment property and need recent sale comparables.
 
 ## Subject Property
 Address: {address}
@@ -287,36 +326,51 @@ Total Units: {unit_count}
 Unit Mix:
 {unit_mix_lines}
 
-## Task
-Search for recent multifamily property sales near {address}.
-Only include sales or active listings from after {cutoff_date} (within the last 12 months).
-Focus on properties within a 2-mile radius.
-Include a mix of sold and active listings, but prioritize sold comps.
-Target properties with similar unit counts (within 50% of {unit_count} units).
+## Research Task
+Search for recent multifamily property sales and active listings in the vicinity of {address}.
 
-## Required Output
+Requirements:
+- No comps older than the date {cutoff_date} (going back to {cutoff_year})
+- Properties must be within {radius_miles} miles of the subject property
+- Include a mix of sold and active listings, but prioritize sold comps
+- Target properties with similar unit counts ({unit_min}–{unit_max} units preferred, but include others if needed to reach 8+ comps)
+
+## For each comparable, provide:
+1. Full street address
+2. Unit count
+3. Sale status (Sold, Active, or Under Contract)
+4. Closing date (or listing date for active)
+5. Sale price (or list price for active)
+6. Annual NOI (net operating income) if available
+7. Cap rate if available or derivable from NOI and price
+8. Price per unit (sale price ÷ unit count)
+9. Approximate distance from subject property
+
+## Required Output Format
 Return a JSON array. Each element must have exactly these fields:
 {{
   "address": "full street address",
-  "unit_count": <number of units as integer>,
+  "unit_count": <integer>,
   "status": "Sold" or "Active" or "Under Contract",
-  "sale_price": <price as a number, no $ or commas>,
-  "close_date": "YYYY-MM-DD (use listing date for active listings)",
-  "observed_cap_rate": <cap rate as decimal e.g. 0.065 for 6.5%, or null if unknown>,
-  "noi": <annual net operating income as a number, or null if unknown>,
-  "distance_miles": <approximate distance from subject property as decimal, or null>
+  "sale_price": <number, no $ or commas>,
+  "close_date": "YYYY-MM-DD",
+  "observed_cap_rate": <decimal e.g. 0.065 for 6.5%, or null if unknown>,
+  "noi": <annual NOI as a number, or null if unknown>,
+  "distance_miles": <decimal, or null>
 }}
 
 Return ONLY the JSON array — no markdown, no explanation, no extra text.
-Aim for 5–8 comps total.
-If cap rate is not available but NOI and sale price are known, include the NOI — the system will derive the cap rate.
-If neither cap rate nor NOI is available, set both to null — the comp will still be included without cap rate data.
-Do NOT guess or estimate cap rates.
+Aim for 8–12 comps. Do NOT guess or estimate cap rates — only include them if you have a reliable source.
+If NOI and sale price are both known, include the NOI and the system will derive the cap rate.
 """
 
 
 def fetch_sale_comps(deal_address: str, unit_count: int, unit_mix: list[dict]) -> list[dict]:
     """Call Gemini to fetch sale comps for a deal.
+
+    Uses a tiered search strategy:
+      Pass 1: 2-mile radius, last 12 months
+      Pass 2 (if < 5 comps returned): 5-mile radius, last 24 months
 
     Args:
         deal_address: Full address of the subject property.
@@ -324,20 +378,43 @@ def fetch_sale_comps(deal_address: str, unit_count: int, unit_mix: list[dict]) -
         unit_mix: List of dicts with keys: unit_type, count, sqft.
 
     Returns:
-        List of sale comp dicts with keys matching the SaleComp model:
-        address, unit_count, status, sale_price, close_date,
-        observed_cap_rate, distance_miles.
+        List of sale comp dicts with keys matching the SaleComp model.
 
     Raises:
         RuntimeError: If Gemini call fails or response cannot be parsed.
     """
-    cutoff = (date.today() - timedelta(days=365)).strftime("%Y-%m-%d")
-    prompt = _build_sale_comp_prompt(deal_address, unit_count, unit_mix, cutoff)
+    cutoff_12mo = (date.today() - timedelta(days=365)).strftime("%Y-%m-%d")
+    cutoff_24mo = (date.today() - timedelta(days=730)).strftime("%Y-%m-%d")
 
-    logger.info("AICompService: fetching sale comps for %s", deal_address)
-    text = _call_gemini(prompt)
-    logger.debug("AICompService: sale comp raw response: %s", text[:500])
+    logger.info("AICompService: fetching sale comps for %s (pass 1: 2mi / 12mo)", deal_address)
+    prompt_pass1 = _build_sale_comp_prompt(deal_address, unit_count, unit_mix, cutoff_12mo, radius_miles=2)
+    text = _call_gemini(prompt_pass1)
+    comps = _parse_sale_comp_response(text, unit_count)
+    logger.info("AICompService: pass 1 returned %d comps", len(comps))
 
+    if len(comps) < 5:
+        logger.info(
+            "AICompService: fewer than 5 comps from pass 1 — running pass 2 (5mi / 24mo)"
+        )
+        prompt_pass2 = _build_sale_comp_prompt(deal_address, unit_count, unit_mix, cutoff_24mo, radius_miles=5)
+        text2 = _call_gemini(prompt_pass2)
+        comps2 = _parse_sale_comp_response(text2, unit_count)
+        logger.info("AICompService: pass 2 returned %d comps", len(comps2))
+
+        # Merge, deduplicating by address (pass 1 takes precedence)
+        existing_addresses = {c["address"].lower() for c in comps}
+        for c in comps2:
+            if c["address"].lower() not in existing_addresses:
+                comps.append(c)
+                existing_addresses.add(c["address"].lower())
+
+        logger.info("AICompService: merged total %d comps after pass 2", len(comps))
+
+    return comps
+
+
+def _parse_sale_comp_response(text: str, unit_count: int) -> list[dict]:
+    """Parse and validate Gemini's sale comp response text into a list of comp dicts."""
     data = _extract_json_from_text(text)
 
     if not isinstance(data, list):
@@ -346,44 +423,46 @@ def fetch_sale_comps(deal_address: str, unit_count: int, unit_mix: list[dict]) -
         )
 
     comps = []
+    unit_min = max(1, round(unit_count * 0.5))
+    unit_max = round(unit_count * 1.5)
+
     for i, item in enumerate(data):
         if not isinstance(item, dict):
             logger.warning("AICompService: sale comp[%d] is not a dict, skipping", i)
             continue
         try:
-            # cap rate may be null — include the comp regardless
             cap_rate_raw = item.get("observed_cap_rate")
             cap_rate = float(cap_rate_raw) if cap_rate_raw is not None else None
 
-            # noi may be null — used to derive cap rate when cap rate is missing
             noi_raw = item.get("noi")
             noi = float(noi_raw) if noi_raw is not None else None
 
-            # distance may be null
             dist_raw = item.get("distance_miles")
             distance = float(dist_raw) if dist_raw is not None else None
 
+            comp_unit_count = int(item["unit_count"])
+            out_of_range = not (unit_min <= comp_unit_count <= unit_max)
+
             comp = {
                 "address": str(item.get("address", "")).strip(),
-                "unit_count": int(item["unit_count"]),
+                "unit_count": comp_unit_count,
                 "status": str(item.get("status", "Sold")).strip(),
                 "sale_price": float(item["sale_price"]),
                 "close_date": str(item.get("close_date", date.today().isoformat())),
                 "observed_cap_rate": cap_rate,
                 "noi": noi,
                 "distance_miles": distance,
+                "out_of_range": out_of_range,
             }
             if not comp["address"] or comp["unit_count"] <= 0 or comp["sale_price"] <= 0:
                 logger.warning("AICompService: sale comp[%d] has invalid fields, skipping: %s", i, item)
                 continue
 
-            # Log cap rate availability for transparency
-            if cap_rate is not None:
-                logger.debug("AICompService: sale comp[%d] has stated cap rate %.4f", i, cap_rate)
-            elif noi is not None:
-                logger.debug("AICompService: sale comp[%d] has NOI %.0f — cap rate will be derived", i, noi)
-            else:
-                logger.info("AICompService: sale comp[%d] has no cap rate or NOI — included without cap rate", i)
+            if out_of_range:
+                logger.info(
+                    "AICompService: sale comp[%d] unit_count=%d outside range [%d, %d] — flagging: %s",
+                    i, comp_unit_count, unit_min, unit_max, comp["address"],
+                )
 
             comps.append(comp)
         except (KeyError, ValueError, TypeError) as exc:

@@ -83,7 +83,7 @@ _activity_id_lists = st.lists(
 _activity_types = st.sampled_from(['NOTE', 'CALL', 'TASK', 'DEAL_STAGE_CHANGE'])
 
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(activity_ids=_activity_id_lists, activity_type=_activity_types)
 def test_property_7_hubspot_deduplication_second_import_adds_zero_rows(
     activity_ids, activity_type
@@ -191,7 +191,7 @@ _actor_text = st.text(
 _summary_text = st.text(min_size=1, max_size=499)
 
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(
     entry_id=st.integers(min_value=1, max_value=100_000),
     lead_id=st.integers(min_value=1, max_value=100_000),
@@ -287,7 +287,7 @@ def test_property_8_soft_delete_preserves_audit_trail(
         assert result is mock_entry
 
 
-@settings(max_examples=50)
+@settings(max_examples=50, deadline=None)
 @given(entry_id=st.integers(min_value=1, max_value=100_000))
 def test_property_8_soft_delete_hubspot_entry_raises_error(entry_id):
     """

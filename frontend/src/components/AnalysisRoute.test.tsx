@@ -22,6 +22,26 @@ vi.mock('@react-google-maps/api', () => ({
 }))
 
 // ---------------------------------------------------------------------------
+// Mock AuthContext so the app renders as an authenticated user
+// (without this, App shows a spinner forever because AuthProvider is not
+// in the test tree and the default context value has isLoading: true)
+// ---------------------------------------------------------------------------
+vi.mock('@/context/AuthContext', () => ({
+  useAuth: () => ({
+    user: { user_id: 'test-user', email: 'test@example.com', display_name: 'Test User', is_admin: false },
+    token: 'mock-token',
+    login: vi.fn(),
+    logout: vi.fn(),
+    isLoading: false,
+  }),
+  AuthContext: {
+    Provider: ({ children }: any) => children,
+  },
+  AuthProvider: ({ children }: any) => children,
+  validateStoredToken: vi.fn(),
+}))
+
+// ---------------------------------------------------------------------------
 // Mock analysisService — each test sets the return value on getSession
 // ---------------------------------------------------------------------------
 const mockGetSession = vi.fn()

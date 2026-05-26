@@ -11,12 +11,14 @@ import {
   Alert,
   Box,
   Button,
+  Chip,
   CircularProgress,
   Collapse,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
+  Divider,
   Grid,
   IconButton,
   Paper,
@@ -32,8 +34,10 @@ import {
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome'
+import CheckIcon from '@mui/icons-material/Check'
 import CloseIcon from '@mui/icons-material/Close'
 import DeleteIcon from '@mui/icons-material/Delete'
+import DeleteSweepIcon from '@mui/icons-material/DeleteSweep'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
@@ -313,12 +317,21 @@ interface SaleCompsTabProps {
 export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
   const queryClient = useQueryClient()
   const [addOpen, setAddOpen] = useState(false)
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false)
+
+  const invalidateAll = () => {
+    queryClient.invalidateQueries({ queryKey: ['deal', dealId, 'sale-comp-rollup'] })
+    queryClient.invalidateQueries({ queryKey: ['deal', dealId, 'sale-comp-suggested'] })
+  }
 
   const { mutation: fetchAIMutation, labelIdx: fetchLabelIdx, labels: fetchLabels, status, setStatus, handleFetch: handleFetchAI } =
     useAIMutation({
       mutationFn: () => multifamilyService.fetchSaleCompsAI(dealId),
       labels: AI_FETCH_LABELS,
-      invalidateKeys: [['deal', dealId, 'sale-comp-rollup']],
+      invalidateKeys: [
+        ['deal', dealId, 'sale-comp-rollup'],
+        ['deal', dealId, 'sale-comp-suggested'],
+      ],
       onSuccess: (result, setStatus) => {
         if (result.added === 0) {
           setStatus({
@@ -326,21 +339,61 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
             severity: 'warning',
           })
         } else {
-          setStatus({ message: result.message, severity: 'success' })
+          setStatus({
+            message: `${result.added} comp(s) fetched — review them below and click Add to include in your analysis.`,
+            severity: 'info',
+          })
         }
       },
     })
 
-  const { data: rollup, isLoading, isError, error } = useQuery({
+  const { data: rollup, isLoading, isError, error, isFetching } = useQuery({
     queryKey: ['deal', dealId, 'sale-comp-rollup'],
     queryFn: () => multifamilyService.getSaleCompRollup(dealId),
+  })
+
+  const { data: suggestedComps, isFetching: isSuggestedFetching, isFetched: isSuggestedFetched, isError: isSuggestedError } = useQuery({
+    queryKey: ['deal', dealId, 'sale-comp-suggested'],
+    queryFn: () => multifamilyService.getSuggestedSaleComps(dealId),
   })
 
   const deleteMutation = useMutation({
     mutationFn: (compId: number) => multifamilyService.deleteSaleComp(dealId, compId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['deal', dealId, 'sale-comp-rollup'] })
+      invalidateAll()
       setStatus(null)
+    },
+  })
+
+  const confirmMutation = useMutation({
+    mutationFn: (compId: number) => multifamilyService.confirmSaleComp(dealId, compId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['deal', dealId, 'sale-comp-rollup'] })
+      queryClient.invalidateQueries({ queryKey: ['deal', dealId, 'sale-comp-suggested'] })
+      queryClient.refetchQueries({ queryKey: ['deal', dealId, 'sale-comp-rollup'] })
+    },
+  })
+
+  const dismissMutation = useMutation({
+    mutationFn: (compId: number) => multifamilyService.dismissSaleComp(dealId, compId),
+    onSuccess: () => invalidateAll(),
+  })
+
+  const clearAllMutation = useMutation({
+    mutationFn: () => multifamilyService.clearAllSaleComps(dealId),
+    onSuccess: () => {
+      invalidateAll()
+      setConfirmClearOpen(false)
+      setStatus(null)
+    },
+  })
+
+  const confirmAllMutation = useMutation({
+    mutationFn: () => multifamilyService.confirmAllSaleComps(dealId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['deal', dealId, 'sale-comp-rollup'] })
+      queryClient.invalidateQueries({ queryKey: ['deal', dealId, 'sale-comp-suggested'] })
+      queryClient.refetchQueries({ queryKey: ['deal', dealId, 'sale-comp-rollup'] })
     },
   })
 
@@ -379,6 +432,17 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
             {fetchAIMutation.isPending ? fetchLabels[fetchLabelIdx] : 'Fetch Comps'}
           </Button>
           <Button
+            variant="outlined"
+            size="small"
+            color="error"
+            startIcon={<DeleteSweepIcon />}
+            onClick={() => setConfirmClearOpen(true)}
+            disabled={clearAllMutation.isPending || (comps.length === 0 && (suggestedComps?.length ?? 0) === 0)}
+            aria-label="Clear all sale comps"
+          >
+            Clear All
+          </Button>
+          <Button
             variant="contained"
             size="small"
             startIcon={<AddIcon />}
@@ -390,7 +454,31 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
         </Box>
       </Box>
 
-      {/* Inline status — shown below the header, stays until dismissed */}
+      {/* Confirm clear dialog */}
+      <Dialog open={confirmClearOpen} onClose={() => setConfirmClearOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Clear All Sale Comps?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            This will permanently delete all sale comps for this deal — including suggested, dismissed, and confirmed comps. This cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmClearOpen(false)} disabled={clearAllMutation.isPending}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={() => clearAllMutation.mutate()}
+            disabled={clearAllMutation.isPending}
+            startIcon={clearAllMutation.isPending ? <CircularProgress size={16} color="inherit" /> : <DeleteSweepIcon />}
+          >
+            {clearAllMutation.isPending ? 'Clearing…' : 'Clear All'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Inline status */}
       <Collapse in={!!status}>
         {status && (
           <Alert
@@ -407,24 +495,136 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
         )}
       </Collapse>
 
-      {/* Insufficient warning */}
-      {rollup?.sale_comps_insufficient && (
+      {/* ── Suggested Comps Section ── */}
+      {(suggestedComps?.length ?? 0) > 0 && (
+        <Box sx={{ mb: 3 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+            <AutoAwesomeIcon fontSize="small" color="primary" />
+            <Typography variant="subtitle1" fontWeight={600}>
+              AI Suggestions
+            </Typography>
+            <Chip label={suggestedComps!.length} size="small" color="primary" />
+            <Typography variant="caption" color="text.secondary">
+              — Review and add the comps you want to include in your analysis
+            </Typography>
+            <Box sx={{ ml: 'auto' }}>
+              <Button
+                size="small"
+                variant="outlined"
+                color="success"
+                startIcon={confirmAllMutation.isPending ? <CircularProgress size={14} /> : <CheckIcon />}
+                onClick={() => confirmAllMutation.mutate()}
+                disabled={confirmAllMutation.isPending}
+                aria-label="Approve all suggested comps"
+              >
+                {confirmAllMutation.isPending ? 'Approving…' : 'Approve All'}
+              </Button>
+            </Box>
+          </Box>
+          <TableContainer component={Paper} variant="outlined">
+            <Table size="small" aria-label="Suggested sale comps">
+              <TableHead>
+                <TableRow sx={{ bgcolor: 'action.hover' }}>
+                  <TableCell>Address</TableCell>
+                  <TableCell align="right">Units</TableCell>
+                  <TableCell>Status</TableCell>
+                  <TableCell align="right">Sale Price</TableCell>
+                  <TableCell>Close Date</TableCell>
+                  <TableCell align="right">Cap Rate</TableCell>
+                  <TableCell align="right">PPU</TableCell>
+                  <TableCell align="right">Distance</TableCell>
+                  <TableCell align="center" sx={{ minWidth: 100 }}>Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {(suggestedComps ?? []).map((comp: MFSaleComp) => (
+                  <TableRow
+                    key={comp.id}
+                    hover
+                    sx={comp.out_of_range ? { bgcolor: 'warning.50' } : {}}
+                  >
+                    <TableCell>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        {comp.address}
+                        {comp.out_of_range && (
+                          <Tooltip title="Unit count differs significantly from subject property — review carefully">
+                            <WarningAmberIcon fontSize="small" sx={{ color: 'warning.main', fontSize: 14, flexShrink: 0 }} />
+                          </Tooltip>
+                        )}
+                      </Box>
+                    </TableCell>
+                    <TableCell align="right">{comp.unit_count}</TableCell>
+                    <TableCell>{comp.status}</TableCell>
+                    <TableCell align="right">{fmtCurrency(comp.sale_price)}</TableCell>
+                    <TableCell>{comp.close_date}</TableCell>
+                    <TableCell align="right">
+                      <CapRateCell capRate={comp.observed_cap_rate} confidence={comp.cap_rate_confidence} />
+                    </TableCell>
+                    <TableCell align="right">{fmtCurrency(comp.observed_ppu)}</TableCell>
+                    <TableCell align="right">
+                      {comp.distance_miles != null ? `${parseFloat(comp.distance_miles).toFixed(1)} mi` : '—'}
+                    </TableCell>
+                    <TableCell align="center">
+                      <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center' }}>
+                        <Tooltip title="Add to analysis">
+                          <IconButton
+                            size="small"
+                            color="success"
+                            onClick={() => confirmMutation.mutate(comp.id)}
+                            disabled={confirmMutation.isPending || dismissMutation.isPending}
+                            aria-label={`Add comp at ${comp.address}`}
+                          >
+                            <CheckIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Dismiss">
+                          <IconButton
+                            size="small"
+                            color="default"
+                            onClick={() => dismissMutation.mutate(comp.id)}
+                            disabled={confirmMutation.isPending || dismissMutation.isPending}
+                            aria-label={`Dismiss comp at ${comp.address}`}
+                          >
+                            <CloseIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </Box>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Box>
+      )}
+
+      {(suggestedComps?.length ?? 0) > 0 && comps.length > 0 && (
+        <Divider sx={{ mb: 3 }}>
+          <Typography variant="caption" color="text.secondary">Confirmed Comps</Typography>
+        </Divider>
+      )}
+
+      {/* Insufficient warning — suppressed while refetching or when suggestions are pending */}
+      {rollup?.sale_comps_insufficient && !isFetching && !isSuggestedFetching && isSuggestedFetched && !isSuggestedError && (suggestedComps?.length ?? 0) === 0 && (
         <Alert severity="warning" icon={<WarningAmberIcon />} sx={{ mb: 2 }}>
-          Insufficient sale comps — at least 3 are required for reliable valuation statistics.
+          Insufficient confirmed sale comps — at least 3 are required for reliable valuation statistics.
+          {(suggestedComps?.length ?? 0) > 0 && ' Add comps from the AI suggestions above.'}
         </Alert>
       )}
 
       {/* Missing cap rate warning */}
       {rollup && comps.some((c) => c.observed_cap_rate === null) && (
         <Alert severity="info" icon={<InfoOutlinedIcon />} sx={{ mb: 2 }}>
-          {comps.filter((c) => c.observed_cap_rate === null).length} comp(s) are missing cap rate data.
-          Cap rates shown in amber were derived from NOI ÷ sale price (lower confidence).
+          {comps.filter((c) => c.observed_cap_rate === null).length} comp(s) are missing cap rate data
+          {comps.some((c) => c.cap_rate_confidence === 0.5) && (
+            <> — cap rates shown in amber were derived from NOI ÷ sale price (lower confidence)</>
+          )}.
           Comps without cap rates are excluded from the cap rate rollup statistics.
         </Alert>
       )}
 
       {/* Rollup stats */}
-      {rollup && (
+      {rollup && comps.length > 0 && (
         <Grid container spacing={2} sx={{ mb: 3 }}>
           <Grid item xs={12} sm={6}>
             <StatCard
@@ -449,16 +649,16 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
         </Grid>
       )}
 
-      {/* Comps table */}
-      {comps.length === 0 ? (
+      {/* Confirmed comps table */}
+      {comps.length === 0 && (suggestedComps?.length ?? 0) === 0 ? (
         <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
           <Typography color="text.secondary">
             No sale comps yet. Click &quot;Fetch Comps&quot; to research with AI, or add manually.
           </Typography>
         </Paper>
-      ) : (
+      ) : comps.length > 0 ? (
         <TableContainer component={Paper} variant="outlined">
-          <Table size="small" aria-label="Sale comps table">
+          <Table size="small" aria-label="Confirmed sale comps table">
             <TableHead>
               <TableRow>
                 <TableCell>Address</TableCell>
@@ -485,7 +685,7 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
                   </TableCell>
                   <TableCell align="right">{fmtCurrency(comp.observed_ppu)}</TableCell>
                   <TableCell align="right">
-                    {comp.distance_miles ? `${parseFloat(comp.distance_miles).toFixed(1)} mi` : '—'}
+                    {comp.distance_miles != null ? `${parseFloat(comp.distance_miles).toFixed(1)} mi` : '—'}
                   </TableCell>
                   <TableCell align="center">
                     <Tooltip title="Delete sale comp">
@@ -505,7 +705,7 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
             </TableBody>
           </Table>
         </TableContainer>
-      )}
+      ) : null}
 
       {deleteMutation.isError && (
         <Alert severity="error" sx={{ mt: 1 }}>

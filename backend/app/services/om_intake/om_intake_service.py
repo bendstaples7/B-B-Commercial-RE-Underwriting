@@ -10,12 +10,15 @@ Requirements: 1.1–1.8, 7.1–7.12, 8.1, 8.3, 9.3, 11.1–11.3, 12.4
 from __future__ import annotations
 
 import dataclasses
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from app import db
 from app.exceptions import ConflictError, InvalidFileError, ResourceNotFoundError
+
+logger = logging.getLogger(__name__)
 from app.models import (  # noqa: F401
     Deal,
     MarketRentAssumption,
@@ -128,17 +131,42 @@ class OMIntakeService:
             user_id=user_id,
             original_filename=filename,
             intake_status="PENDING",
-            pdf_bytes=file_bytes,
             expires_at=datetime.utcnow() + timedelta(days=_JOB_TTL_DAYS),
         )
         db.session.add(job)
-        db.session.commit()
+        db.session.flush()  # get job.id without committing
 
-        # --- Enqueue Celery task by name ---
-        import os
-        from celery import Celery as _Celery
-        _client = _Celery(broker=os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0'))
-        _client.send_task('om_intake.process_pipeline', args=[job.id])
+        # --- Enqueue Celery task — pass PDF bytes directly, never store in DB ---
+        import base64 as _base64
+        pdf_b64 = _base64.b64encode(file_bytes).decode('ascii')
+        try:
+            import os
+            from celery import Celery as _Celery
+            _client = _Celery(broker=os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0'))
+            _client.send_task(
+                'om_intake.process_pipeline',
+                args=[job.id],
+                kwargs={'pdf_b64': pdf_b64},
+            )
+            db.session.commit()
+        except Exception as dispatch_err:
+            logger.warning(
+                "Celery unavailable for OM intake job %s, running synchronously: %s",
+                job.id, dispatch_err,
+            )
+            db.session.commit()
+            # Synchronous fallback — run the pipeline in-process using the
+            # existing Flask app context. Import from the side-effect-free
+            # pipeline module (not celery_worker) to avoid worker bootstrap
+            # side effects in web requests.
+            try:
+                from app.services.om_intake.om_intake_pipeline import run_om_intake_pipeline_body
+                run_om_intake_pipeline_body(job.id, pdf_b64=pdf_b64)
+            except Exception as sync_err:
+                logger.error("Synchronous OM intake pipeline failed: %s", sync_err)
+                job.intake_status = "FAILED"
+                job.error_message = f"Pipeline failed: {sync_err}"
+                db.session.commit()
 
         return job
 
@@ -259,23 +287,14 @@ class OMIntakeService:
                 payload={"job_id": job_id, "intake_status": job.intake_status},
             )
 
-        new_job = OMIntakeJob(
-            user_id=job.user_id,
-            original_filename=job.original_filename,
-            intake_status="PENDING",
-            pdf_bytes=job.pdf_bytes,
-            expires_at=datetime.utcnow() + timedelta(days=_JOB_TTL_DAYS),
+        # PDF bytes are no longer stored in the DB — the retry endpoint is not
+        # supported without re-uploading the file. Raise ConflictError so the
+        # caller knows to prompt the user to re-upload.
+        raise ConflictError(
+            "Retry requires re-uploading the PDF. The original file is not stored "
+            "in the database. Please upload the file again.",
+            payload={"job_id": job_id, "reason": "pdf_not_stored"},
         )
-        db.session.add(new_job)
-        db.session.commit()
-
-        # Enqueue parsing for the new job
-        import os
-        from celery import Celery as _Celery
-        _client = _Celery(broker=os.getenv('CELERY_BROKER_URL', 'redis://localhost:6379/0'))
-        _client.send_task('om_intake.process_pipeline', args=[new_job.id])
-
-        return new_job
 
     # ------------------------------------------------------------------
     # Internal state-transition helpers — called by Celery tasks

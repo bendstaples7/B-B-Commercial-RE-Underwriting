@@ -42,6 +42,9 @@ def _serialize_sale_comp(comp) -> dict:
         'distance_miles': float(comp.distance_miles) if comp.distance_miles is not None else None,
         'noi': float(comp.noi) if comp.noi is not None else None,
         'cap_rate_confidence': comp.cap_rate_confidence,
+        'is_suggested': bool(comp.is_suggested),
+        'is_dismissed': bool(comp.is_dismissed),
+        'out_of_range': bool(comp.out_of_range),
     }
 
 
@@ -124,22 +127,34 @@ def fetch_sale_comps_ai(deal_id):
     if not comps:
         return jsonify({'added': 0, 'message': 'Gemini returned no comps for this property.'}), 200
 
+    # Build set of existing non-dismissed addresses to prevent duplicates.
+    # Dismissed comps are excluded so re-fetching after dismissing works correctly.
+    from app.models import SaleComp as _SaleComp
+    existing_addresses = {
+        c.address.lower()
+        for c in _SaleComp.query.filter_by(deal_id=deal_id, is_dismissed=False)
+        .with_entities(_SaleComp.address).all()
+    }
+
     service = SaleCompService()
     added = 0
+    skipped_dupes = 0
     errors = []
     for comp in comps:
-        # Use a savepoint so a failed insert doesn't roll back earlier successes
+        if comp["address"].lower() in existing_addresses:
+            skipped_dupes += 1
+            continue
+        comp['is_suggested'] = True
         try:
             sp = db.session.begin_nested()
             service.add_sale_comp(deal_id, comp)
             sp.commit()
+            existing_addresses.add(comp["address"].lower())
             added += 1
         except (ValueError, KeyError) as exc:
-            # Expected data-quality failures (missing/invalid fields from Gemini)
             sp.rollback()
             errors.append(str(exc))
         except Exception:
-            # Unexpected error — roll back everything and propagate
             db.session.rollback()
             raise
 
@@ -147,7 +162,7 @@ def fetch_sale_comps_ai(deal_id):
 
     return jsonify({
         'added': added,
-        'skipped': len(errors),
+        'skipped': skipped_dupes + len(errors),
         'message': f'Added {added} sale comp(s) from AI research.',
     }), 200
 
@@ -192,6 +207,49 @@ def get_sale_comps_ai_job_status(deal_id, job_id):
 
 
 
+@multifamily_sale_comp_bp.route('/deals/<int:deal_id>/sale-comps/confirm-all', methods=['POST'])
+@handle_errors
+def confirm_all_sale_comps(deal_id):
+    """Confirm all pending suggested comps — moves them all into the confirmed set."""
+    resp, status = _check_deal_access(deal_id)
+    if resp is not None:
+        return resp, status
+
+    from app.models import SaleComp as _SaleComp
+    confirmed = _SaleComp.query.filter_by(
+        deal_id=deal_id, is_suggested=True, is_dismissed=False
+    ).update({'is_suggested': False})
+
+    # Invalidate pro forma cache then commit once
+    from app.services.multifamily.sale_comp_service import SaleCompService
+    SaleCompService()._invalidate_cache(deal_id)
+    db.session.commit()
+
+    return jsonify({'confirmed': confirmed}), 200
+
+
+@multifamily_sale_comp_bp.route('/deals/<int:deal_id>/sale-comps/clear', methods=['DELETE'])
+@handle_errors
+def clear_all_sale_comps(deal_id):
+    """Hard-delete all sale comps for a deal (suggested, dismissed, and confirmed).
+
+    Used to reset the comp list before a fresh AI fetch.
+    """
+    resp, status = _check_deal_access(deal_id)
+    if resp is not None:
+        return resp, status
+
+    from app.models import SaleComp as _SaleComp
+    deleted = _SaleComp.query.filter_by(deal_id=deal_id).delete()
+
+    # Invalidate pro forma cache then commit once
+    from app.services.multifamily.sale_comp_service import SaleCompService
+    SaleCompService()._invalidate_cache(deal_id)
+    db.session.commit()
+
+    return jsonify({'deleted': deleted}), 200
+
+
 @multifamily_sale_comp_bp.route('/deals/<int:deal_id>/sale-comps', methods=['POST'])
 @handle_errors
 def add_sale_comp(deal_id):
@@ -210,6 +268,51 @@ def add_sale_comp(deal_id):
     db.session.commit()
 
     return jsonify(_serialize_sale_comp(comp)), 201
+
+
+@multifamily_sale_comp_bp.route('/deals/<int:deal_id>/sale-comps/suggested', methods=['GET'])
+@handle_errors
+def get_suggested_comps(deal_id):
+    """Return AI-suggested comps pending user review.
+
+    Returns comps with is_suggested=True and is_dismissed=False,
+    ordered with in-range comps first, then out-of-range.
+    """
+    resp, status = _check_deal_access(deal_id)
+    if resp is not None:
+        return resp, status
+
+    service = SaleCompService()
+    comps = service.get_suggested_comps(deal_id)
+    return jsonify([_serialize_sale_comp(c) for c in comps]), 200
+
+
+@multifamily_sale_comp_bp.route('/deals/<int:deal_id>/sale-comps/<int:comp_id>/confirm', methods=['POST'])
+@handle_errors
+def confirm_sale_comp(deal_id, comp_id):
+    """Confirm a suggested comp — moves it into the confirmed set for rollup stats."""
+    resp, status = _check_deal_access(deal_id)
+    if resp is not None:
+        return resp, status
+
+    service = SaleCompService()
+    comp = service.confirm_comp(deal_id, comp_id)
+    db.session.commit()
+    return jsonify(_serialize_sale_comp(comp)), 200
+
+
+@multifamily_sale_comp_bp.route('/deals/<int:deal_id>/sale-comps/<int:comp_id>/dismiss', methods=['POST'])
+@handle_errors
+def dismiss_sale_comp(deal_id, comp_id):
+    """Dismiss a suggested comp — removes it from the suggested list."""
+    resp, status = _check_deal_access(deal_id)
+    if resp is not None:
+        return resp, status
+
+    service = SaleCompService()
+    comp = service.dismiss_comp(deal_id, comp_id)
+    db.session.commit()
+    return jsonify(_serialize_sale_comp(comp)), 200
 
 
 @multifamily_sale_comp_bp.route('/deals/<int:deal_id>/sale-comps/<int:comp_id>', methods=['DELETE'])

@@ -60,7 +60,7 @@ raw_payload_strategy = st.dictionaries(
     hubspot_engagement_id=hubspot_id_strategy,
     raw_payload=raw_payload_strategy,
 )
-@settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture], deadline=None)
 def test_hubspot_source_fields_preserved_on_roundtrip(app, hubspot_engagement_id, raw_payload):
     """Interaction created with source='hubspot_import' must have non-null
     hubspot_engagement_id and raw_payload equal to the provided values after

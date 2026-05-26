@@ -815,6 +815,12 @@ export interface MFSaleComp {
   noi: string | null
   /** 1.0 = stated directly, 0.5 = derived from NOI/price, 0.0 = unknown, null = not set */
   cap_rate_confidence: number | null
+  /** True = AI-fetched, pending user review. False = confirmed, included in rollup. */
+  is_suggested: boolean
+  /** True = user dismissed, excluded from suggested list. */
+  is_dismissed: boolean
+  /** True = unit count is outside ±50% of subject property unit count. */
+  out_of_range: boolean
 }
 
 export interface SaleCompRollup {
@@ -1017,6 +1023,10 @@ export interface DashboardScenario {
   initial_cash_investment: string | null
   month_1_net_cash_flow: string | null
   month_24_net_cash_flow: string | null
+  cf_per_unit_month_1: string | null
+  cf_per_unit_month_24: string | null
+  cf_needed_for_min: string | null
+  purchase_price_for_min_cf: string | null
   cash_on_cash_return: string | null
   missing_inputs: string[]
 }

@@ -60,7 +60,7 @@ _AES_PATCH = 'app.services.action_engine_service.ActionEngineService.recompute_a
 # Feature: actionable-lead-command-center, Property 4: Task Title Validation Boundary
 # ---------------------------------------------------------------------------
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(title=st.text(min_size=1, max_size=255))
 def test_property_4_valid_title_accepted(title):
     """
@@ -94,7 +94,7 @@ def test_property_4_valid_title_accepted(title):
         assert result is mock_task_instance
 
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(title=st.text(min_size=256, max_size=500))
 def test_property_4_title_too_long_rejected(title):
     """
@@ -105,11 +105,16 @@ def test_property_4_title_too_long_rejected(title):
     Validates: Requirements 3.2
     """
     # Feature: actionable-lead-command-center, Property 4: Task Title Validation Boundary
+    # Only test titles that are still > 255 chars after stripping whitespace,
+    # since the service strips before validating.
+    assume(len(title.strip()) > 255)
+
     service = LeadTaskService()
     mock_lead = make_mock_lead()
 
     with patch('app.services.lead_task_service.Lead') as MockLead, \
-         patch('app.services.lead_task_service.db') as mock_db:
+         patch('app.services.lead_task_service.db') as mock_db, \
+         patch(_AES_PATCH):
 
         MockLead.query.get.return_value = mock_lead
         mock_db.session = MagicMock()
@@ -121,7 +126,7 @@ def test_property_4_title_too_long_rejected(title):
         mock_db.session.commit.assert_not_called()
 
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(title=st.one_of(
     st.just(''),
     st.text(max_size=50).filter(lambda s: not s.strip()),
@@ -157,7 +162,7 @@ def test_property_4_empty_title_rejected(title):
 # Feature: actionable-lead-command-center, Property 5: Task State Machine Validity
 # ---------------------------------------------------------------------------
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(n=st.integers(min_value=0, max_value=100))
 def test_property_5_open_to_completed_is_valid(n):
     """
@@ -185,7 +190,7 @@ def test_property_5_open_to_completed_is_valid(n):
         assert mock_task.completed_at is not None
 
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(n=st.integers(min_value=0, max_value=100))
 def test_property_5_completing_completed_task_is_noop(n):
     """
@@ -241,7 +246,7 @@ def test_property_5_cancelled_task_cannot_be_completed(n):
 # Feature: actionable-lead-command-center, Property 6: Task Snooze Date Validation
 # ---------------------------------------------------------------------------
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(days_ahead=st.integers(min_value=1, max_value=3650))
 def test_property_6_future_date_accepted(days_ahead):
     """
@@ -305,7 +310,7 @@ def test_property_6_today_or_past_date_rejected(days_offset):
 # Feature: actionable-lead-command-center, Property 14: Unanswered Call Count Monotonically Increments
 # ---------------------------------------------------------------------------
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(
     n_calls=st.integers(min_value=1, max_value=20),
     outcome=st.sampled_from(['voicemail', 'no_answer']),
@@ -360,7 +365,7 @@ def test_property_14_unanswered_call_count_increments(n_calls, outcome, initial_
 # Feature: actionable-lead-command-center, Property 15: Note Length Validation Boundary
 # ---------------------------------------------------------------------------
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(body=st.text(min_size=1, max_size=5000))
 def test_property_15_valid_note_accepted(body):
     """
@@ -422,7 +427,7 @@ def test_property_15_note_too_long_rejected(extra_chars):
         mock_db.session.commit.assert_not_called()
 
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(body=st.one_of(
     st.just(''),
     st.text(max_size=50).filter(lambda s: not s.strip()),

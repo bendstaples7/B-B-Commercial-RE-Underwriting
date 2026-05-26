@@ -343,7 +343,7 @@ describe('ReviewQueue', () => {
       expect(screen.getByText('100')).toBeInTheDocument() // internal_record_id
     })
 
-    it('shows "No internal record proposed" for unmatched records', async () => {
+    it('shows "could not be matched" message for unmatched records', async () => {
       render(<ReviewQueue />)
 
       await waitFor(() => {
@@ -356,7 +356,7 @@ describe('ReviewQueue', () => {
 
       await waitFor(() => {
         expect(
-          screen.getByText(/No internal record proposed/)
+          screen.getByText(/could not be matched to any existing property/)
         ).toBeInTheDocument()
       })
     })

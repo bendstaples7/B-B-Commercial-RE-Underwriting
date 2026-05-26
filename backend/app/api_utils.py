@@ -211,3 +211,107 @@ def require_admin(f):
             }), 403
         return f(*args, **kwargs)
     return decorated
+
+
+# ---------------------------------------------------------------------------
+# APIFailoverHandler — try multiple data sources in order, failing over on error
+# ---------------------------------------------------------------------------
+
+class APIFailoverHandler:
+    """Try a list of data sources in order, returning the first successful result.
+
+    Tracks which sources were attempted so callers can raise ``APIFailoverException``
+    with the full list when all sources fail.
+
+    Usage::
+
+        handler = APIFailoverHandler()
+        sources = [
+            ('Source1', fetch_from_source1),
+            ('Source2', fetch_from_source2, arg1, arg2),
+        ]
+        result = handler.try_sources(sources, field='square_footage')
+    """
+
+    def __init__(self):
+        self.attempted_sources: list[str] = []
+
+    def try_sources(self, sources: list, field: str | None = None):
+        """Try each source in order, returning the first successful result.
+
+        Args:
+            sources: List of tuples ``(name, callable, *args)``.
+            field: Optional field name for error context.
+
+        Returns:
+            The return value of the first callable that succeeds.
+
+        Raises:
+            APIFailoverException: If all sources raise an exception.
+        """
+        from app.exceptions import APIFailoverException
+
+        self.attempted_sources = []
+        last_error: Exception | None = None
+
+        for entry in sources:
+            name = entry[0]
+            func = entry[1]
+            args = entry[2:] if len(entry) > 2 else ()
+            self.attempted_sources.append(name)
+            try:
+                return func(*args)
+            except Exception as exc:
+                last_error = exc
+                continue
+
+        raise APIFailoverException(
+            f"All API sources failed{f' for field {field!r}' if field else ''}.",
+            attempted_sources=list(self.attempted_sources),
+        )
+
+
+# ---------------------------------------------------------------------------
+# RateLimitHandler — retry a callable on RateLimitException with backoff
+# ---------------------------------------------------------------------------
+
+class RateLimitHandler:
+    """Retry a callable when it raises ``RateLimitException``, with exponential backoff.
+
+    Usage::
+
+        handler = RateLimitHandler(max_retries=3, base_delay=1.0)
+        result = handler.handle_rate_limit(my_api_call)
+    """
+
+    def __init__(self, max_retries: int = 3, base_delay: float = 1.0):
+        self.max_retries = max_retries
+        self.base_delay = base_delay
+
+    def handle_rate_limit(self, func, *args, **kwargs):
+        """Call ``func(*args, **kwargs)``, retrying on ``RateLimitException``.
+
+        Args:
+            func: The callable to invoke.
+            *args: Positional arguments forwarded to ``func``.
+            **kwargs: Keyword arguments forwarded to ``func``.
+
+        Returns:
+            The return value of ``func`` on success.
+
+        Raises:
+            RateLimitException: If ``max_retries`` is exhausted.
+            Any other exception raised by ``func`` is re-raised immediately.
+        """
+        import time as _time
+        from app.exceptions import RateLimitException
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                return func(*args, **kwargs)
+            except RateLimitException as exc:
+                if attempt >= self.max_retries:
+                    raise
+                retry_after_hint = exc.payload.get('retry_after')
+                retry_after = self.base_delay * (2 ** attempt) if retry_after_hint is None else retry_after_hint
+                _time.sleep(float(retry_after))

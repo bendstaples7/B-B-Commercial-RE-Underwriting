@@ -50,7 +50,8 @@ class SaleCompService:
             deal_id: The Deal to add the comp to.
             payload: Dict with address, unit_count, status, sale_price,
                      close_date, observed_cap_rate (optional), noi (optional),
-                     distance_miles (optional).
+                     distance_miles (optional), is_suggested (optional, default False),
+                     out_of_range (optional, default False).
 
         Returns:
             The persisted SaleComp model instance.
@@ -92,6 +93,9 @@ class SaleCompService:
             distance_miles=payload.get("distance_miles"),
             noi=noi,
             cap_rate_confidence=cap_rate_confidence,
+            is_suggested=bool(payload.get("is_suggested", False)),
+            is_dismissed=False,
+            out_of_range=bool(payload.get("out_of_range", False)),
         )
         db.session.add(comp)
         self._invalidate_cache(deal_id)
@@ -123,23 +127,20 @@ class SaleCompService:
     # ------------------------------------------------------------------
 
     def get_comps_rollup(self, deal_id: int) -> dict:
-        """Return rollup statistics for sale comps of a Deal.
+        """Return rollup statistics for confirmed sale comps of a Deal.
 
-        Cap rate statistics are computed only from comps that have a cap
-        rate (stated or derived). Comps without cap rates are included in
-        the comps list but excluded from cap rate min/median/avg/max.
-
-        Args:
-            deal_id: The Deal to query.
-
-        Returns:
-            Dict with Cap_Rate_Min, Cap_Rate_Median, Cap_Rate_Average,
-            Cap_Rate_Max, PPU_Min, PPU_Median, PPU_Average, PPU_Max,
-            the full list of SaleComp objects, and a warnings list.
+        Only confirmed comps (is_suggested=False, is_dismissed=False) are
+        included in the statistics and the comps list. Suggested comps
+        pending review are excluded — use get_suggested_comps() for those.
 
         Requirements: 4.4, 4.5
         """
-        comps = SaleComp.query.filter_by(deal_id=deal_id).all()
+        # Only confirmed comps feed the rollup
+        comps = SaleComp.query.filter_by(
+            deal_id=deal_id,
+            is_suggested=False,
+            is_dismissed=False,
+        ).all()
 
         warnings: list[str] = []
 
@@ -160,7 +161,6 @@ class SaleCompService:
                 "warnings": warnings,
             }
 
-        # Only include comps with a cap rate in cap rate statistics
         comps_with_cap_rate = [c for c in comps if c.observed_cap_rate is not None]
         comps_without_cap_rate = [c for c in comps if c.observed_cap_rate is None]
 
@@ -196,6 +196,49 @@ class SaleCompService:
             "comps": comps,
             "warnings": warnings,
         }
+
+    def get_suggested_comps(self, deal_id: int) -> list:
+        """Return AI-suggested comps pending user review (is_suggested=True, is_dismissed=False)."""
+        return SaleComp.query.filter_by(
+            deal_id=deal_id,
+            is_suggested=True,
+            is_dismissed=False,
+        ).order_by(SaleComp.out_of_range.asc(), SaleComp.id.asc()).all()
+
+    def confirm_comp(self, deal_id: int, comp_id: int) -> SaleComp:
+        """Confirm a suggested comp — moves it into the confirmed set for rollup."""
+        comp = SaleComp.query.filter_by(id=comp_id, deal_id=deal_id).first()
+        if comp is None:
+            raise ValueError(f"Sale comp {comp_id} not found for deal {deal_id}")
+        comp.is_suggested = False
+        comp.is_dismissed = False
+        self._invalidate_cache(deal_id)
+        db.session.flush()
+        return comp
+
+    def dismiss_comp(self, deal_id: int, comp_id: int) -> SaleComp:
+        """Dismiss a suggested comp — removes it from the suggested list.
+
+        Only suggested comps (is_suggested=True) may be dismissed. Confirmed
+        comps (is_suggested=False) cannot be dismissed to prevent accidentally
+        hiding them from rollup statistics.
+
+        Raises:
+            ValueError: If the comp does not exist for this deal.
+            ValueError: If the comp is already confirmed (is_suggested=False).
+        """
+        comp = SaleComp.query.filter_by(id=comp_id, deal_id=deal_id).first()
+        if comp is None:
+            raise ValueError(f"Sale comp {comp_id} not found for deal {deal_id}")
+        if not comp.is_suggested:
+            raise ValueError(
+                f"Sale comp {comp_id} is already confirmed and cannot be dismissed. "
+                "Delete it instead if you want to remove it from the rollup."
+            )
+        comp.is_dismissed = True
+        self._invalidate_cache(deal_id)
+        db.session.flush()
+        return comp
 
     # ------------------------------------------------------------------
     # Private helpers

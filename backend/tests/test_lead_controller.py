@@ -72,7 +72,7 @@ class TestListLeads:
 
     def test_list_leads_empty(self, client, app):
         """Empty database returns empty list with correct pagination."""
-        response = client.get('/api/leads/')
+        response = client.get('/api/properties/')
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data['leads'] == []
@@ -83,7 +83,7 @@ class TestListLeads:
         """Returns created leads."""
         with app.app_context():
             _create_lead(app)
-        response = client.get('/api/leads/')
+        response = client.get('/api/properties/')
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data['total'] == 1
@@ -94,13 +94,13 @@ class TestListLeads:
         with app.app_context():
             _create_leads_batch(app, 25)
 
-        resp1 = client.get('/api/leads/?page=1&per_page=10')
+        resp1 = client.get('/api/properties/?page=1&per_page=10')
         d1 = json.loads(resp1.data)
         assert len(d1['leads']) == 10
         assert d1['total'] == 25
         assert d1['pages'] == 3
 
-        resp3 = client.get('/api/leads/?page=3&per_page=10')
+        resp3 = client.get('/api/properties/?page=3&per_page=10')
         d3 = json.loads(resp3.data)
         assert len(d3['leads']) == 5
 
@@ -110,7 +110,7 @@ class TestListLeads:
             _create_lead(app, property_street='1 A St', property_type='single_family')
             _create_lead(app, property_street='2 B St', property_type='multi_family')
 
-        resp = client.get('/api/leads/?property_type=single_family')
+        resp = client.get('/api/properties/?property_type=single_family')
         data = json.loads(resp.data)
         assert data['total'] == 1
         assert data['leads'][0]['property_type'] == 'single_family'
@@ -121,7 +121,7 @@ class TestListLeads:
             _create_lead(app, property_street='1 A St', mailing_city='Chicago')
             _create_lead(app, property_street='2 B St', mailing_city='Denver')
 
-        resp = client.get('/api/leads/?city=chicago')
+        resp = client.get('/api/properties/?city=chicago')
         data = json.loads(resp.data)
         assert data['total'] == 1
 
@@ -131,7 +131,7 @@ class TestListLeads:
             _create_lead(app, property_street='1 A St', mailing_state='IL')
             _create_lead(app, property_street='2 B St', mailing_state='CO')
 
-        resp = client.get('/api/leads/?state=il')
+        resp = client.get('/api/properties/?state=il')
         data = json.loads(resp.data)
         assert data['total'] == 1
 
@@ -141,7 +141,7 @@ class TestListLeads:
             _create_lead(app, property_street='1 A St', mailing_zip='60601')
             _create_lead(app, property_street='2 B St', mailing_zip='80202')
 
-        resp = client.get('/api/leads/?zip=60601')
+        resp = client.get('/api/properties/?zip=60601')
         data = json.loads(resp.data)
         assert data['total'] == 1
 
@@ -151,7 +151,7 @@ class TestListLeads:
             _create_lead(app, property_street='1 A St', owner_first_name='Alice', owner_last_name='Smith')
             _create_lead(app, property_street='2 B St', owner_first_name='Bob', owner_last_name='Jones')
 
-        resp = client.get('/api/leads/?owner_name=alice')
+        resp = client.get('/api/properties/?owner_name=alice')
         data = json.loads(resp.data)
         assert data['total'] == 1
         assert data['leads'][0]['owner_first_name'] == 'Alice'
@@ -163,7 +163,7 @@ class TestListLeads:
             _create_lead(app, property_street='2 B St', lead_score=60.0)
             _create_lead(app, property_street='3 C St', lead_score=90.0)
 
-        resp = client.get('/api/leads/?score_min=50&score_max=70')
+        resp = client.get('/api/properties/?score_min=50&score_max=70')
         data = json.loads(resp.data)
         assert data['total'] == 1
         assert data['leads'][0]['lead_score'] == 60.0
@@ -181,7 +181,7 @@ class TestListLeads:
             db.session.add(member)
             db.session.commit()
 
-        resp = client.get(f'/api/leads/?marketing_list_id={ml_id}')
+        resp = client.get(f'/api/properties/?marketing_list_id={ml_id}')
         data = json.loads(resp.data)
         assert data['total'] == 1
         assert data['leads'][0]['property_street'] == '1 A St'
@@ -193,7 +193,7 @@ class TestListLeads:
             _create_lead(app, property_street='2 B St', lead_score=20.0)
             _create_lead(app, property_street='3 C St', lead_score=50.0)
 
-        resp = client.get('/api/leads/?sort_by=lead_score&sort_order=asc')
+        resp = client.get('/api/properties/?sort_by=lead_score&sort_order=asc')
         data = json.loads(resp.data)
         scores = [l['lead_score'] for l in data['leads']]
         assert scores == sorted(scores)
@@ -205,7 +205,7 @@ class TestListLeads:
             _create_lead(app, property_street='2 B St', lead_score=20.0)
             _create_lead(app, property_street='3 C St', lead_score=50.0)
 
-        resp = client.get('/api/leads/?sort_by=lead_score&sort_order=desc')
+        resp = client.get('/api/properties/?sort_by=lead_score&sort_order=desc')
         data = json.loads(resp.data)
         scores = [l['lead_score'] for l in data['leads']]
         assert scores == sorted(scores, reverse=True)
@@ -214,7 +214,7 @@ class TestListLeads:
         """Invalid sort_by falls back to created_at."""
         with app.app_context():
             _create_lead(app)
-        resp = client.get('/api/leads/?sort_by=invalid_field')
+        resp = client.get('/api/properties/?sort_by=invalid_field')
         assert resp.status_code == 200
 
 
@@ -231,7 +231,7 @@ class TestGetLead:
             lead = _create_lead(app)
             lead_id = lead.id
 
-        resp = client.get(f'/api/leads/{lead_id}')
+        resp = client.get(f'/api/properties/{lead_id}')
         assert resp.status_code == 200
         data = json.loads(resp.data)
         assert data['id'] == lead_id
@@ -242,10 +242,10 @@ class TestGetLead:
 
     def test_get_lead_not_found(self, client, app):
         """Returns 404 for non-existent lead."""
-        resp = client.get('/api/leads/99999')
+        resp = client.get('/api/properties/99999')
         assert resp.status_code == 404
         data = json.loads(resp.data)
-        assert data['error'] == 'Lead not found'
+        assert data['error'] in ('Lead not found', 'Property not found')
 
     def test_get_lead_with_enrichment_records(self, client, app):
         """Detail includes enrichment records."""
@@ -264,7 +264,7 @@ class TestGetLead:
             db.session.commit()
             lead_id = lead.id
 
-        resp = client.get(f'/api/leads/{lead_id}')
+        resp = client.get(f'/api/properties/{lead_id}')
         data = json.loads(resp.data)
         assert len(data['enrichment_records']) == 1
         assert data['enrichment_records'][0]['status'] == 'success'
@@ -286,7 +286,7 @@ class TestGetLead:
             db.session.commit()
             lead_id = lead.id
 
-        resp = client.get(f'/api/leads/{lead_id}')
+        resp = client.get(f'/api/properties/{lead_id}')
         data = json.loads(resp.data)
         assert len(data['marketing_lists']) == 1
         assert data['marketing_lists'][0]['marketing_list_name'] == 'Campaign A'
@@ -305,7 +305,7 @@ class TestGetLead:
             lead = _create_lead(app, analysis_session_id=session.id)
             lead_id = lead.id
 
-        resp = client.get(f'/api/leads/{lead_id}')
+        resp = client.get(f'/api/properties/{lead_id}')
         data = json.loads(resp.data)
         assert data['analysis_session'] is not None
         assert data['analysis_session']['session_id'] == 'linked-session'
@@ -332,9 +332,10 @@ class TestAnalyzeLead:
             lead_id = lead.id
 
         resp = client.post(
-            f'/api/leads/{lead_id}/analyze',
-            data=json.dumps({'user_id': 'user1'}),
+            f'/api/properties/{lead_id}/analyze',
+            data=json.dumps({}),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 201
         data = json.loads(resp.data)
@@ -348,9 +349,10 @@ class TestAnalyzeLead:
     def test_analyze_lead_not_found(self, client, app):
         """Returns 404 for non-existent lead."""
         resp = client.post(
-            '/api/leads/99999/analyze',
-            data=json.dumps({'user_id': 'user1'}),
+            '/api/properties/99999/analyze',
+            data=json.dumps({}),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 404
 
@@ -361,7 +363,7 @@ class TestAnalyzeLead:
             lead_id = lead.id
 
         resp = client.post(
-            f'/api/leads/{lead_id}/analyze',
+            f'/api/properties/{lead_id}/analyze',
             data=json.dumps({}),
             content_type='application/json',
         )
@@ -374,13 +376,14 @@ class TestAnalyzeLead:
             lead_id = lead.id
 
         resp = client.post(
-            f'/api/leads/{lead_id}/analyze',
-            data=json.dumps({'user_id': 'user1'}),
+            f'/api/properties/{lead_id}/analyze',
+            data=json.dumps({}),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         data = json.loads(resp.data)
 
-        detail_resp = client.get(f'/api/leads/{lead_id}')
+        detail_resp = client.get(f'/api/properties/{lead_id}')
         detail = json.loads(detail_resp.data)
         assert detail['analysis_session'] is not None
         assert detail['analysis_session']['session_id'] == data['session_id']
@@ -395,7 +398,7 @@ class TestGetScoringWeights:
 
     def test_get_weights_default(self, client, app):
         """Returns default weights when none exist for user."""
-        resp = client.get('/api/leads/scoring/weights?user_id=new_user')
+        resp = client.get('/api/properties/scoring/weights?user_id=new_user')
         assert resp.status_code == 200
         data = json.loads(resp.data)
         assert data['user_id'] == 'new_user'
@@ -417,7 +420,7 @@ class TestGetScoringWeights:
             db.session.add(sw)
             db.session.commit()
 
-        resp = client.get('/api/leads/scoring/weights?user_id=existing_user')
+        resp = client.get('/api/properties/scoring/weights?user_id=existing_user')
         data = json.loads(resp.data)
         assert data['property_characteristics_weight'] == 0.40
         assert data['data_completeness_weight'] == 0.10
@@ -440,9 +443,10 @@ class TestUpdateScoringWeights:
             'location_desirability_weight': 0.25,
         }
         resp = client.put(
-            '/api/leads/scoring/weights',
+            '/api/properties/scoring/weights',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 200
         data = json.loads(resp.data)
@@ -459,9 +463,10 @@ class TestUpdateScoringWeights:
             'location_desirability_weight': 0.50,
         }
         resp = client.put(
-            '/api/leads/scoring/weights',
+            '/api/properties/scoring/weights',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 400
 
@@ -472,9 +477,10 @@ class TestUpdateScoringWeights:
             'property_characteristics_weight': 0.25,
         }
         resp = client.put(
-            '/api/leads/scoring/weights',
+            '/api/properties/scoring/weights',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 400
 
@@ -487,7 +493,7 @@ class TestUpdateScoringWeights:
             'location_desirability_weight': 0.25,
         }
         resp = client.put(
-            '/api/leads/scoring/weights',
+            '/api/properties/scoring/weights',
             data=json.dumps(payload),
             content_type='application/json',
         )
@@ -496,7 +502,7 @@ class TestUpdateScoringWeights:
     def test_update_weights_no_body(self, client, app):
         """Returns 400 when request body is empty."""
         resp = client.put(
-            '/api/leads/scoring/weights',
+            '/api/properties/scoring/weights',
             content_type='application/json',
         )
         assert resp.status_code == 400
@@ -522,9 +528,10 @@ class TestUpdateScoringWeights:
             'location_desirability_weight': 0.25,
         }
         resp = client.put(
-            '/api/leads/scoring/weights',
+            '/api/properties/scoring/weights',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         data = json.loads(resp.data)
         assert data['leads_rescored'] >= 1
@@ -544,7 +551,7 @@ class TestCombinedFilters:
             _create_lead(app, property_street='2 B St', mailing_state='IL', lead_score=40.0)
             _create_lead(app, property_street='3 C St', mailing_state='CO', lead_score=90.0)
 
-        resp = client.get('/api/leads/?state=IL&sort_by=lead_score&sort_order=desc')
+        resp = client.get('/api/properties/?state=IL&sort_by=lead_score&sort_order=desc')
         data = json.loads(resp.data)
         assert data['total'] == 2
         assert data['leads'][0]['lead_score'] == 80.0
@@ -555,6 +562,6 @@ class TestCombinedFilters:
         with app.app_context():
             _create_leads_batch(app, 5)
 
-        resp = client.get('/api/leads/?per_page=500')
+        resp = client.get('/api/properties/?per_page=500')
         data = json.loads(resp.data)
         assert data['per_page'] == 100

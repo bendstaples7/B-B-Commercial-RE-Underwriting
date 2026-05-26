@@ -280,18 +280,19 @@ def advance_to_step(session_id, step_number):
             'message': f'Step number must be between 1 and 6'
         }), 400
     
-    # Step 2 (COMPARABLE_SEARCH) can run async or sync based on configuration
+    # Step 2 (COMPARABLE_SEARCH) is always handled asynchronously via Celery.
+    # The route enqueues the task and returns HTTP 202 immediately so the
+    # frontend is never blocked by the ~2-minute comparable search duration.
     if target_step == WorkflowStep.COMPARABLE_SEARCH:
         from app.models import AnalysisSession
         from app import db
         from datetime import datetime
-        import os
 
         session = AnalysisSession.query.filter_by(session_id=session_id).first()
         if not session:
             return jsonify({'error': 'Session not found'}), 404
 
-        # Enforce sequential step ordering for the async path
+        # Enforce sequential step ordering
         if session.current_step.value + 1 != WorkflowStep.COMPARABLE_SEARCH.value:
             return jsonify({
                 'error': 'Invalid request',
@@ -301,53 +302,52 @@ def advance_to_step(session_id, step_number):
         # Validate step 1 is complete before accepting
         workflow_controller._validate_step_completion(session, WorkflowStep.PROPERTY_FACTS)
 
-        # Check if async mode is enabled (defaults to false for ease of setup)
-        use_async = os.getenv('USE_ASYNC_COMPARABLE_SEARCH', 'false').lower() == 'true'
+        # Short-circuit duplicate submissions — use an atomic UPDATE so that
+        # concurrent requests cannot both pass the loading=False check.
+        # UPDATE returns the number of rows modified; 0 means loading was
+        # already True (another request got there first).
+        from sqlalchemy import update as _sa_update
+        rows_updated = db.session.execute(
+            _sa_update(AnalysisSession)
+            .where(
+                AnalysisSession.session_id == session_id,
+                AnalysisSession.loading == False,  # noqa: E712
+            )
+            .values(loading=True, updated_at=datetime.utcnow())
+        ).rowcount
+        db.session.commit()
 
-        if use_async:
-            # Try to use Celery for async processing
-            try:
-                from celery_worker import run_comparable_search_task
-                
-                session.loading = True
-                session.updated_at = datetime.utcnow()
-                db.session.commit()
-
-                run_comparable_search_task.delay(session_id)
-
-                logger.info(f"Enqueued comparable search for session {session_id}")
-                return jsonify({'status': 'accepted', 'session_id': session_id}), 202
-            except Exception as e:
-                # Celery not available, fall back to synchronous
-                logger.warning(f"Celery unavailable, falling back to synchronous search: {e}")
-                # Reset loading flag that was set before the failed enqueue
-                session.loading = False
-                db.session.commit()
-        
-        # Run synchronously (either because async is disabled or Celery failed)
-        logger.info(f"Running comparable search synchronously for session {session_id}")
-        result = workflow_controller.advance_to_step(
-            session_id=session_id,
-            target_step=target_step,
-            approval_data=data.get('approval_data')
-        )
-        # After a successful synchronous comparable search, automatically advance
-        # to COMPARABLE_REVIEW so the user lands directly on the review step.
-        if result.get('current_step') == WorkflowStep.COMPARABLE_SEARCH.name:
-            from app.models import AnalysisSession
-            from app import db
-            from datetime import datetime
+        if rows_updated == 0:
+            # Either session.loading was already True (duplicate) or session
+            # disappeared between the earlier query and this update.
+            # Re-fetch to distinguish the two cases.
             session = AnalysisSession.query.filter_by(session_id=session_id).first()
-            if session:
-                completed_steps = list(session.completed_steps or [])
-                if WorkflowStep.COMPARABLE_SEARCH.name not in completed_steps:
-                    completed_steps.append(WorkflowStep.COMPARABLE_SEARCH.name)
-                session.completed_steps = completed_steps
-                session.current_step = WorkflowStep.COMPARABLE_REVIEW
-                session.updated_at = datetime.utcnow()
-                db.session.commit()
-                result['current_step'] = WorkflowStep.COMPARABLE_REVIEW.name
-        return jsonify(result), 200
+            if not session:
+                return jsonify({'error': 'Session not found'}), 404
+            return jsonify({
+                'error': 'Conflict',
+                'message': 'Comparable search is already in progress for this session.',
+            }), 409
+
+        # Enqueue the Celery task; revert loading on failure.
+        try:
+            from celery_worker import run_comparable_search_task
+            run_comparable_search_task.delay(session_id)
+            logger.info(f"Enqueued comparable search for session {session_id}")
+        except Exception as e:
+            logger.warning(f"Celery unavailable, reverting loading state: {e}")
+            db.session.execute(
+                _sa_update(AnalysisSession)
+                .where(AnalysisSession.session_id == session_id)
+                .values(loading=False, updated_at=datetime.utcnow())
+            )
+            db.session.commit()
+            return jsonify({
+                'error': 'Service unavailable',
+                'message': 'Comparable search queue is unavailable. Please try again.',
+            }), 503
+
+        return jsonify({'status': 'accepted', 'session_id': session_id}), 202
 
     # Advance to step
     result = workflow_controller.advance_to_step(

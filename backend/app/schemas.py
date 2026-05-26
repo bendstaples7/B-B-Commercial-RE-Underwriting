@@ -1,5 +1,5 @@
 """Marshmallow schemas for request validation."""
-from marshmallow import Schema, fields, validate, ValidationError, validates_schema, validates, EXCLUDE
+from marshmallow import Schema, fields, validate, ValidationError, validates_schema, validates, EXCLUDE, pre_load
 from datetime import datetime
 
 
@@ -15,10 +15,13 @@ class RequestSchema(Schema):
         unknown = EXCLUDE
 
 
-class StartAnalysisSchema(Schema):
-    """Schema for starting a new analysis."""
+class StartAnalysisSchema(RequestSchema):
+    """Schema for starting a new analysis.
+
+    user_id is read from the X-User-Id header via g.user_id, not the body.
+    Unknown fields (including user_id sent by older clients) are silently dropped.
+    """
     address = fields.Str(required=True, validate=validate.Length(min=5, max=500))
-    user_id = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     latitude = fields.Float(load_default=None, allow_none=True)
     longitude = fields.Float(load_default=None, allow_none=True)
 
@@ -1739,3 +1742,28 @@ class HubSpotConfigUpdateSchema(Schema):
     The secret is load_only and never returned in responses.
     """
     client_secret = fields.Str(load_only=True, allow_none=True, required=False)
+
+
+# ---------------------------------------------------------------------------
+# Authentication Schemas
+# ---------------------------------------------------------------------------
+
+class LoginSchema(RequestSchema):
+    """Validation schema for POST /api/auth/login.
+
+    Both fields are required. Email is normalized to lowercase and stripped.
+    Password length is validated server-side only (no client-side hints).
+
+    Requirements: 2.1, 2.2
+    """
+    email = fields.Email(required=True)
+    password = fields.Str(required=True, validate=validate.Length(min=1))
+
+    @pre_load
+    def normalize_email(self, data, **kwargs):
+        if not isinstance(data, dict):
+            return data
+        email = data.get('email')
+        if email and isinstance(email, str):
+            data['email'] = email.strip().lower()
+        return data

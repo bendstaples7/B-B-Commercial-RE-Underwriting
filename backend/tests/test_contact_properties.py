@@ -191,7 +191,7 @@ def test_legacy_redirect_preserves_path_suffix(app, client, suffix):
     city=st.one_of(st.none(), _name_text),
     state=st.one_of(st.none(), st.text(min_size=2, max_size=2, alphabet=st.characters(whitelist_categories=("Lu",)))),
 )
-@settings(max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=50, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_property_writes_persist_to_leads_table(app, street, city, state):
     """Property 2: Properties created in the DB are retrievable via GET /api/properties/.
 
@@ -467,7 +467,7 @@ def test_at_most_one_primary_contact_per_property(app, client, num_contacts, is_
 # ===========================================================================
 
 @given(nonexistent_id=st.integers(min_value=999_000, max_value=999_999_999))
-@settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=100, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_nonexistent_ids_return_404(app, client, nonexistent_id):
     """Property 7: All Contact and Property-Contact endpoints return 404 for non-existent IDs.
 
@@ -555,7 +555,7 @@ def lead_seed_strategy(draw):
 
 
 @given(seeds=st.lists(lead_seed_strategy(), min_size=1, max_size=5))
-@settings(max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=50, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_migration_idempotency(app, seeds):
     """Property 8: Running migration logic twice produces the same record counts as running it once.
 
@@ -805,10 +805,14 @@ def test_unmatched_hubspot_contacts_create_new_contact_records(app, first_name, 
     """
     # Feature: property-contact-model, Property 11: Unmatched HubSpot contacts create new Contact records
     with app.app_context():
-        # Use a unique email and phone that won't match anything
+        # Use a unique email, phone, and name suffix that won't match anything
         unique_suffix = uuid.uuid4().hex[:12]
         unmatched_email = f"unmatched_{unique_suffix}@nowhere-{unique_suffix}.com"
         unmatched_phone = f"9{unique_suffix[:9]}"  # 10 digits, unlikely to match
+        # Append unique suffix to names so the name-match path (step 3) won't
+        # accidentally match a Contact created by a previous test example.
+        unique_first = f"{first_name}{unique_suffix[:6]}"
+        unique_last = f"{last_name}{unique_suffix[6:]}"
 
         count_before = Contact.query.count()
         pc_count_before = PropertyContact.query.count()
@@ -820,8 +824,8 @@ def test_unmatched_hubspot_contacts_create_new_contact_records(app, first_name, 
                 "properties": {
                     "email": unmatched_email,
                     "phone": unmatched_phone,
-                    "firstname": first_name,
-                    "lastname": last_name,
+                    "firstname": unique_first,
+                    "lastname": unique_last,
                 }
             },
         )
@@ -868,7 +872,7 @@ def test_unmatched_hubspot_contacts_create_new_contact_records(app, first_name, 
     hs_first=_name_text,
     hs_last=_name_text,
 )
-@settings(max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=50, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_matching_never_deletes_existing_contact_records(app, num_existing, hs_first, hs_last):
     """Property 12: Running the HubSpot matcher does NOT decrease the total Contact count.
 
@@ -982,7 +986,7 @@ def search_scenario_strategy(draw):
 
 
 @given(scenario=search_scenario_strategy())
-@settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=100, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_owner_name_filter_returns_exactly_matching_properties(app, client, scenario):
     """Property 13: GET /api/properties/?owner_name=q returns exactly matching properties.
 

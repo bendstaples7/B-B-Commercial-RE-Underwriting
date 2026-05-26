@@ -121,8 +121,10 @@ def compute_valuation(
 
     # --- Price-to-rent ratio (Req 9.5) ---
     # price_to_rent_ratio = purchase_price / (month_1_gsr * 12)
-    annualized_gsr = month_1_gsr * Decimal("12")
-    if annualized_gsr > Decimal("0"):
+    # Classic price-to-rent ratio: annual purchase price / annual rent
+    # e.g. $100,000 / ($1,000/mo * 12) = 8.33
+    if purchase_price > Decimal("0") and month_1_gsr > Decimal("0"):
+        annualized_gsr = month_1_gsr * Decimal("12")
         price_to_rent_ratio = (purchase_price / annualized_gsr).quantize(
             Decimal("0.000001"), rounding=ROUND_HALF_UP
         )

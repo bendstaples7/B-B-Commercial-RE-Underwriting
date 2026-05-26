@@ -7,6 +7,7 @@ import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import { NotificationProvider, globalNotify } from './context/NotificationContext'
 import { PipelineStatusProvider } from './context/PipelineStatusContext'
+import { AuthProvider } from './context/AuthContext'
 
 // ---------------------------------------------------------------------------
 // Global mutation error handler
@@ -120,11 +121,13 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           {/* NotificationProvider must be inside BrowserRouter so it can
               render MUI components, and inside QueryClientProvider so
               mutations can trigger it. It wires globalNotify on mount. */}
-          <NotificationProvider>
-            <PipelineStatusProvider>
-              <App />
-            </PipelineStatusProvider>
-          </NotificationProvider>
+          <AuthProvider>
+            <NotificationProvider>
+              <PipelineStatusProvider>
+                <App />
+              </PipelineStatusProvider>
+            </NotificationProvider>
+          </AuthProvider>
         </BrowserRouter>
       </ThemeProvider>
     </QueryClientProvider>

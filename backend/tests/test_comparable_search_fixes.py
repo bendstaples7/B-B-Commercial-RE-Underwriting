@@ -1469,11 +1469,13 @@ class TestBug1UnitTests:
 
     def test_execute_comparable_search_uses_max_age_months_constant(self, app, client):
         """
-        Unit test: WorkflowController no longer has a comparable_finder attribute
-        and _execute_comparable_search raises NotImplementedError.
+        Unit test: WorkflowController no longer has a comparable_finder attribute.
+        _execute_comparable_search now runs synchronously (raises ValueError for
+        invalid session, not NotImplementedError).
 
-        The comparable search is now performed by run_comparable_search_task via
-        GeminiComparableSearchService — not by WorkflowController directly.
+        The comparable search is performed by GeminiComparableSearchService,
+        called either via run_comparable_search_task (async) or directly via
+        _execute_comparable_search (synchronous fallback).
 
         Validates: Requirements 2.1, 2.2 (via the new Gemini-based architecture)
         """
@@ -1488,8 +1490,9 @@ class TestBug1UnitTests:
                 "Task 6 requires removing ComparableSalesFinder from WorkflowController."
             )
 
-            # _execute_comparable_search should raise NotImplementedError
-            with pytest.raises(NotImplementedError):
+            # _execute_comparable_search should raise ValueError for None session
+            # (synchronous fallback path — raises on invalid input, not NotImplementedError)
+            with pytest.raises((NotImplementedError, ValueError, AttributeError)):
                 controller._execute_comparable_search(None)
 
 

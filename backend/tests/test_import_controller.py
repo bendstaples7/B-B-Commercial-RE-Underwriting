@@ -218,6 +218,7 @@ class TestSaveMapping:
             '/api/leads/import/mapping',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 201
         data = json.loads(resp.data)
@@ -244,6 +245,7 @@ class TestSaveMapping:
             '/api/leads/import/mapping',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 200
         data = json.loads(resp.data)
@@ -271,6 +273,7 @@ class TestSaveMapping:
             '/api/leads/import/mapping',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 201
 
@@ -286,6 +289,7 @@ class TestSaveMapping:
             '/api/leads/import/mapping',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 400
 
@@ -321,6 +325,7 @@ class TestStartImport:
             '/api/leads/import/start',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 201
         data = json.loads(resp.data)
@@ -353,6 +358,7 @@ class TestStartImport:
             '/api/leads/import/start',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 401
 
@@ -370,6 +376,7 @@ class TestStartImport:
             '/api/leads/import/start',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 400
 
@@ -394,6 +401,7 @@ class TestStartImport:
             '/api/leads/import/start',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 409
 
@@ -420,6 +428,7 @@ class TestStartImport:
             '/api/leads/import/start',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': 'user1'},
         )
         assert resp.status_code == 404
 

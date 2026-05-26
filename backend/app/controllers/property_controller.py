@@ -358,17 +358,24 @@ def list_properties():
 
     owner_name = args.get('owner_name')
     if owner_name:
-        # Join through property_contacts → contacts for the new contact model
-        query = (
-            query
-            .join(PropertyContact, PropertyContact.property_id == Lead.id)
+        from sqlalchemy import or_, func
+        # Build a subquery for Contact-based matches (individual fields + full name)
+        contact_subquery = (
+            db.session.query(PropertyContact.property_id)
             .join(Contact, Contact.id == PropertyContact.contact_id)
             .filter(or_(
                 Contact.first_name.ilike(f'%{owner_name}%'),
                 Contact.last_name.ilike(f'%{owner_name}%'),
+                func.concat(Contact.first_name, ' ', Contact.last_name).ilike(f'%{owner_name}%'),
             ))
-            .distinct()
+            .subquery()
         )
+        query = query.filter(or_(
+            Lead.owner_first_name.ilike(f'%{owner_name}%'),
+            Lead.owner_last_name.ilike(f'%{owner_name}%'),
+            func.concat(Lead.owner_first_name, ' ', Lead.owner_last_name).ilike(f'%{owner_name}%'),
+            Lead.id.in_(contact_subquery),
+        ))
 
     score_min = args.get('score_min')
     if score_min is not None:
@@ -460,7 +467,7 @@ def analyze_property(lead_id):
     if not user_id or user_id == 'anonymous':
         return jsonify({
             'error': 'Validation error',
-            'message': 'user_id is required',
+            'message': 'user_id is required (send X-User-Id header)',
         }), 400
     session_id = str(uuid.uuid4())
     session = AnalysisSession(
@@ -781,7 +788,7 @@ def update_scoring_weights():
     if not user_id or user_id == 'anonymous':
         return jsonify({
             'error': 'Validation error',
-            'message': 'user_id is required',
+            'message': 'user_id is required (send X-User-Id header)',
         }), 400
 
     required_weight_fields = [

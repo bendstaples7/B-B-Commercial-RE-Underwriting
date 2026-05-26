@@ -282,6 +282,61 @@ import type {
   OccupancyStatus,
 } from '@/types'
 
+// ---------------------------------------------------------------------------
+// Shared polling helper
+// ---------------------------------------------------------------------------
+
+/** Sentinel error thrown when an async job reaches a terminal FAILED state. */
+class AsyncJobTerminalError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'AsyncJobTerminalError'
+  }
+}
+
+/**
+ * Poll an async job until it completes or times out.
+ *
+ * @param statusUrlFn - Function that returns the status URL given the job ID.
+ * @param jobId - The job ID returned by the enqueue step.
+ * @param errorLabel - Human-readable label used in timeout/failure messages.
+ * @returns The final result payload when status === 'done'.
+ * @throws Error when status === 'failed' or max attempts exceeded.
+ */
+async function pollAsyncJob(
+  statusUrlFn: (jobId: string) => string,
+  jobId: string,
+  errorLabel: string
+): Promise<{ added: number; skipped: number; message: string }> {
+  const maxAttempts = 100
+  let lastError: Error | null = null
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise(resolve => setTimeout(resolve, 3000))
+    try {
+      const statusResponse = await api.get<{
+        status: 'pending' | 'running' | 'done' | 'failed'
+        added?: number
+        skipped?: number
+        message?: string
+        error?: string
+      }>(statusUrlFn(jobId))
+      const result = statusResponse.data
+      if (result.status === 'done') {
+        return { added: result.added ?? 0, skipped: result.skipped ?? 0, message: result.message ?? '' }
+      }
+      if (result.status === 'failed') {
+        throw new AsyncJobTerminalError(result.error ?? `${errorLabel} failed.`)
+      }
+      lastError = null  // reset on successful poll
+    } catch (err) {
+      if (err instanceof AsyncJobTerminalError) throw err  // re-throw terminal failures — never retry
+      lastError = err instanceof Error ? err : new Error(String(err))
+      // continue polling on transient errors
+    }
+  }
+  throw new Error(`${errorLabel} timed out after 5 minutes.${lastError ? ` Last error: ${lastError.message}` : ''}`)
+}
+
 export const multifamilyService = {
   // -------------------------------------------------------------------------
   // Deals (Req 1)
@@ -428,17 +483,28 @@ export const multifamilyService = {
 
   /** Fetch rent comps via Gemini AI web search and bulk-insert them (Req 3.2)
    *
-   * Uses a 120s timeout because Gemini with web search grounding can take
-   * 30–90s. Falls back to polling if the server returns a job_id instead
-   * of an immediate result (Option 2 async path).
+   * Uses the async Celery path (?async=true): POSTs to start the job (returns
+   * immediately with a job_id), then polls /fetch-ai/status/:job_id until done.
+   * This prevents any HTTP timeout issues regardless of how long Gemini takes.
    */
   fetchRentCompsAI: async (dealId: number): Promise<{ added: number; skipped: number; message: string }> => {
-    const response = await api.post<{ added: number; skipped: number; message: string }>(
-      `/multifamily/deals/${dealId}/rent-comps/fetch-ai`,
-      {},
-      { timeout: 120_000 }
+    // Step 1: enqueue the Celery task
+    const startResponse = await api.post<{ job_id: string; status: string }>(
+      `/multifamily/deals/${dealId}/rent-comps/fetch-ai?async=true`,
+      {}
     )
-    return response.data
+    const jobId = startResponse.data.job_id
+
+    if (!jobId || typeof jobId !== 'string' || jobId.trim() === '') {
+      throw new Error('Server returned an invalid job ID. Please try again.')
+    }
+
+    // Step 2: poll until done or failed
+    return pollAsyncJob(
+      (id) => `/multifamily/deals/${dealId}/rent-comps/fetch-ai/status/${id}`,
+      jobId,
+      'AI rent comp fetch'
+    )
   },
 
   /** Poll the status of an async AI rent comp fetch job */
@@ -491,19 +557,59 @@ export const multifamilyService = {
     await api.delete(`/multifamily/deals/${dealId}/sale-comps/${compId}`)
   },
 
+  /** Get AI-suggested comps pending user review */
+  getSuggestedSaleComps: async (dealId: number): Promise<MFSaleComp[]> => {
+    const response = await api.get<MFSaleComp[]>(`/multifamily/deals/${dealId}/sale-comps/suggested`)
+    return response.data
+  },
+
+  /** Confirm a suggested comp — moves it into the confirmed set for rollup stats */
+  confirmSaleComp: async (dealId: number, compId: number): Promise<MFSaleComp> => {
+    const response = await api.post<MFSaleComp>(`/multifamily/deals/${dealId}/sale-comps/${compId}/confirm`)
+    return response.data
+  },
+
+  /** Dismiss a suggested comp — removes it from the suggested list */
+  dismissSaleComp: async (dealId: number, compId: number): Promise<void> => {
+    await api.post(`/multifamily/deals/${dealId}/sale-comps/${compId}/dismiss`)
+  },
+
+  /** Hard-delete ALL sale comps for a deal (suggested, dismissed, and confirmed) */
+  clearAllSaleComps: async (dealId: number): Promise<{ deleted: number }> => {
+    const response = await api.delete<{ deleted: number }>(`/multifamily/deals/${dealId}/sale-comps/clear`)
+    return response.data
+  },
+
+  /** Confirm all pending suggested comps at once */
+  confirmAllSaleComps: async (dealId: number): Promise<{ confirmed: number }> => {
+    const response = await api.post<{ confirmed: number }>(`/multifamily/deals/${dealId}/sale-comps/confirm-all`)
+    return response.data
+  },
+
   /** Fetch sale comps via Gemini AI web search and bulk-insert them (Req 4.1)
    *
-   * Uses a 120s timeout because Gemini with web search grounding can take
-   * 30–90s. Falls back to polling if the server returns a job_id instead
-   * of an immediate result (Option 2 async path).
+   * Uses the async Celery path (?async=true): POSTs to start the job (returns
+   * immediately with a job_id), then polls /fetch-ai/status/:job_id until done.
+   * This prevents any HTTP timeout issues regardless of how long Gemini takes.
    */
   fetchSaleCompsAI: async (dealId: number): Promise<{ added: number; skipped: number; message: string }> => {
-    const response = await api.post<{ added: number; skipped: number; message: string }>(
-      `/multifamily/deals/${dealId}/sale-comps/fetch-ai`,
-      {},
-      { timeout: 120_000 }
+    // Step 1: enqueue the Celery task
+    const startResponse = await api.post<{ job_id: string; status: string }>(
+      `/multifamily/deals/${dealId}/sale-comps/fetch-ai?async=true`,
+      {}
     )
-    return response.data
+    const jobId = startResponse.data.job_id
+
+    if (!jobId || typeof jobId !== 'string' || jobId.trim() === '') {
+      throw new Error('Server returned an invalid job ID. Please try again.')
+    }
+
+    // Step 2: poll until done or failed
+    return pollAsyncJob(
+      (id) => `/multifamily/deals/${dealId}/sale-comps/fetch-ai/status/${id}`,
+      jobId,
+      'AI sale comp fetch'
+    )
   },
 
   /** Poll the status of an async AI sale comp fetch job */

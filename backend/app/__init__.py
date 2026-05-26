@@ -159,10 +159,14 @@ def _warn_missing_optional_keys(app):
         app.logger.warning("*** STARTUP WARNING: %s", w)
 
 
-def _validate_and_log_database_url(app):
+def _validate_and_log_database_url(app, config_name='development'):
     """
     Validate DATABASE_URL at startup and log the resolved host with credentials redacted.
-    Aborts startup if the URL is missing or not a valid PostgreSQL connection string.
+
+    If the primary DATABASE_URL is a remote host and the connection fails (e.g. Neon
+    quota exceeded), automatically falls back to LOCAL_DATABASE_URL if set, or to
+    postgresql://localhost/real_estate_analysis as a last resort.
+
     Requirements: 7.8, 8.1, 8.2
     """
     # Skip validation in testing mode — tests use SQLite in-memory
@@ -170,6 +174,31 @@ def _validate_and_log_database_url(app):
         return
 
     from urllib.parse import urlparse
+
+    def _try_connect(url: str) -> bool:
+        """Return True if a basic TCP connection to the database succeeds."""
+        try:
+            import psycopg2
+            conn = psycopg2.connect(url, connect_timeout=5)
+            conn.close()
+            return True
+        except Exception:
+            return False
+
+    def _is_remote(url: str) -> bool:
+        try:
+            hostname = urlparse(url).hostname or ''
+            return hostname not in ('localhost', '127.0.0.1', '')
+        except Exception:
+            return False
+
+    def _safe_host(url: str) -> str:
+        try:
+            parsed = urlparse(url)
+            return f"{parsed.scheme}://{parsed.hostname}:{parsed.port or 5432}/{parsed.path.lstrip('/')}"
+        except Exception:
+            return url
+
     raw_url = os.getenv('DATABASE_URL', '')
     if not raw_url:
         app.logger.error(
@@ -182,8 +211,6 @@ def _validate_and_log_database_url(app):
         parsed = urlparse(raw_url)
         if parsed.scheme not in ('postgresql', 'postgres'):
             raise ValueError(f"Unsupported scheme: {parsed.scheme!r}")
-        safe_host = f"{parsed.scheme}://{parsed.hostname}:{parsed.port or 5432}/{parsed.path.lstrip('/')}"
-        app.logger.info("Database host resolved: %s", safe_host)
     except SystemExit:
         raise
     except Exception as exc:
@@ -192,6 +219,46 @@ def _validate_and_log_database_url(app):
             "connection string in backend/.env. Error: %s", exc
         )
         raise SystemExit(1) from exc
+
+    # If the primary URL is remote, test the connection and fall back to local
+    # if it fails (e.g. Neon quota exceeded, network issue).
+    # Fallback is only allowed in development mode to prevent silent DB switches
+    # in production or testing environments.
+    flask_env = os.getenv('FLASK_ENV', config_name)
+    allow_fallback = (
+        flask_env == 'development'
+        or os.getenv('ALLOW_LOCAL_DB_FALLBACK', '').lower() == 'true'
+    )
+
+    if _is_remote(raw_url):
+        if _try_connect(raw_url):
+            app.logger.info("Database host resolved: %s", _safe_host(raw_url))
+        else:
+            if allow_fallback:
+                # Primary remote DB is unreachable — fall back to local (dev only)
+                fallback_url = (
+                    os.getenv('LOCAL_DATABASE_URL')
+                    or 'postgresql://postgres:postgres@localhost:5432/real_estate_analysis'
+                )
+                app.logger.warning(
+                    "*** DATABASE FALLBACK: Primary database at %s is unreachable "
+                    "(quota exceeded or network error). Falling back to local database: %s",
+                    _safe_host(raw_url),
+                    _safe_host(fallback_url),
+                )
+                app.config['SQLALCHEMY_DATABASE_URI'] = fallback_url
+                os.environ['DATABASE_URL'] = fallback_url
+            else:
+                app.logger.error(
+                    "Primary database at %s is unreachable and DB fallback is not "
+                    "permitted in FLASK_ENV=%s. Set ALLOW_LOCAL_DB_FALLBACK=true to "
+                    "enable fallback in non-development environments.",
+                    _safe_host(raw_url),
+                    flask_env,
+                )
+                raise SystemExit(1)
+    else:
+        app.logger.info("Database host resolved: %s", _safe_host(raw_url))
 
 
 def _assert_pool_pre_ping(app):
@@ -346,7 +413,7 @@ def create_app(config_name='development'):
 
     # Validate DATABASE_URL and log the resolved host (credentials redacted).
     # Must run after SQLALCHEMY_DATABASE_URI is set and before db.init_app.
-    _validate_and_log_database_url(app)
+    _validate_and_log_database_url(app, config_name)
 
     # Initialize extensions
     db.init_app(app)

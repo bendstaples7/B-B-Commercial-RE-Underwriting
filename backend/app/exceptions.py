@@ -304,10 +304,12 @@ class GeminiParseError(ExternalServiceError):
 class GeminiResponseError(ExternalServiceError):
     """Exception raised when the Gemini API response is valid JSON but is missing required fields."""
 
-    def __init__(self, message: str, payload: dict = None):
+    def __init__(self, message: str, payload: dict = None, missing_keys: list = None):
         combined_payload = {'error_type': 'gemini_response_error'}
         if payload:
             combined_payload.update(payload)
+        if missing_keys is not None:
+            combined_payload['missing_keys'] = missing_keys
         RealEstateAnalysisException.__init__(self, message, status_code=502)
         self.payload = combined_payload
 
@@ -515,3 +517,19 @@ class InvalidCronExpressionException(RealEstateAnalysisException):
             'error_type': 'invalid_cron_expression',
             'expression': expression,
         }
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible aliases
+#
+# These names were used in admin_service.py (introduced by the admin-panel
+# branch) but don't match the canonical names defined above. The aliases make
+# the wrong names work correctly so a typo never crashes the Celery worker
+# again. New code should use the canonical names.
+# ---------------------------------------------------------------------------
+
+#: Alias for ResourceNotFoundError — use ResourceNotFoundError in new code.
+NotFoundError = ResourceNotFoundError
+
+#: Alias for ValidationException — use ValidationException in new code.
+ValidationError = ValidationException
