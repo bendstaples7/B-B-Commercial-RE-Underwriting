@@ -302,18 +302,32 @@ def advance_to_step(session_id, step_number):
         # Validate step 1 is complete before accepting
         workflow_controller._validate_step_completion(session, WorkflowStep.PROPERTY_FACTS)
 
-        # Short-circuit duplicate submissions
-        if session.loading:
+        # Short-circuit duplicate submissions — use an atomic UPDATE so that
+        # concurrent requests cannot both pass the loading=False check.
+        # UPDATE returns the number of rows modified; 0 means loading was
+        # already True (another request got there first).
+        from sqlalchemy import update as _sa_update
+        rows_updated = db.session.execute(
+            _sa_update(AnalysisSession)
+            .where(
+                AnalysisSession.session_id == session_id,
+                AnalysisSession.loading == False,  # noqa: E712
+            )
+            .values(loading=True, updated_at=datetime.utcnow())
+        ).rowcount
+        db.session.commit()
+
+        if rows_updated == 0:
+            # Either session.loading was already True (duplicate) or session
+            # disappeared between the earlier query and this update.
+            # Re-fetch to distinguish the two cases.
+            session = AnalysisSession.query.filter_by(session_id=session_id).first()
+            if not session:
+                return jsonify({'error': 'Session not found'}), 404
             return jsonify({
                 'error': 'Conflict',
                 'message': 'Comparable search is already in progress for this session.',
             }), 409
-
-        # Set loading=True before enqueuing so the frontend polling hook can
-        # detect the in-progress state immediately.
-        session.loading = True
-        session.updated_at = datetime.utcnow()
-        db.session.commit()
 
         # Enqueue the Celery task; revert loading on failure.
         try:
@@ -322,8 +336,11 @@ def advance_to_step(session_id, step_number):
             logger.info(f"Enqueued comparable search for session {session_id}")
         except Exception as e:
             logger.warning(f"Celery unavailable, reverting loading state: {e}")
-            session.loading = False
-            session.updated_at = datetime.utcnow()
+            db.session.execute(
+                _sa_update(AnalysisSession)
+                .where(AnalysisSession.session_id == session_id)
+                .values(loading=False, updated_at=datetime.utcnow())
+            )
             db.session.commit()
             return jsonify({
                 'error': 'Service unavailable',

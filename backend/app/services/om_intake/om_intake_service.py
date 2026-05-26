@@ -157,8 +157,8 @@ class OMIntakeService:
             db.session.commit()
             # Synchronous fallback — run the pipeline in-process
             try:
-                from celery_worker import om_intake_pipeline_task
-                om_intake_pipeline_task(job.id, pdf_b64=pdf_b64)
+                from celery_worker import process_om_intake_pipeline
+                process_om_intake_pipeline(job.id, pdf_b64=pdf_b64)
             except Exception as sync_err:
                 logger.error("Synchronous OM intake pipeline failed: %s", sync_err)
                 job.intake_status = "FAILED"
