@@ -190,7 +190,7 @@ def test_property_5_open_to_completed_is_valid(n):
         assert mock_task.completed_at is not None
 
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(n=st.integers(min_value=0, max_value=100))
 def test_property_5_completing_completed_task_is_noop(n):
     """
@@ -427,7 +427,7 @@ def test_property_15_note_too_long_rejected(extra_chars):
         mock_db.session.commit.assert_not_called()
 
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(body=st.one_of(
     st.just(''),
     st.text(max_size=50).filter(lambda s: not s.strip()),

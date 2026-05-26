@@ -155,10 +155,15 @@ class OMIntakeService:
                 job.id, dispatch_err,
             )
             db.session.commit()
-            # Synchronous fallback — run the pipeline in-process
+            # Synchronous fallback — run the pipeline in-process using the
+            # existing Flask app context (avoids calling create_app() again,
+            # which fails in test environments that use SQLite).
             try:
-                from celery_worker import process_om_intake_pipeline
-                process_om_intake_pipeline(job.id, pdf_b64=pdf_b64)
+                from flask import current_app
+                from celery_worker import _run_om_intake_pipeline_body
+                _run_om_intake_pipeline_body(
+                    current_app._get_current_object(), job.id, pdf_b64=pdf_b64
+                )
             except Exception as sync_err:
                 logger.error("Synchronous OM intake pipeline failed: %s", sync_err)
                 job.intake_status = "FAILED"

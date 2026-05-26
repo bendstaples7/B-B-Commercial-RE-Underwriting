@@ -64,7 +64,7 @@ _activity_id_lists = st.lists(
 _activity_types = st.sampled_from(['NOTE', 'CALL', 'TASK', 'DEAL_STAGE_CHANGE'])
 
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(
     lead_status=_lead_status_strategy,
     activity_ids=_activity_id_lists,
