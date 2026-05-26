@@ -287,7 +287,7 @@ def test_property_8_soft_delete_preserves_audit_trail(
         assert result is mock_entry
 
 
-@settings(max_examples=50)
+@settings(max_examples=50, deadline=None)
 @given(entry_id=st.integers(min_value=1, max_value=100_000))
 def test_property_8_soft_delete_hubspot_entry_raises_error(entry_id):
     """

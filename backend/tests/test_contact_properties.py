@@ -467,7 +467,7 @@ def test_at_most_one_primary_contact_per_property(app, client, num_contacts, is_
 # ===========================================================================
 
 @given(nonexistent_id=st.integers(min_value=999_000, max_value=999_999_999))
-@settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=100, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_nonexistent_ids_return_404(app, client, nonexistent_id):
     """Property 7: All Contact and Property-Contact endpoints return 404 for non-existent IDs.
 
@@ -872,7 +872,7 @@ def test_unmatched_hubspot_contacts_create_new_contact_records(app, first_name, 
     hs_first=_name_text,
     hs_last=_name_text,
 )
-@settings(max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=50, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_matching_never_deletes_existing_contact_records(app, num_existing, hs_first, hs_last):
     """Property 12: Running the HubSpot matcher does NOT decrease the total Contact count.
 

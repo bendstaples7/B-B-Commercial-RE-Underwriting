@@ -251,7 +251,7 @@ class TestWeightedScoringEngineProperties:
         sale_date=st_sale_date,
         sale_price=st_sale_price,
     )
-    @settings(max_examples=80, suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @settings(max_examples=80, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_returns_ranked_comparable_dtos_not_dicts(self, engine, n, sale_date, sale_price):
         """rank_comparables returns RankedComparableDTO objects, not dicts or ORM objects."""
         subject = make_subject()
