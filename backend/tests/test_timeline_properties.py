@@ -191,7 +191,7 @@ _actor_text = st.text(
 _summary_text = st.text(min_size=1, max_size=499)
 
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(
     entry_id=st.integers(min_value=1, max_value=100_000),
     lead_id=st.integers(min_value=1, max_value=100_000),

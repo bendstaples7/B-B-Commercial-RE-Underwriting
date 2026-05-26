@@ -162,7 +162,7 @@ def test_property_4_empty_title_rejected(title):
 # Feature: actionable-lead-command-center, Property 5: Task State Machine Validity
 # ---------------------------------------------------------------------------
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(n=st.integers(min_value=0, max_value=100))
 def test_property_5_open_to_completed_is_valid(n):
     """

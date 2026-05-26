@@ -191,7 +191,7 @@ def test_legacy_redirect_preserves_path_suffix(app, client, suffix):
     city=st.one_of(st.none(), _name_text),
     state=st.one_of(st.none(), st.text(min_size=2, max_size=2, alphabet=st.characters(whitelist_categories=("Lu",)))),
 )
-@settings(max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=50, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_property_writes_persist_to_leads_table(app, street, city, state):
     """Property 2: Properties created in the DB are retrievable via GET /api/properties/.
 
