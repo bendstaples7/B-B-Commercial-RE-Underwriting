@@ -557,23 +557,41 @@ class WorkflowController:
                     pass
                 return default
 
+            def _safe_int(value, default):
+                """Coerce value to int, returning default on any failure."""
+                if value is None:
+                    return default
+                try:
+                    return int(float(value))
+                except (ValueError, TypeError):
+                    return default
+
+            def _safe_float(value, default):
+                """Coerce value to float, returning default on any failure."""
+                if value is None:
+                    return default
+                try:
+                    return float(value)
+                except (ValueError, TypeError):
+                    return default
+
             comparable = ComparableSale(
                 session_id=session.id,
                 address=str(comp_dict.get('address') or 'Unknown'),
                 sale_date=sale_date,
-                sale_price=float(comp_dict.get('sale_price', 0.0)),
+                sale_price=_safe_float(comp_dict.get('sale_price'), 0.0),
                 property_type=_resolve_enum(PropertyType, comp_dict.get('property_type'), PropertyType.SINGLE_FAMILY),
-                units=int(comp_dict.get('units', 1)),
-                bedrooms=int(comp_dict.get('bedrooms', 0)),
-                bathrooms=float(comp_dict.get('bathrooms', 0.0)),
-                square_footage=int(comp_dict.get('square_footage', 0)),
-                lot_size=int(comp_dict.get('lot_size', 0)),
-                year_built=int(comp_dict.get('year_built', 0)),
+                units=_safe_int(comp_dict.get('units'), 1),
+                bedrooms=_safe_int(comp_dict.get('bedrooms'), 0),
+                bathrooms=_safe_float(comp_dict.get('bathrooms'), 0.0),
+                square_footage=_safe_int(comp_dict.get('square_footage'), 0),
+                lot_size=_safe_int(comp_dict.get('lot_size'), 0),
+                year_built=_safe_int(comp_dict.get('year_built'), 0),
                 construction_type=_resolve_enum(ConstructionType, comp_dict.get('construction_type'), ConstructionType.FRAME),
                 interior_condition=_resolve_enum(InteriorCondition, comp_dict.get('interior_condition'), InteriorCondition.AVERAGE),
-                distance_miles=float(comp_dict.get('distance_miles', 0.0)),
-                latitude=float(comp_dict['latitude']) if comp_dict.get('latitude') is not None else None,
-                longitude=float(comp_dict['longitude']) if comp_dict.get('longitude') is not None else None,
+                distance_miles=_safe_float(comp_dict.get('distance_miles'), 0.0),
+                latitude=_safe_float(comp_dict.get('latitude'), None),
+                longitude=_safe_float(comp_dict.get('longitude'), None),
                 similarity_notes=str(comp_dict['similarity_notes']) if comp_dict.get('similarity_notes') is not None else None,
             )
             db.session.add(comparable)

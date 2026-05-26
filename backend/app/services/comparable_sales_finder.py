@@ -814,11 +814,15 @@ class ComparableSalesFinder:
         
         comparables: List[Dict[str, Any]] = []
         seen_pins: set = set()
+        # Track pin-less sales by (lat, lon, sale_date) to prevent duplicates
+        # when the same sale appears in multiple radius queries.
+        seen_pinless_keys: set = set()
 
         # Try each radius in sequence; stop at the first that satisfies min_count
         for radius in self.RADIUS_SEQUENCE:
             radius_comparables: List[Dict[str, Any]] = []
             radius_seen_pins: set = set(seen_pins)
+            radius_seen_pinless: set = set(seen_pinless_keys)
 
             # Query every registered data source
             for source in self._data_sources:
@@ -840,6 +844,17 @@ class ComparableSalesFinder:
                     pin = sale.get('pin')
                     if pin and pin in radius_seen_pins:
                         continue
+
+                    # For pin-less sales, deduplicate by (lat, lon, sale_date)
+                    if not pin:
+                        pinless_key = (
+                            round(sale['latitude'], 5),
+                            round(sale['longitude'], 5),
+                            sale.get('sale_date'),
+                        )
+                        if pinless_key in radius_seen_pinless:
+                            continue
+                        radius_seen_pinless.add(pinless_key)
 
                     distance = self._calculate_distance(
                         (subject.latitude, subject.longitude),
@@ -865,6 +880,7 @@ class ComparableSalesFinder:
             # Not enough at this radius — accumulate and try the next
             comparables.extend(radius_comparables)
             seen_pins = radius_seen_pins
+            seen_pinless_keys = radius_seen_pinless
         
         # Exhausted all radii — return whatever we have (capped at min_count if we have enough)
         comparables.sort(key=lambda x: x['distance_miles'])
