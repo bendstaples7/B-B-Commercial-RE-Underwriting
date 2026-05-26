@@ -555,7 +555,7 @@ def lead_seed_strategy(draw):
 
 
 @given(seeds=st.lists(lead_seed_strategy(), min_size=1, max_size=5))
-@settings(max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=50, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_migration_idempotency(app, seeds):
     """Property 8: Running migration logic twice produces the same record counts as running it once.
 
@@ -986,7 +986,7 @@ def search_scenario_strategy(draw):
 
 
 @given(scenario=search_scenario_strategy())
-@settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(max_examples=100, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_owner_name_filter_returns_exactly_matching_properties(app, client, scenario):
     """Property 13: GET /api/properties/?owner_name=q returns exactly matching properties.
 

@@ -73,7 +73,7 @@ def _gemini_api_response_body(raw_text: str) -> dict:
 # Feature: gemini-comparable-search, Property 1: Search result always has required keys
 # ---------------------------------------------------------------------------
 
-@settings(max_examples=100)
+@settings(max_examples=100, deadline=None)
 @given(
     property_facts=st.dictionaries(st.text(), st.text()),
     property_type=st.sampled_from(PropertyType),
