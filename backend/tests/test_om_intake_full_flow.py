@@ -160,103 +160,107 @@ def _run_pipeline_sync(app, job_id):
 
     Mocks Gemini and RentCast so no external API calls are made.
     Also mocks the PDF parser so the minimal test PDF passes text extraction.
+
+    NOTE: Does NOT push a new app context. The test fixture already holds an
+    active context for the duration of the test. Pushing a new context with
+    sqlite:///:memory: would create a new connection to an empty database,
+    making the job invisible to this function.
     """
     from app.services.om_intake.om_intake_service import OMIntakeService
     from app.services.om_intake.om_intake_dataclasses import ExtractedOMData
     from app.services.om_intake.scenario_engine import compute_scenarios
     from app.services.om_intake.pdf_parser_service import PDFParserService
 
-    with app.app_context():
-        service = OMIntakeService()
+    service = OMIntakeService()
 
-        # Stage 1: PDF parsing — mock the parser so the minimal test PDF passes
-        service.transition_to_parsing(job_id)
+    # Stage 1: PDF parsing — mock the parser so the minimal test PDF passes
+    service.transition_to_parsing(job_id)
 
-        # Build a mock parse result with enough text to pass validation
-        mock_parse_result = MagicMock()
-        mock_parse_result.raw_text = (
-            "Offering Memorandum - 123 Main Street Chicago IL\n"
-            "Asking Price: $2,500,000\n"
-            "Unit Count: 10 units\n"
-            "Cap Rate: 6.5%\n"
-            "NOI: $162,500\n"
-            "Unit Mix: 5x 2BR/1BA at $1,200/mo, 5x 1BR/1BA at $950/mo\n"
-        )
-        mock_parse_result.tables = []
+    # Build a mock parse result with enough text to pass validation
+    mock_parse_result = MagicMock()
+    mock_parse_result.raw_text = (
+        "Offering Memorandum - 123 Main Street Chicago IL\n"
+        "Asking Price: $2,500,000\n"
+        "Unit Count: 10 units\n"
+        "Cap Rate: 6.5%\n"
+        "NOI: $162,500\n"
+        "Unit Mix: 5x 2BR/1BA at $1,200/mo, 5x 1BR/1BA at $950/mo\n"
+    )
+    mock_parse_result.tables = []
 
-        with patch.object(PDFParserService, 'extract', return_value=mock_parse_result):
-            job = OMIntakeJob.query.get(job_id)
-            parser = PDFParserService()
-            parse_result = parser.extract(job.pdf_bytes)
+    with patch.object(PDFParserService, 'extract', return_value=mock_parse_result):
+        job = OMIntakeJob.query.get(job_id)
+        parser = PDFParserService()
+        parse_result = parser.extract(job.pdf_bytes)
 
-        service.store_parsed_text(job_id, parse_result.raw_text, parse_result.tables, [])
-        service.transition_to_extracting(job_id)
+    service.store_parsed_text(job_id, parse_result.raw_text, parse_result.tables, [])
+    service.transition_to_extracting(job_id)
 
-        # Stage 2: Gemini extraction (mocked)
-        import dataclasses
-        from app.services.om_intake.om_intake_dataclasses import (
-            UnitMixRow, OtherIncomeItem, ScenarioInputs
-        )
+    # Stage 2: Gemini extraction (mocked)
+    import dataclasses
+    from app.services.om_intake.om_intake_dataclasses import (
+        UnitMixRow, OtherIncomeItem, ScenarioInputs
+    )
 
-        # Build ExtractedOMData from the mock dict
-        from app.services.om_intake.om_intake_dataclasses import ExtractedOMData
-        extracted = ExtractedOMData(**{
-            k: _MOCK_EXTRACTED_DATA[k]
-            for k in ExtractedOMData.__dataclass_fields__
-            if k in _MOCK_EXTRACTED_DATA
-        })
-        service.store_extracted_data(job_id, extracted)
+    # Build ExtractedOMData from the mock dict
+    from app.services.om_intake.om_intake_dataclasses import ExtractedOMData
+    extracted = ExtractedOMData(**{
+        k: _MOCK_EXTRACTED_DATA[k]
+        for k in ExtractedOMData.__dataclass_fields__
+        if k in _MOCK_EXTRACTED_DATA
+    })
+    service.store_extracted_data(job_id, extracted)
 
-        # Stage 3: Market rents (mocked RentCast)
-        for unit_type, rent_data in _MOCK_RENT_ESTIMATES.items():
-            service.store_market_rent(
-                job_id, unit_type,
-                rent_data["market_rent_estimate"],
-                rent_data["market_rent_low"],
-                rent_data["market_rent_high"],
-            )
-
-        # Compute scenarios
-        unit_mix_rows = tuple(
-            UnitMixRow(
-                unit_type_label=row["unit_type_label"]["value"],
-                unit_count=row["unit_count"]["value"],
-                sqft=Decimal(str(row["sqft"]["value"])),
-                current_avg_rent=Decimal(str(row["current_avg_rent"]["value"])),
-                proforma_rent=Decimal(str(row["proforma_rent"]["value"])),
-                market_rent_estimate=Decimal(str(_MOCK_RENT_ESTIMATES.get(
-                    row["unit_type_label"]["value"], {}
-                ).get("market_rent_estimate", 0))),
-                market_rent_low=Decimal(str(_MOCK_RENT_ESTIMATES.get(
-                    row["unit_type_label"]["value"], {}
-                ).get("market_rent_low", 0))),
-                market_rent_high=Decimal(str(_MOCK_RENT_ESTIMATES.get(
-                    row["unit_type_label"]["value"], {}
-                ).get("market_rent_high", 0))),
-            )
-            for row in _MOCK_EXTRACTED_DATA["unit_mix"]
+    # Stage 3: Market rents (mocked RentCast)
+    for unit_type, rent_data in _MOCK_RENT_ESTIMATES.items():
+        service.store_market_rent(
+            job_id, unit_type,
+            rent_data["market_rent_estimate"],
+            rent_data["market_rent_low"],
+            rent_data["market_rent_high"],
         )
 
-        inputs = ScenarioInputs(
-            unit_mix=unit_mix_rows,
-            proforma_vacancy_rate=Decimal("0.05"),
-            proforma_gross_expenses=Decimal("0"),
-            other_income_items=(),
-            asking_price=Decimal("2500000"),
-            loan_amount=None, interest_rate=None, amortization_years=None,
-            debt_service_annual=None,
-            current_gross_potential_income=Decimal("162500"),
-            current_effective_gross_income=Decimal("154375"),
-            current_gross_expenses=Decimal("0"),
-            current_noi=Decimal("162500"),
-            current_vacancy_rate=Decimal("0.05"),
-            proforma_gross_potential_income=Decimal("175000"),
-            proforma_effective_gross_income=Decimal("166250"),
-            proforma_noi=Decimal("175000"),
+    # Compute scenarios
+    unit_mix_rows = tuple(
+        UnitMixRow(
+            unit_type_label=row["unit_type_label"]["value"],
+            unit_count=row["unit_count"]["value"],
+            sqft=Decimal(str(row["sqft"]["value"])),
+            current_avg_rent=Decimal(str(row["current_avg_rent"]["value"])),
+            proforma_rent=Decimal(str(row["proforma_rent"]["value"])),
+            market_rent_estimate=Decimal(str(_MOCK_RENT_ESTIMATES.get(
+                row["unit_type_label"]["value"], {}
+            ).get("market_rent_estimate", 0))),
+            market_rent_low=Decimal(str(_MOCK_RENT_ESTIMATES.get(
+                row["unit_type_label"]["value"], {}
+            ).get("market_rent_low", 0))),
+            market_rent_high=Decimal(str(_MOCK_RENT_ESTIMATES.get(
+                row["unit_type_label"]["value"], {}
+            ).get("market_rent_high", 0))),
         )
-        comparison = compute_scenarios(inputs)
-        service.store_scenario_comparison(job_id, comparison)
-        service.transition_to_review(job_id)
+        for row in _MOCK_EXTRACTED_DATA["unit_mix"]
+    )
+
+    inputs = ScenarioInputs(
+        unit_mix=unit_mix_rows,
+        proforma_vacancy_rate=Decimal("0.05"),
+        proforma_gross_expenses=Decimal("0"),
+        other_income_items=(),
+        asking_price=Decimal("2500000"),
+        loan_amount=None, interest_rate=None, amortization_years=None,
+        debt_service_annual=None,
+        current_gross_potential_income=Decimal("162500"),
+        current_effective_gross_income=Decimal("154375"),
+        current_gross_expenses=Decimal("0"),
+        current_noi=Decimal("162500"),
+        current_vacancy_rate=Decimal("0.05"),
+        proforma_gross_potential_income=Decimal("175000"),
+        proforma_effective_gross_income=Decimal("166250"),
+        proforma_noi=Decimal("175000"),
+    )
+    comparison = compute_scenarios(inputs)
+    service.store_scenario_comparison(job_id, comparison)
+    service.transition_to_review(job_id)
 
 
 # ---------------------------------------------------------------------------
