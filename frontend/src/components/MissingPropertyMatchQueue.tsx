@@ -39,6 +39,7 @@ export function MissingPropertyMatchQueue() {
     queryKey: ['queue-missing-property-match', page],
     queryFn: () => queueService.getMissingPropertyMatch(page, 20),
     refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   })
 
   const rows = data?.rows ?? []

@@ -32,7 +32,10 @@ export function PipelineStatusProvider({ children }: PipelineStatusProviderProps
   const { data } = useQuery({
     queryKey: ['hubspot', 'pipeline', 'status', 'global'],
     queryFn: () => hubSpotService.getPipelineStatus(),
-    refetchInterval: 8000,
+    refetchInterval: (query) => {
+      const data = query.state.data as PipelineStatus | undefined
+      return data?.pipeline_running ? 8000 : false
+    },
     retry: false,
     // Don't throw on error — pipeline status is non-critical
     throwOnError: false,

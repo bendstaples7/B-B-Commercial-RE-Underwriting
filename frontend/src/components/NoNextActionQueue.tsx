@@ -44,6 +44,7 @@ export function NoNextActionQueue() {
     queryKey: ['queue-no-next-action', page],
     queryFn: () => queueService.getNoNextAction(page, 20),
     refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   })
 
   const rows = data?.rows ?? []

@@ -1,7 +1,7 @@
 /**
  * QueueSidebar — sidebar navigation with 7 queue links and live badge counts.
  *
- * Polls /api/queues/counts every 60 seconds via React Query.
+ * Polls /api/queues/counts every 5 minutes via React Query (pauses when tab is hidden).
  * Highlights the active queue using useLocation.
  *
  * Requirements: 18.1, 18.2
@@ -38,7 +38,7 @@ const QUEUE_LINKS: QueueLink[] = [
 
 /**
  * QueueSidebar renders a vertical nav list of the 7 CRM queues.
- * Badge counts are fetched from the API and refreshed every 60 seconds.
+ * Badge counts are fetched from the API and refreshed every 5 minutes (paused when tab is hidden).
  * The currently active queue is highlighted based on the current URL path.
  */
 export function QueueSidebar() {
@@ -47,7 +47,8 @@ export function QueueSidebar() {
   const { data: counts } = useQuery<QueueCounts>({
     queryKey: ['queue-counts'],
     queryFn: () => queueService.getCounts(),
-    refetchInterval: 60_000,
+    refetchInterval: 5 * 60_000,
+    refetchIntervalInBackground: false,
   })
 
   return (
