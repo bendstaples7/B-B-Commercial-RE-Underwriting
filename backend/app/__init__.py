@@ -247,6 +247,7 @@ def _validate_and_log_database_url(app, config_name='development'):
                     _safe_host(fallback_url),
                 )
                 app.config['SQLALCHEMY_DATABASE_URI'] = fallback_url
+                app.config['DB_MODE'] = 'local_fallback'
                 os.environ['DATABASE_URL'] = fallback_url
             else:
                 app.logger.error(

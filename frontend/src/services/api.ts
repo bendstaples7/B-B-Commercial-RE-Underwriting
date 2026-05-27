@@ -68,10 +68,13 @@ api.interceptors.response.use(
         return Promise.reject(error)
       }
 
-      // Extract the real message — backend wraps errors under error.message
-      // e.g. { success: false, error: { message: "...", status_code: 502 } }
+      // Extract the real message — backend uses several shapes:
+      //   { error: { message: "..." } }  — structured error object
+      //   { error: "..." }               — plain string error (auth endpoints)
+      //   { message: "..." }             — direct message field
       const message =
         (errorData as any)?.error?.message ||
+        (typeof (errorData as any)?.error === 'string' ? (errorData as any).error : null) ||
         errorData?.message ||
         'An error occurred'
 
