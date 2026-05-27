@@ -24,6 +24,7 @@ export function DoNotContactQueue() {
     queryKey: ['queue-do-not-contact', page],
     queryFn: () => queueService.getDoNotContact(page, 20),
     refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   })
 
   const rows = data?.rows ?? []

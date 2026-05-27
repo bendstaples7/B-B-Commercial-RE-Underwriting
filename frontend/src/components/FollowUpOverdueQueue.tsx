@@ -33,6 +33,7 @@ export function FollowUpOverdueQueue() {
     queryKey: ['queue-follow-up-overdue', page],
     queryFn: () => queueService.getFollowUpOverdue(page, 20),
     refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   })
 
   const rows = data?.rows ?? []

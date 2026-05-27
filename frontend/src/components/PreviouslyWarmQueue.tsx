@@ -41,6 +41,7 @@ export function PreviouslyWarmQueue() {
     queryKey: ['queue-previously-warm'],
     queryFn: () => queueService.getPreviouslyWarm(1, 20),
     refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   })
 
   const rows = data?.rows ?? []

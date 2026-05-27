@@ -25,6 +25,7 @@ export function NeedsReviewQueue() {
     queryKey: ['queue-needs-review', page],
     queryFn: () => queueService.getNeedsReview(page, 20),
     refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   })
 
   const rows = data?.rows ?? []

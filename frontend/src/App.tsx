@@ -1240,11 +1240,15 @@ function App() {
 
   const toggleDrawer = () => setDrawerOpen((prev) => !prev)
 
-  // Live badge counts for Work Queue nav items — polled every 60s
+  // Badge counts — subscribe reactively to the shared ['queue-counts'] cache key.
+  // QueueSidebar owns the polling (5-minute interval); App subscribes here so the
+  // nav drawer badge chips re-render whenever QueueSidebar fetches fresh data.
   const { data: queueCounts } = useQuery<QueueCounts>({
     queryKey: ['queue-counts'],
     queryFn: () => queueService.getCounts(),
-    refetchInterval: 60_000,
+    staleTime: Infinity, // never re-fetch from here — QueueSidebar owns the interval
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
   })
 
   // Track which top-level sections are expanded; default both open
