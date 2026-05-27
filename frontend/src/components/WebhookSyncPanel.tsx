@@ -40,7 +40,7 @@ import RefreshIcon from '@mui/icons-material/Refresh'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hubSpotService } from '@/services/api'
-import type { WebhookLog, WebhookLogStatus } from '@/types'
+import type { WebhookLog, WebhookLogStatus, WebhookLogSummary } from '@/types'
 
 // ---------------------------------------------------------------------------
 // Props
@@ -131,7 +131,11 @@ export const WebhookSyncPanel: React.FC<WebhookSyncPanelProps> = ({
     queryKey: ['hubspot', 'webhook-log', page, rowsPerPage],
     queryFn: () =>
       hubSpotService.getWebhookLog({ page: page + 1, per_page: rowsPerPage }),
-    refetchInterval: 30_000,
+    refetchInterval: () => {
+      const summaryData = queryClient.getQueryData<WebhookLogSummary>(['hubspot', 'webhook-summary'])
+      return (summaryData?.processed_count ?? 0) > 0 ? 30_000 : 5 * 60_000
+    },
+    refetchIntervalInBackground: false,
   })
 
   const {
@@ -141,7 +145,11 @@ export const WebhookSyncPanel: React.FC<WebhookSyncPanelProps> = ({
   } = useQuery({
     queryKey: ['hubspot', 'webhook-summary'],
     queryFn: () => hubSpotService.getWebhookLogSummary(),
-    refetchInterval: 30_000,
+    refetchInterval: (query) => {
+      const data = query.state.data as WebhookLogSummary | undefined
+      return (data?.processed_count ?? 0) > 0 ? 30_000 : 5 * 60_000
+    },
+    refetchIntervalInBackground: false,
   })
 
   // ── Mutations ────────────────────────────────────────────────────────────

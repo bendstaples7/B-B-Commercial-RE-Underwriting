@@ -67,7 +67,7 @@ import ExpandMore from '@mui/icons-material/ExpandMore'
 import { usePipelineStatus } from './context/PipelineStatusContext'
 import Avatar from '@mui/material/Avatar'
 import { WorkflowStep, PropertyFacts, PropertyType, ConstructionType, InteriorCondition } from './types'
-import { analysisService, queueService } from './services/api'
+import { analysisService } from './services/api'
 import { PropertyFactsForm } from './components/PropertyFactsForm'
 import { PropertyListPage } from './components/PropertyListPage'
 import { PropertyDetailPage } from './components/PropertyDetailPage'
@@ -1238,14 +1238,11 @@ function App() {
     libraries: GOOGLE_MAPS_LIBRARIES,
   })
 
+  const queryClient = useQueryClient()
   const toggleDrawer = () => setDrawerOpen((prev) => !prev)
 
-  // Live badge counts for Work Queue nav items — polled every 60s
-  const { data: queueCounts } = useQuery<QueueCounts>({
-    queryKey: ['queue-counts'],
-    queryFn: () => queueService.getCounts(),
-    refetchInterval: 60_000,
-  })
+  // Badge counts — read from the shared cache populated by QueueSidebar (no independent poll)
+  const queueCounts = queryClient.getQueryData<QueueCounts>(['queue-counts'])
 
   // Track which top-level sections are expanded; default both open
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({

@@ -82,10 +82,13 @@ def _assert_lead_shape(lead_dict: dict) -> None:
         assert val is None or isinstance(val, bool), \
             f"{field} must be bool or None, got {type(val)}: {val!r}"
 
-    # mailer_history: must be None, dict, list, or string (legacy data)
-    mh = lead_dict.get('mailer_history')
-    assert mh is None or isinstance(mh, (dict, list, str)), \
-        f"mailer_history must be None/dict/list/str, got {type(mh)}: {mh!r}"
+    # mailer_history: no longer included in _serialize_property_summary (task 3.7)
+    # It is present in _serialize_property_detail only.
+    # If present in the response (e.g. from a detail endpoint), it must be None/dict/list/str.
+    if 'mailer_history' in lead_dict:
+        mh = lead_dict['mailer_history']
+        assert mh is None or isinstance(mh, (dict, list, str)), \
+            f"mailer_history must be None/dict/list/str, got {type(mh)}: {mh!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -271,9 +274,11 @@ class TestLeadViewApiContract:
     ):
         """A lead with mailer_history as a plain string must not cause a parse error.
 
-        This is the regression test for the bug where legacy imported leads
-        had mailer_history stored as a comma-separated string, causing the
-        frontend Zod schema to throw 'Expected object, received string'.
+        Post-fix: mailer_history is no longer included in _serialize_property_summary
+        (task 3.7 of the polling-optimization bugfix). The field is absent from the
+        list response entirely, so legacy string values can never break the frontend
+        Zod schema. This test verifies the endpoint returns 200 and the lead shape
+        is valid (mailer_history absent is acceptable).
         """
         response = client.get('/api/properties/')
         assert response.status_code == 200
@@ -282,8 +287,9 @@ class TestLeadViewApiContract:
         assert len(matching) == 1
         lead = matching[0]
         _assert_lead_shape(lead)
-        # Confirm the string value passes our shape check
-        assert isinstance(lead['mailer_history'], str)
+        # mailer_history is no longer serialized in the list view (removed by task 3.7)
+        # so it must be absent from the response
+        assert 'mailer_history' not in lead
 
     def test_mailer_history_dict_passes_shape_check(
         self, client, lead_with_dict_mailer_history

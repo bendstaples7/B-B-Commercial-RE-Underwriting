@@ -47,6 +47,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hubSpotService } from '@/services/api'
 import type { HubSpotConfig, HubSpotImportRun } from '@/types'
 import { WebhookSyncPanel } from '@/components/WebhookSyncPanel'
+import { usePipelineStatus } from '@/context/PipelineStatusContext'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -163,14 +164,7 @@ export const HubSpotImportArea: React.FC = () => {
     retry: false,
   })
 
-  const {
-    data: pipelineStatus,
-  } = useQuery({
-    queryKey: ['hubspot', 'pipeline', 'status'],
-    queryFn: () => hubSpotService.getPipelineStatus(),
-    refetchInterval: 8000, // poll every 8 seconds
-    retry: false,
-  })
+  const pipelineStatus = usePipelineStatus()
 
   const pendingCount = reviewQueueData?.total ?? 0
 

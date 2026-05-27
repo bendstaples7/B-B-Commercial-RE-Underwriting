@@ -28,6 +28,7 @@ export function TodaysActionQueue() {
     queryKey: ['queue-todays-action'],
     queryFn: () => queueService.getTodaysAction(1, 20),
     refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   })
 
   const rows = data?.rows ?? []
