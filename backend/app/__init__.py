@@ -233,6 +233,7 @@ def _validate_and_log_database_url(app, config_name='development'):
     if _is_remote(raw_url):
         if _try_connect(raw_url):
             app.logger.info("Database host resolved: %s", _safe_host(raw_url))
+            app.config['DB_MODE'] = 'cloud'
         else:
             if allow_fallback:
                 # Primary remote DB is unreachable — fall back to local (dev only)
@@ -260,6 +261,7 @@ def _validate_and_log_database_url(app, config_name='development'):
                 raise SystemExit(1)
     else:
         app.logger.info("Database host resolved: %s", _safe_host(raw_url))
+        app.config['DB_MODE'] = 'cloud'
 
 
 def _assert_pool_pre_ping(app):

@@ -72,9 +72,10 @@ api.interceptors.response.use(
       //   { error: { message: "..." } }  — structured error object
       //   { error: "..." }               — plain string error (auth endpoints)
       //   { message: "..." }             — direct message field
+      const errorField = (errorData as any)?.error
       const message =
-        (errorData as any)?.error?.message ||
-        (typeof (errorData as any)?.error === 'string' ? (errorData as any).error : null) ||
+        errorField?.message ||
+        (typeof errorField === 'string' ? errorField : null) ||
         errorData?.message ||
         'An error occurred'
 
