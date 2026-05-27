@@ -7,7 +7,7 @@
  *
  * Requirements: 2.1, 2.2, 2.3
  */
-import { useState, FormEvent } from 'react'
+import { useState, useEffect, FormEvent } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import {
   Alert,
@@ -20,6 +20,7 @@ import {
   Typography,
 } from '@mui/material'
 import { useAuth } from '@/context/AuthContext'
+import api from '@/services/api'
 
 // ---------------------------------------------------------------------------
 // Component
@@ -34,6 +35,22 @@ export function LoginPage() {
   const [password, setPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isLocalFallback, setIsLocalFallback] = useState(false)
+
+  // Check on mount whether the backend is running on the local DB fallback
+  // (e.g. cloud DB quota exceeded). If so, show a clear warning so the user
+  // understands why their cloud credentials won't work.
+  useEffect(() => {
+    api.get<{ db_mode?: string }>('/health')
+      .then((res) => {
+        if (res.data?.db_mode === 'local_fallback') {
+          setIsLocalFallback(true)
+        }
+      })
+      .catch(() => {
+        // Health check failure is non-critical — don't block the login form
+      })
+  }, [])
 
   // Redirect destination — check returnUrl query param first (set by 401 interceptor),
   // then fall back to location.state.from (set by ProtectedRoute), then root.
@@ -97,6 +114,14 @@ export function LoginPage() {
           >
             Sign in to your account
           </Typography>
+
+          {isLocalFallback && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              The cloud database is temporarily unavailable (transfer quota exceeded).
+              You are connected to a local copy — your usual account may not be available.
+              Contact your administrator or try again when the quota resets.
+            </Alert>
+          )}
 
           {error && (
             <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>

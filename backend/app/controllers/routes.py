@@ -173,7 +173,9 @@ def health_check():
 
     status = 'degraded' if degraded else 'healthy'
     http_status = 503 if degraded else 200
-    return jsonify({'status': status, 'checks': checks}), http_status
+    from flask import current_app
+    db_mode = current_app.config.get('DB_MODE', 'cloud')
+    return jsonify({'status': status, 'checks': checks, 'db_mode': db_mode}), http_status
 
 
 @api_bp.route('/analysis/start', methods=['POST'])
