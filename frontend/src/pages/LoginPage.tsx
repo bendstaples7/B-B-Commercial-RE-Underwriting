@@ -117,9 +117,9 @@ export function LoginPage() {
 
           {isLocalFallback && (
             <Alert severity="warning" sx={{ mb: 2 }}>
-              The cloud database is temporarily unavailable (transfer quota exceeded).
-              You are connected to a local copy — your usual account may not be available.
-              Contact your administrator or try again when the quota resets.
+              The cloud database is temporarily unavailable. You are connected to
+              a local copy — your usual account may not be available. Contact your
+              administrator or try again later.
             </Alert>
           )}
 
