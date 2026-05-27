@@ -101,17 +101,18 @@ describe('Preservation 3.1 — PipelineStatusContext polls when pipeline_running
      */
     const source = readContextSource('PipelineStatusContext.tsx')
 
-    // Extract all numeric values that appear near 'refetchInterval' or in the context
-    // of the polling interval. We look for the value 8000 specifically.
-    // (intervalMatch is used only to confirm the regex pattern works; the actual
-    // assertion uses the simpler includes check below)
+    // Extract the active polling interval from the source.
+    // Matches the numeric literal used in the refetchInterval expression,
+    // e.g. "8000" in "return data?.pipeline_running ? 8000 : false"
+    // or "refetchInterval: 8000".
+    const match = source.match(/pipeline_running\s*\?\s*(\d+)\s*:\s*false/) ||
+                  source.match(/refetchInterval:\s*(\d+)/)
 
-    // The active interval (8000) must be present and ≤ 10000
-    const hasValidInterval = source.includes('8000')
-    expect(hasValidInterval).toBe(true)
+    expect(match).not.toBeNull()
+    const parsedInterval = parseInt(match![1], 10)
 
-    // Verify 8000 ≤ 10000 (the preservation requirement)
-    expect(8000).toBeLessThanOrEqual(10000)
+    // The active interval must be ≤ 10000ms (Preservation Requirement 3.1)
+    expect(parsedInterval).toBeLessThanOrEqual(10000)
   })
 })
 
@@ -541,23 +542,77 @@ describe('Preservation 3.8 — Queue action invalidations trigger immediate refe
 
 describe('Preservation 3.9 — Property list serializer preserves all visible columns', () => {
   /**
-   * Property: The property list page must continue to display all currently
-   * visible columns. Only notes and mailer_history are removed from the list payload.
+   * Property: _serialize_property_summary must include all visible list columns
+   * and must NOT include notes or mailer_history.
    *
-   * This is a static analysis test on the source — the visible columns must
-   * remain in _serialize_property_summary.
-   *
-   * PASSES on both unfixed and fixed code (visible columns are never removed).
+   * PASSES on both unfixed and fixed code (visible columns are never removed;
+   * notes and mailer_history are absent after the fix).
    */
 
-  it('property: QueueSidebar source must use queueService.getCounts as the query function', () => {
+  const BACKEND_SUMMARY_FILE = path.resolve(
+    __dirname,
+    '../../../backend/app/controllers/property_controller.py'
+  )
+
+  function readBackendSource(): string {
+    return fs.readFileSync(BACKEND_SUMMARY_FILE, 'utf-8')
+  }
+
+  it('property: _serialize_property_summary must include all expected visible column keys', () => {
     /**
-     * The getCounts service call must remain intact.
+     * Parse the _serialize_property_summary function body and assert that all
+     * visible list columns are present as dict keys.
+     *
      * PASSES on both unfixed and fixed code.
      */
-    const source = readSource('QueueSidebar.tsx')
+    const source = readBackendSource()
 
-    expect(source).toContain('queueService')
-    expect(source).toContain('getCounts')
+    // Extract the function body between _serialize_property_summary and the next def
+    const fnMatch = source.match(
+      /def _serialize_property_summary\(lead\):([\s\S]*?)(?=\ndef )/
+    )
+    expect(fnMatch).not.toBeNull()
+    const fnBody = fnMatch![1]
+
+    const expectedKeys = [
+      'id',
+      'property_street',
+      'property_city',
+      'property_state',
+      'property_zip',
+      'property_type',
+      'bedrooms',
+      'bathrooms',
+      'square_footage',
+      'owner_first_name',
+      'owner_last_name',
+      'lead_score',
+      'lead_category',
+      'created_at',
+      'updated_at',
+    ]
+
+    const missingKeys = expectedKeys.filter((key) => !fnBody.includes(`'${key}'`))
+    expect(missingKeys).toEqual([])
+  })
+
+  it('property: _serialize_property_summary must NOT include notes or mailer_history', () => {
+    /**
+     * notes and mailer_history must be absent from the list serializer.
+     * They are only present in _serialize_property_detail.
+     *
+     * PASSES on fixed code; would FAIL on unfixed code (confirming the fix works).
+     */
+    const source = readBackendSource()
+
+    // Extract only the _serialize_property_summary function body
+    const fnMatch = source.match(
+      /def _serialize_property_summary\(lead\):([\s\S]*?)(?=\ndef )/
+    )
+    expect(fnMatch).not.toBeNull()
+    const fnBody = fnMatch![1]
+
+    expect(fnBody).not.toContain("'notes'")
+    expect(fnBody).not.toContain("'mailer_history'")
   })
 })

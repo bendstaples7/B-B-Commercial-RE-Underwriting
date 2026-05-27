@@ -67,7 +67,7 @@ import ExpandMore from '@mui/icons-material/ExpandMore'
 import { usePipelineStatus } from './context/PipelineStatusContext'
 import Avatar from '@mui/material/Avatar'
 import { WorkflowStep, PropertyFacts, PropertyType, ConstructionType, InteriorCondition } from './types'
-import { analysisService } from './services/api'
+import { analysisService, queueService } from './services/api'
 import { PropertyFactsForm } from './components/PropertyFactsForm'
 import { PropertyListPage } from './components/PropertyListPage'
 import { PropertyDetailPage } from './components/PropertyDetailPage'
@@ -1238,11 +1238,18 @@ function App() {
     libraries: GOOGLE_MAPS_LIBRARIES,
   })
 
-  const queryClient = useQueryClient()
   const toggleDrawer = () => setDrawerOpen((prev) => !prev)
 
-  // Badge counts — read from the shared cache populated by QueueSidebar (no independent poll)
-  const queueCounts = queryClient.getQueryData<QueueCounts>(['queue-counts'])
+  // Badge counts — subscribe reactively to the shared ['queue-counts'] cache key.
+  // QueueSidebar owns the polling (5-minute interval); App subscribes here so the
+  // nav drawer badge chips re-render whenever QueueSidebar fetches fresh data.
+  const { data: queueCounts } = useQuery<QueueCounts>({
+    queryKey: ['queue-counts'],
+    queryFn: () => queueService.getCounts(),
+    staleTime: Infinity, // never re-fetch from here — QueueSidebar owns the interval
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+  })
 
   // Track which top-level sections are expanded; default both open
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
