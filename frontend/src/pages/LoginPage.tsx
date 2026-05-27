@@ -31,10 +31,32 @@ export function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
 
+  // Redirect destination — check returnUrl query param first (set by 401 interceptor),
+  // then fall back to location.state.from (set by ProtectedRoute), then root.
+  // Validate returnUrl: only use it if it's a safe internal path.
+  const rawReturnUrl = new URLSearchParams(location.search).get('returnUrl') ?? ''
+  const isInternalPath = (() => {
+    if (!rawReturnUrl.startsWith('/') || rawReturnUrl.startsWith('//')) return false
+    try {
+      const parsed = new URL(rawReturnUrl, window.location.origin)
+      return parsed.origin === window.location.origin
+    } catch {
+      return false
+    }
+  })()
+  const from =
+    (isInternalPath ? rawReturnUrl : null) ??
+    (location.state as { from?: Location })?.from?.pathname ??
+    '/'
+
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // If redirected back here via returnUrl, the session expired or the DB is
+  // unavailable — show an immediate message rather than a blank form.
+  const [error, setError] = useState<string | null>(
+    rawReturnUrl ? 'Your session could not be verified. Please sign in again.' : null
+  )
   const [isLocalFallback, setIsLocalFallback] = useState(false)
 
   // Check on mount whether the backend is running on the local DB fallback
@@ -51,28 +73,6 @@ export function LoginPage() {
         // Health check failure is non-critical — don't block the login form
       })
   }, [])
-
-  // Redirect destination — check returnUrl query param first (set by 401 interceptor),
-  // then fall back to location.state.from (set by ProtectedRoute), then root.
-  // Validate returnUrl: only use it if it's a safe internal path.
-  // Parse with URL to isolate the pathname — this prevents query params containing
-  // external URLs (e.g. /path?next=https://evil.com) from being treated as external.
-  const rawReturnUrl = new URLSearchParams(location.search).get('returnUrl') ?? ''
-  const isInternalPath = (() => {
-    if (!rawReturnUrl.startsWith('/') || rawReturnUrl.startsWith('//')) return false
-    try {
-      // Use a dummy base to parse the returnUrl as a relative URL
-      const parsed = new URL(rawReturnUrl, window.location.origin)
-      // Safe if the origin matches (i.e. it's truly a same-origin path)
-      return parsed.origin === window.location.origin
-    } catch {
-      return false
-    }
-  })()
-  const from =
-    (isInternalPath ? rawReturnUrl : null) ??
-    (location.state as { from?: Location })?.from?.pathname ??
-    '/'
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
