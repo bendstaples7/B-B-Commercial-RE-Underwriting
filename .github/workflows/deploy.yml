@@ -37,28 +37,31 @@ jobs:
         run: |
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
             "set -euo pipefail
+            export PATH=$PATH:/home/deploy/.local/bin
             cd /home/deploy/app
 
             echo '==> (1) Checkout triggering SHA: $TARGET_SHA'
-            git fetch origin main
-            git checkout '$TARGET_SHA'
+            git checkout -- . || { echo 'FAILED: git reset local changes'; exit 1; }
+            git fetch origin main || { echo 'FAILED: git fetch'; exit 1; }
+            git checkout '$TARGET_SHA' || { echo 'FAILED: git checkout'; exit 1; }
 
             echo '==> (2) Install Python dependencies'
-            pip install --user -r backend/requirements.txt
+            pip install --user -r backend/requirements.txt || { echo 'FAILED: pip install'; exit 1; }
 
             echo '==> (3) Build frontend'
             cd frontend
-            npm ci
-            npm run build
+            npm ci || { echo 'FAILED: npm ci'; exit 1; }
+            npm run build || { echo 'FAILED: npm run build'; exit 1; }
             cd ..
 
             echo '==> (4) Run database migrations'
             cd backend
-            FLASK_ENV=production flask db upgrade head
+            set -a && source .env && set +a
+            FLASK_ENV=production flask db upgrade head || { echo 'FAILED: flask db upgrade'; exit 1; }
             cd ..
 
             echo '==> (5) Reload Gunicorn (zero-downtime)'
-            sudo systemctl reload gunicorn
+            sudo systemctl reload gunicorn || { echo 'FAILED: systemctl reload gunicorn'; exit 1; }
 
             echo '==> Deploy complete'"
 
