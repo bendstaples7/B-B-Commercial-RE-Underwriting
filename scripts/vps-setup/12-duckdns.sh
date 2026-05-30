@@ -126,10 +126,10 @@ fi
 # =============================================================================
 step "Step 2: Writing ${DUCK_SCRIPT}..."
 
-# Write the exact curl update command from the design document.
-# The -K flag reads the URL from stdin; -k skips SSL verification for the
-# DuckDNS API call; -o writes the response ("OK" or "KO") to duck.log.
+# Write the DuckDNS update command.
+# The -K flag reads the URL from stdin; -o writes the response ("OK" or "KO") to duck.log.
 # Leaving &ip= empty tells DuckDNS to auto-detect the VPS public IP.
+# TLS verification is enabled (no -k flag) to protect the token in transit.
 cat > "${DUCK_SCRIPT}" << DUCK_SH
 #!/usr/bin/env bash
 echo url="https://www.duckdns.org/update?domains=${DUCKDNS_SUBDOMAIN}&token=${DUCKDNS_TOKEN}&ip=" | curl -o ${DUCK_LOG} -K -

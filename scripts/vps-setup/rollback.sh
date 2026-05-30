@@ -20,9 +20,12 @@ echo "==> (1) Checking if migration downgrade is needed"
 # Count only migration files *added* between TARGET and CURRENT (lines starting with "A").
 # This must run BEFORE git checkout so we use the current working tree's migration files
 # and Alembic env to perform the downgrade.
-NUM_ADDED_MIGRATIONS=$(git diff --name-status "$TARGET_COMMIT" "$CURRENT_COMMIT" \
-  -- backend/alembic_migrations/versions/ \
-  | grep -c '^A' || true)
+GIT_DIFF_OUTPUT=$(git diff --name-status "$TARGET_COMMIT" "$CURRENT_COMMIT" \
+  -- backend/alembic_migrations/versions/)
+NUM_ADDED_MIGRATIONS=$(echo "$GIT_DIFF_OUTPUT" | grep -c '^A' || true)
+# grep -c exits 1 when there are zero matches — that's fine (means no migrations added).
+# If git diff itself failed, GIT_DIFF_OUTPUT would be empty and we'd skip the downgrade,
+# which is the safe default.
 if [ "$NUM_ADDED_MIGRATIONS" -gt 0 ]; then
     echo "    $NUM_ADDED_MIGRATIONS migration file(s) added — running flask db downgrade -${NUM_ADDED_MIGRATIONS}"
     cd backend

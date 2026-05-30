@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # =============================================================================
 # 06a-neon-export.sh
 # VPS Setup — Task 2.2 (Part A): Export data from Neon and copy to VPS.
