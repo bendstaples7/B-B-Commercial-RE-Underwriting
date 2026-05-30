@@ -67,9 +67,10 @@ jobs:
 
       # ── Step 5: Checkout repo, build frontend on runner, deploy ──────────
       - name: Checkout repo (to get deploy script and build frontend)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
 
       - name: Build frontend on runner (avoids OOM on 2GB VPS)
         run: |
@@ -87,7 +88,8 @@ jobs:
         run: |
           # Copy deploy script
           scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
-          # Copy pre-built frontend dist to VPS (avoids building on memory-constrained VPS)
+          # Remove any stale frontend-dist from previous runs, then copy fresh build
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "rm -rf /home/deploy/frontend-dist"
           scp -i ~/.ssh/id_deploy -r frontend/dist $VPS_USER@$VPS_HOST:/home/deploy/frontend-dist
           # Run deploy script
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \

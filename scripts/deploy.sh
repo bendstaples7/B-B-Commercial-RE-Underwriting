@@ -33,8 +33,16 @@ rollback() {
     git checkout -- . 2>/dev/null || { echo "ROLLBACK WARNING: git checkout -- . failed"; ROLLBACK_FAILED=1; }
     git checkout "$PREVIOUS_SHA" 2>/dev/null || { echo "ROLLBACK WARNING: git checkout $PREVIOUS_SHA failed"; ROLLBACK_FAILED=1; }
     pip install --user -r backend/requirements.txt -q 2>/dev/null || { echo "ROLLBACK WARNING: pip install failed"; ROLLBACK_FAILED=1; }
-    # Note: frontend dist is not rebuilt during rollback — the previous dist remains on disk
-    # which is acceptable since the rollback restores the previous backend code.
+    # Restore the previous frontend/dist backup to avoid a version mismatch:
+    # without this, backend would be at PREVIOUS_SHA but frontend/dist would
+    # contain the TARGET_SHA build, causing frontend/backend incompatibility.
+    if [ -d "/home/deploy/frontend-dist-backup" ]; then
+        rm -rf frontend/dist
+        cp -r /home/deploy/frontend-dist-backup frontend/dist 2>/dev/null || { echo "ROLLBACK WARNING: frontend dist restore failed"; ROLLBACK_FAILED=1; }
+    else
+        echo "ROLLBACK WARNING: no frontend-dist-backup found — frontend may be at $TARGET_SHA while backend rolls back to $PREVIOUS_SHA"
+        ROLLBACK_FAILED=1
+    fi
     sudo systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
     if [ "$ROLLBACK_FAILED" -eq 0 ]; then
         echo "Rollback to $PREVIOUS_SHA complete."
@@ -87,8 +95,15 @@ echo "    Python dependencies installed"
 
 echo "==> (3) Install frontend (pre-built on CI runner, copied to VPS)"
 # The dist/ was built on the GitHub Actions runner (7GB RAM) and copied here
-# to avoid OOM kills on the 2GB VPS. Replace the current dist with the new one.
+# to avoid OOM kills on the 2GB VPS.
+# We back up the current dist before replacing it so rollback can restore it
+# and avoid a frontend/backend version mismatch (backend at PREVIOUS_SHA,
+# frontend at TARGET_SHA).
 if [ -d "/home/deploy/frontend-dist" ]; then
+    # Back up current dist for rollback
+    rm -rf /home/deploy/frontend-dist-backup
+    cp -r frontend/dist /home/deploy/frontend-dist-backup 2>/dev/null || true
+    # Install new dist
     rm -rf frontend/dist
     mv /home/deploy/frontend-dist frontend/dist
     echo "    Frontend dist installed from CI runner build"
