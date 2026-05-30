@@ -81,23 +81,40 @@ jobs:
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
             "chmod +x /home/deploy/deploy.sh && bash /home/deploy/deploy.sh '$TARGET_SHA'"
 
-      # ── Step 6: Post-deploy health check ──────────────────────────────────
+      # ── Step 6: Post-deploy health check + SHA verification ──────────────
       - name: Post-deploy health check
         env:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+          TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           echo "Waiting for Gunicorn to finish graceful reload..."
           sleep 5
+          BASE_URL="https://${VPS_SUBDOMAIN}.duckdns.org"
+
+          # Health check
           for i in $(seq 1 10); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
               --max-time 10 \
-              "https://${VPS_SUBDOMAIN}.duckdns.org/api/health")
+              "${BASE_URL}/api/health")
             echo "Attempt $i: HTTP $STATUS"
             if [ "$STATUS" = "200" ]; then
               echo "Health check passed."
-              exit 0
+              break
+            fi
+            if [ "$i" = "10" ]; then
+              echo "Health check failed after 10 attempts."
+              exit 1
             fi
             sleep 3
           done
-          echo "Health check failed after 10 attempts."
-          exit 1
+
+          # SHA verification — confirm the deployed code matches the triggering commit
+          DEPLOYED_SHA=$(curl -s --max-time 10 "${BASE_URL}/api/version" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sha','unknown'))" 2>/dev/null || echo "unknown")
+          echo "Expected SHA: $TARGET_SHA"
+          echo "Deployed SHA: $DEPLOYED_SHA"
+          if [ "$DEPLOYED_SHA" = "$TARGET_SHA" ]; then
+            echo "SHA verification passed — correct version is running."
+          else
+            echo "WARNING: Deployed SHA ($DEPLOYED_SHA) does not match expected ($TARGET_SHA)."
+            echo "The app is healthy but may be running a different version."
+          fi

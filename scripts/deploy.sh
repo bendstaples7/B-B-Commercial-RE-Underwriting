@@ -12,9 +12,52 @@ export PATH=$PATH:/home/deploy/.local/bin
 
 TARGET_SHA="${1:?TARGET_SHA argument is required}"
 APP_DIR="/home/deploy/app"
+ROLLBACK_LOG="/home/deploy/rollback.log"
 
 cd "$APP_DIR"
 
+# ── Capture current SHA for rollback ─────────────────────────────────────────
+PREVIOUS_SHA=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+
+# ── Rollback function — called automatically on any failure ──────────────────
+rollback() {
+    local exit_code=$?
+    if [ "$PREVIOUS_SHA" = "unknown" ] || [ "$PREVIOUS_SHA" = "$TARGET_SHA" ]; then
+        echo "ERROR: Deploy failed (exit $exit_code). No rollback possible."
+        exit $exit_code
+    fi
+    echo "ERROR: Deploy failed (exit $exit_code). Rolling back to $PREVIOUS_SHA..."
+    echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Auto-rollback: $TARGET_SHA -> $PREVIOUS_SHA (deploy failed)" >> "$ROLLBACK_LOG"
+    git checkout -- . 2>/dev/null || true
+    git checkout "$PREVIOUS_SHA" 2>/dev/null || true
+    pip install --user -r backend/requirements.txt -q 2>/dev/null || true
+    cd frontend && npm ci --silent 2>/dev/null && npm run build 2>/dev/null && cd .. || true
+    sudo systemctl reload gunicorn 2>/dev/null || true
+    echo "Rollback to $PREVIOUS_SHA complete."
+    exit $exit_code
+}
+trap rollback ERR
+
+# ── Pre-deploy VPS health checks ─────────────────────────────────────────────
+echo "==> Pre-deploy checks"
+
+# Check gunicorn is running
+systemctl is-active --quiet gunicorn || { echo "FAILED: gunicorn is not active before deploy"; exit 1; }
+echo "    gunicorn: active"
+
+# Check PostgreSQL is running
+systemctl is-active --quiet postgresql || { echo "FAILED: postgresql is not active before deploy"; exit 1; }
+echo "    postgresql: active"
+
+# Check disk space (require at least 1GB free)
+FREE_KB=$(df /home/deploy --output=avail | tail -1 | tr -d ' ')
+if [ "$FREE_KB" -lt 1048576 ]; then
+    echo "FAILED: Less than 1GB disk space available (${FREE_KB}KB free)"
+    exit 1
+fi
+echo "    disk space: ${FREE_KB}KB free (OK)"
+
+# ── Deploy steps ─────────────────────────────────────────────────────────────
 echo "==> (1) Discard local changes and checkout SHA: $TARGET_SHA"
 git checkout -- . || { echo "FAILED: git reset local changes"; exit 1; }
 git fetch origin main || { echo "FAILED: git fetch"; exit 1; }
@@ -47,3 +90,4 @@ sudo systemctl reload gunicorn || { echo "FAILED: systemctl reload gunicorn"; ex
 echo "    Gunicorn reloaded"
 
 echo "==> Deploy complete: $TARGET_SHA"
+echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Deploy successful: $PREVIOUS_SHA -> $TARGET_SHA" >> "$ROLLBACK_LOG"
