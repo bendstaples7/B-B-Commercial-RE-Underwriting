@@ -15,6 +15,29 @@ jobs:
       github.event.workflow_run.head_branch == 'main'
 
     steps:
+      # ── Step 1: Validate all required secrets are set ─────────────────────
+      - name: Validate secrets
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
+          VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+        run: |
+          MISSING=""
+          [ -z "$VPS_SSH_KEY" ]   && MISSING="$MISSING VPS_SSH_KEY"
+          [ -z "$VPS_USER" ]      && MISSING="$MISSING VPS_USER"
+          [ -z "$VPS_HOST" ]      && MISSING="$MISSING VPS_HOST"
+          [ -z "$VPS_HOST_KEY" ]  && MISSING="$MISSING VPS_HOST_KEY"
+          [ -z "$VPS_SUBDOMAIN" ] && MISSING="$MISSING VPS_SUBDOMAIN"
+          if [ -n "$MISSING" ]; then
+            echo "ERROR: The following required secrets are not set:$MISSING"
+            echo "Go to Settings → Secrets and variables → Actions and add them."
+            exit 1
+          fi
+          echo "All required secrets are set."
+
+      # ── Step 2: Set up SSH key ─────────────────────────────────────────────
       - name: Set up SSH key
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
@@ -23,11 +46,30 @@ jobs:
           echo "$VPS_SSH_KEY" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
 
+      # ── Step 3: Add VPS to known hosts ────────────────────────────────────
       - name: Add VPS to known hosts
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.VPS_HOST_KEY }}" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+
+      # ── Step 4: Verify SSH connectivity before deploying ──────────────────
+      - name: Verify SSH connectivity
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          ssh -i ~/.ssh/id_deploy \
+            -o ConnectTimeout=10 \
+            $VPS_USER@$VPS_HOST \
+            "echo 'SSH connection verified'" \
+          || { echo "ERROR: Cannot connect to VPS at $VPS_HOST as $VPS_USER"; exit 1; }
+
+      # ── Step 5: Copy deploy script and run it ─────────────────────────────
+      - name: Checkout repo (to get deploy script)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Deploy
         env:
@@ -35,36 +77,11 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
+          scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
-            "set -euo pipefail
-            export PATH=$PATH:/home/deploy/.local/bin
-            cd /home/deploy/app
+            "chmod +x /home/deploy/deploy.sh && bash /home/deploy/deploy.sh '$TARGET_SHA'"
 
-            echo '==> (1) Checkout triggering SHA: $TARGET_SHA'
-            git checkout -- . || { echo 'FAILED: git reset local changes'; exit 1; }
-            git fetch origin main || { echo 'FAILED: git fetch'; exit 1; }
-            git checkout '$TARGET_SHA' || { echo 'FAILED: git checkout'; exit 1; }
-
-            echo '==> (2) Install Python dependencies'
-            pip install --user -r backend/requirements.txt || { echo 'FAILED: pip install'; exit 1; }
-
-            echo '==> (3) Build frontend'
-            cd frontend
-            npm ci || { echo 'FAILED: npm ci'; exit 1; }
-            npm run build || { echo 'FAILED: npm run build'; exit 1; }
-            cd ..
-
-            echo '==> (4) Run database migrations'
-            cd backend
-            set -a && source .env && set +a
-            FLASK_ENV=production flask db upgrade head || { echo 'FAILED: flask db upgrade'; exit 1; }
-            cd ..
-
-            echo '==> (5) Reload Gunicorn (zero-downtime)'
-            sudo systemctl reload gunicorn || { echo 'FAILED: systemctl reload gunicorn'; exit 1; }
-
-            echo '==> Deploy complete'"
-
+      # ── Step 6: Post-deploy health check ──────────────────────────────────
       - name: Post-deploy health check
         env:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
@@ -74,7 +91,7 @@ jobs:
           for i in $(seq 1 10); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
               --max-time 10 \
-              "https://${VPS_SUBDOMAIN}.duckdns.org/api/health" || echo "000")
+              "https://${VPS_SUBDOMAIN}.duckdns.org/api/health")
             echo "Attempt $i: HTTP $STATUS"
             if [ "$STATUS" = "200" ]; then
               echo "Health check passed."
