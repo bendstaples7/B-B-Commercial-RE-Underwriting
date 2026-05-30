@@ -99,20 +99,26 @@ echo "==> (3) Install frontend (pre-built on CI runner, copied to VPS)"
 # We back up the current dist before replacing it so rollback can restore it
 # and avoid a frontend/backend version mismatch (backend at PREVIOUS_SHA,
 # frontend at TARGET_SHA).
-if [ -d "/home/deploy/frontend-dist" ]; then
-    # Create new backup first, verify it succeeded, then remove the old backup.
-    # This order ensures rollback always has a usable dist even if the copy fails.
-    cp -r frontend/dist /home/deploy/frontend-dist-backup-new || { echo "FAILED: could not create frontend dist backup — aborting to protect rollback"; exit 1; }
-    rm -rf /home/deploy/frontend-dist-backup
-    mv /home/deploy/frontend-dist-backup-new /home/deploy/frontend-dist-backup
-    # Install new dist
-    rm -rf frontend/dist
-    mv /home/deploy/frontend-dist frontend/dist
-    echo "    Frontend dist installed from CI runner build"
-else
+# Verify the CI-built dist was copied to the VPS
+if [ ! -d "/home/deploy/frontend-dist" ]; then
     echo "FAILED: /home/deploy/frontend-dist not found — CI runner did not copy the build"
     exit 1
 fi
+
+# Back up current dist for rollback (only if one exists to protect).
+# Clean any stale temp backup first to prevent nested dist/ on retries.
+if [ -d "frontend/dist" ]; then
+    rm -rf /home/deploy/frontend-dist-backup-new
+    cp -r frontend/dist /home/deploy/frontend-dist-backup-new || { echo "FAILED: could not create frontend dist backup — aborting to protect rollback"; exit 1; }
+    rm -rf /home/deploy/frontend-dist-backup
+    mv /home/deploy/frontend-dist-backup-new /home/deploy/frontend-dist-backup
+    echo "    Previous frontend dist backed up for rollback"
+fi
+
+# Install new dist
+rm -rf frontend/dist
+mv /home/deploy/frontend-dist frontend/dist
+echo "    Frontend dist installed from CI runner build"
 
 echo "==> (4) Run database migrations"
 cd backend
