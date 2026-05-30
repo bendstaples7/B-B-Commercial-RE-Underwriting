@@ -115,6 +115,7 @@ jobs:
           if [ "$DEPLOYED_SHA" = "$TARGET_SHA" ]; then
             echo "SHA verification passed — correct version is running."
           else
-            echo "WARNING: Deployed SHA ($DEPLOYED_SHA) does not match expected ($TARGET_SHA)."
-            echo "The app is healthy but may be running a different version."
+            echo "ERROR: Deployed SHA ($DEPLOYED_SHA) does not match expected ($TARGET_SHA)."
+            echo "The app is healthy but the wrong version is running. Failing the workflow."
+            exit 1
           fi

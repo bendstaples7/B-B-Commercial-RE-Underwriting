@@ -28,12 +28,19 @@ rollback() {
     fi
     echo "ERROR: Deploy failed (exit $exit_code). Rolling back to $PREVIOUS_SHA..."
     echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Auto-rollback: $TARGET_SHA -> $PREVIOUS_SHA (deploy failed)" >> "$ROLLBACK_LOG"
-    git checkout -- . 2>/dev/null || true
-    git checkout "$PREVIOUS_SHA" 2>/dev/null || true
-    pip install --user -r backend/requirements.txt -q 2>/dev/null || true
-    cd frontend && npm ci --silent 2>/dev/null && npm run build 2>/dev/null && cd .. || true
-    sudo systemctl reload gunicorn 2>/dev/null || true
-    echo "Rollback to $PREVIOUS_SHA complete."
+    ROLLBACK_FAILED=0
+    git checkout -- . 2>/dev/null || { echo "ROLLBACK WARNING: git checkout -- . failed"; ROLLBACK_FAILED=1; }
+    git checkout "$PREVIOUS_SHA" 2>/dev/null || { echo "ROLLBACK WARNING: git checkout $PREVIOUS_SHA failed"; ROLLBACK_FAILED=1; }
+    pip install --user -r backend/requirements.txt -q 2>/dev/null || { echo "ROLLBACK WARNING: pip install failed"; ROLLBACK_FAILED=1; }
+    (cd frontend && npm ci --silent 2>/dev/null && npm run build 2>/dev/null) || { echo "ROLLBACK WARNING: frontend build failed"; ROLLBACK_FAILED=1; }
+    sudo systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
+    if [ "$ROLLBACK_FAILED" -eq 0 ]; then
+        echo "Rollback to $PREVIOUS_SHA complete."
+        echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Rollback successful: now at $PREVIOUS_SHA" >> "$ROLLBACK_LOG"
+    else
+        echo "ROLLBACK INCOMPLETE: Some rollback steps failed. Manual intervention required."
+        echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Rollback INCOMPLETE for $PREVIOUS_SHA — manual fix needed" >> "$ROLLBACK_LOG"
+    fi
     exit $exit_code
 }
 trap rollback ERR
