@@ -22,6 +22,7 @@ PREVIOUS_SHA=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
 # ── Rollback function — called automatically on any failure ──────────────────
 rollback() {
     local exit_code=$?
+    cd "$APP_DIR"  # Always reset to APP_DIR regardless of where the failure occurred
     if [ "$PREVIOUS_SHA" = "unknown" ] || [ "$PREVIOUS_SHA" = "$TARGET_SHA" ]; then
         echo "ERROR: Deploy failed (exit $exit_code). No rollback possible."
         exit $exit_code
