@@ -41,6 +41,7 @@ jobs:
             cd /home/deploy/app
 
             echo '==> (1) Checkout triggering SHA: $TARGET_SHA'
+            git checkout -- . || { echo 'FAILED: git reset local changes'; exit 1; }
             git fetch origin main || { echo 'FAILED: git fetch'; exit 1; }
             git checkout '$TARGET_SHA' || { echo 'FAILED: git checkout'; exit 1; }
 
