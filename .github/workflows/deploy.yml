@@ -16,7 +16,7 @@ jobs:
 
     steps:
       - name: Load SSH key
-        uses: webfactory/ssh-agent@dc4b1a57a6ccd19b7610d1d1b9dba45b5c720369
+        uses: webfactory/ssh-agent@dc588b651fe13675774614f8e6a936a468676387
         with:
           ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
 
