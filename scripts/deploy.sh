@@ -66,6 +66,14 @@ if [ "$FREE_KB" -lt 1048576 ]; then
 fi
 echo "    disk space: ${FREE_KB}KB free (OK)"
 
+# Check available memory (require at least 300MB free to avoid OOM during deploy)
+FREE_MEM_KB=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
+if [ "$FREE_MEM_KB" -lt 307200 ]; then
+    echo "FAILED: Less than 300MB memory available (${FREE_MEM_KB}KB free). VPS may be under memory pressure."
+    exit 1
+fi
+echo "    memory: ${FREE_MEM_KB}KB available (OK)"
+
 # ── Deploy steps ─────────────────────────────────────────────────────────────
 echo "==> (1) Discard local changes and checkout SHA: $TARGET_SHA"
 git checkout -- . || { echo "FAILED: git reset local changes"; exit 1; }
