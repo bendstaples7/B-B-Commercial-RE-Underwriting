@@ -213,8 +213,9 @@ else
         if echo "${LOCATION}" | grep -qi "^location: https://"; then
             info "  Redirect target is HTTPS ✓"
         elif [[ -n "${LOCATION}" ]]; then
-            warn "  Location header does not start with https:// — check Nginx config"
-            warn "  Got: ${LOCATION}"
+            record_fail "HTTP redirect Location header does not point to HTTPS"
+            error "  Location header does not start with https:// — check Nginx config"
+            error "  Got: ${LOCATION}"
         fi
 
     elif echo "${STATUS_LINE}" | grep -q "302\|307\|308"; then

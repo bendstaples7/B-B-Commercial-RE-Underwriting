@@ -32,7 +32,7 @@
 #   These files do NOT exist until Certbot runs (task 6.2). Therefore:
 #   - `nginx -t` will FAIL if run before Certbot.
 #   - This script detects that condition and skips validation gracefully.
-#   - After running 12-certbot.sh (task 6.2), re-run this script OR manually
+#   - After running 13-certbot.sh (task 6.2), re-run this script OR manually
 #     run: sudo nginx -t && sudo systemctl reload nginx
 #
 # This script is IDEMPOTENT — safe to run multiple times.
@@ -75,6 +75,12 @@ fi
 
 # Strip .duckdns.org if the user accidentally included it
 SUBDOMAIN="${SUBDOMAIN%.duckdns.org}"
+
+# Validate subdomain format — only alphanumeric characters and hyphens
+if [[ ! "$SUBDOMAIN" =~ ^[a-zA-Z0-9-]+$ ]]; then
+    die "Invalid subdomain format: '${SUBDOMAIN}'. Use only letters, numbers, and hyphens."
+fi
+
 DOMAIN="${SUBDOMAIN}.duckdns.org"
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -148,7 +154,7 @@ server {
     server_name ${DOMAIN};
 
     # TLS — managed by Certbot (Requirement 5.3, 5.6)
-    # NOTE: These files are created by Certbot (task 6.2 / 12-certbot.sh).
+    # NOTE: These files are created by Certbot (task 6.2 / 13-certbot.sh).
     #       nginx -t will fail until Certbot has run.
     ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
@@ -272,8 +278,8 @@ else
     warn "  ┌─────────────────────────────────────────────────────────────┐"
     warn "  │  NEXT STEP: Run Certbot to obtain the TLS certificate       │"
     warn "  │                                                             │"
-    warn "  │  Task 6.2 — 12-certbot.sh                                  │"
-    warn "  │  sudo bash ${APP_DIR}/scripts/vps-setup/12-certbot.sh      │"
+    warn "  │  Task 6.2 — 13-certbot.sh                                  │"
+    warn "  │  sudo bash ${APP_DIR}/scripts/vps-setup/13-certbot.sh      │"
     warn "  │                                                             │"
     warn "  │  After Certbot runs, validate and reload Nginx manually:   │"
     warn "  │    sudo nginx -t && sudo systemctl reload nginx             │"

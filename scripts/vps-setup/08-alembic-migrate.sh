@@ -273,7 +273,7 @@ info "  Note: pg_stat_user_tables shows estimates; use SELECT count(*) for exact
 info "Step 9: Testing connectivity as '${DB_USER}'..."
 
 TABLE_COUNT=$(psql \
-    "postgresql://${DB_USER}@${DB_HOST}/${DB_NAME}" \
+    "${DATABASE_URL}" \
     -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';" \
     2>/dev/null || echo "ERROR")
 

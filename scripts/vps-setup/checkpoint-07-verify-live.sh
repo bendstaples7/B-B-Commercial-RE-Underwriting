@@ -153,7 +153,9 @@ echo ""
 step "Check 3: curl -f https://${DOMAIN}/api/health"
 
 HEALTH_URL="https://${DOMAIN}/api/health"
-HEALTH_STATUS=$(curl -s -o /tmp/health_response.json -w "%{http_code}" \
+HEALTH_RESPONSE_FILE=$(mktemp)
+trap 'rm -f "${HEALTH_RESPONSE_FILE}"' EXIT
+HEALTH_STATUS=$(curl -s -o "${HEALTH_RESPONSE_FILE}" -w "%{http_code}" \
     --max-time 15 \
     "${HEALTH_URL}" 2>/dev/null || echo "000")
 
@@ -163,11 +165,11 @@ if [[ "${HEALTH_STATUS}" == "200" ]]; then
     info "  Status: HTTP ${HEALTH_STATUS}"
 
     # Show the response body if it's valid JSON
-    if command -v python3 &>/dev/null && [[ -f /tmp/health_response.json ]]; then
-        BODY=$(python3 -m json.tool /tmp/health_response.json 2>/dev/null || cat /tmp/health_response.json 2>/dev/null || echo "(empty)")
+    if command -v python3 &>/dev/null && [[ -f "${HEALTH_RESPONSE_FILE}" ]]; then
+        BODY=$(python3 -m json.tool "${HEALTH_RESPONSE_FILE}" 2>/dev/null || cat "${HEALTH_RESPONSE_FILE}" 2>/dev/null || echo "(empty)")
         info "  Body:   ${BODY}"
-    elif [[ -f /tmp/health_response.json ]]; then
-        BODY=$(cat /tmp/health_response.json 2>/dev/null || echo "(empty)")
+    elif [[ -f "${HEALTH_RESPONSE_FILE}" ]]; then
+        BODY=$(cat "${HEALTH_RESPONSE_FILE}" 2>/dev/null || echo "(empty)")
         info "  Body:   ${BODY}"
     fi
 elif [[ "${HEALTH_STATUS}" == "000" ]]; then
@@ -187,8 +189,8 @@ elif [[ "${HEALTH_STATUS}" == "503" ]]; then
     record_fail "/api/health returned HTTP 503 (database unavailable)"
     error "  URL:    ${HEALTH_URL}"
     error "  Status: HTTP ${HEALTH_STATUS}"
-    if [[ -f /tmp/health_response.json ]]; then
-        BODY=$(cat /tmp/health_response.json 2>/dev/null || echo "(empty)")
+    if [[ -f "${HEALTH_RESPONSE_FILE}" ]]; then
+        BODY=$(cat "${HEALTH_RESPONSE_FILE}" 2>/dev/null || echo "(empty)")
         error "  Body:   ${BODY}"
     fi
     error ""
@@ -201,8 +203,8 @@ else
     record_fail "/api/health returned unexpected HTTP ${HEALTH_STATUS}"
     error "  URL:    ${HEALTH_URL}"
     error "  Status: HTTP ${HEALTH_STATUS} (expected 200)"
-    if [[ -f /tmp/health_response.json ]]; then
-        BODY=$(cat /tmp/health_response.json 2>/dev/null || echo "(empty)")
+    if [[ -f "${HEALTH_RESPONSE_FILE}" ]]; then
+        BODY=$(cat "${HEALTH_RESPONSE_FILE}" 2>/dev/null || echo "(empty)")
         error "  Body:   ${BODY}"
     fi
     error ""
@@ -212,8 +214,7 @@ else
     error "    journalctl -u nginx -n 50"
 fi
 
-# Clean up temp file
-rm -f /tmp/health_response.json
+# Temp file is cleaned up by the EXIT trap
 
 echo ""
 
@@ -229,9 +230,7 @@ if [[ -z "${JOURNAL_OUTPUT}" ]]; then
     warn "  No journal output found for gunicorn."
     warn "  This may mean gunicorn has never started, or journald is not collecting its output."
     warn "  Check: systemctl status gunicorn"
-    # Treat as a warning, not a hard failure — the service check (Check 1) covers this
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-    FAIL_MSGS+=("gunicorn journal is empty — service may not have started")
+    # Treat as a warning only — the service check (Check 1) covers this
 else
     # Search for ERROR lines (case-insensitive to catch ERROR, Error, error)
     ERROR_LINES=$(echo "${JOURNAL_OUTPUT}" | grep -i "error" || true)

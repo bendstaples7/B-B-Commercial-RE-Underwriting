@@ -97,18 +97,19 @@ database.
 **Format:**
 
 ```
-postgresql://app_user:<password>@<VPS_IP>:5432/real_estate_analysis
+postgresql://app_user:<password>@localhost:5432/real_estate_analysis
 ```
 
 **Example:**
 
 ```
-postgresql://app_user:s3cur3p4ss@65.21.123.45:5432/real_estate_analysis
+postgresql://app_user:s3cur3p4ss@localhost:5432/real_estate_analysis
 ```
 
-> **Note:** Use the VPS public IP here (same value as `VPS_HOST`), not `localhost`.
-> The migration command runs on the GitHub Actions runner, which connects to the
-> VPS over the network — `localhost` would refer to the runner itself.
+> **Note:** The migration command runs on the VPS over SSH, so use `localhost` as
+> the host — not the VPS public IP. The `flask db upgrade head` command executes
+> directly on the VPS where PostgreSQL is running, so `localhost` correctly refers
+> to the VPS's own database.
 
 **How to find the password:** This is the password you set for the `app_user`
 PostgreSQL role during initial VPS setup (Task 2.1). If you need to reset it:

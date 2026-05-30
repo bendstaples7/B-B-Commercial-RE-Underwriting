@@ -157,8 +157,8 @@ info "Step 6: Validating sshd_config..."
 if sshd -t; then
     info "  sshd_config is valid."
 else
-    error "  sshd_config validation FAILED. Restoring backup and aborting."
     cp "${SSHD_CONFIG}.bak" "$SSHD_CONFIG"
+    error "  sshd_config validation FAILED. Backup restored. Aborting."
 fi
 
 info "Step 6: Restarting sshd..."
@@ -184,4 +184,12 @@ echo "    ssh -i ~/.ssh/bbanalyzer_deploy deploy@<VPS_IP>"
 echo ""
 echo "  WARNING: Do NOT close this root session until you have"
 echo "  confirmed the deploy user can SSH in successfully."
+echo ""
+echo "  !! SECURITY WARNING !!"
+echo "  /etc/sudoers.d/deploy-temp grants '$DEPLOY_USER' NOPASSWD: ALL"
+echo "  (full unrestricted root sudo). This is intentional for provisioning"
+echo "  but MUST be restricted before the server goes into production."
+echo "  Run 11-sudoers-deploy.sh to replace it with a minimal sudoers rule"
+echo "  (systemctl reload gunicorn only). Skipping that step leaves the"
+echo "  deploy user with permanent unrestricted sudo access."
 echo "============================================================"
