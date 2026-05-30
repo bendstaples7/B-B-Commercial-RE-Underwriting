@@ -26,13 +26,10 @@ jobs:
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          GITHUB_SHA: ${{ github.event.workflow_run.head_sha }}
+          TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          # Pass only the target SHA as a positional argument — no secrets in args.
-          # DATABASE_URL is sourced from the .env file already on the VPS.
-          ssh $VPS_USER@$VPS_HOST "bash -s" -- "${GITHUB_SHA}" << 'ENDSSH'
+          ssh $VPS_USER@$VPS_HOST << ENDSSH
             set -euo pipefail
-            TARGET_SHA="$1"
             cd /home/deploy/app
 
             echo "==> (1) Checkout triggering SHA: ${TARGET_SHA}"
@@ -50,7 +47,6 @@ jobs:
 
             echo "==> (4) Run database migrations"
             cd backend
-            # DATABASE_URL is loaded from .env by Flask — no need to pass it explicitly
             FLASK_ENV=production flask db upgrade head
             cd ..
 
