@@ -69,9 +69,17 @@ nohup bash -c 'sleep 2 && ufw --force enable' >/tmp/ufw-enable.log 2>&1 &
 ok "UFW enable scheduled (will activate in ~2 seconds)"
 sleep 4  # Wait for UFW to activate before continuing
 
-# Verify UFW actually became active
-if ! ufw status | grep -q "Status: active"; then
-    die "UFW failed to activate — check /tmp/ufw-enable.log for details."
+# Verify UFW actually became active — poll with a bounded timeout
+UFW_ACTIVE=false
+for _i in $(seq 1 6); do
+    if ufw status | grep -q "Status: active"; then
+        UFW_ACTIVE=true
+        break
+    fi
+    sleep 2
+done
+if [[ "$UFW_ACTIVE" != "true" ]]; then
+    die "UFW failed to activate after 12 seconds — check /tmp/ufw-enable.log for details."
 fi
 ok "UFW is active"
 

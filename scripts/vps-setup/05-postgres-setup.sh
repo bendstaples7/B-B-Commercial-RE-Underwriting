@@ -66,18 +66,12 @@ info "PostgreSQL service is active."
 # =============================================================================
 info "Step 1: Creating PostgreSQL role '$PG_ROLE'..."
 
-# Pass the password via PGPASSWORD env var to avoid SQL injection from
-# special characters in the password value.
-export PGPASSWORD="${APP_USER_PASSWORD}"
-
-# Use DO $$ ... $$ to handle the duplicate_object case gracefully.
-# The password is passed as a psql variable (:APP_PWD) to avoid
-# interpolating it directly into the SQL string.
-sudo -u postgres PGPASSWORD="${APP_USER_PASSWORD}" psql -v ON_ERROR_STOP=1 \
-    -v "APP_PWD=${APP_USER_PASSWORD}" <<'SQL'
-DO $$
+# Pass the password via PGPASSWORD env var to avoid exposing it in process
+# listings. Using format('%L', ...) in SQL prevents SQL injection.
+sudo -u postgres PGPASSWORD="${APP_USER_PASSWORD}" psql -v ON_ERROR_STOP=1 <<SQL
+DO \$\$
 DECLARE
-    v_password TEXT := :'APP_PWD';
+    v_password TEXT := '$(printf '%s' "${APP_USER_PASSWORD}" | sed "s/'/''/g")';
 BEGIN
     IF NOT EXISTS (
         SELECT FROM pg_catalog.pg_roles WHERE rolname = 'app_user'
@@ -89,7 +83,7 @@ BEGIN
         RAISE NOTICE 'Role app_user already exists — password updated.';
     END IF;
 END
-$$;
+\$\$;
 SQL
 
 info "  Role '$PG_ROLE' is present."
