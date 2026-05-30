@@ -29,33 +29,32 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          ssh $VPS_USER@$VPS_HOST << ENDSSH
-            set -euo pipefail
+          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST \
+            "set -euo pipefail
             cd /home/deploy/app
 
-            echo "==> (1) Checkout triggering SHA: ${TARGET_SHA}"
+            echo '==> (1) Checkout triggering SHA: $TARGET_SHA'
             git fetch origin main
-            git checkout "${TARGET_SHA}"
+            git checkout '$TARGET_SHA'
 
-            echo "==> (2) Install Python dependencies"
+            echo '==> (2) Install Python dependencies'
             pip install --user -r backend/requirements.txt
 
-            echo "==> (3) Build frontend"
+            echo '==> (3) Build frontend'
             cd frontend
             npm ci
             npm run build
             cd ..
 
-            echo "==> (4) Run database migrations"
+            echo '==> (4) Run database migrations'
             cd backend
             FLASK_ENV=production flask db upgrade head
             cd ..
 
-            echo "==> (5) Reload Gunicorn (zero-downtime)"
+            echo '==> (5) Reload Gunicorn (zero-downtime)'
             sudo systemctl reload gunicorn
 
-            echo "==> Deploy complete"
-          ENDSSH
+            echo '==> Deploy complete'"
 
       - name: Post-deploy health check
         env:
