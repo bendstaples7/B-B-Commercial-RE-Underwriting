@@ -168,7 +168,7 @@ echo ""
 if [[ -d "${DIST_DIR}/assets" ]]; then
     echo "  Assets:"
     echo "  ─────────────────────────────────────────────────────────────────"
-    ls -lh "${DIST_DIR}/assets/" | head -20
+    ls -lh "${DIST_DIR}/assets/" | head -20 || true
     ASSET_TOTAL=$(find "${DIST_DIR}/assets" -type f | wc -l)
     if [[ "${ASSET_TOTAL}" -gt 20 ]]; then
         echo "  ... (${ASSET_TOTAL} total asset files, showing first 20)"

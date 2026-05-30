@@ -137,13 +137,11 @@ SUDO_LIST=$(sudo -u "${DEPLOY_USER}" sudo -n -l 2>&1 || true)
 if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl reload gunicorn"; then
     info "  ✓ Rule confirmed: deploy can run 'sudo /bin/systemctl reload gunicorn' without a password."
 else
-    warn "  Could not confirm the rule via 'sudo -n -l'."
-    warn "  sudo -l output:"
+    error "  Could not confirm the rule via 'sudo -n -l'."
+    error "  sudo -l output:"
     echo "${SUDO_LIST}" | sed 's/^/    /'
-    warn ""
-    warn "  This may be a timing issue with sudo's credential cache."
-    warn "  Verify manually on the VPS as the deploy user:"
-    warn "    sudo -u deploy bash -c 'sudo -n -l | grep systemctl'"
+    die "Sudo rule verification failed. The rule in ${SUDOERS_FILE} was not recognised by sudo.
+  Check for syntax issues or conflicting rules in /etc/sudoers or /etc/sudoers.d/."
 fi
 
 # =============================================================================
@@ -173,5 +171,5 @@ echo "  from GitHub Actions (Req 6.3, 8.1)."
 echo ""
 echo "  NEXT STEPS:"
 echo "    5.2  Write the Nginx site configuration"
-echo "         sudo bash /home/deploy/app/scripts/vps-setup/12-nginx-config.sh"
+echo "         sudo bash /home/deploy/app/scripts/vps-setup/11-nginx-config.sh"
 echo "============================================================"

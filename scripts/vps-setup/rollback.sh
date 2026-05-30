@@ -17,7 +17,7 @@ TARGET_COMMIT="${1:-$(git rev-parse HEAD~1)}"
 echo "[$TIMESTAMP] Rollback initiated: $CURRENT_COMMIT -> $TARGET_COMMIT" | tee -a "$LOG_FILE"
 
 echo "==> (1) Checking out previous commit: $TARGET_COMMIT"
-git checkout "$TARGET_COMMIT"
+git checkout -B main "$TARGET_COMMIT"
 
 echo "==> (2) Reinstalling Python dependencies"
 pip install --user -r backend/requirements.txt
@@ -29,13 +29,14 @@ npm run build
 cd ..
 
 echo "==> (4) Checking if migration downgrade is needed"
-# If the current (failing) commit added a migration, downgrade by 1
-MIGRATION_CHANGED=$(git diff "$TARGET_COMMIT" "$CURRENT_COMMIT" \
-  --name-only -- backend/alembic_migrations/versions/ | wc -l)
-if [ "$MIGRATION_CHANGED" -gt 0 ]; then
-    echo "    Migration files changed — running flask db downgrade -1"
+# Count only migration files *added* between TARGET and CURRENT (lines starting with "A")
+NUM_ADDED_MIGRATIONS=$(git diff --name-status "$TARGET_COMMIT" "$CURRENT_COMMIT" \
+  -- backend/alembic_migrations/versions/ \
+  | grep -c '^A' || true)
+if [ "$NUM_ADDED_MIGRATIONS" -gt 0 ]; then
+    echo "    $NUM_ADDED_MIGRATIONS migration file(s) added — running flask db downgrade -${NUM_ADDED_MIGRATIONS}"
     cd backend
-    FLASK_ENV=production flask db downgrade -1
+    FLASK_ENV=production flask db downgrade "-${NUM_ADDED_MIGRATIONS}"
     cd ..
 else
     echo "    No migration changes detected — skipping downgrade"
@@ -46,7 +47,7 @@ sudo systemctl reload gunicorn
 
 echo "==> (6) Waiting for health check"
 sleep 5
-for i in $(seq 1 10); do
+for _ in $(seq 1 10); do
     STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
       --max-time 10 http://127.0.0.1:5000/api/health || echo "000")
     if [ "$STATUS" = "200" ]; then

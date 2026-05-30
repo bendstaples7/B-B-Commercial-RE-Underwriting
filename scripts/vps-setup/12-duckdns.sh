@@ -60,7 +60,8 @@ if [[ -z "${DUCKDNS_TOKEN:-}" ]]; then
     echo ""
     echo "  Your DuckDNS token is shown on your account page at https://www.duckdns.org"
     echo -n "  Enter your DuckDNS token: "
-    read -r DUCKDNS_TOKEN
+    read -rs DUCKDNS_TOKEN
+    echo ""
 fi
 
 if [[ -z "${DUCKDNS_TOKEN:-}" ]]; then
@@ -131,7 +132,7 @@ step "Step 2: Writing ${DUCK_SCRIPT}..."
 # Leaving &ip= empty tells DuckDNS to auto-detect the VPS public IP.
 cat > "${DUCK_SCRIPT}" << DUCK_SH
 #!/usr/bin/env bash
-echo url="https://www.duckdns.org/update?domains=${DUCKDNS_SUBDOMAIN}&token=${DUCKDNS_TOKEN}&ip=" | curl -k -o ${DUCK_LOG} -K -
+echo url="https://www.duckdns.org/update?domains=${DUCKDNS_SUBDOMAIN}&token=${DUCKDNS_TOKEN}&ip=" | curl -o ${DUCK_LOG} -K -
 DUCK_SH
 
 info "  ✓ ${DUCK_SCRIPT} written."
@@ -141,12 +142,12 @@ info "  ✓ ${DUCK_SCRIPT} written."
 # =============================================================================
 step "Step 3: Making ${DUCK_SCRIPT} executable..."
 
-chmod +x "${DUCK_SCRIPT}"
-info "  ✓ chmod +x applied to ${DUCK_SCRIPT}"
+chmod 700 "${DUCK_SCRIPT}"
+info "  ✓ chmod 700 applied to ${DUCK_SCRIPT}"
 
 # Verify permissions
 PERMS=$(stat -c "%a" "${DUCK_SCRIPT}")
-info "  ✓ Permissions: ${PERMS} (expected: 755 or similar)"
+info "  ✓ Permissions: ${PERMS} (expected: 700)"
 
 # =============================================================================
 # Step 4: Add cron job to deploy user's crontab (Requirement 5.2)
@@ -240,8 +241,7 @@ echo "  5. Verify DNS propagation (may take a few minutes):"
 echo "     nslookup ${DOMAIN}"
 echo "     # Should resolve to your VPS public IP"
 echo ""
-echo "  Your DuckDNS token (for reference):"
-echo "  Token: ${DUCKDNS_TOKEN}"
+echo "  Your DuckDNS token is stored in ${DUCK_SCRIPT} (owner-read only)."
 echo ""
 echo "  The cron job will keep the DNS record current automatically"
 echo "  every 5 minutes if the VPS IP ever changes."
@@ -256,7 +256,7 @@ echo "  Task 6.1 complete — DuckDNS configured"
 echo "============================================================"
 echo "  Directory:    ${DUCKDNS_DIR}  ✓"
 echo "  Script:       ${DUCK_SCRIPT}  ✓"
-echo "  Executable:   chmod +x applied  ✓"
+echo "  Executable:   chmod 700 applied  ✓"
 echo "  Cron job:     */5 * * * *  ✓"
 echo "  Test run:     completed (see response above)"
 echo ""

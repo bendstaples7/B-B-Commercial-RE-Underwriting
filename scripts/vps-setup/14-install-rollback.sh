@@ -7,6 +7,18 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Preflight: must run as root
+if [[ $EUID -ne 0 ]]; then
+    echo "[ERROR] This script must be run as root (use: sudo bash $0)" >&2
+    exit 1
+fi
+
+# Preflight: source rollback.sh must exist
+if [[ ! -f "$SCRIPT_DIR/rollback.sh" ]]; then
+    echo "[ERROR] Source file not found: $SCRIPT_DIR/rollback.sh" >&2
+    exit 1
+fi
+
 echo "==> Installing rollback script to /home/deploy/rollback.sh"
 cp "$SCRIPT_DIR/rollback.sh" /home/deploy/rollback.sh
 chown deploy:deploy /home/deploy/rollback.sh

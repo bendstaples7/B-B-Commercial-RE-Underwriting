@@ -187,7 +187,9 @@ else
     # Patterns that are ACCEPTABLE (non-fatal) per Requirement 2.6:
     #   - Missing Neon-internal roles (neon_superuser, neondb_owner, etc.)
     #   - Duplicate objects from idempotent migrations
-    ACCEPTABLE_PATTERN='role "neon|role "neondb|duplicate key value|already exists|could not execute query'
+    # NOTE: "could not execute query" is intentionally excluded — it is too
+    #       broad and could mask real restore failures.
+    ACCEPTABLE_PATTERN='role "neon|role "neondb|duplicate key value|already exists'
 
     FATAL_ERRORS=$(grep "^pg_restore: error:" "${LOG_FILE}" 2>/dev/null \
         | grep -vE "${ACCEPTABLE_PATTERN}" || true)
@@ -300,7 +302,7 @@ info "  Compare these counts against the Neon source to confirm data integrity."
 # =============================================================================
 info "Step 7: Testing connectivity as '${DB_USER}'..."
 
-TABLE_COUNT=$(psql \
+TABLE_COUNT=$(PGPASSWORD="${APP_USER_PASSWORD:-}" psql \
     "postgresql://${DB_USER}@${DB_HOST}/${DB_NAME}" \
     -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';" \
     2>/dev/null || echo "ERROR")

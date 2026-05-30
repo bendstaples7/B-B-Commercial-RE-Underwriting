@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # =============================================================================
 # 07-create-env-file.sh
 # VPS Setup — Task 3.1: Write /home/deploy/app/backend/.env with all required
@@ -102,6 +102,9 @@ if [[ ${#JWT_SECRET_KEY} -ne 64 ]]; then
 fi
 info "  ✓ JWT_SECRET_KEY generated."
 
+# ── URL-encode the password for safe embedding in DATABASE_URL ────────────────
+ENCODED_PASSWORD=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$APP_USER_PASSWORD")
+
 # ── Write the .env file ───────────────────────────────────────────────────────
 info "Writing $ENV_FILE ..."
 
@@ -116,7 +119,7 @@ cat > "$ENV_FILE" <<ENV
 
 # ── Database ──────────────────────────────────────────────────────────────────
 # Local PostgreSQL — no sslmode needed for loopback connections
-DATABASE_URL=postgresql://app_user:${APP_USER_PASSWORD}@localhost:5432/real_estate_analysis
+DATABASE_URL=postgresql://app_user:${ENCODED_PASSWORD}@localhost:5432/real_estate_analysis
 
 # ── Flask ─────────────────────────────────────────────────────────────────────
 SECRET_KEY=${SECRET_KEY}
@@ -267,6 +270,7 @@ echo ""
 echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo "  NEXT STEP: After filling in all API keys, proceed to"
-echo "  08-gunicorn-service.sh (Task 4.1) to install the systemd service."
+echo "  08-alembic-migrate.sh (Task 2.3) to apply database migrations,"
+echo "  then 09-gunicorn-service.sh (Task 4.1) to install the systemd service."
 echo ""
 echo "============================================================"

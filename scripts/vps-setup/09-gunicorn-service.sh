@@ -248,9 +248,9 @@ info "Step 8: Verifying Gunicorn is listening on 127.0.0.1:5000..."
 
 # ss is available on Ubuntu 22.04; fall back to netstat if needed
 if command -v ss &>/dev/null; then
-    LISTENING=$(ss -tlnp 2>/dev/null | grep ':5000' || echo "")
+    LISTENING=$(ss -tlnp 2>/dev/null | grep '127.0.0.1:5000' || echo "")
 else
-    LISTENING=$(netstat -tlnp 2>/dev/null | grep ':5000' || echo "")
+    LISTENING=$(netstat -tlnp 2>/dev/null | grep '127.0.0.1:5000' || echo "")
 fi
 
 if [[ -n "${LISTENING}" ]]; then
@@ -307,8 +307,8 @@ echo "    systemctl restart gunicorn  # full restart"
 echo ""
 echo "  NEXT STEPS:"
 echo "    4.2  Grant deploy passwordless sudo for systemctl reload gunicorn"
-echo "         sudo bash ${APP_DIR}/scripts/vps-setup/10-sudoers-deploy.sh"
+echo "         sudo bash ${APP_DIR}/scripts/vps-setup/11-sudoers-deploy.sh"
 echo ""
 echo "    5.1  Build the React frontend"
-echo "         sudo -u deploy bash ${APP_DIR}/scripts/vps-setup/11-frontend-build.sh"
+echo "         sudo -u deploy bash ${APP_DIR}/scripts/vps-setup/10-build-frontend.sh"
 echo "============================================================"

@@ -91,8 +91,7 @@ ls -la "$APP_DIR"
 # We sample the top-level entries; a full recursive check would be slow on
 # large repos, so we verify the root and a few key subdirectories.
 WRONG_OWNER=$(find "$APP_DIR" -maxdepth 3 \
-    ! -user "$DEPLOY_USER" \
-    ! -group "$DEPLOY_USER" \
+    \( ! -user "$DEPLOY_USER" -o ! -group "$DEPLOY_USER" \) \
     -print 2>/dev/null | head -5)
 
 if [[ -n "$WRONG_OWNER" ]]; then

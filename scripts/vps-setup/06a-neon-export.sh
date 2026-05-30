@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # =============================================================================
 # 06a-neon-export.sh
 # VPS Setup — Task 2.2 (Part A): Export data from Neon and copy to VPS.
@@ -158,10 +158,10 @@ echo "  Local dump:   ${DUMP_PATH}"
 echo "  Remote dump:  ${VPS_USER}@${VPS_IP}:${VPS_DEST_PATH}"
 echo ""
 echo "  NEXT STEP: SSH to the VPS and run:"
-echo "    bash /home/${VPS_USER}/scripts/vps-setup/06b-neon-restore.sh"
+echo "    bash /home/${VPS_USER}/app/scripts/vps-setup/06b-neon-restore.sh"
 echo ""
 echo "  Or copy the restore script first:"
 echo "    scp scripts/vps-setup/06b-neon-restore.sh \\"
-echo "        ${VPS_USER}@${VPS_IP}:/home/${VPS_USER}/"
-echo "    ssh ${VPS_USER}@${VPS_IP} 'bash /home/${VPS_USER}/06b-neon-restore.sh'"
+echo "        ${VPS_USER}@${VPS_IP}:/home/${VPS_USER}/app/scripts/vps-setup/"
+echo "    ssh ${VPS_USER}@${VPS_IP} 'bash /home/${VPS_USER}/app/scripts/vps-setup/06b-neon-restore.sh'"
 echo "============================================================"

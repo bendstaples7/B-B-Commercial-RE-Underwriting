@@ -42,6 +42,12 @@ fi
 info "Configuring UFW firewall..."
 
 # Ensure ufw is installed (it ships with Ubuntu 22.04 but be explicit)
+info "  Waiting for apt locks to be released before installing ufw..."
+while fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+    echo "  apt is locked by another process — waiting 5 seconds..."
+    sleep 5
+done
+info "  apt lock is free."
 apt-get install -y ufw > /dev/null
 
 # Set default policies
@@ -62,6 +68,12 @@ info "Enabling UFW in background (avoids SSH session drop)..."
 nohup bash -c 'sleep 2 && ufw --force enable' >/tmp/ufw-enable.log 2>&1 &
 ok "UFW enable scheduled (will activate in ~2 seconds)"
 sleep 4  # Wait for UFW to activate before continuing
+
+# Verify UFW actually became active
+if ! ufw status | grep -q "Status: active"; then
+    die "UFW failed to activate — check /tmp/ufw-enable.log for details."
+fi
+ok "UFW is active"
 
 # Show active rules for verification
 info "Current UFW status:"

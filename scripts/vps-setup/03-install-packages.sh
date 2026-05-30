@@ -71,7 +71,11 @@ if [[ -f "$NODESOURCE_LIST" ]] && grep -q "node_20" "$NODESOURCE_LIST" 2>/dev/nu
     info "NodeSource Node.js 20 repository already configured — skipping."
 else
     info "Adding NodeSource repository for Node.js 20..."
-    # Download and run the official NodeSource setup script for Node 20
+    # NOTE: Piping a remote script into bash as root carries supply-chain risk.
+    # This is the official NodeSource installation method documented at
+    # https://github.com/nodesource/distributions — the URL is HTTPS and the
+    # script only adds the apt repository (it does not install packages).
+    # Verify the script contents manually before running in sensitive environments.
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
     info "NodeSource repository added."
 fi
