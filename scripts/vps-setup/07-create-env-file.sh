@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # =============================================================================
 # 07-create-env-file.sh
 # VPS Setup — Task 3.1: Write /home/deploy/app/backend/.env with all required

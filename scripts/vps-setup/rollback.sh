@@ -16,20 +16,10 @@ TARGET_COMMIT="${1:-$(git rev-parse HEAD~1)}"
 
 echo "[$TIMESTAMP] Rollback initiated: $CURRENT_COMMIT -> $TARGET_COMMIT" | tee -a "$LOG_FILE"
 
-echo "==> (1) Checking out previous commit: $TARGET_COMMIT"
-git checkout -B main "$TARGET_COMMIT"
-
-echo "==> (2) Reinstalling Python dependencies"
-pip install --user -r backend/requirements.txt
-
-echo "==> (3) Rebuilding frontend"
-cd frontend
-npm ci
-npm run build
-cd ..
-
-echo "==> (4) Checking if migration downgrade is needed"
-# Count only migration files *added* between TARGET and CURRENT (lines starting with "A")
+echo "==> (1) Checking if migration downgrade is needed"
+# Count only migration files *added* between TARGET and CURRENT (lines starting with "A").
+# This must run BEFORE git checkout so we use the current working tree's migration files
+# and Alembic env to perform the downgrade.
 NUM_ADDED_MIGRATIONS=$(git diff --name-status "$TARGET_COMMIT" "$CURRENT_COMMIT" \
   -- backend/alembic_migrations/versions/ \
   | grep -c '^A' || true)
@@ -41,6 +31,18 @@ if [ "$NUM_ADDED_MIGRATIONS" -gt 0 ]; then
 else
     echo "    No migration changes detected — skipping downgrade"
 fi
+
+echo "==> (2) Checking out previous commit: $TARGET_COMMIT"
+git checkout -B main "$TARGET_COMMIT"
+
+echo "==> (3) Reinstalling Python dependencies"
+pip install --user -r backend/requirements.txt
+
+echo "==> (4) Rebuilding frontend"
+cd frontend
+npm ci
+npm run build
+cd ..
 
 echo "==> (5) Reloading Gunicorn"
 sudo systemctl reload gunicorn
