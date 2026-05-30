@@ -37,6 +37,7 @@ jobs:
         run: |
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
             "set -euo pipefail
+            export PATH=$PATH:/home/deploy/.local/bin
             cd /home/deploy/app
 
             echo '==> (1) Checkout triggering SHA: $TARGET_SHA'
