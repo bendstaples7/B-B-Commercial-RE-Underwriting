@@ -56,6 +56,7 @@ jobs:
 
             echo '==> (4) Run database migrations'
             cd backend
+            set -a && source .env && set +a
             FLASK_ENV=production flask db upgrade head || { echo 'FAILED: flask db upgrade'; exit 1; }
             cd ..
 
