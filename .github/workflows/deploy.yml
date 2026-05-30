@@ -29,7 +29,7 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          ssh -o StrictHostKeyChecking=no $VPS_USER@$VPS_HOST \
+          ssh $VPS_USER@$VPS_HOST \
             "set -euo pipefail
             cd /home/deploy/app
 

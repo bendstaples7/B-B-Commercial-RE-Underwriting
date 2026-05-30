@@ -8,6 +8,6 @@
   },
   "then": {
     "type": "askAgent",
-    "prompt": "If the user is asking for a PR description, commit message, or mentions pushing to GitHub, ensure you format the ENTIRE PR description inside a markdown code block (```markdown ... ```) so it can be easily copied and pasted into GitHub. Include all sections like title, description, changes, and any other relevant information within the code block."
+    "prompt": "If the user is asking for a PR description, commit message, or mentions pushing to GitHub, ensure you format the ENTIRE PR description inside a single fenced code block so it can be easily copied and pasted into GitHub. Include all sections like title, description, changes, and any other relevant information within the code block.\n\nCRITICAL FORMATTING RULE: The PR description may contain code examples with triple backticks (```). To prevent nested code fences from breaking the outer block, you MUST use FOUR backticks (````) to open and close the outer code block, like this:\n\n````markdown\n## PR Title\n\n### Section\nContent here, including any code blocks with triple backticks inside.\n````\n\nNEVER use triple backticks (```) for the outer wrapper — always use four backticks (````) so nested code examples don't break the block."
   }
 }
