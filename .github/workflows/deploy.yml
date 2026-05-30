@@ -1,0 +1,81 @@
+# .github/workflows/deploy.yml
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - name: Load SSH key
+        uses: webfactory/ssh-agent@dc4b1a57a6ccd19b7610d1d1b9dba45b5c720369
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_KEY }}
+
+      - name: Add VPS to known hosts
+        run: ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          GITHUB_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          # Pass only the target SHA as a positional argument — no secrets in args.
+          # DATABASE_URL is sourced from the .env file already on the VPS.
+          ssh $VPS_USER@$VPS_HOST "bash -s" -- "${GITHUB_SHA}" << 'ENDSSH'
+            set -euo pipefail
+            TARGET_SHA="$1"
+            cd /home/deploy/app
+
+            echo "==> (1) Checkout triggering SHA: ${TARGET_SHA}"
+            git fetch origin main
+            git checkout "${TARGET_SHA}"
+
+            echo "==> (2) Install Python dependencies"
+            pip install --user -r backend/requirements.txt
+
+            echo "==> (3) Build frontend"
+            cd frontend
+            npm ci
+            npm run build
+            cd ..
+
+            echo "==> (4) Run database migrations"
+            cd backend
+            # DATABASE_URL is loaded from .env by Flask — no need to pass it explicitly
+            FLASK_ENV=production flask db upgrade head
+            cd ..
+
+            echo "==> (5) Reload Gunicorn (zero-downtime)"
+            sudo systemctl reload gunicorn
+
+            echo "==> Deploy complete"
+          ENDSSH
+
+      - name: Post-deploy health check
+        env:
+          VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+        run: |
+          echo "Waiting for Gunicorn to finish graceful reload..."
+          sleep 5
+          for i in $(seq 1 10); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              --max-time 10 \
+              "https://${VPS_SUBDOMAIN}.duckdns.org/api/health" || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "Health check passed."
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Health check failed after 10 attempts."
+          exit 1
