@@ -711,6 +711,7 @@ export interface DealSummary {
   unit_count: number
   purchase_price: string
   status: string
+  priority_score: string | null
   created_at: string | null
   updated_at: string | null
 }
@@ -1879,4 +1880,50 @@ export interface AdminLeadListResponse {
   total_count: number
   page: number
   page_size: number
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline Stage Config & Kanban Types
+// ---------------------------------------------------------------------------
+
+export interface PipelineStage {
+  id: number
+  stage_name: string
+  order: number
+  weight: number
+}
+
+export interface DealKanbanCard {
+  id: number
+  property_address: string
+  purchase_price: string
+  unit_count: number
+  status: string
+  priority_score: string | null
+  created_by_user_id: string
+  property_city: string | null
+  property_state: string | null
+  close_date: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export type KanbanSortField = 'purchase_price' | 'priority_score'
+
+export interface KanbanFilters {
+  assigneeUserId?: string
+  valueMin?: number
+  valueMax?: number
+  closingDateFrom?: string
+  closingDateTo?: string
+}
+
+export interface KanbanState {
+  stages: PipelineStage[]
+  dealsByStage: Record<string, DealKanbanCard[]>
+  filters: KanbanFilters
+  sortField: KanbanSortField
+  sortDirection: 'asc' | 'desc'
+  isLoading: boolean
+  error: string | null
 }

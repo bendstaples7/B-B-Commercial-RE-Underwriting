@@ -93,6 +93,8 @@ import { MissingPropertyMatchQueue } from './components/MissingPropertyMatchQueu
 import { LeadCommandCenter } from './components/LeadCommandCenter'
 import { AdminPanel } from './components/AdminPanel'
 import AdminUserDetail from './components/AdminUserDetail'
+import { DealKanbanPage } from './pages/DealKanbanPage'
+import { PipelineConfigAdminPage } from './pages/PipelineConfigAdminPage'
 import type { QueueCounts } from './types'
 
 const DRAWER_WIDTH = 240
@@ -1579,6 +1581,9 @@ function App() {
           {/* Admin routes — guarded by is_admin claim */}
           <Route path="/admin" element={user?.is_admin ? <AdminPanel /> : <Navigate to="/" replace />} />
           <Route path="/admin/users/:userId" element={user?.is_admin ? <AdminUserDetail /> : <Navigate to="/" replace />} />
+          <Route path="/admin/pipeline-stages" element={user?.is_admin ? <PipelineConfigAdminPage /> : <Navigate to="/" replace />} />
+          {/* Kanban view */}
+          <Route path="/kanban" element={<DealKanbanPage />} />
           {/* Old /leads/views/* — redirect to new /queues/* routes */}
           <Route path="/leads/views/previously-warm" element={<Navigate to="/queues/previously-warm" replace />} />
           <Route path="/leads/views/needs-review" element={<Navigate to="/queues/needs-review" replace />} />
