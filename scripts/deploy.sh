@@ -33,7 +33,8 @@ rollback() {
     git checkout -- . 2>/dev/null || { echo "ROLLBACK WARNING: git checkout -- . failed"; ROLLBACK_FAILED=1; }
     git checkout "$PREVIOUS_SHA" 2>/dev/null || { echo "ROLLBACK WARNING: git checkout $PREVIOUS_SHA failed"; ROLLBACK_FAILED=1; }
     pip install --user -r backend/requirements.txt -q 2>/dev/null || { echo "ROLLBACK WARNING: pip install failed"; ROLLBACK_FAILED=1; }
-    (cd frontend && npm ci --silent 2>/dev/null && npm run build 2>/dev/null) || { echo "ROLLBACK WARNING: frontend build failed"; ROLLBACK_FAILED=1; }
+    # Note: frontend dist is not rebuilt during rollback — the previous dist remains on disk
+    # which is acceptable since the rollback restores the previous backend code.
     sudo systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
     if [ "$ROLLBACK_FAILED" -eq 0 ]; then
         echo "Rollback to $PREVIOUS_SHA complete."
@@ -76,12 +77,17 @@ echo "==> (2) Install Python dependencies"
 pip install --user -r backend/requirements.txt -q || { echo "FAILED: pip install"; exit 1; }
 echo "    Python dependencies installed"
 
-echo "==> (3) Build frontend"
-cd frontend
-npm ci || { echo "FAILED: npm ci"; exit 1; }
-npm run build || { echo "FAILED: npm run build"; exit 1; }
-cd ..
-echo "    Frontend built"
+echo "==> (3) Install frontend (pre-built on CI runner, copied to VPS)"
+# The dist/ was built on the GitHub Actions runner (7GB RAM) and copied here
+# to avoid OOM kills on the 2GB VPS. Replace the current dist with the new one.
+if [ -d "/home/deploy/frontend-dist" ]; then
+    rm -rf frontend/dist
+    mv /home/deploy/frontend-dist frontend/dist
+    echo "    Frontend dist installed from CI runner build"
+else
+    echo "FAILED: /home/deploy/frontend-dist not found — CI runner did not copy the build"
+    exit 1
+fi
 
 echo "==> (4) Run database migrations"
 cd backend
