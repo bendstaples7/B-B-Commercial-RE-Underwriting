@@ -77,6 +77,25 @@ def handle_errors(f):
     return decorated_function
 
 
+@api_bp.route('/version', methods=['GET'])
+def version():
+    """Returns the currently deployed git SHA.
+
+    Used by the CI/CD post-deploy smoke test to verify the correct
+    version of the code is running after a deployment.
+    """
+    import subprocess
+    try:
+        sha = subprocess.check_output(
+            ['git', 'rev-parse', 'HEAD'],
+            cwd='/home/deploy/app',
+            stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        sha = 'unknown'
+    return jsonify({'sha': sha}), 200
+
+
 @api_bp.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint — verifies DB connectivity, migration state, and data integrity.
