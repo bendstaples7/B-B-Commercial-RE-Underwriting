@@ -100,9 +100,11 @@ echo "==> (3) Install frontend (pre-built on CI runner, copied to VPS)"
 # and avoid a frontend/backend version mismatch (backend at PREVIOUS_SHA,
 # frontend at TARGET_SHA).
 if [ -d "/home/deploy/frontend-dist" ]; then
-    # Back up current dist for rollback
+    # Create new backup first, verify it succeeded, then remove the old backup.
+    # This order ensures rollback always has a usable dist even if the copy fails.
+    cp -r frontend/dist /home/deploy/frontend-dist-backup-new || { echo "FAILED: could not create frontend dist backup — aborting to protect rollback"; exit 1; }
     rm -rf /home/deploy/frontend-dist-backup
-    cp -r frontend/dist /home/deploy/frontend-dist-backup 2>/dev/null || true
+    mv /home/deploy/frontend-dist-backup-new /home/deploy/frontend-dist-backup
     # Install new dist
     rm -rf frontend/dist
     mv /home/deploy/frontend-dist frontend/dist
