@@ -629,6 +629,10 @@ def create_app(config_name='development'):
     from app.controllers.command_center_controller import command_center_bp
     app.register_blueprint(command_center_bp, url_prefix='/api/leads')
 
+    # Pipeline Config — stages and weights for Kanban scoring
+    from app.controllers.pipeline_config_controller import pipeline_config_bp
+    app.register_blueprint(pipeline_config_bp, url_prefix='/api')
+
     # Authentication endpoints (public — no token required for login)
     from app.controllers.auth_controller import auth_bp
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
