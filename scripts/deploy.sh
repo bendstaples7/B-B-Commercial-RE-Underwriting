@@ -91,7 +91,13 @@ elif [[ ! -x /home/deploy/backup.sh ]]; then
     echo "FAILED: /home/deploy/backup.sh exists but is not executable — check permissions"
     exit 1
 else
-    /home/deploy/backup.sh --pre-deploy || { echo "FAILED: pre-deploy backup failed — aborting deploy"; exit 1; }
+    /home/deploy/backup.sh --pre-deploy || {
+        echo "FAILED: pre-deploy backup failed — aborting deploy"
+        echo "--- backup bootstrap error log (if any) ---"
+        cat /tmp/backup_bootstrap.log 2>/dev/null || echo "(no bootstrap log found at /tmp/backup_bootstrap.log)"
+        echo "-------------------------------------------"
+        exit 1
+    }
     echo "    Pre-deploy backup complete"
 fi
 
