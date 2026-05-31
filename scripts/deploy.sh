@@ -84,13 +84,23 @@ echo "    memory: ${FREE_MEM_KB}KB available (OK)"
 
 # ── Pre-deploy backup (blocks deploy on failure) ──────────────────────────────
 echo "==> (0) Pre-deploy backup"
-if [[ -x /home/deploy/backup.sh && -f /home/deploy/backup.conf ]]; then
+BACKUP_READY=1
+if [[ ! -e /home/deploy/backup.sh ]]; then
+    echo "    WARNING: /home/deploy/backup.sh not found — skipping pre-deploy backup"
+    echo "    To enable pre-deploy backups, ensure the deploy workflow has run at least once"
+    BACKUP_READY=0
+elif [[ ! -x /home/deploy/backup.sh ]]; then
+    echo "    WARNING: /home/deploy/backup.sh exists but is not executable (check permissions)"
+    BACKUP_READY=0
+fi
+if [[ ! -f /home/deploy/backup.conf ]]; then
+    echo "    WARNING: /home/deploy/backup.conf not found — skipping pre-deploy backup"
+    echo "    Run setup-backup-dirs.sh and configure backup.conf to enable pre-deploy backups"
+    BACKUP_READY=0
+fi
+if [[ "$BACKUP_READY" -eq 1 ]]; then
     /home/deploy/backup.sh --pre-deploy || { echo "FAILED: pre-deploy backup failed — aborting deploy"; exit 1; }
     echo "    Pre-deploy backup complete"
-else
-    echo "    WARNING: backup system not fully configured — skipping pre-deploy backup"
-    [[ -x /home/deploy/backup.sh ]] || echo "    Missing: /home/deploy/backup.sh"
-    [[ -f /home/deploy/backup.conf ]] || echo "    Missing: /home/deploy/backup.conf (run setup-backup-dirs.sh and configure backup.conf)"
 fi
 
 # ── Deploy steps ─────────────────────────────────────────────────────────────
