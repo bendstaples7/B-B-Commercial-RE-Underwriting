@@ -84,13 +84,21 @@ echo "    memory: ${FREE_MEM_KB}KB available (OK)"
 
 # ── Pre-deploy backup (blocks deploy on failure) ──────────────────────────────
 echo "==> (0) Pre-deploy backup"
-if [[ -x /home/deploy/backup.sh ]]; then
-    /home/deploy/backup.sh --pre-deploy || { echo "FAILED: pre-deploy backup failed — aborting deploy"; exit 1; }
-    echo "    Pre-deploy backup complete"
-else
+if [[ ! -e /home/deploy/backup.sh ]]; then
     echo "    WARNING: /home/deploy/backup.sh not found — skipping pre-deploy backup"
-    echo "    To enable pre-deploy backups, deploy the backup scripts to /home/deploy/"
-    echo "    See: scripts/backup.sh and the database-backup-redundancy spec"
+    echo "    To enable pre-deploy backups, ensure the deploy workflow has run at least once"
+elif [[ ! -x /home/deploy/backup.sh ]]; then
+    echo "FAILED: /home/deploy/backup.sh exists but is not executable — check permissions"
+    exit 1
+else
+    /home/deploy/backup.sh --pre-deploy || {
+        echo "FAILED: pre-deploy backup failed — aborting deploy"
+        echo "--- backup bootstrap error log (if any) ---"
+        cat /tmp/backup_bootstrap.log 2>/dev/null || echo "(no bootstrap log found at /tmp/backup_bootstrap.log)"
+        echo "-------------------------------------------"
+        exit 1
+    }
+    echo "    Pre-deploy backup complete"
 fi
 
 # ── Deploy steps ─────────────────────────────────────────────────────────────
