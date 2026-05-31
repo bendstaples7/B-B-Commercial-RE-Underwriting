@@ -79,9 +79,12 @@ jobs:
           # Verify the app directory is an initialized git repository
           git -C /home/deploy/app rev-parse --git-dir > /dev/null 2>&1 \
             || MISSING="$MISSING /home/deploy/app/.git (not a git repo — run vps-setup clone step)"
-          # Verify backup.conf exists — backup.sh will fail without it
-          [ -f /home/deploy/backup.conf ] \
-            || MISSING="$MISSING /home/deploy/backup.conf (run setup-backup-dirs.sh and configure backup.conf)"
+          # Verify backup.conf exists — backup.sh will fail without it.
+          # Note: the Deploy step will auto-create a stub if missing, so this
+          # is a warning rather than a hard failure.
+          if [ ! -f /home/deploy/backup.conf ]; then
+            echo "NOTE: /home/deploy/backup.conf not found — Deploy step will create a stub automatically."
+          fi
           if [ -n "$MISSING" ]; then
             echo "ERROR: Required VPS files/directories missing:$MISSING"
             echo "The VPS may not be fully provisioned. Run the vps-setup scripts first."
