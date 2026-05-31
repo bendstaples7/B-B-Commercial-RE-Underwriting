@@ -73,11 +73,9 @@ jobs:
         run: |
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST bash << 'READINESS'
           MISSING=""
-          # backup.sh is deployed by this workflow — warn if absent from a prior run
-          # (it will be copied in the Deploy step, so this is a belt-and-suspenders check)
-          [ -f /home/deploy/app/scripts/deploy.sh ] || MISSING="$MISSING /home/deploy/app/scripts/deploy.sh"
-          [ -d /home/deploy/app ] || MISSING="$MISSING /home/deploy/app (app directory)"
-          [ -f /home/deploy/app/backend/.env ] || MISSING="$MISSING /home/deploy/app/backend/.env"
+          [ -d /home/deploy/app ]                    || MISSING="$MISSING /home/deploy/app (app directory)"
+          [ -f /home/deploy/app/backend/.env ]       || MISSING="$MISSING /home/deploy/app/backend/.env"
+          [ -d /home/deploy/app/frontend ]           || MISSING="$MISSING /home/deploy/app/frontend"
           if [ -n "$MISSING" ]; then
             echo "ERROR: Required VPS files/directories missing:$MISSING"
             echo "The VPS may not be fully provisioned. Run the vps-setup scripts first."
