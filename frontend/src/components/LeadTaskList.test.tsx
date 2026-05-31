@@ -194,7 +194,9 @@ describe('LeadTaskList', () => {
 
       await user.click(screen.getByTestId('open-task-form-btn'))
 
-      expect(screen.getByTestId('task-creation-form')).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByTestId('task-creation-form')).toBeInTheDocument()
+      })
     })
 
     it('hides the form when Cancel is clicked', async () => {
@@ -207,10 +209,14 @@ describe('LeadTaskList', () => {
       )
 
       await user.click(screen.getByTestId('open-task-form-btn'))
-      expect(screen.getByTestId('task-creation-form')).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByTestId('task-creation-form')).toBeInTheDocument()
+      })
 
       await user.click(screen.getByTestId('cancel-task-btn'))
-      expect(screen.queryByTestId('task-creation-form')).not.toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.queryByTestId('task-creation-form')).not.toBeInTheDocument()
+      })
     })
 
     it('clears form fields when form is closed and reopened', async () => {
@@ -223,11 +229,16 @@ describe('LeadTaskList', () => {
       )
 
       await user.click(screen.getByTestId('open-task-form-btn'))
+      await waitFor(() => {
+        expect(screen.getByTestId('task-title-input')).toBeInTheDocument()
+      })
       await user.type(screen.getByTestId('task-title-input'), 'My Task')
       await user.click(screen.getByTestId('cancel-task-btn'))
 
       await user.click(screen.getByTestId('open-task-form-btn'))
-      expect(screen.getByTestId('task-title-input')).toHaveValue('')
+      await waitFor(() => {
+        expect(screen.getByTestId('task-title-input')).toHaveValue('')
+      })
     })
 
     it('hides "Add Task" button while form is open', async () => {
@@ -240,7 +251,9 @@ describe('LeadTaskList', () => {
       )
 
       await user.click(screen.getByTestId('open-task-form-btn'))
-      expect(screen.queryByTestId('open-task-form-btn')).not.toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.queryByTestId('open-task-form-btn')).not.toBeInTheDocument()
+      })
     })
   })
 

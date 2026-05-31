@@ -283,12 +283,29 @@ Use this checklist when the VPS is unrecoverable and you need to rebuild from sc
    ```
    Replace `YYYY/MM/DD/<filename>` with the actual date path and filename of the most recent valid backup.
 
-5. **Restore the backup manifest** — the manifest is stored locally on the VPS. After a total VPS loss, reconstruct it from the remote backup filenames:
+5. **Restore the backup manifest** — the manifest (`backup_manifest.log`) is stored locally on the VPS and is not uploaded off-site. After a total VPS loss, the manifest is unavailable. You have two options:
+
+   **Option A — Use `restore.sh` with a reconstructed manifest entry** (recommended):
+   Create a minimal manifest entry for the downloaded backup file:
    ```bash
-   # List available remote backups to identify what's available
-   rclone ls <RCLONE_REMOTE>:<RCLONE_BUCKET>/<RCLONE_PATH_PREFIX>/
+   # Compute the SHA-256 of the downloaded backup
+   SHA256=$(sha256sum /home/deploy/backups/<filename> | awk '{print $1}')
+   SIZE=$(stat -c "%s" /home/deploy/backups/<filename>)
+   # Create a minimal manifest
+   python3 /home/deploy/backup_lib.py serialize-manifest <<EOF
+   {"filename":"<filename>","timestamp":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","size_bytes":$SIZE,"sha256":"$SHA256","integrity":"valid","type":"scheduled","remote_transferred":true,"remote_path":""}
+   EOF
+   # Append to manifest file
+   python3 /home/deploy/backup_lib.py serialize-manifest > /home/deploy/backups/backup_manifest.log
    ```
-   The manifest will be rebuilt automatically as new backups run. For the restore step, you only need the backup filename — the restore script will verify the checksum from the manifest if available, or you can skip manifest verification by running pg_restore directly if the manifest is unavailable.
+   Then run `restore.sh <filename>` normally.
+
+   **Option B — Manual restore** (when manifest reconstruction is not feasible):
+   ```bash
+   pg_restore -d real_estate_analysis --clean --if-exists /home/deploy/backups/<filename>
+   cd /home/deploy/app/backend && flask db upgrade head
+   ```
+   Note: This bypasses checksum verification. Only use this when you have high confidence in the backup file's integrity (e.g., freshly downloaded from your own off-site storage).
 
 6. **Deploy all scripts** to `/home/deploy/`:
    - `backup.sh`, `restore.sh`, `redis-backup.sh`, `wal-archive.sh`, `pg-basebackup.sh`, `daily-summary.sh`, `backup_lib.py`

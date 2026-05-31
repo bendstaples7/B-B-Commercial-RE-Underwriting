@@ -32,7 +32,10 @@ echo "==> Setting permissions on backup directories"
 chmod 700 /home/deploy/backups
 chmod 700 /home/deploy/backups/base
 chmod 700 /home/deploy/wal-archive
-chmod 750 /home/deploy/logs
+# logs: deploy owns it, postgres group can write (for wal-archive.sh)
+chown deploy:postgres /home/deploy/logs
+chmod 770 /home/deploy/logs
+echo "    logs: deploy:postgres 770 (writable by postgres for WAL archive logging)"
 
 # wal-archive must be writable by the postgres OS user (runs wal-archive.sh)
 chown deploy:postgres /home/deploy/wal-archive

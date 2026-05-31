@@ -35,11 +35,16 @@ WINDOW_START=$(date -u -d "24 hours ago" +%Y-%m-%dT%H:%M:%SZ)
 # ── Aggregate summary counts from manifest ────────────────────────────────────
 SUCCESSFUL=0
 FAILED=0
+SUMMARY_ERROR=""
 if [[ -f "$MANIFEST_FILE" ]]; then
-    SUMMARY_JSON=$(python3 /home/deploy/backup_lib.py aggregate-summary \
-        "$MANIFEST_FILE" "$WINDOW_START" "$WINDOW_END" 2>/dev/null || echo '{"successful":0,"failed":0}')
-    SUCCESSFUL=$(echo "$SUMMARY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['successful'])")
-    FAILED=$(echo "$SUMMARY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['failed'])")
+    if SUMMARY_JSON=$(python3 /home/deploy/backup_lib.py aggregate-summary \
+            "$MANIFEST_FILE" "$WINDOW_START" "$WINDOW_END" 2>&1); then
+        SUCCESSFUL=$(echo "$SUMMARY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['successful'])" 2>/dev/null || echo "0")
+        FAILED=$(echo "$SUMMARY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['failed'])" 2>/dev/null || echo "0")
+    else
+        SUMMARY_ERROR="WARNING: Failed to aggregate backup summary: $SUMMARY_JSON"
+        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $SUMMARY_ERROR" >> "$LOG_FILE"
+    fi
 fi
 
 # ── Total storage used in backup directory (MB) ───────────────────────────────
@@ -62,7 +67,8 @@ BODY="Backup Summary for $SUMMARY_DATE (window: $WINDOW_START to $WINDOW_END)
 Successful backups (last 24h): $SUCCESSFUL
 Failed backups (last 24h):     $FAILED
 Total storage used:            ${STORAGE_MB} MB
-Most recent successful backup: ${LAST_BACKUP_TS:-NONE}"
+Most recent successful backup: ${LAST_BACKUP_TS:-NONE}${SUMMARY_ERROR:+
+$SUMMARY_ERROR}"
 
 # ── Stale backup check ────────────────────────────────────────────────────────
 if [[ -n "$LAST_BACKUP_TS" ]]; then

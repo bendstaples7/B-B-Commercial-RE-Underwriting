@@ -57,6 +57,7 @@ if [[ ! -f "$PG_CONF" ]]; then
     fail "postgresql.conf not found at $PG_CONF"
 fi
 
+WAL_SETTINGS_APPENDED=0
 if grep -qE '^\s*archive_mode\s*=' "$PG_CONF"; then
     skip "WAL archiving settings already present in $PG_CONF — skipping."
 else
@@ -70,14 +71,25 @@ archive_command = '/home/deploy/wal-archive.sh %p %f'
 archive_timeout = 300
 EOF
     pass "WAL archiving settings appended to $PG_CONF"
+    WAL_SETTINGS_APPENDED=1
 fi
 
-# ── Step 3: Restart PostgreSQL (wal_level/archive_mode require restart) ───────
-log "Step 3: Restarting PostgreSQL (wal_level/archive_mode require restart)..."
-if sudo systemctl restart postgresql; then
-    pass "PostgreSQL restarted successfully."
+# ── Step 3: Restart or reload PostgreSQL depending on whether WAL settings changed ───
+log "Step 3: Applying PostgreSQL configuration changes..."
+if [[ "$WAL_SETTINGS_APPENDED" -eq 1 ]]; then
+    log "  WAL settings were appended — restarting PostgreSQL (wal_level/archive_mode require restart)..."
+    if sudo systemctl restart postgresql; then
+        pass "PostgreSQL restarted successfully."
+    else
+        fail "Failed to restart PostgreSQL. Check 'journalctl -u postgresql' for details."
+    fi
 else
-    fail "Failed to restart PostgreSQL. Check 'journalctl -u postgresql' for details."
+    log "  WAL settings already present — reloading PostgreSQL..."
+    if sudo systemctl reload postgresql; then
+        pass "PostgreSQL reloaded successfully."
+    else
+        fail "Failed to reload PostgreSQL. Check 'journalctl -u postgresql' for details."
+    fi
 fi
 
 # ── Step 4: Configure passwordless peer auth in pg_hba.conf ──────────────────

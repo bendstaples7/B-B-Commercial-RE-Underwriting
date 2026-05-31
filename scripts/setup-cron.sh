@@ -32,19 +32,20 @@ else
 fi
 
 TMPFILE="$(mktemp /tmp/deploy_crontab.XXXXXX)"
-trap 'rm -f "$TMPFILE" "${TMPFILE_NEW:-}"' EXIT
+trap 'rm -f "$TMPFILE" "${TMPFILE_NEW:-}" "${ERRTMP:-}"' EXIT
 
 # ── Load existing crontab (tolerate "no crontab for" error only) ──────────────
-$CRONTAB_READ 2>/tmp/crontab_err_$$ > "$TMPFILE" || {
-    if grep -q "no crontab for" /tmp/crontab_err_$$ 2>/dev/null; then
+ERRTMP="$(mktemp /tmp/crontab_err.XXXXXX)"
+$CRONTAB_READ 2>"$ERRTMP" > "$TMPFILE" || {
+    if grep -q "no crontab for" "$ERRTMP" 2>/dev/null; then
         : # empty crontab is fine
     else
-        cat /tmp/crontab_err_$$ >&2
-        rm -f /tmp/crontab_err_$$
+        cat "$ERRTMP" >&2
+        rm -f "$ERRTMP"
         exit 1
     fi
 }
-rm -f /tmp/crontab_err_$$
+rm -f "$ERRTMP"
 
 echo "==> Current crontab loaded ($(wc -l < "$TMPFILE") lines)"
 
