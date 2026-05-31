@@ -234,6 +234,9 @@ describe('LeadTaskList', () => {
       })
       await user.type(screen.getByTestId('task-title-input'), 'My Task')
       await user.click(screen.getByTestId('cancel-task-btn'))
+      await waitFor(() => {
+        expect(screen.queryByTestId('task-creation-form')).not.toBeInTheDocument()
+      })
 
       await user.click(screen.getByTestId('open-task-form-btn'))
       await waitFor(() => {

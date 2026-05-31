@@ -291,12 +291,10 @@ Use this checklist when the VPS is unrecoverable and you need to rebuild from sc
    # Compute the SHA-256 of the downloaded backup
    SHA256=$(sha256sum /home/deploy/backups/<filename> | awk '{print $1}')
    SIZE=$(stat -c "%s" /home/deploy/backups/<filename>)
-   # Create a minimal manifest
-   python3 /home/deploy/backup_lib.py serialize-manifest <<EOF
-   {"filename":"<filename>","timestamp":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","size_bytes":$SIZE,"sha256":"$SHA256","integrity":"valid","type":"scheduled","remote_transferred":true,"remote_path":""}
-   EOF
-   # Append to manifest file
-   python3 /home/deploy/backup_lib.py serialize-manifest > /home/deploy/backups/backup_manifest.log
+   # Pipe the JSON directly into serialize-manifest and write to the manifest file
+   echo "{\"filename\":\"<filename>\",\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"size_bytes\":$SIZE,\"sha256\":\"$SHA256\",\"integrity\":\"valid\",\"type\":\"scheduled\",\"remote_transferred\":true,\"remote_path\":\"\"}" \
+     | python3 /home/deploy/backup_lib.py serialize-manifest \
+     > /home/deploy/backups/backup_manifest.log
    ```
    Then run `restore.sh <filename>` normally.
 

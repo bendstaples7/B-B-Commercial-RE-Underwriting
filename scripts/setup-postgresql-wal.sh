@@ -33,11 +33,10 @@ CONF_FILE="/home/deploy/backup.conf"
 if [[ -f "$CONF_FILE" ]]; then
     # shellcheck source=/home/deploy/backup.conf
     source "$CONF_FILE"
-else
-    # Fallback defaults
-    PGDATABASE="${PGDATABASE:-real_estate_analysis}"
-    PGUSER="${PGUSER:-deploy}"
 fi
+# Apply defaults unconditionally — covers both the no-conf case and a partial conf
+PGDATABASE="${PGDATABASE:-real_estate_analysis}"
+PGUSER="${PGUSER:-deploy}"
 
 # ── Step 1: Detect PostgreSQL version ─────────────────────────────────────────
 log "Step 1: Detecting PostgreSQL version..."
