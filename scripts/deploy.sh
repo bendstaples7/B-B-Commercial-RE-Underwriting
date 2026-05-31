@@ -82,6 +82,11 @@ if [ "$FREE_MEM_KB" -lt 307200 ]; then
 fi
 echo "    memory: ${FREE_MEM_KB}KB available (OK)"
 
+# ── Pre-deploy backup (blocks deploy on failure) ──────────────────────────────
+echo "==> (0) Pre-deploy backup"
+/home/deploy/backup.sh --pre-deploy || { echo "FAILED: pre-deploy backup failed — aborting deploy"; exit 1; }
+echo "    Pre-deploy backup complete"
+
 # ── Deploy steps ─────────────────────────────────────────────────────────────
 echo "==> (1) Discard local changes and checkout SHA: $TARGET_SHA"
 git checkout -- . || { echo "FAILED: git reset local changes"; exit 1; }

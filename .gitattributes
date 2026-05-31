@@ -1,0 +1,4 @@
+# Ensure shell scripts always use LF line endings in the repo and on checkout
+# so they run correctly on the Linux VPS without dos2unix conversion.
+scripts/*.sh text eol=lf
+*.sh text eol=lf
