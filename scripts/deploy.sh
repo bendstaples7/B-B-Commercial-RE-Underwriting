@@ -84,8 +84,16 @@ echo "    memory: ${FREE_MEM_KB}KB available (OK)"
 
 # ── Pre-deploy backup (blocks deploy on failure) ──────────────────────────────
 echo "==> (0) Pre-deploy backup"
-/home/deploy/backup.sh --pre-deploy || { echo "FAILED: pre-deploy backup failed — aborting deploy"; exit 1; }
-echo "    Pre-deploy backup complete"
+if [[ ! -e /home/deploy/backup.sh ]]; then
+    echo "    WARNING: /home/deploy/backup.sh not found — skipping pre-deploy backup"
+    echo "    To enable pre-deploy backups, ensure the deploy workflow has run at least once"
+elif [[ ! -x /home/deploy/backup.sh ]]; then
+    echo "FAILED: /home/deploy/backup.sh exists but is not executable — check permissions"
+    exit 1
+else
+    /home/deploy/backup.sh --pre-deploy || { echo "FAILED: pre-deploy backup failed — aborting deploy"; exit 1; }
+    echo "    Pre-deploy backup complete"
+fi
 
 # ── Deploy steps ─────────────────────────────────────────────────────────────
 echo "==> (1) Discard local changes and checkout SHA: $TARGET_SHA"

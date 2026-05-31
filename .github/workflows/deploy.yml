@@ -65,6 +65,32 @@ jobs:
             "echo 'SSH connection verified'" \
           || { echo "ERROR: Cannot connect to VPS at $VPS_HOST as $VPS_USER"; exit 1; }
 
+      # ── Step 4b: Verify VPS readiness — required files exist ─────────────
+      - name: Verify VPS readiness
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST bash << 'READINESS'
+          MISSING=""
+          [ -d /home/deploy/app ]              || MISSING="$MISSING /home/deploy/app (app directory)"
+          [ -f /home/deploy/app/backend/.env ] || MISSING="$MISSING /home/deploy/app/backend/.env"
+          [ -d /home/deploy/app/frontend ]     || MISSING="$MISSING /home/deploy/app/frontend"
+          # Verify the app directory is an initialized git repository
+          git -C /home/deploy/app rev-parse --git-dir > /dev/null 2>&1 \
+            || MISSING="$MISSING /home/deploy/app/.git (not a git repo — run vps-setup clone step)"
+          if [ -n "$MISSING" ]; then
+            echo "ERROR: Required VPS files/directories missing:$MISSING"
+            echo "The VPS may not be fully provisioned. Run the vps-setup scripts first."
+            exit 1
+          fi
+          # deploy.sh is copied by this workflow — warn if absent (first deploy after provisioning)
+          if [ ! -f /home/deploy/deploy.sh ]; then
+            echo "NOTE: /home/deploy/deploy.sh not yet present — will be copied in the Deploy step."
+          fi
+          echo "VPS readiness check passed."
+          READINESS
+
       # ── Step 5: Checkout repo, build frontend on runner, deploy ──────────
       - name: Checkout repo (to get deploy script and build frontend)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -88,6 +114,17 @@ jobs:
         run: |
           # Copy deploy script
           scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
+          # Copy backup scripts and library (idempotent — safe to overwrite on every deploy)
+          scp -i ~/.ssh/id_deploy scripts/backup.sh $VPS_USER@$VPS_HOST:/home/deploy/backup.sh
+          scp -i ~/.ssh/id_deploy scripts/restore.sh $VPS_USER@$VPS_HOST:/home/deploy/restore.sh
+          scp -i ~/.ssh/id_deploy scripts/redis-backup.sh $VPS_USER@$VPS_HOST:/home/deploy/redis-backup.sh
+          scp -i ~/.ssh/id_deploy scripts/wal-archive.sh $VPS_USER@$VPS_HOST:/home/deploy/wal-archive.sh
+          scp -i ~/.ssh/id_deploy scripts/pg-basebackup.sh $VPS_USER@$VPS_HOST:/home/deploy/pg-basebackup.sh
+          scp -i ~/.ssh/id_deploy scripts/daily-summary.sh $VPS_USER@$VPS_HOST:/home/deploy/daily-summary.sh
+          scp -i ~/.ssh/id_deploy backup_lib.py $VPS_USER@$VPS_HOST:/home/deploy/backup_lib.py
+          # Set correct permissions on backup scripts
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
+            "chmod 750 /home/deploy/backup.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh && chmod 755 /home/deploy/wal-archive.sh && chmod 644 /home/deploy/backup_lib.py"
           # Remove any stale frontend-dist from previous runs, then copy fresh build
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "rm -rf /home/deploy/frontend-dist"
           scp -i ~/.ssh/id_deploy -r frontend/dist $VPS_USER@$VPS_HOST:/home/deploy/frontend-dist
