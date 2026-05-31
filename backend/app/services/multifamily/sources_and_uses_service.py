@@ -165,8 +165,18 @@ def build_sources_and_uses(
     # Compute funding source origination fees from draws
     funding_source_origination_fees = compute_origination_fees(draws, sources_by_type)
 
-    # Final total_uses includes funding_source_origination_fees
-    total_uses = quantize_money(base_uses + funding_source_origination_fees)
+    # Final total_uses: sum all raw components in a single quantize call to avoid
+    # double-rounding.  Using `base_uses + funding_source_origination_fees` would
+    # first round the sub-total and then add the fee, which can shift the result
+    # by $0.01 when the raw sum lands exactly on a half-cent boundary.
+    total_uses = quantize_money(
+        purchase_price
+        + closing_costs
+        + rehab_budget_total
+        + loan_origination_fees
+        + funding_source_origination_fees
+        + interest_reserve
+    )
 
     # Final initial_cash_investment
     initial_cash_investment = quantize_money(total_uses - loan_amount)
