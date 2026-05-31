@@ -31,17 +31,28 @@ else
     CRONTAB_LIST="crontab -l"
 fi
 
-TMPFILE="/tmp/deploy_crontab_$$"
+TMPFILE="$(mktemp /tmp/deploy_crontab.XXXXXX)"
+trap 'rm -f "$TMPFILE" "${TMPFILE_NEW:-}"' EXIT
 
-# ── Load existing crontab (ignore error if none exists yet) ───────────────────
-$CRONTAB_READ 2>/dev/null > "$TMPFILE" || true
+# ── Load existing crontab (tolerate "no crontab for" error only) ──────────────
+$CRONTAB_READ 2>/tmp/crontab_err_$$ > "$TMPFILE" || {
+    if grep -q "no crontab for" /tmp/crontab_err_$$ 2>/dev/null; then
+        : # empty crontab is fine
+    else
+        cat /tmp/crontab_err_$$ >&2
+        rm -f /tmp/crontab_err_$$
+        exit 1
+    fi
+}
+rm -f /tmp/crontab_err_$$
 
 echo "==> Current crontab loaded ($(wc -l < "$TMPFILE") lines)"
 
 # ── Ensure MAILTO="" is present (suppress duplicate email delivery) ───────────
 if ! grep -qF 'MAILTO=""' "$TMPFILE"; then
     # Prepend MAILTO at the top of the file
-    echo 'MAILTO=""' | cat - "$TMPFILE" > "${TMPFILE}.new" && mv "${TMPFILE}.new" "$TMPFILE"
+    TMPFILE_NEW="$(mktemp /tmp/deploy_crontab.XXXXXX)"
+    echo 'MAILTO=""' | cat - "$TMPFILE" > "$TMPFILE_NEW" && mv "$TMPFILE_NEW" "$TMPFILE"
     echo "==> Added MAILTO=\"\" to suppress duplicate email delivery"
 else
     echo "==> MAILTO=\"\" already present — skipping"
@@ -120,9 +131,6 @@ check_entry "0[[:space:]]+10[[:space:]]+\*[[:space:]]+\*[[:space:]]+\*.*backup\.
 check_entry "0[[:space:]]+18[[:space:]]+\*[[:space:]]+\*[[:space:]]+\*.*backup\.sh"  "backup.sh at 18:00 UTC"
 check_entry "0[[:space:]]+1[[:space:]]+\*[[:space:]]+\*[[:space:]]+0.*pg-basebackup\.sh" "pg-basebackup.sh at Sunday 01:00 UTC"
 check_entry "30[[:space:]]+0[[:space:]]+\*[[:space:]]+\*[[:space:]]+\*.*daily-summary\.sh" "daily-summary.sh at 00:30 UTC"
-
-# ── Clean up temp file ────────────────────────────────────────────────────────
-rm -f "$TMPFILE"
 
 # ── Final result ──────────────────────────────────────────────────────────────
 echo ""

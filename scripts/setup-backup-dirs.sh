@@ -28,6 +28,23 @@ chown -R deploy:deploy /home/deploy/backups \
 echo "    Ownership set to deploy:deploy"
 
 echo ""
+echo "==> Setting permissions on backup directories"
+chmod 700 /home/deploy/backups
+chmod 700 /home/deploy/backups/base
+chmod 700 /home/deploy/wal-archive
+chmod 750 /home/deploy/logs
+
+# wal-archive must be writable by the postgres OS user (runs wal-archive.sh)
+chown deploy:postgres /home/deploy/wal-archive
+chmod 770 /home/deploy/wal-archive
+echo "    wal-archive: deploy:postgres 770 (writable by postgres for WAL archiving)"
+
+echo ""
+echo "    NOTE: After deploying wal-archive.sh, run:"
+echo "      chmod 755 /home/deploy/wal-archive.sh"
+echo "      (postgres OS user must be able to execute it via archive_command)"
+
+echo ""
 echo "==> Setting permissions on $CONF_FILE"
 if [[ ! -f "$CONF_FILE" ]]; then
     echo "ERROR: $CONF_FILE does not exist."

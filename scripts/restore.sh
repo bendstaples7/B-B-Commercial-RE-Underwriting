@@ -15,6 +15,15 @@ BACKUP_FILENAME="$1"
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] restore.sh starting — target: $BACKUP_FILENAME"
 
 # ── Load configuration ────────────────────────────────────────────────────────
+# Verify backup.conf permissions before sourcing
+CONF_STAT="$(stat -c "%a %U:%G" /home/deploy/backup.conf 2>/dev/null)" || {
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: Cannot stat /home/deploy/backup.conf" >&2
+    exit 1
+}
+if [[ "$CONF_STAT" != "600 deploy:deploy" ]]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: /home/deploy/backup.conf has wrong permissions: $CONF_STAT (expected 600 deploy:deploy)" >&2
+    exit 1
+fi
 # shellcheck source=/home/deploy/backup.conf
 source /home/deploy/backup.conf
 
@@ -26,6 +35,13 @@ MANIFEST_ENTRY=$(python3 /home/deploy/backup_lib.py lookup-manifest "$BACKUP_DIR
 }
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] manifest lookup complete"
+
+# ── Manifest integrity check ──────────────────────────────────────────────────
+MANIFEST_INTEGRITY=$(echo "$MANIFEST_ENTRY" | python3 -c "import json,sys; print(json.load(sys.stdin).get('integrity', 'unknown'))")
+if [[ "$MANIFEST_INTEGRITY" != "valid" ]]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: manifest entry for '$BACKUP_FILENAME' has integrity='$MANIFEST_INTEGRITY' (not 'valid') — aborting without modifying database" >&2
+    exit 1
+fi
 
 # ── Checksum verification ─────────────────────────────────────────────────────
 # Requirement 8.3: abort with both checksums if mismatch

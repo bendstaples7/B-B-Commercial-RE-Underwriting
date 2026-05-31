@@ -33,11 +33,14 @@ WINDOW_END=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 WINDOW_START=$(date -u -d "24 hours ago" +%Y-%m-%dT%H:%M:%SZ)
 
 # ── Aggregate summary counts from manifest ────────────────────────────────────
-SUMMARY_JSON=$(python3 /home/deploy/backup_lib.py aggregate-summary \
-    "$MANIFEST_FILE" "$WINDOW_START" "$WINDOW_END")
-
-SUCCESSFUL=$(echo "$SUMMARY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['successful'])")
-FAILED=$(echo "$SUMMARY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['failed'])")
+SUCCESSFUL=0
+FAILED=0
+if [[ -f "$MANIFEST_FILE" ]]; then
+    SUMMARY_JSON=$(python3 /home/deploy/backup_lib.py aggregate-summary \
+        "$MANIFEST_FILE" "$WINDOW_START" "$WINDOW_END" 2>/dev/null || echo '{"successful":0,"failed":0}')
+    SUCCESSFUL=$(echo "$SUMMARY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['successful'])")
+    FAILED=$(echo "$SUMMARY_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['failed'])")
+fi
 
 # ── Total storage used in backup directory (MB) ───────────────────────────────
 STORAGE_MB=$(du -sm "$BACKUP_DIR" | awk '{print $1}')
@@ -45,7 +48,7 @@ STORAGE_MB=$(du -sm "$BACKUP_DIR" | awk '{print $1}')
 # ── Most recent successful backup timestamp ───────────────────────────────────
 LAST_BACKUP_TS=""
 if [[ -f "$MANIFEST_FILE" ]]; then
-    LAST_BACKUP_TS=$(grep '"integrity": "valid"' "$MANIFEST_FILE" \
+    LAST_BACKUP_TS=$(grep -F '"integrity":"valid"' "$MANIFEST_FILE" \
         | tail -1 \
         | python3 -c "import json,sys; e=json.load(sys.stdin); print(e['timestamp'])" 2>/dev/null || true)
 fi

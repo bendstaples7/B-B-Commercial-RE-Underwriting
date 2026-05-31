@@ -30,7 +30,7 @@ This feature implements multiple redundant backup layers for the B and B Real Es
 
 #### Acceptance Criteria
 
-1. THE Backup_System SHALL create a compressed PostgreSQL dump of the `real_estate_analysis` database using `pg_dump --format=custom` via a cron job or systemd timer scheduled to run at 02:00 UTC daily.
+1. THE Backup_System SHALL create a compressed PostgreSQL dump of the `real_estate_analysis` database using `pg_dump --format=custom` via a cron job or systemd timer scheduled to run at least once daily, starting at 02:00 UTC.
 2. WHEN a local backup completes successfully, THE Backup_System SHALL store the dump file in `/home/deploy/backups/` with a filename that includes the UTC timestamp in the format `backup_YYYY-MM-DD_HH-MM-SS.dump`.
 3. WHEN a local backup completes successfully, THE Backup_System SHALL write an entry to `/home/deploy/backups/backup_manifest.log` recording the filename, UTC timestamp, size in bytes of the dump file as stored on disk, and SHA-256 checksum of the dump file.
 4. WHEN the current backup run completes successfully, THE Backup_System SHALL delete local backup files in `/home/deploy/backups/` older than 30 days; IF the current backup run fails, THEN THE Backup_System SHALL skip deletion to preserve the most recent available backups.

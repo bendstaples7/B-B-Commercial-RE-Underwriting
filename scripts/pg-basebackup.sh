@@ -37,8 +37,9 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] pg-basebackup.sh starting — output: $OU
 # -Xs: stream WAL segments during backup (avoids needing extra WAL retention)
 # -P: show progress
 # -U: connect as deploy user
-if ! pg_basebackup -D "$OUTPUT_DIR" -Fp -Xs -P -U deploy; then
-    BASEBACKUP_EXIT=$?
+BASEBACKUP_EXIT=0
+pg_basebackup -D "$OUTPUT_DIR" -Fp -Xs -P -U deploy || BASEBACKUP_EXIT=$?
+if [[ "$BASEBACKUP_EXIT" -ne 0 ]]; then
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: pg_basebackup failed with exit code $BASEBACKUP_EXIT — output dir: $OUTPUT_DIR" >> "$LOG_FILE"
     send_alert \
         "pg_basebackup failed" \

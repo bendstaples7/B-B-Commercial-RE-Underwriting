@@ -286,3 +286,44 @@ class TestDispatchTransferMethod:
         assert dispatch_transfer_method("rclone") == "rclone"
         assert dispatch_transfer_method("s3") == "s3"
         assert dispatch_transfer_method("rsync") == "rsync"
+
+
+# ---------------------------------------------------------------------------
+# 12. parse_manifest_entry — non-object JSON raises ValueError
+# ---------------------------------------------------------------------------
+
+class TestParseManifestEntry:
+    """Regression tests for parse_manifest_entry validation."""
+
+    def test_non_object_json_string_raises_value_error(self):
+        from backup_lib import parse_manifest_entry
+        with pytest.raises(ValueError):
+            parse_manifest_entry('"just a string"')
+
+    def test_non_object_json_array_raises_value_error(self):
+        from backup_lib import parse_manifest_entry
+        with pytest.raises(ValueError):
+            parse_manifest_entry('[1, 2, 3]')
+
+    def test_non_object_json_number_raises_value_error(self):
+        from backup_lib import parse_manifest_entry
+        with pytest.raises(ValueError):
+            parse_manifest_entry('42')
+
+
+# ---------------------------------------------------------------------------
+# 13. filter_by_retention — negative retention_days raises ValueError
+# ---------------------------------------------------------------------------
+
+class TestFilterByRetentionValidation:
+    """Regression tests for filter_by_retention input validation."""
+
+    NOW = datetime(2025, 7, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+    def test_negative_retention_days_raises_value_error(self):
+        with pytest.raises(ValueError, match="non-negative"):
+            filter_by_retention([], self.NOW, retention_days=-1)
+
+    def test_negative_retention_days_minus_100_raises_value_error(self):
+        with pytest.raises(ValueError):
+            filter_by_retention([], self.NOW, retention_days=-100)

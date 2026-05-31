@@ -63,24 +63,18 @@ send_alert() {
     fi
 }
 
-# ── Step 2: Log script start ──────────────────────────────────────────────────
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh starting — type: $BACKUP_TYPE" >> "$LOG_FILE"
-
-# ── Step 3: Validate required config variables ────────────────────────────────
+# ── Step 2: Validate required config variables ────────────────────────────────
 # Abort without writing credential values to the log if any are missing.
 REQUIRED_VARS=(PGDATABASE BACKUP_DIR LOG_FILE REMOTE_METHOD ALERT_METHOD)
 for var in "${REQUIRED_VARS[@]}"; do
     if [[ -z "${!var:-}" ]]; then
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: Required config variable '$var' is not set — aborting" >> "$LOG_FILE"
-        # send_alert may not be fully functional if ALERT_METHOD is the missing var,
-        # but attempt it for the other cases.
-        send_alert \
-            "Backup aborted — missing config variable [$BACKUP_TYPE] [$(date -u +%Y-%m-%dT%H:%M:%SZ)]" \
-            "Required configuration variable '$var' is not set. Backup aborted." \
-            2>>"$LOG_FILE" || true
+        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: Required config variable '$var' is not set — aborting" >> /tmp/backup_bootstrap.log 2>&1 || true
         exit 1
     fi
 done
+
+# ── Step 3: Log script start ──────────────────────────────────────────────────
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh starting — type: $BACKUP_TYPE" >> "$LOG_FILE"
 
 # ── Step 4: Verify BACKUP_DIR exists and is writable ─────────────────────────
 if [[ ! -d "$BACKUP_DIR" ]] || [[ ! -w "$BACKUP_DIR" ]]; then
@@ -205,7 +199,7 @@ else
         echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: remote transfer attempt $ATTEMPT/$RETRY_MAX" >> "$LOG_FILE"
 
         TRANSFER_EXIT=0
-        rclone copy "$BACKUP_DIR/$FILENAME" "$RCLONE_REMOTE:$RCLONE_BUCKET/$REMOTE_PATH" \
+        rclone copyto "$BACKUP_DIR/$FILENAME" "$RCLONE_REMOTE:$RCLONE_BUCKET/$REMOTE_PATH" \
             --contimeout "${REMOTE_CONNECT_TIMEOUT:-30}s" \
             2>>"$LOG_FILE" || TRANSFER_EXIT=$?
 
@@ -309,3 +303,8 @@ fi
 
 # NOTE (VPS setup): After deploying this script to /home/deploy/backup.sh, run:
 #   chmod 750 /home/deploy/backup.sh
+
+# Exit non-zero if any failure occurred (ensures pre-deploy hook blocks deploy)
+if [[ "$BACKUP_FAILED" -ne 0 ]]; then
+    exit 1
+fi

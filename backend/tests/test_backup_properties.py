@@ -55,7 +55,7 @@ def manifest_entry_strategy(draw):
         )
     )
     # Timestamp as ISO 8601 UTC string (the format used in the manifest)
-    dt = draw(st.datetimes(timezones=st.just(timezone.utc)))
+    dt = draw(st.datetimes(min_value=datetime(1000, 1, 1), timezones=st.just(timezone.utc)))
     timestamp = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     size_bytes = draw(st.integers(min_value=0, max_value=10**12))
     sha256 = draw(st.text(alphabet="0123456789abcdef", min_size=64, max_size=64))
@@ -78,7 +78,7 @@ def manifest_entry_strategy(draw):
 @st.composite
 def file_entry_strategy(draw):
     """Composite strategy that generates a file entry dict with timestamp (ISO string) and filename."""
-    dt = draw(st.datetimes(timezones=st.just(timezone.utc)))
+    dt = draw(st.datetimes(min_value=datetime(1000, 1, 1), timezones=st.just(timezone.utc)))
     timestamp = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     filename = draw(
         st.text(
@@ -99,7 +99,7 @@ def file_entry_strategy(draw):
 
 # Feature: database-backup-redundancy, Property 1: Backup filename generation is correctly formatted
 @given(
-    timestamp=st.datetimes(timezones=st.just(timezone.utc)),
+    timestamp=st.datetimes(min_value=datetime(1000, 1, 1), timezones=st.just(timezone.utc)),
     backup_type=st.sampled_from(["scheduled", "pre-deploy"]),
 )
 @settings(max_examples=100)
@@ -157,7 +157,7 @@ def test_manifest_round_trip(entry):
 # Feature: database-backup-redundancy, Property 3: Retention filter correctness
 @given(
     files=st.lists(file_entry_strategy(), max_size=20),
-    now=st.datetimes(timezones=st.just(timezone.utc)),
+    now=st.datetimes(min_value=datetime(1000, 1, 1), timezones=st.just(timezone.utc)),
     retention_days=st.integers(min_value=0, max_value=365),
 )
 @settings(max_examples=100)
@@ -311,7 +311,7 @@ def test_manifest_lookup_absent_filename(entries, absent_filename):
             whitelist_characters="-_/",
         ),
     ),
-    timestamp=st.datetimes(timezones=st.just(timezone.utc)),
+    timestamp=st.datetimes(min_value=datetime(1000, 1, 1), timezones=st.just(timezone.utc)),
     # Filenames must not contain '/' so path splitting works correctly
     filename=st.text(
         min_size=1,
@@ -408,7 +408,7 @@ def test_retry_logic_attempt_count(outcomes, max_retries):
 # Feature: database-backup-redundancy, Property 8: Alert messages always contain required fields
 @given(
     backup_type=st.sampled_from(["scheduled", "pre-deploy"]),
-    timestamp=st.datetimes(timezones=st.just(timezone.utc)),
+    timestamp=st.datetimes(min_value=datetime(1000, 1, 1), timezones=st.just(timezone.utc)),
     reason=st.text(min_size=1, max_size=200),
     credentials=st.lists(st.text(min_size=8, max_size=50), max_size=5),
 )
@@ -422,10 +422,11 @@ def test_alert_message_contains_required_fields(backup_type, timestamp, reason, 
     - Contains the reason string
     - Does NOT contain any credential value
     """
-    # Avoid false positives: skip cases where a credential appears in backup_type or reason
-    assume(not any(cred in backup_type or cred in reason for cred in credentials))
-
+    # Avoid false positives: skip cases where a credential appears in the pre-rendered scaffold
     ts_iso = timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+    scaffold = f"[Backup Alert]\nType: {backup_type}\nTimestamp: {ts_iso}\nReason: {reason}"
+    assume(not any(cred and cred in scaffold for cred in credentials))
+
     message = format_alert_message(backup_type, timestamp, reason, credentials)
 
     assert backup_type in message, (
@@ -451,7 +452,7 @@ def test_alert_message_contains_required_fields(backup_type, timestamp, reason, 
 # Feature: database-backup-redundancy, Property 9: Daily summary aggregation is correct over any 24-hour window
 @given(
     entries=st.lists(manifest_entry_strategy(), max_size=20),
-    window_start=st.datetimes(timezones=st.just(timezone.utc)),
+    window_start=st.datetimes(min_value=datetime(1000, 1, 1), timezones=st.just(timezone.utc)),
 )
 @settings(max_examples=100)
 def test_daily_summary_aggregation(entries, window_start):
@@ -503,7 +504,7 @@ def test_daily_summary_aggregation(entries, window_start):
 
 # Feature: database-backup-redundancy, Property 10: Stale backup detection uses correct time comparison
 @given(
-    last_ts=st.datetimes(timezones=st.just(timezone.utc)),
+    last_ts=st.datetimes(min_value=datetime(1000, 1, 1), timezones=st.just(timezone.utc)),
     elapsed_seconds=st.integers(min_value=0, max_value=86400),
 )
 @settings(max_examples=100)

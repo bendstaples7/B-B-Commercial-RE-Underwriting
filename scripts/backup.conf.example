@@ -35,6 +35,10 @@ WEBHOOK_URL=""                  # Slack/Discord/custom HTTP endpoint
 REDIS_RDB_PATH="/var/lib/redis/dump.rdb"   # path inside WSL Ubuntu
 REDIS_BGSAVE_TIMEOUT=300
 
+# ── Redis command prefix (leave empty for native Linux Redis) ─────────────────
+# REDIS_CMD_PREFIX="wsl -d Ubuntu --"   # uncomment for WSL-based Redis
+REDIS_CMD_PREFIX=""
+
 # ── Timeouts ──────────────────────────────────────────────────────────────────
 REMOTE_CONNECT_TIMEOUT=30
 REMOTE_RETRY_COUNT=3

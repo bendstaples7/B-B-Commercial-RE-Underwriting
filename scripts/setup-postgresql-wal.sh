@@ -28,6 +28,17 @@ skip() {
     echo "$STEP_SKIP $*"
 }
 
+# ── Load database config ──────────────────────────────────────────────────────
+CONF_FILE="/home/deploy/backup.conf"
+if [[ -f "$CONF_FILE" ]]; then
+    # shellcheck source=/home/deploy/backup.conf
+    source "$CONF_FILE"
+else
+    # Fallback defaults
+    PGDATABASE="${PGDATABASE:-real_estate_analysis}"
+    PGUSER="${PGUSER:-deploy}"
+fi
+
 # ── Step 1: Detect PostgreSQL version ─────────────────────────────────────────
 log "Step 1: Detecting PostgreSQL version..."
 PG_VERSION=$(psql --version | grep -oP '\d+' | head -1)
@@ -46,7 +57,7 @@ if [[ ! -f "$PG_CONF" ]]; then
     fail "postgresql.conf not found at $PG_CONF"
 fi
 
-if grep -q "archive_mode" "$PG_CONF"; then
+if grep -qE '^\s*archive_mode\s*=' "$PG_CONF"; then
     skip "WAL archiving settings already present in $PG_CONF — skipping."
 else
     log "  Appending WAL archiving settings..."
@@ -61,12 +72,12 @@ EOF
     pass "WAL archiving settings appended to $PG_CONF"
 fi
 
-# ── Step 3: Reload PostgreSQL after postgresql.conf change ────────────────────
-log "Step 3: Reloading PostgreSQL (after postgresql.conf change)..."
-if sudo systemctl reload postgresql; then
-    pass "PostgreSQL reloaded successfully."
+# ── Step 3: Restart PostgreSQL (wal_level/archive_mode require restart) ───────
+log "Step 3: Restarting PostgreSQL (wal_level/archive_mode require restart)..."
+if sudo systemctl restart postgresql; then
+    pass "PostgreSQL restarted successfully."
 else
-    fail "Failed to reload PostgreSQL. Check 'journalctl -u postgresql' for details."
+    fail "Failed to restart PostgreSQL. Check 'journalctl -u postgresql' for details."
 fi
 
 # ── Step 4: Configure passwordless peer auth in pg_hba.conf ──────────────────
@@ -75,7 +86,7 @@ if [[ ! -f "$PG_HBA" ]]; then
     fail "pg_hba.conf not found at $PG_HBA"
 fi
 
-PEER_ENTRY="local   real_estate_analysis   deploy   peer"
+PEER_ENTRY="local   ${PGDATABASE}   ${PGUSER}   peer"
 if grep -qF "$PEER_ENTRY" "$PG_HBA"; then
     skip "Peer auth entry already present in $PG_HBA — skipping."
 else
@@ -97,7 +108,7 @@ fi
 # ── Step 6: Verify passwordless pg_dump works ────────────────────────────────
 log "Step 6: Verifying passwordless pg_dump as deploy user..."
 TEST_DUMP="/tmp/test_auth_$$.dump"
-if sudo -u deploy pg_dump -Fc -d real_estate_analysis -f "$TEST_DUMP"; then
+if sudo -u "${PGUSER}" pg_dump -Fc -d "${PGDATABASE}" -f "$TEST_DUMP"; then
     rm -f "$TEST_DUMP"
     pass "pg_dump succeeded without a password prompt."
 else
@@ -107,7 +118,7 @@ fi
 
 # ── Step 7: Verify WAL archiving is active ────────────────────────────────────
 log "Step 7: Verifying WAL archiving is active..."
-ARCHIVE_MODE=$(sudo -u deploy psql -d real_estate_analysis -tAc "SHOW archive_mode;" 2>/dev/null | tr -d '[:space:]')
+ARCHIVE_MODE=$(sudo -u "${PGUSER}" psql -d "${PGDATABASE}" -tAc "SHOW archive_mode;" 2>/dev/null | tr -d '[:space:]')
 if [[ "$ARCHIVE_MODE" == "on" ]]; then
     pass "archive_mode = on — WAL archiving is active."
 else

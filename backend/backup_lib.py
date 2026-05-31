@@ -143,9 +143,14 @@ def parse_manifest_entry(line: str) -> dict:
         ValueError: If the line is not valid JSON.
     """
     try:
-        return json.loads(line)
+        parsed = json.loads(line)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid manifest line: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            f"Invalid manifest line: expected a JSON object, got {type(parsed).__name__}: {parsed!r}"
+        )
+    return parsed
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +175,10 @@ def filter_by_retention(
         A list of file dicts to keep (age < retention_days).
     """
     threshold_seconds = retention_days * 86400  # days → seconds
+    if retention_days < 0:
+        raise ValueError(
+            f"retention_days must be non-negative, got {retention_days!r}"
+        )
     kept = []
     for f in files:
         ts = f["timestamp"]
@@ -317,8 +326,8 @@ def format_alert_message(
     for cred in credentials:
         if cred and cred in message:
             raise AssertionError(
-                f"Credential value found in alert message. "
-                f"Credential must not be interpolated into alert output."
+                "Credential value found in alert message. "
+                "Credential must not be interpolated into alert output."
             )
     return message
 
@@ -522,6 +531,9 @@ def _cli_filter_retention(args: list[str]) -> None:
         retention_days = int(retention_days_str)
     except ValueError:
         print(f"Error: retention_days must be an integer, got {retention_days_str!r}", file=sys.stderr)
+        sys.exit(1)
+    if retention_days < 0:
+        print(f"Error: retention_days must be non-negative, got {retention_days}", file=sys.stderr)
         sys.exit(1)
     try:
         with open(manifest_file, "r", encoding="utf-8") as fh:

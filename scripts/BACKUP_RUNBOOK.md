@@ -131,7 +131,7 @@ PITR allows restoring the database to any specific moment in time using a base b
 sudo systemctl stop postgresql
 ```
 
-**2. Restore the base backup**
+**2. Clear the data directory and restore the base backup**
 
 Find the most recent base backup directory:
 
@@ -139,10 +139,18 @@ Find the most recent base backup directory:
 ls -lt /home/deploy/backups/base/
 ```
 
-Copy it to the PostgreSQL data directory (replace `<version>` with your PostgreSQL version, e.g. `14`):
+Clear the existing data directory and restore the base backup (preserving attributes):
 
 ```bash
-cp -r /home/deploy/backups/base/base_YYYY-MM-DD_HH-MM-SS/* /var/lib/postgresql/<version>/main/
+# Stop PostgreSQL first (Step 1 above)
+# Clear the existing data directory
+sudo rm -rf /var/lib/postgresql/<version>/main/*
+
+# Copy base backup contents preserving ownership and permissions
+sudo cp -a /home/deploy/backups/base/base_YYYY-MM-DD_HH-MM-SS/. /var/lib/postgresql/<version>/main/
+
+# Restore correct ownership
+sudo chown -R postgres:postgres /var/lib/postgresql/<version>/main
 ```
 
 **3. Configure `restore_command` in `postgresql.conf`**
@@ -275,14 +283,22 @@ Use this checklist when the VPS is unrecoverable and you need to rebuild from sc
    ```
    Replace `YYYY/MM/DD/<filename>` with the actual date path and filename of the most recent valid backup.
 
-5. **Copy `backup_manifest.log` from remote storage**:
+5. **Restore the backup manifest** — the manifest is stored locally on the VPS. After a total VPS loss, reconstruct it from the remote backup filenames:
    ```bash
-   rclone copy <RCLONE_REMOTE>:<RCLONE_BUCKET>/backup_manifest.log /home/deploy/backups/
+   # List available remote backups to identify what's available
+   rclone ls <RCLONE_REMOTE>:<RCLONE_BUCKET>/<RCLONE_PATH_PREFIX>/
    ```
+   The manifest will be rebuilt automatically as new backups run. For the restore step, you only need the backup filename — the restore script will verify the checksum from the manifest if available, or you can skip manifest verification by running pg_restore directly if the manifest is unavailable.
 
 6. **Deploy all scripts** to `/home/deploy/`:
    - `backup.sh`, `restore.sh`, `redis-backup.sh`, `wal-archive.sh`, `pg-basebackup.sh`, `daily-summary.sh`, `backup_lib.py`
-   - Set permissions: `chmod 750 /home/deploy/*.sh && chmod 644 /home/deploy/backup_lib.py`
+   - Set permissions:
+     ```bash
+     chmod 750 /home/deploy/backup.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh \
+               /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh
+     chmod 755 /home/deploy/wal-archive.sh   # must be executable by the postgres OS user
+     chmod 644 /home/deploy/backup_lib.py
+     ```
 
 7. **Create and configure `/home/deploy/backup.conf`**:
    ```bash
