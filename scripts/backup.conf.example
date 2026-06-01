@@ -5,8 +5,9 @@
 
 # ── PostgreSQL ────────────────────────────────────────────────────────────────
 PGDATABASE="real_estate_analysis"
-PGUSER="deploy"
-# Uses .pgpass or peer auth — no password stored here
+PGUSER="app_user"
+PGHOST="localhost"
+# Uses .pgpass for password auth — see setup instructions below
 
 # ── Backup directories ────────────────────────────────────────────────────────
 BACKUP_DIR="/home/deploy/backups"
@@ -14,7 +15,7 @@ WAL_ARCHIVE_DIR="/home/deploy/wal-archive"
 LOG_FILE="/home/deploy/logs/backup.log"
 
 # ── Remote storage ────────────────────────────────────────────────────────────
-REMOTE_METHOD="rclone"          # rclone | s3 | rsync
+REMOTE_METHOD=""          # rclone | s3 | rsync
 RCLONE_REMOTE="b2"              # rclone remote name (configured via rclone config)
 RCLONE_BUCKET="your-bucket-name"
 RCLONE_PATH_PREFIX="backups"    # remote path: RCLONE_BUCKET/RCLONE_PATH_PREFIX/YYYY/MM/DD/
