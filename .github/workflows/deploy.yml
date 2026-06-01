@@ -5,14 +5,28 @@ on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
+  # Allow manual triggering from the GitHub Actions UI
+  # Use this when the deploy workflow needs to be triggered manually,
+  # e.g. after a workflow file change causes the automatic trigger to be skipped.
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: 'SHA to deploy (leave blank to deploy HEAD of main)'
+        required: false
+        default: ''
 
 jobs:
   deploy:
     name: Deploy to VPS
     runs-on: ubuntu-latest
+    # workflow_dispatch is an intentional emergency fallback for cases where the
+    # automatic workflow_run trigger is skipped (e.g. when deploy.yml itself was
+    # changed in the merged PR). Only repository collaborators with write access
+    # can trigger workflow_dispatch via the GitHub Actions UI.
     if: >
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main'
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
 
     steps:
       # ── Step 1: Validate all required secrets are set ─────────────────────
@@ -101,8 +115,16 @@ jobs:
       - name: Checkout repo (to get deploy script and build frontend)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ inputs.target_sha || github.event.workflow_run.head_sha || 'main' }}
           persist-credentials: false
+
+      # Resolve the actual commit SHA after checkout so TARGET_SHA is always a
+      # full commit hash — never a branch name like 'main'. This matters for the
+      # post-deploy SHA verification step which compares against the deployed app's
+      # reported SHA.
+      - name: Resolve target SHA
+        id: resolve_sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Build frontend on runner (avoids OOM on 2GB VPS)
         run: |
@@ -116,7 +138,7 @@ jobs:
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
+          TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
         run: |
           # Copy deploy script
           scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
@@ -182,7 +204,7 @@ EOF
       - name: Post-deploy health check
         env:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
-          TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
+          TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
         run: |
           echo "Waiting for Gunicorn to finish graceful reload..."
           sleep 5
