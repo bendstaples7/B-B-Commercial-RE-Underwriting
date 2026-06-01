@@ -103,6 +103,39 @@ jobs:
             exit 1
           }
 
+      - name: Verify Nginx serves frontend (catches permission denied on /home/deploy)
+        # The previous smoke test only checks the API via Gunicorn on port 5000,
+        # which bypasses Nginx entirely. This check hits the public HTTPS URL and
+        # verifies Nginx can actually serve index.html from frontend/dist.
+        #
+        # Root cause this catches: Ubuntu sets home dirs to 750 by default.
+        # Nginx runs as www-data which has no group membership in deploy, so it
+        # cannot traverse /home/deploy to reach frontend/dist. The symptom is a
+        # 500 "Permission denied" on stat() of index.html — invisible to the API
+        # health check but immediately fatal to any browser request.
+        env:
+          VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+        run: |
+          BASE_URL="https://${VPS_SUBDOMAIN}.duckdns.org"
+          echo "Checking Nginx frontend serve: GET ${BASE_URL}/"
+          HTTP_STATUS=$(curl -s -o /tmp/frontend_response.html -w "%{http_code}" \
+            --max-time 15 "${BASE_URL}/")
+          echo "HTTP status: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "ERROR: Expected HTTP 200 from ${BASE_URL}/ but got $HTTP_STATUS"
+            echo "This usually means Nginx cannot read frontend/dist — check /home/deploy permissions (must be 751, not 750)."
+            echo "Fix: ssh deploy@VPS 'chmod o+x /home/deploy'"
+            exit 1
+          fi
+          # Verify the response is actually HTML (not an Nginx error page)
+          if ! grep -q "<!DOCTYPE html>" /tmp/frontend_response.html 2>/dev/null; then
+            echo "ERROR: Response from ${BASE_URL}/ does not contain <!DOCTYPE html>"
+            echo "Nginx may be returning an error page instead of index.html."
+            head -5 /tmp/frontend_response.html
+            exit 1
+          fi
+          echo "Nginx frontend serve: OK (HTTP 200, HTML content confirmed)"
+
   backend:
     name: Backend — pytest
     runs-on: ubuntu-latest

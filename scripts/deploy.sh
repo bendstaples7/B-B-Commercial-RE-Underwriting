@@ -58,6 +58,13 @@ trap rollback ERR
 # ── Pre-deploy VPS health checks ─────────────────────────────────────────────
 echo "==> Pre-deploy checks"
 
+# Ensure /home/deploy is world-traversable so Nginx (www-data) can serve
+# files from frontend/dist. Ubuntu sets home dirs to 750 by default, which
+# blocks www-data from traversing the path. This is idempotent — chmod o+x
+# on an already-correct directory is a no-op.
+chmod o+x /home/deploy
+echo "    /home/deploy traversal: ok ($(stat -c '%a' /home/deploy))"
+
 # Check gunicorn is running
 systemctl is-active --quiet gunicorn || { echo "FAILED: gunicorn is not active before deploy"; exit 1; }
 echo "    gunicorn: active"
