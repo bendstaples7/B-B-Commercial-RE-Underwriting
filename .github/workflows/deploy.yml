@@ -41,6 +41,7 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           MISSING=""
           [ -z "$VPS_SSH_KEY" ]   && MISSING="$MISSING VPS_SSH_KEY"
@@ -48,6 +49,7 @@ jobs:
           [ -z "$VPS_HOST" ]      && MISSING="$MISSING VPS_HOST"
           [ -z "$VPS_HOST_KEY" ]  && MISSING="$MISSING VPS_HOST_KEY"
           [ -z "$VPS_SUBDOMAIN" ] && MISSING="$MISSING VPS_SUBDOMAIN"
+          [ -z "$DATABASE_URL" ]  && MISSING="$MISSING DATABASE_URL"
           if [ -n "$MISSING" ]; then
             echo "ERROR: The following required secrets are not set:$MISSING"
             echo "Go to Settings → Secrets and variables → Actions and add them."
