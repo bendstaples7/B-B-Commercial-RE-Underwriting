@@ -30,9 +30,9 @@ password = parsed.password or ""
 host = parsed.hostname
 try:
     port = str(parsed.port) if parsed.port is not None else "5432"
-except ValueError:
-    print("WARNING: DATABASE_URL has an invalid port — using default 5432")
-    port = "5432"
+except ValueError as e:
+    print(f"ERROR: DATABASE_URL has an invalid port value — aborting injection: {e}")
+    raise SystemExit(1)
 dbname = parsed.path.lstrip("/")
 
 if not dbname:
