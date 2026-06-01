@@ -48,7 +48,9 @@ jobs:
         # Catches broken YAML in deploy.yml before it reaches main.
         # A malformed deploy.yml causes GitHub to silently ignore workflow_dispatch
         # and skip automatic deploys — this check prevents that from happening.
-        run: python3 -c "import yaml; yaml.safe_load(open('.github/workflows/deploy.yml')); print('deploy.yml YAML valid')"
+        run: |
+          pip install pyyaml -q
+          python3 -c "import yaml; yaml.safe_load(open('.github/workflows/deploy.yml')); print('deploy.yml YAML valid')"
 
   backend:
     name: Backend — pytest
