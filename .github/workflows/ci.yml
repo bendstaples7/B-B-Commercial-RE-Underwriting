@@ -65,6 +65,8 @@ jobs:
     runs-on: ubuntu-latest
     # Only run on pushes to main (PRs don't have VPS secrets)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: none
 
     steps:
       - name: Set up SSH key

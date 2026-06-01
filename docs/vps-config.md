@@ -19,7 +19,7 @@
 **Important:** The PostgreSQL application role is `app_user`, not `deploy`. The `deploy` Linux user does NOT have a matching PostgreSQL role. All `pg_dump` and `pg_restore` commands must use `-U app_user -h localhost` and rely on `/home/deploy/.pgpass` for authentication.
 
 The `DATABASE_URL` GitHub secret contains the full connection string:
-```
+```text
 postgresql://app_user:<password>@localhost:5432/real_estate_analysis
 ```
 

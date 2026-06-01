@@ -10,6 +10,7 @@ Reads DATABASE_URL from the environment variable set by the deploy workflow.
 """
 import os
 import re
+from urllib.parse import urlparse
 
 CONF = "/home/deploy/backup.conf"
 PGPASS = "/home/deploy/.pgpass"
@@ -19,20 +20,27 @@ if not db_url:
     print("WARNING: DATABASE_URL not set — skipping credential injection")
     raise SystemExit(0)
 
-# Parse postgresql://user:password@host:port/dbname
-m = re.match(r"postgresql://([^:]+):([^@]+)@([^:/]+)(?::(\d+))?/(.+?)(?:\?.*)?$", db_url)
-if not m:
-    print(f"WARNING: Could not parse DATABASE_URL format — skipping injection")
+parsed = urlparse(db_url)
+if not parsed.username or not parsed.hostname:
+    print("WARNING: Could not parse DATABASE_URL format — skipping injection")
     raise SystemExit(0)
 
-user, password, host, port, dbname = m.groups()
-port = port or "5432"
+user = parsed.username
+password = parsed.password or ""
+host = parsed.hostname
+port = str(parsed.port) if parsed.port else "5432"
+dbname = parsed.path.lstrip("/")
+
+if not dbname:
+    print("WARNING: DATABASE_URL has no database name — skipping injection")
+    raise SystemExit(0)
 
 print(f"Injecting credentials: PGUSER={user} PGHOST={host} PGDATABASE={dbname}")
 
 # Update backup.conf
 with open(CONF) as f:
     conf = f.read()
+
 
 def set_var(conf, name, value):
     pattern = rf"^{name}=.*"
@@ -41,6 +49,7 @@ def set_var(conf, name, value):
         return re.sub(pattern, replacement, conf, flags=re.MULTILINE)
     else:
         return conf + f'{name}="{value}"\n'
+
 
 conf = set_var(conf, "PGUSER", user)
 conf = set_var(conf, "PGHOST", host)
@@ -52,11 +61,11 @@ conf = re.sub(r"^PGPASSWORD=.*\n?", "", conf, flags=re.MULTILINE)
 with open(CONF, "w") as f:
     f.write(conf)
 os.chmod(CONF, 0o600)
-print(f"backup.conf updated")
+print("backup.conf updated")
 
 # Write .pgpass for pg_dump TCP auth
 pgpass_line = f"{host}:{port}:{dbname}:{user}:{password}"
 with open(PGPASS, "w") as f:
     f.write(pgpass_line + "\n")
 os.chmod(PGPASS, 0o600)
-print(f".pgpass updated")
+print(".pgpass updated")

@@ -70,7 +70,7 @@ send_alert() {
 
 # ── Step 2: Validate required config variables ────────────────────────────────
 # Abort without writing credential values to the log if any are missing.
-REQUIRED_VARS=(PGDATABASE BACKUP_DIR LOG_FILE ALERT_METHOD)
+REQUIRED_VARS=(PGDATABASE PGUSER BACKUP_DIR LOG_FILE ALERT_METHOD)
 for var in "${REQUIRED_VARS[@]}"; do
     if [[ -z "${!var:-}" ]]; then
         echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: Required config variable '$var' is not set — aborting" >> /tmp/backup_bootstrap.log 2>&1 || true
