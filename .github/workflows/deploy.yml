@@ -157,42 +157,8 @@ jobs:
           # The stub has empty remote/alert credentials — backup will skip remote transfer and alerting
           # but will still run pg_dump and write a local manifest entry.
           # Operators should replace this with a real backup.conf to enable full backup functionality.
-          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST 'bash -s' << 'STUB'
-          if [ ! -f /home/deploy/backup.conf ]; then
-            cat > /home/deploy/backup.conf << 'EOF'
-# Auto-generated stub backup.conf — replace with real values to enable full backup functionality.
-# See scripts/backup.conf.example for all available options.
-PGDATABASE="real_estate_analysis"
-PGUSER="deploy"
-BACKUP_DIR="/home/deploy/backups"
-WAL_ARCHIVE_DIR="/home/deploy/wal-archive"
-LOG_FILE="/home/deploy/logs/backup.log"
-REMOTE_METHOD="rclone"
-RCLONE_REMOTE=""
-RCLONE_BUCKET=""
-RCLONE_PATH_PREFIX="backups"
-LOCAL_RETENTION_DAYS=30
-REMOTE_RETENTION_DAYS=30
-REDIS_RETENTION_DAYS=7
-WAL_RETENTION_DAYS=7
-ALERT_METHOD="email"
-ALERT_EMAIL=""
-MSMTP_ACCOUNT="default"
-WEBHOOK_URL=""
-REDIS_RDB_PATH="/var/lib/redis/dump.rdb"
-REDIS_BGSAVE_TIMEOUT=300
-REMOTE_CONNECT_TIMEOUT=30
-REMOTE_RETRY_COUNT=3
-REMOTE_RETRY_DELAY=300
-REDIS_CMD_PREFIX=""
-EOF
-            chmod 600 /home/deploy/backup.conf
-            chown deploy:deploy /home/deploy/backup.conf
-            echo "NOTE: Created stub /home/deploy/backup.conf — replace with real values to enable full backup functionality"
-          fi
-          # Ensure required backup directories exist
-          mkdir -p /home/deploy/backups /home/deploy/wal-archive /home/deploy/logs /home/deploy/backups/base
-          STUB
+          scp -i ~/.ssh/id_deploy scripts/setup-stub-conf.py $VPS_USER@$VPS_HOST:/tmp/setup-stub-conf.py
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "python3 /tmp/setup-stub-conf.py && rm /tmp/setup-stub-conf.py"
           # Remove any stale frontend-dist from previous runs, then copy fresh build
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "rm -rf /home/deploy/frontend-dist"
           scp -i ~/.ssh/id_deploy -r frontend/dist $VPS_USER@$VPS_HOST:/home/deploy/frontend-dist
