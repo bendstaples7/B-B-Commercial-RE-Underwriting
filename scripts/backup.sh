@@ -13,6 +13,11 @@ set -euo pipefail
 # ── Pre-deploy flag ───────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--pre-deploy" ]]; then
     BACKUP_TYPE="pre-deploy"
+elif [[ "${1:-}" == "--check" ]]; then
+    # --check mode: validate config and test pg_dump connectivity without
+    # running a full backup. Exits 0 if everything is configured correctly,
+    # 1 if any required config is missing or pg_dump cannot connect.
+    BACKUP_TYPE="check"
 else
     BACKUP_TYPE="scheduled"
 fi
@@ -75,6 +80,27 @@ done
 
 # ── Step 3: Log script start ──────────────────────────────────────────────────
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh starting — type: $BACKUP_TYPE" >> "$LOG_FILE"
+
+# ── --check mode: validate connectivity and exit ──────────────────────────────
+if [[ "$BACKUP_TYPE" == "check" ]]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh --check: testing pg_dump connectivity..." >> "$LOG_FILE"
+    CHECK_EXIT=0
+    PGPASSFILE="${PGPASSFILE:-/home/deploy/.pgpass}" pg_dump \
+        --schema-only \
+        -h "${PGHOST:-localhost}" \
+        -U "$PGUSER" \
+        -d "$PGDATABASE" \
+        -f /dev/null 2>>"$LOG_FILE" || CHECK_EXIT=$?
+    if [[ "$CHECK_EXIT" -ne 0 ]]; then
+        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh --check: FAILED — pg_dump connectivity test failed (exit $CHECK_EXIT)" >> "$LOG_FILE"
+        echo "BACKUP CHECK FAILED: pg_dump cannot connect to $PGDATABASE as $PGUSER@${PGHOST:-localhost}" >&2
+        echo "Check /home/deploy/logs/backup.log and /home/deploy/.pgpass for details." >&2
+        exit 1
+    fi
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh --check: PASSED — pg_dump connectivity OK" >> "$LOG_FILE"
+    echo "BACKUP CHECK PASSED: pg_dump can connect to $PGDATABASE as $PGUSER@${PGHOST:-localhost}"
+    exit 0
+fi
 
 # ── Step 4: Verify BACKUP_DIR exists and is writable ─────────────────────────
 if [[ ! -d "$BACKUP_DIR" ]] || [[ ! -w "$BACKUP_DIR" ]]; then

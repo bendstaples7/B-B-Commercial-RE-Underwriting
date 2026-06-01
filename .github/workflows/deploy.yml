@@ -163,7 +163,13 @@ jobs:
           # Operators should replace this with a real backup.conf to enable full backup functionality.
           scp -i ~/.ssh/id_deploy scripts/setup-stub-conf.py $VPS_USER@$VPS_HOST:/tmp/setup-stub-conf.py
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "python3 /tmp/setup-stub-conf.py && rm /tmp/setup-stub-conf.py"
-          # Remove any stale frontend-dist from previous runs, then copy fresh build
+          # Inject VPS-specific PostgreSQL credentials into backup.conf from the DATABASE_URL secret.
+          scp -i ~/.ssh/id_deploy scripts/inject-db-creds.py $VPS_USER@$VPS_HOST:/tmp/inject-db-creds.py
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "DATABASE_URL='${{ secrets.DATABASE_URL }}' python3 /tmp/inject-db-creds.py && rm /tmp/inject-db-creds.py"
+          # Pre-flight: verify backup.sh can connect to PostgreSQL before running the full deploy.
+          # This catches DB connectivity issues (wrong user, missing .pgpass, etc.) before the deploy starts.
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "/home/deploy/backup.sh --check" \
+            || { echo "ERROR: backup.sh --check failed — PostgreSQL connectivity issue. Check /home/deploy/logs/backup.log on VPS."; exit 1; }
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "rm -rf /home/deploy/frontend-dist"
           scp -i ~/.ssh/id_deploy -r frontend/dist $VPS_USER@$VPS_HOST:/home/deploy/frontend-dist
           # Run deploy script
