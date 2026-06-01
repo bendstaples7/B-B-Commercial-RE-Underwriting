@@ -13,6 +13,11 @@ set -euo pipefail
 # ── Pre-deploy flag ───────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--pre-deploy" ]]; then
     BACKUP_TYPE="pre-deploy"
+elif [[ "${1:-}" == "--check" ]]; then
+    # --check mode: validate config and test pg_dump connectivity without
+    # running a full backup. Exits 0 if everything is configured correctly,
+    # 1 if any required config is missing or pg_dump cannot connect.
+    BACKUP_TYPE="check"
 else
     BACKUP_TYPE="scheduled"
 fi
@@ -65,7 +70,7 @@ send_alert() {
 
 # ── Step 2: Validate required config variables ────────────────────────────────
 # Abort without writing credential values to the log if any are missing.
-REQUIRED_VARS=(PGDATABASE BACKUP_DIR LOG_FILE REMOTE_METHOD ALERT_METHOD)
+REQUIRED_VARS=(PGDATABASE PGUSER BACKUP_DIR LOG_FILE ALERT_METHOD)
 for var in "${REQUIRED_VARS[@]}"; do
     if [[ -z "${!var:-}" ]]; then
         echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: Required config variable '$var' is not set — aborting" >> /tmp/backup_bootstrap.log 2>&1 || true
@@ -75,6 +80,27 @@ done
 
 # ── Step 3: Log script start ──────────────────────────────────────────────────
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh starting — type: $BACKUP_TYPE" >> "$LOG_FILE"
+
+# ── --check mode: validate connectivity and exit ──────────────────────────────
+if [[ "$BACKUP_TYPE" == "check" ]]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh --check: testing pg_dump connectivity..." >> "$LOG_FILE"
+    CHECK_EXIT=0
+    PGPASSFILE="${PGPASSFILE:-/home/deploy/.pgpass}" pg_dump \
+        --schema-only \
+        -h "${PGHOST:-localhost}" \
+        -U "$PGUSER" \
+        -d "$PGDATABASE" \
+        -f /dev/null 2>>"$LOG_FILE" || CHECK_EXIT=$?
+    if [[ "$CHECK_EXIT" -ne 0 ]]; then
+        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh --check: FAILED — pg_dump connectivity test failed (exit $CHECK_EXIT)" >> "$LOG_FILE"
+        echo "BACKUP CHECK FAILED: pg_dump cannot connect to $PGDATABASE as $PGUSER@${PGHOST:-localhost}" >&2
+        echo "Check /home/deploy/logs/backup.log and /home/deploy/.pgpass for details." >&2
+        exit 1
+    fi
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh --check: PASSED — pg_dump connectivity OK" >> "$LOG_FILE"
+    echo "BACKUP CHECK PASSED: pg_dump can connect to $PGDATABASE as $PGUSER@${PGHOST:-localhost}"
+    exit 0
+fi
 
 # ── Step 4: Verify BACKUP_DIR exists and is writable ─────────────────────────
 if [[ ! -d "$BACKUP_DIR" ]] || [[ ! -w "$BACKUP_DIR" ]]; then
@@ -95,7 +121,12 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: filename=$FILENAME" >> "$LOG_F
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: starting pg_dump" >> "$LOG_FILE"
 
 PGDUMP_EXIT=0
-pg_dump -Fc -d "$PGDATABASE" -f "$BACKUP_DIR/$FILENAME" 2>>"$LOG_FILE" || PGDUMP_EXIT=$?
+PGPASSFILE="${PGPASSFILE:-/home/deploy/.pgpass}" pg_dump \
+    -Fc \
+    -h "${PGHOST:-localhost}" \
+    -U "$PGUSER" \
+    -d "$PGDATABASE" \
+    -f "$BACKUP_DIR/$FILENAME" 2>>"$LOG_FILE" || PGDUMP_EXIT=$?
 
 if [[ "$PGDUMP_EXIT" -ne 0 ]]; then
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: pg_dump failed for database '$PGDATABASE' — exit code: $PGDUMP_EXIT" >> "$LOG_FILE"
@@ -155,7 +186,6 @@ REDIS_EXIT=0
 /home/deploy/redis-backup.sh 2>>"$LOG_FILE" || REDIS_EXIT=$?
 
 if [[ "$REDIS_EXIT" -ne 0 ]]; then
-    BACKUP_FAILED=1
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARNING: redis-backup.sh exited with code $REDIS_EXIT — PostgreSQL backup continues" >> "$LOG_FILE"
     send_alert \
         "Redis backup FAILED [$BACKUP_TYPE] [$(date -u +%Y-%m-%dT%H:%M:%SZ)]" \
@@ -163,6 +193,10 @@ if [[ "$REDIS_EXIT" -ne 0 ]]; then
 fi
 
 # ── Step 10 & 11: Remote transfer with retry loop ────────────────────────────
+# Skip remote transfer if REMOTE_METHOD is empty (local-only backup mode)
+if [[ -z "${REMOTE_METHOD:-}" ]]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: REMOTE_METHOD not set — skipping remote transfer (local backup only)" >> "$LOG_FILE"
+else
 # Validate remote method via backup_lib dispatch
 DISPATCH_CHECK=0
 python3 -c "
@@ -281,6 +315,7 @@ print(json.dumps({
 
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: manifest updated with remote transfer status" >> "$LOG_FILE"
 fi
+fi  # end: if REMOTE_METHOD is set
 
 # ── Step 12: Delete local backups older than LOCAL_RETENTION_DAYS ─────────────
 # Only run if no failures occurred during this backup run.
