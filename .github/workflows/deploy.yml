@@ -19,6 +19,10 @@ jobs:
   deploy:
     name: Deploy to VPS
     runs-on: ubuntu-latest
+    # Prevent concurrent deploys — queue them instead of cancelling in-progress ones
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
     # workflow_dispatch is an intentional emergency fallback for cases where the
     # automatic workflow_run trigger is skipped (e.g. when deploy.yml itself was
     # changed in the merged PR). Only repository collaborators with write access
