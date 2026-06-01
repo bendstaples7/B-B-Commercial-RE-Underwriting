@@ -44,6 +44,22 @@ jobs:
         run: npm run build
         working-directory: frontend
 
+  validate-workflows:
+    name: Validate workflow YAML syntax
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate deploy.yml YAML syntax
+        # Catches broken YAML in deploy.yml before it reaches main.
+        # A malformed deploy.yml causes GitHub to silently ignore workflow_dispatch
+        # and skip automatic deploys — this check prevents that from happening.
+        # Runs as a separate job so it always executes regardless of frontend failures.
+        run: |
+          pip install pyyaml -q
+          python3 -c "import yaml; yaml.safe_load(open('.github/workflows/deploy.yml')); print('deploy.yml YAML valid')"
+
   backend:
     name: Backend — pytest
     runs-on: ubuntu-latest

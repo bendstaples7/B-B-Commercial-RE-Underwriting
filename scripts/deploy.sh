@@ -92,9 +92,9 @@ elif [[ ! -x /home/deploy/backup.sh ]]; then
     exit 1
 else
     /home/deploy/backup.sh --pre-deploy || {
-        echo "FAILED: pre-deploy backup failed — aborting deploy"
+        echo "FAILED: pre-deploy backup failed — aborting deploy (no restore point)"
         echo "--- backup bootstrap error log (if any) ---"
-        cat /tmp/backup_bootstrap.log 2>/dev/null || echo "(no bootstrap log found at /tmp/backup_bootstrap.log)"
+        cat /tmp/backup_bootstrap.log 2>/dev/null || echo "(no bootstrap log found)"
         echo "-------------------------------------------"
         exit 1
     }
