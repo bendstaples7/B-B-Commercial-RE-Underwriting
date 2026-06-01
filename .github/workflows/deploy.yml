@@ -145,6 +145,7 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           # Copy deploy script
           scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
@@ -166,8 +167,10 @@ jobs:
           scp -i ~/.ssh/id_deploy scripts/setup-stub-conf.py $VPS_USER@$VPS_HOST:/tmp/setup-stub-conf.py
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "python3 /tmp/setup-stub-conf.py && rm /tmp/setup-stub-conf.py"
           # Inject VPS-specific PostgreSQL credentials into backup.conf from the DATABASE_URL secret.
+          # DATABASE_URL is in the step env — base64-encode it from the env var (not a shell literal)
+          # so passwords containing single quotes or special characters are handled safely.
           scp -i ~/.ssh/id_deploy scripts/inject-db-creds.py $VPS_USER@$VPS_HOST:/tmp/inject-db-creds.py
-          DB_URL_B64=$(printf '%s' '${{ secrets.DATABASE_URL }}' | base64 -w0)
+          DB_URL_B64=$(printf '%s' "$DATABASE_URL" | base64 -w0)
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "DATABASE_URL=\$(echo '$DB_URL_B64' | base64 -d) python3 /tmp/inject-db-creds.py && rm /tmp/inject-db-creds.py"
           # Pre-flight: verify backup.sh can connect to PostgreSQL before running the full deploy.
           # This catches DB connectivity issues (wrong user, missing .pgpass, etc.) before the deploy starts.

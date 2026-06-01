@@ -28,7 +28,11 @@ if not parsed.username or not parsed.hostname:
 user = parsed.username
 password = parsed.password or ""
 host = parsed.hostname
-port = str(parsed.port) if parsed.port else "5432"
+try:
+    port = str(parsed.port) if parsed.port is not None else "5432"
+except ValueError:
+    print("WARNING: DATABASE_URL has an invalid port — using default 5432")
+    port = "5432"
 dbname = parsed.path.lstrip("/")
 
 if not dbname:
