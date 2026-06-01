@@ -19,6 +19,10 @@ jobs:
   deploy:
     name: Deploy to VPS
     runs-on: ubuntu-latest
+    # workflow_dispatch is an intentional emergency fallback for cases where the
+    # automatic workflow_run trigger is skipped (e.g. when deploy.yml itself was
+    # changed in the merged PR). Only repository collaborators with write access
+    # can trigger workflow_dispatch via the GitHub Actions UI.
     if: >
       (github.event_name == 'workflow_dispatch') ||
       (github.event.workflow_run.conclusion == 'success' &&
@@ -111,7 +115,7 @@ jobs:
       - name: Checkout repo (to get deploy script and build frontend)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
-          ref: ${{ inputs.target_sha || github.event.workflow_run.head_sha }}
+          ref: ${{ inputs.target_sha || github.event.workflow_run.head_sha || 'main' }}
           persist-credentials: false
 
       - name: Build frontend on runner (avoids OOM on 2GB VPS)
@@ -126,7 +130,7 @@ jobs:
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          TARGET_SHA: ${{ inputs.target_sha || github.event.workflow_run.head_sha }}
+          TARGET_SHA: ${{ inputs.target_sha || github.event.workflow_run.head_sha || 'main' }}
         run: |
           # Copy deploy script
           scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
@@ -192,7 +196,7 @@ EOF
       - name: Post-deploy health check
         env:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
-          TARGET_SHA: ${{ inputs.target_sha || github.event.workflow_run.head_sha }}
+          TARGET_SHA: ${{ inputs.target_sha || github.event.workflow_run.head_sha || 'main' }}
         run: |
           echo "Waiting for Gunicorn to finish graceful reload..."
           sleep 5
