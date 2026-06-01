@@ -7,7 +7,7 @@ the deploy on a freshly provisioned VPS. Operators should replace the stub
 with real values to enable full backup functionality.
 """
 import os
-import subprocess
+import shutil
 
 CONF = "/home/deploy/backup.conf"
 DIRS = [
@@ -48,7 +48,7 @@ if not os.path.exists(CONF):
     with open(CONF, "w") as f:
         f.write(content)
     os.chmod(CONF, 0o600)
-    subprocess.run(["chown", "deploy:deploy", CONF], check=True)
+    shutil.chown(CONF, user="deploy", group="deploy")
     print("NOTE: Created stub /home/deploy/backup.conf")
 else:
     print("NOTE: /home/deploy/backup.conf already exists - skipping stub creation")
