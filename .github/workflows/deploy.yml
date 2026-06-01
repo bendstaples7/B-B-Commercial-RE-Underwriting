@@ -118,6 +118,14 @@ jobs:
           ref: ${{ inputs.target_sha || github.event.workflow_run.head_sha || 'main' }}
           persist-credentials: false
 
+      # Resolve the actual commit SHA after checkout so TARGET_SHA is always a
+      # full commit hash — never a branch name like 'main'. This matters for the
+      # post-deploy SHA verification step which compares against the deployed app's
+      # reported SHA.
+      - name: Resolve target SHA
+        id: resolve_sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Build frontend on runner (avoids OOM on 2GB VPS)
         run: |
           cd frontend
@@ -130,7 +138,7 @@ jobs:
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          TARGET_SHA: ${{ inputs.target_sha || github.event.workflow_run.head_sha || 'main' }}
+          TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
         run: |
           # Copy deploy script
           scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
@@ -196,7 +204,7 @@ EOF
       - name: Post-deploy health check
         env:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
-          TARGET_SHA: ${{ inputs.target_sha || github.event.workflow_run.head_sha || 'main' }}
+          TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
         run: |
           echo "Waiting for Gunicorn to finish graceful reload..."
           sleep 5
