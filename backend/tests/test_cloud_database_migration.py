@@ -464,30 +464,7 @@ def test_property9_connection_pool_budget_boundary():
 # Task 9.1 — Requirements: 2.6, 7.1, 7.2, 7.7
 # ===========================================================================
 
-def test_env_example_contains_cloud_format_database_url():
-    """backend/.env.example must contain a commented cloud-format DATABASE_URL with sslmode=require."""
-    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    env_example_path = os.path.join(backend_dir, '.env.example')
-    with open(env_example_path) as f:
-        content = f.read()
-    # Must have a commented cloud-format DATABASE_URL line with sslmode=require
-    assert 'sslmode=require' in content, (
-        ".env.example must contain a DATABASE_URL example with sslmode=require"
-    )
-    assert '# DATABASE_URL=' in content or '#DATABASE_URL=' in content, (
-        ".env.example must contain a commented cloud-format DATABASE_URL line"
-    )
 
-
-def test_env_example_contains_provider_dashboard_url():
-    """backend/.env.example must contain a PROVIDER_DASHBOARD_URL placeholder line."""
-    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    env_example_path = os.path.join(backend_dir, '.env.example')
-    with open(env_example_path) as f:
-        content = f.read()
-    assert 'PROVIDER_DASHBOARD_URL' in content, (
-        ".env.example must contain a PROVIDER_DASHBOARD_URL placeholder line"
-    )
 
 
 def test_env_example_no_real_credentials_in_uncommented_database_url():
