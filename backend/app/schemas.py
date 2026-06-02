@@ -163,6 +163,12 @@ VALID_OUTREACH_STATUSES = [
 VALID_SORT_FIELDS = ['lead_score', 'created_at', 'property_street']
 VALID_SORT_ORDERS = ['asc', 'desc']
 
+# Valid source types — defined here so LeadListQuerySchema can reference it
+# before the DuPage ingestion schemas section below.
+VALID_SOURCE_TYPES = [
+    "foreclosure", "long_owned", "absentee_owner", "tax_distress", "manual_distress"
+]
+
 
 class LeadListQuerySchema(Schema):
     """Schema for lead list query parameters (GET /api/leads/).
@@ -183,6 +189,10 @@ class LeadListQuerySchema(Schema):
     score_min = fields.Float(load_default=None, validate=validate.Range(min=0, max=100))
     score_max = fields.Float(load_default=None, validate=validate.Range(min=0, max=100))
     marketing_list_id = fields.Int(load_default=None, validate=validate.Range(min=1))
+
+    # Source type and owner filters (DuPage lead database)
+    source_type = fields.Str(load_default=None, validate=validate.OneOf(VALID_SOURCE_TYPES), allow_none=True)
+    owner_user_id = fields.Str(load_default=None, validate=validate.Length(max=36))
 
     # Sorting
     sort_by = fields.Str(
@@ -285,6 +295,9 @@ class LeadDetailResponseSchema(Schema):
 
     # Metadata
     data_source = fields.Str(allow_none=True)
+    source_type = fields.Str(allow_none=True)
+    tax_distress_data = fields.Dict(allow_none=True)
+    manual_priority = fields.Int(allow_none=True)
     last_import_job_id = fields.Int(allow_none=True)
     created_at = fields.DateTime(allow_none=True)
     updated_at = fields.DateTime(allow_none=True)
@@ -391,6 +404,48 @@ class ImportJobsQuerySchema(Schema):
     )
     page = fields.Int(load_default=1, validate=validate.Range(min=1))
     per_page = fields.Int(load_default=20, validate=validate.Range(min=1, max=100))
+
+
+# ---------------------------------------------------------------------------
+# DuPage Lead Database — Ingestion Schemas
+# ---------------------------------------------------------------------------
+# Note: VALID_SOURCE_TYPES is defined above in the Lead Management section
+# so that LeadListQuerySchema can reference it.
+
+
+class IngestionRequestSchema(RequestSchema):
+    """Base schema for all ingestion endpoints (POST /api/ingestion/*).
+
+    Validates the owner_user_id and records payload that every ingestion
+    endpoint requires. Unknown fields are silently dropped (via RequestSchema).
+    """
+    owner_user_id = fields.Str(required=True, validate=validate.Length(min=1, max=36))
+    records = fields.List(fields.Dict(), required=True, validate=validate.Length(min=1))
+
+
+class CSVUploadQuerySchema(RequestSchema):
+    """Query params for CSV upload endpoint (POST /api/ingestion/csv).
+
+    Validates the owner_user_id query parameter that identifies the account
+    that will own the leads created from the uploaded CSV.
+    """
+    owner_user_id = fields.Str(required=True, validate=validate.Length(min=1, max=36))
+
+
+class ImportJobResponseSchema(Schema):
+    """Serializer for ImportJob status polling response (GET /api/ingestion/jobs/<id>).
+
+    All fields are dump_only — this schema is used exclusively for output.
+    """
+    id = fields.Int(dump_only=True)
+    status = fields.Str(dump_only=True)
+    source_type = fields.Str(dump_only=True, allow_none=True)
+    rows_processed = fields.Int(dump_only=True)
+    rows_imported = fields.Int(dump_only=True)
+    rows_skipped = fields.Int(dump_only=True)
+    error_log = fields.List(fields.Dict(), dump_only=True)
+    created_at = fields.DateTime(dump_only=True)
+    completed_at = fields.DateTime(dump_only=True, allow_none=True)
 
 
 # ---------------------------------------------------------------------------

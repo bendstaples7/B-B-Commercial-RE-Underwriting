@@ -132,6 +132,9 @@ class Property(db.Model):
 
     # Metadata
     data_source = db.Column(db.String(100), nullable=True)
+    source_type = db.Column(db.String(50), nullable=True, index=True)
+    tax_distress_data = db.Column(db.JSON, nullable=True)
+    manual_priority = db.Column(db.Integer, nullable=True)
     last_import_job_id = db.Column(db.Integer, db.ForeignKey('import_jobs.id'), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)

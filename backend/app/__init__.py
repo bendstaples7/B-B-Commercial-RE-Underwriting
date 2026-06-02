@@ -576,6 +576,10 @@ def create_app(config_name='development'):
     from app.controllers.admin_controller import admin_bp
     app.register_blueprint(admin_bp, url_prefix='/api/admin')
 
+    # DuPage lead database ingestion endpoints
+    from app.controllers.ingestion_controller import ingestion_bp
+    app.register_blueprint(ingestion_bp, url_prefix='/api/ingestion')
+
     # OpenAPI spec endpoint
     from app.openapi import openapi_bp
     app.register_blueprint(openapi_bp, url_prefix='/api')

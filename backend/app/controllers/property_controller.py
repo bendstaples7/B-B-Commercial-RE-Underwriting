@@ -26,6 +26,7 @@ from app.models import (
 )
 from app.models.contact import Contact
 from app.models.property_contact import PropertyContact
+from app.schemas import LeadListQuerySchema
 from app.services.lead_scoring_engine import LeadScoringEngine
 
 logger = logging.getLogger(__name__)
@@ -167,6 +168,8 @@ def _serialize_property_summary(lead):
         'up_next_to_mail': lead.up_next_to_mail,
         'lead_score': lead.lead_score,
         'data_source': lead.data_source,
+        'source_type': lead.source_type,
+        'owner_user_id': lead.owner_user_id,
         'created_at': lead.created_at.isoformat() if lead.created_at else None,
         'updated_at': lead.updated_at.isoformat() if lead.updated_at else None,
     }
@@ -398,6 +401,23 @@ def list_properties():
             )
         except (TypeError, ValueError):
             pass
+
+    # --- DuPage filters: source_type and owner_user_id ---
+    # Use LeadListQuerySchema to validate and deserialize these two params.
+    # Marshmallow's validate.OneOf on source_type raises ValidationError for
+    # invalid values, which the @handle_errors decorator converts to 400.
+    _schema = LeadListQuerySchema()
+    _validated = _schema.load({
+        k: v for k, v in args.items()
+        if k in ('source_type', 'owner_user_id')
+    })
+    source_type = _validated.get('source_type')
+    if source_type is not None:
+        query = query.filter(Lead.source_type == source_type)
+
+    owner_user_id = _validated.get('owner_user_id')
+    if owner_user_id is not None:
+        query = query.filter(Lead.owner_user_id == owner_user_id)
 
     # --- Sorting ---
     sort_by = args.get('sort_by', 'created_at')

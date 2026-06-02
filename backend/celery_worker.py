@@ -110,6 +110,22 @@ celery.conf.update(
             'schedule': int(os.environ.get('HUBSPOT_ENGAGEMENT_SYNC_INTERVAL_MINUTES', 60)) * 60,
             'options': {'expires': 3300},  # expire if not consumed within 55 min
         },
+        # Weekly enrichment: pull DuPage acquisition dates from Illinois MyDec PTAX-203 API
+        # (data.illinois.gov, updated weekly by IDOR). Runs Sunday 3:30 AM UTC, 30 minutes
+        # after the Socrata cache refresh to avoid overlapping heavy DB operations.
+        'dupage-acquisition-date-enrichment': {
+            'task': 'dupage.enrich_acquisition_dates',
+            'schedule': crontab(hour=3, minute=30, day_of_week='sunday'),
+            'options': {'expires': 7200},  # expire after 2 hours if not consumed
+        },
+        # Weekly lead pull: refresh DuPage absentee owner leads from the GIS FeatureServer.
+        # Runs Sunday 3:00 AM UTC — before the acquisition date enrichment so any new leads
+        # already have their acquisition dates populated in the same weekly run.
+        'dupage-absentee-lead-pull': {
+            'task': 'dupage.pull_absentee_leads',
+            'schedule': crontab(hour=3, minute=0, day_of_week='sunday'),
+            'options': {'expires': 7200},
+        },
     },
 )
 
@@ -1034,6 +1050,66 @@ def run_post_import_pipeline(run_ids: list = None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# DuPage Lead Database — async CSV ingestion task (Requirements 6.9, 9.3–9.5)
+# ---------------------------------------------------------------------------
+
+@celery.task(bind=True, name='process_csv_ingestion')
+def process_csv_ingestion(self, job_id: int, file_path: str, owner_user_id: str):
+    """Async Celery task: process a CSV file of manual distress leads.
+
+    Called by the ingestion controller for CSV files > 500 rows.
+
+    Args:
+        job_id: ID of the pre-created ImportJob record.
+        file_path: Absolute path to the temporary CSV file.
+        owner_user_id: Platform user ID that owns the created leads.
+
+    Requirements: 6.9, 9.3, 9.4, 9.5
+    """
+    import os
+
+    from app import create_app
+    app = create_app()
+
+    with app.app_context():
+        try:
+            from app.services.deduplication_engine import DeduplicationEngine
+            from app.services.gis.base import GISConnectorRegistry
+            import app.services.gis.dupage_gis_connector  # triggers self-registration
+            from app.services.lead_ingestion_service import LeadIngestionService
+
+            dedup = DeduplicationEngine()
+            service = LeadIngestionService(
+                dedup_engine=dedup,
+                gis_registry=GISConnectorRegistry,
+            )
+            service.process_csv(job_id, file_path, owner_user_id)
+        except Exception as exc:
+            # process_csv already marks the ImportJob as failed internally,
+            # but if it raised before doing so, mark it here.
+            try:
+                from app import db
+                from app.models.import_job import ImportJob
+                from datetime import datetime
+
+                job = db.session.get(ImportJob, job_id)
+                if job and job.status not in ('completed', 'failed'):
+                    job.status = 'failed'
+                    job.error_log = [{'error': str(exc)}]
+                    job.completed_at = datetime.utcnow()
+                    db.session.commit()
+            except Exception:
+                pass  # don't mask the original exception
+            finally:
+                # Clean up temp file
+                try:
+                    os.unlink(file_path)
+                except OSError:
+                    pass
+            raise
+
+
+# ---------------------------------------------------------------------------
 # Startup assertion
 # ---------------------------------------------------------------------------
 
@@ -1066,7 +1142,63 @@ REQUIRED_TASKS = {
     'hubspot_webhook.extract_signals',
     'hubspot_webhook.rescore_lead',
     'hubspot_webhook.purge_logs',
+    'process_csv_ingestion',
+    'dupage.enrich_acquisition_dates',
+    'dupage.pull_absentee_leads',
 }
+
+
+# ---------------------------------------------------------------------------
+# DuPage acquisition date enrichment — weekly Celery task
+# ---------------------------------------------------------------------------
+
+@celery.task(bind=True, name='dupage.enrich_acquisition_dates')
+def enrich_dupage_acquisition_dates_task(self):
+    """Weekly task: pull DuPage deed transfer dates from Illinois MyDec PTAX-203 API
+    and update leads.acquisition_date for matched leads, then rescore.
+
+    Data source: data.illinois.gov (Socrata), dataset it54-y4c6.
+    Updated weekly by the Illinois Dept. of Revenue. No auth required.
+    """
+    import logging
+    logger = logging.getLogger('celery.dupage.enrich_acquisition_dates')
+
+    from app import create_app
+    app = create_app()
+
+    with app.app_context():
+        try:
+            # Import the script module inline to reuse its logic
+            import sys
+            from pathlib import Path
+            scripts_dir = Path(__file__).resolve().parent / 'scripts'
+            if str(scripts_dir) not in sys.path:
+                sys.path.insert(0, str(scripts_dir))
+
+            from enrich_dupage_acquisition_dates import (
+                fetch_all_dupage_transfers,
+                enrich_leads,
+                rescore_enriched_leads,
+            )
+
+            logger.info("Starting weekly DuPage acquisition date enrichment...")
+            pin_to_date = fetch_all_dupage_transfers()
+
+            if not pin_to_date:
+                logger.error("No PTAX records fetched — enrichment aborted")
+                return {'status': 'aborted', 'reason': 'no records fetched'}
+
+            stats = enrich_leads(pin_to_date, dry_run=False)
+            logger.info("Enrichment: %s leads updated", stats.get('updated', 0))
+
+            if stats.get('updated', 0) > 0:
+                rescore_enriched_leads(dry_run=False)
+
+            return {'status': 'completed', **stats}
+
+        except Exception as exc:
+            logger.error("DuPage acquisition date enrichment failed: %s", exc)
+            raise
 
 
 @worker_ready.connect
@@ -1077,3 +1209,170 @@ def assert_tasks_registered(sender, **kwargs):
         f"Worker started with missing tasks: {missing}. "
         f"Check celery_worker.py."
     )
+
+
+# ---------------------------------------------------------------------------
+# DuPage absentee owner lead pull — weekly Celery task
+# ---------------------------------------------------------------------------
+
+@celery.task(bind=True, name='dupage.pull_absentee_leads')
+def pull_dupage_absentee_leads_task(self):
+    """Weekly task: pull all DuPage County residential absentee owner leads
+    from the ParcelsWithRealEstateCC GIS FeatureServer and upsert them into
+    the leads table.  New leads are scored automatically after insert.
+
+    Data source: gis.dupageco.org ArcGIS FeatureServer (no auth required).
+    Run Sunday 3:00 AM UTC — 30 minutes before the acquisition date enrichment
+    so new leads have their deed dates populated in the same weekly window.
+    """
+    import logging
+    logger = logging.getLogger('celery.dupage.pull_absentee_leads')
+
+    try:
+        import sys
+        from pathlib import Path
+        scripts_dir = Path(__file__).resolve().parent / 'scripts'
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+
+        from pull_dupage_leads import (
+            _get_count,
+            _fetch_page,
+            _feature_to_row,
+            ABSENTEE_WHERE,
+        )
+        import sqlalchemy as sa
+        import time
+        import os
+        from datetime import datetime
+
+        db_url = os.environ.get(
+            'DATABASE_URL',
+            'postgresql://postgres:postgres@localhost:5432/real_estate_analysis'
+        )
+        # owner_user_id for userx — the designated DuPage account
+        OWNER_USER_ID = 'f60ca13b-0ca5-4475-8666-9a393f90bff1'
+        BATCH_SIZE = 500
+
+        engine = sa.create_engine(db_url, pool_pre_ping=True)
+
+        total = _get_count(ABSENTEE_WHERE)
+        logger.info("DuPage absentee pull: %s records available", f"{total:,}")
+
+        offset = 0
+        total_upserted = 0
+        total_skipped = 0
+
+        with engine.connect() as conn:
+            while offset < total:
+                fetch_count = min(BATCH_SIZE, total - offset)
+                try:
+                    features = _fetch_page(ABSENTEE_WHERE, offset, fetch_count)
+                except Exception as e:
+                    logger.error("Fetch failed at offset %d: %s — skipping batch", offset, e)
+                    offset += fetch_count
+                    continue
+
+                if not features:
+                    break
+
+                rows = []
+                for feat in features:
+                    row = _feature_to_row(feat.get('attributes', {}), OWNER_USER_ID)
+                    if row:
+                        rows.append(row)
+                    else:
+                        total_skipped += 1
+
+                now = datetime.utcnow()
+                for row in rows:
+                    pin = row.get('county_assessor_pin')
+                    sp = conn.begin_nested()
+                    try:
+                        if pin:
+                            existing = conn.execute(
+                                sa.text('SELECT id FROM leads WHERE county_assessor_pin = :pin'),
+                                {'pin': pin}
+                            ).fetchone()
+                            if existing:
+                                conn.execute(sa.text("""
+                                    UPDATE leads SET
+                                        owner_first_name = COALESCE(owner_first_name, :owner_first_name),
+                                        owner_last_name  = COALESCE(owner_last_name,  :owner_last_name),
+                                        property_street  = COALESCE(property_street,  :property_street),
+                                        property_city    = COALESCE(property_city,    :property_city),
+                                        property_state   = COALESCE(property_state,   :property_state),
+                                        property_zip     = COALESCE(property_zip,     :property_zip),
+                                        mailing_address  = COALESCE(mailing_address,  :mailing_address),
+                                        mailing_city     = COALESCE(mailing_city,     :mailing_city),
+                                        mailing_state    = COALESCE(mailing_state,    :mailing_state),
+                                        mailing_zip      = COALESCE(mailing_zip,      :mailing_zip),
+                                        source_type      = CASE WHEN source_type IS NULL
+                                                           THEN :source_type ELSE source_type END,
+                                        owner_user_id    = COALESCE(owner_user_id,    :owner_user_id),
+                                        updated_at       = :now
+                                    WHERE county_assessor_pin = :county_assessor_pin
+                                """), {**row, 'now': now})
+                                sp.commit()
+                                total_upserted += 1
+                                continue
+
+                        conn.execute(sa.text("""
+                            INSERT INTO leads (
+                                county_assessor_pin, owner_first_name, owner_last_name,
+                                property_street, property_city, property_state, property_zip,
+                                mailing_address, mailing_city, mailing_state, mailing_zip,
+                                source_type, data_source, lead_category, owner_user_id,
+                                needs_skip_trace, lead_score, created_at, updated_at
+                            ) VALUES (
+                                :county_assessor_pin, :owner_first_name, :owner_last_name,
+                                :property_street, :property_city, :property_state, :property_zip,
+                                :mailing_address, :mailing_city, :mailing_state, :mailing_zip,
+                                :source_type, :data_source, :lead_category, :owner_user_id,
+                                :needs_skip_trace, 0, :now, :now
+                            )
+                        """), {**row, 'now': now})
+                        sp.commit()
+                        total_upserted += 1
+                    except Exception:
+                        sp.rollback()
+                        total_skipped += 1
+
+                conn.commit()
+                offset += len(features)
+                time.sleep(0.3)
+
+        logger.info(
+            "DuPage absentee pull complete: %s upserted, %s skipped",
+            f"{total_upserted:,}", f"{total_skipped:,}"
+        )
+
+        # Score any newly inserted leads (lead_score == 0 means unscored)
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            from app import db
+            from app.models.lead import Property
+            from app.services.deterministic_scoring_engine import DeterministicScoringEngine
+            scoring_engine = DeterministicScoringEngine()
+            new_leads = (
+                db.session.query(Property)
+                .filter(
+                    Property.source_type == 'absentee_owner',
+                    Property.lead_score == 0,
+                )
+                .all()
+            )
+            logger.info("Scoring %d new absentee leads...", len(new_leads))
+            for lead in new_leads:
+                try:
+                    scoring_engine.recalculate_lead_score(lead)
+                except Exception as e:
+                    logger.error("Score failed for lead %s: %s", lead.id, e)
+            logger.info("Scoring complete")
+
+        return {'status': 'completed', 'upserted': total_upserted, 'skipped': total_skipped}
+
+    except Exception as exc:
+        logger.error("DuPage absentee lead pull failed: %s", exc)
+        raise
