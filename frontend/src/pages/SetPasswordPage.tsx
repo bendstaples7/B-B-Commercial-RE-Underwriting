@@ -8,6 +8,7 @@
  */
 import { useState, FormEvent } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
+import axios from 'axios'
 import {
   Alert,
   Box,
@@ -18,7 +19,6 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import api from '@/services/api'
 import { useAuth } from '@/context/AuthContext'
 
 // ---------------------------------------------------------------------------
@@ -66,10 +66,14 @@ export function SetPasswordPage() {
     setIsLoading(true)
 
     try {
-      // Use the shared api instance with a manual Authorization header.
-      // The shared instance uses the configured baseURL (e.g. /api) so this
-      // works correctly in all deployment environments.
-      const response = await api.post<{
+      // Call set-password using a standalone axios instance so the shared
+      // api interceptor cannot overwrite the setup_token Authorization header
+      // with a stale session_token from localStorage.
+      const standaloneAxios = axios.create({
+        baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      const response = await standaloneAxios.post<{
         session_token: string
         user_id: string
       }>(
@@ -84,10 +88,9 @@ export function SetPasswordPage() {
       navigate('/', { replace: true })
     } catch (err: unknown) {
       // Extract the error message from the Axios response if available.
-      if (err && typeof err === 'object' && 'response' in err) {
-        const axiosErr = err as { response?: { data?: { message?: string; error?: string } } }
-        const data = axiosErr.response?.data
-        setError(data?.message ?? data?.error ?? 'Failed to set password. Please try again.')
+      if (axios.isAxiosError(err) && err.response?.data) {
+        const data = err.response.data as { message?: string; error?: string }
+        setError(data.message ?? data.error ?? 'Failed to set password. Please try again.')
       } else {
         setError(err instanceof Error ? err.message : 'Failed to set password. Please try again.')
       }

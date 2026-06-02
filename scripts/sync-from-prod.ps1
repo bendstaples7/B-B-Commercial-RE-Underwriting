@@ -105,8 +105,14 @@ if (-not (Test-Path $VPS_SSH_KEY)){ Die "SSH key not found at $VPS_SSH_KEY" }
 
 # Write the pinned VPS host key to a local known_hosts file so SSH can
 # verify the server identity without disabling host-key checking.
+# Use .NET WriteAllText with explicit no-BOM UTF-8 encoding — PowerShell's
+# built-in UTF8 encoding adds a BOM which causes OpenSSH to reject the entry.
 New-Item -ItemType Directory -Force -Path (Split-Path $VPS_KNOWN_HOSTS_FILE) | Out-Null
-Set-Content -Path $VPS_KNOWN_HOSTS_FILE -Value $VPS_HOST_KEY -Encoding UTF8
+[System.IO.File]::WriteAllText(
+    $VPS_KNOWN_HOSTS_FILE,
+    "$VPS_HOST_KEY`n",
+    [System.Text.UTF8Encoding]::new($false)
+)
 
 # --- Step 1: dump prod via SSH -----------------------------------------------
 
