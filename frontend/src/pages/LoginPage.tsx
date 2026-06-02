@@ -31,7 +31,7 @@ import api from '@/services/api'
 // ---------------------------------------------------------------------------
 
 export function LoginPage() {
-  const { login } = useAuth()
+  const { loginWithToken } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -100,8 +100,10 @@ export function LoginPage() {
         return
       }
 
-      // Normal login path — delegate to AuthContext.login() to validate and store the token.
-      await login(email, password)
+      // Normal login path — store the token we already have via loginWithToken.
+      // This avoids a second network request since we already have the response.
+      const { session_token, user_id } = response.data as { session_token: string; user_id: string }
+      loginWithToken(session_token, user_id)
       navigate(from, { replace: true })
     } catch (err: unknown) {
       const message =

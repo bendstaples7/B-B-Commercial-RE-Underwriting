@@ -74,6 +74,18 @@ def upgrade():
     """)
 
     # 5. Reassign unowned leads to ben.d.staples.7@gmail.com
+    # Pre-check: ensure the target user exists before running the bulk UPDATE.
+    bind = op.get_bind()
+    row = bind.execute(
+        sa.text("SELECT user_id FROM users WHERE email_lower = 'ben.d.staples.7@gmail.com'")
+    ).fetchone()
+    if row is None:
+        raise RuntimeError(
+            "Migration w2x3y4z5a6b7: user 'ben.d.staples.7@gmail.com' not found. "
+            "The INSERT above may have failed silently, or the user was already deleted. "
+            "Cannot reassign leads without a valid owner. Aborting migration."
+        )
+
     op.execute("""
         UPDATE leads
         SET owner_user_id = (

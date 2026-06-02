@@ -133,6 +133,7 @@ def login():
 
 
 @auth_bp.route('/set-password', methods=['POST'])
+@limiter.limit("10 per minute")
 @handle_errors
 def set_password():
     """Set password for a user who was provisioned without one.
@@ -181,6 +182,15 @@ def set_password():
     user = User.query.filter_by(user_id=user_id).first()
     if user is None:
         return jsonify({'error': 'User not found'}), 404
+
+    # 4a. Guard against setup token replay: reject if password already set.
+    # A valid setup token can only be used once — once password_set=True the
+    # token is no longer valid for password assignment.
+    if user.password_set:
+        return jsonify({
+            'error': 'Invalid setup token',
+            'message': 'Password has already been set. Use the standard login flow.',
+        }), 400
 
     # 5. Validate new_password from request body
     body = request.get_json(silent=True) or {}

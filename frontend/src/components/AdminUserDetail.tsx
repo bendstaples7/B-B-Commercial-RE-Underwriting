@@ -330,6 +330,12 @@ export default function AdminUserDetail() {
             fullWidth
             margin="dense"
             autoFocus
+            error={newPassword.length > 0 && newPassword.length < 8}
+            helperText={
+              newPassword.length > 0 && newPassword.length < 8
+                ? 'Password must be at least 8 characters'
+                : 'Minimum 8 characters'
+            }
           />
         </DialogContent>
         <DialogActions>
@@ -374,10 +380,17 @@ export default function AdminUserDetail() {
           <Button onClick={() => setEditOpen(false)}>Cancel</Button>
           <Button
             variant="contained"
-            disabled={updateUserMutation.isPending}
-            onClick={() =>
-              updateUserMutation.mutate({ display_name: editDisplayName, email: editEmail })
+            disabled={
+              updateUserMutation.isPending ||
+              (editDisplayName === (summary?.display_name ?? '') &&
+               editEmail === (summary?.email ?? ''))
             }
+            onClick={() => {
+              const patch: { display_name?: string; email?: string } = {}
+              if (editDisplayName !== (summary?.display_name ?? '')) patch.display_name = editDisplayName
+              if (editEmail !== (summary?.email ?? '')) patch.email = editEmail
+              updateUserMutation.mutate(patch)
+            }}
           >
             Save
           </Button>

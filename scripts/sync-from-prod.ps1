@@ -27,6 +27,11 @@ $PG_BIN        = "C:\Program Files\PostgreSQL\17\bin"
 $PSQL          = "$PG_BIN\psql.exe"
 $PG_RESTORE    = "$PG_BIN\pg_restore.exe"
 
+# Pinned VPS host key — matches VPS_HOST_KEY in vps-config.md / GitHub secrets.
+# SSH will fail if the server presents a different key (prevents MITM).
+$VPS_KNOWN_HOSTS_FILE = "$HOME\AppData\Local\BBAnalyzer\vps_known_hosts"
+$VPS_HOST_KEY  = "5.161.200.46 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG3qSNJa8RTI+PBjSz6Z332g9LVw82et/xpdNnZ4KpcJ"
+
 $LOG_DIR       = "$HOME\AppData\Local\BBAnalyzer\logs"
 $DUMP_DIR      = "$HOME\AppData\Local\BBAnalyzer\dumps"
 $LOG_FILE      = "$LOG_DIR\sync-from-prod.log"
@@ -83,9 +88,13 @@ function RunPsql([string]$db, [string]$sql) {
     $tmp = [System.IO.Path]::GetTempFileName() + ".sql"
     Set-Content -Path $tmp -Value $sql -Encoding UTF8
     [System.Environment]::SetEnvironmentVariable("PGPASSWORD", $LOCAL_DB_PASS, "Process")
-    & $PSQL -U $LOCAL_DB_USER -h $LOCAL_DB_HOST -p $LOCAL_DB_PORT -d $db -f $tmp | Out-Null
+    & $PSQL -U $LOCAL_DB_USER -h $LOCAL_DB_HOST -p $LOCAL_DB_PORT -d $db -f $tmp
+    $exitCode = $LASTEXITCODE
     Remove-Item $tmp -ErrorAction SilentlyContinue
     [System.Environment]::SetEnvironmentVariable("PGPASSWORD", $null, "Process")
+    if ($exitCode -ne 0) {
+        Die "psql failed (exit $exitCode) running: $sql"
+    }
 }
 
 # --- Pre-flight checks -------------------------------------------------------
@@ -94,6 +103,11 @@ if (-not (Test-Path $PSQL))       { Die "psql not found at $PSQL" }
 if (-not (Test-Path $PG_RESTORE)) { Die "pg_restore not found at $PG_RESTORE" }
 if (-not (Test-Path $VPS_SSH_KEY)){ Die "SSH key not found at $VPS_SSH_KEY" }
 
+# Write the pinned VPS host key to a local known_hosts file so SSH can
+# verify the server identity without disabling host-key checking.
+New-Item -ItemType Directory -Force -Path (Split-Path $VPS_KNOWN_HOSTS_FILE) | Out-Null
+Set-Content -Path $VPS_KNOWN_HOSTS_FILE -Value $VPS_HOST_KEY -Encoding UTF8
+
 # --- Step 1: dump prod via SSH -----------------------------------------------
 
 Log "=== prod to local sync starting ==="
@@ -101,7 +115,8 @@ Log "Dumping $VPS_DB_NAME from $VPS_HOST ..."
 
 $sshArgs = @(
     "-i", $VPS_SSH_KEY,
-    "-o", "StrictHostKeyChecking=no",
+    "-o", "StrictHostKeyChecking=yes",
+    "-o", "UserKnownHostsFile=$VPS_KNOWN_HOSTS_FILE",
     "-o", "BatchMode=yes",
     "${VPS_USER}@${VPS_HOST}",
     "pg_dump -U $VPS_DB_USER -h localhost -Fc $VPS_DB_NAME"
@@ -148,9 +163,12 @@ Log "Restoring dump into $LOCAL_DB_NAME ..."
     --no-owner --no-acl `
     -j 4 `
     $DUMP_FILE
+$restoreExit = $LASTEXITCODE
 [System.Environment]::SetEnvironmentVariable("PGPASSWORD", $null, "Process")
 
-# Verify data regardless of pg_restore exit code (it exits non-zero on warnings)
+if ($restoreExit -ne 0) {
+    Die "pg_restore failed (exit $restoreExit). Local database may be incomplete."
+}
 [System.Environment]::SetEnvironmentVariable("PGPASSWORD", $LOCAL_DB_PASS, "Process")
 $userCount = (& $PSQL -U $LOCAL_DB_USER -h $LOCAL_DB_HOST -p $LOCAL_DB_PORT `
     -d $LOCAL_DB_NAME -t -c "SELECT COUNT(*) FROM users;" 2>&1).Trim()
@@ -166,8 +184,12 @@ Log "Verified: $userCount users in restored database"
 Log "Running Flask db upgrade ..."
 $backendDir = Join-Path (Split-Path $PSScriptRoot -Parent) "backend"
 Push-Location $backendDir
-python -m flask db upgrade 2>&1 | ForEach-Object { Log $_ }
+$migrateProc = Start-Process -FilePath "python" -ArgumentList "-m", "flask", "db", "upgrade" `
+    -Wait -PassThru -NoNewWindow
 Pop-Location
+if ($migrateProc.ExitCode -ne 0) {
+    Die "flask db upgrade failed (exit $($migrateProc.ExitCode))"
+}
 
 # --- Step 5: clean up old dumps (keep last 5) --------------------------------
 

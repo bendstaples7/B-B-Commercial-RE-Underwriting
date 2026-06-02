@@ -103,6 +103,11 @@ class AuthService:
         # Users provisioned by an admin may have no password yet (empty hash).
         # Skip bcrypt entirely — there is nothing to verify against — and raise
         # PasswordSetupRequiredException so the caller can issue a setup token.
+        # Note: both checks below are intentional:
+        #   - empty password_hash: migration-seeded user with no hash at all
+        #   - password_set==False: user whose hash may exist but was never confirmed
+        # The second check (password_set) runs after is_active to avoid leaking
+        # account existence for users who submit a wrong password.
         if not user.password_hash:
             raise PasswordSetupRequiredException(user)
 

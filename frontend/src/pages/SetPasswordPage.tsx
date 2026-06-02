@@ -18,7 +18,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import axios from 'axios'
+import api from '@/services/api'
 
 // ---------------------------------------------------------------------------
 // Component
@@ -28,6 +28,12 @@ export function SetPasswordPage() {
   const navigate = useNavigate()
   const location = useLocation()
 
+  // All hooks must be called unconditionally before any early return.
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+
   // Read the setup_token from navigation state — if absent, redirect to login.
   // This token is never stored in localStorage per Req 9.6.
   const setupToken = (location.state as { setupToken?: string } | null)?.setupToken
@@ -35,11 +41,6 @@ export function SetPasswordPage() {
     navigate('/login', { replace: true })
     return null
   }
-
-  const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
 
   function validate(): string | null {
     if (!password) return 'New password is required.'
@@ -63,13 +64,14 @@ export function SetPasswordPage() {
     setIsLoading(true)
 
     try {
-      // Use axios directly with a manual Authorization header so the stored
-      // session token (which may not exist yet) is not sent in its place.
-      const response = await axios.post<{
+      // Use the shared api instance with a manual Authorization header.
+      // The shared instance uses the configured baseURL (e.g. /api) so this
+      // works correctly in all deployment environments.
+      const response = await api.post<{
         session_token: string
         user_id: string
       }>(
-        '/api/auth/set-password',
+        '/auth/set-password',
         { new_password: password },
         { headers: { Authorization: `Bearer ${setupToken}` } }
       )
@@ -81,9 +83,10 @@ export function SetPasswordPage() {
       navigate('/', { replace: true })
     } catch (err: unknown) {
       // Extract the error message from the Axios response if available.
-      if (axios.isAxiosError(err) && err.response?.data) {
-        const data = err.response.data as { message?: string; error?: string }
-        setError(data.message ?? data.error ?? 'Failed to set password. Please try again.')
+      if (err && typeof err === 'object' && 'response' in err) {
+        const axiosErr = err as { response?: { data?: { message?: string; error?: string } } }
+        const data = axiosErr.response?.data
+        setError(data?.message ?? data?.error ?? 'Failed to set password. Please try again.')
       } else {
         setError(err instanceof Error ? err.message : 'Failed to set password. Please try again.')
       }
