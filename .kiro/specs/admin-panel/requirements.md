@@ -39,8 +39,8 @@ Admin status is stored as an `is_admin` boolean on the `users` table. The system
 #### Acceptance Criteria
 
 1. THE Admin_Service SHALL add an `is_admin` boolean column to the `users` table with a default value of `false` and a `NOT NULL` constraint.
-2. WHEN the migration runs, THE Admin_Service SHALL set `is_admin = true` for the User record whose `email_lower` is `ben.d.staples.7@gmail.com`, and SHALL leave all other User records with `is_admin = false`.
-3. IF no User record with `email_lower = 'ben.d.staples.7@gmail.com'` exists at migration time, THE Admin_Service migration SHALL fail with a clear error indicating that the user must be created before the migration is run; user/account creation (including `display_name = "Ben"`, `is_active = true`, `is_admin = true`) is handled by a separate seed/bootstrap process and is not part of the migration.
+2. WHEN the migration runs, THE Admin_Service SHALL set `is_admin = true` for the User record whose `email_lower` is `admin@admin.com`, and SHALL leave all other User records with `is_admin = false`.
+3. IF no User record with `email_lower = 'admin@admin.com'` exists at migration time, THE Admin_Service migration SHALL fail with a clear error indicating that the admin account must be created before the migration is run; user/account creation (including `display_name = "Ben Staples"`, `is_active = true`, `is_admin = true`) is handled by a separate seed/bootstrap process and is not part of the migration.
 4. THE Auth_Service SHALL include the `is_admin` claim in the JWT payload when issuing a Session_Token, so that the frontend can determine admin status without an additional API call.
 5. THE Auth_Service SHALL reject any JWT whose `is_admin` claim is present but not a boolean as malformed; if the `is_admin` claim is absent, THE Auth_Service SHALL treat it as `false` (non-admin).
 

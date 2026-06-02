@@ -59,6 +59,7 @@ class AuthService:
             password_hash=password_hash,
             display_name=display_name,
             is_active=True,
+            password_set=True,   # create_user always sets a real password hash
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
         )
@@ -109,6 +110,8 @@ class AuthService:
         # The second check (password_set) runs after is_active to avoid leaking
         # account existence for users who submit a wrong password.
         if not user.password_hash:
+            if not user.is_active:
+                return None
             raise PasswordSetupRequiredException(user)
 
         if not bcrypt.checkpw(password.encode("utf-8"), user.password_hash.encode("utf-8")):

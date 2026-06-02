@@ -19,6 +19,7 @@ import {
   Typography,
 } from '@mui/material'
 import api from '@/services/api'
+import { useAuth } from '@/context/AuthContext'
 
 // ---------------------------------------------------------------------------
 // Component
@@ -27,6 +28,7 @@ import api from '@/services/api'
 export function SetPasswordPage() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { loginWithToken } = useAuth()
 
   // All hooks must be called unconditionally before any early return.
   const [password, setPassword] = useState('')
@@ -76,10 +78,9 @@ export function SetPasswordPage() {
         { headers: { Authorization: `Bearer ${setupToken}` } }
       )
 
-      // Store the returned session token — the user is now fully authenticated.
-      localStorage.setItem('session_token', response.data.session_token)
-      localStorage.setItem('user_id', response.data.user_id)
-
+      // Update AuthContext state (and localStorage) atomically so the app
+      // treats the user as authenticated before navigating to the home page.
+      loginWithToken(response.data.session_token, response.data.user_id)
       navigate('/', { replace: true })
     } catch (err: unknown) {
       // Extract the error message from the Axios response if available.

@@ -528,8 +528,9 @@ class PasswordSetupRequiredException(RealEstateAnalysisException):
     """Exception raised when a user has not yet set their password.
 
     Raised by AuthService.authenticate when the user exists and is active but
-    password_set is False. The caller is expected to issue a short-lived setup
-    JWT and return a 403 response directing the client to POST /api/auth/set-password.
+    has no password set (empty hash or password_set=False). The caller issues a
+    short-lived setup JWT and returns HTTP 200 with {"setup_required": true,
+    "setup_token": "..."} so the client can redirect to POST /api/auth/set-password.
 
     The ``user`` attribute holds the User instance so the caller can issue a
     setup token without an extra database lookup.
@@ -538,7 +539,7 @@ class PasswordSetupRequiredException(RealEstateAnalysisException):
     def __init__(self, user):
         super().__init__(
             "Password setup required. Please set your password before logging in.",
-            status_code=403,
+            status_code=200,
         )
         self.user = user
         self.payload = {

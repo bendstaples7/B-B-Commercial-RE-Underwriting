@@ -192,6 +192,10 @@ def set_password():
             'message': 'Password has already been set. Use the standard login flow.',
         }), 400
 
+    # Reject inactive accounts — they should not be able to complete setup.
+    if not user.is_active:
+        return jsonify({'error': 'Account is not active'}), 403
+
     # 5. Validate new_password from request body
     body = request.get_json(silent=True) or {}
     new_password = body.get('new_password')

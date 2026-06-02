@@ -9,6 +9,7 @@ from app import db
 from app.exceptions import ConflictError, ResourceNotFoundError, ValidationException
 from app.models.user import User
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 
 class AdminService:
@@ -168,8 +169,10 @@ class AdminService:
         # Normalise empty strings to None so callers can pass '' or None interchangeably.
         if display_name is not None and display_name.strip() == '':
             display_name = None
-        if email is not None and email.strip() == '':
-            email = None
+        if email is not None:
+            email = email.strip()
+            if email == '':
+                email = None
 
         if display_name is None and email is None:
             raise ValidationException('At least one of display_name or email must be provided.')
@@ -200,7 +203,11 @@ class AdminService:
         if display_name is not None:
             user.display_name = display_name
 
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            raise ConflictError('Email already in use.')
 
         return {
             'user_id': user.user_id,

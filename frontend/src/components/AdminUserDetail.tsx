@@ -343,7 +343,7 @@ export default function AdminUserDetail() {
           <Button
             variant="contained"
             color="warning"
-            disabled={resetPasswordMutation.isPending || !newPassword}
+            disabled={resetPasswordMutation.isPending || !newPassword || newPassword.length < 8}
             onClick={() => resetPasswordMutation.mutate(newPassword)}
           >
             Reset
