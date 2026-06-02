@@ -152,6 +152,9 @@ def require_auth(f):
             token = auth_header[7:]
             try:
                 claims = AuthService().verify_token(token)
+                # Reject setup tokens — they may only be used with POST /api/auth/set-password
+                if claims.get('setup_required') is True:
+                    return jsonify({'error': 'Setup token cannot be used for authentication'}), 401
                 g.user_id = claims['sub']
                 is_admin_claim = claims.get('is_admin', False)
                 g.is_admin = is_admin_claim if isinstance(is_admin_claim, bool) else False

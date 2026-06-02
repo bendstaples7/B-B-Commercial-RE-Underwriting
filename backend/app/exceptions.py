@@ -520,6 +520,33 @@ class InvalidCronExpressionException(RealEstateAnalysisException):
 
 
 # ---------------------------------------------------------------------------
+# Admin Panel — Password Setup Exceptions
+# ---------------------------------------------------------------------------
+
+
+class PasswordSetupRequiredException(RealEstateAnalysisException):
+    """Exception raised when a user has not yet set their password.
+
+    Raised by AuthService.authenticate when the user exists and is active but
+    password_set is False. The caller is expected to issue a short-lived setup
+    JWT and return a 403 response directing the client to POST /api/auth/set-password.
+
+    The ``user`` attribute holds the User instance so the caller can issue a
+    setup token without an extra database lookup.
+    """
+
+    def __init__(self, user):
+        super().__init__(
+            "Password setup required. Please set your password before logging in.",
+            status_code=403,
+        )
+        self.user = user
+        self.payload = {
+            "error_type": "password_setup_required",
+        }
+
+
+# ---------------------------------------------------------------------------
 # Backward-compatible aliases
 #
 # These names were used in admin_service.py (introduced by the admin-panel

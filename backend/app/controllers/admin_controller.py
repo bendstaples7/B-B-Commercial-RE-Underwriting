@@ -6,10 +6,10 @@ Blueprint is registered at prefix ``/api/admin`` in ``app/__init__.py``.
 import logging
 from functools import wraps
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 from app.api_utils import require_auth, require_admin
-from app.exceptions import NotFoundError, ValidationError
+from app.exceptions import ConflictError, NotFoundError, ValidationError
 from app.services.admin_service import AdminService
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,12 @@ def handle_errors(f):
                 'error': 'Validation error',
                 'message': e.message,
             }), 400
+        except ConflictError as e:
+            logger.warning("Conflict: %s", e.message)
+            return jsonify({
+                'error': 'Conflict',
+                'message': e.message,
+            }), 409
         except ValueError as e:
             logger.warning("Value error: %s", str(e))
             return jsonify({
@@ -133,4 +139,53 @@ def list_leads():
         page=page,
         page_size=page_size,
     )
+    return jsonify(result), 200
+
+
+@admin_bp.route('/users/<user_id>/reset-password', methods=['POST'])
+@handle_errors
+@require_auth
+@require_admin
+def reset_user_password(user_id):
+    """Reset a user's password. Admin-only.
+
+    Request body (JSON):
+        new_password: str (required, min 8 chars)
+
+    Returns 200 {"message": "Password reset successfully."}
+    Returns 400 if password too short or admin trying to reset own password.
+    Returns 403 if not admin.
+    Returns 404 if user not found.
+
+    Requirements: 10.1, 10.2, 10.3, 10.4, 10.5
+    """
+    body = request.get_json(silent=True) or {}
+    new_password = body.get('new_password', '')
+    AdminService().reset_user_password(user_id, new_password, g.user_id)
+    return jsonify({'message': 'Password reset successfully.'}), 200
+
+
+@admin_bp.route('/users/<user_id>', methods=['PATCH'])
+@handle_errors
+@require_auth
+@require_admin
+def update_user(user_id):
+    """Update a user's display_name and/or email. Admin-only.
+
+    Request body (JSON):
+        display_name: str (optional)
+        email: str (optional)
+
+    Returns 200 with updated user object.
+    Returns 400 if neither field provided or validation fails.
+    Returns 403 if not admin.
+    Returns 404 if user not found.
+    Returns 409 if new email already in use.
+
+    Requirements: 11.1, 11.2, 11.3, 11.4, 11.5, 11.6, 11.7
+    """
+    body = request.get_json(silent=True) or {}
+    display_name = body.get('display_name', None)
+    email = body.get('email', None)
+    result = AdminService().update_user(user_id, display_name, email)
     return jsonify(result), 200

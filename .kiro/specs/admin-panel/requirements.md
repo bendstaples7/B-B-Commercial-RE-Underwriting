@@ -2,22 +2,28 @@
 
 ## Introduction
 
-This feature adds an admin panel to the B&B Real Estate Analyzer platform. The platform currently has two users — Ben (ben.d.staples.7@gmail.com) and User X (userx@test.com) — with full lead exclusivity enforced per user. Admins need cross-user visibility to monitor the overall health of the system: who owns what leads, how many import jobs each user has run, and how many marketing lists each user has created.
+This feature adds an admin panel to the B&B Real Estate Analyzer platform. The platform has three users: the admin account (`admin@admin.com`, display name "Ben Staples"), and two sub-users — Ben (`ben.d.staples.7@gmail.com`) and UserX (`userx@test.com`). The sub-users do not yet exist in the database and must be seeded. All 6,790 existing leads currently have `owner_user_id = NULL` and must be reassigned to `ben.d.staples.7@gmail.com` via migration.
 
-The scope is intentionally narrow: **read-only visibility** across all users. Admins can see everything but cannot modify another user's data or impersonate them. Admin status is stored as an `is_admin` boolean on the `users` table, seeded for Ben via a migration.
+The admin panel covers two areas:
+1. **Read-only cross-user visibility** — admins can see all users, their activity summaries, and their leads.
+2. **User management** — admins can reset a user's password, change a user's display name, and change a user's email.
 
-The system uses a Flask/Python backend with PostgreSQL and a React/TypeScript frontend (MUI v5, React Router v6, TanStack React Query v5).
+Sub-users are seeded without a password and must set one on first login via a "set password" flow (they are issued a one-time setup token instead of a normal session token).
+
+Admin status is stored as an `is_admin` boolean on the `users` table. The system uses a Flask/Python backend with PostgreSQL and a React/TypeScript frontend (MUI v5, React Router v6, TanStack React Query v5).
 
 ---
 
 ## Glossary
 
-- **Admin_User**: A User whose `is_admin` column is `true`. Currently only Ben (ben.d.staples.7@gmail.com).
+- **Admin_User**: A User whose `is_admin` column is `true`. Currently only `admin@admin.com` (display name "Ben Staples").
+- **Sub_User**: A non-admin User account. Currently `ben.d.staples.7@gmail.com` ("Ben") and `userx@test.com` ("UserX").
 - **Admin_Service**: The backend component that enforces admin-only access and aggregates cross-user data.
 - **Admin_Panel**: The frontend page at `/admin` that is only visible and accessible to Admin_Users.
 - **User_Summary**: A read-only aggregate view of one user's data: their profile fields plus counts of owned leads, marketing lists, and import jobs.
 - **require_admin**: A Flask decorator that verifies the authenticated user is an Admin_User, returning HTTP 403 if not.
-- **User**: A registered account as defined in the multi-user-lead-exclusivity spec (fields: `id`, `user_id`, `email`, `display_name`, `is_active`, `is_admin`, `created_at`, `updated_at`).
+- **Setup_Token**: A short-lived JWT (1 hour) issued to a newly seeded sub-user that has no password yet. It carries a `setup_required: true` claim and can only be used to call `POST /api/auth/set-password`. It cannot authenticate any other endpoint.
+- **User**: A registered account (fields: `id`, `user_id`, `email`, `email_lower`, `display_name`, `password_hash`, `is_active`, `is_admin`, `password_set`, `created_at`, `updated_at`).
 - **Lead**: A property owner record in the `leads` table with an `owner_user_id` foreign key to `users.user_id`.
 - **MarketingList**: A campaign group in the `marketing_lists` table with a `user_id` foreign key.
 - **ImportJob**: A Google Sheets import record in the `import_jobs` table with a `user_id` foreign key.
@@ -121,3 +127,66 @@ The system uses a Flask/Python backend with PostgreSQL and a React/TypeScript fr
 2. WHEN the JWT is validated on application load or at any point during the session, THE Auth_Context SHALL include `is_admin` in the restored or updated `AuthUser` state.
 3. WHEN a new token is received from the login endpoint, THE Auth_Context SHALL extract and store the `is_admin` claim from the token payload as part of the `AuthUser` object.
 4. THE Auth_Context SHALL treat a token whose `is_admin` claim is present but not a boolean as malformed and SHALL remove it from local storage, treating the user as unauthenticated; if the `is_admin` claim is absent, THE Auth_Context SHALL default it to `false`.
+
+---
+
+### Requirement 8: Seed Sub-Users and Reassign Leads
+
+**User Story:** As a system administrator, I want the two sub-user accounts to exist in the database and all existing leads to be owned by the correct user, so that the admin panel shows accurate data from the start.
+
+#### Acceptance Criteria
+
+1. WHEN the migration runs, THE Admin_Service SHALL insert a User record for `ben.d.staples.7@gmail.com` with `display_name = 'Ben'`, `is_active = true`, `is_admin = false`, and `password_set = false` IF no such record already exists (idempotent).
+2. WHEN the migration runs, THE Admin_Service SHALL insert a User record for `userx@test.com` with `display_name = 'UserX'`, `is_active = true`, `is_admin = false`, and `password_set = false` IF no such record already exists (idempotent).
+3. WHEN the migration runs, THE Admin_Service SHALL update all `leads` rows where `owner_user_id IS NULL` to set `owner_user_id` to the `user_id` of the `ben.d.staples.7@gmail.com` User record.
+4. THE `users` table SHALL have a `password_set` boolean column (`NOT NULL DEFAULT FALSE`) that tracks whether a user has set their own password; this column SHALL be added by the same migration if it does not already exist.
+5. THE migration SHALL be idempotent — running it twice SHALL NOT create duplicate users or fail.
+
+---
+
+### Requirement 9: First-Login Password Setup Flow
+
+**User Story:** As a sub-user who was seeded by the admin, I want to be prompted to set my password on first login, so that I can access the platform securely without the admin knowing my credentials.
+
+#### Acceptance Criteria
+
+1. WHEN a User with `password_set = false` attempts to log in via `POST /api/auth/login`, THE Auth_Service SHALL return HTTP 200 with a JSON body `{"setup_required": true, "setup_token": "<token>"}` instead of a normal session token; the `setup_token` SHALL be a signed JWT with `setup_required: true`, `sub: <user_id>`, `exp: now + 3600` (1 hour), and no `is_admin` claim.
+2. WHEN `POST /api/auth/set-password` is called with a valid `setup_token` in the `Authorization: Bearer` header and a `new_password` in the request body, THE Auth_Service SHALL hash the password, update `password_hash` and set `password_set = true` on the User record, and return a normal session token (same format as a successful login).
+3. IF the `setup_token` is expired or invalid, THE Auth_Service SHALL return HTTP 401.
+4. IF `new_password` is absent or fewer than 8 characters, THE Auth_Service SHALL return HTTP 400 with `{"error": "Validation error", "message": "Password must be at least 8 characters."}`.
+5. THE `setup_token` SHALL NOT be accepted by `require_auth` — any endpoint protected by `require_auth` SHALL return HTTP 401 if presented with a `setup_token`.
+6. WHEN the frontend receives `{"setup_required": true, "setup_token": "..."}` from the login endpoint, THE Login_Page SHALL redirect to `/set-password` and store the `setup_token` in memory (not localStorage).
+7. THE Set_Password_Page at `/set-password` SHALL display a form with a "New Password" field and a "Confirm Password" field; WHEN submitted with matching passwords of at least 8 characters, it SHALL call `POST /api/auth/set-password` and on success redirect to the application home page with the returned session token stored in localStorage.
+8. IF the passwords do not match or are fewer than 8 characters, THE Set_Password_Page SHALL display an inline validation error and SHALL NOT submit the request.
+
+---
+
+### Requirement 10: Admin User Management — Reset Password
+
+**User Story:** As an admin, I want to reset any user's password from the admin panel, so that I can help users who are locked out without needing direct database access.
+
+#### Acceptance Criteria
+
+1. WHEN a `POST /api/admin/users/<user_id>/reset-password` request is made by an Admin_User with a JSON body `{"new_password": "<password>"}`, THE Admin_Service SHALL hash the new password, update the User's `password_hash`, set `password_set = true`, and return HTTP 200 with `{"message": "Password reset successfully."}`.
+2. IF `new_password` is absent or fewer than 8 characters, THE Admin_Service SHALL return HTTP 400 with `{"error": "Validation error", "message": "Password must be at least 8 characters."}`.
+3. IF the `user_id` does not correspond to any User record, THE Admin_Service SHALL return HTTP 404.
+4. WHEN a `POST /api/admin/users/<user_id>/reset-password` request is made by a non-admin authenticated user, THE Admin_Service SHALL return HTTP 403.
+5. THE Admin_Service SHALL NOT allow an Admin_User to reset their own password via this endpoint; IF the `user_id` matches the requesting admin's `user_id`, THE Admin_Service SHALL return HTTP 400 with `{"error": "Validation error", "message": "Use the standard password change flow to update your own password."}`.
+6. THE Admin_Panel user detail view SHALL include a "Reset Password" button that opens a dialog with a "New Password" field; WHEN submitted, it SHALL call `POST /api/admin/users/<user_id>/reset-password` and display a success or error message.
+
+---
+
+### Requirement 11: Admin User Management — Edit Display Name and Email
+
+**User Story:** As an admin, I want to update a user's display name and email from the admin panel, so that I can correct mistakes or accommodate name changes without direct database access.
+
+#### Acceptance Criteria
+
+1. WHEN a `PATCH /api/admin/users/<user_id>` request is made by an Admin_User with a JSON body containing `display_name` and/or `email`, THE Admin_Service SHALL update the specified fields on the User record and return HTTP 200 with the updated user object (same shape as the user summary, without credential fields).
+2. IF `email` is provided, THE Admin_Service SHALL validate it is a non-empty string containing `@`; IF the new email is already in use by another User, THE Admin_Service SHALL return HTTP 409 with `{"error": "Conflict", "message": "Email already in use."}`.
+3. IF `display_name` is provided, THE Admin_Service SHALL validate it is a non-empty string of at most 100 characters.
+4. IF neither `display_name` nor `email` is provided in the request body, THE Admin_Service SHALL return HTTP 400 with `{"error": "Validation error", "message": "At least one of display_name or email must be provided."}`.
+5. IF the `user_id` does not correspond to any User record, THE Admin_Service SHALL return HTTP 404.
+6. WHEN a `PATCH /api/admin/users/<user_id>` request is made by a non-admin authenticated user, THE Admin_Service SHALL return HTTP 403.
+7. WHEN `email` is updated, THE Admin_Service SHALL also update `email_lower` to `email.lower()`.
+8. THE Admin_Panel user detail view SHALL include an "Edit" button that opens a dialog pre-populated with the user's current `display_name` and `email`; WHEN submitted, it SHALL call `PATCH /api/admin/users/<user_id>` and refresh the displayed data on success.

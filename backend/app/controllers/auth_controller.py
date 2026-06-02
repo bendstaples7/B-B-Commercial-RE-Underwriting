@@ -5,15 +5,20 @@ The Blueprint is registered at ``/api/auth`` in ``app/__init__.py``.
 
 Public endpoints (no token required):
   - POST /api/auth/login
+  - POST /api/auth/set-password
   - GET  /api/health  (defined in routes.py, listed here for documentation)
 """
 import logging
 from functools import wraps
 
+import bcrypt
+import jwt
 from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
-from app import limiter
+from app import db, limiter
+from app.exceptions import PasswordSetupRequiredException
+from app.models.user import User
 from app.schemas import LoginSchema
 from app.services.auth_service import AuthService
 
@@ -30,6 +35,7 @@ auth_bp = Blueprint('auth', __name__)
 # ---------------------------------------------------------------------------
 PUBLIC_ENDPOINTS = {
     'POST /api/auth/login',
+    'POST /api/auth/set-password',
     'GET /api/health',
 }
 
@@ -106,7 +112,11 @@ def login():
     email: str = data['email']
     password: str = data['password']
 
-    user = _auth_service.authenticate(email, password)
+    try:
+        user = _auth_service.authenticate(email, password)
+    except PasswordSetupRequiredException as exc:
+        setup_token = _auth_service.issue_setup_token(exc.user)
+        return jsonify({'setup_required': True, 'setup_token': setup_token}), 200
 
     if user is None:
         # Return identical 401 for wrong email and wrong password (Req 2.2)
@@ -116,6 +126,84 @@ def login():
 
     return jsonify({
         'session_token': token,
+        'user_id': user.user_id,
+        'email': user.email,
+        'display_name': user.display_name,
+    }), 200
+
+
+@auth_bp.route('/set-password', methods=['POST'])
+@handle_errors
+def set_password():
+    """Set password for a user who was provisioned without one.
+
+    Requires Authorization: Bearer <setup_token> where setup_token has
+    setup_required=True claim. Returns a normal session token on success.
+
+    Request headers
+    ---------------
+    Authorization : Bearer <setup_token> (required)
+
+    Request body (JSON)
+    -------------------
+    new_password : str (required, minimum 8 characters)
+
+    Returns
+    -------
+    200 — ``{"session_token": str, "user_id": str, "email": str, "display_name": str}``
+    400 — Missing or too-short new_password.
+    401 — Missing, expired, or invalid setup token; or token is not a setup token.
+    404 — User record not found.
+
+    Requirements: 9.2, 9.3, 9.4, 9.5
+    """
+    # 1. Read and validate the Authorization header
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.lower().startswith('bearer '):
+        return jsonify({'error': 'Authentication required'}), 401
+    token = auth_header[7:]
+
+    # 2. Verify the token
+    auth_service = AuthService()
+    try:
+        claims = auth_service.verify_token(token)
+    except jwt.ExpiredSignatureError:
+        return jsonify({'error': 'Token expired'}), 401
+    except jwt.InvalidTokenError:
+        return jsonify({'error': 'Invalid token'}), 401
+
+    # 3. Ensure it is a setup token
+    if claims.get('setup_required') is not True:
+        return jsonify({'error': 'Invalid setup token'}), 401
+
+    # 4. Look up the user
+    user_id = claims['sub']
+    user = User.query.filter_by(user_id=user_id).first()
+    if user is None:
+        return jsonify({'error': 'User not found'}), 404
+
+    # 5. Validate new_password from request body
+    body = request.get_json(silent=True) or {}
+    new_password = body.get('new_password')
+    if not new_password or len(new_password) < 8:
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'Password must be at least 8 characters.',
+        }), 400
+
+    # 6. Hash with bcrypt work factor 12, persist, and mark password as set
+    password_hash = bcrypt.hashpw(
+        new_password.encode('utf-8'),
+        bcrypt.gensalt(rounds=12),
+    ).decode('utf-8')
+    user.password_hash = password_hash
+    user.password_set = True
+    db.session.commit()
+
+    # 7. Issue a normal session token and return the user payload
+    session_token = auth_service.issue_token(user)
+    return jsonify({
+        'session_token': session_token,
         'user_id': user.user_id,
         'email': user.email,
         'display_name': user.display_name,
