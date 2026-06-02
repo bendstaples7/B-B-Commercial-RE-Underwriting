@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Box,
   Button,
@@ -16,6 +16,11 @@ import {
   TableRow,
   TablePagination,
   Chip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
 } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import { adminService } from '@/services/api'
@@ -28,11 +33,38 @@ function safeFormatDate(dateStr: string | null | undefined): string {
   return d.toLocaleDateString()
 }
 
+/** Extract a human-readable error message from an unknown error (e.g. Axios error). */
+function extractErrorMessage(err: unknown): string {
+  if (err && typeof err === 'object') {
+    const axiosErr = err as { response?: { data?: { error?: string; message?: string } }; message?: string }
+    return (
+      axiosErr.response?.data?.error ??
+      axiosErr.response?.data?.message ??
+      axiosErr.message ??
+      'An unexpected error occurred.'
+    )
+  }
+  return 'An unexpected error occurred.'
+}
+
 export default function AdminUserDetail() {
   const { userId } = useParams<{ userId: string }>()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [page, setPage] = useState(0) // MUI TablePagination is 0-indexed
   const PAGE_SIZE = 50
+
+  // ── Reset Password dialog state ──────────────────────────────────────────
+  const [resetPwdOpen, setResetPwdOpen] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [resetPwdSuccess, setResetPwdSuccess] = useState<string | null>(null)
+  const [resetPwdError, setResetPwdError] = useState<string | null>(null)
+
+  // ── Edit User dialog state ───────────────────────────────────────────────
+  const [editOpen, setEditOpen] = useState(false)
+  const [editDisplayName, setEditDisplayName] = useState('')
+  const [editEmail, setEditEmail] = useState('')
+  const [editError, setEditError] = useState<string | null>(null)
 
   // Fetch user summary
   const {
@@ -59,6 +91,32 @@ export default function AdminUserDetail() {
         page_size: PAGE_SIZE,
       }),
     enabled: !!userId,
+  })
+
+  // ── Reset Password mutation ──────────────────────────────────────────────
+  const resetPasswordMutation = useMutation({
+    mutationFn: (password: string) => adminService.resetPassword(userId!, password),
+    onSuccess: () => {
+      setResetPwdSuccess('Password reset successfully.')
+      setResetPwdOpen(false)
+      setNewPassword('')
+    },
+    onError: (err: unknown) => {
+      setResetPwdError(extractErrorMessage(err))
+    },
+  })
+
+  // ── Update User mutation ─────────────────────────────────────────────────
+  const updateUserMutation = useMutation({
+    mutationFn: (data: { display_name?: string; email?: string }) =>
+      adminService.updateUser(userId!, data),
+    onSuccess: () => {
+      setEditOpen(false)
+      queryClient.invalidateQueries({ queryKey: ['adminUserSummary', userId] })
+    },
+    onError: (err: unknown) => {
+      setEditError(extractErrorMessage(err))
+    },
   })
 
   const isLoading = summaryLoading || leadsLoading
@@ -164,7 +222,44 @@ export default function AdminUserDetail() {
               <Typography variant="body1">{summary.marketing_list_count}</Typography>
             </Box>
           </Box>
+
+          {/* Action buttons */}
+          <Box display="flex" gap={2} mt={3}>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                setEditDisplayName(summary?.display_name ?? '')
+                setEditEmail(summary?.email ?? '')
+                setEditError(null)
+                setEditOpen(true)
+              }}
+            >
+              Edit
+            </Button>
+            <Button
+              variant="outlined"
+              color="warning"
+              onClick={() => {
+                setResetPwdOpen(true)
+                setResetPwdError(null)
+                setNewPassword('')
+              }}
+            >
+              Reset Password
+            </Button>
+          </Box>
         </Paper>
+      )}
+
+      {/* Reset password success alert */}
+      {resetPwdSuccess && (
+        <Alert
+          severity="success"
+          onClose={() => setResetPwdSuccess(null)}
+          sx={{ mb: 3 }}
+        >
+          {resetPwdSuccess}
+        </Alert>
       )}
 
       {/* Leads table */}
@@ -217,6 +312,90 @@ export default function AdminUserDetail() {
           rowsPerPageOptions={[PAGE_SIZE]}
         />
       </TableContainer>
+
+      {/* ── Reset Password Dialog ── */}
+      <Dialog open={resetPwdOpen} onClose={() => setResetPwdOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Reset Password</DialogTitle>
+        <DialogContent>
+          {resetPwdError && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {resetPwdError}
+            </Alert>
+          )}
+          <TextField
+            label="New Password"
+            type="password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            fullWidth
+            margin="dense"
+            autoFocus
+            error={newPassword.length > 0 && newPassword.length < 8}
+            helperText={
+              newPassword.length > 0 && newPassword.length < 8
+                ? 'Password must be at least 8 characters'
+                : 'Minimum 8 characters'
+            }
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setResetPwdOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="warning"
+            disabled={resetPasswordMutation.isPending || !newPassword || newPassword.length < 8}
+            onClick={() => resetPasswordMutation.mutate(newPassword)}
+          >
+            Reset
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Edit User Dialog ── */}
+      <Dialog open={editOpen} onClose={() => setEditOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Edit User</DialogTitle>
+        <DialogContent>
+          {editError && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {editError}
+            </Alert>
+          )}
+          <TextField
+            label="Display Name"
+            value={editDisplayName}
+            onChange={(e) => setEditDisplayName(e.target.value)}
+            fullWidth
+            margin="dense"
+            autoFocus
+          />
+          <TextField
+            label="Email"
+            value={editEmail}
+            onChange={(e) => setEditEmail(e.target.value)}
+            fullWidth
+            margin="dense"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={
+              updateUserMutation.isPending ||
+              (editDisplayName === (summary?.display_name ?? '') &&
+               editEmail === (summary?.email ?? ''))
+            }
+            onClick={() => {
+              const patch: { display_name?: string; email?: string } = {}
+              if (editDisplayName !== (summary?.display_name ?? '')) patch.display_name = editDisplayName
+              if (editEmail !== (summary?.email ?? '')) patch.email = editEmail
+              updateUserMutation.mutate(patch)
+            }}
+          >
+            Save
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }

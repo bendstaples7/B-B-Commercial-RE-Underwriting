@@ -8,7 +8,7 @@ from flask import current_app
 from sqlalchemy.exc import IntegrityError
 
 from app import db
-from app.exceptions import ConflictError, ValidationException
+from app.exceptions import ConflictError, PasswordSetupRequiredException, ValidationException
 from app.models.user import User
 
 
@@ -59,6 +59,7 @@ class AuthService:
             password_hash=password_hash,
             display_name=display_name,
             is_active=True,
+            password_set=True,   # create_user always sets a real password hash
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
         )
@@ -100,17 +101,57 @@ class AuthService:
             bcrypt.checkpw(b"dummy", bcrypt.hashpw(b"dummy", bcrypt.gensalt(rounds=12)))
             return None
 
+        # Users provisioned by an admin may have no password yet (empty hash).
+        # Skip bcrypt entirely — there is nothing to verify against — and raise
+        # PasswordSetupRequiredException so the caller can issue a setup token.
+        # Note: both checks below are intentional:
+        #   - empty password_hash: migration-seeded user with no hash at all
+        #   - password_set==False: user whose hash may exist but was never confirmed
+        # The second check (password_set) runs after is_active to avoid leaking
+        # account existence for users who submit a wrong password.
+        if not user.password_hash:
+            if not user.is_active:
+                return None
+            raise PasswordSetupRequiredException(user)
+
         if not bcrypt.checkpw(password.encode("utf-8"), user.password_hash.encode("utf-8")):
             return None
 
         if not user.is_active:
             return None
 
+        # Raise after confirming the user is active to avoid leaking account
+        # existence for totally wrong passwords.
+        if not user.password_set:
+            raise PasswordSetupRequiredException(user)
+
         return user
 
     # ------------------------------------------------------------------
     # JWT lifecycle
     # ------------------------------------------------------------------
+
+    def issue_setup_token(self, user: User) -> str:
+        """Issue a short-lived setup JWT for a user who has not yet set their password.
+
+        This token can ONLY be used with POST /api/auth/set-password.
+        It is explicitly rejected by require_auth.
+
+        Claims: sub, setup_required=True, iat, exp (1 hour lifetime).
+        No is_admin claim — this token cannot authenticate any other endpoint.
+        """
+        now = datetime.utcnow()
+        payload = {
+            "sub": user.user_id,
+            "setup_required": True,
+            "iat": now,
+            "exp": now + timedelta(hours=1),
+        }
+        return jwt.encode(
+            payload,
+            current_app.config["SECRET_KEY"],
+            algorithm="HS256",
+        )
 
     def issue_token(self, user: User) -> str:
         """Issue a signed HS256 JWT for the given user.

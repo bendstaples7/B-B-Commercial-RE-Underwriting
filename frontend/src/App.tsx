@@ -2,6 +2,7 @@ import { createContext, useContext, useState, Component } from 'react'
 import { Routes, Route, Link, Navigate, useNavigate, useParams, useLocation } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import { LoginPage } from './pages/LoginPage'
+import { SetPasswordPage } from './pages/SetPasswordPage'
 import { useLoadScript } from '@react-google-maps/api'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -1382,11 +1383,13 @@ function App() {
   //   - auth is still loading (avoid flash of authenticated shell)
   //   - auth has resolved but user is null (unauthenticated — AuthGuard will redirect)
   const isLoginPage = location.pathname === '/login'
-  if (isLoginPage || authLoading || !user) {
+  const isSetPasswordPage = location.pathname === '/set-password'
+  if (isLoginPage || isSetPasswordPage || authLoading || !user) {
     return (
       <GoogleMapsLoadedContext.Provider value={mapsLoaded}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/set-password" element={<SetPasswordPage />} />
           <Route path="/*" element={<LoginPage />} />
         </Routes>
       </GoogleMapsLoadedContext.Provider>

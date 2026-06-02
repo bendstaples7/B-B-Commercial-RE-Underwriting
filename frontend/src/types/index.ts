@@ -1836,6 +1836,7 @@ export interface AuthContextValue {
   user: AuthUser | null       // null = unauthenticated
   token: string | null
   login: (email: string, password: string) => Promise<void>
+  loginWithToken: (sessionToken: string, userId: string) => void
   logout: () => void
   isLoading: boolean          // true during initial token validation on load
 }

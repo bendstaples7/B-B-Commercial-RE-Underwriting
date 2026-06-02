@@ -5,7 +5,11 @@
  * On success, redirects to the page the user was trying to reach (state.from)
  * or falls back to the root route.
  *
- * Requirements: 2.1, 2.2, 2.3
+ * If the server returns { setup_required: true, setup_token: "..." }, the user
+ * is redirected to /set-password with the token passed via navigation state
+ * (never stored in localStorage).
+ *
+ * Requirements: 2.1, 2.2, 2.3, 9.6
  */
 import { useState, useEffect, FormEvent } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -27,7 +31,7 @@ import api from '@/services/api'
 // ---------------------------------------------------------------------------
 
 export function LoginPage() {
-  const { login } = useAuth()
+  const { loginWithToken } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -80,7 +84,26 @@ export function LoginPage() {
     setIsLoading(true)
 
     try {
-      await login(email, password)
+      // Call the login endpoint directly so we can inspect the response before
+      // deciding whether to store the session token or redirect to /set-password.
+      const response = await api.post<{
+        session_token?: string
+        user_id?: string
+        setup_required?: boolean
+        setup_token?: string
+      }>('/auth/login', { email, password })
+
+      // Handle first-time password setup flow (Req 9.6)
+      // setup_token is passed via navigation state only — never stored in localStorage.
+      if (response.data.setup_required === true) {
+        navigate('/set-password', { state: { setupToken: response.data.setup_token } })
+        return
+      }
+
+      // Normal login path — store the token we already have via loginWithToken.
+      // This avoids a second network request since we already have the response.
+      const { session_token, user_id } = response.data as { session_token: string; user_id: string }
+      loginWithToken(session_token, user_id)
       navigate(from, { replace: true })
     } catch (err: unknown) {
       const message =

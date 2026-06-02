@@ -3,9 +3,13 @@
 Provides read-only access to all users, their activity summaries,
 and their leads. No modification of another user's data is permitted.
 """
+import bcrypt
+
 from app import db
-from app.exceptions import ResourceNotFoundError, ValidationException
+from app.exceptions import ConflictError, ResourceNotFoundError, ValidationException
+from app.models.user import User
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 
 class AdminService:
@@ -145,3 +149,104 @@ class AdminService:
             'page': page,
             'page_size': page_size,
         }
+
+    def update_user(self, user_id: str, display_name: str | None, email: str | None) -> dict:
+        """Update a user's display_name and/or email. Admin-only operation.
+
+        Args:
+            user_id: The user_id of the user to update.
+            display_name: New display name (optional, non-empty, max 100 chars).
+            email: New email address (optional, must contain '@', must be unique).
+
+        Returns:
+            Updated user dict (same shape as list_users rows — no password_hash).
+
+        Raises:
+            ValidationException: If neither field provided, or validation fails.
+            ResourceNotFoundError: If the user_id does not exist.
+            ConflictError: If the new email is already in use by another user.
+        """
+        # Normalise empty strings to None so callers can pass '' or None interchangeably.
+        if display_name is not None and display_name.strip() == '':
+            display_name = None
+        if email is not None:
+            email = email.strip()
+            if email == '':
+                email = None
+
+        if display_name is None and email is None:
+            raise ValidationException('At least one of display_name or email must be provided.')
+
+        if display_name is not None:
+            if len(display_name) > 100:
+                raise ValidationException('display_name must be 100 characters or fewer.')
+
+        if email is not None:
+            if '@' not in email:
+                raise ValidationException('email must contain @.')
+
+        user = User.query.filter_by(user_id=user_id).first()
+        if user is None:
+            raise ResourceNotFoundError(f'User {user_id} not found.')
+
+        if email is not None:
+            email_lower = email.lower()
+            conflict = User.query.filter(
+                User.email_lower == email_lower,
+                User.user_id != user_id,
+            ).first()
+            if conflict is not None:
+                raise ConflictError('Email already in use.')
+            user.email = email
+            user.email_lower = email_lower
+
+        if display_name is not None:
+            user.display_name = display_name
+
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            raise ConflictError('Email already in use.')
+
+        return {
+            'user_id': user.user_id,
+            'email': user.email,
+            'display_name': user.display_name,
+            'is_active': user.is_active,
+            'is_admin': user.is_admin,
+            'created_at': (
+                user.created_at.isoformat()
+                if user.created_at and hasattr(user.created_at, 'isoformat')
+                else user.created_at
+            ),
+        }
+
+    def reset_user_password(self, user_id: str, new_password: str, requesting_admin_id: str) -> None:
+        """Reset a user's password. Admin-only operation.
+
+        Args:
+            user_id: The user_id of the user whose password to reset.
+            new_password: The new plaintext password (min 8 chars).
+            requesting_admin_id: The user_id of the admin making the request.
+
+        Raises:
+            ValidationException: If new_password is < 8 chars or user_id == requesting_admin_id.
+            ResourceNotFoundError: If the user_id does not exist.
+        """
+        if user_id == requesting_admin_id:
+            raise ValidationException('Use the standard password change flow to update your own password.')
+
+        if not new_password or len(new_password) < 8:
+            raise ValidationException('Password must be at least 8 characters.')
+
+        user = User.query.filter_by(user_id=user_id).first()
+        if user is None:
+            raise ResourceNotFoundError(f'User {user_id} not found.')
+
+        user.password_hash = bcrypt.hashpw(
+            new_password.encode('utf-8'),
+            bcrypt.gensalt(rounds=12),
+        ).decode('utf-8')
+        user.password_set = True
+        db.session.commit()
