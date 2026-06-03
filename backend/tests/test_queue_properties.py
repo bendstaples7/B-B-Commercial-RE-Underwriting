@@ -646,6 +646,9 @@ def _seed_nna_lead(db_session, lead_status: str, recommended_action, task_varian
     return lead.id
 
 
+_nna_seed_counter = 0
+
+
 @pytest.mark.usefixtures('app')
 @settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(
@@ -669,14 +672,17 @@ def test_property_1_no_next_action_filter_predicate(
 
     Validates: Requirements 1.1, 1.3, 1.4
     """
+    global _nna_seed_counter
     from app import db as _db
     from app.services.queue_service import QueueService
 
     with app.app_context():
-        # Seed exactly one lead for this Hypothesis example
-        idx = id((lead_status, recommended_action, task_variant))
-        lead_id = _seed_nna_lead(_db.session, lead_status, recommended_action, task_variant, idx)
-        _db.session.commit()
+        # Use a monotonically increasing counter to guarantee unique street addresses
+        # across all Hypothesis examples (id() of tuples can be reused by CPython).
+        _nna_seed_counter += 1
+        lead_id = _seed_nna_lead(_db.session, lead_status, recommended_action, task_variant, _nna_seed_counter)
+        # Use flush (not commit) so the subsequent rollback actually removes the seeded data.
+        _db.session.flush()
 
         try:
             # Query No Next Action queue — no owner scoping so all leads visible

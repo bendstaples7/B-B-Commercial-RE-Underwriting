@@ -40,6 +40,7 @@ export function NoNextActionQueue() {
   const [page, setPage] = useState(1)
   const queryClient = useQueryClient()
   const [suppressTarget, setSuppressTarget] = useState<QueueRow | null>(null)
+  const [suppressError, setSuppressError] = useState<string | null>(null)
 
   const { data } = useQuery({
     queryKey: ['queue-no-next-action', page],
@@ -57,14 +58,15 @@ export function NoNextActionQueue() {
 
   const handleSuppressConfirm = async () => {
     if (!suppressTarget) return
+    setSuppressError(null)
     try {
       await commandCenterService.suppress(suppressTarget.id)
       queryClient.invalidateQueries({ queryKey: ['queue-no-next-action'] })
       setPage(1)
-    } catch {
-      // Suppress failed — page remains unchanged, dialog still closes
-    } finally {
       setSuppressTarget(null)
+    } catch (err) {
+      console.error('[NoNextActionQueue] Suppress failed:', err)
+      setSuppressError(err instanceof Error ? err.message : 'Suppress failed. Please try again.')
     }
   }
 
@@ -129,7 +131,7 @@ export function NoNextActionQueue() {
       {/* Suppress confirmation dialog */}
       <Dialog
         open={suppressTarget !== null}
-        onClose={() => setSuppressTarget(null)}
+        onClose={() => { setSuppressTarget(null); setSuppressError(null) }}
         data-testid="suppress-confirm-dialog"
       >
         <DialogTitle>Suppress Lead?</DialogTitle>
@@ -137,9 +139,14 @@ export function NoNextActionQueue() {
           <DialogContentText>
             This will suppress the lead and remove it from active queues. Are you sure?
           </DialogContentText>
+          {suppressError && (
+            <DialogContentText color="error" sx={{ mt: 1 }} data-testid="suppress-error">
+              {suppressError}
+            </DialogContentText>
+          )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setSuppressTarget(null)}>Cancel</Button>
+          <Button onClick={() => { setSuppressTarget(null); setSuppressError(null) }}>Cancel</Button>
           <Button
             onClick={handleSuppressConfirm}
             color="error"

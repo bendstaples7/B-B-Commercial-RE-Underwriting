@@ -16,13 +16,15 @@ def _get_queue_service():
     """Return a QueueService scoped to the current user.
 
     Non-admin users only see leads they own.  Admins see all leads.
+    Requests without a valid authenticated user_id are rejected with 401.
     """
+    from flask import abort
     from app.models.user import User
     user_id = getattr(g, 'user_id', None)
-    is_admin = False
-    if user_id and user_id != 'anonymous':
-        user = User.query.filter_by(user_id=user_id).first()
-        is_admin = bool(user and user.is_admin)
+    if not user_id or user_id == 'anonymous':
+        abort(401)
+    user = User.query.filter_by(user_id=user_id).first()
+    is_admin = bool(user and user.is_admin)
     owner_filter = None if is_admin else user_id
     return QueueService(owner_user_id=owner_filter)
 

@@ -33,7 +33,7 @@ No schema changes are required. All relevant columns (`is_warm`, `review_require
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────┐
 │              React Frontend                     │
 │  App.tsx                                        │

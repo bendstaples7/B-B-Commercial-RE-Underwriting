@@ -209,7 +209,7 @@ describe('NoNextActionQueue', () => {
 
       // After successful suppress, the service should be called with page=1
       await waitFor(() => {
-        expect(queueService.getNoNextAction).toHaveBeenCalledWith(1, 20)
+        expect(queueService.getNoNextAction).toHaveBeenLastCalledWith(1, 20)
       })
     })
 

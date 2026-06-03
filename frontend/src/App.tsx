@@ -1242,10 +1242,12 @@ function App() {
   const toggleDrawer = () => setDrawerOpen((prev) => !prev)
 
   // Badge counts — fetch once on mount and refresh every 5 minutes.
-  // Only runs when the user is authenticated (user is non-null at this point).
+  // Keyed by user.id so cached counts are never shared across user sessions.
+  // Disabled until auth resolves and user is confirmed non-null.
   const { data: queueCounts } = useQuery<QueueCounts>({
-    queryKey: ['queue-counts'],
+    queryKey: ['queue-counts', user?.email],
     queryFn: () => queueService.getCounts(),
+    enabled: !!user,
     staleTime: 5 * 60 * 1000,        // 5-minute cache
     refetchInterval: 5 * 60 * 1000,  // re-fetch in the background every 5 minutes
     refetchIntervalInBackground: false,

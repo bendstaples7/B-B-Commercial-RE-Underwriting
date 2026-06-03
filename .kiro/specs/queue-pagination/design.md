@@ -12,7 +12,7 @@ The change is confined entirely to the frontend. No backend or API changes are r
 
 The data flow follows the existing unidirectional pattern used by sorting:
 
-```
+```text
 Queue_Component
   ├── useState(page, setPage)         ← local state, initialized to 1
   ├── useQuery([queryKey, page], fn)  ← page in key forces refetch on change
@@ -226,7 +226,7 @@ totalPages = total > 0 ? Math.ceil(total / per_page) : 0
 
 ### Loading state during page transitions
 
-React Query handles this naturally. When `page` changes, the query key changes and a new fetch is triggered. The previous page's data remains visible (`keepPreviousData` is not configured, so `data` will briefly be `undefined`). The existing `rows = data?.rows ?? []` fallback in every Queue_Component renders an empty table during the transition rather than crashing — this is acceptable and consistent with the current initial-load behavior.
+React Query handles this naturally. When `page` changes, the query key changes and a new fetch is triggered. In TanStack Query v5, when no `placeholderData`/`keepPreviousData` is configured, `data` resets to `undefined` while the new page is being fetched, so previous page rows are **not** preserved during the transition. The existing `rows = data?.rows ?? []` fallback renders an empty table during the transition rather than crashing — this is acceptable and consistent with the current initial-load behavior. To keep previous rows visible during the transition, pass `placeholderData: keepPreviousData` to `useQuery` (imported from `@tanstack/react-query`).
 
 If the desired behavior is to keep previous data visible during transition, `placeholderData: keepPreviousData` can be added to `useQuery` — this is deferred to implementation preference.
 
