@@ -237,6 +237,8 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = ({ onLeadSelect
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [leadCategory, setLeadCategory] = useState<'residential' | 'commercial' | ''>('')
   const [propertyType, setPropertyType] = useState('')
+  const [sourceType, setSourceType] = useState<PropertyListFilters['source_type'] | ''>('')
+  const [ownerUserId, setOwnerUserId] = useState('')
   const [city, setCity] = useState('')
   const [state, setState] = useState('')
   const [zip, setZip] = useState('')
@@ -363,6 +365,8 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = ({ onLeadSelect
     }
     if (leadCategory) filters.lead_category = leadCategory
     if (propertyType) filters.property_type = propertyType
+    if (sourceType) filters.source_type = sourceType as PropertyListFilters['source_type']
+    if (ownerUserId.trim()) filters.owner_user_id = ownerUserId.trim()
     if (city.trim()) filters.city = city.trim()
     if (state.trim()) filters.state = state.trim()
     if (zip.trim()) filters.zip = zip.trim()
@@ -371,7 +375,7 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = ({ onLeadSelect
     if (scoreRange[1] < 100) filters.score_max = scoreRange[1]
     if (marketingListId !== '') filters.marketing_list_id = marketingListId as number
     return filters
-  }, [page, sortBy, sortOrder, leadCategory, propertyType, city, state, zip, ownerName, scoreRange, marketingListId])
+  }, [page, sortBy, sortOrder, leadCategory, propertyType, sourceType, ownerUserId, city, state, zip, ownerName, scoreRange, marketingListId])
 
   const fetchLeads = useCallback(async () => {
     setLoading(true)
@@ -418,6 +422,8 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = ({ onLeadSelect
   const handleClearFilters = () => {
     setLeadCategory('')
     setPropertyType('')
+    setSourceType('')
+    setOwnerUserId('')
     setCity('')
     setState('')
     setZip('')
@@ -502,10 +508,34 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = ({ onLeadSelect
                     {PROPERTY_TYPE_OPTIONS.map((opt) => (<MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>))}
                   </Select>
                 </FormControl>
-                <TextField size="small" label="City" value={city} onChange={(e) => setCity(e.target.value)} fullWidth />
-                <TextField size="small" label="State" value={state} onChange={(e) => setState(e.target.value)} fullWidth />
-                <TextField size="small" label="Zip Code" value={zip} onChange={(e) => setZip(e.target.value)} fullWidth />
-                <TextField size="small" label="Owner Name" value={ownerName} onChange={(e) => setOwnerName(e.target.value)} fullWidth />
+                <FormControl size="small" fullWidth>
+                  <InputLabel id="filter-source-type-label">Source Type</InputLabel>
+                  <Select
+                    labelId="filter-source-type-label"
+                    value={sourceType}
+                    label="Source Type"
+                    onChange={(e) => { setSourceType(e.target.value as any); setPage(1) }}
+                  >
+                    <MenuItem value="">All Sources</MenuItem>
+                    <MenuItem value="foreclosure">Foreclosure</MenuItem>
+                    <MenuItem value="long_owned">Long Owned</MenuItem>
+                    <MenuItem value="absentee_owner">Absentee Owner</MenuItem>
+                    <MenuItem value="tax_distress">Tax Distress</MenuItem>
+                    <MenuItem value="manual_distress">Manual Distress</MenuItem>
+                  </Select>
+                </FormControl>
+                <TextField
+                  size="small"
+                  label="Owner user ID"
+                  placeholder="Owner user ID"
+                  value={ownerUserId}
+                  onChange={(e) => { setOwnerUserId(e.target.value); setPage(1) }}
+                  fullWidth
+                />
+                <TextField size="small" label="City" value={city} onChange={(e) => { setCity(e.target.value); setPage(1) }} fullWidth />
+                <TextField size="small" label="State" value={state} onChange={(e) => { setState(e.target.value); setPage(1) }} fullWidth />
+                <TextField size="small" label="Zip Code" value={zip} onChange={(e) => { setZip(e.target.value); setPage(1) }} fullWidth />
+                <TextField size="small" label="Owner Name" value={ownerName} onChange={(e) => { setOwnerName(e.target.value); setPage(1) }} fullWidth />
                 <FormControl size="small" fullWidth>
                   <InputLabel id="filter-marketing-list-label">Marketing List</InputLabel>
                   <Select labelId="filter-marketing-list-label" value={marketingListId} label="Marketing List" onChange={(e) => setMarketingListId(e.target.value as number | '')}>

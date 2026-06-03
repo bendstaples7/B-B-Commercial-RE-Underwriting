@@ -1,11 +1,10 @@
 """QueueService — badge counts and paginated results for all 7 lead queues."""
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 
-from sqlalchemy import exists, and_, or_, case, select, func
+from sqlalchemy import exists, and_, or_, case, select
 
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry
-from app.models.hubspot_signal import HubSpotSignal
 from app.models.task import Task
 from app.models.task_association import TaskAssociation
 
@@ -73,6 +72,21 @@ def _hubspot_task_overdue_subquery(cutoff_date):
 class QueueService:
     """Computes badge counts and paginated rows for the 7 Actionable Lead Command Center queues."""
 
+    def __init__(self, owner_user_id: str | None = None):
+        """
+        Args:
+            owner_user_id: When set, all queries are scoped to leads owned by
+                           this user.  When None (admin), all leads are included.
+        """
+        self._owner_user_id = owner_user_id
+
+    def _base_query(self):
+        """Return a Lead query scoped to this service's owner, if set."""
+        q = Lead.query
+        if self._owner_user_id:
+            q = q.filter(Lead.owner_user_id == self._owner_user_id)
+        return q
+
     # ------------------------------------------------------------------
     # Badge counts
     # ------------------------------------------------------------------
@@ -80,12 +94,11 @@ class QueueService:
     def get_counts(self) -> dict[str, int]:
         """Return badge counts for all 7 queues as a single dict."""
         today = date.today()
-        ninety_days_ago = datetime.now(timezone.utc) - timedelta(days=90)
         seven_days_ago = today - timedelta(days=7)
 
         return {
             "todays_action": self._count_todays_action(today),
-            "previously_warm": self._count_previously_warm(ninety_days_ago),
+            "previously_warm": self._count_previously_warm(),
             "follow_up_overdue": self._count_follow_up_overdue(today, seven_days_ago),
             "no_next_action": self._count_no_next_action(),
             "needs_review": self._count_needs_review(),
@@ -115,7 +128,7 @@ class QueueService:
         hubspot_task_due_today = _hubspot_task_overdue_subquery(today)
 
         return (
-            db.session.query(Lead)
+            self._base_query()
             .filter(
                 or_(
                     # CRM-native path: requires active/follow_up status
@@ -133,18 +146,9 @@ class QueueService:
             .count()
         )
 
-    def _count_previously_warm(self, ninety_days_ago: datetime) -> int:
-        """Previously Warm: leads with a PRIOR_WARM_CONVERSATION or APPOINTMENT_OCCURRED signal."""
-        subq = (
-            select(Lead.id)
-            .join(HubSpotSignal, HubSpotSignal.lead_id == Lead.id)
-            .filter(
-                HubSpotSignal.signal_type.in_(["PRIOR_WARM_CONVERSATION", "APPOINTMENT_OCCURRED"])
-            )
-            .distinct()
-            .subquery()
-        )
-        return db.session.query(func.count()).select_from(subq).scalar()
+    def _count_previously_warm(self) -> int:
+        """Previously Warm: leads where is_warm = True."""
+        return self._base_query().filter(Lead.is_warm.is_(True)).count()
 
     def _count_follow_up_overdue(self, today: date, seven_days_ago: date) -> int:
         """Follow-Up Overdue: any lead with an overdue follow-up.
@@ -165,7 +169,7 @@ class QueueService:
         hubspot_task_overdue = _hubspot_task_overdue_subquery(yesterday)
 
         return (
-            db.session.query(Lead)
+            self._base_query()
             .filter(
                 or_(
                     open_lead_task_overdue,
@@ -205,12 +209,12 @@ class QueueService:
         )
 
         return (
-            db.session.query(Lead)
+            self._base_query()
             .filter(
                 Lead.lead_status.in_(['active', 'new']),
                 or_(
                     Lead.recommended_action.is_(None),
-                    Lead.recommended_action == 'create_task',
+                    Lead.recommended_action.in_(['create_task', 'ready_for_outreach', 'add_contact_info']),
                 ),
                 ~has_open_lead_task,
                 ~has_open_hubspot_task,
@@ -221,11 +225,11 @@ class QueueService:
 
     def _count_needs_review(self) -> int:
         """Needs Review: review_required = true."""
-        return db.session.query(Lead).filter(Lead.review_required.is_(True)).count()
+        return self._base_query().filter(Lead.review_required.is_(True)).count()
 
     def _count_do_not_contact(self) -> int:
         """Do Not Contact: lead_status = 'do_not_contact'."""
-        return db.session.query(Lead).filter(Lead.lead_status == 'do_not_contact').count()
+        return self._base_query().filter(Lead.lead_status == 'do_not_contact').count()
 
     def _count_missing_property_match(self) -> int:
         """Missing Property Match: has_property_match = false AND no research task open."""
@@ -237,7 +241,7 @@ class QueueService:
             )
         )
         return (
-            db.session.query(Lead)
+            self._base_query()
             .filter(
                 Lead.has_property_match.is_(False),
                 ~has_research_task,
@@ -267,7 +271,7 @@ class QueueService:
         )
         hubspot_task_due_today = _hubspot_task_overdue_subquery(today)
 
-        query = db.session.query(Lead).filter(
+        query = self._base_query().filter(
             or_(
                 and_(
                     Lead.lead_status.in_(['active', 'follow_up']),
@@ -292,17 +296,8 @@ class QueueService:
         sort_by: str = 'lead_score',
         sort_order: str = 'desc',
     ) -> tuple[list[dict], int]:
-        """Previously Warm: leads with warm HubSpot signals."""
-        warm_lead_ids = (
-            select(Lead.id)
-            .join(HubSpotSignal, HubSpotSignal.lead_id == Lead.id)
-            .filter(
-                HubSpotSignal.signal_type.in_(['PRIOR_WARM_CONVERSATION', 'APPOINTMENT_OCCURRED'])
-            )
-            .distinct()
-            .subquery()
-        )
-        query = db.session.query(Lead).filter(Lead.id.in_(warm_lead_ids))
+        """Previously Warm: leads where is_warm = True."""
+        query = self._base_query().filter(Lead.is_warm.is_(True))
         total = query.count()
         sort_col = getattr(Lead, sort_by, Lead.lead_score)
         query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
@@ -330,7 +325,7 @@ class QueueService:
         )
         hubspot_task_overdue = _hubspot_task_overdue_subquery(yesterday)
 
-        query = db.session.query(Lead).filter(
+        query = self._base_query().filter(
             or_(
                 open_lead_task_overdue,
                 and_(
@@ -374,11 +369,11 @@ class QueueService:
                 Task.status.in_(['open', 'overdue']),
             )
         )
-        query = db.session.query(Lead).filter(
+        query = self._base_query().filter(
             Lead.lead_status.in_(['active', 'new']),
             or_(
                 Lead.recommended_action.is_(None),
-                Lead.recommended_action == 'create_task',
+                Lead.recommended_action.in_(['create_task', 'ready_for_outreach', 'add_contact_info']),
             ),
             ~has_open_lead_task,
             ~has_open_hubspot_task,
@@ -402,7 +397,7 @@ class QueueService:
         sort_order: str = 'desc',
     ) -> tuple[list[dict], int]:
         """Needs Review: review_required = true."""
-        query = db.session.query(Lead).filter(Lead.review_required.is_(True))
+        query = self._base_query().filter(Lead.review_required.is_(True))
         total = query.count()
         sort_col = getattr(Lead, sort_by, Lead.review_triggered_at)
         query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
@@ -417,7 +412,7 @@ class QueueService:
         sort_order: str = 'desc',
     ) -> tuple[list[dict], int]:
         """Do Not Contact: lead_status = 'do_not_contact'."""
-        query = db.session.query(Lead).filter(Lead.lead_status == 'do_not_contact')
+        query = self._base_query().filter(Lead.lead_status == 'do_not_contact')
         total = query.count()
         sort_col = getattr(Lead, sort_by, Lead.lead_score)
         query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
@@ -439,7 +434,7 @@ class QueueService:
                 LeadTask.status == 'open',
             )
         )
-        query = db.session.query(Lead).filter(
+        query = self._base_query().filter(
             Lead.has_property_match.is_(False),
             ~has_research_task,
         )

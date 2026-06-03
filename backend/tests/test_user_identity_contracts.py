@@ -103,7 +103,7 @@ class TestLeadIdentityContract:
 
     def test_analyze_lead_no_user_id_in_body(self, app, client):
         """POST /api/leads/:id/analyze must work with user_id in header only."""
-        # Seed a lead
+        # Seed a lead owned by the test user so the ownership check passes
         from app.models import Lead
         with app.app_context():
             lead = Lead(
@@ -112,6 +112,7 @@ class TestLeadIdentityContract:
                 owner_last_name="User",
                 lead_score=50.0,
                 lead_category="residential",
+                owner_user_id=USER_ID,  # must match X-User-Id header
             )
             db.session.add(lead)
             db.session.commit()

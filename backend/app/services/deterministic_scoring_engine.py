@@ -7,6 +7,7 @@ Each recalculation creates a new LeadScore record (append-only history).
 All scoring functions are pure (no DB access) except the recalculate_*
 orchestration methods.
 """
+import json
 import logging
 from datetime import date, datetime
 from typing import Optional
@@ -32,6 +33,19 @@ MOTIVATION_KEYWORDS = [
     "needs work", "deferred maintenance", "boarded up",
 ]
 
+# source_type values that earn the base distress score
+SOURCE_TYPE_DISTRESS_QUALIFYING = frozenset({"foreclosure", "tax_distress", "long_owned"})
+
+# Points awarded per distress scoring rule
+SOURCE_TYPE_DISTRESS_BASE_POINTS = 10
+SOURCE_TYPE_DISTRESS_TAX_BONUS = 5
+SOURCE_TYPE_DISTRESS_COMBINED_CAP = 15  # base + bonus cap
+
+# Tax distress language that must never appear in top_signals or recommended_action
+TAX_DISTRESS_FORBIDDEN_TERMS = frozenset({
+    "tax_delinquency", "tax_sale", "delinquent", "tax delinquency", "tax sale",
+})
+
 # Residential scoring dimension maximums
 RESIDENTIAL_MAX_POINTS = {
     "property_type_fit": 20,
@@ -42,6 +56,7 @@ RESIDENTIAL_MAX_POINTS = {
     "years_owned": 10,
     "existing_notes_motivation": 10,
     "manual_priority": 10,
+    "source_type_distress": SOURCE_TYPE_DISTRESS_COMBINED_CAP,
 }
 
 # Commercial scoring dimension maximums
@@ -114,7 +129,14 @@ class DeterministicScoringEngine:
         details["property_type_fit"] = self._residential_property_type_fit(lead)
         details["neighborhood_fit"] = self._residential_neighborhood_fit(lead)
         details["unit_count_fit"] = self._residential_unit_count_fit(lead)
-        details["absentee_owner"] = self._absentee_owner_score(lead)
+
+        # absentee_owner: short-circuit to full 10 when source_type == 'absentee_owner'
+        source_type = getattr(lead, "source_type", None)
+        if source_type == "absentee_owner":
+            details["absentee_owner"] = 10.0
+        else:
+            details["absentee_owner"] = self._absentee_owner_score(lead)
+
         details["owner_mailing_quality"] = self._owner_mailing_quality(lead)
         details["years_owned"] = self._years_owned_score(lead)
         details["existing_notes_motivation"] = self._notes_motivation_score(
@@ -123,6 +145,7 @@ class DeterministicScoringEngine:
         details["manual_priority"] = self._manual_priority_score(
             lead, max_points=RESIDENTIAL_MAX_POINTS["manual_priority"]
         )
+        details["source_type_distress"] = self._source_type_distress_score(lead)
 
         total_score = sum(details.values())
 
@@ -253,6 +276,46 @@ class DeterministicScoringEngine:
             return 0.0
         # Clamp to [0, max_points]
         return max(0.0, min(float(priority), max_points))
+
+    @staticmethod
+    def _source_type_distress_score(lead: Lead) -> float:
+        """Award points based on source_type and tax_distress_data.
+
+        Scoring rules (residential leads only):
+        - 10 points when source_type in {foreclosure, tax_distress, long_owned}
+        - 5 additional points when tax_distress_data is non-null
+        - Combined cap of 15 points
+        - absentee_owner is handled separately via short-circuit in the caller
+        - Unknown source_type → 0 points; no exception
+        - Malformed tax_distress_data JSON → log warning; treat as null; no exception
+        """
+        source_type = getattr(lead, "source_type", None)
+        base_points = 0.0
+
+        if source_type in SOURCE_TYPE_DISTRESS_QUALIFYING:
+            base_points = float(SOURCE_TYPE_DISTRESS_BASE_POINTS)
+
+        # tax_distress_data bonus — 5 additional points when non-null
+        tax_distress_data = getattr(lead, "tax_distress_data", None)
+
+        # Handle malformed JSON stored as a string
+        if isinstance(tax_distress_data, str):
+            try:
+                tax_distress_data = json.loads(tax_distress_data)
+            except (json.JSONDecodeError, ValueError):
+                logger.warning(
+                    "lead %s: malformed tax_distress_data JSON — treating as null for scoring",
+                    getattr(lead, "id", "unknown"),
+                )
+                tax_distress_data = None
+
+        bonus = 0.0
+        if tax_distress_data is not None:
+            bonus = float(SOURCE_TYPE_DISTRESS_TAX_BONUS)
+
+        total = base_points + bonus
+        # Enforce combined cap
+        return min(total, float(SOURCE_TYPE_DISTRESS_COMBINED_CAP))
 
     # ------------------------------------------------------------------
     # Commercial Scoring
@@ -546,6 +609,8 @@ class DeterministicScoringEngine:
         1. do_not_contact flag -> suppress
         2. Commercial condo overrides (likely_condo -> suppress, needs_review -> needs_manual_review)
         3. Tier-based logic with data quality consideration
+
+        Tax distress language is never included in the returned action string.
         """
         # 1. Do not contact override
         if getattr(lead, "do_not_contact", False):
@@ -575,8 +640,8 @@ class DeterministicScoringEngine:
                 return "enrich_data"
         elif score_tier == "C":
             return "nurture"
-        else:  # D
-            return "suppress"
+        else:  # D — low motivation score, but NOT hidden; guide user to enrich data
+            return "enrich_data"
 
     # ------------------------------------------------------------------
     # Top Signals Extraction
@@ -589,12 +654,22 @@ class DeterministicScoringEngine:
         Returns a list of dicts sorted by points descending, excluding
         dimensions with zero points. Includes at least top 3 (or all
         non-zero if fewer than 3).
+
+        Tax distress language is never included in dimension names or values.
+        The ``source_type_distress`` dimension itself is allowed (it's a neutral
+        name), but any signal whose dimension name or representation contains
+        forbidden tax distress terms is filtered out as a safety guard.
         """
-        non_zero = [
-            {"dimension": dim, "points": pts}
-            for dim, pts in score_details.items()
-            if pts > 0
-        ]
+        non_zero = []
+        for dim, pts in score_details.items():
+            if pts <= 0:
+                continue
+            # Guard: never include a signal whose name contains forbidden tax terms
+            dim_lower = dim.lower().replace("_", " ")
+            is_forbidden = any(term in dim_lower for term in TAX_DISTRESS_FORBIDDEN_TERMS)
+            if is_forbidden:
+                continue
+            non_zero.append({"dimension": dim, "points": pts})
 
         # Sort by points descending
         non_zero.sort(key=lambda x: x["points"], reverse=True)
@@ -651,6 +726,10 @@ class DeterministicScoringEngine:
         )
 
         db.session.add(lead_score)
+
+        # Keep leads.lead_score in sync so list views sort correctly
+        lead.lead_score = total_score
+
         db.session.commit()
 
         logger.info(

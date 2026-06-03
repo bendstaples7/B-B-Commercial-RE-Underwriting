@@ -96,6 +96,11 @@ class LeadStub:
         self.analysis_session_id = kwargs.get('analysis_session_id', None)
         self.analysis_session = kwargs.get('analysis_session', None)
         self.suppression_flag = kwargs.get('suppression_flag', False)
+        # DuPage lead database additions
+        self.source_type = kwargs.get('source_type', None)
+        self.tax_distress_data = kwargs.get('tax_distress_data', None)
+        self.manual_priority = kwargs.get('manual_priority', None)
+        self.owner_user_id = kwargs.get('owner_user_id', None)
         # Lazy-loaded relationships — return empty queryable-like objects
         self.enrichment_records = _EmptyRelationship()
         self.marketing_list_members = _EmptyRelationship()

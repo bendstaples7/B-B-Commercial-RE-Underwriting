@@ -9,6 +9,7 @@
  * - bulk partial failure summary: "X succeeded, Y failed" message shown
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import * as fc from 'fast-check'
 import { render as baseRender, screen, waitFor, within } from '@/test/testUtils'
 import { MemoryRouter } from 'react-router-dom'
 import userEvent from '@testing-library/user-event'
@@ -661,6 +662,163 @@ describe('QueueTable', () => {
 
       expect(screen.getByText('Days Overdue')).toBeInTheDocument()
       expect(screen.getByTestId('extra-1')).toHaveTextContent('5 days')
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Pagination render block
+  // -------------------------------------------------------------------------
+
+  describe('pagination render block', () => {
+    it('renders pagination wrapper when totalPages > 1', () => {
+      render(
+        <QueueTable
+          rows={[makeRow(1)]}
+          total={25}
+          page={1}
+          totalPages={2}
+          onPageChange={vi.fn()}
+        />
+      )
+      expect(screen.getByTestId('queue-pagination')).toBeInTheDocument()
+    })
+
+    it('does not render pagination when totalPages = 1', () => {
+      render(
+        <QueueTable
+          rows={[makeRow(1)]}
+          total={10}
+          page={1}
+          totalPages={1}
+          onPageChange={vi.fn()}
+        />
+      )
+      expect(screen.queryByTestId('queue-pagination')).not.toBeInTheDocument()
+    })
+
+    it('does not render pagination when totalPages prop is not provided', () => {
+      render(<QueueTable rows={[makeRow(1)]} total={25} />)
+      expect(screen.queryByTestId('queue-pagination')).not.toBeInTheDocument()
+    })
+
+    it('renders "Page X of Y" label for specific (page, totalPages) values', () => {
+      render(
+        <QueueTable
+          rows={[makeRow(1)]}
+          total={100}
+          page={3}
+          totalPages={5}
+          onPageChange={vi.fn()}
+        />
+      )
+      expect(screen.getByTestId('queue-page-label')).toHaveTextContent('Page 3 of 5')
+    })
+
+    it('renders aria-label="queue pagination" on wrapping element', () => {
+      render(
+        <QueueTable
+          rows={[makeRow(1)]}
+          total={40}
+          page={1}
+          totalPages={2}
+          onPageChange={vi.fn()}
+        />
+      )
+      expect(screen.getByTestId('queue-pagination')).toHaveAttribute('aria-label', 'queue pagination')
+    })
+
+    it('does not render pagination when total = 0 (empty queue)', () => {
+      render(<QueueTable rows={[]} total={0} totalPages={0} page={1} onPageChange={vi.fn()} />)
+      expect(screen.queryByTestId('queue-pagination')).not.toBeInTheDocument()
+    })
+
+    it('calls onPageChange when page number is clicked', async () => {
+      const onPageChange = vi.fn()
+      render(
+        <QueueTable
+          rows={[makeRow(1)]}
+          total={40}
+          page={1}
+          totalPages={2}
+          onPageChange={onPageChange}
+        />
+      )
+      // Click page 2 button
+      await user.click(screen.getByRole('button', { name: /page 2/i }))
+      expect(onPageChange).toHaveBeenCalledWith(2)
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // P1: Pagination renders with correct content for all valid page positions
+  // -------------------------------------------------------------------------
+
+  // Feature: queue-pagination, Property 1: Pagination renders with correct content for all valid page positions
+  describe('P1: Pagination renders with correct content for all valid page positions', () => {
+    it('renders pagination with correct page label for all valid (page, totalPages) combinations', () => {
+      fc.assert(
+        fc.property(
+          fc.integer({ min: 2, max: 20 }),
+          fc.integer({ min: 1 }),
+          (totalPages, offset) => {
+            const page = ((offset - 1) % totalPages) + 1 // map to [1, totalPages]
+            const { getByTestId, getByText, unmount } = baseRender(
+              <MemoryRouter>
+                <QueueTable
+                  rows={[makeRow(1)]}
+                  total={totalPages * 20}
+                  page={page}
+                  totalPages={totalPages}
+                  onPageChange={vi.fn()}
+                />
+              </MemoryRouter>
+            )
+            expect(getByTestId('queue-pagination')).toHaveAttribute('aria-label', 'queue pagination')
+            expect(getByText(`Page ${page} of ${totalPages}`)).toBeInTheDocument()
+            unmount()
+          }
+        ),
+        { numRuns: 100 }
+      )
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // P2: Page change callback delivers the correct page number (property-based)
+  // -------------------------------------------------------------------------
+
+  // Feature: queue-pagination, Property 2: Page change callback delivers the correct page number
+  describe('P2: Page change callback delivers the correct page number', () => {
+    it('onPageChange is called with the correct page number when a page button is clicked', async () => {
+      // NOTE: numRuns is 20 (instead of 100) because simulating user clicks via
+      // userEvent is significantly more expensive than pure-function tests. Each
+      // iteration mounts and unmounts a real React component with jsdom interaction.
+      // 20 runs still covers the full generator range (2–5 totalPages) many times over.
+      await fc.assert(
+        fc.asyncProperty(
+          fc.integer({ min: 2, max: 5 }),
+          async (totalPages) => {
+            const targetPage = totalPages // click the last page button
+            const onPageChange = vi.fn()
+            const { unmount } = baseRender(
+              <MemoryRouter>
+                <QueueTable
+                  rows={[makeRow(1)]}
+                  total={totalPages * 20}
+                  page={1}
+                  totalPages={totalPages}
+                  onPageChange={onPageChange}
+                />
+              </MemoryRouter>
+            )
+            const userEv = userEvent.setup({ pointerEventsCheck: 0 })
+            await userEv.click(screen.getByRole('button', { name: new RegExp(`page ${targetPage}`, 'i') }))
+            expect(onPageChange).toHaveBeenCalledWith(targetPage)
+            unmount()
+          }
+        ),
+        { numRuns: 20 }
+      )
     })
   })
 })

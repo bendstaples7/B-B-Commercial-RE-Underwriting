@@ -29,9 +29,10 @@ import {
   commandCenterService,
 } from '@/services/api'
 import type { QueueRow } from '@/types'
+import { computeTotalPages, clampPage } from '@/utils/pagination'
 
 export function MissingPropertyMatchQueue() {
-  const [page] = useState(1)
+  const [page, setPage] = useState(1)
   const queryClient = useQueryClient()
   const [suppressTarget, setSuppressTarget] = useState<QueueRow | null>(null)
 
@@ -44,11 +45,16 @@ export function MissingPropertyMatchQueue() {
 
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
+  const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
+  const handlePageChange = (newPage: number) => {
+    setPage(clampPage(newPage, totalPages))
+  }
 
   const handleSuppressConfirm = async () => {
     if (!suppressTarget) return
     await commandCenterService.suppress(suppressTarget.id)
     queryClient.invalidateQueries({ queryKey: ['queue-missing-property-match'] })
+    setPage(1)
     setSuppressTarget(null)
   }
 
@@ -71,6 +77,7 @@ export function MissingPropertyMatchQueue() {
           task_type: 'research_missing_pin',
         })
         queryClient.invalidateQueries({ queryKey: ['queue-missing-property-match'] })
+        setPage(1)
       },
     },
     {
@@ -97,6 +104,7 @@ export function MissingPropertyMatchQueue() {
         total={total}
         rowActions={rowActions}
         extraColumns={extraColumns}
+        {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
       />
 
       {/* Suppress confirmation dialog */}

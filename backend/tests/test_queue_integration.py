@@ -27,6 +27,9 @@ from app.models.hubspot_signal_dictionary import HubSpotSignalDictionary
 from app.services.queue_service import QueueService
 from app.services.action_engine_service import ActionEngineService
 
+# All queue endpoints require an authenticated user (X-User-Id in testing env)
+_AUTH_HEADERS = {'X-User-Id': 'test-user'}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -47,6 +50,7 @@ def _make_lead(app, street: str, **kwargs) -> Lead:
         review_required=False,
         data_completeness_score=0.0,
         unanswered_call_count=0,
+        owner_user_id='test-user',  # matches _AUTH_HEADERS X-User-Id
     )
     defaults.update(kwargs)
     lead = Lead(**defaults)
@@ -153,7 +157,7 @@ class TestTodaysActionQueue:
     def test_endpoint_returns_200(self, app, client):
         """GET /api/queues/todays-action returns HTTP 200."""
         with app.app_context():
-            resp = client.get('/api/queues/todays-action')
+            resp = client.get('/api/queues/todays-action', headers=_AUTH_HEADERS)
             assert resp.status_code == 200
             data = json.loads(resp.data)
             assert 'rows' in data
@@ -166,15 +170,44 @@ class TestTodaysActionQueue:
 
 class TestPreviouslyWarmQueue:
     def test_lead_with_warm_signal_appears(self, app, client):
-        """A lead with a PRIOR_WARM_CONVERSATION signal appears in Previously Warm."""
+        """A lead with a PRIOR_WARM_CONVERSATION signal and is_warm=True appears in Previously Warm.
+
+        The is_warm flag is set directly on the lead (as the HubSpot signal pipeline
+        would do via run_extract_hubspot_signals). The queue filter uses is_warm=True
+        only — not the signals table.
+        """
         with app.app_context():
-            lead = _make_lead(app, '1 Previously Warm St')
+            lead = _make_lead(app, '1 Previously Warm St', is_warm=True)
             _make_warm_signal(app, lead.id)
 
             svc = QueueService()
             rows, total = svc.get_previously_warm()
             ids = [r['id'] for r in rows]
             assert lead.id in ids
+            assert total >= 1
+
+    def test_dupage_lead_with_is_warm_true_appears(self, app, client):
+        """A DuPage lead with is_warm=True appears in Previously Warm (no signal seeding).
+
+        This confirms the is_warm-only filter works end-to-end for non-HubSpot
+        source types. The lead has source_type='foreclosure' and is_warm=True set
+        directly on the model — no HubSpotSignal records involved.
+        """
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '3 Previously Warm St',
+                source_type='foreclosure',
+                is_warm=True,
+            )
+
+            svc = QueueService()
+            rows, total = svc.get_previously_warm()
+            ids = [r['id'] for r in rows]
+            assert lead.id in ids, (
+                f"DuPage lead {lead.id} with is_warm=True not found in Previously Warm. "
+                f"Rows: {ids}"
+            )
             assert total >= 1
 
     def test_lead_without_signal_does_not_appear(self, app, client):
@@ -189,7 +222,7 @@ class TestPreviouslyWarmQueue:
 
     def test_endpoint_returns_200(self, app, client):
         with app.app_context():
-            resp = client.get('/api/queues/previously-warm')
+            resp = client.get('/api/queues/previously-warm', headers=_AUTH_HEADERS)
             assert resp.status_code == 200
 
 
@@ -237,7 +270,7 @@ class TestFollowUpOverdueQueue:
 
     def test_endpoint_returns_200(self, app, client):
         with app.app_context():
-            resp = client.get('/api/queues/follow-up-overdue')
+            resp = client.get('/api/queues/follow-up-overdue', headers=_AUTH_HEADERS)
             assert resp.status_code == 200
 
 
@@ -283,7 +316,7 @@ class TestNoNextActionQueue:
 
     def test_endpoint_returns_200(self, app, client):
         with app.app_context():
-            resp = client.get('/api/queues/no-next-action')
+            resp = client.get('/api/queues/no-next-action', headers=_AUTH_HEADERS)
             assert resp.status_code == 200
 
 
@@ -317,7 +350,7 @@ class TestNeedsReviewQueue:
 
     def test_endpoint_returns_200(self, app, client):
         with app.app_context():
-            resp = client.get('/api/queues/needs-review')
+            resp = client.get('/api/queues/needs-review', headers=_AUTH_HEADERS)
             assert resp.status_code == 200
 
 
@@ -349,7 +382,7 @@ class TestDoNotContactQueue:
 
     def test_endpoint_returns_200(self, app, client):
         with app.app_context():
-            resp = client.get('/api/queues/do-not-contact')
+            resp = client.get('/api/queues/do-not-contact', headers=_AUTH_HEADERS)
             assert resp.status_code == 200
 
 
@@ -381,7 +414,7 @@ class TestMissingPropertyMatchQueue:
 
     def test_endpoint_returns_200(self, app, client):
         with app.app_context():
-            resp = client.get('/api/queues/missing-property-match')
+            resp = client.get('/api/queues/missing-property-match', headers=_AUTH_HEADERS)
             assert resp.status_code == 200
 
 
@@ -393,7 +426,7 @@ class TestQueueCountsEndpoint:
     def test_counts_endpoint_returns_all_7_keys(self, app, client):
         """GET /api/queues/counts returns all 7 queue count keys."""
         with app.app_context():
-            resp = client.get('/api/queues/counts')
+            resp = client.get('/api/queues/counts', headers=_AUTH_HEADERS)
             assert resp.status_code == 200
             data = json.loads(resp.data)
             expected_keys = {
@@ -406,7 +439,7 @@ class TestQueueCountsEndpoint:
     def test_counts_are_non_negative_integers(self, app, client):
         """All queue counts are non-negative integers."""
         with app.app_context():
-            resp = client.get('/api/queues/counts')
+            resp = client.get('/api/queues/counts', headers=_AUTH_HEADERS)
             data = json.loads(resp.data)
             for key, value in data.items():
                 assert isinstance(value, int), f"{key} is not an int: {value}"
@@ -481,3 +514,146 @@ class TestHealthEndpoint:
             assert 'status' in data
             assert 'checks' in data
             assert 'db_connectivity' in data['checks']
+
+
+# ---------------------------------------------------------------------------
+# DuPage Lead Queue Visibility — source-agnostic queue filtering
+# Asserts HubSpot-sourced (source_type=None) and DuPage-sourced
+# (source_type='foreclosure') leads with identical qualifying fields
+# both appear in the same queue.
+# ---------------------------------------------------------------------------
+
+class TestDuPageLeadQueueVisibility:
+    """Seed a HubSpot-sourced and a DuPage-sourced lead with identical
+    qualifying field values and assert both appear in the same queue.
+
+    Covers queues: No Next Action, Previously Warm, Needs Review,
+    Missing Property Match.
+    """
+
+    # ------------------------------------------------------------------
+    # Queue 4: No Next Action
+    # ------------------------------------------------------------------
+
+    def test_no_next_action_both_sources_appear(self, app, client):
+        """Both HubSpot-sourced (no source_type) and DuPage-sourced leads
+        with lead_status='new', recommended_action=None, and no tasks appear
+        in get_no_next_action()."""
+        with app.app_context():
+            hubspot_lead = _make_lead(
+                app, '10 DuPage NNA HubSpot St',
+                lead_status='new',
+                recommended_action=None,
+                source_type=None,
+            )
+            dupage_lead = _make_lead(
+                app, '10 DuPage NNA DuPage St',
+                lead_status='new',
+                recommended_action=None,
+                source_type='foreclosure',
+            )
+
+            svc = QueueService()
+            rows, total = svc.get_no_next_action()
+            ids = [r['id'] for r in rows]
+
+            assert hubspot_lead.id in ids, (
+                f"HubSpot lead {hubspot_lead.id} missing from No Next Action. ids={ids}"
+            )
+            assert dupage_lead.id in ids, (
+                f"DuPage lead {dupage_lead.id} missing from No Next Action. ids={ids}"
+            )
+            assert total >= 2
+
+    # ------------------------------------------------------------------
+    # Queue 2: Previously Warm
+    # ------------------------------------------------------------------
+
+    def test_previously_warm_both_sources_appear(self, app, client):
+        """Both HubSpot-sourced and DuPage-sourced leads with is_warm=True
+        appear in get_previously_warm()."""
+        with app.app_context():
+            hubspot_lead = _make_lead(
+                app, '20 DuPage Warm HubSpot St',
+                is_warm=True,
+                source_type=None,
+            )
+            dupage_lead = _make_lead(
+                app, '20 DuPage Warm DuPage St',
+                is_warm=True,
+                source_type='foreclosure',
+            )
+
+            svc = QueueService()
+            rows, total = svc.get_previously_warm()
+            ids = [r['id'] for r in rows]
+
+            assert hubspot_lead.id in ids, (
+                f"HubSpot lead {hubspot_lead.id} missing from Previously Warm. ids={ids}"
+            )
+            assert dupage_lead.id in ids, (
+                f"DuPage lead {dupage_lead.id} missing from Previously Warm. ids={ids}"
+            )
+            assert total >= 2
+
+    # ------------------------------------------------------------------
+    # Queue 5: Needs Review
+    # ------------------------------------------------------------------
+
+    def test_needs_review_both_sources_appear(self, app, client):
+        """Both HubSpot-sourced and DuPage-sourced leads with review_required=True
+        appear in get_needs_review()."""
+        with app.app_context():
+            hubspot_lead = _make_lead(
+                app, '30 DuPage Review HubSpot St',
+                review_required=True,
+                source_type=None,
+            )
+            dupage_lead = _make_lead(
+                app, '30 DuPage Review DuPage St',
+                review_required=True,
+                source_type='foreclosure',
+            )
+
+            svc = QueueService()
+            rows, total = svc.get_needs_review()
+            ids = [r['id'] for r in rows]
+
+            assert hubspot_lead.id in ids, (
+                f"HubSpot lead {hubspot_lead.id} missing from Needs Review. ids={ids}"
+            )
+            assert dupage_lead.id in ids, (
+                f"DuPage lead {dupage_lead.id} missing from Needs Review. ids={ids}"
+            )
+            assert total >= 2
+
+    # ------------------------------------------------------------------
+    # Queue 7: Missing Property Match
+    # ------------------------------------------------------------------
+
+    def test_missing_property_match_both_sources_appear(self, app, client):
+        """Both HubSpot-sourced and DuPage-sourced leads with
+        has_property_match=False appear in get_missing_property_match()."""
+        with app.app_context():
+            hubspot_lead = _make_lead(
+                app, '40 DuPage NoMatch HubSpot St',
+                has_property_match=False,
+                source_type=None,
+            )
+            dupage_lead = _make_lead(
+                app, '40 DuPage NoMatch DuPage St',
+                has_property_match=False,
+                source_type='foreclosure',
+            )
+
+            svc = QueueService()
+            rows, total = svc.get_missing_property_match()
+            ids = [r['id'] for r in rows]
+
+            assert hubspot_lead.id in ids, (
+                f"HubSpot lead {hubspot_lead.id} missing from Missing Property Match. ids={ids}"
+            )
+            assert dupage_lead.id in ids, (
+                f"DuPage lead {dupage_lead.id} missing from Missing Property Match. ids={ids}"
+            )
+            assert total >= 2

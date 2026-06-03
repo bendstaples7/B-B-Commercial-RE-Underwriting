@@ -14,6 +14,7 @@ class ImportJob(db.Model):
     sheet_name = db.Column(db.String(255), nullable=False)
     field_mapping_id = db.Column(db.Integer, db.ForeignKey('field_mappings.id'), nullable=True)
     status = db.Column(db.String(20), nullable=False, default='pending')
+    source_type = db.Column(db.String(50), nullable=True)
     total_rows = db.Column(db.Integer, default=0)
     rows_processed = db.Column(db.Integer, default=0)
     rows_imported = db.Column(db.Integer, default=0)
