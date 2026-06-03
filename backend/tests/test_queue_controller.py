@@ -200,23 +200,9 @@ class TestPreviouslyWarmQueue:
             assert response.status_code == 200
 
     def test_lead_with_hubspot_sync_appears(self, client, app):
-        """Lead with a PRIOR_WARM_CONVERSATION signal appears in Previously Warm."""
+        """Lead with is_warm=True appears in Previously Warm."""
         with app.app_context():
-            from app.models.hubspot_signal_dictionary import HubSpotSignalDictionary
-            from app.models.hubspot_signal import HubSpotSignal
-            lead = _make_lead(app, '5 Warm St', lead_status='active')
-            if not HubSpotSignalDictionary.query.filter_by(signal_type='PRIOR_WARM_CONVERSATION').first():
-                db.session.add(HubSpotSignalDictionary(
-                    signal_type='PRIOR_WARM_CONVERSATION',
-                    keywords=['interested'],
-                ))
-            db.session.add(HubSpotSignal(
-                lead_id=lead.id,
-                signal_type='PRIOR_WARM_CONVERSATION',
-                source_engagement_id='test-ctrl-warm',
-                raw_evidence='interested',
-            ))
-            db.session.commit()
+            lead = _make_lead(app, '5 Warm St', lead_status='active', is_warm=True)
             response = client.get('/api/queues/previously-warm', headers=_AUTH_HEADERS)
             data = json.loads(response.data)
             ids = [r['id'] for r in data['rows']]
