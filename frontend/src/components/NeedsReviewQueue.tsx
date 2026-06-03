@@ -16,9 +16,10 @@ import { QueueTable } from './QueueTable'
 import type { RowAction, ExtraColumn } from './QueueTable'
 import { queueService } from '@/services/api'
 import type { QueueRow } from '@/types'
+import { computeTotalPages, clampPage } from '@/utils/pagination'
 
 export function NeedsReviewQueue() {
-  const [page] = useState(1)
+  const [page, setPage] = useState(1)
   const navigate = useNavigate()
 
   const { data } = useQuery({
@@ -30,6 +31,10 @@ export function NeedsReviewQueue() {
 
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
+  const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
+  const handlePageChange = (newPage: number) => {
+    setPage(clampPage(newPage, totalPages))
+  }
 
   const extraColumns: ExtraColumn[] = [
     {
@@ -82,6 +87,7 @@ export function NeedsReviewQueue() {
         total={total}
         rowActions={rowActions}
         extraColumns={extraColumns}
+        {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
       />
     </Box>
   )

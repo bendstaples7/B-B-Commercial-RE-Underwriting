@@ -11,6 +11,7 @@ import {
   Checkbox,
   IconButton,
   Link,
+  Pagination,
   Table,
   TableBody,
   TableCell,
@@ -59,6 +60,12 @@ export interface QueueTableProps {
   rowActions?: RowAction[]
   bulkActions?: BulkAction[]
   extraColumns?: ExtraColumn[]
+  /** Current 1-based page number. Required when totalPages is provided. */
+  page?: number
+  /** Total number of pages, computed as Math.ceil(total / per_page). */
+  totalPages?: number
+  /** Called with the new page number when the user changes page. */
+  onPageChange?: (page: number) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +113,9 @@ export function QueueTable({
   rowActions = [],
   bulkActions = [],
   extraColumns = [],
+  page,
+  totalPages,
+  onPageChange,
 }: QueueTableProps) {
   // Per-row optimistic state: 'pending' | 'error' | null
   const [rowStates, setRowStates] = useState<Record<number, { pending: boolean; error: string | null }>>({})
@@ -459,6 +469,27 @@ export function QueueTable({
         >
           {total} total
         </Typography>
+      )}
+
+      {/* Pagination controls */}
+      {(totalPages ?? 0) > 1 && (
+        <Box
+          sx={{ mt: 2, display: 'flex', alignItems: 'center', gap: 2 }}
+          aria-label="queue pagination"
+          data-testid="queue-pagination"
+        >
+          <Typography variant="caption" color="text.secondary" data-testid="queue-page-label">
+            Page {page} of {totalPages}
+          </Typography>
+          <Pagination
+            count={totalPages}
+            page={page}
+            shape="rounded"
+            color="primary"
+            onChange={(_event, value) => onPageChange?.(value)}
+            aria-label="queue pagination"
+          />
+        </Box>
       )}
     </Box>
   )

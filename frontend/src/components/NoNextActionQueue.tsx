@@ -26,6 +26,7 @@ import { QueueTable } from './QueueTable'
 import type { RowAction, ExtraColumn } from './QueueTable'
 import { queueService, callLogService, commandCenterService } from '@/services/api'
 import type { QueueRow } from '@/types'
+import { computeTotalPages, clampPage } from '@/utils/pagination'
 
 function computeDaysSinceActivity(lastContactDate: string | null): number | null {
   if (!lastContactDate) return null
@@ -36,7 +37,7 @@ function computeDaysSinceActivity(lastContactDate: string | null): number | null
 }
 
 export function NoNextActionQueue() {
-  const [page] = useState(1)
+  const [page, setPage] = useState(1)
   const queryClient = useQueryClient()
   const [suppressTarget, setSuppressTarget] = useState<QueueRow | null>(null)
 
@@ -49,12 +50,22 @@ export function NoNextActionQueue() {
 
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
+  const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
+  const handlePageChange = (newPage: number) => {
+    setPage(clampPage(newPage, totalPages))
+  }
 
   const handleSuppressConfirm = async () => {
     if (!suppressTarget) return
-    await commandCenterService.suppress(suppressTarget.id)
-    queryClient.invalidateQueries({ queryKey: ['queue-no-next-action'] })
-    setSuppressTarget(null)
+    try {
+      await commandCenterService.suppress(suppressTarget.id)
+      queryClient.invalidateQueries({ queryKey: ['queue-no-next-action'] })
+      setPage(1)
+    } catch {
+      // Suppress failed — page remains unchanged, dialog still closes
+    } finally {
+      setSuppressTarget(null)
+    }
   }
 
   const extraColumns: ExtraColumn[] = [
@@ -85,6 +96,7 @@ export function NoNextActionQueue() {
         if (!body || !body.trim()) return
         await callLogService.logNote(row.id, { body: body.trim() })
         queryClient.invalidateQueries({ queryKey: ['queue-no-next-action'] })
+        setPage(1)
       },
     },
     {
@@ -111,6 +123,7 @@ export function NoNextActionQueue() {
         total={total}
         rowActions={rowActions}
         extraColumns={extraColumns}
+        {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
       />
 
       {/* Suppress confirmation dialog */}

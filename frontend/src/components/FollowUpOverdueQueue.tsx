@@ -16,6 +16,7 @@ import { QueueTable } from './QueueTable'
 import type { RowAction, ExtraColumn } from './QueueTable'
 import { queueService, callLogService } from '@/services/api'
 import type { QueueRow } from '@/types'
+import { computeTotalPages, clampPage } from '@/utils/pagination'
 
 function computeDaysOverdue(lastContactDate: string | null): number | null {
   if (!lastContactDate) return null
@@ -26,7 +27,7 @@ function computeDaysOverdue(lastContactDate: string | null): number | null {
 }
 
 export function FollowUpOverdueQueue() {
-  const [page] = useState(1)
+  const [page, setPage] = useState(1)
   const queryClient = useQueryClient()
 
   const { data } = useQuery({
@@ -38,6 +39,10 @@ export function FollowUpOverdueQueue() {
 
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
+  const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
+  const handlePageChange = (newPage: number) => {
+    setPage(clampPage(newPage, totalPages))
+  }
 
   const extraColumns: ExtraColumn[] = [
     {
@@ -75,6 +80,7 @@ export function FollowUpOverdueQueue() {
       onClick: async (row: QueueRow) => {
         await callLogService.logCall(row.id, { outcome: 'answered' })
         queryClient.invalidateQueries({ queryKey: ['queue-follow-up-overdue'] })
+        setPage(1)
       },
     },
     {
@@ -86,6 +92,7 @@ export function FollowUpOverdueQueue() {
         if (!body || !body.trim()) return
         await callLogService.logNote(row.id, { body: body.trim() })
         queryClient.invalidateQueries({ queryKey: ['queue-follow-up-overdue'] })
+        setPage(1)
       },
     },
   ]
@@ -104,6 +111,7 @@ export function FollowUpOverdueQueue() {
         total={total}
         rowActions={rowActions}
         extraColumns={extraColumns}
+        {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
       />
     </Box>
   )

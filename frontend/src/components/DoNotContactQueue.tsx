@@ -15,9 +15,10 @@ import { QueueTable } from './QueueTable'
 import type { RowAction, ExtraColumn } from './QueueTable'
 import { queueService, commandCenterService } from '@/services/api'
 import type { QueueRow } from '@/types'
+import { computeTotalPages, clampPage } from '@/utils/pagination'
 
 export function DoNotContactQueue() {
-  const [page] = useState(1)
+  const [page, setPage] = useState(1)
   const queryClient = useQueryClient()
 
   const { data } = useQuery({
@@ -29,6 +30,10 @@ export function DoNotContactQueue() {
 
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
+  const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
+  const handlePageChange = (newPage: number) => {
+    setPage(clampPage(newPage, totalPages))
+  }
 
   const extraColumns: ExtraColumn[] = [
     {
@@ -54,6 +59,7 @@ export function DoNotContactQueue() {
       onClick: async (row: QueueRow) => {
         await commandCenterService.reactivate(row.id)
         queryClient.invalidateQueries({ queryKey: ['queue-do-not-contact'] })
+        setPage(1)
       },
     },
   ]
@@ -72,6 +78,7 @@ export function DoNotContactQueue() {
         total={total}
         rowActions={rowActions}
         extraColumns={extraColumns}
+        {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
       />
     </Box>
   )

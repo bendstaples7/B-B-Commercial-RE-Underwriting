@@ -6,6 +6,7 @@
  *
  * Requirements: 6.3, 18.1
  */
+import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Box, Link, Typography } from '@mui/material'
 import PhoneIcon from '@mui/icons-material/Phone'
@@ -20,19 +21,25 @@ import {
   leadTaskService,
 } from '@/services/api'
 import type { QueueRow } from '@/types'
+import { computeTotalPages, clampPage } from '@/utils/pagination'
 
 export function TodaysActionQueue() {
   const queryClient = useQueryClient()
+  const [page, setPage] = useState(1)
 
   const { data } = useQuery({
-    queryKey: ['queue-todays-action'],
-    queryFn: () => queueService.getTodaysAction(1, 20),
+    queryKey: ['queue-todays-action', page],
+    queryFn: () => queueService.getTodaysAction(page, 20),
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
   })
 
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
+  const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
+  const handlePageChange = (newPage: number) => {
+    setPage(clampPage(newPage, totalPages))
+  }
 
   const overdueCount = rows.filter((r) => r.follow_up_overdue).length
   const followUpNowCount = rows.filter((r) => r.recommended_action === 'follow_up_now').length
@@ -45,6 +52,7 @@ export function TodaysActionQueue() {
       onClick: async (row: QueueRow) => {
         await callLogService.logCall(row.id, { outcome: 'answered' })
         queryClient.invalidateQueries({ queryKey: ['queue-todays-action'] })
+        setPage(1)
       },
     },
     {
@@ -54,6 +62,7 @@ export function TodaysActionQueue() {
       onClick: async (row: QueueRow) => {
         await callLogService.logNote(row.id, { body: '' })
         queryClient.invalidateQueries({ queryKey: ['queue-todays-action'] })
+        setPage(1)
       },
     },
     {
@@ -63,6 +72,7 @@ export function TodaysActionQueue() {
       onClick: async (row: QueueRow) => {
         await leadTaskService.createTask(row.id, { title: 'Follow up', task_type: 'call_owner_today' })
         queryClient.invalidateQueries({ queryKey: ['queue-todays-action'] })
+        setPage(1)
       },
     },
   ]
@@ -101,6 +111,7 @@ export function TodaysActionQueue() {
           rows={rows}
           total={total}
           rowActions={rowActions}
+          {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
         />
       )}
     </Box>
