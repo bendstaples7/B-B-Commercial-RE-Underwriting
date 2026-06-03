@@ -323,6 +323,7 @@ class TestAnalyzeLead:
         with app.app_context():
             lead = _create_lead(
                 app,
+                owner_user_id='user1',
                 bedrooms=3,
                 bathrooms=2.0,
                 square_footage=1500,
@@ -372,7 +373,7 @@ class TestAnalyzeLead:
     def test_analyze_lead_links_session(self, client, app):
         """After analysis, the lead's analysis_session_id is set."""
         with app.app_context():
-            lead = _create_lead(app)
+            lead = _create_lead(app, owner_user_id='user1')
             lead_id = lead.id
 
         resp = client.post(

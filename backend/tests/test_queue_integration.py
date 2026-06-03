@@ -27,6 +27,9 @@ from app.models.hubspot_signal_dictionary import HubSpotSignalDictionary
 from app.services.queue_service import QueueService
 from app.services.action_engine_service import ActionEngineService
 
+# All queue endpoints require an authenticated user (X-User-Id in testing env)
+_AUTH_HEADERS = {'X-User-Id': 'test-user'}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -47,6 +50,7 @@ def _make_lead(app, street: str, **kwargs) -> Lead:
         review_required=False,
         data_completeness_score=0.0,
         unanswered_call_count=0,
+        owner_user_id='test-user',  # matches _AUTH_HEADERS X-User-Id
     )
     defaults.update(kwargs)
     lead = Lead(**defaults)
@@ -153,7 +157,7 @@ class TestTodaysActionQueue:
     def test_endpoint_returns_200(self, app, client):
         """GET /api/queues/todays-action returns HTTP 200."""
         with app.app_context():
-            resp = client.get('/api/queues/todays-action')
+            resp = client.get('/api/queues/todays-action', headers=_AUTH_HEADERS)
             assert resp.status_code == 200
             data = json.loads(resp.data)
             assert 'rows' in data
@@ -218,7 +222,7 @@ class TestPreviouslyWarmQueue:
 
     def test_endpoint_returns_200(self, app, client):
         with app.app_context():
-            resp = client.get('/api/queues/previously-warm')
+            resp = client.get('/api/queues/previously-warm', headers=_AUTH_HEADERS)
             assert resp.status_code == 200
 
 
@@ -266,7 +270,7 @@ class TestFollowUpOverdueQueue:
 
     def test_endpoint_returns_200(self, app, client):
         with app.app_context():
-            resp = client.get('/api/queues/follow-up-overdue')
+            resp = client.get('/api/queues/follow-up-overdue', headers=_AUTH_HEADERS)
             assert resp.status_code == 200
 
 
@@ -312,7 +316,7 @@ class TestNoNextActionQueue:
 
     def test_endpoint_returns_200(self, app, client):
         with app.app_context():
-            resp = client.get('/api/queues/no-next-action')
+            resp = client.get('/api/queues/no-next-action', headers=_AUTH_HEADERS)
             assert resp.status_code == 200
 
 
@@ -346,7 +350,7 @@ class TestNeedsReviewQueue:
 
     def test_endpoint_returns_200(self, app, client):
         with app.app_context():
-            resp = client.get('/api/queues/needs-review')
+            resp = client.get('/api/queues/needs-review', headers=_AUTH_HEADERS)
             assert resp.status_code == 200
 
 
@@ -378,7 +382,7 @@ class TestDoNotContactQueue:
 
     def test_endpoint_returns_200(self, app, client):
         with app.app_context():
-            resp = client.get('/api/queues/do-not-contact')
+            resp = client.get('/api/queues/do-not-contact', headers=_AUTH_HEADERS)
             assert resp.status_code == 200
 
 
@@ -410,7 +414,7 @@ class TestMissingPropertyMatchQueue:
 
     def test_endpoint_returns_200(self, app, client):
         with app.app_context():
-            resp = client.get('/api/queues/missing-property-match')
+            resp = client.get('/api/queues/missing-property-match', headers=_AUTH_HEADERS)
             assert resp.status_code == 200
 
 
@@ -422,7 +426,7 @@ class TestQueueCountsEndpoint:
     def test_counts_endpoint_returns_all_7_keys(self, app, client):
         """GET /api/queues/counts returns all 7 queue count keys."""
         with app.app_context():
-            resp = client.get('/api/queues/counts')
+            resp = client.get('/api/queues/counts', headers=_AUTH_HEADERS)
             assert resp.status_code == 200
             data = json.loads(resp.data)
             expected_keys = {
@@ -435,7 +439,7 @@ class TestQueueCountsEndpoint:
     def test_counts_are_non_negative_integers(self, app, client):
         """All queue counts are non-negative integers."""
         with app.app_context():
-            resp = client.get('/api/queues/counts')
+            resp = client.get('/api/queues/counts', headers=_AUTH_HEADERS)
             data = json.loads(resp.data)
             for key, value in data.items():
                 assert isinstance(value, int), f"{key} is not an int: {value}"
