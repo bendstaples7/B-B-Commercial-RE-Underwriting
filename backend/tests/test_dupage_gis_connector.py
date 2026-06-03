@@ -167,6 +167,41 @@ class TestLookupByAddress:
         # Single quote must be doubled to prevent SQL injection
         assert "''" in params["where"]
 
+    @patch("requests.get")
+    def test_percent_sign_in_address_is_escaped(self, mock_get):
+        """Percent signs must be escaped to prevent LIKE wildcard matching."""
+        mock_get.return_value = _make_mock_response(_SAMPLE_RESPONSE)
+        connector = DuPageGISConnector()
+        connector.lookup_by_address("50% Off St")
+
+        call_kwargs = mock_get.call_args
+        params = call_kwargs[1]["params"] if "params" in call_kwargs[1] else call_kwargs[0][1]
+        # Percent must be backslash-escaped
+        assert r"\%" in params["where"]
+
+    @patch("requests.get")
+    def test_underscore_in_address_is_escaped(self, mock_get):
+        """Underscores must be escaped to prevent LIKE wildcard matching."""
+        mock_get.return_value = _make_mock_response(_SAMPLE_RESPONSE)
+        connector = DuPageGISConnector()
+        connector.lookup_by_address("Main_Street")
+
+        call_kwargs = mock_get.call_args
+        params = call_kwargs[1]["params"] if "params" in call_kwargs[1] else call_kwargs[0][1]
+        # Underscore must be backslash-escaped
+        assert r"\_" in params["where"]
+
+    @patch("requests.get")
+    def test_escape_clause_present_in_where(self, mock_get):
+        """WHERE clause must include ESCAPE '\\' for backslash escaping to work."""
+        mock_get.return_value = _make_mock_response(_SAMPLE_RESPONSE)
+        connector = DuPageGISConnector()
+        connector.lookup_by_address("any address")
+
+        call_kwargs = mock_get.call_args
+        params = call_kwargs[1]["params"] if "params" in call_kwargs[1] else call_kwargs[0][1]
+        assert "ESCAPE" in params["where"]
+
 
 # ---------------------------------------------------------------------------
 # lookup_by_pin — success path
@@ -267,8 +302,8 @@ class TestLookupByPin:
 # Field type coercion
 # ---------------------------------------------------------------------------
 
-class TestFieldTypeCoercion:
-    """Verify safe int/float/str conversion for messy API data."""
+class TestOwnerNameParsing:
+    """Verify PROPNAME parsing into owner_first_name and owner_last_name."""
 
     @patch("requests.get")
     def test_string_propname_splits_on_comma(self, mock_get):

@@ -220,23 +220,38 @@ describe('PropertyListPage — source_type filter', () => {
   })
 
   it('resets page to 1 when source_type filter changes', async () => {
-    // Start from a page != 1 by having listLeads return multi-page data
+    // Step 1: Render with enough pages for pagination to appear
     const MULTI_PAGE_RESPONSE = {
       leads: [],
       total: 60,
-      page: 2,
+      page: 1,
       per_page: 20,
       pages: 3,
     }
     vi.mocked(leadService.listLeads).mockResolvedValue(MULTI_PAGE_RESPONSE)
 
     render(<PropertyListPage />)
+
+    // Wait for pagination to render
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /go to page 2/i })).toBeInTheDocument()
+    })
+
+    // Step 2: Navigate to page 2 via the pagination component
+    const pageTwoBtn = screen.getByRole('button', { name: /go to page 2/i })
+    fireEvent.click(pageTwoBtn)
+
+    // Wait for the re-fetch triggered by page change
+    await waitFor(() => {
+      expect(vi.mocked(leadService.listLeads).toHaveBeenCalledTimes(2))
+    })
+
+    // Step 3: Clear calls and open the filter panel
+    vi.mocked(leadService.listLeads).mockClear()
     await openFilterPanel()
 
-    // Clear the calls made during mount + panel open
-    vi.mocked(leadService.listLeads).mockClear()
+    // Step 4: Change a filter that should trigger page reset to 1
     vi.mocked(leadService.listLeads).mockResolvedValue(EMPTY_LEADS_RESPONSE)
-
     const sourceTypeSelect = screen.getByLabelText('Source Type')
     fireEvent.mouseDown(sourceTypeSelect)
     const listbox = screen.getByRole('listbox')
@@ -246,6 +261,7 @@ describe('PropertyListPage — source_type filter', () => {
       expect(vi.mocked(leadService.listLeads)).toHaveBeenCalled()
     })
 
+    // Step 5: Assert the filter change reset the page back to 1
     const calls = vi.mocked(leadService.listLeads).mock.calls
     const lastCallArgs = calls[calls.length - 1][0]
     expect(lastCallArgs).toMatchObject({ page: 1 })

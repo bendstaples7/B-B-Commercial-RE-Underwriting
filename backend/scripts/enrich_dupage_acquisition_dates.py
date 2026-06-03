@@ -172,10 +172,12 @@ def enrich_leads(pin_to_date: dict[str, date], dry_run: bool) -> dict:
     """Update leads.acquisition_date for leads whose PIN is in the transfer data."""
     import sqlalchemy as sa
 
-    db_url = os.environ.get(
-        'DATABASE_URL',
-        'postgresql://postgres:postgres@localhost:5432/real_estate_analysis'
-    )
+    db_url = os.environ.get('DATABASE_URL')
+    if not db_url:
+        raise RuntimeError(
+            "DATABASE_URL environment variable is required — "
+            "set it in .env or the shell environment before running this script"
+        )
     engine = sa.create_engine(db_url, pool_pre_ping=True)
 
     stats = {'updated': 0, 'already_set': 0, 'no_pin_match': 0}
@@ -211,18 +213,16 @@ def enrich_leads(pin_to_date: dict[str, date], dry_run: bool) -> dict:
             stats['updated'] += 1
 
         if update_tuples and not dry_run:
-            # Build a single bulk UPDATE using VALUES
-            values_clause = ",\n".join(
-                f"('{lead_id}'::uuid, '{deed_date}'::date)"
-                for lead_id, deed_date in update_tuples
+            # Bulk UPDATE using executemany with bound parameters
+            conn.execute(
+                sa.text("""
+                    UPDATE leads
+                    SET acquisition_date = :acq_date,
+                        updated_at = NOW()
+                    WHERE id = :lead_id
+                """),
+                [{"lead_id": str(lid), "acq_date": d} for lid, d in update_tuples]
             )
-            conn.execute(sa.text(f"""
-                UPDATE leads AS l
-                SET acquisition_date = v.acq_date,
-                    updated_at = NOW()
-                FROM (VALUES {values_clause}) AS v(lead_id, acq_date)
-                WHERE l.id = v.lead_id::uuid
-            """))
             updated_ids.extend(lead_id for lead_id, _ in update_tuples)
 
         if not dry_run:
@@ -266,6 +266,12 @@ def rescore_enriched_leads(dry_run: bool) -> None:
                 scored += 1
             except Exception as e:
                 logger.error("Score failed for lead %s: %s", lead.id, e)
+        try:
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            logger.error("Commit failed during rescore: %s — rolled back", e)
+            raise
         logger.info("Rescore complete: %s leads rescored", f"{scored:,}")
 
 
