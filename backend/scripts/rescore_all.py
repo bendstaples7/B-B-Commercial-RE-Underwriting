@@ -29,9 +29,8 @@ if _env_file.exists():
                 if k.strip() not in os.environ:
                     os.environ[k.strip()] = v.strip()
 
-# Must have a proper SECRET_KEY for Flask
-if not os.environ.get('SECRET_KEY') or os.environ['SECRET_KEY'] == 'dev-secret-key':
-    os.environ['SECRET_KEY'] = 'rescore-bulk-local-key'
+# Must have a proper SECRET_KEY for Flask — require it to be set in environment
+# (no fallback; the script will fail at app init if SECRET_KEY is missing)
 
 import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')

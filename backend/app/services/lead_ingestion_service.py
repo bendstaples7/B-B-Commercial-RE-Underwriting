@@ -7,7 +7,7 @@ service is designed to be market-agnostic.
 Requirements: 1.5, 8.1–8.7, 9.1–9.7
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from app.services.deduplication_engine import DeduplicationEngine
@@ -291,7 +291,7 @@ class LeadIngestionService:
         job.rows_imported = rows_imported
         job.rows_skipped = rows_skipped
         job.error_log = error_log
-        job.completed_at = datetime.utcnow()
+        job.completed_at = datetime.now(timezone.utc)
 
     def _fail_import_job(self, job, reason: str) -> None:
         """Mark an ImportJob as failed and record the failure reason.
@@ -304,7 +304,7 @@ class LeadIngestionService:
         """
         job.status = 'failed'
         job.error_log = [{'error': reason}]
-        job.completed_at = datetime.utcnow()
+        job.completed_at = datetime.now(timezone.utc)
 
     def _score_imported_leads(self, job_id: int) -> None:
         """Score all leads created or updated in this import job.

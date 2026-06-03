@@ -302,11 +302,8 @@ class TestUploadCSV:
         mock_task.delay.return_value = MagicMock()
 
         import celery_worker as cw
-        # Temporarily graft the attribute onto the real module
-        had_attr = hasattr(cw, "process_csv_ingestion")
-        cw.process_csv_ingestion = mock_task
 
-        try:
+        with patch.object(cw, "process_csv_ingestion", mock_task):
             with app.app_context():
                 with patch(
                     "app.controllers.ingestion_controller._build_service"
@@ -323,10 +320,6 @@ class TestUploadCSV:
                             data={"file": (io.BytesIO(csv_bytes), "leads.csv")},
                             content_type="multipart/form-data",
                         )
-        finally:
-            # Clean up: remove grafted attribute if it wasn't there originally
-            if not had_attr:
-                del cw.process_csv_ingestion
 
         assert resp.status_code == 202
         data = resp.get_json()

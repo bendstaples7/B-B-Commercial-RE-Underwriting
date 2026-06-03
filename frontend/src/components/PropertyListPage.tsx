@@ -532,10 +532,10 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = ({ onLeadSelect
                   onChange={(e) => { setOwnerUserId(e.target.value); setPage(1) }}
                   fullWidth
                 />
-                <TextField size="small" label="City" value={city} onChange={(e) => setCity(e.target.value)} fullWidth />
-                <TextField size="small" label="State" value={state} onChange={(e) => setState(e.target.value)} fullWidth />
-                <TextField size="small" label="Zip Code" value={zip} onChange={(e) => setZip(e.target.value)} fullWidth />
-                <TextField size="small" label="Owner Name" value={ownerName} onChange={(e) => setOwnerName(e.target.value)} fullWidth />
+                <TextField size="small" label="City" value={city} onChange={(e) => { setCity(e.target.value); setPage(1) }} fullWidth />
+                <TextField size="small" label="State" value={state} onChange={(e) => { setState(e.target.value); setPage(1) }} fullWidth />
+                <TextField size="small" label="Zip Code" value={zip} onChange={(e) => { setZip(e.target.value); setPage(1) }} fullWidth />
+                <TextField size="small" label="Owner Name" value={ownerName} onChange={(e) => { setOwnerName(e.target.value); setPage(1) }} fullWidth />
                 <FormControl size="small" fullWidth>
                   <InputLabel id="filter-marketing-list-label">Marketing List</InputLabel>
                   <Select labelId="filter-marketing-list-label" value={marketingListId} label="Marketing List" onChange={(e) => setMarketingListId(e.target.value as number | '')}>

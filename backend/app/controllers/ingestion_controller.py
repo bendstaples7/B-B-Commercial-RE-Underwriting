@@ -341,9 +341,11 @@ def upload_csv():
             except ImportError:
                 logger.warning(
                     "celery_worker.process_csv_ingestion not yet available; "
-                    "async CSV job %s created but not enqueued",
+                    "processing CSV %s synchronously instead",
                     job.id,
                 )
+                service.process_csv(job.id, tmp_path, owner_user_id)
+                return jsonify({'import_job_id': job.id}), 200
 
             return jsonify({'import_job_id': job.id}), 202
         except Exception:

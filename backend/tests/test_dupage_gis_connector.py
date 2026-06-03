@@ -25,18 +25,12 @@ from app.services.gis.base import GISParcel
 
 _SAMPLE_ATTRIBUTES = {
     "PIN": "0912101018",
-    "PROP_CLASS_DESC": "Single Family Residence",
-    "YEAR_BUILT": 1985,
-    "BLDG_SQ_FT": 1850,
-    "BEDROOMS": 3,
-    "BATHROOMS": 2.0,
-    "LOT_SQ_FT": 8000,
-    "OWNER_FIRST": "Jane",
-    "OWNER_LAST": "Doe",
-    "MAIL_ADDR": "123 Main St",
-    "MAIL_CITY": "Wheaton",
-    "MAIL_STATE": "IL",
-    "MAIL_ZIP": "60187",
+    "PROPNAME": "DOE, JANE",
+    "PROPADDRL1": "123 MAIN ST",
+    "PROPADDRL2": "WHEATON IL 60187",
+    "BILLADDRL1": "123 Main St",
+    "BILLADDRL2": "Wheaton IL 60187",
+    "REA017_PROP_CLASS": "Single Family Residence",
 }
 
 _SAMPLE_RESPONSE = {
@@ -104,13 +98,13 @@ class TestLookupByAddress:
 
         assert parcel.county_assessor_pin == "0912101018"
         assert parcel.property_type == "Single Family Residence"
-        assert parcel.year_built == 1985
-        assert parcel.square_footage == 1850
-        assert parcel.bedrooms == 3
-        assert parcel.bathrooms == 2.0
-        assert parcel.lot_size == 8000
-        assert parcel.owner_first_name == "Jane"
-        assert parcel.owner_last_name == "Doe"
+        assert parcel.year_built is None
+        assert parcel.square_footage is None
+        assert parcel.bedrooms is None
+        assert parcel.bathrooms is None
+        assert parcel.lot_size is None
+        assert parcel.owner_first_name == "JANE"
+        assert parcel.owner_last_name == "DOE"
         assert parcel.mailing_address == "123 Main St"
         assert parcel.mailing_city == "Wheaton"
         assert parcel.mailing_state == "IL"
@@ -125,7 +119,7 @@ class TestLookupByAddress:
         call_kwargs = mock_get.call_args
         params = call_kwargs[1]["params"] if "params" in call_kwargs[1] else call_kwargs[0][1]
         where = params["where"]
-        assert "SITUS_ADDRESS" in where
+        assert "PROPADDRL1" in where
         assert "123 MAIN ST" in where
 
     @patch("requests.get")
@@ -196,13 +190,13 @@ class TestLookupByPin:
 
         assert parcel.county_assessor_pin == "0912101018"
         assert parcel.property_type == "Single Family Residence"
-        assert parcel.year_built == 1985
-        assert parcel.square_footage == 1850
-        assert parcel.bedrooms == 3
-        assert parcel.bathrooms == 2.0
-        assert parcel.lot_size == 8000
-        assert parcel.owner_first_name == "Jane"
-        assert parcel.owner_last_name == "Doe"
+        assert parcel.year_built is None
+        assert parcel.square_footage is None
+        assert parcel.bedrooms is None
+        assert parcel.bathrooms is None
+        assert parcel.lot_size is None
+        assert parcel.owner_first_name == "JANE"
+        assert parcel.owner_last_name == "DOE"
         assert parcel.mailing_address == "123 Main St"
         assert parcel.mailing_city == "Wheaton"
         assert parcel.mailing_state == "IL"
@@ -277,22 +271,24 @@ class TestFieldTypeCoercion:
     """Verify safe int/float/str conversion for messy API data."""
 
     @patch("requests.get")
-    def test_string_year_built_coerced_to_int(self, mock_get):
-        attrs = {**_SAMPLE_ATTRIBUTES, "YEAR_BUILT": "1985"}
+    def test_string_propname_splits_on_comma(self, mock_get):
+        """PROPNAME with comma format splits into first/last correctly."""
+        attrs = {**_SAMPLE_ATTRIBUTES, "PROPNAME": "SMITH, JOHN A"}
         mock_get.return_value = _make_mock_response({"features": [{"attributes": attrs}]})
         connector = DuPageGISConnector()
         parcel = connector.lookup_by_address("any")
-        assert parcel.year_built == 1985
-        assert isinstance(parcel.year_built, int)
+        assert parcel.owner_first_name == "JOHN A"
+        assert parcel.owner_last_name == "SMITH"
 
     @patch("requests.get")
-    def test_string_bathrooms_coerced_to_float(self, mock_get):
-        attrs = {**_SAMPLE_ATTRIBUTES, "BATHROOMS": "2.5"}
+    def test_propname_without_comma(self, mock_get):
+        """PROPNAME without comma uses last word as last name."""
+        attrs = {**_SAMPLE_ATTRIBUTES, "PROPNAME": "JOHN SMITH"}
         mock_get.return_value = _make_mock_response({"features": [{"attributes": attrs}]})
         connector = DuPageGISConnector()
         parcel = connector.lookup_by_address("any")
-        assert parcel.bathrooms == 2.5
-        assert isinstance(parcel.bathrooms, float)
+        assert parcel.owner_first_name == "JOHN"
+        assert parcel.owner_last_name == "SMITH"
 
     @patch("requests.get")
     def test_none_fields_remain_none(self, mock_get):
@@ -306,8 +302,8 @@ class TestFieldTypeCoercion:
         assert parcel.owner_first_name is None
 
     @patch("requests.get")
-    def test_blank_string_owner_name_returns_none(self, mock_get):
-        attrs = {**_SAMPLE_ATTRIBUTES, "OWNER_FIRST": "   ", "OWNER_LAST": ""}
+    def test_blank_string_propname_returns_none_owner(self, mock_get):
+        attrs = {**_SAMPLE_ATTRIBUTES, "PROPNAME": "   "}
         mock_get.return_value = _make_mock_response({"features": [{"attributes": attrs}]})
         connector = DuPageGISConnector()
         parcel = connector.lookup_by_address("any")
@@ -315,12 +311,13 @@ class TestFieldTypeCoercion:
         assert parcel.owner_last_name is None
 
     @patch("requests.get")
-    def test_invalid_year_built_returns_none(self, mock_get):
-        attrs = {**_SAMPLE_ATTRIBUTES, "YEAR_BUILT": "not-a-number"}
+    def test_none_propname_returns_none_owner(self, mock_get):
+        attrs = {**_SAMPLE_ATTRIBUTES, "PROPNAME": None}
         mock_get.return_value = _make_mock_response({"features": [{"attributes": attrs}]})
         connector = DuPageGISConnector()
         parcel = connector.lookup_by_address("any")
-        assert parcel.year_built is None
+        assert parcel.owner_first_name is None
+        assert parcel.owner_last_name is None
 
     @patch("requests.get")
     def test_first_feature_used_when_multiple_returned(self, mock_get):

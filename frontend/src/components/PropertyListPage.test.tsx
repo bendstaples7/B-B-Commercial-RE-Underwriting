@@ -220,9 +220,20 @@ describe('PropertyListPage — source_type filter', () => {
   })
 
   it('resets page to 1 when source_type filter changes', async () => {
+    // Start from a page != 1 by having listLeads return multi-page data
+    const MULTI_PAGE_RESPONSE = {
+      leads: [],
+      total: 60,
+      page: 2,
+      per_page: 20,
+      pages: 3,
+    }
+    vi.mocked(leadService.listLeads).mockResolvedValue(MULTI_PAGE_RESPONSE)
+
     render(<PropertyListPage />)
     await openFilterPanel()
 
+    // Clear the calls made during mount + panel open
     vi.mocked(leadService.listLeads).mockClear()
     vi.mocked(leadService.listLeads).mockResolvedValue(EMPTY_LEADS_RESPONSE)
 

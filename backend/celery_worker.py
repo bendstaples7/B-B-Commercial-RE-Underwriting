@@ -1100,13 +1100,13 @@ def process_csv_ingestion(self, job_id: int, file_path: str, owner_user_id: str)
                     db.session.commit()
             except Exception:
                 pass  # don't mask the original exception
-            finally:
-                # Clean up temp file
-                try:
-                    os.unlink(file_path)
-                except OSError:
-                    pass
             raise
+        finally:
+            # Clean up temp file on both success and failure paths
+            try:
+                os.unlink(file_path)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -1251,7 +1251,7 @@ def pull_dupage_absentee_leads_task(self):
             'postgresql://postgres:postgres@localhost:5432/real_estate_analysis'
         )
         # owner_user_id for userx — the designated DuPage account
-        OWNER_USER_ID = 'f60ca13b-0ca5-4475-8666-9a393f90bff1'
+        OWNER_USER_ID = os.environ.get('DUPAGE_OWNER_USER_ID', 'f60ca13b-0ca5-4475-8666-9a393f90bff1')
         BATCH_SIZE = 500
 
         engine = sa.create_engine(db_url, pool_pre_ping=True)

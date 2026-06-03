@@ -26,6 +26,7 @@ import logging
 import os
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -190,6 +191,7 @@ def _bulk_upsert(rows: list[dict], conn) -> tuple[int, int]:
 
     now = datetime.utcnow()
     upserted = 0
+    skipped = 0
 
     for row in rows:
         pin = row.get("county_assessor_pin")
@@ -243,8 +245,10 @@ def _bulk_upsert(rows: list[dict], conn) -> tuple[int, int]:
             upserted += 1
         except Exception:
             sp.rollback()  # rollback just this row, connection stays healthy
+            logger.warning("Failed to upsert row PIN=%s: %s", pin, traceback.format_exc())
+            skipped += 1
 
-    return upserted, 0
+    return upserted, skipped
 
 
 def run_pull(owner_user_id: str, limit: Optional[int],
@@ -309,9 +313,10 @@ def run_pull(owner_user_id: str, limit: Optional[int],
 
             if rows:
                 try:
-                    upserted, _ = _bulk_upsert(rows, conn)
+                    upserted, skipped = _bulk_upsert(rows, conn)
                     conn.commit()
                     total_upserted += upserted
+                    total_skipped += skipped
                 except Exception as e:
                     logger.error("Upsert failed for batch %d: %s", batch_num + 1, e)
 

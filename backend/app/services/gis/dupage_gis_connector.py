@@ -175,8 +175,8 @@ class DuPageGISConnector(GISConnector):
 
     def lookup_by_address(self, address: str) -> Optional[GISParcel]:
         """Look up a parcel by property address (PROPADDRL1 LIKE match)."""
-        safe = address.replace("'", "''").upper()
-        where_clause = f"UPPER(PROPADDRL1) LIKE '%{safe}%'"
+        safe = address.replace("'", "''").replace("%", r"\%").replace("_", r"\_").upper()
+        where_clause = f"UPPER(PROPADDRL1) LIKE '%{safe}%' ESCAPE '\\'"
         return self._query_endpoint(where_clause)
 
     def lookup_by_pin(self, pin: str) -> Optional[GISParcel]:

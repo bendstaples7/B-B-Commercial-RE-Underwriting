@@ -93,6 +93,7 @@ def fetch_all_dupage_transfers(limit: Optional[int] = None) -> dict[str, date]:
     r = requests.get(PTAX_API,
         params={'$select': 'count(*)', '$where': DUPAGE_WHERE},
         timeout=30)
+    r.raise_for_status()
     total = int(r.json()[0]['count'])
     logger.info("Total DuPage PTAX records available: %s", f"{total:,}")
 
@@ -191,6 +192,7 @@ def enrich_leads(pin_to_date: dict[str, date], dry_run: bool) -> dict:
         logger.info("Leads with PIN to check: %s", f"{len(rows):,}")
 
         updated_ids = []
+        update_tuples = []  # (lead_id, deed_date)
         for row in rows:
             lead_id = row[0]
             pin = (row[1] or '').strip()
@@ -205,14 +207,23 @@ def enrich_leads(pin_to_date: dict[str, date], dry_run: bool) -> dict:
                 stats['no_pin_match'] += 1
                 continue
 
-            if not dry_run:
-                conn.execute(sa.text("""
-                    UPDATE leads
-                    SET acquisition_date = :acq_date, updated_at = NOW()
-                    WHERE id = :lead_id
-                """), {'acq_date': deed_date, 'lead_id': lead_id})
-                updated_ids.append(lead_id)
+            update_tuples.append((lead_id, deed_date))
             stats['updated'] += 1
+
+        if update_tuples and not dry_run:
+            # Build a single bulk UPDATE using VALUES
+            values_clause = ",\n".join(
+                f"('{lead_id}'::uuid, '{deed_date}'::date)"
+                for lead_id, deed_date in update_tuples
+            )
+            conn.execute(sa.text(f"""
+                UPDATE leads AS l
+                SET acquisition_date = v.acq_date,
+                    updated_at = NOW()
+                FROM (VALUES {values_clause}) AS v(lead_id, acq_date)
+                WHERE l.id = v.lead_id::uuid
+            """))
+            updated_ids.extend(lead_id for lead_id, _ in update_tuples)
 
         if not dry_run:
             conn.commit()

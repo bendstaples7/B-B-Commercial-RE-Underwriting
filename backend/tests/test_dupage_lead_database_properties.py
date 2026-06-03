@@ -797,7 +797,6 @@ def test_property_1_valid_source_type_assignment(source_type, app):
 
             elif source_type == "absentee_owner":
                 record = {
-                    'property_street': f"100 Absentee St {unique_suffix}",
                     'property_city': 'Wheaton',
                     'property_zip': '60189',
                     'county_assessor_pin': f"AO-{unique_suffix}",
