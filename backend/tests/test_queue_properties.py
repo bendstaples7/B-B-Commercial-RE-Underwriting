@@ -10,7 +10,7 @@ database while still verifying the correctness of the filter rules.
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-from hypothesis import given, settings, assume
+from hypothesis import given, settings, assume, HealthCheck
 from hypothesis import strategies as st
 
 
@@ -430,3 +430,845 @@ def test_property_10_queue_membership_pure_function_of_lead_state(
         assert not in_todays_action, (
             f"Nurture lead in Today's Action queue"
         )
+
+
+# ---------------------------------------------------------------------------
+# Property 4: Warm signal processing sets is_warm = True (one-way)
+# Feature: source-agnostic-crm-queues, Property 4: warm signal sets is_warm (one-way)
+# ---------------------------------------------------------------------------
+
+# Signal types that mark a lead as warm — mirrors WARM_SIGNAL_TYPES in hubspot_tasks.py
+_WARM_SIGNAL_TYPES = frozenset({'PRIOR_WARM_CONVERSATION', 'APPOINTMENT_OCCURRED'})
+
+# All signal types the extractor can produce (warm + non-warm)
+_ALL_SIGNAL_TYPES = [
+    'PRIOR_WARM_CONVERSATION',
+    'APPOINTMENT_OCCURRED',
+    'DO_NOT_CONTACT',
+    'WRONG_NUMBER',
+    'EMAIL_OPEN',
+    'FORM_SUBMISSION',
+    'MEETING_SCHEDULED',
+    'CALL_LOGGED',
+    'NOTE_ADDED',
+]
+
+
+def _apply_warm_signal_logic(signals_batch: list[str], initial_is_warm: bool) -> bool:
+    """Pure-Python extraction of the is_warm flag logic from run_extract_hubspot_signals.
+
+    Given a list of signal_type strings for one interaction batch and the lead's
+    initial is_warm value, returns the resulting is_warm value after processing.
+
+    This mirrors the guarded block in hubspot_tasks.py:
+        warm_signals = [s for s in signals if s.signal_type in WARM_SIGNAL_TYPES]
+        if warm_signals:
+            if lead_obj is not None and not lead_obj.is_warm:
+                lead_obj.is_warm = True
+    """
+    has_warm_signal = any(sig in _WARM_SIGNAL_TYPES for sig in signals_batch)
+    if has_warm_signal and not initial_is_warm:
+        return True
+    # No warm signal → unchanged; already warm → unchanged (one-way)
+    return initial_is_warm
+
+
+# Hypothesis strategy: a list of 0–10 signal types drawn from all known types
+signal_batch_strategy = st.lists(
+    st.sampled_from(_ALL_SIGNAL_TYPES),
+    min_size=0,
+    max_size=10,
+)
+
+
+@settings(max_examples=100)
+@given(
+    signals_batch=signal_batch_strategy,
+    initial_is_warm=st.booleans(),
+)
+def test_property_4_warm_signal_sets_is_warm(signals_batch, initial_is_warm):
+    """
+    Property 4: Warm signal processing sets is_warm = True (one-way)
+
+    For any lead processed by the HubSpot signal pipeline:
+    1. is_warm=True after processing iff any signal in the batch is
+       PRIOR_WARM_CONVERSATION or APPOINTMENT_OCCURRED (or was already True).
+    2. If no warm signals are present, is_warm is unchanged.
+    3. A lead that already had is_warm=True is NEVER set to False (one-way flag).
+
+    The warm signal logic is extracted from run_extract_hubspot_signals in
+    backend/app/tasks/hubspot_tasks.py and tested as a pure function so that
+    db.session calls are not needed (full Celery task tested separately).
+
+    Validates: Requirements 4.3, 9.1, 9.2, 9.3
+    """
+    # Feature: source-agnostic-crm-queues, Property 4: warm signal sets is_warm (one-way)
+
+    has_warm_signal = any(sig in _WARM_SIGNAL_TYPES for sig in signals_batch)
+    result_is_warm = _apply_warm_signal_logic(signals_batch, initial_is_warm)
+
+    # --- Req 9.1: warm signal present → is_warm must be True after processing ---
+    if has_warm_signal:
+        assert result_is_warm is True, (
+            f"Warm signal in batch but is_warm not set to True: "
+            f"signals={signals_batch}, initial_is_warm={initial_is_warm}, "
+            f"result={result_is_warm}"
+        )
+
+    # --- Req 9.2: no warm signal → is_warm unchanged ---
+    if not has_warm_signal:
+        assert result_is_warm == initial_is_warm, (
+            f"No warm signals but is_warm changed: "
+            f"signals={signals_batch}, initial_is_warm={initial_is_warm}, "
+            f"result={result_is_warm}"
+        )
+
+    # --- Req 9.3: one-way flag — True is never set back to False ---
+    if initial_is_warm:
+        assert result_is_warm is True, (
+            f"is_warm was True before processing but is False after: "
+            f"signals={signals_batch}, initial_is_warm={initial_is_warm}, "
+            f"result={result_is_warm}"
+        )
+
+    # --- Req 4.3 cross-check: result is True iff (warm signal present OR was already warm) ---
+    expected = has_warm_signal or initial_is_warm
+    assert result_is_warm == expected, (
+        f"is_warm result does not match expected: "
+        f"signals={signals_batch}, initial_is_warm={initial_is_warm}, "
+        f"has_warm_signal={has_warm_signal}, expected={expected}, result={result_is_warm}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Property 1: No Next Action filter predicate (source-agnostic-crm-queues)
+# Feature: source-agnostic-crm-queues, Property 1: No Next Action filter predicate
+# ---------------------------------------------------------------------------
+
+# All valid lead statuses and recommended_action values for Property 1
+_NNA_LEAD_STATUSES = ['new', 'active', 'follow_up', 'nurture', 'under_contract', 'closed', 'suppressed', 'do_not_contact']
+_NNA_RECOMMENDED_ACTIONS = [
+    None,
+    'enrich_data',
+    'resolve_match',
+    'analyze_property',
+    'follow_up_now',
+    'ready_for_outreach',
+    'add_contact_info',
+    'create_task',
+    'nurture',
+    'suppress',
+    'do_not_contact',
+]
+
+# Task presence variants:
+#   'none'          — no tasks at all
+#   'open_lead'     — one open LeadTask
+#   'open_assoc'    — one open Task linked via TaskAssociation
+#   'open_direct'   — one open Task linked via Task.lead_id
+#   'closed_lead'   — only completed LeadTask (should not block No Next Action)
+_TASK_VARIANTS = ['none', 'open_lead', 'open_assoc', 'open_direct', 'closed_lead']
+
+_nna_status_st = st.sampled_from(_NNA_LEAD_STATUSES)
+_nna_action_st = st.sampled_from(_NNA_RECOMMENDED_ACTIONS)
+_task_variant_st = st.sampled_from(_TASK_VARIANTS)
+
+# Expected No Next Action include criteria (mirrors the updated QueueService)
+_NNA_ALLOWED_ACTIONS = {None, 'create_task', 'ready_for_outreach', 'add_contact_info'}
+_NNA_ALLOWED_STATUSES = {'new', 'active'}
+_OPEN_TASK_VARIANTS = {'open_lead', 'open_assoc', 'open_direct'}
+
+
+def _expected_in_nna(lead_status: str, recommended_action, task_variant: str) -> bool:
+    """Pure-Python reference predicate for No Next Action (updated allow-list)."""
+    return (
+        lead_status in _NNA_ALLOWED_STATUSES
+        and recommended_action in _NNA_ALLOWED_ACTIONS
+        and task_variant not in _OPEN_TASK_VARIANTS
+    )
+
+
+def _seed_nna_lead(db_session, lead_status: str, recommended_action, task_variant: str, idx: int):
+    """Seed a single Lead with the given parameters and a unique street address."""
+    from app.models import Lead, LeadTask, Task, TaskAssociation
+
+    lead = Lead(
+        property_street=f'{1000 + idx} Test St NNA {lead_status} {recommended_action} {task_variant}',
+        lead_status=lead_status,
+        recommended_action=recommended_action,
+    )
+    db_session.add(lead)
+    db_session.flush()  # get lead.id
+
+    if task_variant == 'open_lead':
+        task = LeadTask(
+            lead_id=lead.id,
+            task_type='custom',
+            title='Open CRM task',
+            status='open',
+        )
+        db_session.add(task)
+
+    elif task_variant == 'open_assoc':
+        t = Task(
+            title='Open HubSpot task via assoc',
+            status='open',
+        )
+        db_session.add(t)
+        db_session.flush()
+        assoc = TaskAssociation(
+            task_id=t.id,
+            target_type='lead',
+            target_id=lead.id,
+        )
+        db_session.add(assoc)
+
+    elif task_variant == 'open_direct':
+        t = Task(
+            title='Open task direct lead_id',
+            status='open',
+            lead_id=lead.id,
+        )
+        db_session.add(t)
+
+    elif task_variant == 'closed_lead':
+        task = LeadTask(
+            lead_id=lead.id,
+            task_type='custom',
+            title='Completed CRM task',
+            status='completed',
+        )
+        db_session.add(task)
+
+    # 'none' variant: no tasks created
+
+    db_session.flush()
+    return lead.id
+
+
+@pytest.mark.usefixtures('app')
+@settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(
+    lead_status=_nna_status_st,
+    recommended_action=_nna_action_st,
+    task_variant=_task_variant_st,
+)
+def test_property_1_no_next_action_filter_predicate(
+    app,
+    lead_status,
+    recommended_action,
+    task_variant,
+):
+    """
+    # Feature: source-agnostic-crm-queues, Property 1: No Next Action filter predicate
+
+    For any lead in the database, it appears in No Next Action iff:
+      - lead_status in ('new', 'active') AND
+      - recommended_action in (None, 'create_task', 'ready_for_outreach', 'add_contact_info') AND
+      - has no open task (no open LeadTask and no open Task via TaskAssociation or direct lead_id)
+
+    Validates: Requirements 1.1, 1.3, 1.4
+    """
+    from app import db as _db
+    from app.services.queue_service import QueueService
+
+    with app.app_context():
+        # Seed exactly one lead for this Hypothesis example
+        idx = id((lead_status, recommended_action, task_variant))
+        lead_id = _seed_nna_lead(_db.session, lead_status, recommended_action, task_variant, idx)
+        _db.session.commit()
+
+        try:
+            # Query No Next Action queue — no owner scoping so all leads visible
+            service = QueueService(owner_user_id=None)
+            rows, total = service.get_no_next_action(page=1, per_page=10000)
+            result_ids = {row['id'] for row in rows}
+
+            expected = _expected_in_nna(lead_status, recommended_action, task_variant)
+
+            if expected:
+                assert lead_id in result_ids, (
+                    f"Lead {lead_id} EXPECTED in No Next Action but NOT found. "
+                    f"lead_status={lead_status!r}, recommended_action={recommended_action!r}, "
+                    f"task_variant={task_variant!r}"
+                )
+            else:
+                assert lead_id not in result_ids, (
+                    f"Lead {lead_id} NOT expected in No Next Action but WAS found. "
+                    f"lead_status={lead_status!r}, recommended_action={recommended_action!r}, "
+                    f"task_variant={task_variant!r}"
+                )
+        finally:
+            # Clean up all seeded data so each Hypothesis example starts fresh
+            _db.session.rollback()
+
+
+# ---------------------------------------------------------------------------
+# Imports needed for Property 2 (DB-backed test)
+# ---------------------------------------------------------------------------
+import os
+import unittest
+
+from hypothesis import HealthCheck
+
+from app import create_app, db
+from app.models import Lead
+from app.services.queue_service import QueueService
+
+
+# ---------------------------------------------------------------------------
+# Property 2: Badge counts equal paginated totals
+# Feature: source-agnostic-crm-queues, Property 2: badge counts equal paginated totals
+# ---------------------------------------------------------------------------
+
+# Strategies for lead field values
+_lead_statuses = st.sampled_from([
+    'new', 'active', 'follow_up', 'nurture',
+    'under_contract', 'closed', 'suppressed', 'do_not_contact',
+])
+
+_recommended_actions = st.one_of(
+    st.none(),
+    st.sampled_from([
+        'enrich_data', 'resolve_match', 'analyze_property', 'follow_up_now',
+        'ready_for_outreach', 'add_contact_info', 'create_task', 'nurture',
+        'suppress', 'do_not_contact',
+    ]),
+)
+
+_lead_record = st.fixed_dictionaries({
+    'lead_status':         _lead_statuses,
+    'recommended_action':  _recommended_actions,
+    'is_warm':             st.booleans(),
+    'review_required':     st.booleans(),
+    'has_property_match':  st.booleans(),
+})
+
+
+@settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(lead_dicts=st.lists(_lead_record, min_size=0, max_size=20))
+def test_property_2_badge_counts_equal_paginated_totals(lead_dicts):
+    """
+    Property 2: Badge counts equal paginated totals.
+
+    For any state of the leads table, QueueService.get_counts() returns a count
+    for each of the 7 queues that equals the `total` value returned by the
+    corresponding paginated get_* method called with no pagination constraints.
+
+    # Feature: source-agnostic-crm-queues, Property 2: badge counts equal paginated totals
+
+    Validates: Requirements 1.5, 2.3, 3.4, 4.5, 5.5, 6.5, 12.1
+    """
+    os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
+    os.environ['FLASK_ENV'] = 'testing'
+
+    app = create_app('testing')
+    app.config['TESTING'] = True
+
+    with app.app_context():
+        db.create_all()
+        try:
+            # Seed the database with the Hypothesis-generated lead population
+            for i, ld in enumerate(lead_dicts):
+                lead = Lead(
+                    property_street=f'{i} Property 2 Test St',
+                    lead_status=ld['lead_status'],
+                    recommended_action=ld['recommended_action'],
+                    is_warm=ld['is_warm'],
+                    review_required=ld['review_required'],
+                    has_property_match=ld['has_property_match'],
+                    lead_score=50.0,
+                    has_phone=False,
+                    has_email=False,
+                    analysis_complete=False,
+                    follow_up_overdue=False,
+                    data_completeness_score=0.0,
+                    unanswered_call_count=0,
+                )
+                db.session.add(lead)
+            db.session.commit()
+
+            svc = QueueService()
+            counts = svc.get_counts()
+
+            # Assert get_counts() == total from each paginated method for all 7 queues
+            _, total_todays_action = svc.get_todays_action(per_page=10000)
+            assert counts['todays_action'] == total_todays_action, (
+                f"todays_action count mismatch: get_counts()={counts['todays_action']}, "
+                f"get_todays_action total={total_todays_action}"
+            )
+
+            _, total_previously_warm = svc.get_previously_warm(per_page=10000)
+            assert counts['previously_warm'] == total_previously_warm, (
+                f"previously_warm count mismatch: get_counts()={counts['previously_warm']}, "
+                f"get_previously_warm total={total_previously_warm}"
+            )
+
+            _, total_follow_up_overdue = svc.get_follow_up_overdue(per_page=10000)
+            assert counts['follow_up_overdue'] == total_follow_up_overdue, (
+                f"follow_up_overdue count mismatch: get_counts()={counts['follow_up_overdue']}, "
+                f"get_follow_up_overdue total={total_follow_up_overdue}"
+            )
+
+            _, total_no_next_action = svc.get_no_next_action(per_page=10000)
+            assert counts['no_next_action'] == total_no_next_action, (
+                f"no_next_action count mismatch: get_counts()={counts['no_next_action']}, "
+                f"get_no_next_action total={total_no_next_action}"
+            )
+
+            _, total_needs_review = svc.get_needs_review(per_page=10000)
+            assert counts['needs_review'] == total_needs_review, (
+                f"needs_review count mismatch: get_counts()={counts['needs_review']}, "
+                f"get_needs_review total={total_needs_review}"
+            )
+
+            _, total_do_not_contact = svc.get_do_not_contact(per_page=10000)
+            assert counts['do_not_contact'] == total_do_not_contact, (
+                f"do_not_contact count mismatch: get_counts()={counts['do_not_contact']}, "
+                f"get_do_not_contact total={total_do_not_contact}"
+            )
+
+            _, total_missing_property_match = svc.get_missing_property_match(per_page=10000)
+            assert counts['missing_property_match'] == total_missing_property_match, (
+                f"missing_property_match count mismatch: get_counts()={counts['missing_property_match']}, "
+                f"get_missing_property_match total={total_missing_property_match}"
+            )
+
+        finally:
+            db.session.remove()
+            db.drop_all()
+
+
+# ---------------------------------------------------------------------------
+# Property 3: Previously Warm queue is exactly the set of is_warm=True leads
+# Feature: source-agnostic-crm-queues, Property 3: Previously Warm equals is_warm
+# ---------------------------------------------------------------------------
+
+# Strategy: a list of leads with varying is_warm values
+_warm_lead_record = st.fixed_dictionaries({
+    'is_warm': st.booleans(),
+})
+
+
+@settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(lead_dicts=st.lists(_warm_lead_record, min_size=0, max_size=20))
+def test_property_3_previously_warm_equals_is_warm(lead_dicts):
+    """
+    Property 3: Previously Warm queue is exactly the set of is_warm=True leads.
+
+    For any population of leads, the Previously Warm queue contains EXACTLY
+    those leads where is_warm=True — no more, no fewer:
+      1. Every lead with is_warm=True appears in the results.
+      2. No lead with is_warm=False appears in the results.
+
+    # Feature: source-agnostic-crm-queues, Property 3: Previously Warm equals is_warm
+
+    Validates: Requirements 4.1, 4.2
+    """
+    os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
+    os.environ['FLASK_ENV'] = 'testing'
+
+    app = create_app('testing')
+    app.config['TESTING'] = True
+
+    with app.app_context():
+        db.create_all()
+        try:
+            # Seed the database with the Hypothesis-generated lead population
+            warm_ids = set()
+            not_warm_ids = set()
+
+            for i, ld in enumerate(lead_dicts):
+                lead = Lead(
+                    property_street=f'{i} Property 3 Test St',
+                    lead_status='new',
+                    is_warm=ld['is_warm'],
+                    lead_score=50.0,
+                    has_phone=False,
+                    has_email=False,
+                    analysis_complete=False,
+                    follow_up_overdue=False,
+                    data_completeness_score=0.0,
+                    unanswered_call_count=0,
+                )
+                db.session.add(lead)
+                db.session.flush()  # get lead.id before commit
+
+                if ld['is_warm']:
+                    warm_ids.add(lead.id)
+                else:
+                    not_warm_ids.add(lead.id)
+
+            db.session.commit()
+
+            svc = QueueService()
+            rows, total = svc.get_previously_warm(per_page=10000)
+            result_ids = {row['id'] for row in rows}
+
+            # Assert 1: every lead with is_warm=True appears in the results
+            for lead_id in warm_ids:
+                assert lead_id in result_ids, (
+                    f"Lead {lead_id} has is_warm=True but was NOT found in "
+                    f"Previously Warm queue. result_ids={result_ids}, "
+                    f"warm_ids={warm_ids}"
+                )
+
+            # Assert 2: no lead with is_warm=False appears in the results
+            for lead_id in not_warm_ids:
+                assert lead_id not in result_ids, (
+                    f"Lead {lead_id} has is_warm=False but WAS found in "
+                    f"Previously Warm queue. result_ids={result_ids}, "
+                    f"not_warm_ids={not_warm_ids}"
+                )
+
+            # Sanity: total count returned matches the number of warm leads seeded
+            assert total == len(warm_ids), (
+                f"Previously Warm total={total} does not match "
+                f"number of is_warm=True leads seeded={len(warm_ids)}"
+            )
+
+        finally:
+            db.session.remove()
+            db.drop_all()
+
+
+# ---------------------------------------------------------------------------
+# Property 9: Priority queues exclude No Next Action
+# Feature: source-agnostic-crm-queues, Property 9: priority queues exclude No Next Action
+# ---------------------------------------------------------------------------
+
+# Updated No Next Action allowed values (mirrors the Task 1.4 QueueService expansion)
+_UPDATED_NNA_ALLOWED_ACTIONS = {None, 'create_task', 'ready_for_outreach', 'add_contact_info'}
+
+
+def _is_in_no_next_action_updated(lead_status, recommended_action, has_open_tasks):
+    """Updated No Next Action predicate with expanded recommended_action allow-list.
+
+    Mirrors QueueService after Task 1.4 expansion (adds 'ready_for_outreach' and
+    'add_contact_info' to the allow-list alongside None and 'create_task').
+    """
+    return (
+        lead_status in ('active', 'new')
+        and recommended_action in _UPDATED_NNA_ALLOWED_ACTIONS
+        and not has_open_tasks
+    )
+
+
+def _is_in_todays_action_or_follow_up_overdue(
+    lead_status,
+    recommended_action,
+    open_task_due_today,
+    open_task_overdue,
+    last_contact_date,
+    today,
+):
+    """Returns True if the lead is in Today's Action OR Follow-Up Overdue."""
+    in_todays_action = is_in_todays_action(lead_status, recommended_action, open_task_due_today)
+    in_follow_up_overdue = is_in_follow_up_overdue(
+        recommended_action, last_contact_date, open_task_overdue, today
+    )
+    return in_todays_action or in_follow_up_overdue
+
+
+# Strategy that generates consistent lead state where task booleans are coherent:
+# If a lead has open_task_due_today=True or open_task_overdue=True, it necessarily
+# has open tasks (has_open_tasks must be True). This mirrors real lead state.
+@st.composite
+def consistent_lead_state(draw):
+    """Generate a lead state where task presence flags are mutually consistent.
+
+    open_task_due_today=True  → has_open_tasks=True  (a task due today is an open task)
+    open_task_overdue=True    → has_open_tasks=True  (an overdue task is an open task)
+    has_open_tasks=False      → open_task_due_today=False, open_task_overdue=False
+    """
+    lead_status = draw(all_lead_statuses)
+    recommended_action = draw(all_recommended_actions)
+    last_contact_date = draw(date_strategy)
+
+    # Draw the concrete task presence flag first
+    has_open_tasks = draw(st.booleans())
+
+    if has_open_tasks:
+        # At least one open task exists; due-today and overdue are independent booleans
+        open_task_due_today = draw(st.booleans())
+        open_task_overdue = draw(st.booleans())
+    else:
+        # No open tasks at all → neither flag can be True
+        open_task_due_today = False
+        open_task_overdue = False
+
+    return {
+        'lead_status': lead_status,
+        'recommended_action': recommended_action,
+        'open_task_due_today': open_task_due_today,
+        'open_task_overdue': open_task_overdue,
+        'has_open_tasks': has_open_tasks,
+        'last_contact_date': last_contact_date,
+    }
+
+
+@settings(max_examples=100)
+@given(lead=consistent_lead_state())
+def test_property_9_priority_queues_exclude_no_next_action(lead):
+    """
+    Property 9: Priority queues exclude No Next Action
+
+    For any lead state, the intersection of (Today's Action ∪ Follow-Up Overdue)
+    and No Next Action is EMPTY.  No lead can appear in both a priority queue
+    (Today's Action or Follow-Up Overdue) and No Next Action simultaneously.
+
+    The invariant holds structurally because:
+    - No Next Action requires NO open tasks.
+    - Today's Action and Follow-Up Overdue require open tasks (or recommended_action
+      = 'follow_up_now', which is outside the No Next Action allow-list).
+    - A lead with an open task has has_open_tasks=True → excluded from No Next Action.
+
+    # Feature: source-agnostic-crm-queues, Property 9: priority queues exclude No Next Action
+
+    Validates: Requirements 11.1, 11.2, 11.3
+    """
+    today = date.today()
+
+    lead_status = lead['lead_status']
+    recommended_action = lead['recommended_action']
+    open_task_due_today = lead['open_task_due_today']
+    open_task_overdue = lead['open_task_overdue']
+    has_open_tasks = lead['has_open_tasks']
+    last_contact_date = lead['last_contact_date']
+
+    # Evaluate priority queue membership (Today's Action OR Follow-Up Overdue)
+    in_priority = _is_in_todays_action_or_follow_up_overdue(
+        lead_status,
+        recommended_action,
+        open_task_due_today,
+        open_task_overdue,
+        last_contact_date,
+        today,
+    )
+
+    # Evaluate No Next Action membership (updated allow-list per Task 1.4)
+    in_no_next_action = _is_in_no_next_action_updated(
+        lead_status,
+        recommended_action,
+        has_open_tasks,
+    )
+
+    # --- Core invariant: no lead is in both a priority queue and No Next Action ---
+    assert not (in_priority and in_no_next_action), (
+        f"Lead appears in BOTH a priority queue AND No Next Action — invariant violated!\n"
+        f"  lead_status={lead_status!r}\n"
+        f"  recommended_action={recommended_action!r}\n"
+        f"  open_task_due_today={open_task_due_today}\n"
+        f"  open_task_overdue={open_task_overdue}\n"
+        f"  has_open_tasks={has_open_tasks}\n"
+        f"  last_contact_date={last_contact_date}\n"
+        f"  in_priority (Today's Action OR Follow-Up Overdue)={in_priority}\n"
+        f"  in_no_next_action={in_no_next_action}"
+    )
+
+    # --- Structural sub-assertions (document WHY the invariant holds) ---
+
+    # If a lead is in No Next Action, it must have NO open tasks
+    if in_no_next_action:
+        assert not has_open_tasks, (
+            f"No Next Action lead has open tasks — impossible per predicate definition: "
+            f"lead_status={lead_status!r}, recommended_action={recommended_action!r}, "
+            f"has_open_tasks={has_open_tasks}"
+        )
+        # recommended_action must be in the No Next Action allow-list
+        assert recommended_action in _UPDATED_NNA_ALLOWED_ACTIONS, (
+            f"No Next Action lead has disallowed recommended_action={recommended_action!r}"
+        )
+        # Therefore it cannot have open_task_due_today or open_task_overdue
+        assert not open_task_due_today, (
+            f"No Next Action lead has open_task_due_today=True (contradicts has_open_tasks=False)"
+        )
+        assert not open_task_overdue, (
+            f"No Next Action lead has open_task_overdue=True (contradicts has_open_tasks=False)"
+        )
+        # And follow_up_now is not in the allow-list, so Today's Action via
+        # recommended_action path is also excluded
+        assert recommended_action != 'follow_up_now', (
+            f"No Next Action lead has recommended_action='follow_up_now' — impossible per allow-list"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Property 10: Owner scoping is applied uniformly
+# Feature: source-agnostic-crm-queues, Property 10: owner scoping is applied uniformly
+# ---------------------------------------------------------------------------
+
+# Strategy: a list of lead field dicts for owner-A and owner-B
+_scoping_lead_record = st.fixed_dictionaries({
+    'lead_status':        _lead_statuses,
+    'recommended_action': _recommended_actions,
+    'is_warm':            st.booleans(),
+    'review_required':    st.booleans(),
+    'has_property_match': st.booleans(),
+    # last_contact_date as an ISO string or None (used to trigger follow_up_overdue)
+    'last_contact_date': st.one_of(
+        st.none(),
+        st.dates(
+            min_value=date(2020, 1, 1),
+            max_value=date.today() - timedelta(days=10),  # ensure overdue for some leads
+        ).map(lambda d: d.isoformat()),
+    ),
+    # recommended_action override for follow_up_now to trigger more queue slots
+    'force_follow_up_now': st.booleans(),
+})
+
+
+@settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(
+    owner_a_leads=st.lists(_scoping_lead_record, min_size=0, max_size=10),
+    owner_b_leads=st.lists(_scoping_lead_record, min_size=1, max_size=10),
+)
+def test_property_10_owner_scoping_uniform(owner_a_leads, owner_b_leads):
+    """
+    Property 10: Owner scoping is applied uniformly across all 7 queues.
+
+    For any owner_user_id and any lead population, all 7 queues (both badge
+    counts and paginated results) contain ONLY leads whose owner_user_id matches
+    the scoping value. No lead owned by a different user appears in any queue.
+
+    Verifies:
+    1. No leads belonging to 'owner-B' appear in any of the 7 paginated queues
+       when QueueService is scoped to 'owner-A'.
+    2. Badge counts from get_counts() match the paginated totals (only owner-A
+       leads are reflected in the counts).
+
+    # Feature: source-agnostic-crm-queues, Property 10: owner scoping is applied uniformly
+
+    Validates: Requirements 12.3, 12.4
+    """
+    from datetime import date as _date
+
+    os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
+    os.environ['FLASK_ENV'] = 'testing'
+
+    app = create_app('testing')
+    app.config['TESTING'] = True
+
+    with app.app_context():
+        db.create_all()
+        try:
+            owner_b_ids: set[int] = set()
+
+            # Helper: seed a lead dict into the DB with a specific owner
+            def _seed_lead(ld: dict, owner: str, idx: int) -> int:
+                # Resolve recommended_action: optionally override to follow_up_now
+                # so that some leads qualify for Today's Action / Follow-Up Overdue
+                rec_action = 'follow_up_now' if ld['force_follow_up_now'] else ld['recommended_action']
+
+                # Parse last_contact_date if present
+                lcd = None
+                if ld['last_contact_date']:
+                    lcd = _date.fromisoformat(ld['last_contact_date'])
+
+                lead = Lead(
+                    property_street=f'{idx} Scoping Test St owner={owner}',
+                    owner_user_id=owner,
+                    lead_status=ld['lead_status'],
+                    recommended_action=rec_action,
+                    is_warm=ld['is_warm'],
+                    review_required=ld['review_required'],
+                    has_property_match=ld['has_property_match'],
+                    last_contact_date=lcd,
+                    lead_score=50.0,
+                    has_phone=False,
+                    has_email=False,
+                    analysis_complete=False,
+                    follow_up_overdue=False,
+                    data_completeness_score=0.0,
+                    unanswered_call_count=0,
+                )
+                db.session.add(lead)
+                db.session.flush()
+                return lead.id
+
+            # Seed owner-A leads
+            for i, ld in enumerate(owner_a_leads):
+                _seed_lead(ld, 'owner-A', i)
+
+            # Seed owner-B leads — collect their IDs for leakage checks
+            base = len(owner_a_leads)
+            for j, ld in enumerate(owner_b_leads):
+                lead_id = _seed_lead(ld, 'owner-B', base + j)
+                owner_b_ids.add(lead_id)
+
+            db.session.commit()
+
+            # Create a QueueService scoped to owner-A only
+            svc = QueueService(owner_user_id='owner-A')
+
+            # ------------------------------------------------------------------
+            # Check 1: Badge counts match paginated totals (owner-A scoping)
+            # ------------------------------------------------------------------
+            counts = svc.get_counts()
+
+            _, total_todays_action = svc.get_todays_action(per_page=10000)
+            assert counts['todays_action'] == total_todays_action, (
+                f"todays_action badge count {counts['todays_action']} != "
+                f"paginated total {total_todays_action}"
+            )
+
+            _, total_previously_warm = svc.get_previously_warm(per_page=10000)
+            assert counts['previously_warm'] == total_previously_warm, (
+                f"previously_warm badge count {counts['previously_warm']} != "
+                f"paginated total {total_previously_warm}"
+            )
+
+            _, total_follow_up_overdue = svc.get_follow_up_overdue(per_page=10000)
+            assert counts['follow_up_overdue'] == total_follow_up_overdue, (
+                f"follow_up_overdue badge count {counts['follow_up_overdue']} != "
+                f"paginated total {total_follow_up_overdue}"
+            )
+
+            _, total_no_next_action = svc.get_no_next_action(per_page=10000)
+            assert counts['no_next_action'] == total_no_next_action, (
+                f"no_next_action badge count {counts['no_next_action']} != "
+                f"paginated total {total_no_next_action}"
+            )
+
+            _, total_needs_review = svc.get_needs_review(per_page=10000)
+            assert counts['needs_review'] == total_needs_review, (
+                f"needs_review badge count {counts['needs_review']} != "
+                f"paginated total {total_needs_review}"
+            )
+
+            _, total_do_not_contact = svc.get_do_not_contact(per_page=10000)
+            assert counts['do_not_contact'] == total_do_not_contact, (
+                f"do_not_contact badge count {counts['do_not_contact']} != "
+                f"paginated total {total_do_not_contact}"
+            )
+
+            _, total_missing_property_match = svc.get_missing_property_match(per_page=10000)
+            assert counts['missing_property_match'] == total_missing_property_match, (
+                f"missing_property_match badge count {counts['missing_property_match']} != "
+                f"paginated total {total_missing_property_match}"
+            )
+
+            # ------------------------------------------------------------------
+            # Check 2: No owner-B leads appear in any of the 7 paginated queues
+            # ------------------------------------------------------------------
+            all_queue_results = {
+                'todays_action':          svc.get_todays_action(per_page=10000)[0],
+                'previously_warm':        svc.get_previously_warm(per_page=10000)[0],
+                'follow_up_overdue':      svc.get_follow_up_overdue(per_page=10000)[0],
+                'no_next_action':         svc.get_no_next_action(per_page=10000)[0],
+                'needs_review':           svc.get_needs_review(per_page=10000)[0],
+                'do_not_contact':         svc.get_do_not_contact(per_page=10000)[0],
+                'missing_property_match': svc.get_missing_property_match(per_page=10000)[0],
+            }
+
+            for queue_name, rows in all_queue_results.items():
+                result_ids = {row['id'] for row in rows}
+                leaked = result_ids & owner_b_ids
+                assert not leaked, (
+                    f"Owner-B lead(s) {leaked} appeared in queue '{queue_name}' "
+                    f"when scoped to owner-A. owner_b_ids={owner_b_ids}"
+                )
+
+        finally:
+            db.session.remove()
+            db.drop_all()

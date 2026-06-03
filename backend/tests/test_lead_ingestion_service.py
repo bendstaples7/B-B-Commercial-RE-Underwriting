@@ -788,3 +788,200 @@ class TestImportJobLifecycle:
             assert job.status == "completed"
             assert job.rows_processed == 0
             assert job.rows_imported == 0
+
+
+# ---------------------------------------------------------------------------
+# Property 5: review_required creation rule (Hypothesis)
+# Feature: source-agnostic-crm-queues, Property 5: review_required creation rule
+# ---------------------------------------------------------------------------
+
+from hypothesis import given, settings, assume
+from hypothesis import strategies as st
+
+
+# Strategies for the three critical fields:
+# Each field can be None, empty string, or a non-empty stripped string.
+_field_strategy = st.one_of(
+    st.none(),
+    st.just(""),
+    st.text(min_size=1).map(str.strip).filter(lambda s: len(s) > 0),
+)
+
+
+@given(
+    phone_1=_field_strategy,
+    email_1=_field_strategy,
+    county_assessor_pin=_field_strategy,
+)
+@settings(max_examples=100)
+def test_property_5_review_required_creation_rule(phone_1, email_1, county_assessor_pin):
+    # Feature: source-agnostic-crm-queues, Property 5: review_required creation rule
+    # Validates: Requirements 5.2, 5.3
+
+    # Build a mock lead object with only the fields _set_review_required_flag touches
+    lead = MagicMock()
+    lead.phone_1 = phone_1
+    lead.email_1 = email_1
+    lead.county_assessor_pin = county_assessor_pin
+    lead.review_required = False   # default before flag is set
+    lead.review_reason = None
+
+    # Determine whether each field is "populated" (non-null, non-empty after strip)
+    has_phone = bool(phone_1 and str(phone_1).strip())
+    has_email = bool(email_1 and str(email_1).strip())
+    has_pin   = bool(county_assessor_pin and str(county_assessor_pin).strip())
+
+    all_missing = not has_phone and not has_email and not has_pin
+
+    # Call the helper directly — no database needed
+    svc = LeadIngestionService(
+        dedup_engine=MagicMock(),
+        gis_registry={},
+    )
+    svc._set_review_required_flag(lead, is_creation=True)
+
+    if all_missing:
+        # All three critical fields absent → review_required must be True
+        assert lead.review_required is True, (
+            f"Expected review_required=True when phone_1={phone_1!r}, "
+            f"email_1={email_1!r}, county_assessor_pin={county_assessor_pin!r}"
+        )
+        assert lead.review_reason == "Missing phone, email, and county PIN"
+    else:
+        # At least one field populated → review_required must remain False
+        assert lead.review_required is False, (
+            f"Expected review_required=False when phone_1={phone_1!r}, "
+            f"email_1={email_1!r}, county_assessor_pin={county_assessor_pin!r} "
+            f"(has_phone={has_phone}, has_email={has_email}, has_pin={has_pin})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Property 6: review_required update rule (Hypothesis)
+# Feature: source-agnostic-crm-queues, Property 6: review_required update rule
+# ---------------------------------------------------------------------------
+
+
+@given(
+    phone_1=_field_strategy,
+    email_1=_field_strategy,
+    county_assessor_pin=_field_strategy,
+)
+@settings(max_examples=100)
+def test_property_6_review_required_update_rule(phone_1, email_1, county_assessor_pin):
+    # Feature: source-agnostic-crm-queues, Property 6: review_required update rule
+    # Validates: Requirement 5.4
+
+    # Build a mock lead that already has review_required=True (pre-update state)
+    lead = MagicMock()
+    lead.phone_1 = phone_1
+    lead.email_1 = email_1
+    lead.county_assessor_pin = county_assessor_pin
+    lead.review_required = True
+    lead.review_reason = 'Missing phone, email, and county PIN'
+
+    # Determine whether each field is "populated" (non-null, non-empty after strip)
+    has_phone = bool(phone_1 and str(phone_1).strip())
+    has_email = bool(email_1 and str(email_1).strip())
+    has_pin   = bool(county_assessor_pin and str(county_assessor_pin).strip())
+
+    all_present = has_phone and has_email and has_pin
+
+    # Call the helper directly on an update path — no database needed
+    svc = LeadIngestionService(
+        dedup_engine=MagicMock(),
+        gis_registry={},
+    )
+    svc._set_review_required_flag(lead, is_creation=False)
+
+    if all_present:
+        # All three critical fields populated → flag must clear
+        assert lead.review_required is False, (
+            f"Expected review_required=False (cleared) when phone_1={phone_1!r}, "
+            f"email_1={email_1!r}, county_assessor_pin={county_assessor_pin!r}"
+        )
+        assert lead.review_reason is None, (
+            f"Expected review_reason=None when all fields populated, "
+            f"got {lead.review_reason!r}"
+        )
+    else:
+        # At least one field is still null/empty → flag must stay True (unchanged)
+        assert lead.review_required is True, (
+            f"Expected review_required=True (unchanged) when phone_1={phone_1!r}, "
+            f"email_1={email_1!r}, county_assessor_pin={county_assessor_pin!r} "
+            f"(has_phone={has_phone}, has_email={has_email}, has_pin={has_pin})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Property 7: GIS no-match sets has_property_match=False (Hypothesis)
+# Feature: source-agnostic-crm-queues, Property 7: GIS no-match sets has_property_match=False
+# ---------------------------------------------------------------------------
+
+# Strategy: prior has_property_match state — True or False
+_prior_match_strategy = st.booleans()
+
+# Strategy: what the GIS connector returns — None (no match) or a real parcel (match)
+_gis_result_strategy = st.one_of(
+    st.none(),
+    st.just(_make_gis_parcel()),
+)
+
+
+@given(
+    prior_has_match=_prior_match_strategy,
+    gis_result=_gis_result_strategy,
+)
+@settings(max_examples=100)
+def test_property_7_gis_no_match_sets_false(prior_has_match, gis_result):
+    # Feature: source-agnostic-crm-queues, Property 7: GIS no-match sets has_property_match=False
+    # Validates: Requirements 6.2, 6.3, 6.4
+
+    # Build a mock lead with a prior has_property_match state
+    lead = MagicMock()
+    lead.property_street = "123 Test St"
+    lead.county_assessor_pin = None
+    lead.has_property_match = prior_has_match
+    lead.needs_skip_trace = False
+    lead.notes = None
+    # Give lead attributes that _enrich_with_gis iterates over (_GIS_FIELDS)
+    for field in [
+        'county_assessor_pin', 'property_type', 'year_built', 'square_footage',
+        'bedrooms', 'bathrooms', 'lot_size', 'owner_first_name', 'owner_last_name',
+        'mailing_address', 'mailing_city', 'mailing_state', 'mailing_zip',
+    ]:
+        setattr(lead, field, None)
+    lead.source_type = "foreclosure"
+
+    # Wire up a mock connector returning the generated gis_result
+    connector = _make_mock_connector(parcel=gis_result)
+
+    svc = LeadIngestionService(
+        dedup_engine=MagicMock(),
+        gis_registry={"dupage_il": connector},
+    )
+
+    outcome = svc._enrich_with_gis(lead, connector, import_job_id=1)
+
+    if gis_result is None:
+        # GIS connector attempted a lookup and found no match (Req 6.2, 6.3):
+        # has_property_match must be False regardless of prior state
+        assert lead.has_property_match is False, (
+            f"Expected has_property_match=False after GIS no-match "
+            f"(prior={prior_has_match!r})"
+        )
+        assert outcome["match_found"] is False
+    else:
+        # GIS connector found a match (Req 6.4):
+        # has_property_match must be True; a prior True is never overridden to False
+        assert lead.has_property_match is True, (
+            f"Expected has_property_match=True after GIS match "
+            f"(prior={prior_has_match!r})"
+        )
+        assert outcome["match_found"] is True
+        # Crucially: if prior was already True, it remains True (never flipped to False)
+        if prior_has_match:
+            assert lead.has_property_match is True, (
+                f"A prior True must never be overridden to False by a subsequent result "
+                f"(prior={prior_has_match!r}, gis_result={gis_result!r})"
+            )

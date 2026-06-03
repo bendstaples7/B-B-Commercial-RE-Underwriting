@@ -166,15 +166,44 @@ class TestTodaysActionQueue:
 
 class TestPreviouslyWarmQueue:
     def test_lead_with_warm_signal_appears(self, app, client):
-        """A lead with a PRIOR_WARM_CONVERSATION signal appears in Previously Warm."""
+        """A lead with a PRIOR_WARM_CONVERSATION signal and is_warm=True appears in Previously Warm.
+
+        The is_warm flag is set directly on the lead (as the HubSpot signal pipeline
+        would do via run_extract_hubspot_signals). The queue filter uses is_warm=True
+        only — not the signals table.
+        """
         with app.app_context():
-            lead = _make_lead(app, '1 Previously Warm St')
+            lead = _make_lead(app, '1 Previously Warm St', is_warm=True)
             _make_warm_signal(app, lead.id)
 
             svc = QueueService()
             rows, total = svc.get_previously_warm()
             ids = [r['id'] for r in rows]
             assert lead.id in ids
+            assert total >= 1
+
+    def test_dupage_lead_with_is_warm_true_appears(self, app, client):
+        """A DuPage lead with is_warm=True appears in Previously Warm (no signal seeding).
+
+        This confirms the is_warm-only filter works end-to-end for non-HubSpot
+        source types. The lead has source_type='foreclosure' and is_warm=True set
+        directly on the model — no HubSpotSignal records involved.
+        """
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '3 Previously Warm St',
+                source_type='foreclosure',
+                is_warm=True,
+            )
+
+            svc = QueueService()
+            rows, total = svc.get_previously_warm()
+            ids = [r['id'] for r in rows]
+            assert lead.id in ids, (
+                f"DuPage lead {lead.id} with is_warm=True not found in Previously Warm. "
+                f"Rows: {ids}"
+            )
             assert total >= 1
 
     def test_lead_without_signal_does_not_appear(self, app, client):
@@ -481,3 +510,146 @@ class TestHealthEndpoint:
             assert 'status' in data
             assert 'checks' in data
             assert 'db_connectivity' in data['checks']
+
+
+# ---------------------------------------------------------------------------
+# DuPage Lead Queue Visibility — source-agnostic queue filtering
+# Asserts HubSpot-sourced (source_type=None) and DuPage-sourced
+# (source_type='foreclosure') leads with identical qualifying fields
+# both appear in the same queue.
+# ---------------------------------------------------------------------------
+
+class TestDuPageLeadQueueVisibility:
+    """Seed a HubSpot-sourced and a DuPage-sourced lead with identical
+    qualifying field values and assert both appear in the same queue.
+
+    Covers queues: No Next Action, Previously Warm, Needs Review,
+    Missing Property Match.
+    """
+
+    # ------------------------------------------------------------------
+    # Queue 4: No Next Action
+    # ------------------------------------------------------------------
+
+    def test_no_next_action_both_sources_appear(self, app, client):
+        """Both HubSpot-sourced (no source_type) and DuPage-sourced leads
+        with lead_status='new', recommended_action=None, and no tasks appear
+        in get_no_next_action()."""
+        with app.app_context():
+            hubspot_lead = _make_lead(
+                app, '10 DuPage NNA HubSpot St',
+                lead_status='new',
+                recommended_action=None,
+                source_type=None,
+            )
+            dupage_lead = _make_lead(
+                app, '10 DuPage NNA DuPage St',
+                lead_status='new',
+                recommended_action=None,
+                source_type='foreclosure',
+            )
+
+            svc = QueueService()
+            rows, total = svc.get_no_next_action()
+            ids = [r['id'] for r in rows]
+
+            assert hubspot_lead.id in ids, (
+                f"HubSpot lead {hubspot_lead.id} missing from No Next Action. ids={ids}"
+            )
+            assert dupage_lead.id in ids, (
+                f"DuPage lead {dupage_lead.id} missing from No Next Action. ids={ids}"
+            )
+            assert total >= 2
+
+    # ------------------------------------------------------------------
+    # Queue 2: Previously Warm
+    # ------------------------------------------------------------------
+
+    def test_previously_warm_both_sources_appear(self, app, client):
+        """Both HubSpot-sourced and DuPage-sourced leads with is_warm=True
+        appear in get_previously_warm()."""
+        with app.app_context():
+            hubspot_lead = _make_lead(
+                app, '20 DuPage Warm HubSpot St',
+                is_warm=True,
+                source_type=None,
+            )
+            dupage_lead = _make_lead(
+                app, '20 DuPage Warm DuPage St',
+                is_warm=True,
+                source_type='foreclosure',
+            )
+
+            svc = QueueService()
+            rows, total = svc.get_previously_warm()
+            ids = [r['id'] for r in rows]
+
+            assert hubspot_lead.id in ids, (
+                f"HubSpot lead {hubspot_lead.id} missing from Previously Warm. ids={ids}"
+            )
+            assert dupage_lead.id in ids, (
+                f"DuPage lead {dupage_lead.id} missing from Previously Warm. ids={ids}"
+            )
+            assert total >= 2
+
+    # ------------------------------------------------------------------
+    # Queue 5: Needs Review
+    # ------------------------------------------------------------------
+
+    def test_needs_review_both_sources_appear(self, app, client):
+        """Both HubSpot-sourced and DuPage-sourced leads with review_required=True
+        appear in get_needs_review()."""
+        with app.app_context():
+            hubspot_lead = _make_lead(
+                app, '30 DuPage Review HubSpot St',
+                review_required=True,
+                source_type=None,
+            )
+            dupage_lead = _make_lead(
+                app, '30 DuPage Review DuPage St',
+                review_required=True,
+                source_type='foreclosure',
+            )
+
+            svc = QueueService()
+            rows, total = svc.get_needs_review()
+            ids = [r['id'] for r in rows]
+
+            assert hubspot_lead.id in ids, (
+                f"HubSpot lead {hubspot_lead.id} missing from Needs Review. ids={ids}"
+            )
+            assert dupage_lead.id in ids, (
+                f"DuPage lead {dupage_lead.id} missing from Needs Review. ids={ids}"
+            )
+            assert total >= 2
+
+    # ------------------------------------------------------------------
+    # Queue 7: Missing Property Match
+    # ------------------------------------------------------------------
+
+    def test_missing_property_match_both_sources_appear(self, app, client):
+        """Both HubSpot-sourced and DuPage-sourced leads with
+        has_property_match=False appear in get_missing_property_match()."""
+        with app.app_context():
+            hubspot_lead = _make_lead(
+                app, '40 DuPage NoMatch HubSpot St',
+                has_property_match=False,
+                source_type=None,
+            )
+            dupage_lead = _make_lead(
+                app, '40 DuPage NoMatch DuPage St',
+                has_property_match=False,
+                source_type='foreclosure',
+            )
+
+            svc = QueueService()
+            rows, total = svc.get_missing_property_match()
+            ids = [r['id'] for r in rows]
+
+            assert hubspot_lead.id in ids, (
+                f"HubSpot lead {hubspot_lead.id} missing from Missing Property Match. ids={ids}"
+            )
+            assert dupage_lead.id in ids, (
+                f"DuPage lead {dupage_lead.id} missing from Missing Property Match. ids={ids}"
+            )
+            assert total >= 2

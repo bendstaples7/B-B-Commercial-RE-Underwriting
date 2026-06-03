@@ -135,6 +135,38 @@ class LeadIngestionService:
         lead.needs_skip_trace = not (has_phone or has_email)
 
     # ------------------------------------------------------------------ #
+    # Review-required flag (Requirements 5.2–5.4)                         #
+    # ------------------------------------------------------------------ #
+
+    def _set_review_required_flag(self, lead, is_creation: bool) -> None:
+        """Set or clear review_required based on critical field completeness (Req 5.2–5.4).
+
+        Rule:
+        - On creation: set True + reason only when all three of phone_1, email_1,
+          county_assessor_pin are null or empty.
+        - On update: clear flag (set False, reason=None) if all three fields are now
+          populated; otherwise leave flag unchanged.
+        """
+        has_phone = bool(lead.phone_1 and str(lead.phone_1).strip())
+        has_email = bool(lead.email_1 and str(lead.email_1).strip())
+        has_pin   = bool(lead.county_assessor_pin and str(lead.county_assessor_pin).strip())
+
+        all_missing = not has_phone and not has_email and not has_pin
+        all_present = has_phone and has_email and has_pin
+
+        if is_creation:
+            if all_missing:
+                lead.review_required = True
+                lead.review_reason   = 'Missing phone, email, and county PIN'
+            # Otherwise leave False (default) — Req 5.3
+        else:
+            # On update: clear if all three are now present
+            if all_present and lead.review_required:
+                lead.review_required = False
+                lead.review_reason   = None
+            # Otherwise leave review_required unchanged — Req 5.4
+
+    # ------------------------------------------------------------------ #
     # GIS enrichment (Requirements 8.1–8.7)                               #
     # ------------------------------------------------------------------ #
 
@@ -194,6 +226,7 @@ class LeadIngestionService:
             if parcel is None:
                 # No match found (Requirement 8.4)
                 lead.needs_skip_trace = True
+                lead.has_property_match = False          # Req 6.2, 6.3
                 _append_note(lead, 'GIS match not found')
                 return outcome
 
@@ -454,6 +487,7 @@ class LeadIngestionService:
                         _append_note(lead, 'Owned 20+ years')
 
                 self._set_skip_trace_flag(lead, is_creation)
+                self._set_review_required_flag(lead, is_creation)
                 lead.last_import_job_id = job.id
                 db.session.add(lead)
 
@@ -633,6 +667,7 @@ class LeadIngestionService:
                         _append_note(lead, 'Long-owned absentee')
 
                 self._set_skip_trace_flag(lead, is_creation)
+                self._set_review_required_flag(lead, is_creation)
                 lead.last_import_job_id = job.id
                 db.session.add(lead)
 
@@ -757,6 +792,7 @@ class LeadIngestionService:
                         error_log.append(error_log_entry)
 
                 self._set_skip_trace_flag(lead, is_creation)
+                self._set_review_required_flag(lead, is_creation)
                 lead.last_import_job_id = job.id
                 db.session.add(lead)
 
@@ -891,6 +927,7 @@ class LeadIngestionService:
                         error_log.append({'type': 'gis_enrichment', 'record': rows_processed, **gis_outcome})
 
                 self._set_skip_trace_flag(lead, is_creation)
+                self._set_review_required_flag(lead, is_creation)
                 lead.last_import_job_id = job.id
                 db.session.add(lead)
 
@@ -1150,6 +1187,7 @@ class LeadIngestionService:
                             })
 
                     self._set_skip_trace_flag(lead, is_creation)
+                    self._set_review_required_flag(lead, is_creation)
                     lead.last_import_job_id = job_id
                     db.session.add(lead)
 

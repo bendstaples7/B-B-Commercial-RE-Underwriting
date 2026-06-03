@@ -148,7 +148,9 @@ export const LeadSummarySchema = z.object({
   updated_at: z.string().nullable(),
   source: z.string().nullable(),
   date_identified: z.string().nullable(),
-  notes: z.string().nullable(),
+  // notes and mailer_history are only present in the detail endpoint, not the
+  // list endpoint — use .nullish() to accept both null and undefined.
+  notes: z.string().nullish(),
   needs_skip_trace: z.boolean().nullable(),
   skip_tracer: z.string().nullable(),
   date_skip_traced: z.string().nullable(),
@@ -158,7 +160,11 @@ export const LeadSummarySchema = z.object({
   owner_user_id: z.string().nullable(),
   // mailer_history is stored as free-text strings in legacy imported data,
   // so we accept string | array | object to avoid parse failures.
-  mailer_history: z.union([z.record(z.unknown()), z.array(z.unknown()), z.string()]).nullable(),
+  // Also nullish because it is absent from list-endpoint responses.
+  mailer_history: z.union([z.record(z.unknown()), z.array(z.unknown()), z.string()]).nullish(),
+  // DuPage lead database fields (added in feature/dupage-lead-database)
+  source_type: z.string().nullish(),
+  owner_user_id: z.string().nullish(),
 })
 
 export type LeadSummaryParsed = z.infer<typeof LeadSummarySchema>

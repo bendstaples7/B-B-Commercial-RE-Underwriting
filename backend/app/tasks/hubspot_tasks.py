@@ -28,6 +28,9 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+# Signal types that mark a lead as warm (used in run_extract_hubspot_signals)
+WARM_SIGNAL_TYPES = frozenset({'PRIOR_WARM_CONVERSATION', 'APPOINTMENT_OCCURRED'})
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -590,6 +593,24 @@ def run_extract_hubspot_signals(run_id: int = None) -> None:
                     extractor.apply_suppression(signals)
 
                 db.session.commit()
+
+                # Set is_warm flag on the lead if any warm signal was detected (Req 4.3, 9.1-9.3)
+                try:
+                    warm_signals = [s for s in signals if s.signal_type in WARM_SIGNAL_TYPES]
+                    if warm_signals:
+                        from app.models import Lead as _Lead
+                        lead_obj = db.session.get(_Lead, lead_id)
+                        if lead_obj is not None and not lead_obj.is_warm:
+                            lead_obj.is_warm = True
+                            db.session.add(lead_obj)
+                            db.session.commit()
+                except Exception as warm_exc:
+                    logger.warning(
+                        "run_extract_hubspot_signals: failed to set is_warm for lead_id=%s: %s",
+                        lead_id, warm_exc,
+                    )
+                    db.session.rollback()
+
                 processed += 1
 
             except Exception as exc:
