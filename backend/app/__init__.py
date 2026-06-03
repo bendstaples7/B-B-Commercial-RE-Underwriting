@@ -442,17 +442,23 @@ def create_app(config_name='development'):
         _warn_provider_dashboard(app)
 
     # ---------------------------------------------------------------------------
-    # User identity — Option 1: centralise in g.user_id via before_request
+    # User identity — centralise in g.user_id via before_request
     #
-    # Every request sets g.user_id from the X-User-Id header.  Controllers
-    # read g.user_id instead of parsing the header or request body themselves.
-    # If the header is absent, g.user_id defaults to 'anonymous'.
+    # Production/development: identity comes exclusively from the verified Bearer
+    # JWT (`sub` claim). X-User-Id header is not trusted in these environments.
+    #
+    # Testing: X-User-Id fallback is allowed so the test suite can set user
+    # identity without issuing real JWTs.
+    #
+    # If no valid identity is resolved, g.user_id defaults to 'anonymous',
+    # which authenticated endpoints reject with 401.
     # ---------------------------------------------------------------------------
     from flask import g, request as _request
+    _is_testing = config_name == 'testing'
 
     @app.before_request
     def set_user_identity():
-        """Populate g.user_id from Bearer JWT (preferred) or X-User-Id header (fallback)."""
+        """Populate g.user_id from Bearer JWT (required) or X-User-Id header (testing only)."""
         auth_header = _request.headers.get('Authorization', '')
         if auth_header.startswith('Bearer '):
             token = auth_header[7:]
@@ -460,10 +466,19 @@ def create_app(config_name='development'):
                 from app.services.auth_service import AuthService
                 claims = AuthService().verify_token(token)
                 g.user_id = claims['sub']
-                return  # Bearer token wins — skip X-User-Id
+                return  # Bearer token verified — done
             except Exception:
-                pass  # fall through to X-User-Id
-        g.user_id = _request.headers.get('X-User-Id', 'anonymous')
+                # Invalid/expired token — fall through to anonymous
+                pass
+
+        if _is_testing:
+            # In tests, allow X-User-Id header as a convenience identity mechanism
+            # since tests don't issue real JWTs.
+            g.user_id = _request.headers.get('X-User-Id', 'anonymous')
+        else:
+            # In production/development, never trust the unauthenticated X-User-Id
+            # header. No valid Bearer token means anonymous.
+            g.user_id = 'anonymous'
     # Register error handlers
     from app.error_handlers import register_error_handlers
     register_error_handlers(app)
