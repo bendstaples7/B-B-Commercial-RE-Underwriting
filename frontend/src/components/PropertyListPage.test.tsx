@@ -243,7 +243,7 @@ describe('PropertyListPage — source_type filter', () => {
 
     // Wait for the re-fetch triggered by page change
     await waitFor(() => {
-      expect(vi.mocked(leadService.listLeads).toHaveBeenCalledTimes(2))
+      expect(vi.mocked(leadService.listLeads)).toHaveBeenCalledTimes(2)
     })
 
     // Step 3: Clear calls and open the filter panel

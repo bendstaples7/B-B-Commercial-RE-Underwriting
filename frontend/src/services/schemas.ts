@@ -162,9 +162,6 @@ export const LeadSummarySchema = z.object({
   // so we accept string | array | object to avoid parse failures.
   // Also nullish because it is absent from list-endpoint responses.
   mailer_history: z.union([z.record(z.unknown()), z.array(z.unknown()), z.string()]).nullish(),
-  // DuPage lead database fields (added in feature/dupage-lead-database)
-  source_type: z.string().nullish(),
-  owner_user_id: z.string().nullish(),
 })
 
 export type LeadSummaryParsed = z.infer<typeof LeadSummarySchema>
