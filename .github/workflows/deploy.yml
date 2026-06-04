@@ -248,10 +248,7 @@ jobs:
 
           echo "Logging in as smoke test user ($SMOKE_TEST_EMAIL)..."
           # Build JSON payload safely using Python to handle special characters in secrets
-          LOGIN_PAYLOAD=$(python3 -c "
-          import json, os
-          print(json.dumps({'email': os.environ['SMOKE_TEST_EMAIL'], 'password': os.environ['SMOKE_TEST_PASSWORD']}))
-          ")
+          LOGIN_PAYLOAD=$(python3 -c "import json, os; print(json.dumps({'email': os.environ['SMOKE_TEST_EMAIL'], 'password': os.environ['SMOKE_TEST_PASSWORD']}))")
           LOGIN_RESPONSE=$(curl -s --max-time 15 \
             -X POST "${BASE_URL}/api/auth/login" \
             -H "Content-Type: application/json" \
@@ -294,15 +291,7 @@ jobs:
 
           echo "Queue counts response: $COUNTS"
 
-          TOTAL=$(echo "$COUNTS" | python3 -c "
-          import sys, json
-          d = json.load(sys.stdin)
-          total = sum(d.get(k, 0) for k in [
-              'todays_action','previously_warm','follow_up_overdue',
-              'no_next_action','needs_review','do_not_contact','missing_property_match'
-          ])
-          print(total)
-          " 2>/dev/null || echo "0")
+          TOTAL=$(echo "$COUNTS" | python3 -c "import sys, json; d=json.load(sys.stdin); print(sum(d.get(k,0) for k in ['todays_action','previously_warm','follow_up_overdue','no_next_action','needs_review','do_not_contact','missing_property_match']))" 2>/dev/null || echo "0")
 
           echo "Sum of all queue counts: $TOTAL"
           if [ "$TOTAL" = "0" ]; then

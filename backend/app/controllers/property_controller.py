@@ -15,7 +15,7 @@ from marshmallow import ValidationError
 from sqlalchemy import or_
 
 from app import db, limiter
-from app.api_utils import get_current_user_id
+from app.api_utils import get_current_user_id, require_auth
 from app.models import (
     AnalysisSession,
     Lead,
@@ -331,6 +331,7 @@ def _serialize_scoring_weights(weights):
 @properties_bp.route('/', methods=['GET'])
 @limiter.limit("30 per minute")
 @handle_errors
+@require_auth
 def list_properties():
     """List properties with pagination, filtering, and sorting.
 
@@ -480,6 +481,7 @@ def list_properties():
 @properties_bp.route('/<int:lead_id>', methods=['GET'])
 @limiter.limit("30 per minute")
 @handle_errors
+@require_auth
 def get_property(lead_id):
     """Get full property detail including score, enrichment records, and analysis links."""
     lead = db.session.get(Lead, lead_id)
@@ -508,6 +510,7 @@ def get_property(lead_id):
 @properties_bp.route('/<int:lead_id>/analyze', methods=['POST'])
 @limiter.limit("10 per minute")
 @handle_errors
+@require_auth
 def analyze_property(lead_id):
     """Create an AnalysisSession pre-populated from property data.
 
