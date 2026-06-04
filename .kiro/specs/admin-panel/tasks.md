@@ -251,6 +251,138 @@ Implement read-only cross-user visibility for admin users across three layers: a
 
 ---
 
+## New Tasks — Admin Panel Enhancements
+
+- [x] 12. Database migration — seed sub-users, add `password_set`, reassign leads
+  - [x] 12.1 Create Alembic migration `seed_sub_users_and_reassign_leads`
+    - Create `backend/alembic_migrations/versions/w2x3y4z5a6b7_seed_sub_users_and_reassign_leads.py`
+    - Set `revision = 'w2x3y4z5a6b7'`, `down_revision = 'v1w2x3y4z5a6'`
+    - `upgrade()`:
+      1. `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_set BOOLEAN NOT NULL DEFAULT FALSE`
+      2. `UPDATE users SET password_set = TRUE WHERE password_hash IS NOT NULL AND password_hash != ''` (mark existing users as already having a password)
+      3. Insert `ben.d.staples.7@gmail.com` with `display_name='Ben'`, `is_active=true`, `is_admin=false`, `password_set=false`, `password_hash=''` using `INSERT INTO users ... ON CONFLICT (email_lower) DO NOTHING`
+      4. Insert `userx@test.com` with `display_name='UserX'`, `is_active=true`, `is_admin=false`, `password_set=false`, `password_hash=''` using `INSERT INTO users ... ON CONFLICT (email_lower) DO NOTHING`
+      5. `UPDATE leads SET owner_user_id = (SELECT user_id FROM users WHERE email_lower = 'ben.d.staples.7@gmail.com') WHERE owner_user_id IS NULL`
+    - `downgrade()`: `ALTER TABLE users DROP COLUMN IF EXISTS password_set` (do NOT delete seeded users or undo lead reassignment — data changes are irreversible)
+    - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5_
+
+  - [x] 12.2 Add `password_set` column to the `User` SQLAlchemy model
+    - In `backend/app/models/user.py`, add `password_set = db.Column(db.Boolean, nullable=False, default=False, server_default='false')`
+    - _Requirements: 8.4_
+
+- [x] 13. Backend — first-login password setup flow
+  - [x] 13.1 Update `AuthService.authenticate` to detect `password_set = false`
+    - In `backend/app/services/auth_service.py`, after verifying the password (or if `password_hash` is empty), check `user.password_set`
+    - If `password_set = false`, return a special sentinel instead of the User — e.g. raise a new `PasswordSetupRequiredException(user)` exception
+    - _Requirements: 9.1_
+
+  - [x] 13.2 Add `AuthService.issue_setup_token` method
+    - In `backend/app/services/auth_service.py`, add `issue_setup_token(self, user: User) -> str`
+    - Payload: `{"sub": user.user_id, "setup_required": True, "iat": now, "exp": now + timedelta(hours=1)}`
+    - No `is_admin` claim — this token cannot pass `require_auth`
+    - _Requirements: 9.1_
+
+  - [x] 13.3 Update `POST /api/auth/login` to return setup token for passwordless users
+    - In the auth controller (find via `grep_search` for the login route), catch `PasswordSetupRequiredException`
+    - Return HTTP 200 with `{"setup_required": true, "setup_token": "<token>"}` instead of the normal session token
+    - _Requirements: 9.1_
+
+  - [x] 13.4 Add `POST /api/auth/set-password` endpoint
+    - In the auth controller, add a new route `POST /api/auth/set-password`
+    - Verify the `Authorization: Bearer` token has `setup_required: true` claim (use a new `require_setup_token` decorator or inline check)
+    - Validate `new_password` is present and >= 8 characters; return 400 if not
+    - Hash the password with bcrypt work factor 12, update `password_hash` and `password_set = True`, commit
+    - Return HTTP 200 with a normal session token (call `AuthService().issue_token(user)`)
+    - _Requirements: 9.2, 9.3, 9.4, 9.5_
+
+  - [x] 13.5 Update `require_auth` to reject setup tokens
+    - In `backend/app/api_utils.py`, after decoding JWT claims in `require_auth`, check if `claims.get('setup_required') == True`; if so, return HTTP 401 `{"error": "Setup token cannot be used for authentication"}`
+    - _Requirements: 9.5_
+
+- [x] 14. Backend — admin user management endpoints
+  - [x] 14.1 Add `AdminService.reset_user_password` method
+    - In `backend/app/services/admin_service.py`, add `reset_user_password(self, user_id: str, new_password: str, requesting_admin_id: str) -> None`
+    - Validate `new_password` >= 8 chars (raise `ValidationException` if not)
+    - Raise `ValidationException` if `user_id == requesting_admin_id`
+    - Raise `ResourceNotFoundError` if user not found
+    - Hash with bcrypt work factor 12, update `password_hash` and `password_set = True`, commit
+    - _Requirements: 10.1, 10.2, 10.3, 10.5_
+
+  - [x] 14.2 Add `AdminService.update_user` method
+    - In `backend/app/services/admin_service.py`, add `update_user(self, user_id: str, display_name: str | None, email: str | None) -> dict`
+    - Validate at least one field is provided (raise `ValidationException` if neither)
+    - Validate `display_name` is non-empty and <= 100 chars if provided
+    - Validate `email` contains `@` if provided; raise `ConflictError` if email already in use by another user
+    - Update `email_lower = email.lower()` when email is changed
+    - Commit and return the updated user dict (same shape as `list_users` rows)
+    - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5, 11.7_
+
+  - [x] 14.3 Add `POST /api/admin/users/<user_id>/reset-password` route to `admin_controller.py`
+    - Decorated with `@handle_errors`, `@require_auth`, `@require_admin`
+    - Read `new_password` from JSON body
+    - Call `AdminService().reset_user_password(user_id, new_password, g.user_id)`
+    - Return 200 `{"message": "Password reset successfully."}`; 400/403/404 handled by `handle_errors` and `require_admin`
+    - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5_
+
+  - [x] 14.4 Add `PATCH /api/admin/users/<user_id>` route to `admin_controller.py`
+    - Decorated with `@handle_errors`, `@require_auth`, `@require_admin`
+    - Read `display_name` and `email` from JSON body (both optional)
+    - Call `AdminService().update_user(user_id, display_name, email)`
+    - Return 200 with updated user dict; 400/403/404/409 handled by decorators and `handle_errors`
+    - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5, 11.6, 11.7_
+
+- [x] 15. Frontend — set-password page
+  - [x] 15.1 Update `LoginPage` to handle `setup_required` response
+    - In `frontend/src/pages/LoginPage.tsx` (or wherever the login form lives), after a successful login response, check if `response.data.setup_required === true`
+    - If so, store `setup_token` in a React state/context (NOT localStorage) and navigate to `/set-password`
+    - _Requirements: 9.6_
+
+  - [x] 15.2 Create `frontend/src/pages/SetPasswordPage.tsx`
+    - Display a form with "New Password" and "Confirm Password" fields
+    - Validate: both fields non-empty, >= 8 characters, must match — show inline error if not
+    - On submit, call `POST /api/auth/set-password` with `Authorization: Bearer <setup_token>` and `{"new_password": "..."}`
+    - On success, store the returned `session_token` in localStorage and navigate to `/`
+    - On API error, display the error message
+    - _Requirements: 9.7, 9.8_
+
+  - [x] 15.3 Add `/set-password` route to `App.tsx`
+    - Import `SetPasswordPage` and add `<Route path="/set-password" element={<SetPasswordPage />} />`
+    - This route must be accessible without authentication (outside the auth guard)
+    - _Requirements: 9.7_
+
+  - [x] 15.4 Add `setupToken` to a lightweight context or pass via navigation state
+    - The `setup_token` must be available to `SetPasswordPage` without being stored in localStorage
+    - Use React Router `useLocation` state (`navigate('/set-password', { state: { setupToken } })`) to pass it
+    - `SetPasswordPage` reads `location.state?.setupToken`; if absent, redirect to `/login`
+    - _Requirements: 9.6, 9.7_
+
+- [x] 16. Frontend — admin user management UI
+  - [x] 16.1 Add admin API methods to `frontend/src/services/api.ts`
+    - Add to `adminService`:
+      - `resetPassword(userId: string, newPassword: string): Promise<void>` — `POST /api/admin/users/<userId>/reset-password`
+      - `updateUser(userId: string, data: { display_name?: string; email?: string }): Promise<AdminUserSummary>` — `PATCH /api/admin/users/<userId>`
+    - _Requirements: 10.1, 11.1_
+
+  - [x] 16.2 Add "Reset Password" dialog to `AdminUserDetail`
+    - In `frontend/src/components/AdminUserDetail.tsx`, add a "Reset Password" `Button` in the user profile section
+    - Clicking it opens an MUI `Dialog` with a "New Password" `TextField` and Submit/Cancel buttons
+    - On submit, call `adminService.resetPassword(userId, newPassword)` via `useMutation`
+    - Show a success `Snackbar` or inline `Alert` on success; show error `Alert` on failure
+    - _Requirements: 10.6_
+
+  - [x] 16.3 Add "Edit User" dialog to `AdminUserDetail`
+    - In `frontend/src/components/AdminUserDetail.tsx`, add an "Edit" `Button` in the user profile section
+    - Clicking it opens an MUI `Dialog` pre-populated with the user's current `display_name` and `email`
+    - On submit, call `adminService.updateUser(userId, { display_name, email })` via `useMutation`
+    - On success, invalidate the `['adminUserSummary', userId]` React Query cache key to refresh the displayed data
+    - Show error `Alert` on failure (including 409 conflict for duplicate email)
+    - _Requirements: 11.8_
+
+- [x] 17. Final checkpoint — run all tests
+  - Run `cd backend && pytest` and `cd frontend && npm test` to confirm all tests pass.
+
+---
+
 ## Notes
 
 - Tasks marked with `*` are optional and can be skipped for a faster MVP
@@ -273,7 +405,14 @@ Implement read-only cross-user visibility for admin users across three layers: a
     { "id": 4, "tasks": ["4.2", "4.3", "7.2", "7.3", "7.4"] },
     { "id": 5, "tasks": ["8.1", "9.1"] },
     { "id": 6, "tasks": ["8.2", "9.2", "10.1"] },
-    { "id": 7, "tasks": ["10.2"] }
+    { "id": 7, "tasks": ["10.2"] },
+    { "id": 8, "tasks": ["12.1", "12.2"] },
+    { "id": 9, "tasks": ["13.1", "13.2"] },
+    { "id": 10, "tasks": ["13.3", "13.4", "13.5", "14.1", "14.2"] },
+    { "id": 11, "tasks": ["14.3", "14.4", "15.1", "15.2"] },
+    { "id": 12, "tasks": ["15.3", "15.4", "16.1"] },
+    { "id": 13, "tasks": ["16.2", "16.3"] },
+    { "id": 14, "tasks": ["17"] }
   ]
 }
 ```

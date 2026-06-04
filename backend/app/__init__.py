@@ -163,10 +163,6 @@ def _validate_and_log_database_url(app, config_name='development'):
     """
     Validate DATABASE_URL at startup and log the resolved host with credentials redacted.
 
-    If the primary DATABASE_URL is a remote host and the connection fails (e.g. Neon
-    quota exceeded), automatically falls back to LOCAL_DATABASE_URL if set, or to
-    postgresql://localhost/real_estate_analysis as a last resort.
-
     Requirements: 7.8, 8.1, 8.2
     """
     # Skip validation in testing mode — tests use SQLite in-memory
@@ -174,23 +170,6 @@ def _validate_and_log_database_url(app, config_name='development'):
         return
 
     from urllib.parse import urlparse
-
-    def _try_connect(url: str) -> bool:
-        """Return True if a basic TCP connection to the database succeeds."""
-        try:
-            import psycopg2
-            conn = psycopg2.connect(url, connect_timeout=5)
-            conn.close()
-            return True
-        except Exception:
-            return False
-
-    def _is_remote(url: str) -> bool:
-        try:
-            hostname = urlparse(url).hostname or ''
-            return hostname not in ('localhost', '127.0.0.1', '')
-        except Exception:
-            return False
 
     def _safe_host(url: str) -> str:
         try:
@@ -220,48 +199,8 @@ def _validate_and_log_database_url(app, config_name='development'):
         )
         raise SystemExit(1) from exc
 
-    # If the primary URL is remote, test the connection and fall back to local
-    # if it fails (e.g. Neon quota exceeded, network issue).
-    # Fallback is only allowed in development mode to prevent silent DB switches
-    # in production or testing environments.
-    flask_env = os.getenv('FLASK_ENV', config_name)
-    allow_fallback = (
-        flask_env == 'development'
-        or os.getenv('ALLOW_LOCAL_DB_FALLBACK', '').lower() == 'true'
-    )
-
-    if _is_remote(raw_url):
-        if _try_connect(raw_url):
-            app.logger.info("Database host resolved: %s", _safe_host(raw_url))
-            app.config['DB_MODE'] = 'cloud'
-        else:
-            if allow_fallback:
-                # Primary remote DB is unreachable — fall back to local (dev only)
-                fallback_url = (
-                    os.getenv('LOCAL_DATABASE_URL')
-                    or 'postgresql://postgres:postgres@localhost:5432/real_estate_analysis'
-                )
-                app.logger.warning(
-                    "*** DATABASE FALLBACK: Primary database at %s is unreachable "
-                    "(quota exceeded or network error). Falling back to local database: %s",
-                    _safe_host(raw_url),
-                    _safe_host(fallback_url),
-                )
-                app.config['SQLALCHEMY_DATABASE_URI'] = fallback_url
-                app.config['DB_MODE'] = 'local_fallback'
-                os.environ['DATABASE_URL'] = fallback_url
-            else:
-                app.logger.error(
-                    "Primary database at %s is unreachable and DB fallback is not "
-                    "permitted in FLASK_ENV=%s. Set ALLOW_LOCAL_DB_FALLBACK=true to "
-                    "enable fallback in non-development environments.",
-                    _safe_host(raw_url),
-                    flask_env,
-                )
-                raise SystemExit(1)
-    else:
-        app.logger.info("Database host resolved: %s", _safe_host(raw_url))
-        app.config['DB_MODE'] = 'cloud'
+    app.logger.info("Database host resolved: %s", _safe_host(raw_url))
+    app.config['DB_MODE'] = 'local'
 
 
 def _assert_pool_pre_ping(app):
@@ -503,17 +442,23 @@ def create_app(config_name='development'):
         _warn_provider_dashboard(app)
 
     # ---------------------------------------------------------------------------
-    # User identity — Option 1: centralise in g.user_id via before_request
+    # User identity — centralise in g.user_id via before_request
     #
-    # Every request sets g.user_id from the X-User-Id header.  Controllers
-    # read g.user_id instead of parsing the header or request body themselves.
-    # If the header is absent, g.user_id defaults to 'anonymous'.
+    # Production/development: identity comes exclusively from the verified Bearer
+    # JWT (`sub` claim). X-User-Id header is not trusted in these environments.
+    #
+    # Testing: X-User-Id fallback is allowed so the test suite can set user
+    # identity without issuing real JWTs.
+    #
+    # If no valid identity is resolved, g.user_id defaults to 'anonymous',
+    # which authenticated endpoints reject with 401.
     # ---------------------------------------------------------------------------
     from flask import g, request as _request
+    _is_testing = config_name == 'testing'
 
     @app.before_request
     def set_user_identity():
-        """Populate g.user_id from Bearer JWT (preferred) or X-User-Id header (fallback)."""
+        """Populate g.user_id from Bearer JWT (required) or X-User-Id header (testing only)."""
         auth_header = _request.headers.get('Authorization', '')
         if auth_header.startswith('Bearer '):
             token = auth_header[7:]
@@ -521,10 +466,19 @@ def create_app(config_name='development'):
                 from app.services.auth_service import AuthService
                 claims = AuthService().verify_token(token)
                 g.user_id = claims['sub']
-                return  # Bearer token wins — skip X-User-Id
+                return  # Bearer token verified — done
             except Exception:
-                pass  # fall through to X-User-Id
-        g.user_id = _request.headers.get('X-User-Id', 'anonymous')
+                # Invalid/expired token — fall through to anonymous
+                pass
+
+        if _is_testing:
+            # In tests, allow X-User-Id header as a convenience identity mechanism
+            # since tests don't issue real JWTs.
+            g.user_id = _request.headers.get('X-User-Id', 'anonymous')
+        else:
+            # In production/development, never trust the unauthenticated X-User-Id
+            # header. No valid Bearer token means anonymous.
+            g.user_id = 'anonymous'
     # Register error handlers
     from app.error_handlers import register_error_handlers
     register_error_handlers(app)
@@ -640,6 +594,10 @@ def create_app(config_name='development'):
     # Admin panel endpoints (admin-only, guarded by require_admin)
     from app.controllers.admin_controller import admin_bp
     app.register_blueprint(admin_bp, url_prefix='/api/admin')
+
+    # DuPage lead database ingestion endpoints
+    from app.controllers.ingestion_controller import ingestion_bp
+    app.register_blueprint(ingestion_bp, url_prefix='/api/ingestion')
 
     # OpenAPI spec endpoint
     from app.openapi import openapi_bp

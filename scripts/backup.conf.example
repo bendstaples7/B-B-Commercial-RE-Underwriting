@@ -1,0 +1,46 @@
+# /home/deploy/backup.conf
+# Permissions: 600, owned by deploy:deploy
+# Copy this file to /home/deploy/backup.conf and fill in real values.
+# NEVER commit real credentials to version control.
+
+# ── PostgreSQL ────────────────────────────────────────────────────────────────
+PGDATABASE="real_estate_analysis"
+PGUSER="app_user"
+PGHOST="localhost"
+# Uses .pgpass for password auth — see setup instructions below
+
+# ── Backup directories ────────────────────────────────────────────────────────
+BACKUP_DIR="/home/deploy/backups"
+WAL_ARCHIVE_DIR="/home/deploy/wal-archive"
+LOG_FILE="/home/deploy/logs/backup.log"
+
+# ── Remote storage ────────────────────────────────────────────────────────────
+REMOTE_METHOD=""          # rclone | s3 | rsync
+RCLONE_REMOTE="b2"              # rclone remote name (configured via rclone config)
+RCLONE_BUCKET="your-bucket-name"
+RCLONE_PATH_PREFIX="backups"    # remote path: RCLONE_BUCKET/RCLONE_PATH_PREFIX/YYYY/MM/DD/
+
+# ── Retention ─────────────────────────────────────────────────────────────────
+LOCAL_RETENTION_DAYS=30
+REMOTE_RETENTION_DAYS=30
+REDIS_RETENTION_DAYS=7
+WAL_RETENTION_DAYS=7
+
+# ── Alerting ──────────────────────────────────────────────────────────────────
+ALERT_METHOD="email"            # email | webhook | both
+ALERT_EMAIL="operator@example.com"
+MSMTP_ACCOUNT="default"
+WEBHOOK_URL=""                  # Slack/Discord/custom HTTP endpoint
+
+# ── Redis (WSL Ubuntu) ────────────────────────────────────────────────────────
+REDIS_RDB_PATH="/var/lib/redis/dump.rdb"   # path inside WSL Ubuntu
+REDIS_BGSAVE_TIMEOUT=300
+
+# ── Redis command prefix (leave empty for native Linux Redis) ─────────────────
+# REDIS_CMD_PREFIX="wsl -d Ubuntu --"   # uncomment for WSL-based Redis
+REDIS_CMD_PREFIX=""
+
+# ── Timeouts ──────────────────────────────────────────────────────────────────
+REMOTE_CONNECT_TIMEOUT=30
+REMOTE_RETRY_COUNT=3
+REMOTE_RETRY_DELAY=300          # seconds between retries

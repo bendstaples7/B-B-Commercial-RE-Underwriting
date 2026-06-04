@@ -302,6 +302,13 @@ export interface Property {
   lead_score: number
   lead_category: string
   data_source: string | null
+  source_type?: 'foreclosure' | 'long_owned' | 'absentee_owner' | 'tax_distress' | 'manual_distress' | null
+  tax_distress_data?: {
+    signal_type: 'tax_delinquency' | 'tax_sale'
+    delinquent_amount: number | null
+    tax_year: number | null
+  } | null
+  manual_priority?: number | null
   last_import_job_id: number | null
   created_at: string | null
   updated_at: string | null
@@ -564,6 +571,8 @@ export interface PropertyListFilters {
   marketing_list_id?: number
   sort_by?: 'lead_score' | 'created_at' | 'property_street'
   sort_order?: 'asc' | 'desc'
+  source_type?: 'foreclosure' | 'long_owned' | 'absentee_owner' | 'tax_distress' | 'manual_distress'
+  owner_user_id?: string
 }
 
 /** @deprecated Use `PropertyListFilters` instead */
@@ -1837,6 +1846,7 @@ export interface AuthContextValue {
   user: AuthUser | null       // null = unauthenticated
   token: string | null
   login: (email: string, password: string) => Promise<void>
+  loginWithToken: (sessionToken: string, userId: string) => void
   logout: () => void
   isLoading: boolean          // true during initial token validation on load
 }

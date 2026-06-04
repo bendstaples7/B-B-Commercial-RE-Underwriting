@@ -323,6 +323,7 @@ class TestAnalyzeLead:
         with app.app_context():
             lead = _create_lead(
                 app,
+                owner_user_id='user1',
                 bedrooms=3,
                 bathrooms=2.0,
                 square_footage=1500,
@@ -372,7 +373,7 @@ class TestAnalyzeLead:
     def test_analyze_lead_links_session(self, client, app):
         """After analysis, the lead's analysis_session_id is set."""
         with app.app_context():
-            lead = _create_lead(app)
+            lead = _create_lead(app, owner_user_id='user1')
             lead_id = lead.id
 
         resp = client.post(
@@ -565,3 +566,208 @@ class TestCombinedFilters:
         resp = client.get('/api/properties/?per_page=500')
         data = json.loads(resp.data)
         assert data['per_page'] == 100
+
+
+# ---------------------------------------------------------------------------
+# Tests: source_type and owner_user_id filter extension (Requirements 11.1–11.3)
+# ---------------------------------------------------------------------------
+
+class TestSourceTypeFilter:
+    """Tests for GET /api/properties/?source_type=<value> filtering."""
+
+    def test_filter_by_source_type_returns_only_matching_leads(self, client, app):
+        """source_type filter returns only leads with that source_type value."""
+        with app.app_context():
+            _create_lead(app, property_street='101 Foreclosure St', source_type='foreclosure')
+            _create_lead(app, property_street='102 LongOwned St', source_type='long_owned')
+            _create_lead(app, property_street='103 NoSource St', source_type=None)
+
+        resp = client.get('/api/properties/?source_type=foreclosure')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['total'] == 1
+        assert data['leads'][0]['property_street'] == '101 Foreclosure St'
+
+    def test_filter_by_source_type_excludes_different_source_types(self, client, app):
+        """source_type filter excludes leads with a different non-null source_type."""
+        with app.app_context():
+            _create_lead(app, property_street='201 Absentee St', source_type='absentee_owner')
+            _create_lead(app, property_street='202 TaxDist St', source_type='tax_distress')
+            _create_lead(app, property_street='203 Manual St', source_type='manual_distress')
+
+        resp = client.get('/api/properties/?source_type=absentee_owner')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['total'] == 1
+        assert data['leads'][0]['property_street'] == '201 Absentee St'
+
+    def test_filter_by_source_type_excludes_null_source_type(self, client, app):
+        """source_type filter excludes leads with NULL source_type."""
+        with app.app_context():
+            _create_lead(app, property_street='301 HasSource St', source_type='long_owned')
+            _create_lead(app, property_street='302 NullSource St', source_type=None)
+
+        resp = client.get('/api/properties/?source_type=long_owned')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['total'] == 1
+        assert data['leads'][0]['property_street'] == '301 HasSource St'
+
+    def test_filter_by_source_type_all_valid_values(self, client, app):
+        """All five valid source_type values are accepted without error."""
+        valid_types = ['foreclosure', 'long_owned', 'absentee_owner', 'tax_distress', 'manual_distress']
+        with app.app_context():
+            for i, st in enumerate(valid_types):
+                _create_lead(app, property_street=f'{400 + i} Valid St', source_type=st)
+
+        for st in valid_types:
+            resp = client.get(f'/api/properties/?source_type={st}')
+            assert resp.status_code == 200, f"Expected 200 for source_type={st}, got {resp.status_code}"
+            data = resp.get_json()
+            assert data['total'] == 1
+            assert data['leads'][0]['source_type'] == st
+
+    def test_filter_by_invalid_source_type_returns_400(self, client, app):
+        """Invalid source_type returns 400 with a descriptive error message."""
+        resp = client.get('/api/properties/?source_type=invalid_type')
+        assert resp.status_code == 400
+        data = resp.get_json()
+        # Response should contain an error key
+        assert 'error' in data or 'details' in data or 'message' in data
+
+    def test_filter_by_invalid_source_type_unknown_value_returns_400(self, client, app):
+        """Another invalid source_type (empty string-like) also returns 400."""
+        resp = client.get('/api/properties/?source_type=not_a_real_type')
+        assert resp.status_code == 400
+
+    def test_filter_by_invalid_source_type_has_descriptive_message(self, client, app):
+        """400 response body contains details identifying the invalid value."""
+        resp = client.get('/api/properties/?source_type=garbage')
+        assert resp.status_code == 400
+        data = resp.get_json()
+        # Must have at least one of these error-describing keys
+        error_keys = {'error', 'details', 'message'}
+        assert bool(data.keys() & error_keys), "Response must contain an error description"
+
+    def test_no_source_type_filter_returns_all_leads(self, client, app):
+        """Omitting source_type param returns leads regardless of their source_type."""
+        with app.app_context():
+            _create_lead(app, property_street='501 Any St', source_type='foreclosure')
+            _create_lead(app, property_street='502 Any St', source_type='long_owned')
+            _create_lead(app, property_street='503 Any St', source_type=None)
+
+        resp = client.get('/api/properties/')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['total'] == 3
+
+
+class TestOwnerUserIdFilter:
+    """Tests for GET /api/properties/?owner_user_id=<value> filtering."""
+
+    def test_filter_by_owner_user_id_returns_only_matching_leads(self, client, app):
+        """owner_user_id filter returns only leads belonging to that user."""
+        with app.app_context():
+            _create_lead(app, property_street='601 Owner St', owner_user_id='user-123')
+            _create_lead(app, property_street='602 Other St', owner_user_id='user-456')
+            _create_lead(app, property_street='603 NoOwner St', owner_user_id=None)
+
+        resp = client.get('/api/properties/?owner_user_id=user-123')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['total'] == 1
+        assert data['leads'][0]['property_street'] == '601 Owner St'
+
+    def test_filter_by_owner_user_id_excludes_null_owner(self, client, app):
+        """owner_user_id filter excludes leads with no owner set."""
+        with app.app_context():
+            _create_lead(app, property_street='701 Owned St', owner_user_id='user-abc')
+            _create_lead(app, property_street='702 Unowned St', owner_user_id=None)
+
+        resp = client.get('/api/properties/?owner_user_id=user-abc')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['total'] == 1
+        assert data['leads'][0]['property_street'] == '701 Owned St'
+
+    def test_filter_by_owner_user_id_returns_multiple_matching_leads(self, client, app):
+        """owner_user_id filter returns all leads for that user when multiple exist."""
+        with app.app_context():
+            _create_lead(app, property_street='801 Multi A St', owner_user_id='user-456')
+            _create_lead(app, property_street='802 Multi B St', owner_user_id='user-456')
+            _create_lead(app, property_street='803 Other St', owner_user_id='user-789')
+
+        resp = client.get('/api/properties/?owner_user_id=user-456')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['total'] == 2
+        streets = {lead['property_street'] for lead in data['leads']}
+        assert streets == {'801 Multi A St', '802 Multi B St'}
+
+    def test_filter_by_owner_user_id_no_match_returns_empty(self, client, app):
+        """owner_user_id that matches no leads returns an empty list."""
+        with app.app_context():
+            _create_lead(app, property_street='901 Someone St', owner_user_id='user-111')
+
+        resp = client.get('/api/properties/?owner_user_id=user-999')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['total'] == 0
+        assert data['leads'] == []
+
+    def test_no_owner_user_id_filter_returns_all_leads(self, client, app):
+        """Omitting owner_user_id returns all leads regardless of owner."""
+        with app.app_context():
+            _create_lead(app, property_street='1001 All A St', owner_user_id='user-111')
+            _create_lead(app, property_street='1002 All B St', owner_user_id='user-222')
+            _create_lead(app, property_street='1003 All C St', owner_user_id=None)
+
+        resp = client.get('/api/properties/')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['total'] == 3
+
+
+class TestCombinedSourceTypeOwnerFilter:
+    """Tests for combining source_type and owner_user_id filters together."""
+
+    def test_combined_source_type_and_owner_user_id_filter(self, client, app):
+        """Both source_type and owner_user_id filters applied together return only intersection."""
+        with app.app_context():
+            # Matches both filters
+            _create_lead(app, property_street='1101 Match St',
+                         source_type='foreclosure', owner_user_id='user-456')
+            # Matches source_type only
+            _create_lead(app, property_street='1102 SrcOnly St',
+                         source_type='foreclosure', owner_user_id='user-789')
+            # Matches owner only
+            _create_lead(app, property_street='1103 OwnerOnly St',
+                         source_type='long_owned', owner_user_id='user-456')
+            # Matches neither
+            _create_lead(app, property_street='1104 NoMatch St',
+                         source_type='tax_distress', owner_user_id='user-999')
+
+        resp = client.get('/api/properties/?source_type=foreclosure&owner_user_id=user-456')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['total'] == 1
+        assert data['leads'][0]['property_street'] == '1101 Match St'
+
+    def test_combined_filter_invalid_source_type_still_returns_400(self, client, app):
+        """Even with a valid owner_user_id, an invalid source_type returns 400."""
+        resp = client.get('/api/properties/?source_type=invalid_type&owner_user_id=user-456')
+        assert resp.status_code == 400
+
+    def test_combined_filter_empty_result_when_no_intersection(self, client, app):
+        """Combined filters return empty when no lead matches both criteria."""
+        with app.app_context():
+            _create_lead(app, property_street='1201 A St',
+                         source_type='foreclosure', owner_user_id='user-111')
+            _create_lead(app, property_street='1202 B St',
+                         source_type='long_owned', owner_user_id='user-222')
+
+        resp = client.get('/api/properties/?source_type=foreclosure&owner_user_id=user-222')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['total'] == 0
+        assert data['leads'] == []

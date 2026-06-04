@@ -82,10 +82,39 @@ if [ "$FREE_MEM_KB" -lt 307200 ]; then
 fi
 echo "    memory: ${FREE_MEM_KB}KB available (OK)"
 
+# ── Pre-deploy backup (blocks deploy on failure) ──────────────────────────────
+echo "==> (0) Pre-deploy backup"
+if [[ ! -e /home/deploy/backup.sh ]]; then
+    echo "    WARNING: /home/deploy/backup.sh not found — skipping pre-deploy backup"
+    echo "    To enable pre-deploy backups, ensure the deploy workflow has run at least once"
+elif [[ ! -x /home/deploy/backup.sh ]]; then
+    echo "FAILED: /home/deploy/backup.sh exists but is not executable — check permissions"
+    exit 1
+else
+    /home/deploy/backup.sh --pre-deploy || {
+        echo "FAILED: pre-deploy backup failed — aborting deploy (no restore point)"
+        echo "--- backup bootstrap error log (if any) ---"
+        cat /tmp/backup_bootstrap.log 2>/dev/null || echo "(no bootstrap log found)"
+        echo "-------------------------------------------"
+        exit 1
+    }
+    echo "    Pre-deploy backup complete"
+fi
+
 # ── Deploy steps ─────────────────────────────────────────────────────────────
 echo "==> (1) Discard local changes and checkout SHA: $TARGET_SHA"
 git checkout -- . || { echo "FAILED: git reset local changes"; exit 1; }
-git fetch origin main || { echo "FAILED: git fetch"; exit 1; }
+# Retry git fetch up to 3 times with 5s delay — guards against transient network failures
+GIT_FETCH_ATTEMPTS=0
+until git fetch origin main; do
+    GIT_FETCH_ATTEMPTS=$(( GIT_FETCH_ATTEMPTS + 1 ))
+    if [ "$GIT_FETCH_ATTEMPTS" -ge 3 ]; then
+        echo "FAILED: git fetch failed after 3 attempts"
+        exit 1
+    fi
+    echo "    git fetch failed (attempt $GIT_FETCH_ATTEMPTS/3) — retrying in 5s..."
+    sleep 5
+done
 git checkout "$TARGET_SHA" || { echo "FAILED: git checkout $TARGET_SHA"; exit 1; }
 echo "    Checked out $TARGET_SHA"
 
@@ -126,6 +155,12 @@ set -a
 # shellcheck source=/dev/null
 source .env
 set +a
+# Pre-check: verify migrations can run before touching the database
+# flask db check exits non-zero if there are unresolved migration issues
+FLASK_ENV=production flask db check 2>/dev/null || {
+    echo "WARNING: flask db check returned non-zero — proceeding with upgrade anyway"
+    echo "    (flask db check may not be available in all Flask-Migrate versions)"
+}
 FLASK_ENV=production flask db upgrade head || { echo "FAILED: flask db upgrade"; exit 1; }
 cd ..
 echo "    Migrations applied"

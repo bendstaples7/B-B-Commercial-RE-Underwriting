@@ -1546,6 +1546,26 @@ export const adminService = {
     const response = await api.get<AdminLeadListResponse>('/admin/leads', { params })
     return response.data
   },
+
+  /**
+   * POST /api/admin/users/:userId/reset-password — reset a user's password (admin only)
+   */
+  resetPassword: async (userId: string, newPassword: string): Promise<void> => {
+    await api.post(`/admin/users/${userId}/reset-password`, { new_password: newPassword })
+  },
+
+  /**
+   * PATCH /api/admin/users/:userId — update a user's display_name or email (admin only)
+   */
+  updateUser: async (
+    userId: string,
+    data: { display_name?: string; email?: string },
+  ): Promise<Omit<AdminUserSummary, 'lead_count' | 'marketing_list_count' | 'import_job_count'>> => {
+    const response = await api.patch<
+      Omit<AdminUserSummary, 'lead_count' | 'marketing_list_count' | 'import_job_count'>
+    >(`/admin/users/${userId}`, data)
+    return response.data
+  },
 }
 
 // ---------------------------------------------------------------------------

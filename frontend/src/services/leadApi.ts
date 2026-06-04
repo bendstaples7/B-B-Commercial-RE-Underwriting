@@ -36,7 +36,10 @@ export const leadService = {
    * List leads with optional filtering, sorting, and pagination.
    */
   async listLeads(filters?: PropertyListFilters): Promise<PropertyListResponse> {
-    const response = await api.get<PropertyListResponse>('/properties/', { params: filters })
+    const params: Record<string, any> = { ...filters }
+    if (filters?.source_type) params.source_type = filters.source_type
+    if (filters?.owner_user_id) params.owner_user_id = filters.owner_user_id
+    const response = await api.get<PropertyListResponse>('/properties/', { params })
     return LeadListSchema.parse(response.data) as PropertyListResponse
   },
 

@@ -163,6 +163,12 @@ VALID_OUTREACH_STATUSES = [
 VALID_SORT_FIELDS = ['lead_score', 'created_at', 'property_street']
 VALID_SORT_ORDERS = ['asc', 'desc']
 
+# Valid source types — defined here so LeadListQuerySchema can reference it
+# before the DuPage ingestion schemas section below.
+VALID_SOURCE_TYPES = [
+    "foreclosure", "long_owned", "absentee_owner", "tax_distress", "manual_distress"
+]
+
 
 class LeadListQuerySchema(Schema):
     """Schema for lead list query parameters (GET /api/leads/).
@@ -183,6 +189,10 @@ class LeadListQuerySchema(Schema):
     score_min = fields.Float(load_default=None, validate=validate.Range(min=0, max=100))
     score_max = fields.Float(load_default=None, validate=validate.Range(min=0, max=100))
     marketing_list_id = fields.Int(load_default=None, validate=validate.Range(min=1))
+
+    # Source type and owner filters (DuPage lead database)
+    source_type = fields.Str(load_default=None, validate=validate.OneOf(VALID_SOURCE_TYPES), allow_none=True)
+    owner_user_id = fields.Str(load_default=None, validate=validate.Length(max=36))
 
     # Sorting
     sort_by = fields.Str(
@@ -285,6 +295,9 @@ class LeadDetailResponseSchema(Schema):
 
     # Metadata
     data_source = fields.Str(allow_none=True)
+    source_type = fields.Str(allow_none=True)
+    tax_distress_data = fields.Dict(allow_none=True)
+    manual_priority = fields.Int(allow_none=True)
     last_import_job_id = fields.Int(allow_none=True)
     created_at = fields.DateTime(allow_none=True)
     updated_at = fields.DateTime(allow_none=True)
@@ -394,17 +407,6 @@ class ImportJobsQuerySchema(Schema):
 
 
 # ---------------------------------------------------------------------------
-# Pipeline Stage Config Schemas
-# ---------------------------------------------------------------------------
-
-class PipelineStageConfigSchema(Schema):
-    """Schema for serializing PipelineStageConfig records."""
-    id = fields.Int(dump_only=True)
-    stage_name = fields.Str(required=True, validate=validate.Length(max=80))
-    order = fields.Int(required=True)
-    weight = fields.Float(required=True)
-    created_at = fields.DateTime(dump_only=True)
-    updated_at = fields.DateTime(dump_only=True)
 
 
 # ---------------------------------------------------------------------------

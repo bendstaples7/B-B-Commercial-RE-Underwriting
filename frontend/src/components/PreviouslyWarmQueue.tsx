@@ -31,26 +31,33 @@ import {
   leadTaskService,
   commandCenterService,
 } from '@/services/api'
+import { computeTotalPages, clampPage } from '@/utils/pagination'
 import type { QueueRow } from '@/types'
 
 export function PreviouslyWarmQueue() {
   const queryClient = useQueryClient()
   const [suppressTarget, setSuppressTarget] = useState<QueueRow | null>(null)
+  const [page, setPage] = useState(1)
 
   const { data } = useQuery({
-    queryKey: ['queue-previously-warm'],
-    queryFn: () => queueService.getPreviouslyWarm(1, 20),
+    queryKey: ['queue-previously-warm', page],
+    queryFn: () => queueService.getPreviouslyWarm(page, 20),
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
   })
 
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
+  const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
+  const handlePageChange = (newPage: number) => {
+    setPage(clampPage(newPage, totalPages))
+  }
 
   const handleSuppressConfirm = async () => {
     if (!suppressTarget) return
     await commandCenterService.suppress(suppressTarget.id)
     queryClient.invalidateQueries({ queryKey: ['queue-previously-warm'] })
+    setPage(1)
     setSuppressTarget(null)
   }
 
@@ -78,6 +85,7 @@ export function PreviouslyWarmQueue() {
       onClick: async (row: QueueRow) => {
         await callLogService.logCall(row.id, { outcome: 'answered' })
         queryClient.invalidateQueries({ queryKey: ['queue-previously-warm'] })
+        setPage(1)
       },
     },
     {
@@ -89,6 +97,7 @@ export function PreviouslyWarmQueue() {
         if (!body || !body.trim()) return
         await callLogService.logNote(row.id, { body: body.trim() })
         queryClient.invalidateQueries({ queryKey: ['queue-previously-warm'] })
+        setPage(1)
       },
     },
     {
@@ -98,6 +107,7 @@ export function PreviouslyWarmQueue() {
       onClick: async (row: QueueRow) => {
         await leadTaskService.createTask(row.id, { title: 'Follow up', task_type: 'call_owner_today' })
         queryClient.invalidateQueries({ queryKey: ['queue-previously-warm'] })
+        setPage(1)
       },
     },
     {
@@ -124,6 +134,7 @@ export function PreviouslyWarmQueue() {
         total={total}
         rowActions={rowActions}
         extraColumns={extraColumns}
+        {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
       />
 
       {/* Suppress confirmation dialog */}

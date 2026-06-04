@@ -115,24 +115,10 @@ def test_todays_action_excludes_nurture_lead(app):
 # ---------------------------------------------------------------------------
 
 def test_previously_warm_includes_lead_with_hubspot_sync_no_recent_contact(app):
-    """Previously Warm includes a lead with a PRIOR_WARM_CONVERSATION HubSpot signal."""
+    """Previously Warm includes a lead marked is_warm=True (warm signals set this flag)."""
     with app.app_context():
         from app import db
-        lead = _make_lead(app, '4 Queue St', lead_status='active')
-        # Seed signal dictionary entry if needed
-        from app.models.hubspot_signal_dictionary import HubSpotSignalDictionary
-        from app.models.hubspot_signal import HubSpotSignal
-        if not HubSpotSignalDictionary.query.filter_by(signal_type='PRIOR_WARM_CONVERSATION').first():
-            db.session.add(HubSpotSignalDictionary(
-                signal_type='PRIOR_WARM_CONVERSATION',
-                keywords=['interested'],
-            ))
-        db.session.add(HubSpotSignal(
-            lead_id=lead.id,
-            signal_type='PRIOR_WARM_CONVERSATION',
-            source_engagement_id='test-eng-warm',
-            raw_evidence='interested',
-        ))
+        lead = _make_lead(app, '4 Queue St', lead_status='active', is_warm=True)
         db.session.commit()
 
         svc = QueueService()

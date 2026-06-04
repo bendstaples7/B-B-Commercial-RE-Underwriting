@@ -39,6 +39,9 @@ from .cache_status_service import CacheStatusService, DatasetStatus
 # Admin panel service
 from .admin_service import AdminService
 
+# Deduplication engine (platform-wide, all ingestion sources)
+from .deduplication_engine import DeduplicationEngine, DeduplicationResult
+
 __all__ = [
     'AuthService',
     'RankedComparableDTO',
@@ -80,4 +83,7 @@ __all__ = [
     'DatasetStatus',
     # Admin panel
     'AdminService',
+    # Deduplication
+    'DeduplicationEngine',
+    'DeduplicationResult',
 ]

@@ -26,6 +26,7 @@ import { QueueTable } from './QueueTable'
 import type { RowAction, ExtraColumn } from './QueueTable'
 import { queueService, callLogService, commandCenterService } from '@/services/api'
 import type { QueueRow } from '@/types'
+import { computeTotalPages, clampPage } from '@/utils/pagination'
 
 function computeDaysSinceActivity(lastContactDate: string | null): number | null {
   if (!lastContactDate) return null
@@ -36,9 +37,10 @@ function computeDaysSinceActivity(lastContactDate: string | null): number | null
 }
 
 export function NoNextActionQueue() {
-  const [page] = useState(1)
+  const [page, setPage] = useState(1)
   const queryClient = useQueryClient()
   const [suppressTarget, setSuppressTarget] = useState<QueueRow | null>(null)
+  const [suppressError, setSuppressError] = useState<string | null>(null)
 
   const { data } = useQuery({
     queryKey: ['queue-no-next-action', page],
@@ -49,12 +51,23 @@ export function NoNextActionQueue() {
 
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
+  const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
+  const handlePageChange = (newPage: number) => {
+    setPage(clampPage(newPage, totalPages))
+  }
 
   const handleSuppressConfirm = async () => {
     if (!suppressTarget) return
-    await commandCenterService.suppress(suppressTarget.id)
-    queryClient.invalidateQueries({ queryKey: ['queue-no-next-action'] })
-    setSuppressTarget(null)
+    setSuppressError(null)
+    try {
+      await commandCenterService.suppress(suppressTarget.id)
+      queryClient.invalidateQueries({ queryKey: ['queue-no-next-action'] })
+      setPage(1)
+      setSuppressTarget(null)
+    } catch (err) {
+      console.error('[NoNextActionQueue] Suppress failed:', err)
+      setSuppressError(err instanceof Error ? err.message : 'Suppress failed. Please try again.')
+    }
   }
 
   const extraColumns: ExtraColumn[] = [
@@ -85,6 +98,7 @@ export function NoNextActionQueue() {
         if (!body || !body.trim()) return
         await callLogService.logNote(row.id, { body: body.trim() })
         queryClient.invalidateQueries({ queryKey: ['queue-no-next-action'] })
+        setPage(1)
       },
     },
     {
@@ -111,12 +125,13 @@ export function NoNextActionQueue() {
         total={total}
         rowActions={rowActions}
         extraColumns={extraColumns}
+        {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
       />
 
       {/* Suppress confirmation dialog */}
       <Dialog
         open={suppressTarget !== null}
-        onClose={() => setSuppressTarget(null)}
+        onClose={() => { setSuppressTarget(null); setSuppressError(null) }}
         data-testid="suppress-confirm-dialog"
       >
         <DialogTitle>Suppress Lead?</DialogTitle>
@@ -124,9 +139,14 @@ export function NoNextActionQueue() {
           <DialogContentText>
             This will suppress the lead and remove it from active queues. Are you sure?
           </DialogContentText>
+          {suppressError && (
+            <DialogContentText color="error" sx={{ mt: 1 }} data-testid="suppress-error">
+              {suppressError}
+            </DialogContentText>
+          )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setSuppressTarget(null)}>Cancel</Button>
+          <Button onClick={() => { setSuppressTarget(null); setSuppressError(null) }}>Cancel</Button>
           <Button
             onClick={handleSuppressConfirm}
             color="error"

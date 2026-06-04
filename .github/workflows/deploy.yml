@@ -5,14 +5,32 @@ on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
+  # Allow manual triggering from the GitHub Actions UI
+  # Use this when the deploy workflow needs to be triggered manually,
+  # e.g. after a workflow file change causes the automatic trigger to be skipped.
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: 'SHA to deploy (leave blank to deploy HEAD of main)'
+        required: false
+        default: ''
 
 jobs:
   deploy:
     name: Deploy to VPS
     runs-on: ubuntu-latest
+    # Prevent concurrent deploys — queue them instead of cancelling in-progress ones
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    # workflow_dispatch is an intentional emergency fallback for cases where the
+    # automatic workflow_run trigger is skipped (e.g. when deploy.yml itself was
+    # changed in the merged PR). Only repository collaborators with write access
+    # can trigger workflow_dispatch via the GitHub Actions UI.
     if: >
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main'
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
 
     steps:
       # ── Step 1: Validate all required secrets are set ─────────────────────
@@ -23,6 +41,7 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           MISSING=""
           [ -z "$VPS_SSH_KEY" ]   && MISSING="$MISSING VPS_SSH_KEY"
@@ -30,6 +49,7 @@ jobs:
           [ -z "$VPS_HOST" ]      && MISSING="$MISSING VPS_HOST"
           [ -z "$VPS_HOST_KEY" ]  && MISSING="$MISSING VPS_HOST_KEY"
           [ -z "$VPS_SUBDOMAIN" ] && MISSING="$MISSING VPS_SUBDOMAIN"
+          [ -z "$DATABASE_URL" ]  && MISSING="$MISSING DATABASE_URL"
           if [ -n "$MISSING" ]; then
             echo "ERROR: The following required secrets are not set:$MISSING"
             echo "Go to Settings → Secrets and variables → Actions and add them."
@@ -65,12 +85,52 @@ jobs:
             "echo 'SSH connection verified'" \
           || { echo "ERROR: Cannot connect to VPS at $VPS_HOST as $VPS_USER"; exit 1; }
 
+      # ── Step 4b: Verify VPS readiness — required files exist ─────────────
+      - name: Verify VPS readiness
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST bash << 'READINESS'
+          MISSING=""
+          [ -d /home/deploy/app ]              || MISSING="$MISSING /home/deploy/app (app directory)"
+          [ -f /home/deploy/app/backend/.env ] || MISSING="$MISSING /home/deploy/app/backend/.env"
+          [ -d /home/deploy/app/frontend ]     || MISSING="$MISSING /home/deploy/app/frontend"
+          # Verify the app directory is an initialized git repository
+          git -C /home/deploy/app rev-parse --git-dir > /dev/null 2>&1 \
+            || MISSING="$MISSING /home/deploy/app/.git (not a git repo — run vps-setup clone step)"
+          # Verify backup.conf exists — backup.sh will fail without it.
+          # Note: the Deploy step will auto-create a stub if missing, so this
+          # is a warning rather than a hard failure.
+          if [ ! -f /home/deploy/backup.conf ]; then
+            echo "NOTE: /home/deploy/backup.conf not found — Deploy step will create a stub automatically."
+          fi
+          if [ -n "$MISSING" ]; then
+            echo "ERROR: Required VPS files/directories missing:$MISSING"
+            echo "The VPS may not be fully provisioned. Run the vps-setup scripts first."
+            exit 1
+          fi
+          # deploy.sh is copied by this workflow — warn if absent (first deploy after provisioning)
+          if [ ! -f /home/deploy/deploy.sh ]; then
+            echo "NOTE: /home/deploy/deploy.sh not yet present — will be copied in the Deploy step."
+          fi
+          echo "VPS readiness check passed."
+          READINESS
+
       # ── Step 5: Checkout repo, build frontend on runner, deploy ──────────
       - name: Checkout repo (to get deploy script and build frontend)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ inputs.target_sha || github.event.workflow_run.head_sha || 'main' }}
           persist-credentials: false
+
+      # Resolve the actual commit SHA after checkout so TARGET_SHA is always a
+      # full commit hash — never a branch name like 'main'. This matters for the
+      # post-deploy SHA verification step which compares against the deployed app's
+      # reported SHA.
+      - name: Resolve target SHA
+        id: resolve_sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Build frontend on runner (avoids OOM on 2GB VPS)
         run: |
@@ -84,11 +144,38 @@ jobs:
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
+          TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           # Copy deploy script
           scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
-          # Remove any stale frontend-dist from previous runs, then copy fresh build
+          # Copy backup scripts and library (idempotent — safe to overwrite on every deploy)
+          scp -i ~/.ssh/id_deploy scripts/backup.sh $VPS_USER@$VPS_HOST:/home/deploy/backup.sh
+          scp -i ~/.ssh/id_deploy scripts/restore.sh $VPS_USER@$VPS_HOST:/home/deploy/restore.sh
+          scp -i ~/.ssh/id_deploy scripts/redis-backup.sh $VPS_USER@$VPS_HOST:/home/deploy/redis-backup.sh
+          scp -i ~/.ssh/id_deploy scripts/wal-archive.sh $VPS_USER@$VPS_HOST:/home/deploy/wal-archive.sh
+          scp -i ~/.ssh/id_deploy scripts/pg-basebackup.sh $VPS_USER@$VPS_HOST:/home/deploy/pg-basebackup.sh
+          scp -i ~/.ssh/id_deploy scripts/daily-summary.sh $VPS_USER@$VPS_HOST:/home/deploy/daily-summary.sh
+          scp -i ~/.ssh/id_deploy backup_lib.py $VPS_USER@$VPS_HOST:/home/deploy/backup_lib.py
+          # Set correct permissions on backup scripts
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
+            "chmod 750 /home/deploy/backup.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh && chmod 755 /home/deploy/wal-archive.sh && chmod 644 /home/deploy/backup_lib.py"
+          # Create a stub backup.conf if none exists so backup.sh can run without blocking the deploy.
+          # The stub has empty remote/alert credentials — backup will skip remote transfer and alerting
+          # but will still run pg_dump and write a local manifest entry.
+          # Operators should replace this with a real backup.conf to enable full backup functionality.
+          scp -i ~/.ssh/id_deploy scripts/setup-stub-conf.py $VPS_USER@$VPS_HOST:/tmp/setup-stub-conf.py
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "python3 /tmp/setup-stub-conf.py && rm /tmp/setup-stub-conf.py"
+          # Inject VPS-specific PostgreSQL credentials into backup.conf from the DATABASE_URL secret.
+          # DATABASE_URL is in the step env — base64-encode it from the env var (not a shell literal)
+          # so passwords containing single quotes or special characters are handled safely.
+          scp -i ~/.ssh/id_deploy scripts/inject-db-creds.py $VPS_USER@$VPS_HOST:/tmp/inject-db-creds.py
+          DB_URL_B64=$(printf '%s' "$DATABASE_URL" | base64 -w0)
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "DATABASE_URL=\$(echo '$DB_URL_B64' | base64 -d) python3 /tmp/inject-db-creds.py && rm /tmp/inject-db-creds.py"
+          # Pre-flight: verify backup.sh can connect to PostgreSQL before running the full deploy.
+          # This catches DB connectivity issues (wrong user, missing .pgpass, etc.) before the deploy starts.
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "/home/deploy/backup.sh --check" \
+            || { echo "ERROR: backup.sh --check failed — PostgreSQL connectivity issue. Check /home/deploy/logs/backup.log on VPS."; exit 1; }
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "rm -rf /home/deploy/frontend-dist"
           scp -i ~/.ssh/id_deploy -r frontend/dist $VPS_USER@$VPS_HOST:/home/deploy/frontend-dist
           # Run deploy script
@@ -99,7 +186,7 @@ jobs:
       - name: Post-deploy health check
         env:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
-          TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
+          TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
         run: |
           echo "Waiting for Gunicorn to finish graceful reload..."
           sleep 5

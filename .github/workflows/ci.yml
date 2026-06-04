@@ -44,6 +44,65 @@ jobs:
         run: npm run build
         working-directory: frontend
 
+  validate-workflows:
+    name: Validate workflow YAML syntax
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate deploy.yml YAML syntax
+        # Catches broken YAML in deploy.yml before it reaches main.
+        # A malformed deploy.yml causes GitHub to silently ignore workflow_dispatch
+        # and skip automatic deploys — this check prevents that from happening.
+        # Runs as a separate job so it always executes regardless of frontend failures.
+        run: |
+          pip install pyyaml -q
+          python3 -c "import yaml; yaml.safe_load(open('.github/workflows/deploy.yml')); print('deploy.yml YAML valid')"
+
+  vps-smoke-test:
+    name: VPS smoke test — backup connectivity
+    runs-on: ubuntu-latest
+    # Only run on pushes to main (PRs don't have VPS secrets)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: none
+
+    steps:
+      - name: Set up SSH key
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+      - name: Add VPS to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_HOST_KEY }}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Run backup.sh --check on VPS
+        # Verifies that backup.sh can connect to PostgreSQL on the VPS.
+        # Catches DB connectivity issues (wrong PGUSER, missing .pgpass, etc.)
+        # before they block a deploy. Runs after every push to main so regressions
+        # are caught immediately rather than at deploy time.
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          ssh -i ~/.ssh/id_deploy \
+            -o ConnectTimeout=10 \
+            $VPS_USER@$VPS_HOST \
+            "/home/deploy/backup.sh --check" \
+          || {
+            echo "ERROR: backup.sh --check failed on VPS."
+            echo "This means the backup system cannot connect to PostgreSQL."
+            echo "Check /home/deploy/logs/backup.log on the VPS for details."
+            exit 1
+          }
+
   backend:
     name: Backend — pytest
     runs-on: ubuntu-latest

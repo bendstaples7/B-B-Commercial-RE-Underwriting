@@ -2,6 +2,7 @@ import { createContext, useContext, useState, Component } from 'react'
 import { Routes, Route, Link, Navigate, useNavigate, useParams, useLocation } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import { LoginPage } from './pages/LoginPage'
+import { SetPasswordPage } from './pages/SetPasswordPage'
 import { useLoadScript } from '@react-google-maps/api'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -1242,15 +1243,17 @@ function App() {
 
   const toggleDrawer = () => setDrawerOpen((prev) => !prev)
 
-  // Badge counts — subscribe reactively to the shared ['queue-counts'] cache key.
-  // QueueSidebar owns the polling (5-minute interval); App subscribes here so the
-  // nav drawer badge chips re-render whenever QueueSidebar fetches fresh data.
+  // Badge counts — fetch once on mount and refresh every 5 minutes.
+  // Keyed by user.id so cached counts are never shared across user sessions.
+  // Disabled until auth resolves and user is confirmed non-null.
   const { data: queueCounts } = useQuery<QueueCounts>({
-    queryKey: ['queue-counts'],
+    queryKey: ['queue-counts', user?.email],
     queryFn: () => queueService.getCounts(),
-    staleTime: Infinity, // never re-fetch from here — QueueSidebar owns the interval
-    refetchOnWindowFocus: false,
-    refetchOnMount: false,
+    enabled: !!user,
+    staleTime: 5 * 60 * 1000,        // 5-minute cache
+    refetchInterval: 5 * 60 * 1000,  // re-fetch in the background every 5 minutes
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
   })
 
   // Track which top-level sections are expanded; default both open
@@ -1274,18 +1277,49 @@ function App() {
       <List disablePadding>
         {NAV_SECTIONS.map((section) => (
           <Box key={section.path}>
-            {/* Section header */}
-            <ListItemButton
-              onClick={() => toggleSection(section.path)}
-              sx={{ py: 1.5 }}
-            >
-              <ListItemIcon sx={{ minWidth: 40 }}>{section.icon}</ListItemIcon>
-              <ListItemText
-                primary={section.label}
-                primaryTypographyProps={{ fontWeight: 600 }}
-              />
-              {expandedSections[section.path] ? <ExpandLess /> : <ExpandMore />}
-            </ListItemButton>
+            {/* Section header — Properties gets split label/chevron targets; all others toggle only */}
+            {section.path === '/properties' ? (
+              // Properties: label navigates to /properties, chevron toggles expand/collapse — Req 10.1
+              <Box
+                sx={{ display: 'flex', alignItems: 'center', py: 1.5, cursor: 'pointer' }}
+              >
+                <ListItemButton
+                  component={Link}
+                  to={section.path}
+                  onClick={() => isMobile && setDrawerOpen(false)}
+                  sx={{ py: 0, flexGrow: 1, '&:hover': { bgcolor: 'transparent' } }}
+                  disableRipple={false}
+                  aria-label={`Navigate to ${section.label}`}
+                >
+                  <ListItemIcon sx={{ minWidth: 40 }}>{section.icon}</ListItemIcon>
+                  <ListItemText
+                    primary={section.label}
+                    primaryTypographyProps={{ fontWeight: 600 }}
+                  />
+                </ListItemButton>
+                <IconButton
+                  size="small"
+                  onClick={(e) => { e.stopPropagation(); toggleSection(section.path); }}
+                  aria-label={expandedSections[section.path] ? 'Collapse section' : 'Expand section'}
+                  sx={{ mr: 1 }}
+                >
+                  {expandedSections[section.path] ? <ExpandLess /> : <ExpandMore />}
+                </IconButton>
+              </Box>
+            ) : (
+              // All other sections: single ListItemButton toggles collapse only
+              <ListItemButton
+                onClick={() => toggleSection(section.path)}
+                sx={{ py: 1.5 }}
+              >
+                <ListItemIcon sx={{ minWidth: 40 }}>{section.icon}</ListItemIcon>
+                <ListItemText
+                  primary={section.label}
+                  primaryTypographyProps={{ fontWeight: 600 }}
+                />
+                {expandedSections[section.path] ? <ExpandLess /> : <ExpandMore />}
+              </ListItemButton>
+            )}
 
             <Collapse in={expandedSections[section.path]} timeout="auto" unmountOnExit>
               {section.groups.map((group, groupIdx) => (
@@ -1384,11 +1418,13 @@ function App() {
   //   - auth is still loading (avoid flash of authenticated shell)
   //   - auth has resolved but user is null (unauthenticated — AuthGuard will redirect)
   const isLoginPage = location.pathname === '/login'
-  if (isLoginPage || authLoading || !user) {
+  const isSetPasswordPage = location.pathname === '/set-password'
+  if (isLoginPage || isSetPasswordPage || authLoading || !user) {
     return (
       <GoogleMapsLoadedContext.Provider value={mapsLoaded}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/set-password" element={<SetPasswordPage />} />
           <Route path="/*" element={<LoginPage />} />
         </Routes>
       </GoogleMapsLoadedContext.Provider>

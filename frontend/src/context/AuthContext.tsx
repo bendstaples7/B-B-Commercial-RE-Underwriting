@@ -105,6 +105,7 @@ export const AuthContext = createContext<AuthContextValue>({
   user: null,
   token: null,
   login: async () => {},
+  loginWithToken: () => {},
   logout: () => {},
   isLoading: true,
 })
@@ -143,6 +144,26 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
     setIsLoading(false)
   }, [])
+
+  /**
+   * Store a session token that was already obtained by the caller (e.g. LoginPage
+   * which calls /api/auth/login directly to inspect the response). Validates the
+   * token client-side, persists it to localStorage, and updates context state.
+   * Throws if the token is invalid so the caller can show an error.
+   */
+  const loginWithToken = useCallback(
+    (sessionToken: string, userId: string): void => {
+      const validatedUser = validateStoredToken(sessionToken)
+      if (!validatedUser) {
+        throw new Error('Received an invalid session token from the server. Please try again.')
+      }
+      localStorage.setItem('session_token', sessionToken)
+      localStorage.setItem('user_id', userId)
+      setToken(sessionToken)
+      setUser(validatedUser)
+    },
+    []
+  )
 
   /**
    * POST /api/auth/login with email + password.
@@ -188,7 +209,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, [navigate])
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout, isLoading }}>
+    <AuthContext.Provider value={{ user, token, login, loginWithToken, logout, isLoading }}>
       {children}
     </AuthContext.Provider>
   )
