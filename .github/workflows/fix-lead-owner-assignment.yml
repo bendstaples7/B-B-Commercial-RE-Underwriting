@@ -83,6 +83,9 @@ jobs:
           echo "Pre-fix backup completed successfully."
 
       # ── Step 4: Look up userx UUID and preview counts ─────────────────────
+      # Uses Python on the runner to parse DATABASE_URL and build SQL safely.
+      # The script is base64-encoded before transfer so no quoting issues arise
+      # when passing it over SSH — the VPS decodes and runs it directly.
       - name: Look up userx UUID and preview lead counts
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -92,85 +95,85 @@ jobs:
         run: |
           echo "Looking up user_id for email: [provided as workflow input]"
 
-          # Parse DATABASE_URL safely using Python (handles special chars in password).
-          # Write each field to a temp file so they survive multi-line passwords.
-          python3 - <<'PYEOF'
-          import urllib.parse, os
-          u = urllib.parse.urlparse(os.environ['DATABASE_URL'])
-          fields = [
-              u.username or '',
-              urllib.parse.unquote(u.password or ''),
-              u.hostname or '',
-              str(u.port or 5432),
-              u.path.lstrip('/'),
-          ]
-          with open('/tmp/db_fields.txt', 'w') as f:
-              for v in fields:
-                  f.write(v + '\n')
+          # Build a self-contained Python script that uses psycopg2 (available on VPS)
+          # to query safely with parameterized SQL — no shell injection possible.
+          cat > /tmp/lookup_user.py << 'PYEOF'
+          import os, sys
+          import psycopg2
+          import psycopg2.extras
+
+          db_url = os.environ['DATABASE_URL']
+          email  = os.environ['USERX_EMAIL']
+
+          conn = psycopg2.connect(db_url)
+          cur  = conn.cursor()
+
+          # Look up user by email using parameterized query
+          cur.execute("SELECT user_id FROM users WHERE email = %s LIMIT 1", (email,))
+          row = cur.fetchone()
+
+          if row is None:
+              cur.execute("SELECT COUNT(*) FROM users")
+              count = cur.fetchone()[0]
+              print(f"ERROR: No user found with the provided email.", file=sys.stderr)
+              print(f"Hint: {count} user(s) exist in the database. Check the email and retry.", file=sys.stderr)
+              sys.exit(1)
+
+          userx_uuid = row[0]
+          print(f"Found userx. UUID ends in: ...{userx_uuid[-6:]}")
+
+          # Current lead ownership breakdown (masked UUIDs)
+          cur.execute("""
+              SELECT
+                CASE WHEN owner_user_id = %s THEN '[userx]'
+                     WHEN owner_user_id IS NULL THEN '[unowned]'
+                     ELSE '[other-user]'
+                END AS owner,
+                source_type,
+                COUNT(*) AS lead_count
+              FROM leads
+              WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
+              GROUP BY 1, source_type
+              ORDER BY lead_count DESC
+          """, (userx_uuid,))
+
+          print("\n=== STEP 2: Current lead ownership breakdown ===")
+          rows = cur.fetchall()
+          print(f"{'owner':<15} {'source_type':<20} {'lead_count':>10}")
+          print("-" * 48)
+          for r in rows:
+              print(f"{str(r[0]):<15} {str(r[1]):<20} {str(r[2]):>10}")
+
+          # Leads that will be reassigned
+          cur.execute("""
+              SELECT COUNT(*) AS leads_to_reassign, source_type
+              FROM leads
+              WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
+                AND (owner_user_id != %s OR owner_user_id IS NULL)
+              GROUP BY source_type
+              ORDER BY leads_to_reassign DESC
+          """, (userx_uuid,))
+
+          print("\n=== STEP 3: Leads that WILL BE reassigned to userx ===")
+          rows = cur.fetchall()
+          if not rows:
+              print("No leads need reassignment — all already assigned to userx.")
+          else:
+              print(f"{'count':>10} {'source_type':<20}")
+              print("-" * 32)
+              for r in rows:
+                  print(f"{str(r[0]):>10} {str(r[1]):<20}")
+
+          cur.close()
+          conn.close()
           PYEOF
 
-          PGUSER=$(sed -n '1p' /tmp/db_fields.txt)
-          PGPASSWORD=$(sed -n '2p' /tmp/db_fields.txt)
-          PGHOST=$(sed -n '3p' /tmp/db_fields.txt)
-          PGPORT=$(sed -n '4p' /tmp/db_fields.txt)
-          PGDATABASE=$(sed -n '5p' /tmp/db_fields.txt)
-          rm -f /tmp/db_fields.txt
-
-          # Write credentials into the heredoc body so the remote side receives
-          # properly-quoted literal values — not re-parsed by the SSH invocation.
-          # USERX_EMAIL is passed via psql --set and referenced as :'USERX_EMAIL'
-          # to avoid any SQL injection risk.
-          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" bash << SSHEOF
-          set -e
-          export PGPASSWORD=$(printf '%q' "$PGPASSWORD")
-          export PGUSER=$(printf '%q' "$PGUSER")
-          export PGHOST=$(printf '%q' "$PGHOST")
-          export PGPORT=$(printf '%q' "$PGPORT")
-          export PGDATABASE=$(printf '%q' "$PGDATABASE")
-          USERX_EMAIL=$(printf '%q' "$USERX_EMAIL")
-
-          echo "=== STEP 1: Looking up userx ==="
-          USERX_UUID=\$(psql -h "\$PGHOST" -p "\$PGPORT" -U "\$PGUSER" -d "\$PGDATABASE" \
-            --set="USERX_EMAIL=\$USERX_EMAIL" \
-            -t -c "SELECT user_id FROM users WHERE email = :'USERX_EMAIL' LIMIT 1;")
-          USERX_UUID=\$(echo "\$USERX_UUID" | tr -d ' \n')
-
-          if [ -z "\$USERX_UUID" ]; then
-            USER_COUNT=\$(psql -h "\$PGHOST" -p "\$PGPORT" -U "\$PGUSER" -d "\$PGDATABASE" \
-              -t -c "SELECT COUNT(*) FROM users;")
-            USER_COUNT=\$(echo "\$USER_COUNT" | tr -d ' \n')
-            echo "ERROR: No user found with the provided email."
-            echo "Hint: \$USER_COUNT user(s) exist in the database. Check the email and retry."
-            exit 1
-          fi
-
-          echo "Found userx. UUID ends in: ...\${USERX_UUID: -6}"
-
-          echo ""
-          echo "=== STEP 2: Current lead ownership breakdown ==="
-          psql -h "\$PGHOST" -p "\$PGPORT" -U "\$PGUSER" -d "\$PGDATABASE" -c \
-            "SELECT
-               CASE WHEN owner_user_id = '\$USERX_UUID' THEN '[userx]'
-                    WHEN owner_user_id IS NULL THEN '[unowned]'
-                    ELSE '[other-user]'
-               END AS owner,
-               source_type,
-               COUNT(*) AS lead_count
-             FROM leads
-             WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
-             GROUP BY 1, source_type
-             ORDER BY lead_count DESC;"
-
-          echo ""
-          echo "=== STEP 3: Leads that WILL BE reassigned to userx ==="
-          psql -h "\$PGHOST" -p "\$PGPORT" -U "\$PGUSER" -d "\$PGDATABASE" -c \
-            "SELECT COUNT(*) AS leads_to_reassign, source_type
-             FROM leads
-             WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
-               AND (owner_user_id != '\$USERX_UUID' OR owner_user_id IS NULL)
-             GROUP BY source_type
-             ORDER BY leads_to_reassign DESC;"
-          SSHEOF
+          # Transfer the script to the VPS and run it there
+          scp -i ~/.ssh/id_deploy /tmp/lookup_user.py "$VPS_USER@$VPS_HOST:/tmp/lookup_user.py"
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+            DATABASE_URL="$DATABASE_URL" USERX_EMAIL="$USERX_EMAIL" \
+            python3 /tmp/lookup_user.py
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" "rm -f /tmp/lookup_user.py"
 
       # ── Step 5: Run the UPDATE (only when dry_run is false) ───────────────
       - name: Update owner_user_id on DuPage leads
@@ -183,72 +186,71 @@ jobs:
         run: |
           echo "Running UPDATE — assigning all DuPage leads..."
 
-          python3 - <<'PYEOF'
-          import urllib.parse, os
-          u = urllib.parse.urlparse(os.environ['DATABASE_URL'])
-          fields = [
-              u.username or '',
-              urllib.parse.unquote(u.password or ''),
-              u.hostname or '',
-              str(u.port or 5432),
-              u.path.lstrip('/'),
-          ]
-          with open('/tmp/db_fields.txt', 'w') as f:
-              for v in fields:
-                  f.write(v + '\n')
+          cat > /tmp/assign_leads.py << 'PYEOF'
+          import os, sys
+          import psycopg2
+
+          db_url = os.environ['DATABASE_URL']
+          email  = os.environ['USERX_EMAIL']
+
+          conn = psycopg2.connect(db_url)
+          cur  = conn.cursor()
+
+          # Look up userx UUID with parameterized query
+          cur.execute("SELECT user_id FROM users WHERE email = %s LIMIT 1", (email,))
+          row = cur.fetchone()
+          if row is None:
+              print("ERROR: Cannot find user with provided email — aborting UPDATE", file=sys.stderr)
+              sys.exit(1)
+
+          userx_uuid = row[0]
+          print(f"Assigning leads to user UUID ending in: ...{userx_uuid[-6:]}")
+
+          # Run the UPDATE with parameterized UUID
+          cur.execute("""
+              UPDATE leads
+              SET owner_user_id = %s,
+                  updated_at    = NOW()
+              WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
+          """, (userx_uuid,))
+
+          updated = cur.rowcount
+          conn.commit()
+          print(f"Updated {updated} leads.")
+
+          # Post-fix verification (masked)
+          cur.execute("""
+              SELECT
+                CASE WHEN owner_user_id = %s THEN '[userx]'
+                     WHEN owner_user_id IS NULL THEN '[unowned]'
+                     ELSE '[other-user]'
+                END AS owner,
+                source_type,
+                COUNT(*) AS lead_count
+              FROM leads
+              WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
+              GROUP BY 1, source_type
+              ORDER BY lead_count DESC
+          """, (userx_uuid,))
+
+          print("\n=== POST-FIX: Lead ownership verification ===")
+          rows = cur.fetchall()
+          print(f"{'owner':<15} {'source_type':<20} {'lead_count':>10}")
+          print("-" * 48)
+          for r in rows:
+              print(f"{str(r[0]):<15} {str(r[1]):<20} {str(r[2]):>10}")
+
+          print(f"\nSUCCESS — DuPage leads reassigned to user ending in ...{userx_uuid[-6:]}")
+
+          cur.close()
+          conn.close()
           PYEOF
 
-          PGUSER=$(sed -n '1p' /tmp/db_fields.txt)
-          PGPASSWORD=$(sed -n '2p' /tmp/db_fields.txt)
-          PGHOST=$(sed -n '3p' /tmp/db_fields.txt)
-          PGPORT=$(sed -n '4p' /tmp/db_fields.txt)
-          PGDATABASE=$(sed -n '5p' /tmp/db_fields.txt)
-          rm -f /tmp/db_fields.txt
-
-          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" bash << SSHEOF
-          set -e
-          export PGPASSWORD=$(printf '%q' "$PGPASSWORD")
-          export PGUSER=$(printf '%q' "$PGUSER")
-          export PGHOST=$(printf '%q' "$PGHOST")
-          export PGPORT=$(printf '%q' "$PGPORT")
-          export PGDATABASE=$(printf '%q' "$PGDATABASE")
-          USERX_EMAIL=$(printf '%q' "$USERX_EMAIL")
-
-          USERX_UUID=\$(psql -h "\$PGHOST" -p "\$PGPORT" -U "\$PGUSER" -d "\$PGDATABASE" \
-            --set="USERX_EMAIL=\$USERX_EMAIL" \
-            -t -c "SELECT user_id FROM users WHERE email = :'USERX_EMAIL' LIMIT 1;")
-          USERX_UUID=\$(echo "\$USERX_UUID" | tr -d ' \n')
-
-          if [ -z "\$USERX_UUID" ]; then
-            echo "ERROR: Cannot find user with provided email — aborting UPDATE"
-            exit 1
-          fi
-
-          echo "Updating leads..."
-          psql -h "\$PGHOST" -p "\$PGPORT" -U "\$PGUSER" -d "\$PGDATABASE" -c \
-            "UPDATE leads
-             SET owner_user_id = '\$USERX_UUID',
-                 updated_at    = NOW()
-             WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress');"
-
-          echo ""
-          echo "=== POST-FIX: Lead ownership verification ==="
-          psql -h "\$PGHOST" -p "\$PGPORT" -U "\$PGUSER" -d "\$PGDATABASE" -c \
-            "SELECT
-               CASE WHEN owner_user_id = '\$USERX_UUID' THEN '[userx]'
-                    WHEN owner_user_id IS NULL THEN '[unowned]'
-                    ELSE '[other-user]'
-               END AS owner,
-               source_type,
-               COUNT(*) AS lead_count
-             FROM leads
-             WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
-             GROUP BY 1, source_type
-             ORDER BY lead_count DESC;"
-
-          echo ""
-          echo "SUCCESS — DuPage leads reassigned. UUID ends in: ...\${USERX_UUID: -6}"
-          SSHEOF
+          scp -i ~/.ssh/id_deploy /tmp/assign_leads.py "$VPS_USER@$VPS_HOST:/tmp/assign_leads.py"
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+            DATABASE_URL="$DATABASE_URL" USERX_EMAIL="$USERX_EMAIL" \
+            python3 /tmp/assign_leads.py
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" "rm -f /tmp/assign_leads.py"
 
       - name: Dry run notice
         if: ${{ inputs.dry_run }}
