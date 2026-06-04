@@ -360,15 +360,17 @@ class TestAnalyzeLead:
         assert resp.status_code == 404
 
     def test_analyze_lead_missing_user_id(self, client, app):
-        """Returns 400 when user_id is missing."""
+        """Returns 400 or 401 when no user identity is provided."""
         with app.app_context():
             lead = _create_lead(app)
             lead_id = lead.id
 
+        # Explicitly pass empty headers to bypass the default X-User-Id injection
         resp = client.post(
             f'/api/properties/{lead_id}/analyze',
             data=json.dumps({}),
             content_type='application/json',
+            headers={'X-User-Id': ''},
         )
         assert resp.status_code in (400, 401)
 
@@ -495,10 +497,12 @@ class TestUpdateScoringWeights:
             'owner_situation_weight': 0.25,
             'location_desirability_weight': 0.25,
         }
+        # Explicitly bypass the default X-User-Id injection to test the unauthenticated path
         resp = client.put(
             '/api/properties/scoring/weights',
             data=json.dumps(payload),
             content_type='application/json',
+            headers={'X-User-Id': ''},
         )
         assert resp.status_code == 400
 
