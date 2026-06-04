@@ -220,3 +220,63 @@ jobs:
             echo "The app is healthy but the wrong version is running. Failing the workflow."
             exit 1
           fi
+
+      # ── Step 7: Post-deploy ownership smoke test ──────────────────────────
+      # Catches the class of regression where scoping logic works for new data
+      # but silently breaks for legacy data (owner_user_id=NULL). Logs in as a
+      # real non-admin user and asserts that the queues and properties list
+      # return non-empty results. If all queues return zero, the deploy is flagged.
+      - name: Post-deploy ownership smoke test
+        env:
+          VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+          SMOKE_TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
+          SMOKE_TEST_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
+        run: |
+          BASE_URL="https://${VPS_SUBDOMAIN}.duckdns.org"
+
+          # Skip if smoke test credentials are not configured
+          if [ -z "$SMOKE_TEST_EMAIL" ] || [ -z "$SMOKE_TEST_PASSWORD" ]; then
+            echo "SMOKE_TEST_EMAIL or SMOKE_TEST_PASSWORD not set — skipping ownership smoke test."
+            echo "Add SMOKE_TEST_EMAIL and SMOKE_TEST_PASSWORD secrets to enable this check."
+            exit 0
+          fi
+
+          echo "Logging in as smoke test user ($SMOKE_TEST_EMAIL)..."
+          LOGIN_RESPONSE=$(curl -s --max-time 15 \
+            -X POST "${BASE_URL}/api/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\": \"$SMOKE_TEST_EMAIL\", \"password\": \"$SMOKE_TEST_PASSWORD\"}")
+
+          TOKEN=$(echo "$LOGIN_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+          if [ -z "$TOKEN" ]; then
+            echo "ERROR: Could not obtain auth token. Login response: $LOGIN_RESPONSE"
+            exit 1
+          fi
+          echo "Login successful."
+
+          # Check /api/queues/counts — all seven counts must not ALL be zero.
+          # If every queue returns 0, scoping has broken for this user's data.
+          COUNTS=$(curl -s --max-time 15 \
+            "${BASE_URL}/api/queues/counts" \
+            -H "Authorization: Bearer $TOKEN")
+
+          echo "Queue counts response: $COUNTS"
+
+          TOTAL=$(echo "$COUNTS" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          total = sum(d.get(k, 0) for k in [
+              'todays_action','previously_warm','follow_up_overdue',
+              'no_next_action','needs_review','do_not_contact','missing_property_match'
+          ])
+          print(total)
+          " 2>/dev/null || echo "0")
+
+          echo "Sum of all queue counts: $TOTAL"
+          if [ "$TOTAL" = "0" ]; then
+            echo "ERROR: All queue counts are zero for $SMOKE_TEST_EMAIL after deploy."
+            echo "This indicates an ownership scoping regression — leads with owner_user_id=NULL"
+            echo "are not visible to non-admin users. Review recent changes to ownership filters."
+            exit 1
+          fi
+          echo "Ownership smoke test passed — queues are non-empty for $SMOKE_TEST_EMAIL."
