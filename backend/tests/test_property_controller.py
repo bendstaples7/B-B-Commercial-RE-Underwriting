@@ -13,6 +13,8 @@ import json
 import pytest
 
 from app import db
+
+_AUTH_HEADERS = {'X-User-Id': 'test-user'}
 from app.models.lead import Lead
 from app.models.contact import Contact
 from app.models.property_contact import PropertyContact
@@ -172,7 +174,7 @@ class TestDeprecatedContactFields:
             )
             prop_id = prop.id
 
-        response = client.get(f"/api/properties/{prop_id}")
+        response = client.get(f"/api/properties/{prop_id}", headers=_AUTH_HEADERS)
         assert response.status_code == 200
         data = json.loads(response.data)
         # Legacy fields are still returned in GET responses during transition
@@ -195,7 +197,7 @@ class TestOwnerNameFilter:
             contact = _create_contact("John", "Smith")
             _link_contact(prop.id, contact.id)
 
-        response = client.get("/api/properties/?owner_name=John")
+        response = client.get("/api/properties/?owner_name=John", headers=_AUTH_HEADERS)
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data["total"] == 1
@@ -210,18 +212,18 @@ class TestOwnerNameFilter:
             _link_contact(prop.id, contact.id)
 
         # Lowercase query should still match "Alice"
-        response = client.get("/api/properties/?owner_name=alice")
+        response = client.get("/api/properties/?owner_name=alice", headers=_AUTH_HEADERS)
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data["total"] == 1
 
         # Uppercase query should still match "alice"
-        response2 = client.get("/api/properties/?owner_name=ALICE")
+        response2 = client.get("/api/properties/?owner_name=ALICE", headers=_AUTH_HEADERS)
         data2 = json.loads(response2.data)
         assert data2["total"] == 1
 
         # Mixed case
-        response3 = client.get("/api/properties/?owner_name=AlIcE")
+        response3 = client.get("/api/properties/?owner_name=AlIcE", headers=_AUTH_HEADERS)
         data3 = json.loads(response3.data)
         assert data3["total"] == 1
 
@@ -232,7 +234,7 @@ class TestOwnerNameFilter:
             contact = _create_contact("Bob", "Williams")
             _link_contact(prop.id, contact.id)
 
-        response = client.get("/api/properties/?owner_name=williams")
+        response = client.get("/api/properties/?owner_name=williams", headers=_AUTH_HEADERS)
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data["total"] == 1
@@ -245,12 +247,12 @@ class TestOwnerNameFilter:
             _link_contact(prop.id, contact.id)
 
         # Partial first name
-        response = client.get("/api/properties/?owner_name=chris")
+        response = client.get("/api/properties/?owner_name=chris", headers=_AUTH_HEADERS)
         data = json.loads(response.data)
         assert data["total"] == 1
 
         # Partial last name
-        response2 = client.get("/api/properties/?owner_name=ander")
+        response2 = client.get("/api/properties/?owner_name=ander", headers=_AUTH_HEADERS)
         data2 = json.loads(response2.data)
         assert data2["total"] == 1
 
@@ -267,7 +269,7 @@ class TestOwnerNameFilter:
             contact_no_match = _create_contact("Different", "Owner")
             _link_contact(prop_no_match.id, contact_no_match.id)
 
-        response = client.get("/api/properties/?owner_name=Target")
+        response = client.get("/api/properties/?owner_name=Target", headers=_AUTH_HEADERS)
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data["total"] == 1
@@ -284,7 +286,7 @@ class TestOwnerNameFilter:
             # Property with no contacts at all
             _create_property("701 No Contact St")
 
-        response = client.get("/api/properties/?owner_name=SearchName")
+        response = client.get("/api/properties/?owner_name=SearchName", headers=_AUTH_HEADERS)
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data["total"] == 1
@@ -297,7 +299,7 @@ class TestOwnerNameFilter:
             contact = _create_contact("Existing", "Contact")
             _link_contact(prop.id, contact.id)
 
-        response = client.get("/api/properties/?owner_name=NonExistentName")
+        response = client.get("/api/properties/?owner_name=NonExistentName", headers=_AUTH_HEADERS)
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data["total"] == 0
@@ -321,7 +323,7 @@ class TestOwnerNameFilter:
             db.session.commit()
 
         # Searching for the secondary contact's name should still return the property
-        response = client.get("/api/properties/?owner_name=Secondary")
+        response = client.get("/api/properties/?owner_name=Secondary", headers=_AUTH_HEADERS)
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data["total"] == 1
@@ -341,7 +343,7 @@ class TestExistingFiltersWithOwnerName:
             _create_property("1000 Single St", property_type="single_family")
             _create_property("1001 Multi St", property_type="multi_family")
 
-        response = client.get("/api/properties/?property_type=single_family")
+        response = client.get("/api/properties/?property_type=single_family", headers=_AUTH_HEADERS)
         data = json.loads(response.data)
         assert data["total"] == 1
         assert data["leads"][0]["property_type"] == "single_family"
@@ -352,7 +354,7 @@ class TestExistingFiltersWithOwnerName:
             _create_property("1100 Chicago St", mailing_city="Chicago")
             _create_property("1101 Denver St", mailing_city="Denver")
 
-        response = client.get("/api/properties/?city=chicago")
+        response = client.get("/api/properties/?city=chicago", headers=_AUTH_HEADERS)
         data = json.loads(response.data)
         assert data["total"] == 1
 
@@ -362,7 +364,7 @@ class TestExistingFiltersWithOwnerName:
             _create_property("1200 IL St", mailing_state="IL")
             _create_property("1201 CO St", mailing_state="CO")
 
-        response = client.get("/api/properties/?state=il")
+        response = client.get("/api/properties/?state=il", headers=_AUTH_HEADERS)
         data = json.loads(response.data)
         assert data["total"] == 1
 
@@ -372,7 +374,7 @@ class TestExistingFiltersWithOwnerName:
             _create_property("1300 Zip A St", mailing_zip="60601")
             _create_property("1301 Zip B St", mailing_zip="80202")
 
-        response = client.get("/api/properties/?zip=60601")
+        response = client.get("/api/properties/?zip=60601", headers=_AUTH_HEADERS)
         data = json.loads(response.data)
         assert data["total"] == 1
 
@@ -383,7 +385,7 @@ class TestExistingFiltersWithOwnerName:
             _create_property("1401 Mid St", lead_score=60.0)
             _create_property("1402 High St", lead_score=90.0)
 
-        response = client.get("/api/properties/?score_min=50&score_max=70")
+        response = client.get("/api/properties/?score_min=50&score_max=70", headers=_AUTH_HEADERS)
         data = json.loads(response.data)
         assert data["total"] == 1
         assert data["leads"][0]["lead_score"] == 60.0
@@ -401,7 +403,7 @@ class TestExistingFiltersWithOwnerName:
             contact_denver = _create_contact("TargetName", "Denver")
             _link_contact(prop_denver.id, contact_denver.id)
 
-        response = client.get("/api/properties/?owner_name=TargetName&city=Chicago")
+        response = client.get("/api/properties/?owner_name=TargetName&city=Chicago", headers=_AUTH_HEADERS)
         data = json.loads(response.data)
         assert data["total"] == 1
         assert data["leads"][0]["property_street"] == "1500 Chicago Match St"
@@ -413,7 +415,7 @@ class TestExistingFiltersWithOwnerName:
             _create_property("1601 Low St", lead_score=20.0)
             _create_property("1602 Mid St", lead_score=50.0)
 
-        response = client.get("/api/properties/?sort_by=lead_score&sort_order=asc")
+        response = client.get("/api/properties/?sort_by=lead_score&sort_order=asc", headers=_AUTH_HEADERS)
         data = json.loads(response.data)
         scores = [p["lead_score"] for p in data["leads"]]
         assert scores == sorted(scores)
@@ -424,7 +426,7 @@ class TestExistingFiltersWithOwnerName:
             for i in range(15):
                 _create_property(f"{1700 + i} Paginate St")
 
-        response = client.get("/api/properties/?page=1&per_page=5")
+        response = client.get("/api/properties/?page=1&per_page=5", headers=_AUTH_HEADERS)
         data = json.loads(response.data)
         assert len(data["leads"]) == 5
         assert data["total"] == 15
@@ -443,7 +445,7 @@ class TestExistingFiltersWithOwnerName:
             contact_low = _create_contact("SearchPerson", "Low")
             _link_contact(prop_low.id, contact_low.id)
 
-        response = client.get("/api/properties/?owner_name=SearchPerson&score_min=50")
+        response = client.get("/api/properties/?owner_name=SearchPerson&score_min=50", headers=_AUTH_HEADERS)
         data = json.loads(response.data)
         assert data["total"] == 1
         assert data["leads"][0]["property_street"] == "1800 High Score St"
@@ -458,7 +460,7 @@ class TestListProperties:
 
     def test_list_properties_empty(self, client):
         """Empty database returns empty list with correct pagination metadata."""
-        response = client.get("/api/properties/")
+        response = client.get("/api/properties/", headers=_AUTH_HEADERS)
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data["leads"] == []
@@ -470,7 +472,7 @@ class TestListProperties:
         with app.app_context():
             _create_property("1900 Exists St")
 
-        response = client.get("/api/properties/")
+        response = client.get("/api/properties/", headers=_AUTH_HEADERS)
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data["total"] == 1
@@ -482,7 +484,7 @@ class TestListProperties:
             prop = _create_property("2000 Detail St")
             prop_id = prop.id
 
-        response = client.get(f"/api/properties/{prop_id}")
+        response = client.get(f"/api/properties/{prop_id}", headers=_AUTH_HEADERS)
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data["id"] == prop_id
@@ -493,7 +495,7 @@ class TestListProperties:
 
     def test_get_property_not_found(self, client):
         """GET /api/properties/<id> returns 404 for non-existent property."""
-        response = client.get("/api/properties/99999")
+        response = client.get("/api/properties/99999", headers=_AUTH_HEADERS)
         assert response.status_code == 404
         data = json.loads(response.data)
         assert "error" in data
