@@ -582,3 +582,34 @@ class TestLegacyUnownedLeadsAreVisible:
                 f"REGRESSION: Unowned lead (owner_user_id=NULL) id={lead.id} not found in "
                 f"/api/properties list. Ownership scoping must include NULL owner_user_id rows."
             )
+
+    def test_unowned_lead_visible_in_property_detail(self, client, app):
+        """Unowned lead (owner_user_id=NULL) is accessible via GET /api/properties/<id>."""
+        with app.app_context():
+            lead = self._make_unowned_lead(app, '8 Unowned Detail St')
+            response = client.get(f'/api/properties/{lead.id}', headers=_AUTH_HEADERS)
+            assert response.status_code == 200, (
+                f"REGRESSION: GET /api/properties/{lead.id} returned {response.status_code} "
+                f"for unowned lead. Expected 200 — unowned leads must be accessible to all "
+                f"authenticated users."
+            )
+            data = json.loads(response.data)
+            assert data['id'] == lead.id
+
+    def test_unowned_lead_can_be_analyzed_via_property_analyze(self, client, app):
+        """Unowned lead (owner_user_id=NULL) can have an analysis session started."""
+        with app.app_context():
+            lead = self._make_unowned_lead(app, '9 Unowned Analyze St')
+            response = client.post(
+                f'/api/properties/{lead.id}/analyze',
+                json={},
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 201, (
+                f"REGRESSION: POST /api/properties/{lead.id}/analyze returned "
+                f"{response.status_code} for unowned lead. Expected 201 — analysis must "
+                f"be startable on unowned leads for all authenticated users."
+            )
+            data = json.loads(response.data)
+            assert data['lead_id'] == lead.id
+            assert 'session_id' in data

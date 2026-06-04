@@ -224,13 +224,18 @@ jobs:
       # ── Step 7: Post-deploy ownership smoke test ──────────────────────────
       # Catches the class of regression where scoping logic works for new data
       # but silently breaks for legacy data (owner_user_id=NULL). Logs in as a
-      # real non-admin user and asserts that the queues and properties list
-      # return non-empty results. If all queues return zero, the deploy is flagged.
+      # real non-admin user and asserts that:
+      #   a) A known sentinel lead with owner_user_id=NULL is directly fetchable
+      #      via GET /api/properties/<id> (explicit NULL-owner visibility check)
+      #   b) The sum of all queue counts is non-zero (broad sanity check)
+      # Set SMOKE_TEST_SENTINEL_LEAD_ID to the database ID of a known unowned
+      # lead (any lead imported before the ownership model) to enable check (a).
       - name: Post-deploy ownership smoke test
         env:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
           SMOKE_TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
           SMOKE_TEST_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
+          SMOKE_TEST_SENTINEL_LEAD_ID: ${{ secrets.SMOKE_TEST_SENTINEL_LEAD_ID }}
         run: |
           BASE_URL="https://${VPS_SUBDOMAIN}.duckdns.org"
 
@@ -254,8 +259,30 @@ jobs:
           fi
           echo "Login successful."
 
-          # Check /api/queues/counts — all seven counts must not ALL be zero.
-          # If every queue returns 0, scoping has broken for this user's data.
+          # Check (a): Sentinel lead with owner_user_id=NULL must be directly visible.
+          # This is the explicit NULL-owner regression check — TOTAL=0 would also catch
+          # a full regression, but this catches partial regressions where a user has some
+          # owned leads (masking the bug) but can't see the unowned legacy data.
+          if [ -n "$SMOKE_TEST_SENTINEL_LEAD_ID" ]; then
+            echo "Checking sentinel lead ID=$SMOKE_TEST_SENTINEL_LEAD_ID (expected owner_user_id=NULL)..."
+            SENTINEL_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 \
+              "${BASE_URL}/api/properties/${SMOKE_TEST_SENTINEL_LEAD_ID}" \
+              -H "Authorization: Bearer $TOKEN")
+            echo "Sentinel lead HTTP status: $SENTINEL_STATUS"
+            if [ "$SENTINEL_STATUS" != "200" ]; then
+              echo "ERROR: Sentinel lead $SMOKE_TEST_SENTINEL_LEAD_ID returned $SENTINEL_STATUS."
+              echo "This indicates an ownership scoping regression — leads with owner_user_id=NULL"
+              echo "are not visible to non-admin users. Review recent changes to ownership filters."
+              exit 1
+            fi
+            echo "Sentinel lead check passed — unowned lead is visible."
+          else
+            echo "SMOKE_TEST_SENTINEL_LEAD_ID not set — skipping sentinel lead check."
+            echo "Add SMOKE_TEST_SENTINEL_LEAD_ID secret (any lead ID with owner_user_id=NULL)"
+            echo "to enable the explicit NULL-owner visibility check."
+          fi
+
+          # Check (b): Sum of all queue counts must be non-zero.
           COUNTS=$(curl -s --max-time 15 \
             "${BASE_URL}/api/queues/counts" \
             -H "Authorization: Bearer $TOKEN")

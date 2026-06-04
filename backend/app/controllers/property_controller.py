@@ -359,12 +359,13 @@ def list_properties():
     # NULL owner_user_id means the lead predates the ownership model and is
     # visible to all authenticated users until explicitly assigned.
     if not _current_user_is_admin():
-        from flask import g
+        from flask import g, abort
         current_user_id = getattr(g, 'user_id', None)
-        if current_user_id and current_user_id != 'anonymous':
-            query = query.filter(
-                or_(Lead.owner_user_id == current_user_id, Lead.owner_user_id.is_(None))
-            )
+        if not current_user_id or current_user_id == 'anonymous':
+            abort(401)
+        query = query.filter(
+            or_(Lead.owner_user_id == current_user_id, Lead.owner_user_id.is_(None))
+        )
 
     # --- Filters ---
     lead_category = args.get('lead_category')
@@ -389,7 +390,7 @@ def list_properties():
 
     owner_name = args.get('owner_name')
     if owner_name:
-        from sqlalchemy import or_, func
+        from sqlalchemy import func
         # Build a subquery for Contact-based matches (individual fields + full name)
         contact_subquery = (
             db.session.query(PropertyContact.property_id)
@@ -490,10 +491,11 @@ def get_property(lead_id):
 
     # Ownership check: non-admins can only access leads they own or unowned (legacy) leads
     if not _current_user_is_admin():
-        from flask import g
+        from flask import g, abort
         current_user_id = getattr(g, 'user_id', None)
-        if (current_user_id and current_user_id != 'anonymous'
-                and lead.owner_user_id is not None
+        if not current_user_id or current_user_id == 'anonymous':
+            abort(401)
+        if (lead.owner_user_id is not None
                 and lead.owner_user_id != current_user_id):
             return jsonify({
                 'error': 'Property not found',
@@ -524,10 +526,11 @@ def analyze_property(lead_id):
 
     # Ownership check: non-admins can only access leads they own or unowned (legacy) leads
     if not _current_user_is_admin():
-        from flask import g
+        from flask import g, abort
         current_user_id = getattr(g, 'user_id', None)
-        if (current_user_id and current_user_id != 'anonymous'
-                and lead.owner_user_id is not None
+        if not current_user_id or current_user_id == 'anonymous':
+            abort(401)
+        if (lead.owner_user_id is not None
                 and lead.owner_user_id != current_user_id):
             return jsonify({
                 'error': 'Property not found',
