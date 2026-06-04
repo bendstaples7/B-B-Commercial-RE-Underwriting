@@ -1,0 +1,257 @@
+# .github/workflows/fix-lead-owner-assignment.yml
+#
+# ONE-OFF WORKFLOW: Assign all DuPage-sourced leads to userx
+#
+# Steps:
+#   1. Take a pre-fix pg_dump backup on the VPS
+#   2. Look up userx's user_id UUID from the users table
+#   3. Print the UUID and current lead counts for confirmation
+#   4. Run the UPDATE to assign all DuPage leads to userx (only when dry_run=false)
+#   5. Print post-fix counts to confirm the change
+#
+# Trigger: workflow_dispatch only (manual, via GitHub Actions UI)
+# This workflow does NOT run automatically on push or PR.
+#
+# DELETE THIS FILE after the fix has been confirmed.
+
+name: Fix — Assign DuPage leads to userx
+
+on:
+  workflow_dispatch:
+    inputs:
+      userx_email:
+        description: "Email address of userx (used to look up their user_id UUID)"
+        required: true
+        default: ""
+      dry_run:
+        description: "Preview counts without making any changes (set to false to apply)"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  fix-lead-owner:
+    name: Assign DuPage leads to userx
+    runs-on: ubuntu-latest
+    # Never allow concurrent runs of this job
+    concurrency:
+      group: fix-lead-owner
+      cancel-in-progress: false
+
+    steps:
+      # ── Step 1: Set up SSH ─────────────────────────────────────────────────
+      - name: Set up SSH key
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+      - name: Add VPS to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_HOST_KEY }}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      # ── Step 2: Verify SSH connectivity ───────────────────────────────────
+      - name: Verify SSH connectivity
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          ssh -i ~/.ssh/id_deploy \
+            -o ConnectTimeout=10 \
+            "$VPS_USER@$VPS_HOST" \
+            "echo 'SSH OK'" \
+          || { echo "ERROR: Cannot connect to VPS"; exit 1; }
+
+      # ── Step 3: Take a pre-fix backup ─────────────────────────────────────
+      - name: Take pre-fix database backup
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "Taking pre-fix backup before modifying owner_user_id on leads..."
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+            "/home/deploy/backup.sh --pre-deploy" \
+          || {
+            echo "ERROR: Pre-fix backup failed. Aborting — no data changes made."
+            echo "Check /home/deploy/logs/backup.log on the VPS for details."
+            exit 1
+          }
+          echo "Pre-fix backup completed successfully."
+
+      # ── Step 4: Look up userx UUID and preview counts ─────────────────────
+      - name: Look up userx UUID and preview lead counts
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          USERX_EMAIL: ${{ inputs.userx_email }}
+        run: |
+          echo "Looking up user_id for email: [provided as workflow input]"
+
+          # Parse DATABASE_URL safely using Python (handles special chars in password).
+          # Write each field to a temp file so they survive multi-line passwords.
+          python3 - <<'PYEOF'
+          import urllib.parse, os
+          u = urllib.parse.urlparse(os.environ['DATABASE_URL'])
+          fields = [
+              u.username or '',
+              urllib.parse.unquote(u.password or ''),
+              u.hostname or '',
+              str(u.port or 5432),
+              u.path.lstrip('/'),
+          ]
+          with open('/tmp/db_fields.txt', 'w') as f:
+              for v in fields:
+                  f.write(v + '\n')
+          PYEOF
+
+          PGUSER=$(sed -n '1p' /tmp/db_fields.txt)
+          PGPASSWORD=$(sed -n '2p' /tmp/db_fields.txt)
+          PGHOST=$(sed -n '3p' /tmp/db_fields.txt)
+          PGPORT=$(sed -n '4p' /tmp/db_fields.txt)
+          PGDATABASE=$(sed -n '5p' /tmp/db_fields.txt)
+          rm -f /tmp/db_fields.txt
+
+          # Write credentials into the heredoc body so the remote side receives
+          # properly-quoted literal values — not re-parsed by the SSH invocation.
+          # USERX_EMAIL is passed via psql --set and referenced as :'USERX_EMAIL'
+          # to avoid any SQL injection risk.
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" bash << SSHEOF
+          set -e
+          export PGPASSWORD=$(printf '%q' "$PGPASSWORD")
+          export PGUSER=$(printf '%q' "$PGUSER")
+          export PGHOST=$(printf '%q' "$PGHOST")
+          export PGPORT=$(printf '%q' "$PGPORT")
+          export PGDATABASE=$(printf '%q' "$PGDATABASE")
+          USERX_EMAIL=$(printf '%q' "$USERX_EMAIL")
+
+          echo "=== STEP 1: Looking up userx ==="
+          USERX_UUID=\$(psql -h "\$PGHOST" -p "\$PGPORT" -U "\$PGUSER" -d "\$PGDATABASE" \
+            --set="USERX_EMAIL=\$USERX_EMAIL" \
+            -t -c "SELECT user_id FROM users WHERE email = :'USERX_EMAIL' LIMIT 1;")
+          USERX_UUID=\$(echo "\$USERX_UUID" | tr -d ' \n')
+
+          if [ -z "\$USERX_UUID" ]; then
+            USER_COUNT=\$(psql -h "\$PGHOST" -p "\$PGPORT" -U "\$PGUSER" -d "\$PGDATABASE" \
+              -t -c "SELECT COUNT(*) FROM users;")
+            USER_COUNT=\$(echo "\$USER_COUNT" | tr -d ' \n')
+            echo "ERROR: No user found with the provided email."
+            echo "Hint: \$USER_COUNT user(s) exist in the database. Check the email and retry."
+            exit 1
+          fi
+
+          echo "Found userx. UUID ends in: ...\${USERX_UUID: -6}"
+
+          echo ""
+          echo "=== STEP 2: Current lead ownership breakdown ==="
+          psql -h "\$PGHOST" -p "\$PGPORT" -U "\$PGUSER" -d "\$PGDATABASE" -c \
+            "SELECT
+               CASE WHEN owner_user_id = '\$USERX_UUID' THEN '[userx]'
+                    WHEN owner_user_id IS NULL THEN '[unowned]'
+                    ELSE '[other-user]'
+               END AS owner,
+               source_type,
+               COUNT(*) AS lead_count
+             FROM leads
+             WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
+             GROUP BY 1, source_type
+             ORDER BY lead_count DESC;"
+
+          echo ""
+          echo "=== STEP 3: Leads that WILL BE reassigned to userx ==="
+          psql -h "\$PGHOST" -p "\$PGPORT" -U "\$PGUSER" -d "\$PGDATABASE" -c \
+            "SELECT COUNT(*) AS leads_to_reassign, source_type
+             FROM leads
+             WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
+               AND (owner_user_id != '\$USERX_UUID' OR owner_user_id IS NULL)
+             GROUP BY source_type
+             ORDER BY leads_to_reassign DESC;"
+          SSHEOF
+
+      # ── Step 5: Run the UPDATE (only when dry_run is false) ───────────────
+      - name: Update owner_user_id on DuPage leads
+        if: ${{ !inputs.dry_run }}
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          USERX_EMAIL: ${{ inputs.userx_email }}
+        run: |
+          echo "Running UPDATE — assigning all DuPage leads..."
+
+          python3 - <<'PYEOF'
+          import urllib.parse, os
+          u = urllib.parse.urlparse(os.environ['DATABASE_URL'])
+          fields = [
+              u.username or '',
+              urllib.parse.unquote(u.password or ''),
+              u.hostname or '',
+              str(u.port or 5432),
+              u.path.lstrip('/'),
+          ]
+          with open('/tmp/db_fields.txt', 'w') as f:
+              for v in fields:
+                  f.write(v + '\n')
+          PYEOF
+
+          PGUSER=$(sed -n '1p' /tmp/db_fields.txt)
+          PGPASSWORD=$(sed -n '2p' /tmp/db_fields.txt)
+          PGHOST=$(sed -n '3p' /tmp/db_fields.txt)
+          PGPORT=$(sed -n '4p' /tmp/db_fields.txt)
+          PGDATABASE=$(sed -n '5p' /tmp/db_fields.txt)
+          rm -f /tmp/db_fields.txt
+
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" bash << SSHEOF
+          set -e
+          export PGPASSWORD=$(printf '%q' "$PGPASSWORD")
+          export PGUSER=$(printf '%q' "$PGUSER")
+          export PGHOST=$(printf '%q' "$PGHOST")
+          export PGPORT=$(printf '%q' "$PGPORT")
+          export PGDATABASE=$(printf '%q' "$PGDATABASE")
+          USERX_EMAIL=$(printf '%q' "$USERX_EMAIL")
+
+          USERX_UUID=\$(psql -h "\$PGHOST" -p "\$PGPORT" -U "\$PGUSER" -d "\$PGDATABASE" \
+            --set="USERX_EMAIL=\$USERX_EMAIL" \
+            -t -c "SELECT user_id FROM users WHERE email = :'USERX_EMAIL' LIMIT 1;")
+          USERX_UUID=\$(echo "\$USERX_UUID" | tr -d ' \n')
+
+          if [ -z "\$USERX_UUID" ]; then
+            echo "ERROR: Cannot find user with provided email — aborting UPDATE"
+            exit 1
+          fi
+
+          echo "Updating leads..."
+          psql -h "\$PGHOST" -p "\$PGPORT" -U "\$PGUSER" -d "\$PGDATABASE" -c \
+            "UPDATE leads
+             SET owner_user_id = '\$USERX_UUID',
+                 updated_at    = NOW()
+             WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress');"
+
+          echo ""
+          echo "=== POST-FIX: Lead ownership verification ==="
+          psql -h "\$PGHOST" -p "\$PGPORT" -U "\$PGUSER" -d "\$PGDATABASE" -c \
+            "SELECT
+               CASE WHEN owner_user_id = '\$USERX_UUID' THEN '[userx]'
+                    WHEN owner_user_id IS NULL THEN '[unowned]'
+                    ELSE '[other-user]'
+               END AS owner,
+               source_type,
+               COUNT(*) AS lead_count
+             FROM leads
+             WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
+             GROUP BY 1, source_type
+             ORDER BY lead_count DESC;"
+
+          echo ""
+          echo "SUCCESS — DuPage leads reassigned. UUID ends in: ...\${USERX_UUID: -6}"
+          SSHEOF
+
+      - name: Dry run notice
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "DRY RUN MODE — no changes were made to the database."
+          echo "Review the lead counts above, then re-run with dry_run=false to apply."
