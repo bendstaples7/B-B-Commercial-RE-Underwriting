@@ -1278,7 +1278,8 @@ def test_property_12_source_type_filter_returns_only_matching_leads(source_type,
         db.session.commit()
 
         try:
-            resp = client.get(f"/api/properties/?source_type={source_type}&per_page=100")
+            resp = client.get(f"/api/properties/?source_type={source_type}&per_page=100",
+                              headers={'X-User-Id': 'test-user'})
             assert resp.status_code == 200, (
                 f"Expected 200, got {resp.status_code}. Body: {resp.get_data(as_text=True)[:200]}"
             )
@@ -1367,7 +1368,8 @@ def test_property_13_owner_user_id_filter_returns_only_matching_leads(owner_ids,
         db.session.commit()
 
         try:
-            resp = client.get(f"/api/properties/?owner_user_id={target_user}&per_page=100")
+            resp = client.get(f"/api/properties/?owner_user_id={target_user}&per_page=100",
+                              headers={'X-User-Id': target_user})
             assert resp.status_code == 200, (
                 f"Expected 200, got {resp.status_code}. Body: {resp.get_data(as_text=True)[:200]}"
             )

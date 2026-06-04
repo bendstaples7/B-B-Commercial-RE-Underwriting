@@ -83,30 +83,8 @@ def app():
 
 @pytest.fixture
 def client(app):
-    """Create test client with default X-User-Id header for testing.
-
-    All property/lead endpoints use @require_auth which accepts X-User-Id
-    when ALLOW_LEGACY_X_USER_ID is True (set in testing config). Using a
-    custom FlaskClient subclass injects the header on every request so
-    individual tests don't need to pass headers manually.
-    """
-    from flask.testing import FlaskClient
-
-    class AuthenticatedTestClient(FlaskClient):
-        """FlaskClient that injects X-User-Id: test-user on every request."""
-        def open(self, *args, **kwargs):
-            headers = kwargs.pop('headers', {}) or {}
-            # Only inject if no auth already provided
-            if 'X-User-Id' not in headers and 'Authorization' not in headers:
-                headers['X-User-Id'] = 'test-user'
-            kwargs['headers'] = headers
-            return super().open(*args, **kwargs)
-
-    original_client_class = app.test_client_class
-    app.test_client_class = AuthenticatedTestClient
-    client = app.test_client()
-    yield client
-    app.test_client_class = original_client_class
+    """Create test client."""
+    return app.test_client()
 
 @pytest.fixture
 def seeded_app(app):
