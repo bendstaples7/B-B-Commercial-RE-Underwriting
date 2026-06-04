@@ -12,7 +12,7 @@ from functools import wraps
 
 from flask import Blueprint, jsonify, redirect, request, url_for
 from marshmallow import ValidationError
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 
 from app import db, limiter
 from app.api_utils import get_current_user_id, require_auth
@@ -393,7 +393,6 @@ def list_properties():
 
     owner_name = args.get('owner_name')
     if owner_name:
-        from sqlalchemy import func
         # Build a subquery for Contact-based matches (individual fields + full name)
         contact_subquery = (
             db.session.query(PropertyContact.property_id)
