@@ -100,7 +100,6 @@ jobs:
           cat > /tmp/lookup_user.py << 'PYEOF'
           import os, sys
           import psycopg2
-          import psycopg2.extras
 
           db_url = os.environ['DATABASE_URL']
           email  = os.environ['USERX_EMAIL']
@@ -206,13 +205,14 @@ jobs:
           userx_uuid = row[0]
           print(f"Assigning leads to user UUID ending in: ...{userx_uuid[-6:]}")
 
-          # Run the UPDATE with parameterized UUID
+          # Run the UPDATE with parameterized UUID — only for leads not already assigned to userx
           cur.execute("""
               UPDATE leads
               SET owner_user_id = %s,
                   updated_at    = NOW()
               WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
-          """, (userx_uuid,))
+                AND (owner_user_id != %s OR owner_user_id IS NULL)
+          """, (userx_uuid, userx_uuid))
 
           updated = cur.rowcount
           conn.commit()
