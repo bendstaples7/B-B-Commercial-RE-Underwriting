@@ -22,7 +22,9 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        # Retry up to 3 times — transient npm registry network errors (ECONNRESET,
+        # ETIMEDOUT) occasionally hit GitHub-hosted runners mid-download.
+        run: npm ci || npm ci || npm ci
         working-directory: frontend
 
       - name: Install optional native dependencies (Linux CI fix)

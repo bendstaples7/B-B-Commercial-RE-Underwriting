@@ -318,6 +318,9 @@ def create_app(config_name='development'):
         from sqlalchemy.pool import NullPool
         app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'poolclass': NullPool}
         app.config['TESTING'] = True  # set early so guards can check it
+        # Allow X-User-Id header as auth fallback in tests — tests send
+        # this header instead of a Bearer JWT. Never enabled in production.
+        app.config['ALLOW_LEGACY_X_USER_ID'] = True
     else:
         app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
             'pool_size': 3,

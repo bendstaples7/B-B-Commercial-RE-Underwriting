@@ -15,7 +15,7 @@ from marshmallow import ValidationError
 from sqlalchemy import or_
 
 from app import db, limiter
-from app.api_utils import get_current_user_id
+from app.api_utils import get_current_user_id, require_auth
 from app.models import (
     AnalysisSession,
     Lead,
@@ -355,14 +355,20 @@ def list_properties():
     query = Lead.query
 
     # --- Ownership scope (security) ---
-    # Non-admin users only see leads they own. Admins see all leads.
-    # There is no NULL exception — leads with no owner_user_id are not
-    # visible to non-admins to prevent accidental cross-user data exposure.
+    # Non-admin users see leads they own OR leads with no owner (legacy data).
+    # NULL owner_user_id means the lead predates the ownership model and is
+    # visible to all authenticated users until explicitly assigned.
+    # Anonymous/unauthenticated users see only unowned (NULL owner) leads.
     if not _current_user_is_admin():
         from flask import g
         current_user_id = getattr(g, 'user_id', None)
         if current_user_id and current_user_id != 'anonymous':
-            query = query.filter(Lead.owner_user_id == current_user_id)
+            query = query.filter(
+                or_(Lead.owner_user_id == current_user_id, Lead.owner_user_id.is_(None))
+            )
+        else:
+            # Unauthenticated: show only unowned (legacy) leads
+            query = query.filter(Lead.owner_user_id.is_(None))
 
     # --- Filters ---
     lead_category = args.get('lead_category')
@@ -387,7 +393,7 @@ def list_properties():
 
     owner_name = args.get('owner_name')
     if owner_name:
-        from sqlalchemy import or_, func
+        from sqlalchemy import func
         # Build a subquery for Contact-based matches (individual fields + full name)
         contact_subquery = (
             db.session.query(PropertyContact.property_id)
@@ -486,16 +492,18 @@ def get_property(lead_id):
             'message': f'Property {lead_id} does not exist',
         }), 404
 
-    # Ownership check: non-admins can only access leads they own
+    # Ownership check: non-admins can only access leads they own or unowned (legacy) leads.
+    # Anonymous users can only access unowned (legacy) leads.
     if not _current_user_is_admin():
         from flask import g
         current_user_id = getattr(g, 'user_id', None)
-        if (current_user_id and current_user_id != 'anonymous'
-                and lead.owner_user_id != current_user_id):
-            return jsonify({
-                'error': 'Property not found',
-                'message': f'Property {lead_id} does not exist',
-            }), 404
+        is_authenticated = current_user_id and current_user_id != 'anonymous'
+        if lead.owner_user_id is not None:
+            if not is_authenticated or lead.owner_user_id != current_user_id:
+                return jsonify({
+                    'error': 'Property not found',
+                    'message': f'Property {lead_id} does not exist',
+                }), 404
 
     return jsonify(_serialize_property_detail(lead)), 200
 
@@ -519,16 +527,18 @@ def analyze_property(lead_id):
             'message': f'Property {lead_id} does not exist',
         }), 404
 
-    # Ownership check: non-admins can only access leads they own
+    # Ownership check: non-admins can only access leads they own or unowned (legacy) leads.
+    # Anonymous users can only access unowned (legacy) leads.
     if not _current_user_is_admin():
         from flask import g
         current_user_id = getattr(g, 'user_id', None)
-        if (current_user_id and current_user_id != 'anonymous'
-                and lead.owner_user_id != current_user_id):
-            return jsonify({
-                'error': 'Property not found',
-                'message': f'Property {lead_id} does not exist',
-            }), 404
+        is_authenticated = current_user_id and current_user_id != 'anonymous'
+        if lead.owner_user_id is not None:
+            if not is_authenticated or lead.owner_user_id != current_user_id:
+                return jsonify({
+                    'error': 'Property not found',
+                    'message': f'Property {lead_id} does not exist',
+                }), 404
 
     data = request.get_json() or {}
     user_id = get_current_user_id()
