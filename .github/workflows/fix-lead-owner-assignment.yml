@@ -91,42 +91,49 @@ jobs:
         run: |
           echo "Looking up user_id for email: $USERX_EMAIL"
 
-          # Run psql commands on the VPS where .pgpass is configured
-          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST bash << SSHEOF
+          # Parse DATABASE_URL safely using Python (handles special chars in password)
+          DB_PARTS=$(python3 -c "
+          import urllib.parse, os
+          u = urllib.parse.urlparse(os.environ['DATABASE_URL'])
+          print(u.username)
+          print(urllib.parse.unquote(u.password))
+          print(u.hostname)
+          print(u.port or 5432)
+          print(u.path.lstrip('/'))
+          ")
+          PGUSER=$(echo "$DB_PARTS" | sed -n '1p')
+          PGPASSWORD=$(echo "$DB_PARTS" | sed -n '2p')
+          PGHOST=$(echo "$DB_PARTS" | sed -n '3p')
+          PGPORT=$(echo "$DB_PARTS" | sed -n '4p')
+          PGDATABASE=$(echo "$DB_PARTS" | sed -n '5p')
+
+          # Pass parsed credentials to VPS over SSH as individual env vars
+          # (avoids embedding raw DATABASE_URL in heredoc which breaks on special chars)
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
+            PGPASSWORD="$PGPASSWORD" PGUSER="$PGUSER" PGHOST="$PGHOST" \
+            PGPORT="$PGPORT" PGDATABASE="$PGDATABASE" USERX_EMAIL="$USERX_EMAIL" \
+            bash << 'SSHEOF'
           set -e
 
-          # Extract connection details from DATABASE_URL
-          # DATABASE_URL format: postgresql://user:password@host:port/dbname
-          DB_URL='$DATABASE_URL'
-
-          PGUSER=\$(echo "\$DB_URL" | sed 's|.*://\([^:]*\):.*|\1|')
-          PGPASSWORD=\$(echo "\$DB_URL" | sed 's|.*://[^:]*:\([^@]*\)@.*|\1|')
-          PGHOST=\$(echo "\$DB_URL" | sed 's|.*@\([^:/]*\)[:/].*|\1|')
-          PGPORT=\$(echo "\$DB_URL" | sed -n 's|.*:\([0-9]*\)/.*|\1|p')
-          PGPORT=\${PGPORT:-5432}
-          PGDATABASE=\$(echo "\$DB_URL" | sed 's|.*/\([^?]*\).*|\1|')
-
-          export PGPASSWORD
-
           echo "=== STEP 1: Looking up userx ==="
-          USERX_UUID=\$(psql -h \$PGHOST -p \$PGPORT -U \$PGUSER -d \$PGDATABASE -t -c \
+          USERX_UUID=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -t -c \
             "SELECT user_id FROM users WHERE email = '$USERX_EMAIL' LIMIT 1;")
-          USERX_UUID=\$(echo "\$USERX_UUID" | tr -d ' \n')
+          USERX_UUID=$(echo "$USERX_UUID" | tr -d ' \n')
 
-          if [ -z "\$USERX_UUID" ]; then
+          if [ -z "$USERX_UUID" ]; then
             echo "ERROR: No user found with email '$USERX_EMAIL'"
             echo "Available users:"
-            psql -h \$PGHOST -p \$PGPORT -U \$PGUSER -d \$PGDATABASE -c \
+            psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -c \
               "SELECT user_id, email, display_name, created_at FROM users ORDER BY created_at;"
             exit 1
           fi
 
-          echo "Found userx UUID: \$USERX_UUID"
+          echo "Found userx UUID: $USERX_UUID"
           echo "Email: $USERX_EMAIL"
 
           echo ""
           echo "=== STEP 2: Current lead ownership breakdown ==="
-          psql -h \$PGHOST -p \$PGPORT -U \$PGUSER -d \$PGDATABASE -c \
+          psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -c \
             "SELECT owner_user_id, source_type, COUNT(*) as lead_count
              FROM leads
              WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
@@ -135,16 +142,13 @@ jobs:
 
           echo ""
           echo "=== STEP 3: Leads that WILL BE reassigned to userx ==="
-          psql -h \$PGHOST -p \$PGPORT -U \$PGUSER -d \$PGDATABASE -c \
+          psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -c \
             "SELECT COUNT(*) as leads_to_reassign, source_type
              FROM leads
              WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
-               AND (owner_user_id != '\$USERX_UUID' OR owner_user_id IS NULL)
+               AND (owner_user_id != '$USERX_UUID' OR owner_user_id IS NULL)
              GROUP BY source_type
              ORDER BY leads_to_reassign DESC;"
-
-          echo "USERX_UUID=\$USERX_UUID" > /tmp/fix_owner_uuid.txt
-          echo "Saved UUID to /tmp/fix_owner_uuid.txt for next step."
           SSHEOF
 
       # ── Step 5: Run the UPDATE (unless dry_run=true) ─────────────────────
@@ -158,38 +162,47 @@ jobs:
         run: |
           echo "Running UPDATE — assigning all DuPage leads to $USERX_EMAIL..."
 
-          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST bash << SSHEOF
+          # Parse DATABASE_URL safely using Python
+          DB_PARTS=$(python3 -c "
+          import urllib.parse, os
+          u = urllib.parse.urlparse(os.environ['DATABASE_URL'])
+          print(u.username)
+          print(urllib.parse.unquote(u.password))
+          print(u.hostname)
+          print(u.port or 5432)
+          print(u.path.lstrip('/'))
+          ")
+          PGUSER=$(echo "$DB_PARTS" | sed -n '1p')
+          PGPASSWORD=$(echo "$DB_PARTS" | sed -n '2p')
+          PGHOST=$(echo "$DB_PARTS" | sed -n '3p')
+          PGPORT=$(echo "$DB_PARTS" | sed -n '4p')
+          PGDATABASE=$(echo "$DB_PARTS" | sed -n '5p')
+
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
+            PGPASSWORD="$PGPASSWORD" PGUSER="$PGUSER" PGHOST="$PGHOST" \
+            PGPORT="$PGPORT" PGDATABASE="$PGDATABASE" USERX_EMAIL="$USERX_EMAIL" \
+            bash << 'SSHEOF'
           set -e
 
-          DB_URL='$DATABASE_URL'
-          PGUSER=\$(echo "\$DB_URL" | sed 's|.*://\([^:]*\):.*|\1|')
-          PGPASSWORD=\$(echo "\$DB_URL" | sed 's|.*://[^:]*:\([^@]*\)@.*|\1|')
-          PGHOST=\$(echo "\$DB_URL" | sed 's|.*@\([^:/]*\)[:/].*|\1|')
-          PGPORT=\$(echo "\$DB_URL" | sed -n 's|.*:\([0-9]*\)/.*|\1|p')
-          PGPORT=\${PGPORT:-5432}
-          PGDATABASE=\$(echo "\$DB_URL" | sed 's|.*/\([^?]*\).*|\1|')
-
-          export PGPASSWORD
-
-          USERX_UUID=\$(psql -h \$PGHOST -p \$PGPORT -U \$PGUSER -d \$PGDATABASE -t -c \
+          USERX_UUID=$(psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -t -c \
             "SELECT user_id FROM users WHERE email = '$USERX_EMAIL' LIMIT 1;")
-          USERX_UUID=\$(echo "\$USERX_UUID" | tr -d ' \n')
+          USERX_UUID=$(echo "$USERX_UUID" | tr -d ' \n')
 
-          if [ -z "\$USERX_UUID" ]; then
+          if [ -z "$USERX_UUID" ]; then
             echo "ERROR: Cannot find UUID for $USERX_EMAIL — aborting UPDATE"
             exit 1
           fi
 
-          echo "Updating leads with owner_user_id = \$USERX_UUID ..."
-          psql -h \$PGHOST -p \$PGPORT -U \$PGUSER -d \$PGDATABASE -c \
+          echo "Updating leads with owner_user_id = $USERX_UUID ..."
+          psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -c \
             "UPDATE leads
-             SET owner_user_id = '\$USERX_UUID',
+             SET owner_user_id = '$USERX_UUID',
                  updated_at    = NOW()
              WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress');"
 
           echo ""
           echo "=== POST-FIX: Lead ownership verification ==="
-          psql -h \$PGHOST -p \$PGPORT -U \$PGUSER -d \$PGDATABASE -c \
+          psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -c \
             "SELECT owner_user_id, source_type, COUNT(*) as lead_count
              FROM leads
              WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
@@ -197,7 +210,7 @@ jobs:
              ORDER BY lead_count DESC;"
 
           echo ""
-          echo "SUCCESS — all DuPage leads now assigned to \$USERX_UUID ($USERX_EMAIL)"
+          echo "SUCCESS — all DuPage leads now assigned to $USERX_UUID ($USERX_EMAIL)"
           SSHEOF
 
       - name: Dry run notice
