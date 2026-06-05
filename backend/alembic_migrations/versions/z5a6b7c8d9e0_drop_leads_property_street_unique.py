@@ -26,9 +26,18 @@ depends_on = None
 
 
 def upgrade():
+    # Drop both known constraint names — the name depends on how the schema was
+    # bootstrapped:
+    #   - leads_property_street_key  — PostgreSQL auto-name from SQLAlchemy unique=True
+    #   - uq_leads_property_street   — explicit name in migrations/002_lead_management.sql
+    # IF EXISTS makes both calls safe regardless of which name is present.
     op.execute("""
         ALTER TABLE leads
         DROP CONSTRAINT IF EXISTS leads_property_street_key
+    """)
+    op.execute("""
+        ALTER TABLE leads
+        DROP CONSTRAINT IF EXISTS uq_leads_property_street
     """)
 
 
