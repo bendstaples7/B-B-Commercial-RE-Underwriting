@@ -23,7 +23,7 @@ class Property(db.Model):
     id = db.Column(db.Integer, primary_key=True)
 
     # Property details
-    property_street = db.Column(db.String(500), nullable=True, unique=True)
+    property_street = db.Column(db.String(500), nullable=True)
     property_city = db.Column(db.String(100), nullable=True)
     property_state = db.Column(db.String(50), nullable=True)
     property_zip = db.Column(db.String(20), nullable=True)
