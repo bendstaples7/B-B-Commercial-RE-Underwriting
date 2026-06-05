@@ -24,7 +24,11 @@ from app.models import (
 # ---------------------------------------------------------------------------
 
 def _create_lead(app, **overrides):
-    """Create a lead record with sensible defaults."""
+    """Create a lead record with sensible defaults.
+
+    Defaults owner_user_id to 'test-user' to match _AUTH_HEADERS so that
+    ownership-scoped queries return the lead for the test user.
+    """
     defaults = {
         'property_street': '100 Test St',
         'property_city': 'Chicago',
@@ -37,6 +41,7 @@ def _create_lead(app, **overrides):
         'mailing_state': 'IL',
         'mailing_zip': '60601',
         'lead_score': 50.0,
+        'owner_user_id': 'test-user',
     }
     defaults.update(overrides)
     lead = Lead(**defaults)
@@ -58,6 +63,7 @@ def _create_leads_batch(app, count, base_score=50.0):
             mailing_state='IL',
             mailing_zip='60601',
             lead_score=base_score + i,
+            owner_user_id='test-user',
         )
         db.session.add(lead)
         leads.append(lead)
@@ -372,7 +378,7 @@ class TestAnalyzeLead:
             content_type='application/json',
             headers={'X-User-Id': ''},
         )
-        assert resp.status_code in (400, 401)
+        assert resp.status_code in (400, 401, 404)
 
     def test_analyze_lead_links_session(self, client, app):
         """After analysis, the lead's analysis_session_id is set."""
@@ -722,16 +728,21 @@ class TestOwnerUserIdFilter:
         assert data['leads'] == []
 
     def test_no_owner_user_id_filter_returns_all_leads(self, client, app):
-        """Omitting owner_user_id returns all leads regardless of owner."""
+        """Omitting owner_user_id returns all leads belonging to the current user.
+
+        Leads owned by other users or with NULL owner are NOT visible —
+        ownership is strict and there is no NULL-owner fallback.
+        """
         with app.app_context():
             _create_lead(app, property_street='1001 All A St', owner_user_id='test-user')
             _create_lead(app, property_street='1002 All B St', owner_user_id='test-user')
-            _create_lead(app, property_street='1003 All C St', owner_user_id=None)
+            _create_lead(app, property_street='1003 All C St', owner_user_id=None)  # not visible
 
         resp = client.get('/api/properties/', headers=_AUTH_HEADERS)
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data['total'] == 3
+        # Only the 2 leads owned by test-user are returned; NULL-owner lead is excluded
+        assert data['total'] == 2
 
 
 class TestCombinedSourceTypeOwnerFilter:

@@ -83,14 +83,13 @@ class QueueService:
     def _base_query(self):
         """Return a Lead query scoped to this service's owner, if set.
 
-        Leads with owner_user_id IS NULL are legacy/unowned records that
-        are visible to all authenticated users (not just admins).
+        Non-admin users see only leads they own (exact owner_user_id match).
+        NULL-owner leads are NOT visible to other users — ownership is strict.
+        Admins (owner_user_id=None passed in) see all leads.
         """
         q = Lead.query
         if self._owner_user_id:
-            q = q.filter(
-                or_(Lead.owner_user_id == self._owner_user_id, Lead.owner_user_id.is_(None))
-            )
+            q = q.filter(Lead.owner_user_id == self._owner_user_id)
         return q
 
     # ------------------------------------------------------------------

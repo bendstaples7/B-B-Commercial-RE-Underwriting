@@ -12,7 +12,7 @@ from functools import wraps
 
 from flask import Blueprint, jsonify, redirect, request, url_for
 from marshmallow import ValidationError
-from sqlalchemy import func, or_
+from sqlalchemy import false, func, or_
 
 from app import db, limiter
 from app.api_utils import get_current_user_id, require_auth
@@ -355,20 +355,17 @@ def list_properties():
     query = Lead.query
 
     # --- Ownership scope (security) ---
-    # Non-admin users see leads they own OR leads with no owner (legacy data).
-    # NULL owner_user_id means the lead predates the ownership model and is
-    # visible to all authenticated users until explicitly assigned.
-    # Anonymous/unauthenticated users see only unowned (NULL owner) leads.
+    # Non-admin users see only leads they own (exact match on owner_user_id).
+    # NULL-owner leads are NOT visible to non-admin users — ownership is strict.
+    # Admins bypass this filter and see all leads.
     if not _current_user_is_admin():
         from flask import g
         current_user_id = getattr(g, 'user_id', None)
         if current_user_id and current_user_id != 'anonymous':
-            query = query.filter(
-                or_(Lead.owner_user_id == current_user_id, Lead.owner_user_id.is_(None))
-            )
+            query = query.filter(Lead.owner_user_id == current_user_id)
         else:
-            # Unauthenticated: show only unowned (legacy) leads
-            query = query.filter(Lead.owner_user_id.is_(None))
+            # Unauthenticated: no leads visible
+            query = query.filter(false())
 
     # --- Filters ---
     lead_category = args.get('lead_category')
