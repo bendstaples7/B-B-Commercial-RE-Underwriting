@@ -1,0 +1,10 @@
+# sync-local-db.conf.example — Copy this to sync-local-db.conf and fill in your values.
+# sync-local-db.conf is gitignored — never commit it.
+
+$VPS_USER       = "deploy"
+$VPS_HOST       = "YOUR_VPS_IP"
+$VPS_DB_PASS    = "YOUR_VPS_DB_PASSWORD"
+$LOCAL_USER     = "postgres"
+$LOCAL_PASSWORD = "YOUR_LOCAL_POSTGRES_PASSWORD"
+$LOCAL_DB       = "real_estate_analysis"
+$PG_BIN         = "C:\Program Files\PostgreSQL\17\bin"  # adjust if your version differs

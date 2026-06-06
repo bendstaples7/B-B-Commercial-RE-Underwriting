@@ -82,3 +82,6 @@ celerybeat-schedule.dir
 credentials.json
 credentials.json.json
 token.json
+
+# Local developer sync config (contains VPS credentials — never commit)
+scripts/sync-local-db.conf
