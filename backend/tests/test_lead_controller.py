@@ -24,7 +24,11 @@ from app.models import (
 # ---------------------------------------------------------------------------
 
 def _create_lead(app, **overrides):
-    """Create a lead record with sensible defaults."""
+    """Create a lead record with sensible defaults.
+
+    Defaults owner_user_id to 'test-user' to match _AUTH_HEADERS so that
+    ownership-scoped queries return the lead for the test user.
+    """
     defaults = {
         'property_street': '100 Test St',
         'property_city': 'Chicago',
@@ -37,6 +41,7 @@ def _create_lead(app, **overrides):
         'mailing_state': 'IL',
         'mailing_zip': '60601',
         'lead_score': 50.0,
+        'owner_user_id': 'test-user',
     }
     defaults.update(overrides)
     lead = Lead(**defaults)
@@ -58,6 +63,7 @@ def _create_leads_batch(app, count, base_score=50.0):
             mailing_state='IL',
             mailing_zip='60601',
             lead_score=base_score + i,
+            owner_user_id='test-user',
         )
         db.session.add(lead)
         leads.append(lead)
@@ -372,7 +378,7 @@ class TestAnalyzeLead:
             content_type='application/json',
             headers={'X-User-Id': ''},
         )
-        assert resp.status_code in (400, 401)
+        assert resp.status_code in (400, 401, 404)
 
     def test_analyze_lead_links_session(self, client, app):
         """After analysis, the lead's analysis_session_id is set."""
@@ -722,16 +728,58 @@ class TestOwnerUserIdFilter:
         assert data['leads'] == []
 
     def test_no_owner_user_id_filter_returns_all_leads(self, client, app):
-        """Omitting owner_user_id returns all leads regardless of owner."""
+        """Omitting owner_user_id returns only leads owned by the current user.
+
+        NULL-owner leads are NOT visible — ownership is strict.
+        """
         with app.app_context():
             _create_lead(app, property_street='1001 All A St', owner_user_id='test-user')
             _create_lead(app, property_street='1002 All B St', owner_user_id='test-user')
-            _create_lead(app, property_street='1003 All C St', owner_user_id=None)
+            _create_lead(app, property_street='1003 All C St', owner_user_id=None)  # not visible
 
         resp = client.get('/api/properties/', headers=_AUTH_HEADERS)
         assert resp.status_code == 200
         data = resp.get_json()
-        assert data['total'] == 3
+        # Only the 2 leads owned by test-user — NULL-owner lead is excluded
+        assert data['total'] == 2
+
+
+class TestNullOwnerLeadAccess:
+    """NULL-owner leads are NOT accessible to non-admin authenticated users.
+
+    Strict ownership: only leads where owner_user_id == current_user are visible.
+    NULL-owner leads return 404 for detail and analyze endpoints.
+    """
+
+    def test_no_owner_detail_returns_404(self, client, app):
+        """GET /api/properties/<id> returns 404 for a NULL-owner lead for non-admin users."""
+        with app.app_context():
+            lead = _create_lead(app, property_street='2001 Null Owner Detail St',
+                                owner_user_id=None)
+            lead_id = lead.id
+
+        resp = client.get(f'/api/properties/{lead_id}', headers=_AUTH_HEADERS)
+        assert resp.status_code == 404, (
+            f"Expected 404 for NULL-owner lead detail, got {resp.status_code}. "
+            "NULL-owner leads must not be accessible to non-admin users."
+        )
+
+    def test_no_owner_analyze_returns_404(self, client, app):
+        """POST /api/properties/<id>/analyze returns 404 for a NULL-owner lead."""
+        with app.app_context():
+            lead = _create_lead(app, property_street='2002 Null Owner Analyze St',
+                                owner_user_id=None)
+            lead_id = lead.id
+
+        resp = client.post(
+            f'/api/properties/{lead_id}/analyze',
+            json={},
+            headers=_AUTH_HEADERS,
+        )
+        assert resp.status_code == 404, (
+            f"Expected 404 for NULL-owner lead analyze, got {resp.status_code}. "
+            "NULL-owner leads must not be accessible to non-admin users."
+        )
 
 
 class TestCombinedSourceTypeOwnerFilter:

@@ -124,7 +124,7 @@ def empty_name_contact_strategy(draw):
 def _create_property(app_ctx, street=None):
     """Create a Lead/Property row and return its id."""
     street = street or f"Test St {uuid.uuid4().hex[:8]}"
-    lead = Lead(property_street=street)
+    lead = Lead(property_street=street, owner_user_id="test-user")
     db.session.add(lead)
     db.session.commit()
     return lead.id
@@ -664,13 +664,14 @@ def test_deprecated_fields_not_written_after_migration(app, client, deprecated_s
             owner_last_name="LegacyLast",
             phone_1="555-0001",
             email_1="legacy@example.com",
+            owner_user_id="test-user",
         )
         db.session.add(lead)
         db.session.commit()
         lead_id = lead.id
 
         # GET the property — legacy fields should still be readable
-        get_resp = client.get(f"/api/properties/{lead_id}")
+        get_resp = client.get(f"/api/properties/{lead_id}", headers={"X-User-Id": "test-user"})
         assert get_resp.status_code == 200
         data = get_resp.get_json()
 
@@ -1055,7 +1056,8 @@ def test_owner_name_filter_returns_exactly_matching_properties(app, client, scen
         db.session.commit()
 
         # Query the API with the owner_name filter
-        resp = client.get(f"/api/properties/?owner_name={query}&per_page=100")
+        resp = client.get(f"/api/properties/?owner_name={query}&per_page=100",
+                          headers={'X-User-Id': 'test-user'})
         assert resp.status_code == 200
         data = resp.get_json()
         returned_ids = {item["id"] for item in data.get("leads", [])}
