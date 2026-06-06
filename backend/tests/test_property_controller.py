@@ -36,6 +36,7 @@ def _create_property(street: str = "100 Test St", **kwargs) -> Lead:
         "mailing_zip": "60601",
         "property_type": "single_family",
         "lead_score": 50.0,
+        "owner_user_id": "test-user",
     }
     defaults.update(kwargs)
     prop = Lead(**defaults)
