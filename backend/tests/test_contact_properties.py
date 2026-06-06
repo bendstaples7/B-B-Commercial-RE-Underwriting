@@ -664,13 +664,14 @@ def test_deprecated_fields_not_written_after_migration(app, client, deprecated_s
             owner_last_name="LegacyLast",
             phone_1="555-0001",
             email_1="legacy@example.com",
+            owner_user_id="test-user",
         )
         db.session.add(lead)
         db.session.commit()
         lead_id = lead.id
 
         # GET the property — legacy fields should still be readable
-        get_resp = client.get(f"/api/properties/{lead_id}")
+        get_resp = client.get(f"/api/properties/{lead_id}", headers={"X-User-Id": "test-user"})
         assert get_resp.status_code == 200
         data = get_resp.get_json()
 
