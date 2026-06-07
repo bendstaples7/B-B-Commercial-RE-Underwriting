@@ -29,6 +29,38 @@ logger = logging.getLogger(__name__)
 command_center_bp = Blueprint('command_center', __name__)
 
 # ---------------------------------------------------------------------------
+# HubSpot pipeline stage label cache
+# Translates internal stage IDs (e.g. 'closedlost') to portal display labels
+# (e.g. 'Negotiating Remote'). Refreshed at most once every 5 minutes.
+# ---------------------------------------------------------------------------
+import time as _time
+
+_stage_label_cache: dict = {}
+_stage_label_cache_ts: float = 0.0
+_STAGE_CACHE_TTL = 300  # seconds
+
+
+def _get_stage_label(stage_id: str) -> str:
+    """Translate a HubSpot deal stage ID to its portal display label.
+
+    Falls back to the raw stage_id if the API call fails or the ID is unknown.
+    Cache is refreshed at most every 5 minutes.
+    """
+    global _stage_label_cache, _stage_label_cache_ts
+    now = _time.monotonic()
+    if now - _stage_label_cache_ts > _STAGE_CACHE_TTL:
+        try:
+            from app.models.hubspot_config import HubSpotConfig as _HubSpotConfig
+            from app.services.hubspot_client_service import HubSpotClientService as _HCS
+            _config = _HubSpotConfig.query.order_by(_HubSpotConfig.id.desc()).first()
+            if _config:
+                _stage_label_cache = _HCS(_config).fetch_pipeline_stage_labels("deals")
+                _stage_label_cache_ts = now
+        except Exception as _exc:
+            logger.debug("_get_stage_label: could not refresh stage map: %s", _exc)
+    return _stage_label_cache.get(stage_id, stage_id)
+
+# ---------------------------------------------------------------------------
 # Module-level service instances
 # ---------------------------------------------------------------------------
 
@@ -324,6 +356,7 @@ def get_command_center(lead_id: int):
     # matched to a HubSpot deal, and that live stage/name should always show.
     # The stage is read from properties.dealstage (nested JSON), not the
     # top-level key which is always null in the stored payload structure.
+    # Stage IDs are translated to display labels via the portal's pipeline API.
     row = _db.session.execute(_text("""
         SELECT hd.raw_payload->'properties'->>'dealname' AS dealname,
                hd.raw_payload->'properties'->>'dealstage' AS dealstage
@@ -335,14 +368,19 @@ def get_command_center(lead_id: int):
             AND hm.status = 'confirmed'
         LIMIT 1
     """), {'lead_id': lead_id}).fetchone()
-    # Live deal data takes precedence over the stale stored column
+    # Live deal data takes precedence over the stale stored column.
+    # Translate the raw stage ID to the portal's display label.
     live_deal_stage = None
     if row:
         if row[0]:
             hubspot_deal_name = row[0]
         if row[1]:
-            live_deal_stage = row[1]
-            # Sync back to the lead so the stored column stays current
+            raw_stage_id = row[1]
+            # Translate stage ID to display label using a module-level cache
+            # (refreshed every 5 minutes to pick up portal changes without
+            # hitting the HubSpot API on every request).
+            live_deal_stage = _get_stage_label(raw_stage_id)
+            # Sync translated label back to the lead column so it stays current
             if lead.hubspot_deal_stage != live_deal_stage:
                 lead.hubspot_deal_stage = live_deal_stage
                 _db.session.add(lead)
