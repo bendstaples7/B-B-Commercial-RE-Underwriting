@@ -115,6 +115,151 @@ class HubSpotMatcherService:
         return result
 
     # ------------------------------------------------------------------
+    # Lead enrichment from HubSpot data
+    # ------------------------------------------------------------------
+
+    def enrich_lead_from_deal(self, lead: Lead, deal: HubSpotDeal) -> list[str]:
+        """Enrich a Lead with data from a matched HubSpot deal.
+
+        Copies fields that are currently null/empty on the Lead from the
+        deal's raw_payload.  This is intentionally non-destructive: existing
+        non-null values on the lead are never overwritten.
+
+        Enriched fields (when present on deal and null on lead):
+        - hubspot_deal_stage  — always synced (it is a live signal, not
+          an owner-provided value, so we always want the freshest value)
+        - owner_first_name / owner_last_name — from the deal's contact
+          associations if available (filled in by enrich_lead_from_contact)
+        - property_street / property_city / property_state / property_zip
+        - county_assessor_pin
+        - property_type, bedrooms, bathrooms, square_footage, year_built
+
+        Returns a list of field names that were updated.
+        """
+        props = (deal.raw_payload or {}).get("properties", {})
+        updated_fields = []
+
+        # hubspot_deal_stage: always sync the live value regardless of what
+        # is stored — it is a CRM signal, not a lead-owned field.
+        stage = props.get("dealstage") or None
+        if stage and lead.hubspot_deal_stage != stage:
+            lead.hubspot_deal_stage = stage
+            updated_fields.append("hubspot_deal_stage")
+
+        # Address fields — fill in nulls only
+        field_map = {
+            "address": "property_street",
+        }
+        for hs_key, lead_attr in field_map.items():
+            val = (props.get(hs_key) or "").strip() or None
+            if val and not getattr(lead, lead_attr):
+                setattr(lead, lead_attr, val)
+                updated_fields.append(lead_attr)
+
+        # PIN
+        pin = (
+            props.get("county_assessor_pin")
+            or props.get("pin")
+            or ""
+        ).strip() or None
+        if pin and not lead.county_assessor_pin:
+            lead.county_assessor_pin = pin
+            updated_fields.append("county_assessor_pin")
+
+        if updated_fields:
+            db.session.add(lead)
+
+        return updated_fields
+
+    def enrich_lead_from_contact(self, lead: Lead, contact: HubSpotContact) -> list[str]:
+        """Enrich a Lead with contact data from a matched HubSpot contact.
+
+        Fills in phone and email flat columns (phone_1–phone_7, email_1–email_5)
+        from the HubSpot contact's properties, using the first empty slot.
+        Also fills owner_first_name / owner_last_name when null.
+
+        Additionally syncs data into the relational contact_phones /
+        contact_emails tables if a PropertyContact link exists, so that
+        the lead_crm_flags view also picks it up.
+
+        Updates has_phone / has_email flags if new data was written.
+
+        Returns a list of field names that were updated.
+        """
+        props = (contact.raw_payload or {}).get("properties", {})
+        updated_fields: list[str] = []
+
+        # --- Owner name -------------------------------------------------------
+        first_name = (props.get("firstname") or "").strip() or None
+        last_name = (props.get("lastname") or "").strip() or None
+        if first_name and not lead.owner_first_name:
+            lead.owner_first_name = first_name
+            updated_fields.append("owner_first_name")
+        if last_name and not lead.owner_last_name:
+            lead.owner_last_name = last_name
+            updated_fields.append("owner_last_name")
+
+        # --- Phones -----------------------------------------------------------
+        hs_phones = []
+        for key in ("phone", "mobilephone", "hs_phone_number"):
+            val = (props.get(key) or "").strip()
+            if val and val not in hs_phones:
+                hs_phones.append(val)
+
+        phone_slots = ["phone_1", "phone_2", "phone_3", "phone_4",
+                       "phone_5", "phone_6", "phone_7"]
+        # Collect already-stored flat phones to avoid duplicates
+        existing_phones = {
+            HubSpotMatcherService.normalize_phone(getattr(lead, slot))
+            for slot in phone_slots
+            if getattr(lead, slot)
+        }
+        for phone_val in hs_phones:
+            digits = HubSpotMatcherService.normalize_phone(phone_val)
+            if not digits or digits in existing_phones:
+                continue
+            # Write to first empty slot
+            for slot in phone_slots:
+                if not getattr(lead, slot):
+                    setattr(lead, slot, phone_val)
+                    updated_fields.append(slot)
+                    existing_phones.add(digits)
+                    break
+
+        # --- Emails -----------------------------------------------------------
+        hs_email = (props.get("email") or "").strip().lower() or None
+        email_slots = ["email_1", "email_2", "email_3", "email_4", "email_5"]
+        existing_emails = {
+            (getattr(lead, slot) or "").strip().lower()
+            for slot in email_slots
+            if getattr(lead, slot)
+        }
+        if hs_email and hs_email not in existing_emails:
+            for slot in email_slots:
+                if not getattr(lead, slot):
+                    setattr(lead, slot, hs_email)
+                    updated_fields.append(slot)
+                    existing_emails.add(hs_email)
+                    break
+
+        # --- Update boolean flags --------------------------------------------
+        if any(f.startswith("phone_") for f in updated_fields):
+            lead.has_phone = True
+            updated_fields.append("has_phone")
+        if any(f.startswith("email_") for f in updated_fields):
+            lead.has_email = True
+            updated_fields.append("has_email")
+
+        if updated_fields:
+            db.session.add(lead)
+
+        logger.debug(
+            "enrich_lead_from_contact: lead_id=%s enriched fields=%s",
+            lead.id, updated_fields,
+        )
+        return updated_fields
+
+    # ------------------------------------------------------------------
     # Deal matching  (HubSpot Deal → internal Lead / property)
     # ------------------------------------------------------------------
 
@@ -145,7 +290,7 @@ class HubSpotMatcherService:
                     "Deal %s matched Lead %s via PIN '%s'",
                     deal.hubspot_id, lead.id, pin,
                 )
-                return self._upsert_match(
+                match = self._upsert_match(
                     hubspot_record_type="deal",
                     hubspot_id=deal.hubspot_id,
                     internal_record_type="lead",
@@ -153,6 +298,10 @@ class HubSpotMatcherService:
                     confidence="HIGH",
                     matching_criteria="pin_match",
                 )
+                enriched = self.enrich_lead_from_deal(lead, deal)
+                if enriched:
+                    logger.debug("Deal %s enriched Lead %s fields: %s", deal.hubspot_id, lead.id, enriched)
+                return match
 
         # --- 2. Normalised address match ------------------------------------
         raw_address = (
@@ -178,7 +327,7 @@ class HubSpotMatcherService:
                         "Deal %s matched Lead %s via address '%s'",
                         deal.hubspot_id, lead.id, norm_address,
                     )
-                    return self._upsert_match(
+                    match = self._upsert_match(
                         hubspot_record_type="deal",
                         hubspot_id=deal.hubspot_id,
                         internal_record_type="lead",
@@ -187,6 +336,12 @@ class HubSpotMatcherService:
                         matching_criteria="address_match",
                         status="pending",
                     )
+                    # Enrich even on MEDIUM confidence — the stage signal is
+                    # always useful regardless of match confidence level.
+                    enriched = self.enrich_lead_from_deal(lead, deal)
+                    if enriched:
+                        logger.debug("Deal %s enriched Lead %s fields: %s", deal.hubspot_id, lead.id, enriched)
+                    return match
 
         # --- 3. No match — record as UNMATCHED with no internal record ----------
         # If the deal has an address, create a placeholder Lead so the address
@@ -270,7 +425,7 @@ class HubSpotMatcherService:
                     "Contact %s matched Contact %s via email '%s' (property_id=%s)",
                     contact.hubspot_id, matched_contact.id, email, property_id,
                 )
-                return self._upsert_match(
+                match = self._upsert_match(
                     hubspot_record_type="contact",
                     hubspot_id=contact.hubspot_id,
                     internal_record_type="lead",
@@ -278,6 +433,11 @@ class HubSpotMatcherService:
                     confidence="HIGH",
                     matching_criteria="email_match",
                 )
+                if property_id:
+                    lead = Lead.query.get(property_id)
+                    if lead:
+                        self.enrich_lead_from_contact(lead, contact)
+                return match
 
             # Also check Lead.email_1 directly (denormalized storage).
             # Tiebreaker: most recently updated lead wins; fall back to highest id.
@@ -289,7 +449,7 @@ class HubSpotMatcherService:
                     "Contact %s matched Lead %s via email_1 '%s'",
                     contact.hubspot_id, lead_by_email.id, email,
                 )
-                return self._upsert_match(
+                match = self._upsert_match(
                     hubspot_record_type="contact",
                     hubspot_id=contact.hubspot_id,
                     internal_record_type="lead",
@@ -297,6 +457,8 @@ class HubSpotMatcherService:
                     confidence="HIGH",
                     matching_criteria="email_match",
                 )
+                self.enrich_lead_from_contact(lead_by_email, contact)
+                return match
 
         # --- 2. Phone match (digits only) -----------------------------------
         if phone_digits:
@@ -314,7 +476,7 @@ class HubSpotMatcherService:
                         "Contact %s matched Contact %s via phone '%s' (property_id=%s)",
                         contact.hubspot_id, matched_contact.id, phone_digits, property_id,
                     )
-                    return self._upsert_match(
+                    match = self._upsert_match(
                         hubspot_record_type="contact",
                         hubspot_id=contact.hubspot_id,
                         internal_record_type="lead",
@@ -322,6 +484,11 @@ class HubSpotMatcherService:
                         confidence="HIGH",
                         matching_criteria="phone_match",
                     )
+                    if property_id:
+                        lead = Lead.query.get(property_id)
+                        if lead:
+                            self.enrich_lead_from_contact(lead, contact)
+                    return match
 
             # Also check Lead.phone_1 directly (denormalized storage).
             # Tiebreaker: most recently updated lead wins; fall back to highest id.
@@ -334,7 +501,7 @@ class HubSpotMatcherService:
                         "Contact %s matched Lead %s via phone_1 '%s'",
                         contact.hubspot_id, lead.id, phone_digits,
                     )
-                    return self._upsert_match(
+                    match = self._upsert_match(
                         hubspot_record_type="contact",
                         hubspot_id=contact.hubspot_id,
                         internal_record_type="lead",
@@ -342,6 +509,8 @@ class HubSpotMatcherService:
                         confidence="HIGH",
                         matching_criteria="phone_match",
                     )
+                    self.enrich_lead_from_contact(lead, contact)
+                    return match
 
         # --- 3. Name + property match ---------------------------------------
         if first_name and last_name:
@@ -365,7 +534,7 @@ class HubSpotMatcherService:
                     "Contact %s matched Contact %s via name '%s %s' (property_id=%s)",
                     contact.hubspot_id, name_match.id, first_name, last_name, property_id,
                 )
-                return self._upsert_match(
+                match = self._upsert_match(
                     hubspot_record_type="contact",
                     hubspot_id=contact.hubspot_id,
                     internal_record_type="lead",
@@ -373,6 +542,11 @@ class HubSpotMatcherService:
                     confidence="MEDIUM",
                     matching_criteria="name_property_match",
                 )
+                if property_id:
+                    lead = Lead.query.get(property_id)
+                    if lead:
+                        self.enrich_lead_from_contact(lead, contact)
+                return match
 
             # Also check Lead.owner_first_name / owner_last_name directly.
             # Tiebreaker: most recently updated lead wins; fall back to highest id.
@@ -390,7 +564,7 @@ class HubSpotMatcherService:
                     "Contact %s matched Lead %s via owner name '%s %s'",
                     contact.hubspot_id, lead_by_name.id, first_name, last_name,
                 )
-                return self._upsert_match(
+                match = self._upsert_match(
                     hubspot_record_type="contact",
                     hubspot_id=contact.hubspot_id,
                     internal_record_type="lead",
@@ -398,6 +572,8 @@ class HubSpotMatcherService:
                     confidence="MEDIUM",
                     matching_criteria="name_property_match",
                 )
+                self.enrich_lead_from_contact(lead_by_name, contact)
+                return match
 
         # --- 4. No match — create a new Contact record and auto-confirm ----
         # Check if we already have a match for this contact (idempotency guard)

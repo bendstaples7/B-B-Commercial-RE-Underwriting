@@ -318,20 +318,35 @@ def get_command_center(lead_id: int):
     overdue_task_due = overdue_task_row[2].isoformat() if overdue_task_row and overdue_task_row[2] else None
     source = lead.source
     hubspot_deal_name = None
-    if source == 'hubspot_import' or not source:
-        row = _db.session.execute(_text("""
-            SELECT hd.raw_payload->>'dealname', hd.raw_payload->>'dealstage'
-            FROM hubspot_deals hd
-            JOIN hubspot_matches hm ON hm.hubspot_id = hd.hubspot_id
-                AND hm.hubspot_record_type = 'deal'
-            WHERE hm.internal_record_id = :lead_id
-                AND hm.internal_record_type = 'lead'
-                AND hm.status = 'confirmed'
-            LIMIT 1
-        """), {'lead_id': lead_id}).fetchone()
-        if row and row[0]:
+    # Look up live deal data for ANY lead that has a confirmed HubSpot deal
+    # match — not just hubspot_import leads.  A lead imported from any source
+    # (Driving for Dollars, DuPage GIS, Google Sheets, …) may later be
+    # matched to a HubSpot deal, and that live stage/name should always show.
+    # The stage is read from properties.dealstage (nested JSON), not the
+    # top-level key which is always null in the stored payload structure.
+    row = _db.session.execute(_text("""
+        SELECT hd.raw_payload->'properties'->>'dealname' AS dealname,
+               hd.raw_payload->'properties'->>'dealstage' AS dealstage
+        FROM hubspot_deals hd
+        JOIN hubspot_matches hm ON hm.hubspot_id = hd.hubspot_id
+            AND hm.hubspot_record_type = 'deal'
+        WHERE hm.internal_record_id = :lead_id
+            AND hm.internal_record_type = 'lead'
+            AND hm.status = 'confirmed'
+        LIMIT 1
+    """), {'lead_id': lead_id}).fetchone()
+    # Live deal data takes precedence over the stale stored column
+    live_deal_stage = None
+    if row:
+        if row[0]:
             hubspot_deal_name = row[0]
-            hubspot_deal_stage = row[1]
+        if row[1]:
+            live_deal_stage = row[1]
+            # Sync back to the lead so the stored column stays current
+            if lead.hubspot_deal_stage != live_deal_stage:
+                lead.hubspot_deal_stage = live_deal_stage
+                _db.session.add(lead)
+                _db.session.commit()
 
     # ------------------------------------------------------------------
     # HubSpot interactions (calls, emails, notes from HubSpot import)
@@ -443,7 +458,7 @@ def get_command_center(lead_id: int):
         'analysis_session_id': lead.analysis_session_id,
         'last_contact_date': lead.last_contact_date.isoformat() if lead.last_contact_date else None,
         'last_hubspot_sync_at': lead.last_hubspot_sync_at.isoformat() if lead.last_hubspot_sync_at else None,
-        'hubspot_deal_stage': lead.hubspot_deal_stage,
+        'hubspot_deal_stage': live_deal_stage or lead.hubspot_deal_stage,
         'review_required': lead.review_required,
         'review_reason': lead.review_reason,
         'recommended_action': {

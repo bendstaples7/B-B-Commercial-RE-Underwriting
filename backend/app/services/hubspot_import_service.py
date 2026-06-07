@@ -33,6 +33,7 @@ def _run_pipeline_after_imports(app, run_ids: list) -> None:
     import time
     from app.tasks.hubspot_tasks import (
         run_hubspot_matching,
+        run_enrich_leads_from_hubspot,
         run_convert_hubspot_activities,
         run_extract_hubspot_signals,
         run_rescore_leads_after_import,
@@ -72,6 +73,8 @@ def _run_pipeline_after_imports(app, run_ids: list) -> None:
         try:
             run_hubspot_matching()
             logger.info("Pipeline thread: matching complete")
+            run_enrich_leads_from_hubspot()
+            logger.info("Pipeline thread: lead enrichment from HubSpot complete")
             run_convert_hubspot_activities()
             logger.info("Pipeline thread: activity conversion complete")
             run_extract_hubspot_signals()
