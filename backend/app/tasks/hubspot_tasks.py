@@ -480,6 +480,25 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
 
         matcher = HubSpotMatcherService()
 
+        # Fetch portal stage label map once — used to translate stage IDs to
+        # display labels (e.g. 'closedlost' → 'Negotiating Remote')
+        stage_label_map = {}
+        try:
+            from app.models.hubspot_config import HubSpotConfig
+            from app.services.hubspot_client_service import HubSpotClientService
+            _config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
+            if _config:
+                _client = HubSpotClientService(_config)
+                stage_label_map = _client.fetch_pipeline_stage_labels("deals")
+                logger.info(
+                    "run_enrich_leads_from_hubspot: loaded %d stage labels",
+                    len(stage_label_map),
+                )
+        except Exception as exc:
+            logger.warning(
+                "run_enrich_leads_from_hubspot: could not fetch stage labels: %s", exc
+            )
+
         deal_enriched = 0
         deal_errors = 0
         contact_enriched = 0
@@ -502,7 +521,7 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                 ).first()
                 if lead is None or deal is None:
                     continue
-                enriched = matcher.enrich_lead_from_deal(lead, deal)
+                enriched = matcher.enrich_lead_from_deal(lead, deal, stage_label_map)
                 if enriched:
                     db.session.commit()
                     deal_enriched += 1

@@ -285,6 +285,38 @@ class HubSpotClientService:
                 break
             params["after"] = next_cursor
 
+    def fetch_pipeline_stage_labels(self, object_type: str = "deals") -> dict:
+        """Return a dict mapping stage internal ID → display label for all pipelines.
+
+        Example return value::
+
+            {
+                "closedlost": "Negotiating Remote",
+                "closedwon": "Mailing, contact made, interested",
+                "decisionmakerboughtin": "Mailing, no contact made",
+                ...
+            }
+
+        Fetches all pipelines for *object_type* and flattens their stages.
+        On any error, returns an empty dict (caller should fall back to raw ID).
+        """
+        try:
+            response = self._get(f"/crm/v3/pipelines/{object_type}")
+            stage_map = {}
+            for pipeline in response.get("results", []):
+                for stage in pipeline.get("stages", []):
+                    stage_id = stage.get("id")
+                    label = stage.get("label")
+                    if stage_id and label:
+                        stage_map[stage_id] = label
+            return stage_map
+        except Exception as exc:
+            logger.warning(
+                "fetch_pipeline_stage_labels: failed to fetch stages for %s: %s",
+                object_type, exc,
+            )
+            return {}
+
     def fetch_all_deals(self) -> Iterator[dict]:
         """Yield every deal from HubSpot using cursor-based pagination.
 

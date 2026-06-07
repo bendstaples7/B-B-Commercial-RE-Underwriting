@@ -118,33 +118,30 @@ class HubSpotMatcherService:
     # Lead enrichment from HubSpot data
     # ------------------------------------------------------------------
 
-    def enrich_lead_from_deal(self, lead: Lead, deal: HubSpotDeal) -> list[str]:
+    def enrich_lead_from_deal(self, lead: Lead, deal: HubSpotDeal,
+                              stage_label_map: dict = None) -> list[str]:
         """Enrich a Lead with data from a matched HubSpot deal.
 
         Copies fields that are currently null/empty on the Lead from the
         deal's raw_payload.  This is intentionally non-destructive: existing
         non-null values on the lead are never overwritten.
 
-        Enriched fields (when present on deal and null on lead):
-        - hubspot_deal_stage  — always synced (it is a live signal, not
-          an owner-provided value, so we always want the freshest value)
-        - owner_first_name / owner_last_name — from the deal's contact
-          associations if available (filled in by enrich_lead_from_contact)
-        - property_street / property_city / property_state / property_zip
-        - county_assessor_pin
-        - property_type, bedrooms, bathrooms, square_footage, year_built
+        hubspot_deal_stage is always synced and translated to the portal's
+        display label via stage_label_map (so 'closedlost' → 'Negotiating Remote').
 
         Returns a list of field names that were updated.
         """
         props = (deal.raw_payload or {}).get("properties", {})
         updated_fields = []
 
-        # hubspot_deal_stage: always sync the live value regardless of what
-        # is stored — it is a CRM signal, not a lead-owned field.
-        stage = props.get("dealstage") or None
-        if stage and lead.hubspot_deal_stage != stage:
-            lead.hubspot_deal_stage = stage
-            updated_fields.append("hubspot_deal_stage")
+        # hubspot_deal_stage: always sync the live value — it is a CRM signal.
+        # Translate internal stage ID to the portal's display label.
+        stage_id = props.get("dealstage") or None
+        if stage_id:
+            stage_label = (stage_label_map or {}).get(stage_id, stage_id)
+            if lead.hubspot_deal_stage != stage_label:
+                lead.hubspot_deal_stage = stage_label
+                updated_fields.append("hubspot_deal_stage")
 
         # Address fields — fill in nulls only
         field_map = {
