@@ -235,6 +235,12 @@ class HubSpotClientService:
         "hs_object_id", "createdate", "hs_lastmodifieddate",
         "associatedcompanyid", "hs_analytics_source", "lifecyclestage",
         "hs_lead_source",
+        # Custom properties — additional contact data stored as multi-line strings
+        "additional_phone_numbers",  # e.g. "1) (630) 430-5720\n2) (630) 202-3839 CONFIRMED"
+        "additional_addresses",      # e.g. "198 Karen Cir, Bolingbrook IL 60440\n..."
+        "hs_additional_emails",      # additional email addresses
+        # Standard address fields
+        "address", "city", "state", "zip",
     ]
     _COMPANY_PROPERTIES = [
         "name", "type", "phone", "hs_object_id",

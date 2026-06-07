@@ -206,6 +206,29 @@ class HubSpotMatcherService:
             if val and val not in hs_phones:
                 hs_phones.append(val)
 
+        # Parse additional_phone_numbers — multi-line, one per line, may have
+        # a leading index like "1) (630) 430-5720 CONFIRMED" or annotations.
+        # We extract the phone number and strip annotation text.
+        additional_raw = (props.get("additional_phone_numbers") or "").strip()
+        if additional_raw:
+            import re as _re
+            for line in additional_raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                # Strip leading index like "1) " or "2. "
+                line = _re.sub(r'^\d+[).]\s*', '', line).strip()
+                # Extract phone number (digits, spaces, dashes, parens, plus)
+                # and strip trailing annotations like " CONFIRMED", " (disconnected)"
+                phone_match = _re.match(r'^(\+?[\d\s\(\)\-\.]+)', line)
+                if phone_match:
+                    phone_val = phone_match.group(1).strip()
+                    if phone_val and phone_val not in hs_phones:
+                        # Only add if it has at least 7 digits
+                        digits = _re.sub(r'\D', '', phone_val)
+                        if len(digits) >= 7:
+                            hs_phones.append(phone_val)
+
         phone_slots = ["phone_1", "phone_2", "phone_3", "phone_4",
                        "phone_5", "phone_6", "phone_7"]
         # Collect already-stored flat phones to avoid duplicates
@@ -227,20 +250,52 @@ class HubSpotMatcherService:
                     break
 
         # --- Emails -----------------------------------------------------------
-        hs_email = (props.get("email") or "").strip().lower() or None
+        hs_emails = []
+        primary_email = (props.get("email") or "").strip().lower() or None
+        if primary_email:
+            hs_emails.append(primary_email)
+
+        # Parse hs_additional_emails — comma or newline separated
+        additional_emails_raw = (props.get("hs_additional_emails") or "").strip()
+        if additional_emails_raw:
+            import re as _re
+            for part in _re.split(r'[\n,;]+', additional_emails_raw):
+                part = part.strip().lower()
+                if part and '@' in part and part not in hs_emails:
+                    hs_emails.append(part)
+
         email_slots = ["email_1", "email_2", "email_3", "email_4", "email_5"]
         existing_emails = {
             (getattr(lead, slot) or "").strip().lower()
             for slot in email_slots
             if getattr(lead, slot)
         }
-        if hs_email and hs_email not in existing_emails:
-            for slot in email_slots:
-                if not getattr(lead, slot):
-                    setattr(lead, slot, hs_email)
-                    updated_fields.append(slot)
-                    existing_emails.add(hs_email)
-                    break
+        for hs_email in hs_emails:
+            if hs_email and hs_email not in existing_emails:
+                for slot in email_slots:
+                    if not getattr(lead, slot):
+                        setattr(lead, slot, hs_email)
+                        updated_fields.append(slot)
+                        existing_emails.add(hs_email)
+                        break
+
+        # --- Mailing address from HubSpot contact ----------------------------
+        hs_street = (props.get("address") or "").strip() or None
+        hs_city   = (props.get("city") or "").strip() or None
+        hs_state  = (props.get("state") or "").strip() or None
+        hs_zip    = (props.get("zip") or "").strip() or None
+        if hs_street and not lead.mailing_address:
+            lead.mailing_address = hs_street
+            updated_fields.append("mailing_address")
+        if hs_city and not lead.mailing_city:
+            lead.mailing_city = hs_city
+            updated_fields.append("mailing_city")
+        if hs_state and not lead.mailing_state:
+            lead.mailing_state = hs_state
+            updated_fields.append("mailing_state")
+        if hs_zip and not lead.mailing_zip:
+            lead.mailing_zip = hs_zip
+            updated_fields.append("mailing_zip")
 
         # --- Update boolean flags --------------------------------------------
         if any(f.startswith("phone_") for f in updated_fields):
