@@ -77,8 +77,13 @@ try {
     $pgName = & $PgpassEscape $VPS_DB_NAME
     $pgUser = & $PgpassEscape $VPS_DB_USER
     $pgPass = & $PgpassEscape $VPS_DB_PASS
+    # Shell-escape the pgpass-escaped values so single quotes inside them don't
+    # break the bash single-quoted argument in $setupRemote
+    $spgName = & $ShellEscape $pgName
+    $spgUser = & $ShellEscape $pgUser
+    $spgPass = & $ShellEscape $pgPass
 
-    $setupRemote = "printf '%s:%s:%s:%s:%s\n' '127.0.0.1' $ePort '$pgName' '$pgUser' '$pgPass' > ~/.pgpass_sync && chmod 600 ~/.pgpass_sync"
+    $setupRemote = "printf '%s:%s:%s:%s:%s\n' '127.0.0.1' $ePort $spgName $spgUser $spgPass > ~/.pgpass_sync && chmod 600 ~/.pgpass_sync"
 
     & ssh @sshBase $setupRemote
     if ($LASTEXITCODE -ne 0) { throw "ERROR: Failed to write remote .pgpass_sync." }
