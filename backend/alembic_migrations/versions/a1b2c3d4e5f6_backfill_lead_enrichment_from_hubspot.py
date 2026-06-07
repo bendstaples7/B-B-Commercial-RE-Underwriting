@@ -39,24 +39,84 @@ depends_on = None
 
 def upgrade():
     """Run the HubSpot lead enrichment backfill."""
-    # Import the task function directly — this migration is data-only and
-    # relies on the app's service layer rather than raw SQL, because the
-    # enrichment logic is intentionally centralised in HubSpotMatcherService
-    # to ensure consistency between the migration and the ongoing pipeline.
+    # We call the enrichment service directly using the current Alembic
+    # connection context rather than creating a new Flask app.  The task
+    # function (run_enrich_leads_from_hubspot) calls create_app() internally
+    # for standalone use, but that causes infinite recursion when called from
+    # inside a migration (which is already running inside create_app).
     #
-    # We import inside the function to avoid issues with the Alembic env not
-    # having the app configured at module load time.
+    # Instead, we use the SQLAlchemy session that's already active.
     try:
-        from app.tasks.hubspot_tasks import run_enrich_leads_from_hubspot
-        summary = run_enrich_leads_from_hubspot()
+        from app import db
+        from app.models import Lead, HubSpotDeal, HubSpotContact, HubSpotMatch
+        from app.services.hubspot_matcher_service import HubSpotMatcherService
+        from app.services.action_engine_service import ActionEngineService
+
+        matcher = HubSpotMatcherService()
+
+        deal_enriched = 0
+        contact_enriched = 0
+
+        # Enrich from confirmed deal matches
+        confirmed_deal_matches = (
+            HubSpotMatch.query
+            .filter_by(hubspot_record_type='deal', status='confirmed',
+                       internal_record_type='lead')
+            .filter(HubSpotMatch.internal_record_id.isnot(None))
+            .all()
+        )
+        for match in confirmed_deal_matches:
+            try:
+                lead = Lead.query.get(match.internal_record_id)
+                deal = HubSpotDeal.query.filter_by(hubspot_id=match.hubspot_id).first()
+                if lead and deal:
+                    enriched = matcher.enrich_lead_from_deal(lead, deal)
+                    if enriched:
+                        db.session.commit()
+                        deal_enriched += 1
+            except Exception as exc:
+                db.session.rollback()
+                logger.debug("Backfill: deal enrich lead_id=%s: %s", match.internal_record_id, exc)
+
+        # Enrich from confirmed contact matches
+        confirmed_contact_matches = (
+            HubSpotMatch.query
+            .filter_by(hubspot_record_type='contact', status='confirmed',
+                       internal_record_type='lead')
+            .filter(HubSpotMatch.internal_record_id.isnot(None))
+            .all()
+        )
+        for match in confirmed_contact_matches:
+            try:
+                lead = Lead.query.get(match.internal_record_id)
+                contact = HubSpotContact.query.filter_by(hubspot_id=match.hubspot_id).first()
+                if lead and contact:
+                    enriched = matcher.enrich_lead_from_contact(lead, contact)
+                    if enriched:
+                        db.session.commit()
+                        contact_enriched += 1
+            except Exception as exc:
+                db.session.rollback()
+                logger.debug("Backfill: contact enrich lead_id=%s: %s", match.internal_record_id, exc)
+
+        # Recompute recommended_action for touched leads
+        touched_ids = {m.internal_record_id for m in confirmed_deal_matches + confirmed_contact_matches if m.internal_record_id}
+        recomputed = 0
+        for lead_id in touched_ids:
+            try:
+                ActionEngineService.recompute_and_persist(lead_id)
+                recomputed += 1
+            except Exception:
+                db.session.rollback()
+
         logger.info(
-            "Backfill migration a1b2c3d4e5f6 complete: %s", summary
+            "Backfill migration r9s0t1u2v3w4 complete: "
+            "deal_enriched=%d contact_enriched=%d action_recomputed=%d",
+            deal_enriched, contact_enriched, recomputed,
         )
     except Exception as exc:
-        # Log but don't fail the migration — the data backfill is best-effort.
-        # The same enrichment runs automatically on the next HubSpot import.
         logger.warning(
-            "Backfill migration a1b2c3d4e5f6: enrichment failed (non-fatal): %s", exc
+            "Backfill migration r9s0t1u2v3w4: enrichment failed (non-fatal): %s", exc
         )
 
 
