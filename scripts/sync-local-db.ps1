@@ -7,7 +7,7 @@
 # Setup:
 #   1. Copy scripts/sync-local-db.conf.example to scripts/sync-local-db.conf
 #   2. Fill in your VPS and local DB credentials in sync-local-db.conf
-#   3. Ensure ~/.ssh/bbanalyzer_deploy has SSH access to the VPS
+#   3. Ensure your SSH key has access to the VPS (set SSH_KEY in conf or use default)
 #   4. Ensure psql and pg_restore are available at the path set in $PG_BIN
 
 $ErrorActionPreference = "Stop"
@@ -19,30 +19,42 @@ if (-not (Test-Path $configPath)) {
     Write-Host "Copy scripts/sync-local-db.conf.example to scripts/sync-local-db.conf and fill in your values." -ForegroundColor Yellow
     exit 1
 }
-try {
-    . $configPath
-} catch {
-    Write-Host "ERROR: Failed to load config from $configPath : $_" -ForegroundColor Red
-    exit 1
+
+# Parse config file without Invoke-Expression (PSScriptAnalyzer-safe).
+# Reads lines matching $VarName = "value" and assigns via Set-Variable.
+Get-Content $configPath | Where-Object { $_ -match '^\$(\w+)\s*=\s*"([^"]*)"' -and $_ -notmatch '^\s*#' } | ForEach-Object {
+    if ($_ -match '^\$(\w+)\s*=\s*"([^"]*)"') {
+        Set-Variable -Name $Matches[1] -Value $Matches[2] -Scope Script
+    }
 }
 
-# Dot-source sets variables in child scope under -File execution; re-read explicitly
-Get-Content $configPath | Where-Object { $_ -match '^\$\w+\s*=' -and $_ -notmatch '^\s*#' } | ForEach-Object {
-    Invoke-Expression $_
+# SSH key: use config-provided value if set, otherwise fall back to default
+if ([string]::IsNullOrEmpty($SSH_KEY)) {
+    $SSH_KEY = "$env:USERPROFILE\.ssh\bbanalyzer_deploy"
 }
-
-$SSH_KEY       = "$env:USERPROFILE\.ssh\bbanalyzer_deploy"
-$KNOWN_HOSTS   = "$env:USERPROFILE\.ssh\known_hosts"
-$DUMP_FILE     = "$env:TEMP\prod_dump_$(Get-Date -Format 'yyyyMMdd_HHmmss').dump"
+$KNOWN_HOSTS = "$env:USERPROFILE\.ssh\known_hosts"
+$DUMP_FILE   = "$env:TEMP\prod_dump_$(Get-Date -Format 'yyyyMMdd_HHmmss').dump"
 
 # Validate config values are safe identifiers before interpolating into SQL
-# Trim trailing whitespace/CR that can appear from Windows line endings in conf files
 if ($null -ne $LOCAL_DB)   { $LOCAL_DB   = $LOCAL_DB.Trim() }
 if ($null -ne $LOCAL_USER) { $LOCAL_USER = $LOCAL_USER.Trim() }
-if ([string]::IsNullOrEmpty($LOCAL_DB))   { Write-Host "ERROR: LOCAL_DB is not set in sync-local-db.conf" -ForegroundColor Red; exit 1 }
-if ([string]::IsNullOrEmpty($LOCAL_USER)) { Write-Host "ERROR: LOCAL_USER is not set in sync-local-db.conf" -ForegroundColor Red; exit 1 }
-if ($LOCAL_DB    -notmatch '^[a-zA-Z0-9_]+$') { Write-Host "ERROR: LOCAL_DB contains unsafe characters: [$LOCAL_DB]" -ForegroundColor Red; exit 1 }
-if ($LOCAL_USER  -notmatch '^[a-zA-Z0-9_]+$') { Write-Host "ERROR: LOCAL_USER contains unsafe characters: [$LOCAL_USER]" -ForegroundColor Red; exit 1 }
+if ([string]::IsNullOrEmpty($LOCAL_DB))      { Write-Host "ERROR: LOCAL_DB is not set in sync-local-db.conf" -ForegroundColor Red; exit 1 }
+if ([string]::IsNullOrEmpty($LOCAL_USER))    { Write-Host "ERROR: LOCAL_USER is not set in sync-local-db.conf" -ForegroundColor Red; exit 1 }
+if ([string]::IsNullOrEmpty($VPS_DB_NAME))   { $VPS_DB_NAME = "real_estate_analysis" }
+if ([string]::IsNullOrEmpty($VPS_DB_USER))   { $VPS_DB_USER = "app_user" }
+if ([string]::IsNullOrEmpty($VPS_DB_PORT))   { $VPS_DB_PORT = "5432" }
+if ($LOCAL_DB   -notmatch '^[a-zA-Z0-9_]+$') { Write-Host "ERROR: LOCAL_DB contains unsafe characters: [$LOCAL_DB]" -ForegroundColor Red; exit 1 }
+if ($LOCAL_USER -notmatch '^[a-zA-Z0-9_]+$') { Write-Host "ERROR: LOCAL_USER contains unsafe characters: [$LOCAL_USER]" -ForegroundColor Red; exit 1 }
+
+$sshBase = @(
+    "-i", $SSH_KEY,
+    "-o", "StrictHostKeyChecking=accept-new",
+    "-o", "UserKnownHostsFile=$KNOWN_HOSTS",
+    "$VPS_USER@$VPS_HOST"
+)
+
+# Track whether remote .pgpass_sync was written so finally can clean it up
+$remotePassWritten = $false
 
 # ── Main execution wrapped in try/finally so cleanup always runs ──────────────
 try {
@@ -51,30 +63,21 @@ try {
     Write-Host "=== Syncing local DB from production ===" -ForegroundColor Cyan
     Write-Host "Step 1: Dumping production database from $VPS_HOST..." -ForegroundColor Yellow
 
-    # Write VPS DB password to a remote .pgpass so it never appears in process listings.
+    # Write VPS DB password to a remote .pgpass_sync using printf to safely
+    # handle passwords containing single quotes or shell metacharacters.
     # Format: hostname:port:database:username:password
-    $pgpassEntry = "127.0.0.1:5432:real_estate_analysis:app_user:$VPS_DB_PASS"
-    $setupRemote = "echo '$pgpassEntry' > ~/.pgpass_sync && chmod 600 ~/.pgpass_sync"
-    $cleanupRemote = "rm -f ~/.pgpass_sync"
+    $setupRemote = "printf '%s\n' '${VPS_DB_PORT}:${VPS_DB_NAME}:${VPS_DB_USER}:${VPS_DB_PASS}' | sed 's|^|127.0.0.1:|' > ~/.pgpass_sync && chmod 600 ~/.pgpass_sync"
+    # Simpler: build the entry safely using printf with positional args
+    $setupRemote = "printf '%s:%s:%s:%s:%s\n' '127.0.0.1' '$VPS_DB_PORT' '$VPS_DB_NAME' '$VPS_DB_USER' '$VPS_DB_PASS' > ~/.pgpass_sync && chmod 600 ~/.pgpass_sync"
 
-    $sshBase = @(
-        "-i", $SSH_KEY,
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-o", "UserKnownHostsFile=$KNOWN_HOSTS",
-        "$VPS_USER@$VPS_HOST"
-    )
-
-    # Write remote .pgpass
     & ssh @sshBase $setupRemote
     if ($LASTEXITCODE -ne 0) { throw "ERROR: Failed to write remote .pgpass_sync." }
+    $remotePassWritten = $true
 
     # Dump using the remote .pgpass (no password in command line)
-    $dumpCmd = "PGPASSFILE=~/.pgpass_sync pg_dump -h 127.0.0.1 -U app_user -d real_estate_analysis --no-owner --no-acl --format=custom"
+    $dumpCmd = "PGPASSFILE=~/.pgpass_sync pg_dump -h 127.0.0.1 -U $VPS_DB_USER -d $VPS_DB_NAME --no-owner --no-acl --format=custom"
     $sshProcess = Start-Process -FilePath "ssh" -ArgumentList (@($sshBase) + @($dumpCmd)) `
         -NoNewWindow -PassThru -RedirectStandardOutput $DUMP_FILE -Wait
-
-    # Always clean up remote .pgpass regardless of dump success
-    & ssh @sshBase $cleanupRemote | Out-Null
 
     if ($sshProcess.ExitCode -ne 0) { throw "ERROR: pg_dump failed on VPS (exit code $($sshProcess.ExitCode))." }
 
@@ -86,8 +89,12 @@ try {
 
     $env:PGPASSWORD = $LOCAL_PASSWORD
 
-    # -h localhost pins libpq to the local instance regardless of PGHOST env var
-    & "$PG_BIN\psql" -h localhost -U $LOCAL_USER -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$LOCAL_DB' AND pid <> pg_backend_pid();" | Out-Null
+    # Terminate existing connections — check exit code before DROP to give a clear error
+    & "$PG_BIN\psql" -h localhost -U $LOCAL_USER -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$LOCAL_DB' AND pid <> pg_backend_pid();" 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "WARNING: Failed to terminate existing connections (exit code $LASTEXITCODE). Proceeding anyway..." -ForegroundColor Yellow
+    }
+
     & "$PG_BIN\psql" -h localhost -U $LOCAL_USER -d postgres -c "DROP DATABASE IF EXISTS `"$LOCAL_DB`";" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "ERROR: Failed to drop local database." }
 
@@ -116,7 +123,11 @@ try {
 finally {
     # Always clear credentials and remove dump artifact, even on early exit
     $env:PGPASSWORD = ""
-    if ($DUMP_FILE -and (Test-Path $DUMP_FILE)) {
+    if ($DUMP_FILE -and (Test-Path $DUMP_FILE -ErrorAction SilentlyContinue)) {
         Remove-Item $DUMP_FILE -Force -ErrorAction SilentlyContinue
+    }
+    # Clean up remote .pgpass_sync if it was written
+    if ($remotePassWritten) {
+        & ssh @sshBase "rm -f ~/.pgpass_sync" 2>&1 | Out-Null
     }
 }
