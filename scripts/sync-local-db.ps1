@@ -63,19 +63,29 @@ try {
     Write-Host "=== Syncing local DB from production ===" -ForegroundColor Cyan
     Write-Host "Step 1: Dumping production database from $VPS_HOST..." -ForegroundColor Yellow
 
-    # Write VPS DB password to a remote .pgpass_sync using printf to safely
-    # handle passwords containing single quotes or shell metacharacters.
-    # Format: hostname:port:database:username:password
-    $setupRemote = "printf '%s\n' '${VPS_DB_PORT}:${VPS_DB_NAME}:${VPS_DB_USER}:${VPS_DB_PASS}' | sed 's|^|127.0.0.1:|' > ~/.pgpass_sync && chmod 600 ~/.pgpass_sync"
-    # Simpler: build the entry safely using printf with positional args
-    $setupRemote = "printf '%s:%s:%s:%s:%s\n' '127.0.0.1' '$VPS_DB_PORT' '$VPS_DB_NAME' '$VPS_DB_USER' '$VPS_DB_PASS' > ~/.pgpass_sync && chmod 600 ~/.pgpass_sync"
+    # Write VPS DB password to a remote .pgpass_sync using printf with positional
+    # args to safely handle passwords/values containing single quotes or shell
+    # metacharacters. Shell-escape: wrap in single quotes, replace ' with '\''.
+    # pgpass-escape: escape backslashes first, then colons (pgpass field separator).
+    $ShellEscape  = { param($s) "'" + $s.Replace("'", "'\\''") + "'" }
+    $PgpassEscape = { param($s) $s.Replace('\', '\\').Replace(':', '\:') }
+
+    $ePort = & $ShellEscape $VPS_DB_PORT
+    $eName = & $ShellEscape $VPS_DB_NAME
+    $eUser = & $ShellEscape $VPS_DB_USER
+    $ePass = & $ShellEscape $VPS_DB_PASS
+    $pgName = & $PgpassEscape $VPS_DB_NAME
+    $pgUser = & $PgpassEscape $VPS_DB_USER
+    $pgPass = & $PgpassEscape $VPS_DB_PASS
+
+    $setupRemote = "printf '%s:%s:%s:%s:%s\n' '127.0.0.1' $ePort '$pgName' '$pgUser' '$pgPass' > ~/.pgpass_sync && chmod 600 ~/.pgpass_sync"
 
     & ssh @sshBase $setupRemote
     if ($LASTEXITCODE -ne 0) { throw "ERROR: Failed to write remote .pgpass_sync." }
     $remotePassWritten = $true
 
     # Dump using the remote .pgpass (no password in command line)
-    $dumpCmd = "PGPASSFILE=~/.pgpass_sync pg_dump -h 127.0.0.1 -U $VPS_DB_USER -d $VPS_DB_NAME --no-owner --no-acl --format=custom"
+    $dumpCmd = "PGPASSFILE=~/.pgpass_sync pg_dump -h 127.0.0.1 -U $eUser -d $eName --no-owner --no-acl --format=custom"
     $sshProcess = Start-Process -FilePath "ssh" -ArgumentList (@($sshBase) + @($dumpCmd)) `
         -NoNewWindow -PassThru -RedirectStandardOutput $DUMP_FILE -Wait
 
@@ -83,6 +93,12 @@ try {
 
     $dumpSize = (Get-Item $DUMP_FILE).Length / 1MB
     Write-Host "  Dump complete: $([math]::Round($dumpSize, 1)) MB" -ForegroundColor Green
+
+    # Validate dump integrity before touching the local DB — prevents data loss
+    # from a corrupted or partial dump overwriting good local data
+    Write-Host "  Validating dump integrity..." -ForegroundColor Yellow
+    & "$PG_BIN\pg_restore" -l $DUMP_FILE | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "ERROR: Dump file validation failed - $DUMP_FILE appears corrupt or incomplete. Local DB was not modified." }
 
     # ── Step 2: Drop and recreate local DB ────────────────────────────────────
     Write-Host "Step 2: Recreating local database '$LOCAL_DB'..." -ForegroundColor Yellow
