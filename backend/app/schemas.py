@@ -1014,7 +1014,7 @@ class DatasetStatusResponseSchema(Schema):
 # ---------------------------------------------------------------------------
 
 class ScenarioMetricsSchema(Schema): # type: ignore
-    """Schema for a single scenarios computed metrics."""
+    """Schema for a single scenario's computed metrics."""
     gross_potential_income_annual = fields.Decimal(allow_none=True)
     effective_gross_income_annual = fields.Decimal(allow_none=True)
     gross_expenses_annual = fields.Decimal(allow_none=True)
@@ -1502,7 +1502,7 @@ class PropertyContactLinkSchema(Schema):
 
 
 class PropertyContactResponseSchema(ContactResponseSchema):
-    """Schema for serializing a Contact as returned from a Propertys contact list.
+    """Schema for serializing a Contact as returned from a Property's contact list.
 
     Extends ContactResponseSchema with join-record fields:
     property_contact_role and is_primary from the PropertyContact record.
