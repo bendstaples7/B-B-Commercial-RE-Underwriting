@@ -1,8 +1,11 @@
 import json
+import os
 import sys
 
 try:
-    with open('prs.json', 'r') as f:
+    script_dir = os.path.dirname(__file__)
+    prs_path = os.path.join(script_dir, 'prs.json')
+    with open(prs_path, 'r') as f:
         pr_data = json.load(f)
 except FileNotFoundError:
     print("Error: prs.json not found.", file=sys.stderr)
@@ -32,9 +35,9 @@ for pr in pr_data:
         
         # Check for P22 overlaps (Quotes + Social Media nav, deathclock as homepage)
         overlaps = []
-        if any(term in pr_title or term in pr_body for term in ["quotes", "social media nav"]):
+        if all(term in pr_title or term in pr_body for term in ["quotes", "social media nav"]):
             overlaps.append("Quotes + Social Media nav")
-        if any(term in pr_title or term in pr_body for term in ["deathclock", "homepage"]):
+        if all(term in pr_title or term in pr_body for term in ["deathclock", "homepage"]):
             overlaps.append("deathclock as homepage")
 
         found_prs.append({
