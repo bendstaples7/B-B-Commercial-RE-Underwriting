@@ -388,6 +388,11 @@ class LeadScoringEngine:
             + location_sub * weights.location_desirability_weight
         )
 
+        # Apply pipeline stage bonus — leads farther along the pipeline are
+        # more valuable and should rank higher in outreach queues.
+        pipeline_stage_bonus = self._pipeline_stage_bonus(lead)
+        total += pipeline_stage_bonus
+
         # Apply signal adjustments when signals are provided
         if signals:
             for signal in signals:
@@ -608,8 +613,9 @@ class LeadScoringEngine:
                 .order_by(HubSpotSignal.extracted_at.asc())
                 .all()
             )
+            # Only update lead_score here — recommended_action is managed
+            # exclusively by ActionEngineService to keep enum values consistent.
             lead.lead_score = self.compute_score(lead, weights, signals=signals)
-            lead.recommended_action = self.compute_recommended_action(signals)
 
         if lead_ids is not None:
             # Process specific leads in batches
@@ -677,6 +683,40 @@ class LeadScoringEngine:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _pipeline_stage_bonus(lead: Lead) -> float:
+        """Return a score bonus based on how far along the pipeline the lead is.
+
+        Leads that have been contacted, are in active negotiation, or have had
+        an offer delivered are worth more attention and should rank higher.
+        Leads awaiting skip trace have insufficient contact info and are
+        slightly deprioritised relative to uncontacted leads.
+
+        Stage bonuses (additive on top of the base weighted score):
+          skip_trace / awaiting_skip_trace : -5  (contact info not yet acquired)
+          mailing_no_contact_made          :  0  (baseline — no adjustment)
+          mailing_contacted_no_interest    : +5  (at least spoke to them)
+          mailing_contacted_interested     : +15 (active interest expressed)
+          negotiating_remote               : +25 (in active negotiation)
+          in_person_appointment            : +30 (high-commitment stage)
+          offer_delivered                  : +35 (offer on the table)
+
+        All other statuses return 0 (suppressed/terminal leads are filtered
+        out before scoring runs, so they never hit this method in practice).
+        """
+        STAGE_BONUS: dict = {
+            'skip_trace': -5.0,
+            'awaiting_skip_trace': -5.0,
+            'mailing_no_contact_made': 0.0,
+            'mailing_contacted_no_interest': 5.0,
+            'mailing_contacted_interested': 15.0,
+            'negotiating_remote': 25.0,
+            'in_person_appointment': 30.0,
+            'offer_delivered': 35.0,
+        }
+        status = getattr(lead, 'lead_status', None)
+        return STAGE_BONUS.get(status, 0.0)
 
     @staticmethod
     def _years_since(d: date) -> Optional[float]:

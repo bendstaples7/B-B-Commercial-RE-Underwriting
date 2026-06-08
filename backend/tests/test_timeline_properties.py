@@ -18,7 +18,7 @@ from app.services.lead_timeline_service import LeadTimelineService
 # Helpers / mock factories
 # ---------------------------------------------------------------------------
 
-def make_mock_lead(lead_id=1, lead_status='active'):
+def make_mock_lead(lead_id=1, lead_status='mailing_no_contact_made'):
     """Create a minimal mock Lead object."""
     lead = MagicMock()
     lead.id = lead_id
@@ -485,3 +485,4 @@ def test_property_12_status_transition_recorded_in_timeline(
         # 5. The entry was committed to the DB (not absent after successful change)
         mock_db_session.add.assert_called_with(entry)
         mock_db_session.commit.assert_called_once()
+

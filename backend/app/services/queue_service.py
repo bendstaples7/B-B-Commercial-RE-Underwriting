@@ -8,6 +8,27 @@ from app.models import Lead, LeadTask, LeadTimelineEntry
 from app.models.task import Task
 from app.models.task_association import TaskAssociation
 
+# Statuses that represent active outreach pipeline (not terminal or suppressed)
+ACTIVE_PIPELINE_STATUSES = [
+    'skip_trace',
+    'awaiting_skip_trace',
+    'mailing_no_contact_made',
+    'mailing_contacted_no_interest',
+    'mailing_contacted_interested',
+    'negotiating_remote',
+    'in_person_appointment',
+    'offer_delivered',
+]
+
+# Statuses where outreach is in progress (has had contact)
+CONTACTED_STATUSES = [
+    'mailing_contacted_no_interest',
+    'mailing_contacted_interested',
+    'negotiating_remote',
+    'in_person_appointment',
+    'offer_delivered',
+]
+
 
 def _lead_to_queue_row(lead) -> dict:
     """Convert a Lead model instance to a queue row dict."""
@@ -136,16 +157,20 @@ class QueueService:
             self._base_query()
             .filter(
                 or_(
-                    # CRM-native path: requires active/follow_up status
+                    # CRM-native path: requires active pipeline status
                     and_(
-                        Lead.lead_status.in_(['active', 'follow_up']),
+                        Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
                         or_(
                             Lead.recommended_action == 'follow_up_now',
                             open_lead_task_due_today,
                         ),
                     ),
-                    # HubSpot task path: any lead with an overdue HubSpot task
-                    hubspot_task_due_today,
+                    # HubSpot task path: also scoped to active pipeline statuses
+                    # so terminal/suppressed leads don't leak into Today's Action.
+                    and_(
+                        Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
+                        hubspot_task_due_today,
+                    ),
                 )
             )
             .count()
@@ -216,7 +241,7 @@ class QueueService:
         return (
             self._base_query()
             .filter(
-                Lead.lead_status.in_(['active', 'new']),
+                Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
                 or_(
                     Lead.recommended_action.is_(None),
                     Lead.recommended_action.in_(['create_task', 'ready_for_outreach', 'add_contact_info']),
@@ -279,13 +304,17 @@ class QueueService:
         query = self._base_query().filter(
             or_(
                 and_(
-                    Lead.lead_status.in_(['active', 'follow_up']),
+                    Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
                     or_(
                         Lead.recommended_action == 'follow_up_now',
                         open_lead_task_due_today,
                     ),
                 ),
-                hubspot_task_due_today,
+                # HubSpot task path: also scoped to active pipeline statuses
+                and_(
+                    Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
+                    hubspot_task_due_today,
+                ),
             )
         )
         total = query.count()
@@ -375,7 +404,7 @@ class QueueService:
             )
         )
         query = self._base_query().filter(
-            Lead.lead_status.in_(['active', 'new']),
+            Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
             or_(
                 Lead.recommended_action.is_(None),
                 Lead.recommended_action.in_(['create_task', 'ready_for_outreach', 'add_contact_info']),
@@ -385,7 +414,7 @@ class QueueService:
             ~has_open_direct_task,
         )
         total = query.count()
-        status_order = case((Lead.lead_status == 'new', 0), else_=1)
+        status_order = case((Lead.lead_status == 'awaiting_skip_trace', 0), else_=1)
         sort_col = getattr(Lead, sort_by, Lead.lead_score)
         query = query.order_by(
             status_order.asc(),

@@ -62,7 +62,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('follow_up_now', 'Follow Up Now', 'Reach out now.')}
-          leadStatus="active"
+          leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={vi.fn()}
         />
@@ -75,7 +75,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('follow_up_now', 'Follow Up Now', 'Reach out now to keep the conversation warm.')}
-          leadStatus="active"
+          leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={vi.fn()}
         />
@@ -90,7 +90,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('follow_up_now')}
-          leadStatus="active"
+          leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={vi.fn()}
         />
@@ -105,7 +105,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('enrich_data')}
-          leadStatus="active"
+          leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={vi.fn()}
         />
@@ -120,7 +120,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('analyze_property')}
-          leadStatus="active"
+          leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={vi.fn()}
         />
@@ -135,7 +135,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('analyze_property')}
-          leadStatus="active"
+          leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={onAction}
         />
@@ -152,7 +152,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={null}
-          leadStatus="active"
+          leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={vi.fn()}
         />
@@ -165,7 +165,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={{ value: null, label: null, explanation: null, signals: {} }}
-          leadStatus="active"
+          leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={vi.fn()}
         />
@@ -182,7 +182,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('analyze_property')}
-          leadStatus="active"
+          leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={onAction}
         />
@@ -201,7 +201,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('analyze_property', 'Analyze Property', 'Run an analysis.')}
-          leadStatus="active"
+          leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={onAction}
         />
@@ -224,7 +224,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('analyze_property')}
-          leadStatus="active"
+          leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={onAction}
         />
@@ -245,7 +245,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('analyze_property')}
-          leadStatus="active"
+          leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={onAction}
         />
@@ -286,7 +286,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('follow_up_now')}
-          leadStatus="active"
+          leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={vi.fn()}
         />
@@ -359,7 +359,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('create_task', 'Create a Task', 'Create a task to define the next step.')}
-          leadStatus="active"
+          leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={vi.fn()}
           onCreateTask={vi.fn()}
@@ -374,7 +374,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('create_task')}
-          leadStatus="active"
+          leadStatus="mailing_no_contact_made"
           openTasks={[makeTask(1)]}
           onAction={vi.fn()}
           onCreateTask={vi.fn()}
@@ -388,7 +388,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('follow_up_now')}
-          leadStatus="active"
+          leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={vi.fn()}
           onCreateTask={vi.fn()}
@@ -404,7 +404,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('create_task')}
-          leadStatus="active"
+          leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={vi.fn()}
           onCreateTask={onCreateTask}
@@ -417,3 +417,5 @@ describe('RecommendedActionPanel', () => {
     })
   })
 })
+
+

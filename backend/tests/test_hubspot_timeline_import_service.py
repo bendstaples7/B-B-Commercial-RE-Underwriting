@@ -17,7 +17,7 @@ def _make_lead(app, street='HubSpot Test St'):
 
     lead = Lead(
         property_street=street,
-        lead_status='active',
+        lead_status='mailing_no_contact_made',
         has_phone=True,
         has_email=True,
         has_property_match=True,
@@ -235,3 +235,4 @@ def test_derive_is_warm_false_with_voicemail_calls_only(app):
         svc.import_activities_for_lead(lead.id, activities)
 
         assert svc.derive_is_warm(lead.id) is False
+

@@ -20,22 +20,32 @@ from hypothesis import strategies as st
 # ---------------------------------------------------------------------------
 
 def is_in_todays_action(lead_status, recommended_action, open_task_due_today):
-    """Today's Action: lead_status in (active, follow_up) AND
+    """Today's Action: lead_status in active pipeline statuses AND
     (recommended_action = 'follow_up_now' OR any open task has due_date <= today).
     """
+    _TODAYS_ACTION_STATUSES = {
+        'mailing_no_contact_made', 'mailing_contacted_no_interest',
+        'mailing_contacted_interested', 'negotiating_remote',
+        'in_person_appointment', 'offer_delivered',
+    }
     return (
-        lead_status in ('active', 'follow_up')
+        lead_status in _TODAYS_ACTION_STATUSES
         and (recommended_action == 'follow_up_now' or open_task_due_today)
     )
 
 
 def is_in_previously_warm(lead_status, has_hubspot_activity, recent_platform_contact):
-    """Previously Warm: last_hubspot_sync_at IS NOT NULL AND lead_status in (active, new)
-    AND no call_logged or note_added timeline entry in the past 90 days.
+    """Previously Warm: is_warm=True (checked via has_hubspot_activity proxy here)
+    and lead is in an active pipeline status.
     """
+    _PREVIOUSLY_WARM_STATUSES = {
+        'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+        'mailing_contacted_no_interest', 'mailing_contacted_interested',
+        'negotiating_remote', 'in_person_appointment', 'offer_delivered',
+    }
     return (
         has_hubspot_activity
-        and lead_status in ('active', 'new')
+        and lead_status in _PREVIOUSLY_WARM_STATUSES
         and not recent_platform_contact
     )
 
@@ -58,12 +68,18 @@ def is_in_follow_up_overdue(recommended_action, last_contact_date, open_task_ove
 
 
 def is_in_no_next_action(lead_status, recommended_action, has_open_tasks):
-    """No Next Action: lead_status in (active, new) AND
-    recommended_action in (null, 'create_task') AND no open tasks.
+    """No Next Action: lead_status in active pipeline statuses AND
+    recommended_action in (null, 'create_task', 'ready_for_outreach', 'add_contact_info')
+    AND no open tasks.
     """
+    _NNA_STATUSES = {
+        'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+        'mailing_contacted_no_interest', 'mailing_contacted_interested',
+        'negotiating_remote', 'in_person_appointment', 'offer_delivered',
+    }
     return (
-        lead_status in ('active', 'new')
-        and recommended_action in (None, 'create_task')
+        lead_status in _NNA_STATUSES
+        and recommended_action in (None, 'create_task', 'ready_for_outreach', 'add_contact_info')
         and not has_open_tasks
     )
 
@@ -123,8 +139,10 @@ def is_in_any_active_work_queue(
 # ---------------------------------------------------------------------------
 
 all_lead_statuses = st.sampled_from([
-    'new', 'active', 'follow_up', 'nurture',
-    'under_contract', 'closed', 'suppressed', 'do_not_contact',
+    'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+    'mailing_contacted_no_interest', 'mailing_contacted_interested',
+    'negotiating_remote', 'in_person_appointment', 'offer_delivered',
+    'deprioritize', 'deal_won', 'deal_lost', 'suppressed', 'do_not_contact',
 ])
 
 all_recommended_actions = st.one_of(
@@ -181,7 +199,7 @@ def test_property_9_suppressed_nurture_dnc_queue_exclusion(
     """
     Property 9: Suppressed/Nurture/DNC Queue Exclusion
 
-    Part A: Leads with lead_status='nurture' do NOT appear in:
+    Part A: Leads with lead_status='deprioritize' do NOT appear in:
       - Previously Warm Queue
       - Follow-Up Overdue Queue
       - No Next Action Queue
@@ -195,34 +213,21 @@ def test_property_9_suppressed_nurture_dnc_queue_exclusion(
     # Feature: actionable-lead-command-center, Property 9: Suppressed/Nurture/DNC Queue Exclusion
     today = date.today()
 
-    # --- Part A: nurture leads excluded from 3 specific queues ---
+    # --- Part A: deprioritize leads excluded from 3 specific queues ---
     nurture_in_previously_warm = is_in_previously_warm(
-        'nurture', has_hubspot_activity, recent_platform_contact
+        'deprioritize', has_hubspot_activity, recent_platform_contact
     )
     assert not nurture_in_previously_warm, (
-        f"Nurture lead appeared in Previously Warm queue: "
+        f"Deprioritize lead appeared in Previously Warm queue: "
         f"has_hubspot_activity={has_hubspot_activity}, "
         f"recent_platform_contact={recent_platform_contact}"
     )
 
-    nurture_in_follow_up_overdue = is_in_follow_up_overdue(
-        recommended_action, last_contact_date, open_task_overdue, today
-    )
-    # Note: Follow-Up Overdue has no lead_status filter in the SQL — it fires
-    # on task overdue or follow_up_now + stale contact regardless of status.
-    # The requirement says nurture leads are excluded. We verify the predicate
-    # correctly excludes nurture by checking the Previously Warm and No Next
-    # Action predicates (which have explicit lead_status filters).
-    # For Follow-Up Overdue, the exclusion is enforced at the service level
-    # by the lead_status not being in the filter set — but the current
-    # QueueService implementation does NOT filter by lead_status for
-    # follow_up_overdue. We test what the spec says the predicates should do.
-
     nurture_in_no_next_action = is_in_no_next_action(
-        'nurture', recommended_action, has_open_tasks
+        'deprioritize', recommended_action, has_open_tasks
     )
     assert not nurture_in_no_next_action, (
-        f"Nurture lead appeared in No Next Action queue: "
+        f"Deprioritize lead appeared in No Next Action queue: "
         f"recommended_action={recommended_action}, has_open_tasks={has_open_tasks}"
     )
 
@@ -334,9 +339,14 @@ def test_property_10_queue_membership_pure_function_of_lead_state(
 
     # --- Structural invariants ---
 
-    # Today's Action requires active or follow_up status
+    # Today's Action requires specific active pipeline statuses
+    _TODAYS_ACTION_STATUSES = {
+        'mailing_no_contact_made', 'mailing_contacted_no_interest',
+        'mailing_contacted_interested', 'negotiating_remote',
+        'in_person_appointment', 'offer_delivered',
+    }
     if in_todays_action:
-        assert lead_status in ('active', 'follow_up'), (
+        assert lead_status in _TODAYS_ACTION_STATUSES, (
             f"Today's Action contains lead with status='{lead_status}'"
         )
         assert recommended_action == 'follow_up_now' or open_task_due_today, (
@@ -344,9 +354,14 @@ def test_property_10_queue_membership_pure_function_of_lead_state(
             f"recommended_action={recommended_action}, open_task_due_today={open_task_due_today}"
         )
 
-    # Previously Warm requires active or new status AND hubspot activity
+    # Previously Warm requires active pipeline status AND hubspot activity
+    _PREVIOUSLY_WARM_STATUSES = {
+        'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+        'mailing_contacted_no_interest', 'mailing_contacted_interested',
+        'negotiating_remote', 'in_person_appointment', 'offer_delivered',
+    }
     if in_previously_warm:
-        assert lead_status in ('active', 'new'), (
+        assert lead_status in _PREVIOUSLY_WARM_STATUSES, (
             f"Previously Warm contains lead with status='{lead_status}'"
         )
         assert has_hubspot_activity, (
@@ -356,12 +371,17 @@ def test_property_10_queue_membership_pure_function_of_lead_state(
             f"Previously Warm contains lead with recent platform contact"
         )
 
-    # No Next Action requires active or new status
+    # No Next Action requires active pipeline status
+    _NNA_STATUSES = {
+        'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+        'mailing_contacted_no_interest', 'mailing_contacted_interested',
+        'negotiating_remote', 'in_person_appointment', 'offer_delivered',
+    }
     if in_no_next_action:
-        assert lead_status in ('active', 'new'), (
+        assert lead_status in _NNA_STATUSES, (
             f"No Next Action contains lead with status='{lead_status}'"
         )
-        assert recommended_action in (None, 'create_task'), (
+        assert recommended_action in (None, 'create_task', 'ready_for_outreach', 'add_contact_info'), (
             f"No Next Action contains lead with recommended_action='{recommended_action}'"
         )
         assert not has_open_tasks, (
@@ -419,16 +439,16 @@ def test_property_10_queue_membership_pure_function_of_lead_state(
             f"Suppressed/DNC lead in No Next Action: status='{lead_status}'"
         )
 
-    # --- Nurture exclusion from 3 specific queues ---
-    if lead_status == 'nurture':
+    # --- Nurture (deprioritize) exclusion from 3 specific queues ---
+    if lead_status == 'deprioritize':
         assert not in_previously_warm, (
-            f"Nurture lead in Previously Warm queue"
+            "Deprioritize lead in Previously Warm queue"
         )
         assert not in_no_next_action, (
-            f"Nurture lead in No Next Action queue"
+            "Deprioritize lead in No Next Action queue"
         )
         assert not in_todays_action, (
-            f"Nurture lead in Today's Action queue"
+            "Deprioritize lead in Today's Action queue"
         )
 
 
@@ -546,7 +566,12 @@ def test_property_4_warm_signal_sets_is_warm(signals_batch, initial_is_warm):
 # ---------------------------------------------------------------------------
 
 # All valid lead statuses and recommended_action values for Property 1
-_NNA_LEAD_STATUSES = ['new', 'active', 'follow_up', 'nurture', 'under_contract', 'closed', 'suppressed', 'do_not_contact']
+_NNA_LEAD_STATUSES = [
+    'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+    'mailing_contacted_no_interest', 'mailing_contacted_interested',
+    'negotiating_remote', 'in_person_appointment', 'offer_delivered',
+    'deprioritize', 'deal_won', 'deal_lost', 'suppressed', 'do_not_contact',
+]
 _NNA_RECOMMENDED_ACTIONS = [
     None,
     'enrich_data',
@@ -573,9 +598,15 @@ _nna_status_st = st.sampled_from(_NNA_LEAD_STATUSES)
 _nna_action_st = st.sampled_from(_NNA_RECOMMENDED_ACTIONS)
 _task_variant_st = st.sampled_from(_TASK_VARIANTS)
 
-# Expected No Next Action include criteria (mirrors the updated QueueService)
+# Expected No Next Action include criteria (mirrors the updated QueueService).
+# Active-pipeline statuses that can appear in No Next Action when there's
+# no specific recommended action and no open tasks.
 _NNA_ALLOWED_ACTIONS = {None, 'create_task', 'ready_for_outreach', 'add_contact_info'}
-_NNA_ALLOWED_STATUSES = {'new', 'active'}
+_NNA_ALLOWED_STATUSES = {
+    'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+    'mailing_contacted_no_interest', 'mailing_contacted_interested',
+    'negotiating_remote', 'in_person_appointment', 'offer_delivered',
+}
 _OPEN_TASK_VARIANTS = {'open_lead', 'open_assoc', 'open_direct'}
 
 
@@ -729,8 +760,10 @@ from app.services.queue_service import QueueService
 
 # Strategies for lead field values
 _lead_statuses = st.sampled_from([
-    'new', 'active', 'follow_up', 'nurture',
-    'under_contract', 'closed', 'suppressed', 'do_not_contact',
+    'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+    'mailing_contacted_no_interest', 'mailing_contacted_interested',
+    'negotiating_remote', 'in_person_appointment', 'offer_delivered',
+    'deprioritize', 'deal_won', 'deal_lost', 'suppressed', 'do_not_contact',
 ])
 
 _recommended_actions = st.one_of(
@@ -887,7 +920,7 @@ def test_property_3_previously_warm_equals_is_warm(lead_dicts):
             for i, ld in enumerate(lead_dicts):
                 lead = Lead(
                     property_street=f'{i} Property 3 Test St',
-                    lead_status='new',
+                    lead_status='awaiting_skip_trace',
                     is_warm=ld['is_warm'],
                     lead_score=50.0,
                     has_phone=False,
@@ -1278,3 +1311,5 @@ def test_property_10_owner_scoping_uniform(owner_a_leads, owner_b_leads):
         finally:
             db.session.remove()
             db.drop_all()
+
+

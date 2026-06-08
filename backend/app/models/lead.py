@@ -109,12 +109,23 @@ class Property(db.Model):
     # HubSpot CRM — suppression flag
     suppression_flag = db.Column(db.Boolean, nullable=False, default=False)
 
-    # Lead lifecycle status
+    # Lead lifecycle status — mirrors the HubSpot pipeline stages plus platform-specific values
     lead_status = db.Column(db.Enum(
-        'new', 'active', 'follow_up', 'nurture',
-        'under_contract', 'closed', 'suppressed', 'do_not_contact',
+        'skip_trace',
+        'awaiting_skip_trace',
+        'mailing_no_contact_made',
+        'mailing_contacted_no_interest',
+        'mailing_contacted_interested',
+        'negotiating_remote',
+        'in_person_appointment',
+        'offer_delivered',
+        'deprioritize',
+        'deal_won',
+        'deal_lost',
+        'suppressed',
+        'do_not_contact',
         name='lead_status_enum'
-    ), nullable=False, default='new', server_default='new', index=True)
+    ), nullable=False, default='awaiting_skip_trace', server_default='awaiting_skip_trace', index=True)
 
     # Action Engine output
     recommended_action = db.Column(db.Enum(

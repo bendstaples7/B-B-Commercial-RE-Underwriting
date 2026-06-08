@@ -397,11 +397,22 @@ def run_hubspot_matching(run_id: int = None) -> None:
         }
 
         deal_errors = 0
+        # Fetch stage label map once for the whole loop — avoids N API calls
+        _stage_label_map: dict = {}
+        try:
+            from app.models.hubspot_config import HubSpotConfig as _HubSpotConfig
+            from app.services.hubspot_client_service import HubSpotClientService as _HCS
+            _config = _HubSpotConfig.query.order_by(_HubSpotConfig.id.desc()).first()
+            if _config:
+                _stage_label_map = _HCS(_config).fetch_pipeline_stage_labels("deals")
+        except Exception as _exc:
+            logger.debug("run_hubspot_matching: could not fetch stage labels: %s", _exc)
+
         for deal in HubSpotDeal.query.all():
             if deal.hubspot_id in matched_deals:
                 continue
             try:
-                matcher.match_deal(deal)
+                matcher.match_deal(deal, stage_label_map=_stage_label_map)
                 db.session.commit()
             except Exception as exc:
                 logger.warning(
@@ -445,6 +456,199 @@ def run_hubspot_matching(run_id: int = None) -> None:
             "run_hubspot_matching: complete — deal_errors=%d contact_errors=%d company_errors=%d",
             deal_errors, contact_errors, company_errors,
         )
+
+
+# ---------------------------------------------------------------------------
+# Task 5b: enrich_leads_from_hubspot  (backfill + ongoing sync)
+# ---------------------------------------------------------------------------
+
+def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
+    """Enrich leads from all confirmed HubSpot deal and contact matches.
+
+    This is a source-agnostic enrichment pass: for every lead that has a
+    confirmed deal or contact match (regardless of how the lead was originally
+    imported — Driving for Dollars, Google Sheets, DuPage GIS, etc.), we pull
+    live contact and deal data from the stored HubSpot payloads and write any
+    missing fields onto the lead.
+
+    Safe to run repeatedly — existing non-null lead fields are never overwritten
+    (except ``hubspot_deal_stage``, which is always synced as a CRM signal).
+
+    Returns a summary dict with counts.
+
+    Requirements: multi-source lead enrichment
+    """
+    from dotenv import load_dotenv
+    load_dotenv()
+    from app import create_app
+
+    app = create_app()
+    with app.app_context():
+        from app import db
+        from app.models import Lead, HubSpotDeal, HubSpotContact, HubSpotMatch
+        from app.services.hubspot_matcher_service import HubSpotMatcherService
+        from app.services.action_engine_service import ActionEngineService
+
+        matcher = HubSpotMatcherService()
+
+        # Fetch portal stage label map once — used to translate stage IDs to
+        # display labels (e.g. 'closedlost' → 'Negotiating Remote')
+        stage_label_map = {}
+        try:
+            from app.models.hubspot_config import HubSpotConfig
+            from app.services.hubspot_client_service import HubSpotClientService
+            _config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
+            if _config:
+                _client = HubSpotClientService(_config)
+                stage_label_map = _client.fetch_pipeline_stage_labels("deals")
+                logger.info(
+                    "run_enrich_leads_from_hubspot: loaded %d stage labels",
+                    len(stage_label_map),
+                )
+        except Exception as exc:
+            logger.warning(
+                "run_enrich_leads_from_hubspot: could not fetch stage labels: %s", exc
+            )
+
+        deal_enriched = 0
+        deal_errors = 0
+        contact_enriched = 0
+        contact_errors = 0
+        action_recomputed = 0
+
+        # --- Enrich from confirmed deal matches ----------------------------
+        confirmed_deal_matches = (
+            HubSpotMatch.query
+            .filter_by(hubspot_record_type='deal', status='confirmed',
+                       internal_record_type='lead')
+            .filter(HubSpotMatch.internal_record_id.isnot(None))
+            .all()
+        )
+        for match in confirmed_deal_matches:
+            try:
+                lead = Lead.query.get(match.internal_record_id)
+                deal = HubSpotDeal.query.filter_by(
+                    hubspot_id=match.hubspot_id
+                ).first()
+                if lead is None or deal is None:
+                    continue
+                enriched = matcher.enrich_lead_from_deal(lead, deal, stage_label_map)
+                if enriched:
+                    db.session.commit()
+                    deal_enriched += 1
+                    logger.debug(
+                        "run_enrich_leads_from_hubspot: lead_id=%d deal enriched fields=%s",
+                        lead.id, enriched,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "run_enrich_leads_from_hubspot: deal match lead_id=%s error: %s",
+                    match.internal_record_id, exc,
+                )
+                deal_errors += 1
+                db.session.rollback()
+
+        # --- Enrich from confirmed contact matches -------------------------
+        confirmed_contact_matches = (
+            HubSpotMatch.query
+            .filter_by(hubspot_record_type='contact', status='confirmed',
+                       internal_record_type='lead')
+            .filter(HubSpotMatch.internal_record_id.isnot(None))
+            .all()
+        )
+        for match in confirmed_contact_matches:
+            try:
+                lead = Lead.query.get(match.internal_record_id)
+                contact = HubSpotContact.query.filter_by(
+                    hubspot_id=match.hubspot_id
+                ).first()
+                if lead is None or contact is None:
+                    continue
+                enriched = matcher.enrich_lead_from_contact(lead, contact)
+                if enriched:
+                    db.session.commit()
+                    contact_enriched += 1
+                    logger.debug(
+                        "run_enrich_leads_from_hubspot: lead_id=%d contact enriched fields=%s",
+                        lead.id, enriched,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "run_enrich_leads_from_hubspot: contact match lead_id=%s error: %s",
+                    match.internal_record_id, exc,
+                )
+                contact_errors += 1
+                db.session.rollback()
+
+        # --- Also match contacts via deal associations ----------------------
+        # For each confirmed deal match, check if the HubSpot deal has
+        # associated contact IDs in its raw payload and try to enrich the
+        # lead from those contacts.
+        for match in confirmed_deal_matches:
+            try:
+                lead = Lead.query.get(match.internal_record_id)
+                deal = HubSpotDeal.query.filter_by(
+                    hubspot_id=match.hubspot_id
+                ).first()
+                if lead is None or deal is None:
+                    continue
+                # HubSpot deal payload may carry associations.contacts list
+                assoc = (deal.raw_payload or {}).get("associations", {})
+                contact_ids = (
+                    assoc.get("contacts", {}).get("results", [])
+                    if isinstance(assoc.get("contacts"), dict)
+                    else []
+                )
+                for assoc_entry in contact_ids:
+                    cid = str(assoc_entry.get("id", ""))
+                    if not cid:
+                        continue
+                    assoc_contact = HubSpotContact.query.filter_by(
+                        hubspot_id=cid
+                    ).first()
+                    if assoc_contact is None:
+                        continue
+                    enriched = matcher.enrich_lead_from_contact(lead, assoc_contact)
+                    if enriched:
+                        db.session.commit()
+                        contact_enriched += 1
+                        logger.debug(
+                            "run_enrich_leads_from_hubspot: lead_id=%d associated contact %s enriched fields=%s",
+                            lead.id, cid, enriched,
+                        )
+            except Exception as exc:
+                logger.warning(
+                    "run_enrich_leads_from_hubspot: deal assoc enrich lead_id=%s error: %s",
+                    match.internal_record_id, exc,
+                )
+                db.session.rollback()
+
+        # --- Recompute recommended_action for all touched leads ------------
+        touched_lead_ids = {
+            m.internal_record_id
+            for m in confirmed_deal_matches + confirmed_contact_matches
+            if m.internal_record_id
+        }
+        for lead_id in touched_lead_ids:
+            try:
+                ActionEngineService.recompute_and_persist(lead_id)
+                action_recomputed += 1
+            except Exception as exc:
+                logger.warning(
+                    "run_enrich_leads_from_hubspot: recompute failed for lead_id=%d: %s",
+                    lead_id, exc,
+                )
+                db.session.rollback()
+
+        summary = {
+            'deal_enriched': deal_enriched,
+            'deal_errors': deal_errors,
+            'contact_enriched': contact_enriched,
+            'contact_errors': contact_errors,
+            'action_recomputed': action_recomputed,
+        }
+        logger.info("run_enrich_leads_from_hubspot: complete — %s", summary)
+        return summary
 
 
 # ---------------------------------------------------------------------------

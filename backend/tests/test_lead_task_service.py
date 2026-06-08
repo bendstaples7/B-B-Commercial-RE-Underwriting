@@ -24,7 +24,7 @@ def _make_lead(app, **kwargs):
 
     defaults = dict(
         property_street=None,
-        lead_status='active',
+        lead_status='mailing_no_contact_made',
         has_phone=True,
         has_email=True,
         has_property_match=True,
@@ -196,3 +196,4 @@ def test_list_open_orders_by_due_date_asc_nulls_last(app):
         # near future first, far future second, null last
         assert titles.index('Near future') < titles.index('Far future')
         assert titles.index('Far future') < titles.index('No due date')
+

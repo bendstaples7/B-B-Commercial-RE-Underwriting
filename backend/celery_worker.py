@@ -838,6 +838,18 @@ def run_hubspot_matching(run_id: int = None) -> None:
     _run(run_id)
 
 
+@celery.task(name='hubspot.enrich_leads')
+def enrich_leads_from_hubspot(run_id: int = None) -> dict:
+    """Enrich all leads that have confirmed HubSpot deal/contact matches.
+
+    Source-agnostic: works for leads from any import source (Google Sheets,
+    Driving for Dollars, DuPage GIS, etc.) as long as they have a confirmed
+    HubSpot match.  Safe to run repeatedly — only fills null fields.
+    """
+    from app.tasks.hubspot_tasks import run_enrich_leads_from_hubspot as _run
+    return _run(run_id)
+
+
 @celery.task(name='hubspot.convert_activities')
 def convert_hubspot_activities(run_id: int = None) -> None:
     """Convert all unconverted HubSpot engagements to Interactions/Tasks."""
@@ -1031,6 +1043,7 @@ def run_post_import_pipeline(run_ids: list = None) -> None:
 
     from app.tasks.hubspot_tasks import (
         run_hubspot_matching,
+        run_enrich_leads_from_hubspot,
         run_convert_hubspot_activities,
         run_extract_hubspot_signals,
         run_rescore_leads_after_import,
@@ -1038,6 +1051,9 @@ def run_post_import_pipeline(run_ids: list = None) -> None:
 
     run_hubspot_matching()
     logger.info("Post-import pipeline: matching complete")
+
+    run_enrich_leads_from_hubspot()
+    logger.info("Post-import pipeline: lead enrichment from HubSpot complete")
 
     run_convert_hubspot_activities()
     logger.info("Post-import pipeline: activity conversion complete")
@@ -1126,6 +1142,7 @@ REQUIRED_TASKS = {
     'hubspot.import_companies',
     'hubspot.import_engagements',
     'hubspot.run_matching',
+    'hubspot.enrich_leads',
     'hubspot.convert_activities',
     'hubspot.extract_signals',
     'hubspot.rescore_leads',
