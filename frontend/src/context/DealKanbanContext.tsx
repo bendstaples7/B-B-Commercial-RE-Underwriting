@@ -193,8 +193,16 @@ export function LeadKanbanProvider({ children }: { children: React.ReactNode }) 
     (leadId: number, fromColId: string, toColId: string) => {
       // Optimistic update
       dispatch({ type: 'MOVE_LEAD', leadId, fromColId, toColId })
-      // Fire mutation
-      moveMutation.mutate({ leadId, targetAction: toColId })
+      // Fire mutation with rollback on error
+      moveMutation.mutate(
+        { leadId, targetAction: toColId },
+        {
+          onError: () => {
+            // Revert optimistic update: move lead back to original column
+            dispatch({ type: 'MOVE_LEAD', leadId, fromColId: toColId, toColId: fromColId })
+          },
+        },
+      )
     },
     [moveMutation],
   )
