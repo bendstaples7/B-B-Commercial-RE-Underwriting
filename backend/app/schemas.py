@@ -31,18 +31,6 @@ class PipelineStageConfigSchema(RequestSchema):
     config_data = fields.Dict(required=True)
 
 
-
-
-    """Schema for starting a new analysis.
-
-    user_id is read from the X-User-Id header via g.user_id, not the body.
-    Unknown fields (including user_id sent by older clients) are silently dropped.
-    """
-    address = fields.Str(required=True, validate=validate.Length(min=5, max=500))
-    latitude = fields.Float(load_default=None, allow_none=True)
-    longitude = fields.Float(load_default=None, allow_none=True)
-
-
 class PropertyFactsSchema(Schema):
     """Schema for property facts data.
 
