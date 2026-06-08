@@ -147,7 +147,7 @@ export function DealCard({ deal, onClick }: DealCardProps) {
 
         {/* Bottom row: score + action badge */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 0.5 }}>
-          <Tooltip title={`Lead score: ${score}`}>
+          <Tooltip title={score != null ? `Lead score: ${score.toFixed(1)}` : 'Lead score: —'}>
             <Chip
               label={score != null ? score.toFixed(1) : '—'}
               size="small"
