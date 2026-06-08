@@ -518,15 +518,10 @@ def analyze_property(lead_id):
 
     Returns the new session details.
     """
-    lead = db.session.get(Lead, lead_id)
-    if not lead:
-        return jsonify({
-            'error': 'Property not found',
-            'message': f'Property {lead_id} does not exist',
-        }), 404
-
-    # Auth + ownership check for non-admin users.
-    # Auth validation comes first so missing credentials return 400 (not 404).
+    # Auth check first -- before lead lookup -- to prevent info leak.
+    # Missing credentials return 400, not 404, so unauthenticated callers
+    # cannot distinguish valid lead IDs.
+    current_user_id = None
     if not _current_user_is_admin():
         from flask import g
         current_user_id = getattr(g, 'user_id', None)
@@ -535,6 +530,16 @@ def analyze_property(lead_id):
                 'error': 'Validation error',
                 'message': 'user_id is required (send X-User-Id header)',
             }), 400
+
+    lead = db.session.get(Lead, lead_id)
+    if not lead:
+        return jsonify({
+            'error': 'Property not found',
+            'message': f'Property {lead_id} does not exist',
+        }), 404
+
+    # Ownership check for non-admin users (now that lead is confirmed to exist).
+    if not _current_user_is_admin():
         if lead.owner_user_id is None or lead.owner_user_id != current_user_id:
             return jsonify({
                 'error': 'Property not found',
