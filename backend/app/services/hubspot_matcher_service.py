@@ -229,25 +229,24 @@ class HubSpotMatcherService:
         # We extract the phone number and strip annotation text.
         additional_raw = (props.get("additional_phone_numbers") or "").strip()
         if additional_raw:
-            import re as _re
             for line in additional_raw.splitlines():
                 line = line.strip()
                 if not line:
                     continue
                 # Strip leading index like "1) " or "2. "
-                line = _re.sub(r'^\d+[).]\s*', '', line).strip()
+                line = re.sub(r'^\d+[).]\s*', '', line).strip()
                 # Extract phone number (digits, spaces, dashes, parens, plus)
                 # and strip trailing annotations like " CONFIRMED", " (disconnected)"
                 # Match up to 15 chars of phone pattern, stop before annotation words
-                phone_match = _re.match(r'^(\+?[\d\s\(\)\-\.]{7,20}?)(?:\s+[A-Za-z(]|$)', line)
+                phone_match = re.match(r'^(\+?[\d\s\(\)\-\.]{7,20}?)(?:\s+[A-Za-z(]|$)', line)
                 if not phone_match:
                     # Fallback: just extract digit groups
-                    phone_match = _re.match(r'^(\+?[\d\(\)\-\.\s]+)', line)
+                    phone_match = re.match(r'^(\+?[\d\(\)\-\.\s]+)', line)
                 if phone_match:
                     phone_val = phone_match.group(1).strip()
                     if phone_val and phone_val not in hs_phones:
                         # Only add if it has at least 7 digits
-                        digits = _re.sub(r'\D', '', phone_val)
+                        digits = re.sub(r'\D', '', phone_val)
                         if len(digits) >= 7:
                             hs_phones.append(phone_val)
 
@@ -280,8 +279,7 @@ class HubSpotMatcherService:
         # Parse hs_additional_emails — comma or newline separated
         additional_emails_raw = (props.get("hs_additional_emails") or "").strip()
         if additional_emails_raw:
-            import re as _re
-            for part in _re.split(r'[\n,;]+', additional_emails_raw):
+            for part in re.split(r'[\n,;]+', additional_emails_raw):
                 part = part.strip().lower()
                 if part and '@' in part and part not in hs_emails:
                     hs_emails.append(part)

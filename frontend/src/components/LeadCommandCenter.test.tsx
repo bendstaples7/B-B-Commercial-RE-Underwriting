@@ -403,7 +403,7 @@ describe('LeadCommandCenter', () => {
       })
     })
 
-    it('does NOT show DNC badge in header when lead_status is active', async () => {
+    it('does NOT show DNC badge in header when lead_status is mailing_no_contact_made', async () => {
       renderCommandCenter()
       await waitFor(() => {
         expect(screen.getByTestId('lead-header')).toBeInTheDocument()
@@ -412,7 +412,7 @@ describe('LeadCommandCenter', () => {
       expect(header.querySelector('[data-testid="dnc-badge"]')).not.toBeInTheDocument()
     })
 
-    it('does NOT show DNC badge in header when lead_status is follow_up', async () => {
+    it('does NOT show DNC badge in header when lead_status is mailing_contacted_interested', async () => {
       vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
         makePayload({ lead_status: 'mailing_contacted_interested' })
       )

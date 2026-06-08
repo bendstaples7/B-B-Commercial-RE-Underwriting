@@ -397,11 +397,22 @@ def run_hubspot_matching(run_id: int = None) -> None:
         }
 
         deal_errors = 0
+        # Fetch stage label map once for the whole loop — avoids N API calls
+        _stage_label_map: dict = {}
+        try:
+            from app.models.hubspot_config import HubSpotConfig as _HubSpotConfig
+            from app.services.hubspot_client_service import HubSpotClientService as _HCS
+            _config = _HubSpotConfig.query.order_by(_HubSpotConfig.id.desc()).first()
+            if _config:
+                _stage_label_map = _HCS(_config).fetch_pipeline_stage_labels("deals")
+        except Exception as _exc:
+            logger.debug("run_hubspot_matching: could not fetch stage labels: %s", _exc)
+
         for deal in HubSpotDeal.query.all():
             if deal.hubspot_id in matched_deals:
                 continue
             try:
-                matcher.match_deal(deal)
+                matcher.match_deal(deal, stage_label_map=_stage_label_map)
                 db.session.commit()
             except Exception as exc:
                 logger.warning(

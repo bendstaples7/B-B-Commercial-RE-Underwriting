@@ -1664,7 +1664,7 @@ LEAD_STATUS_LABELS = {
     'do_not_contact': 'Do Not Contact',
 }
 
-VALID_CALL_OUTCOMES = ['answered', 'voicemail', 'no_answer', 'busy', 'wrong_number']
+VALID_CALL_OUTCOMES = ['answered', 'voicemail', 'no_answer', 'busy', 'wrong_number', 'not_interested']
 
 
 class LeadStatusUpdateSchema(RequestSchema):
