@@ -49,21 +49,9 @@ import { LeadStatusChip, LEAD_STATUS_LABELS } from './LeadStatusChip'
 // Constants
 // ---------------------------------------------------------------------------
 
-const ALL_LEAD_STATUSES: LeadStatus[] = [
-  'skip_trace',
-  'awaiting_skip_trace',
-  'mailing_no_contact_made',
-  'mailing_contacted_no_interest',
-  'mailing_contacted_interested',
-  'negotiating_remote',
-  'in_person_appointment',
-  'offer_delivered',
-  'deprioritize',
-  'deal_won',
-  'deal_lost',
-  'suppressed',
-  'do_not_contact',
-]
+// Derive status options from LEAD_STATUS_LABELS so there's a single source of truth.
+// Casting through unknown is needed because Object.keys always returns string[].
+const ALL_LEAD_STATUSES = Object.keys(LEAD_STATUS_LABELS) as LeadStatus[]
 
 // ---------------------------------------------------------------------------
 // Sidebar helpers

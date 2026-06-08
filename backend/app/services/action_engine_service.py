@@ -137,7 +137,7 @@ class ActionEngineService:
                 JOIN task_associations ta ON ta.task_id = t.id
                 WHERE ta.target_type = 'lead' AND ta.target_id = :lid
                   AND t.status IN ('open', 'overdue')
-                  AND t.due_date <= :now
+                  AND (t.due_date IS NULL OR t.due_date <= :now)
                   AND t.source = 'hubspot_import'
                 LIMIT 1
             """), {'lid': lead.id, 'now': _dt.utcnow()}).fetchone()
@@ -146,13 +146,18 @@ class ActionEngineService:
                     SELECT 1 FROM tasks
                     WHERE lead_id = :lid
                       AND status IN ('open', 'overdue')
-                      AND due_date <= :now
+                      AND (due_date IS NULL OR due_date <= :now)
                       AND source = 'hubspot_import'
                     LIMIT 1
                 """), {'lid': lead.id, 'now': _dt.utcnow()}).fetchone()
             has_overdue_hs_task = row is not None
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "action_engine: overdue HubSpot task query failed for lead_id=%s: %s",
+                lead.id, exc,
+            )
+            # Leave has_overdue_hs_task=False — don't raise so the rest of the
+            # engine can still produce a meaningful action for this lead.
         if lead.follow_up_overdue or has_overdue_hs_task:
             return 'follow_up_now'
         # Priority 6 — warm lead

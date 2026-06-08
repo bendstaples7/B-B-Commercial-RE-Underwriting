@@ -18,8 +18,19 @@ from app.services.hubspot_timeline_import_service import HubSpotTimelineImportSe
 # ---------------------------------------------------------------------------
 
 ALL_LEAD_STATUSES = [
-    'new', 'active', 'follow_up', 'nurture',
-    'under_contract', 'closed', 'suppressed', 'do_not_contact',
+    'skip_trace',
+    'awaiting_skip_trace',
+    'mailing_no_contact_made',
+    'mailing_contacted_no_interest',
+    'mailing_contacted_interested',
+    'negotiating_remote',
+    'in_person_appointment',
+    'offer_delivered',
+    'deprioritize',
+    'deal_won',
+    'deal_lost',
+    'suppressed',
+    'do_not_contact',
 ]
 
 

@@ -37,14 +37,15 @@ import time as _time
 
 _stage_label_cache: dict = {}
 _stage_label_cache_ts: float = 0.0
-_STAGE_CACHE_TTL = 300  # seconds
+_STAGE_CACHE_TTL = 300  # seconds — successful refresh
+_STAGE_CACHE_FAILURE_TTL = 30  # seconds — back-off after a failed refresh
 
 
 def _get_stage_label(stage_id: str) -> str:
     """Translate a HubSpot deal stage ID to its portal display label.
 
     Falls back to the raw stage_id if the API call fails or the ID is unknown.
-    Cache is refreshed at most every 5 minutes.
+    Cache is refreshed at most every 5 minutes on success, 30 seconds on failure.
     """
     global _stage_label_cache, _stage_label_cache_ts
     now = _time.monotonic()
@@ -56,8 +57,14 @@ def _get_stage_label(stage_id: str) -> str:
             if _config:
                 _stage_label_cache = _HCS(_config).fetch_pipeline_stage_labels("deals")
                 _stage_label_cache_ts = now
+            else:
+                # No config — defer next attempt by failure TTL
+                logger.debug("_get_stage_label: no HubSpot config found")
+                _stage_label_cache_ts = now - (_STAGE_CACHE_TTL - _STAGE_CACHE_FAILURE_TTL)
         except Exception as _exc:
             logger.debug("_get_stage_label: could not refresh stage map: %s", _exc)
+            # Advance timestamp by failure TTL to avoid hammering the API on every request
+            _stage_label_cache_ts = now - (_STAGE_CACHE_TTL - _STAGE_CACHE_FAILURE_TTL)
     return _stage_label_cache.get(stage_id, stage_id)
 
 # ---------------------------------------------------------------------------
@@ -135,6 +142,10 @@ def _get_winning_rule_signals(lead) -> dict:
     # Priority 2 — suppressed / deprioritize / terminal (RA is None for these)
     if lead.lead_status in ('suppressed', 'deprioritize', 'deal_won', 'deal_lost'):
         return {'lead_status': lead.lead_status}
+
+    # Priority 2.5 — skip trace statuses always need contact info
+    if lead.lead_status in ('skip_trace', 'awaiting_skip_trace'):
+        return {'lead_status': lead.lead_status, 'requires_skip_trace': True}
 
     # Priority 3 — no contact info
     if not lead.has_phone and not lead.has_email:
@@ -368,11 +379,14 @@ def get_command_center(lead_id: int):
             # (refreshed every 5 minutes to pick up portal changes without
             # hitting the HubSpot API on every request).
             live_deal_stage = _get_stage_label(raw_stage_id)
-            # Sync translated label back to the lead column so it stays current
-            if lead.hubspot_deal_stage != live_deal_stage:
-                lead.hubspot_deal_stage = live_deal_stage
-                _db.session.add(lead)
-                _db.session.commit()
+            # Only persist when we got a genuine translation (not the fallback
+            # where the cache returned the raw ID unchanged). Persisting the raw
+            # ID would overwrite a previously stored human-readable label.
+            if live_deal_stage and live_deal_stage != raw_stage_id:
+                if lead.hubspot_deal_stage != live_deal_stage:
+                    lead.hubspot_deal_stage = live_deal_stage
+                    _db.session.add(lead)
+                    _db.session.commit()
 
     # ------------------------------------------------------------------
     # HubSpot interactions (calls, emails, notes from HubSpot import)

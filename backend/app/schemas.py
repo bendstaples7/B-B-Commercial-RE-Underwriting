@@ -1766,6 +1766,7 @@ class CommandCenterPayloadSchema(Schema):
     property_street = fields.String(dump_only=True, allow_none=True)
     property_city = fields.String(dump_only=True, allow_none=True)
     property_state = fields.String(dump_only=True, allow_none=True)
+    property_zip = fields.String(dump_only=True, allow_none=True)
     lead_score = fields.Float(dump_only=True)
     lead_status = fields.String(dump_only=True)
     has_property_match = fields.Boolean(dump_only=True)

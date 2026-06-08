@@ -165,8 +165,12 @@ class QueueService:
                             open_lead_task_due_today,
                         ),
                     ),
-                    # HubSpot task path: any lead with an overdue HubSpot task
-                    hubspot_task_due_today,
+                    # HubSpot task path: also scoped to active pipeline statuses
+                    # so terminal/suppressed leads don't leak into Today's Action.
+                    and_(
+                        Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
+                        hubspot_task_due_today,
+                    ),
                 )
             )
             .count()
@@ -306,7 +310,11 @@ class QueueService:
                         open_lead_task_due_today,
                     ),
                 ),
-                hubspot_task_due_today,
+                # HubSpot task path: also scoped to active pipeline statuses
+                and_(
+                    Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
+                    hubspot_task_due_today,
+                ),
             )
         )
         total = query.count()

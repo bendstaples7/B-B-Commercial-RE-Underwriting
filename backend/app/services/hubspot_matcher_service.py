@@ -340,7 +340,7 @@ class HubSpotMatcherService:
     # Deal matching  (HubSpot Deal → internal Lead / property)
     # ------------------------------------------------------------------
 
-    def match_deal(self, deal: HubSpotDeal) -> HubSpotMatch:
+    def match_deal(self, deal: HubSpotDeal, stage_label_map: dict = None) -> HubSpotMatch:
         """Match a HubSpot deal to an internal Lead record.
 
         Priority:
@@ -349,9 +349,25 @@ class HubSpotMatcherService:
         3. No match → UNMATCHED; create a placeholder Lead with
            ``source='hubspot_import'`` and ``needs_review`` status.
 
+        *stage_label_map* is an optional dict of HubSpot internal stage ID →
+        display label used to translate ``dealstage`` IDs when enriching leads.
+        If omitted, the method fetches it lazily from the HubSpot config.
+
         Returns the created/updated :class:`HubSpotMatch` record.
         """
         props = (deal.raw_payload or {}).get("properties", {})
+
+        # Resolve stage label map lazily if not provided by the caller
+        if stage_label_map is None:
+            stage_label_map = {}
+            try:
+                from app.models.hubspot_config import HubSpotConfig as _HubSpotConfig
+                from app.services.hubspot_client_service import HubSpotClientService as _HCS
+                _config = _HubSpotConfig.query.order_by(_HubSpotConfig.id.desc()).first()
+                if _config:
+                    stage_label_map = _HCS(_config).fetch_pipeline_stage_labels("deals")
+            except Exception as _exc:
+                logger.debug("match_deal: could not fetch stage labels: %s", _exc)
 
         # --- 1. PIN match ---------------------------------------------------
         pin = (
@@ -375,7 +391,7 @@ class HubSpotMatcherService:
                     confidence="HIGH",
                     matching_criteria="pin_match",
                 )
-                enriched = self.enrich_lead_from_deal(lead, deal)
+                enriched = self.enrich_lead_from_deal(lead, deal, stage_label_map)
                 if enriched:
                     logger.debug("Deal %s enriched Lead %s fields: %s", deal.hubspot_id, lead.id, enriched)
                 return match
@@ -415,7 +431,7 @@ class HubSpotMatcherService:
                     )
                     # Enrich even on MEDIUM confidence — the stage signal is
                     # always useful regardless of match confidence level.
-                    enriched = self.enrich_lead_from_deal(lead, deal)
+                    enriched = self.enrich_lead_from_deal(lead, deal, stage_label_map)
                     if enriched:
                         logger.debug("Deal %s enriched Lead %s fields: %s", deal.hubspot_id, lead.id, enriched)
                     return match

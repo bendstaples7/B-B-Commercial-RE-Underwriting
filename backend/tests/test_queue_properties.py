@@ -442,13 +442,13 @@ def test_property_10_queue_membership_pure_function_of_lead_state(
     # --- Nurture (deprioritize) exclusion from 3 specific queues ---
     if lead_status == 'deprioritize':
         assert not in_previously_warm, (
-            f"Deprioritize lead in Previously Warm queue"
+            "Deprioritize lead in Previously Warm queue"
         )
         assert not in_no_next_action, (
-            f"Deprioritize lead in No Next Action queue"
+            "Deprioritize lead in No Next Action queue"
         )
         assert not in_todays_action, (
-            f"Deprioritize lead in Today's Action queue"
+            "Deprioritize lead in Today's Action queue"
         )
 
 

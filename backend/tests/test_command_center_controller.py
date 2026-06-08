@@ -482,7 +482,7 @@ class TestParkLead:
             )
             assert response.status_code == 200
 
-    def test_park_sets_nurture_status(self, client, app):
+    def test_park_sets_deprioritize_status(self, client, app):
         """POST /api/leads/<id>/park sets lead_status to deprioritize."""
         with app.app_context():
             lead = _make_lead(app, '32 Park St', lead_status='mailing_no_contact_made')

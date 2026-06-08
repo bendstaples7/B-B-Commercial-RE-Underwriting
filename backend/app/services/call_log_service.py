@@ -65,8 +65,12 @@ class CallLogService:
         elif outcome == 'wrong_number':
             lead.has_phone = False
 
-        # Auto-transition early pipeline statuses → mailing_contacted_no_interest on call
-        if lead.lead_status in ('awaiting_skip_trace', 'mailing_no_contact_made', 'skip_trace'):
+        # Auto-transition early pipeline statuses → mailing_contacted_no_interest
+        # only when the call outcome is a definitive "not interested" signal.
+        # Generic answered/voicemail outcomes do not warrant this transition.
+        _CONTACTED_NO_INTEREST_OUTCOMES = {'not_interested', 'declined', 'refused', 'no_interest'}
+        if (outcome in _CONTACTED_NO_INTEREST_OUTCOMES
+                and lead.lead_status in ('awaiting_skip_trace', 'mailing_no_contact_made', 'skip_trace')):
             lead.lead_status = 'mailing_contacted_no_interest'
 
         db.session.add(lead)
