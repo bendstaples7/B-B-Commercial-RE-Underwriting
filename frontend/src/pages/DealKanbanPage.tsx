@@ -10,6 +10,7 @@ import {
   DragEndEvent,
   DragOverlay,
   DragStartEvent,
+  KeyboardSensor,
   PointerSensor,
   useSensor,
   useSensors,
@@ -36,6 +37,7 @@ import ViewKanbanIcon from '@mui/icons-material/ViewKanban'
 import { LeadKanbanProvider, useLeadKanban } from '@/context/DealKanbanContext'
 import { KanbanColumn } from '@/components/KanbanColumn'
 import { DealCard } from '@/components/DealCard'
+import { sortableKeyboardCoordinates } from '@dnd-kit/sortable'
 import type { LeadKanbanCard, KanbanFilters, KanbanSortField } from '@/types'
 import { useState, useMemo, useCallback } from 'react';
 
@@ -154,6 +156,9 @@ function KanbanBoardInner() {
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 5 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
     })
   )
 
