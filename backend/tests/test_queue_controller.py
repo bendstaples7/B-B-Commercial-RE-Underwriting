@@ -22,7 +22,7 @@ _AUTH_HEADERS = {'X-User-Id': 'test-user'}
 def _make_lead(app, street, **kwargs):
     """Create a Lead with sensible defaults."""
     defaults = dict(
-        lead_status='active',
+        lead_status='mailing_no_contact_made',
         has_phone=True,
         has_email=True,
         has_property_match=True,
@@ -136,7 +136,7 @@ class TestTodaysActionQueue:
         """Lead with recommended_action='follow_up_now' appears in Today's Action."""
         with app.app_context():
             lead = _make_lead(app, '2 Todays St',
-                              lead_status='active',
+                              lead_status='mailing_no_contact_made',
                               recommended_action='follow_up_now')
             response = client.get('/api/queues/todays-action', headers=_AUTH_HEADERS)
             data = json.loads(response.data)
@@ -146,7 +146,7 @@ class TestTodaysActionQueue:
     def test_lead_with_task_due_today_appears(self, client, app):
         """Lead with open task due today appears in Today's Action."""
         with app.app_context():
-            lead = _make_lead(app, '3 Todays St', lead_status='active')
+            lead = _make_lead(app, '3 Todays St', lead_status='mailing_no_contact_made')
             _make_task(app, lead.id, due_date=date.today())
             response = client.get('/api/queues/todays-action', headers=_AUTH_HEADERS)
             data = json.loads(response.data)
@@ -202,7 +202,7 @@ class TestPreviouslyWarmQueue:
     def test_lead_with_hubspot_sync_appears(self, client, app):
         """Lead with is_warm=True appears in Previously Warm."""
         with app.app_context():
-            lead = _make_lead(app, '5 Warm St', lead_status='active', is_warm=True)
+            lead = _make_lead(app, '5 Warm St', lead_status='mailing_no_contact_made', is_warm=True)
             response = client.get('/api/queues/previously-warm', headers=_AUTH_HEADERS)
             data = json.loads(response.data)
             ids = [r['id'] for r in data['rows']]
@@ -290,7 +290,7 @@ class TestNoNextActionQueue:
         """Lead with recommended_action='create_task' and no open tasks appears."""
         with app.app_context():
             lead = _make_lead(app, '7 NoAction St',
-                              lead_status='active',
+                              lead_status='mailing_no_contact_made',
                               recommended_action='create_task')
             response = client.get('/api/queues/no-next-action', headers=_AUTH_HEADERS)
             data = json.loads(response.data)
@@ -382,7 +382,7 @@ class TestDoNotContactQueue:
     def test_active_lead_excluded(self, client, app):
         """Active lead does not appear in DNC queue."""
         with app.app_context():
-            lead = _make_lead(app, '10 Active St', lead_status='active')
+            lead = _make_lead(app, '10 Active St', lead_status='mailing_no_contact_made')
             response = client.get('/api/queues/do-not-contact', headers=_AUTH_HEADERS)
             data = json.loads(response.data)
             ids = [r['id'] for r in data['rows']]
@@ -438,6 +438,7 @@ class TestMissingPropertyMatchQueue:
             data = json.loads(response.data)
             ids = [r['id'] for r in data['rows']]
             assert lead.id not in ids
+
 
 
 

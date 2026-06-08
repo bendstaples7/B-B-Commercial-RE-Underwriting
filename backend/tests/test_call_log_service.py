@@ -17,7 +17,7 @@ _AE_PATCH = 'app.services.action_engine_service.ActionEngineService.recompute_an
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_lead(app, street, lead_status='active', has_phone=True, unanswered_call_count=0):
+def _make_lead(app, street, lead_status='mailing_no_contact_made', has_phone=True, unanswered_call_count=0):
     from app import db
     from app.models import Lead
 
@@ -175,3 +175,4 @@ def test_log_call_creates_timeline_entry(app):
 
         assert entry.event_type == 'call_logged'
         assert entry.event_metadata['outcome'] == 'answered'
+

@@ -39,7 +39,7 @@ def _make_lead(app, street: str, **kwargs) -> Lead:
     """Create and persist a minimal Lead with the given overrides."""
     defaults = dict(
         property_street=street,
-        lead_status='new',
+        lead_status='awaiting_skip_trace',
         lead_score=50.0,
         has_phone=False,
         has_email=False,
@@ -136,7 +136,7 @@ class TestTodaysActionQueue:
         """A lead with recommended_action=follow_up_now and active status appears."""
         with app.app_context():
             lead = _make_lead(app, '2 Todays Action St',
-                              lead_status='active',
+                              lead_status='mailing_no_contact_made',
                               recommended_action='follow_up_now')
 
             svc = QueueService()
@@ -147,7 +147,7 @@ class TestTodaysActionQueue:
     def test_lead_with_new_status_and_no_tasks_does_not_appear(self, app, client):
         """A plain new lead with no tasks does not appear in Today's Action."""
         with app.app_context():
-            lead = _make_lead(app, '3 Todays Action St', lead_status='new')
+            lead = _make_lead(app, '3 Todays Action St', lead_status='awaiting_skip_trace')
 
             svc = QueueService()
             rows, _ = svc.get_todays_action()
@@ -282,7 +282,7 @@ class TestNoNextActionQueue:
     def test_new_lead_with_no_tasks_appears(self, app, client):
         """A new lead with no tasks and no recommended_action appears."""
         with app.app_context():
-            lead = _make_lead(app, '1 No Action St', lead_status='new')
+            lead = _make_lead(app, '1 No Action St', lead_status='awaiting_skip_trace')
 
             svc = QueueService()
             rows, total = svc.get_no_next_action()
@@ -293,7 +293,7 @@ class TestNoNextActionQueue:
     def test_lead_with_open_hubspot_task_does_not_appear(self, app, client):
         """A lead with an open HubSpot task does not appear in No Next Action."""
         with app.app_context():
-            lead = _make_lead(app, '2 No Action St', lead_status='new')
+            lead = _make_lead(app, '2 No Action St', lead_status='awaiting_skip_trace')
             _make_hubspot_task(lead.id, status='open',
                                due_date=datetime.now(timezone.utc) + timedelta(days=7))
 
@@ -305,7 +305,7 @@ class TestNoNextActionQueue:
     def test_lead_with_open_lead_task_does_not_appear(self, app, client):
         """A lead with an open CRM lead_task does not appear in No Next Action."""
         with app.app_context():
-            lead = _make_lead(app, '3 No Action St', lead_status='new')
+            lead = _make_lead(app, '3 No Action St', lead_status='awaiting_skip_trace')
             _make_lead_task(lead.id, status='open',
                             due_date=date.today() + timedelta(days=3))
 
@@ -373,7 +373,7 @@ class TestDoNotContactQueue:
     def test_active_lead_does_not_appear(self, app, client):
         """An active lead does not appear in Do Not Contact."""
         with app.app_context():
-            lead = _make_lead(app, '2 DNC St', lead_status='active')
+            lead = _make_lead(app, '2 DNC St', lead_status='mailing_no_contact_made')
 
             svc = QueueService()
             rows, _ = svc.get_do_not_contact()
@@ -463,25 +463,30 @@ class TestActionEngineIntegration:
         """A lead with phone but no property match gets recommended_action=resolve_match."""
         with app.app_context():
             lead = _make_lead(app, '2 Action Engine St',
+                              lead_status='mailing_no_contact_made',
                               has_phone=True, has_email=False,
                               has_property_match=False)
             action = ActionEngineService.compute_recommended_action(lead)
             assert action == 'resolve_match'
 
     def test_lead_with_match_no_analysis_gets_analyze_property(self, app):
-        """A lead with property match but no analysis gets recommended_action=analyze_property."""
+        """A lead with property match but no analysis falls through to create_task
+        (analyze_property was removed — property analysis is optional)."""
         with app.app_context():
             lead = _make_lead(app, '3 Action Engine St',
+                              lead_status='mailing_no_contact_made',
                               has_phone=True,
                               has_property_match=True,
                               analysis_complete=False)
             action = ActionEngineService.compute_recommended_action(lead)
-            assert action == 'analyze_property'
+            # analyze_property is no longer a mandatory step — falls through to create_task
+            assert action == 'create_task'
 
     def test_warm_lead_gets_follow_up_now(self, app):
         """A warm lead with complete data gets recommended_action=follow_up_now."""
         with app.app_context():
             lead = _make_lead(app, '4 Action Engine St',
+                              lead_status='mailing_no_contact_made',
                               has_phone=True,
                               has_property_match=True,
                               analysis_complete=True,
@@ -537,18 +542,18 @@ class TestDuPageLeadQueueVisibility:
 
     def test_no_next_action_both_sources_appear(self, app, client):
         """Both HubSpot-sourced (no source_type) and DuPage-sourced leads
-        with lead_status='new', recommended_action=None, and no tasks appear
+        with lead_status='awaiting_skip_trace', recommended_action=None, and no tasks appear
         in get_no_next_action()."""
         with app.app_context():
             hubspot_lead = _make_lead(
                 app, '10 DuPage NNA HubSpot St',
-                lead_status='new',
+                lead_status='awaiting_skip_trace',
                 recommended_action=None,
                 source_type=None,
             )
             dupage_lead = _make_lead(
                 app, '10 DuPage NNA DuPage St',
-                lead_status='new',
+                lead_status='awaiting_skip_trace',
                 recommended_action=None,
                 source_type='foreclosure',
             )
@@ -657,3 +662,4 @@ class TestDuPageLeadQueueVisibility:
                 f"DuPage lead {dupage_lead.id} missing from Missing Property Match. ids={ids}"
             )
             assert total >= 2
+

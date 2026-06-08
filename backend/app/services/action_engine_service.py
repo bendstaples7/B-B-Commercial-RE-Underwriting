@@ -62,8 +62,29 @@ RECOMMENDED_ACTION_METADATA = {
 
 
 def _count_open_tasks(lead_id: int) -> int:
-    """Return the number of open LeadTask records for the given lead."""
-    return LeadTask.query.filter_by(lead_id=lead_id, status='open').count()
+    """Return the number of open tasks for the given lead.
+
+    Counts both native LeadTask records and HubSpot-imported tasks linked
+    via task_associations, so the action engine sees the full picture.
+    """
+    from sqlalchemy import text as _text
+    native = LeadTask.query.filter_by(lead_id=lead_id, status='open').count()
+    hs = db.session.execute(_text("""
+        SELECT COUNT(*) FROM tasks t
+        JOIN task_associations ta ON ta.task_id = t.id
+        WHERE ta.target_type = 'lead' AND ta.target_id = :lid
+          AND t.status IN ('open', 'overdue')
+          AND t.source = 'hubspot_import'
+        UNION ALL
+        SELECT COUNT(*) FROM tasks
+        WHERE lead_id = :lid
+          AND status IN ('open', 'overdue')
+          AND source = 'hubspot_import'
+    """), {'lid': lead_id}).fetchall()
+    # Sum both union rows and deduplicate by taking max (avoids double-counting)
+    hs_counts = [r[0] for r in hs]
+    hs_total = max(hs_counts) if hs_counts else 0
+    return native + hs_total
 
 
 class ActionEngineService:
@@ -79,9 +100,14 @@ class ActionEngineService:
         # Priority 1
         if lead.lead_status == 'do_not_contact':
             return None
-        # Priority 2
-        if lead.lead_status in ('suppressed', 'nurture'):
+        # Priority 2 — statuses that suppress all outreach actions
+        if lead.lead_status in ('suppressed', 'deprioritize', 'deal_won', 'deal_lost'):
             return None
+        # Priority 2.5 — skip trace statuses always need contact info first, regardless of
+        # what has_phone/has_email says.  Being in skip_trace/awaiting_skip_trace means the
+        # existing contact info is insufficient and a skip trace is required before outreach.
+        if lead.lead_status in ('skip_trace', 'awaiting_skip_trace'):
+            return 'add_contact_info'
         # Priority 3 — resolve has_phone/has_email/has_property_match from view, fall back to stored columns
         try:
             flags = LeadCRMFlagsView.query.filter_by(lead_id=lead.id).first()
@@ -98,30 +124,50 @@ class ActionEngineService:
         if not has_property_match and lead.property_street:
             return 'resolve_match'
         if not has_property_match and not lead.property_street:
-            return 'enrich_data'  # Req 22.1: no address → enrich_data, not resolve_match
-        # Priority 5
-        if has_property_match and not lead.analysis_complete:
-            return 'analyze_property'
-        # Priority 6
-        if lead.follow_up_overdue:
+            return 'enrich_data'  # no address at all — need more data before outreach
+        # Priority 5 — follow-up overdue (native task OR overdue HubSpot task)
+        # Note: skip_trace/awaiting_skip_trace leads are intercepted at Priority 2.5
+        # and never reach here, so no guard is needed.
+        has_overdue_hs_task = False
+        try:
+            from sqlalchemy import text as _hs_text
+            from datetime import datetime as _dt
+            row = db.session.execute(_hs_text("""
+                SELECT 1 FROM tasks t
+                JOIN task_associations ta ON ta.task_id = t.id
+                WHERE ta.target_type = 'lead' AND ta.target_id = :lid
+                  AND t.status IN ('open', 'overdue')
+                  AND t.due_date <= :now
+                  AND t.source = 'hubspot_import'
+                LIMIT 1
+            """), {'lid': lead.id, 'now': _dt.utcnow()}).fetchone()
+            if not row:
+                row = db.session.execute(_hs_text("""
+                    SELECT 1 FROM tasks
+                    WHERE lead_id = :lid
+                      AND status IN ('open', 'overdue')
+                      AND due_date <= :now
+                      AND source = 'hubspot_import'
+                    LIMIT 1
+                """), {'lid': lead.id, 'now': _dt.utcnow()}).fetchone()
+            has_overdue_hs_task = row is not None
+        except Exception:
+            pass
+        if lead.follow_up_overdue or has_overdue_hs_task:
             return 'follow_up_now'
-        # Priority 7
+        # Priority 6 — warm lead
         if lead.is_warm:
             return 'follow_up_now'
-        # Priority 8
-        if lead.analysis_complete and lead.lead_score >= 70:
+        # Priority 7 — high score lead with no open tasks → ready for outreach
+        if lead.lead_score >= 70:
             open_tasks = _count_open_tasks(lead.id)
             if open_tasks == 0:
                 return 'ready_for_outreach'
-        # Priority 9
-        if lead.data_completeness_score < 50:
-            return 'enrich_data'
-        # Priority 10
-        if lead.lead_status in ('active', 'new'):
-            open_tasks = _count_open_tasks(lead.id)
-            if open_tasks == 0:
-                return 'create_task'
-        # Priority 11 (default)
+        # Priority 8 — has contact info, property matched, no tasks → create a task
+        open_tasks = _count_open_tasks(lead.id)
+        if open_tasks == 0:
+            return 'create_task'
+        # Priority 9 (default)
         return 'nurture'
 
     @staticmethod

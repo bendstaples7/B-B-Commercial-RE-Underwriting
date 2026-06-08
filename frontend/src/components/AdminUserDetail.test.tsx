@@ -51,7 +51,7 @@ const mockLeadsResponse = {
       property_street: '123 Main St',
       property_city: 'Chicago',
       property_state: 'IL',
-      lead_status: 'new',
+      lead_status: 'awaiting_skip_trace',
       lead_score: 75,
       created_at: '2024-02-01T08:00:00Z',
     },
@@ -62,7 +62,7 @@ const mockLeadsResponse = {
       property_street: '456 Oak Ave',
       property_city: 'Evanston',
       property_state: 'IL',
-      lead_status: 'active',
+      lead_status: 'mailing_no_contact_made',
       lead_score: 88,
       created_at: '2024-02-10T09:00:00Z',
     },
@@ -246,3 +246,4 @@ describe('AdminUserDetail', () => {
     })
   })
 })
+

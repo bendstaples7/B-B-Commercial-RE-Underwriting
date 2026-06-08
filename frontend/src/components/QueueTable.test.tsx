@@ -35,7 +35,7 @@ function makeRow(id: number, overrides: Partial<QueueRow> = {}): QueueRow {
     property_city: 'Springfield',
     property_state: 'IL',
     lead_score: 50 + id,
-    lead_status: 'active',
+    lead_status: 'mailing_no_contact_made',
     recommended_action: null,
     has_property_match: true,
     last_contact_date: null,
@@ -624,7 +624,7 @@ describe('QueueTable', () => {
     it('renders lead status', () => {
       render(
         <QueueTable
-          rows={[makeRow(1, { lead_status: 'follow_up' })]}
+          rows={[makeRow(1, { lead_status: 'mailing_contacted_interested' })]}
           total={1}
         />
       )
@@ -822,3 +822,4 @@ describe('QueueTable', () => {
     })
   })
 })
+

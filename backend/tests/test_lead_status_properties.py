@@ -23,7 +23,7 @@ ALL_LEAD_STATUSES = [
 ]
 
 
-def make_mock_lead(lead_id=1, lead_status='active'):
+def make_mock_lead(lead_id=1, lead_status='mailing_no_contact_made'):
     """Create a minimal mock Lead object."""
     lead = MagicMock()
     lead.id = lead_id
@@ -419,3 +419,4 @@ def test_property_18_park_reactivation_date_boundary_via_controller(offset_days)
             f"(offset={offset_days}, date={reactivation_date}), "
             f"but got error: '{error_response}'."
         )
+

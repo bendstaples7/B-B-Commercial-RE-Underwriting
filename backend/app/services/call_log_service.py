@@ -65,9 +65,9 @@ class CallLogService:
         elif outcome == 'wrong_number':
             lead.has_phone = False
 
-        # Auto-transition new → active
-        if lead.lead_status == 'new':
-            lead.lead_status = 'active'
+        # Auto-transition early pipeline statuses → mailing_contacted_no_interest on call
+        if lead.lead_status in ('awaiting_skip_trace', 'mailing_no_contact_made', 'skip_trace'):
+            lead.lead_status = 'mailing_contacted_no_interest'
 
         db.session.add(lead)
 
@@ -137,9 +137,9 @@ class CallLogService:
         if lead.lead_status == 'do_not_contact':
             raise DoNotContactViolationError(lead_id)
 
-        # Auto-transition new → active
-        if lead.lead_status == 'new':
-            lead.lead_status = 'active'
+        # Auto-transition early pipeline statuses → mailing_contacted_no_interest on note
+        if lead.lead_status in ('awaiting_skip_trace', 'mailing_no_contact_made', 'skip_trace'):
+            lead.lead_status = 'mailing_contacted_no_interest'
             db.session.add(lead)
 
         entry = LeadTimelineEntry(

@@ -16,14 +16,14 @@ from app.services.action_engine_service import ActionEngineService, _count_open_
 # ---------------------------------------------------------------------------
 
 lead_status_strategy = st.sampled_from(['new', 'active', 'follow_up', 'nurture', 'suppressed', 'do_not_contact'])
-active_lead_status_strategy = st.sampled_from(['new', 'active', 'follow_up'])
+active_lead_status_strategy = st.sampled_from(['new', 'mailing_no_contact_made', 'mailing_contacted_interested'])
 bool_strategy = st.booleans()
 score_strategy = st.floats(min_value=0, max_value=100, allow_nan=False)
 completeness_strategy = st.floats(min_value=0, max_value=100, allow_nan=False)
 
 
 def make_mock_lead(
-    lead_status='active',
+    lead_status='mailing_no_contact_made',
     has_phone=True,
     has_email=True,
     has_property_match=True,
@@ -196,7 +196,7 @@ def test_property_3_action_engine_priority_ordering(
     # Priority 3 (no contact info) should fire before Priority 4 (no property match)
     # when both conditions are true
     lead = make_mock_lead(
-        lead_status='active',
+        lead_status='mailing_no_contact_made',
         has_phone=False,
         has_email=False,
         has_property_match=False,
@@ -324,3 +324,5 @@ def test_property_16_action_engine_timeline_idempotency(
         f"Idempotency violated: first call returned '{result_1}', "
         f"second call returned '{result_2}' with identical inputs"
     )
+
+

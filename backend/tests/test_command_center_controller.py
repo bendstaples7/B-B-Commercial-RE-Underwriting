@@ -21,7 +21,7 @@ from app.services.hubspot_timeline_import_service import HubSpotTimelineImportSe
 def _make_lead(app, street, **kwargs):
     """Create a Lead with sensible defaults."""
     defaults = dict(
-        lead_status='active',
+        lead_status='mailing_no_contact_made',
         has_phone=True,
         has_email=True,
         has_property_match=True,
@@ -132,10 +132,10 @@ class TestUpdateStatus:
     def test_status_change_returns_200(self, client, app):
         """PATCH /api/leads/<id>/status returns 200 on valid status change."""
         with app.app_context():
-            lead = _make_lead(app, '6 Status St', lead_status='active')
+            lead = _make_lead(app, '6 Status St', lead_status='mailing_no_contact_made')
             response = client.patch(
                 f'/api/leads/{lead.id}/status',
-                data=json.dumps({'status': 'nurture'}),
+                data=json.dumps({'status': 'deprioritize'}),
                 content_type='application/json',
             )
             assert response.status_code == 200
@@ -143,36 +143,36 @@ class TestUpdateStatus:
     def test_status_change_persists(self, client, app):
         """PATCH /api/leads/<id>/status persists the new status to the database."""
         with app.app_context():
-            lead = _make_lead(app, '7 Status St', lead_status='active')
+            lead = _make_lead(app, '7 Status St', lead_status='mailing_no_contact_made')
             client.patch(
                 f'/api/leads/{lead.id}/status',
-                data=json.dumps({'status': 'nurture'}),
+                data=json.dumps({'status': 'deprioritize'}),
                 content_type='application/json',
             )
             db.session.refresh(lead)
-            assert lead.lead_status == 'nurture'
+            assert lead.lead_status == 'deprioritize'
 
     def test_status_change_appends_timeline_entry(self, client, app):
         """PATCH /api/leads/<id>/status appends a status_changed timeline entry."""
         with app.app_context():
-            lead = _make_lead(app, '8 Status St', lead_status='active')
+            lead = _make_lead(app, '8 Status St', lead_status='mailing_no_contact_made')
             client.patch(
                 f'/api/leads/{lead.id}/status',
-                data=json.dumps({'status': 'follow_up'}),
+                data=json.dumps({'status': 'negotiating_remote'}),
                 content_type='application/json',
             )
             entry = LeadTimelineEntry.query.filter_by(
                 lead_id=lead.id, event_type='status_changed'
             ).first()
             assert entry is not None
-            assert entry.event_metadata['previous_status'] == 'active'
-            assert entry.event_metadata['new_status'] == 'follow_up'
+            assert entry.event_metadata['previous_status'] == 'mailing_no_contact_made'
+            assert entry.event_metadata['new_status'] == 'negotiating_remote'
 
     def test_dnc_status_nulls_recommended_action(self, client, app):
         """Setting status to do_not_contact sets recommended_action to null."""
         with app.app_context():
             lead = _make_lead(app, '9 Status St',
-                              lead_status='active',
+                              lead_status='mailing_no_contact_made',
                               recommended_action='follow_up_now')
             client.patch(
                 f'/api/leads/{lead.id}/status',
@@ -185,7 +185,7 @@ class TestUpdateStatus:
     def test_dnc_status_cancels_open_tasks(self, client, app):
         """Setting status to do_not_contact cancels all open tasks."""
         with app.app_context():
-            lead = _make_lead(app, '10 Status St', lead_status='active')
+            lead = _make_lead(app, '10 Status St', lead_status='mailing_no_contact_made')
             task = _make_task(app, lead.id)
             client.patch(
                 f'/api/leads/{lead.id}/status',
@@ -200,7 +200,7 @@ class TestUpdateStatus:
         with app.app_context():
             response = client.patch(
                 '/api/leads/99999/status',
-                data=json.dumps({'status': 'active'}),
+                data=json.dumps({'status': 'negotiating_remote'}),
                 content_type='application/json',
             )
             assert response.status_code == 404
@@ -393,7 +393,7 @@ class TestDoNotContact:
     def test_dnc_returns_200(self, client, app):
         """POST /api/leads/<id>/do-not-contact returns 200."""
         with app.app_context():
-            lead = _make_lead(app, '25 DNC St', lead_status='active')
+            lead = _make_lead(app, '25 DNC St', lead_status='mailing_no_contact_made')
             response = client.post(
                 f'/api/leads/{lead.id}/do-not-contact',
                 data=json.dumps({}),
@@ -404,7 +404,7 @@ class TestDoNotContact:
     def test_dnc_sets_status(self, client, app):
         """POST /api/leads/<id>/do-not-contact sets lead_status to do_not_contact."""
         with app.app_context():
-            lead = _make_lead(app, '26 DNC St', lead_status='active')
+            lead = _make_lead(app, '26 DNC St', lead_status='mailing_no_contact_made')
             client.post(
                 f'/api/leads/{lead.id}/do-not-contact',
                 data=json.dumps({}),
@@ -417,7 +417,7 @@ class TestDoNotContact:
         """POST /api/leads/<id>/do-not-contact sets recommended_action to null."""
         with app.app_context():
             lead = _make_lead(app, '27 DNC St',
-                              lead_status='active',
+                              lead_status='mailing_no_contact_made',
                               recommended_action='follow_up_now')
             client.post(
                 f'/api/leads/{lead.id}/do-not-contact',
@@ -430,7 +430,7 @@ class TestDoNotContact:
     def test_dnc_cancels_open_tasks(self, client, app):
         """POST /api/leads/<id>/do-not-contact cancels all open tasks."""
         with app.app_context():
-            lead = _make_lead(app, '28 DNC St', lead_status='active')
+            lead = _make_lead(app, '28 DNC St', lead_status='mailing_no_contact_made')
             task1 = _make_task(app, lead.id, title='Task 1')
             task2 = _make_task(app, lead.id, title='Task 2')
             client.post(
@@ -474,7 +474,7 @@ class TestParkLead:
     def test_park_returns_200(self, client, app):
         """POST /api/leads/<id>/park returns 200."""
         with app.app_context():
-            lead = _make_lead(app, '31 Park St', lead_status='active')
+            lead = _make_lead(app, '31 Park St', lead_status='mailing_no_contact_made')
             response = client.post(
                 f'/api/leads/{lead.id}/park',
                 data=json.dumps({}),
@@ -483,21 +483,21 @@ class TestParkLead:
             assert response.status_code == 200
 
     def test_park_sets_nurture_status(self, client, app):
-        """POST /api/leads/<id>/park sets lead_status to nurture."""
+        """POST /api/leads/<id>/park sets lead_status to deprioritize."""
         with app.app_context():
-            lead = _make_lead(app, '32 Park St', lead_status='active')
+            lead = _make_lead(app, '32 Park St', lead_status='mailing_no_contact_made')
             client.post(
                 f'/api/leads/{lead.id}/park',
                 data=json.dumps({}),
                 content_type='application/json',
             )
             db.session.refresh(lead)
-            assert lead.lead_status == 'nurture'
+            assert lead.lead_status == 'deprioritize'
 
     def test_park_with_future_reactivation_date_accepted(self, client, app):
         """POST /api/leads/<id>/park with a future reactivation_date returns 200."""
         with app.app_context():
-            lead = _make_lead(app, '33 Park St', lead_status='active')
+            lead = _make_lead(app, '33 Park St', lead_status='mailing_no_contact_made')
             future_date = (date.today() + timedelta(days=30)).isoformat()
             response = client.post(
                 f'/api/leads/{lead.id}/park',
@@ -509,7 +509,7 @@ class TestParkLead:
     def test_park_with_past_reactivation_date_rejected(self, client, app):
         """POST /api/leads/<id>/park with a past reactivation_date returns 400."""
         with app.app_context():
-            lead = _make_lead(app, '34 Park St', lead_status='active')
+            lead = _make_lead(app, '34 Park St', lead_status='mailing_no_contact_made')
             past_date = (date.today() - timedelta(days=1)).isoformat()
             response = client.post(
                 f'/api/leads/{lead.id}/park',
@@ -521,7 +521,7 @@ class TestParkLead:
     def test_park_with_reactivation_date_too_far_rejected(self, client, app):
         """POST /api/leads/<id>/park with reactivation_date > 365 days returns 400."""
         with app.app_context():
-            lead = _make_lead(app, '35 Park St', lead_status='active')
+            lead = _make_lead(app, '35 Park St', lead_status='mailing_no_contact_made')
             far_date = (date.today() + timedelta(days=366)).isoformat()
             response = client.post(
                 f'/api/leads/{lead.id}/park',
@@ -654,3 +654,4 @@ class TestHubSpotTimelineImport:
             assert count == 0
             total = LeadTimelineEntry.query.filter_by(lead_id=lead.id).count()
             assert total == 0
+

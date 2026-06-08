@@ -52,7 +52,7 @@ function makePayload(overrides: Partial<CommandCenterPayload> = {}): CommandCent
     property_city: 'Chicago',
     property_state: 'IL',
     lead_score: 75,
-    lead_status: 'active',
+    lead_status: 'mailing_no_contact_made',
     has_property_match: true,
     analysis_session_id: 42,
     recommended_action: {
@@ -230,8 +230,8 @@ describe('LeadCommandCenter', () => {
       vi.mocked(commandCenterService.updateStatus).mockResolvedValue(undefined)
       // Return updated payload on second call
       vi.mocked(commandCenterService.getCommandCenter)
-        .mockResolvedValueOnce(makePayload({ lead_status: 'active' }))
-        .mockResolvedValue(makePayload({ lead_status: 'follow_up' }))
+        .mockResolvedValueOnce(makePayload({ lead_status: 'mailing_no_contact_made' }))
+        .mockResolvedValue(makePayload({ lead_status: 'mailing_contacted_interested' }))
 
       renderCommandCenter()
       await waitFor(() => {
@@ -416,7 +416,7 @@ describe('LeadCommandCenter', () => {
 
     it('does NOT show DNC badge in header when lead_status is follow_up', async () => {
       vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
-        makePayload({ lead_status: 'follow_up' })
+        makePayload({ lead_status: 'mailing_contacted_interested' })
       )
 
       renderCommandCenter()
@@ -428,3 +428,4 @@ describe('LeadCommandCenter', () => {
     })
   })
 })
+

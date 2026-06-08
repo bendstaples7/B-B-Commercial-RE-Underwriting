@@ -272,6 +272,10 @@ class HubSpotClientService:
             "properties": properties,
         }
 
+        # Request contact associations for deals so we can link deal → owner contact
+        if object_type == "deals":
+            params["associations"] = "contacts"
+
         while True:
             response = self._get(path, params=params)
             results = response.get("results", [])

@@ -25,6 +25,7 @@ import {
 } from '@mui/material'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import type { QueueRow, BulkActionResult } from '@/types'
+import { LeadStatusChip } from './LeadStatusChip'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -368,7 +369,10 @@ export function QueueTable({
 
                     {/* Lead status */}
                     <TableCell data-testid={`row-status-${row.id}`}>
-                      {row.lead_status}
+                      {row.lead_status
+                        ? <LeadStatusChip status={row.lead_status} />
+                        : '—'
+                      }
                     </TableCell>
 
                     {/* Property address */}

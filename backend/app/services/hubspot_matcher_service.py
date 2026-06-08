@@ -143,6 +143,27 @@ class HubSpotMatcherService:
                 lead.hubspot_deal_stage = stage_label
                 updated_fields.append("hubspot_deal_stage")
 
+            # Sync lead_status to match the HubSpot pipeline stage label
+            _HS_STAGE_TO_LEAD_STATUS = {
+                'Skip Trace': 'skip_trace',
+                'Awaiting Skip Trace': 'awaiting_skip_trace',
+                'Mailing, no contact made': 'mailing_no_contact_made',
+                'Mailing, contact made, no interest': 'mailing_contacted_no_interest',
+                'Mailing, contact made, interested': 'mailing_contacted_interested',
+                'Negotiating Remote': 'negotiating_remote',
+                'In Person Appointment': 'in_person_appointment',
+                'Offer Delivered': 'offer_delivered',
+                'Deprioritize': 'deprioritize',
+                'Deal Won': 'deal_won',
+                'Deal Lost': 'deal_lost',
+            }
+            new_lead_status = _HS_STAGE_TO_LEAD_STATUS.get(stage_label)
+            if new_lead_status and lead.lead_status != new_lead_status:
+                # Don't override suppressed/do_not_contact with a pipeline stage
+                if lead.lead_status not in ('suppressed', 'do_not_contact'):
+                    lead.lead_status = new_lead_status
+                    updated_fields.append("lead_status")
+
         # Address fields — fill in nulls only
         field_map = {
             "address": "property_street",

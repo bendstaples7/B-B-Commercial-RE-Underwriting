@@ -24,6 +24,7 @@ import {
 } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import { adminService } from '@/services/api'
+import { LeadStatusChip } from './LeadStatusChip'
 
 /** Format a date string safely. Returns '—' for null/undefined/invalid values. */
 function safeFormatDate(dateStr: string | null | undefined): string {
@@ -293,7 +294,12 @@ export default function AdminUserDetail() {
                   <TableCell>{lead.property_street ?? '—'}</TableCell>
                   <TableCell>{lead.property_city ?? '—'}</TableCell>
                   <TableCell>{lead.property_state ?? '—'}</TableCell>
-                  <TableCell>{lead.lead_status}</TableCell>
+                  <TableCell>
+                    {lead.lead_status
+                      ? <LeadStatusChip status={lead.lead_status} />
+                      : '—'
+                    }
+                  </TableCell>
                   <TableCell align="right">{lead.lead_score}</TableCell>
                   <TableCell>
                     {safeFormatDate(lead.created_at)}

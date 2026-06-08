@@ -132,8 +132,8 @@ def _get_winning_rule_signals(lead) -> dict:
     if lead.lead_status == 'do_not_contact':
         return {'lead_status': 'do_not_contact'}
 
-    # Priority 2 — suppressed / nurture (RA is None for these)
-    if lead.lead_status in ('suppressed', 'nurture'):
+    # Priority 2 — suppressed / deprioritize / terminal (RA is None for these)
+    if lead.lead_status in ('suppressed', 'deprioritize', 'deal_won', 'deal_lost'):
         return {'lead_status': lead.lead_status}
 
     # Priority 3 — no contact info
@@ -147,42 +147,30 @@ def _get_winning_rule_signals(lead) -> dict:
             'property_street': lead.property_street,
         }
 
-    # Priority 5 — no analysis
-    if lead.has_property_match and not lead.analysis_complete:
-        return {
-            'has_property_match': True,
-            'analysis_complete': False,
-        }
-
-    # Priority 6 — follow-up overdue
+    # Priority 5 — follow-up overdue
     if lead.follow_up_overdue:
         return {'follow_up_overdue': True}
 
-    # Priority 7 — warm lead
+    # Priority 6 — warm lead
     if lead.is_warm:
         return {'is_warm': True}
 
-    # Priority 8 — ready for outreach (analysis complete + high score + no open tasks)
-    if lead.analysis_complete and lead.lead_score >= 70:
+    # Priority 7 — ready for outreach (high score + no open tasks)
+    if lead.lead_score >= 70:
         open_tasks = LeadTask.query.filter_by(lead_id=lead.id, status='open').count()
         if open_tasks == 0:
             return {
-                'analysis_complete': True,
                 'lead_score': lead.lead_score,
             }
 
-    # Priority 9 — low data completeness
-    if lead.data_completeness_score < 50:
-        return {'data_completeness_score': lead.data_completeness_score}
+    # Priority 8 — has contact info, property matched, no tasks
+    open_tasks = LeadTask.query.filter_by(lead_id=lead.id, status='open').count()
+    if open_tasks == 0:
+        return {'lead_status': lead.lead_status}
 
-    # Priority 10 — active/new with no open tasks → create_task
-    if lead.lead_status in ('active', 'new'):
-        open_tasks = LeadTask.query.filter_by(lead_id=lead.id, status='open').count()
-        if open_tasks == 0:
-            return {'lead_status': lead.lead_status}
-
-    # Priority 11 — default (nurture)
-    return {}
+    # Priority 10 — active pipeline lead with no open tasks → create_task
+    if lead.lead_status not in ('do_not_contact', 'suppressed', 'deprioritize', 'deal_won', 'deal_lost'):
+        return {'lead_status': lead.lead_status}
 
 
 # ---------------------------------------------------------------------------
@@ -884,7 +872,7 @@ def park_lead(lead_id: int):
         return jsonify({'error': 'Not found'}), 404
 
     old_status = lead.lead_status
-    lead.lead_status = 'nurture'
+    lead.lead_status = 'deprioritize'
     if reactivation_date:
         lead.follow_up_date = reactivation_date
 
@@ -894,10 +882,10 @@ def park_lead(lead_id: int):
         occurred_at=_dt.datetime.now(_dt.timezone.utc),
         source='manual',
         actor=actor,
-        summary="Lead parked (status: nurture).",
+        summary="Lead parked (status: deprioritize).",
         event_metadata={
             'previous_status': old_status,
-            'new_status': 'nurture',
+            'new_status': 'deprioritize',
             'reactivation_date': reactivation_date.isoformat() if reactivation_date else None,
         },
     )
@@ -914,7 +902,7 @@ def park_lead(lead_id: int):
             lead_id, exc,
         )
 
-    return jsonify({'lead_status': 'nurture'}), 200
+    return jsonify({'lead_status': 'deprioritize'}), 200
 
 
 @command_center_bp.route('/<int:lead_id>/reactivate', methods=['POST'])
@@ -936,7 +924,7 @@ def reactivate_lead(lead_id: int):
         return jsonify({'error': 'Not found'}), 404
 
     old_status = lead.lead_status
-    lead.lead_status = 'active'
+    lead.lead_status = 'mailing_no_contact_made'
 
     entry = LeadTimelineEntry(
         lead_id=lead_id,
@@ -944,8 +932,8 @@ def reactivate_lead(lead_id: int):
         occurred_at=_dt.datetime.now(_dt.timezone.utc),
         source='manual',
         actor=actor,
-        summary="Lead reactivated (status: active).",
-        event_metadata={'previous_status': old_status, 'new_status': 'active'},
+        summary="Lead reactivated (status: mailing_no_contact_made).",
+        event_metadata={'previous_status': old_status, 'new_status': 'mailing_no_contact_made'},
     )
     db.session.add(lead)
     db.session.add(entry)
@@ -959,7 +947,7 @@ def reactivate_lead(lead_id: int):
             lead_id, exc,
         )
 
-    return jsonify({'lead_status': 'active', 'recommended_action': lead.recommended_action}), 200
+    return jsonify({'lead_status': 'mailing_no_contact_made', 'recommended_action': lead.recommended_action}), 200
 
 
 @command_center_bp.route('/<int:lead_id>/suppress', methods=['POST'])
