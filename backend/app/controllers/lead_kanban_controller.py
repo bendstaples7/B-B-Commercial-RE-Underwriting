@@ -6,6 +6,7 @@ from functools import wraps
 from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
+from app.api_utils import require_auth
 from app.exceptions import RealEstateAnalysisException
 from app.services.lead_kanban_service import LeadKanbanService
 
@@ -49,6 +50,7 @@ def handle_errors(f):
 
 @lead_kanban_bp.route("/api/kanban/leads", methods=["GET"])
 @handle_errors
+@require_auth
 def get_kanban_leads():
     """Return kanban columns with leads grouped by recommended_action.
 
@@ -71,6 +73,7 @@ def get_kanban_leads():
 
 @lead_kanban_bp.route("/api/kanban/leads/<int:lead_id>/move", methods=["PATCH"])
 @handle_errors
+@require_auth
 def move_kanban_lead(lead_id: int):
     """Move a lead to a different recommended_action column."""
     data = request.get_json(silent=True) or {}
