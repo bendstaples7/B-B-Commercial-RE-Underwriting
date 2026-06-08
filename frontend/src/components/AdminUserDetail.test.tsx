@@ -177,12 +177,12 @@ describe('AdminUserDetail', () => {
     expect(screen.getByText('123 Main St')).toBeInTheDocument()
     expect(screen.getByText('Chicago')).toBeInTheDocument()
     expect(screen.getAllByText('IL').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText('new')).toBeInTheDocument()
+    expect(screen.getByText('Awaiting Skip Trace')).toBeInTheDocument()
     expect(screen.getByText('75')).toBeInTheDocument()
 
     expect(screen.getByText('456 Oak Ave')).toBeInTheDocument()
     expect(screen.getByText('Evanston')).toBeInTheDocument()
-    expect(screen.getByText('active')).toBeInTheDocument()
+    expect(screen.getByText('Mailing, No Contact Made')).toBeInTheDocument()
     expect(screen.getByText('88')).toBeInTheDocument()
   })
 

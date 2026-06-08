@@ -213,12 +213,10 @@ describe('LeadCommandCenter', () => {
       await user.click(statusSelect)
 
       await waitFor(() => {
-        expect(screen.getByTestId('status-option-new')).toBeInTheDocument()
-        expect(screen.getByTestId('status-option-active')).toBeInTheDocument()
-        expect(screen.getByTestId('status-option-follow_up')).toBeInTheDocument()
-        expect(screen.getByTestId('status-option-nurture')).toBeInTheDocument()
-        expect(screen.getByTestId('status-option-under_contract')).toBeInTheDocument()
-        expect(screen.getByTestId('status-option-closed')).toBeInTheDocument()
+        expect(screen.getByTestId('status-option-mailing_no_contact_made')).toBeInTheDocument()
+        expect(screen.getByTestId('status-option-mailing_contacted_interested')).toBeInTheDocument()
+        expect(screen.getByTestId('status-option-negotiating_remote')).toBeInTheDocument()
+        expect(screen.getByTestId('status-option-deprioritize')).toBeInTheDocument()
         expect(screen.getByTestId('status-option-suppressed')).toBeInTheDocument()
         expect(screen.getByTestId('status-option-do_not_contact')).toBeInTheDocument()
       })
@@ -243,13 +241,13 @@ describe('LeadCommandCenter', () => {
       await user.click(statusSelect)
 
       await waitFor(() => {
-        expect(screen.getByTestId('status-option-follow_up')).toBeInTheDocument()
+        expect(screen.getByTestId('status-option-mailing_contacted_interested')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByTestId('status-option-follow_up'))
+      await user.click(screen.getByTestId('status-option-mailing_contacted_interested'))
 
       await waitFor(() => {
-        expect(commandCenterService.updateStatus).toHaveBeenCalledWith(1, 'follow_up')
+        expect(commandCenterService.updateStatus).toHaveBeenCalledWith(1, 'mailing_contacted_interested')
       })
     })
 
@@ -266,10 +264,10 @@ describe('LeadCommandCenter', () => {
       await user.click(statusSelect)
 
       await waitFor(() => {
-        expect(screen.getByTestId('status-option-nurture')).toBeInTheDocument()
+        expect(screen.getByTestId('status-option-deprioritize')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByTestId('status-option-nurture'))
+      await user.click(screen.getByTestId('status-option-deprioritize'))
 
       await waitFor(() => {
         expect(commandCenterService.updateStatus).toHaveBeenCalled()
@@ -295,10 +293,10 @@ describe('LeadCommandCenter', () => {
       await user.click(statusSelect)
 
       await waitFor(() => {
-        expect(screen.getByTestId('status-option-nurture')).toBeInTheDocument()
+        expect(screen.getByTestId('status-option-deprioritize')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByTestId('status-option-nurture'))
+      await user.click(screen.getByTestId('status-option-deprioritize'))
 
       await waitFor(() => {
         expect(screen.getByTestId('status-change-error')).toBeInTheDocument()
@@ -324,10 +322,10 @@ describe('LeadCommandCenter', () => {
       await user.click(statusSelect)
 
       await waitFor(() => {
-        expect(screen.getByTestId('status-option-nurture')).toBeInTheDocument()
+        expect(screen.getByTestId('status-option-deprioritize')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByTestId('status-option-nurture'))
+      await user.click(screen.getByTestId('status-option-deprioritize'))
 
       await waitFor(() => {
         expect(screen.getByTestId('status-change-error')).toBeInTheDocument()

@@ -629,7 +629,7 @@ describe('QueueTable', () => {
         />
       )
 
-      expect(screen.getByTestId('row-status-1')).toHaveTextContent('follow_up')
+      expect(screen.getByTestId('row-status-1')).toHaveTextContent('Mailing, Contact Made, Interested')
     })
 
     it('renders total count', () => {
