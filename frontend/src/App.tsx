@@ -63,6 +63,7 @@ import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import BlockIcon from '@mui/icons-material/Block'
 import LocationOffIcon from '@mui/icons-material/LocationOff'
 import TodayIcon from '@mui/icons-material/Today'
+import ViewKanbanIcon from '@mui/icons-material/ViewKanban'
 import ExpandLess from '@mui/icons-material/ExpandLess'
 import ExpandMore from '@mui/icons-material/ExpandMore'
 import { usePipelineStatus } from './context/PipelineStatusContext'
@@ -145,6 +146,7 @@ const NAV_SECTIONS = [
       {
         label: 'Work Queues',
         items: [
+          { label: 'Kanban',                path: '/kanban',                           icon: <ViewKanbanIcon />,             badgeKey: null },
           { label: "Today's Action",         path: '/',                              icon: <TodayIcon />,                  badgeKey: 'todays_action' as keyof QueueCounts },
           { label: 'Previously Warm',        path: '/queues/previously-warm',        icon: <LocalFireDepartmentIcon />,    badgeKey: 'previously_warm' as keyof QueueCounts },
           { label: 'Follow-Up Overdue',      path: '/queues/follow-up-overdue',      icon: <AlarmIcon />,                  badgeKey: 'follow_up_overdue' as keyof QueueCounts },
@@ -1578,8 +1580,8 @@ function App() {
           <Route path="/*" element={
             <AuthGuard>
               <Routes>
-          {/* Default landing page — Today's Action Queue */}
-          <Route path="/" element={<TodaysActionQueue />} />
+          {/* Default landing page — redirect to Kanban */}
+          <Route path="/" element={<Navigate to="/kanban" replace />} />
           {/* Queue routes */}
           <Route path="/queues/previously-warm" element={<PreviouslyWarmQueue />} />
           <Route path="/queues/follow-up-overdue" element={<FollowUpOverdueQueue />} />

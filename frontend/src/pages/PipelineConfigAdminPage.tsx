@@ -4,7 +4,6 @@
  * Displays all configured stages with editable weight fields.
  * Sends batch updates via PUT /api/pipeline-stages/weights.
  */
-import React, { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Box,
@@ -28,7 +27,7 @@ import RefreshIcon from '@mui/icons-material/Refresh'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import { useNavigate } from 'react-router-dom'
 import { pipelineConfigService } from '@/services/api'
-import type { PipelineStage } from '@/types'
+import { useState, useEffect } from 'react';
 
 export function PipelineConfigAdminPage() {
   const navigate = useNavigate()

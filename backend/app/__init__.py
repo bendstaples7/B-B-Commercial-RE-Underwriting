@@ -7,6 +7,8 @@ from flask_limiter.util import get_remote_address
 from flask_migrate import Migrate
 import os
 
+from app.api_utils import _allow_legacy_header
+
 db = SQLAlchemy()
 migrate = Migrate()
 limiter = Limiter(
@@ -306,6 +308,7 @@ def create_app(config_name='development'):
         )
     app.config['SECRET_KEY'] = _secret_key or 'dev-secret-key'  # testing only
     app.config['REDIS_URL'] = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    app.config['ALLOW_LEGACY_X_USER_ID'] = os.getenv('ALLOW_LEGACY_X_USER_ID', 'false').lower() == 'true'
 
     # Limit the SQLAlchemy connection pool to prevent exhausting PostgreSQL's
     # max_connections when multiple processes start simultaneously (Flask +
@@ -471,9 +474,9 @@ def create_app(config_name='development'):
                 # Invalid/expired token — fall through to anonymous
                 pass
 
-        if _is_testing:
-            # In tests, allow X-User-Id header as a convenience identity mechanism
-            # since tests don't issue real JWTs.
+        if _is_testing or _allow_legacy_header():
+            # In tests or when ALLOW_LEGACY_X_USER_ID=true, allow X-User-Id header
+            # as a convenience identity mechanism since the frontend sends it.
             g.user_id = _request.headers.get('X-User-Id', 'anonymous')
         else:
             # In production/development, never trust the unauthenticated X-User-Id
@@ -586,6 +589,10 @@ def create_app(config_name='development'):
     # Pipeline Config — stages and weights for Kanban scoring
     from app.controllers.pipeline_config_controller import pipeline_config_bp
     app.register_blueprint(pipeline_config_bp, url_prefix='/api')
+
+    # Lead Kanban board endpoints
+    from app.controllers.lead_kanban_controller import lead_kanban_bp
+    app.register_blueprint(lead_kanban_bp)  # routes already carry full /api/... paths
 
     # Authentication endpoints (public — no token required for login)
     from app.controllers.auth_controller import auth_bp

@@ -7,6 +7,7 @@ from app.models.pipeline_stage_config import PipelineStageConfig
 
 
 INITIAL_STAGES = [
+    {"stage_name": "Draft", "order": 0, "weight": 0.5},
     {"stage_name": "Lead", "order": 1, "weight": 1},
     {"stage_name": "Qualification", "order": 2, "weight": 3},
     {"stage_name": "Proposal", "order": 3, "weight": 5},

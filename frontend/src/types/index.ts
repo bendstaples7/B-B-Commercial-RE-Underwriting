@@ -1918,7 +1918,7 @@ export interface DealKanbanCard {
   updated_at: string | null
 }
 
-export type KanbanSortField = 'purchase_price' | 'priority_score'
+export type KanbanSortField = 'purchase_price' | 'priority_score' | 'lead_score'
 
 export interface KanbanFilters {
   assigneeUserId?: string
@@ -1936,4 +1936,39 @@ export interface KanbanState {
   sortDirection: 'asc' | 'desc'
   isLoading: boolean
   error: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Lead Kanban Types (reads from leads table instead of deals table)
+// ---------------------------------------------------------------------------
+
+export interface LeadKanbanCard {
+  id: number
+  property_address: string
+  owner_name: string
+  lead_status: string | null
+  recommended_action: string | null
+  lead_score: number
+  lead_category: string
+  source_type: string
+  last_contact_date: string | null
+  analysis_complete: boolean
+  is_warm: boolean
+  has_phone: boolean
+  has_email: boolean
+  has_property_match: boolean
+}
+
+export interface LeadKanbanColumn {
+  id: string
+  label: string
+  icon: string
+  leads: LeadKanbanCard[]
+  count: number
+  sort_order: number
+}
+
+export interface LeadKanbanResponse {
+  columns: LeadKanbanColumn[]
+  total_counts: Record<string, number>
 }

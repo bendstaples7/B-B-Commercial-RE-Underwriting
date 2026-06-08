@@ -1,37 +1,42 @@
 /**
- * KanbanColumn — renders a single pipeline stage column with deal count header.
+ * KanbanColumn — renders a single kanban column with action label, icon, and count header.
  *
  * Acts as a drop target for dragged DealCards.
+ * Supports pagination with a "Load all X more" button at the bottom.
  */
-import React from 'react'
 import { useDroppable } from '@dnd-kit/core'
 import {
   SortableContext,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
-import { Box, Paper, Typography, Chip } from '@mui/material'
+import { Box, Paper, Typography, Chip, Button } from '@mui/material'
 import { DealCard } from './DealCard'
-import type { DealKanbanCard } from '@/types'
+import type { LeadKanbanColumn } from '@/types'
 
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
 
 interface KanbanColumnProps {
-  stageName: string
-  deals: DealKanbanCard[]
+  column: LeadKanbanColumn
   onDealClick?: (dealId: number) => void
+  onLoadMore?: (columnId: string) => void
+  totalCount: number
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export function KanbanColumn({ stageName, deals, onDealClick }: KanbanColumnProps) {
+export function KanbanColumn({ column, onDealClick, onLoadMore, totalCount }: KanbanColumnProps) {
   const { setNodeRef, isOver } = useDroppable({
-    id: `column-${stageName}`,
-    data: { stageName },
+    id: `column-${column.id}`,
+    data: { stageName: column.id },
   })
+
+  const visibleCount = column.leads.length
+  const remaining = totalCount - visibleCount
+  const hasMore = remaining > 0
 
   return (
     <Paper
@@ -64,19 +69,31 @@ export function KanbanColumn({ stageName, deals, onDealClick }: KanbanColumnProp
           backgroundColor: 'grey.50',
         }}
       >
-        <Typography variant="subtitle2" fontWeight={600}>
-          {stageName}
-        </Typography>
-        <Chip
-          label={deals.length}
-          size="small"
-          color={deals.length > 0 ? 'primary' : 'default'}
-          variant="outlined"
-          sx={{ fontWeight: 600, minWidth: 28 }}
-        />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Typography variant="body1" sx={{ lineHeight: 1 }}>
+            {column.icon}
+          </Typography>
+          <Typography variant="subtitle2" fontWeight={600}>
+            {column.label} ({totalCount.toLocaleString()})
+          </Typography>
+        </Box>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          <Chip
+            label={visibleCount}
+            size="small"
+            color={totalCount > 0 ? 'primary' : 'default'}
+            variant="outlined"
+            sx={{ fontWeight: 600, minWidth: 28 }}
+          />
+          {visibleCount < totalCount && (
+            <Typography variant="caption" color="text.secondary">
+              showing {visibleCount}
+            </Typography>
+          )}
+        </Box>
       </Box>
 
-      {/* Deal Cards */}
+      {/* Lead Cards */}
       <Box
         sx={{
           p: 1,
@@ -86,10 +103,10 @@ export function KanbanColumn({ stageName, deals, onDealClick }: KanbanColumnProp
         }}
       >
         <SortableContext
-          items={deals.map((d) => `deal-${d.id}`)}
+          items={column.leads.map((d) => `deal-${d.id}`)}
           strategy={verticalListSortingStrategy}
         >
-          {deals.length === 0 ? (
+          {column.leads.length === 0 ? (
             <Box
               sx={{
                 display: 'flex',
@@ -99,15 +116,30 @@ export function KanbanColumn({ stageName, deals, onDealClick }: KanbanColumnProp
                 color: 'text.disabled',
               }}
             >
-              <Typography variant="caption">No deals</Typography>
+              <Typography variant="caption">No leads</Typography>
             </Box>
           ) : (
-            deals.map((deal) => (
-              <DealCard key={deal.id} deal={deal} onClick={onDealClick} />
+            column.leads.map((lead) => (
+              <DealCard key={lead.id} deal={lead} onClick={onDealClick} />
             ))
           )}
         </SortableContext>
       </Box>
+
+      {/* Load More Button — shown when there are more leads not displayed */}
+      {hasMore && onLoadMore && (
+        <Box sx={{ p: 1, borderTop: 1, borderColor: 'divider' }}>
+          <Button
+            fullWidth
+            size="small"
+            variant="text"
+            onClick={() => onLoadMore(column.id)}
+            sx={{ textTransform: 'none', fontWeight: 500 }}
+          >
+            Load all {remaining.toLocaleString()} more
+          </Button>
+        </Box>
+      )}
     </Paper>
   )
 }

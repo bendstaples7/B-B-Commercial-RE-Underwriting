@@ -1,45 +1,61 @@
 /**
  * DealKanbanContext — React context for the Kanban board state.
  *
- * Manages pipeline stages, deals organized by stage, filters, sorting,
- * and drag-and-drop state transitions.
+ * Now reads from the leads table via /api/kanban/leads, grouping leads
+ * by recommended_action instead of deal pipeline stages.
+ *
+ * Supports pagination: loads 50 leads per column by default, with
+ * "Load all" expand functionality for individual columns.
  */
-import React, { createContext, useContext, useCallback, useReducer, useMemo } from 'react'
+import React, { createContext, useContext, useCallback, useReducer, useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { multifamilyService, pipelineConfigService } from '@/services/api'
+import { leadKanbanService } from '@/services/api'
 import type {
-  PipelineStage,
-  DealKanbanCard,
+  LeadKanbanColumn,
   KanbanFilters,
   KanbanSortField,
-  KanbanState,
 } from '@/types'
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const DEFAULT_LIMIT = 50
 
 // ---------------------------------------------------------------------------
 // Action types
 // ---------------------------------------------------------------------------
 
 type KanbanAction =
-  | { type: 'SET_STAGES'; stages: PipelineStage[] }
-  | { type: 'SET_DEALS_FOR_STAGE'; stageName: string; deals: DealKanbanCard[] }
-  | { type: 'MOVE_DEAL'; dealId: number; fromStage: string; toStage: string }
+  | { type: 'SET_COLUMNS'; columns: LeadKanbanColumn[] }
+  | { type: 'MOVE_LEAD'; leadId: number; fromColId: string; toColId: string }
   | { type: 'SET_FILTERS'; filters: KanbanFilters }
   | { type: 'SET_SORT'; field: KanbanSortField; direction: 'asc' | 'desc' }
   | { type: 'SET_LOADING'; isLoading: boolean }
   | { type: 'SET_ERROR'; error: string | null }
 
 // ---------------------------------------------------------------------------
-// Initial state
+// State shape
 // ---------------------------------------------------------------------------
 
+interface KanbanState {
+  columns: LeadKanbanColumn[]
+  filters: KanbanFilters
+  sortField: KanbanSortField
+  sortDirection: 'asc' | 'desc'
+  isLoading: boolean
+  error: string | null
+  total_counts: Record<string, number>
+}
+
 const initialState: KanbanState = {
-  stages: [],
-  dealsByStage: {},
+  columns: [],
   filters: {},
-  sortField: 'priority_score',
+  sortField: 'lead_score',
   sortDirection: 'desc',
   isLoading: false,
   error: null,
+  total_counts: {},
 }
 
 // ---------------------------------------------------------------------------
@@ -48,47 +64,41 @@ const initialState: KanbanState = {
 
 function kanbanReducer(state: KanbanState, action: KanbanAction): KanbanState {
   switch (action.type) {
-    case 'SET_STAGES':
-      return { ...state, stages: action.stages }
-    case 'SET_DEALS_FOR_STAGE': {
-      const { stageName, deals } = action
-      return {
-        ...state,
-        dealsByStage: { ...state.dealsByStage, [stageName]: deals },
-      }
-    }
-    case 'MOVE_DEAL': {
-      const { dealId, fromStage, toStage } = action
-      const fromDeals = (state.dealsByStage[fromStage] ?? []).filter(
-        (d) => d.id !== dealId
-      )
-      const movedDeal = (state.dealsByStage[fromStage] ?? []).find(
-        (d) => d.id === dealId
-      )
-      const toDeals = movedDeal
-        ? [
-            ...(state.dealsByStage[toStage] ?? []),
-            { ...movedDeal, status: toStage },
-          ]
-        : state.dealsByStage[toStage] ?? []
-
-      return {
-        ...state,
-        dealsByStage: {
-          ...state.dealsByStage,
-          [fromStage]: fromDeals,
-          [toStage]: toDeals,
-        },
-      }
+    case 'SET_COLUMNS':
+      return { ...state, columns: action.columns }
+    case 'MOVE_LEAD': {
+      const { leadId, fromColId, toColId } = action
+      const newColumns = state.columns.map((col) => {
+        if (col.id === fromColId) {
+          return {
+            ...col,
+            leads: col.leads.filter((l) => l.id !== leadId),
+            count: col.count - 1,
+          }
+        }
+        if (col.id === toColId) {
+          const moved = state.columns
+            .find((c) => c.id === fromColId)
+            ?.leads.find((l) => l.id === leadId)
+          if (moved) {
+            return {
+              ...col,
+              leads: [
+                ...col.leads,
+                { ...moved, recommended_action: toColId },
+              ],
+              count: col.count + 1,
+            }
+          }
+        }
+        return col
+      })
+      return { ...state, columns: newColumns }
     }
     case 'SET_FILTERS':
       return { ...state, filters: action.filters }
     case 'SET_SORT':
-      return {
-        ...state,
-        sortField: action.field,
-        sortDirection: action.direction,
-      }
+      return { ...state, sortField: action.field, sortDirection: action.direction }
     case 'SET_LOADING':
       return { ...state, isLoading: action.isLoading }
     case 'SET_ERROR':
@@ -102,103 +112,91 @@ function kanbanReducer(state: KanbanState, action: KanbanAction): KanbanState {
 // Context
 // ---------------------------------------------------------------------------
 
-interface DealKanbanContextValue {
+interface LeadKanbanContextValue {
   state: KanbanState
-  moveDeal: (dealId: number, fromStage: string, toStage: string) => void
+  moveLead: (leadId: number, fromColId: string, toColId: string) => void
   setFilters: (filters: KanbanFilters) => void
   setSort: (field: KanbanSortField, direction: 'asc' | 'desc') => void
   refetchAll: () => void
   isLoading: boolean
   error: string | null
+  expandColumn: (columnId: string) => void
+  expandedColumns: Set<string>
+  total_counts: Record<string, number>
 }
 
-const DealKanbanContext = createContext<DealKanbanContextValue | null>(null)
+const LeadKanbanContext = createContext<LeadKanbanContextValue | null>(null)
 
 // ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------
 
-export function DealKanbanProvider({ children }: { children: React.ReactNode }) {
+export function LeadKanbanProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(kanbanReducer, initialState)
+  const [expandedColumns, setExpandedColumns] = useState<Set<string>>(new Set())
   const queryClient = useQueryClient()
 
-  // Fetch pipeline stages
+  // Fetch kanban columns from the leads API — default limited fetch
   const {
-    data: stages,
-    isError: stagesError,
-    error: stagesErrorObj,
+    data: columnsData,
+    isLoading,
+    error: fetchError,
   } = useQuery({
-    queryKey: ['pipeline-stages'],
-    queryFn: () => pipelineConfigService.getStages(),
-    staleTime: 5 * 60 * 1000,
-  })
-
-  // When stages load, store them and fetch deals for each stage
-  const stageNames = useMemo(() => stages?.map((s) => s.stage_name) ?? [], [stages])
-
-  // Fetch deals for each stage individually
-  useQuery({
-    queryKey: ['kanban-deals', stageNames],
+    queryKey: ['kanban-leads', { limit: DEFAULT_LIMIT }],
     queryFn: async () => {
-      if (stageNames.length === 0) return {}
-      const results = await Promise.all(
-        stageNames.map(async (name) => {
-          try {
-            const deals = await multifamilyService.listDealsByStatus(name)
-            return { stageName: name, deals }
-          } catch {
-            return { stageName: name, deals: [] }
-          }
+      try {
+        const response = await leadKanbanService.getKanbanLeads({ limit: DEFAULT_LIMIT })
+        return response
+      } catch (err) {
+        dispatch({
+          type: 'SET_ERROR',
+          error: (err as Error)?.message ?? 'An unknown error occurred',
         })
-      )
-      const dealsByStage: Record<string, DealKanbanCard[]> = {}
-      for (const { stageName, deals } of results) {
-        dealsByStage[stageName] = deals
-      }
-      return dealsByStage
-    },
-    onSuccess: (dealsByStage) => {
-      if (stages) dispatch({ type: 'SET_STAGES', stages })
-      if (dealsByStage) {
-        for (const [stageName, deals] of Object.entries(dealsByStage)) {
-          dispatch({ type: 'SET_DEALS_FOR_STAGE', stageName, deals })
-        }
+        return { columns: [] as LeadKanbanColumn[], total_counts: {} }
       }
     },
-    onError: (err: Error) => {
-      dispatch({ type: 'SET_ERROR', error: err.message })
-    },
-    enabled: stageNames.length > 0,
     staleTime: 30 * 1000,
   })
 
-  // Handle stages load separately
-  if (stages && state.stages.length === 0) {
-    dispatch({ type: 'SET_STAGES', stages })
-  }
+  // Sync columns and total_counts from query into reducer state
+  React.useEffect(() => {
+    if (columnsData) {
+      dispatch({ type: 'SET_COLUMNS', columns: columnsData.columns })
+      // Store total_counts in state via a SET_TOTAL_COUNTS-like approach,
+      // but we'll just store it alongside columns
+      setStoredTotalCounts(columnsData.total_counts)
+    }
+  }, [columnsData])
 
-  // Move deal mutation
+  // We need a separate state for total_counts since it's not in the reducer
+  const [storedTotalCounts, setStoredTotalCounts] = useState<Record<string, number>>({})
+
+  React.useEffect(() => {
+    dispatch({ type: 'SET_LOADING', isLoading })
+  }, [isLoading])
+
+  // Move lead mutation
   const moveMutation = useMutation({
     mutationFn: ({
-      dealId,
-      newStatus,
+      leadId,
+      targetAction,
     }: {
-      dealId: number
-      newStatus: string
-    }) => multifamilyService.updateDeal(dealId, { status: newStatus }),
+      leadId: number
+      targetAction: string
+    }) => leadKanbanService.moveKanbanLead(leadId, targetAction),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['kanban-deals'] })
+      queryClient.invalidateQueries({ queryKey: ['kanban-leads'] })
     },
   })
 
-  const moveDeal = useCallback(
-    (dealId: number, fromStage: string, toStage: string) => {
+  const moveLead = useCallback(
+    (leadId: number, fromColId: string, toColId: string) => {
       // Optimistic update
-      dispatch({ type: 'MOVE_DEAL', dealId, fromStage, toStage })
+      dispatch({ type: 'MOVE_LEAD', leadId, fromColId, toColId })
       // Fire mutation
-      moveMutation.mutate({ dealId, newStatus: toStage })
+      moveMutation.mutate({ leadId, targetAction: toColId })
     },
-    [moveMutation]
+    [moveMutation],
   )
 
   const setFilters = useCallback((filters: KanbanFilters) => {
@@ -209,31 +207,76 @@ export function DealKanbanProvider({ children }: { children: React.ReactNode }) 
     (field: KanbanSortField, direction: 'asc' | 'desc') => {
       dispatch({ type: 'SET_SORT', field, direction })
     },
-    []
+    [],
   )
 
   const refetchAll = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['pipeline-stages'] })
-    queryClient.invalidateQueries({ queryKey: ['kanban-deals'] })
+    setExpandedColumns(new Set())
+    queryClient.invalidateQueries({ queryKey: ['kanban-leads'] })
   }, [queryClient])
 
-  const value = useMemo<DealKanbanContextValue>(
+  const expandColumn = useCallback(
+    (columnId: string) => {
+      // Mark this column as expanded
+      setExpandedColumns((prev) => {
+        const next = new Set(prev)
+        next.add(columnId)
+        return next
+      })
+
+      // Refetch with limit=0 and column_id to get all leads for that column
+      queryClient.fetchQuery({
+        queryKey: ['kanban-leads-expand', columnId],
+        queryFn: async () => {
+          const response = await leadKanbanService.getKanbanLeads({
+            limit: 0,
+            column_id: columnId,
+          })
+          return response
+        },
+      }).then((response) => {
+        // Merge the expanded column's leads into the existing columns
+        dispatch({ type: 'SET_COLUMNS', columns: response.columns })
+        setStoredTotalCounts(response.total_counts)
+      })
+    },
+    [queryClient],
+  )
+
+  const value = useMemo<LeadKanbanContextValue>(
     () => ({
-      state,
-      moveDeal,
+      state: { ...state, total_counts: storedTotalCounts },
+      moveLead,
       setFilters,
       setSort,
       refetchAll,
-      isLoading: moveMutation.isPending,
-      error: stagesError ? (stagesErrorObj as Error)?.message ?? 'Failed to load stages' : state.error,
+      expandColumn,
+      expandedColumns,
+      total_counts: storedTotalCounts,
+      isLoading: moveMutation.isPending || isLoading,
+      error: fetchError
+        ? (fetchError as Error)?.message ?? 'Failed to load leads'
+        : state.error,
     }),
-    [state, moveDeal, setFilters, setSort, refetchAll, moveMutation.isPending, stagesError, stagesErrorObj]
+    [
+      state,
+      moveLead,
+      setFilters,
+      setSort,
+      refetchAll,
+      expandColumn,
+      expandedColumns,
+      storedTotalCounts,
+      moveMutation.isPending,
+      isLoading,
+      fetchError,
+    ],
   )
 
   return (
-    <DealKanbanContext.Provider value={value}>
+    <LeadKanbanContext.Provider value={value}>
       {children}
-    </DealKanbanContext.Provider>
+    </LeadKanbanContext.Provider>
   )
 }
 
@@ -241,12 +284,12 @@ export function DealKanbanProvider({ children }: { children: React.ReactNode }) 
 // Hook
 // ---------------------------------------------------------------------------
 
-export function useDealKanban(): DealKanbanContextValue {
-  const ctx = useContext(DealKanbanContext)
+export function useLeadKanban(): LeadKanbanContextValue {
+  const ctx = useContext(LeadKanbanContext)
   if (!ctx) {
-    throw new Error('useDealKanban must be used within a DealKanbanProvider')
+    throw new Error('useLeadKanban must be used within a LeadKanbanProvider')
   }
   return ctx
 }
 
-export default DealKanbanContext
+export default LeadKanbanContext

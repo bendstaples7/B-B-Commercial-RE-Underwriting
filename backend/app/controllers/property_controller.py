@@ -486,12 +486,18 @@ def get_property(lead_id):
             'message': f'Property {lead_id} does not exist',
         }), 404
 
-    # Ownership check: non-admins can only access leads they own
+    # Ownership check: non-admins can only access leads they own.
+    # Anonymous/unauthenticated users are denied (matches list_properties).
+    # NULL-owner leads are not accessible to non-admins.
     if not _current_user_is_admin():
         from flask import g
         current_user_id = getattr(g, 'user_id', None)
-        if (current_user_id and current_user_id != 'anonymous'
-                and lead.owner_user_id != current_user_id):
+        if not current_user_id or current_user_id == 'anonymous':
+            return jsonify({
+                'error': 'Property not found',
+                'message': f'Property {lead_id} does not exist',
+            }), 404
+        if lead.owner_user_id is None or lead.owner_user_id != current_user_id:
             return jsonify({
                 'error': 'Property not found',
                 'message': f'Property {lead_id} does not exist',
@@ -519,12 +525,17 @@ def analyze_property(lead_id):
             'message': f'Property {lead_id} does not exist',
         }), 404
 
-    # Ownership check: non-admins can only access leads they own
+    # Auth + ownership check for non-admin users.
+    # Auth validation comes first so missing credentials return 400 (not 404).
     if not _current_user_is_admin():
         from flask import g
         current_user_id = getattr(g, 'user_id', None)
-        if (current_user_id and current_user_id != 'anonymous'
-                and lead.owner_user_id != current_user_id):
+        if not current_user_id or current_user_id == 'anonymous':
+            return jsonify({
+                'error': 'Validation error',
+                'message': 'user_id is required (send X-User-Id header)',
+            }), 400
+        if lead.owner_user_id is None or lead.owner_user_id != current_user_id:
             return jsonify({
                 'error': 'Property not found',
                 'message': f'Property {lead_id} does not exist',

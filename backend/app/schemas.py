@@ -16,6 +16,23 @@ class RequestSchema(Schema):
 
 
 class StartAnalysisSchema(RequestSchema):
+    """Schema for starting a new analysis."""
+    
+#     user_id is read from the X-User-Id header via g.user_id, not the body.
+#     Unknown fields (including user_id sent by older clients) are silently dropped.
+    address = fields.Str(required=True, validate=validate.Length(min=5, max=500))
+    latitude = fields.Float(load_default=None, allow_none=True)
+    longitude = fields.Float(load_default=None, allow_none=True)
+
+
+class PipelineStageConfigSchema(RequestSchema):
+    """Schema for pipeline stage configuration."""
+    stage_name = fields.Str(required=True, validate=validate.Length(min=1, max=255))
+    config_data = fields.Dict(required=True)
+
+
+
+
     """Schema for starting a new analysis.
 
     user_id is read from the X-User-Id header via g.user_id, not the body.
@@ -31,7 +48,7 @@ class PropertyFactsSchema(Schema):
 
     Unknown fields (e.g. user_id injected by middleware) are silently ignored.
     All fields except address are optional so the endpoint accepts partial
-    updates — the workflow controller merges the diff onto the existing record.
+    updates - the workflow controller merges the diff onto the existing record.
     """
     class Meta:
         unknown = EXCLUDE
@@ -1008,8 +1025,8 @@ class DatasetStatusResponseSchema(Schema):
 # OM Intake schemas
 # ---------------------------------------------------------------------------
 
-class ScenarioMetricsSchema(Schema):
-    """Schema for a single scenario's computed metrics."""
+class ScenarioMetricsSchema(Schema): # type: ignore
+    """Schema for a single scenarios computed metrics."""
     gross_potential_income_annual = fields.Decimal(allow_none=True)
     effective_gross_income_annual = fields.Decimal(allow_none=True)
     gross_expenses_annual = fields.Decimal(allow_none=True)
@@ -1159,7 +1176,7 @@ class InteractionAssociationSchema(Schema):
 class TimelineEntrySchema(Schema):
     """Schema for a unified timeline entry returned by TimelineService.
 
-    Not model-based — represents a merged view of Interactions and Tasks
+    Not model-based - represents a merged view of Interactions and Tasks
     sorted by date for display in the timeline panel.
     """
     entry_type = fields.Str(required=True)          # 'interaction' or 'task'
@@ -1249,7 +1266,7 @@ class OrganizationSchema(Schema):
 class OrganizationAuditLogSchema(Schema):
     """Schema for serializing OrganizationAuditLog records (read-only responses).
 
-    All fields are dump_only — audit log entries are created by the service layer,
+    All fields are dump_only - audit log entries are created by the service layer,
     never directly via API input.
     """
     id = fields.Int(dump_only=True)
@@ -1497,7 +1514,7 @@ class PropertyContactLinkSchema(Schema):
 
 
 class PropertyContactResponseSchema(ContactResponseSchema):
-    """Schema for serializing a Contact as returned from a Property's contact list.
+    """Schema for serializing a Contact as returned from a Propertys contact list.
 
     Extends ContactResponseSchema with join-record fields:
     property_contact_role and is_primary from the PropertyContact record.
@@ -1728,7 +1745,7 @@ class BulkActionResultSchema(Schema):
 class WebhookLogSchema(Schema):
     """Schema for serializing HubSpotWebhookLog records.
 
-    All fields are dump_only — this is a read-only response schema.
+    All fields are dump_only - this is a read-only response schema.
     received_at and processed_at are serialized as ISO 8601 strings.
     """
     id = fields.Int(dump_only=True)
@@ -1744,7 +1761,7 @@ class WebhookLogSchema(Schema):
 class WebhookLogSummarySchema(Schema):
     """Schema for serializing the 24-hour webhook log summary.
 
-    Not tied to a model — used for plain dict serialization.
+    Not tied to a model - used for plain dict serialization.
     """
     processed_count = fields.Integer()
     failed_count = fields.Integer()
@@ -1770,8 +1787,6 @@ class LoginSchema(RequestSchema):
 
     Both fields are required. Email is normalized to lowercase and stripped.
     Password length is validated server-side only (no client-side hints).
-
-    Requirements: 2.1, 2.2
     """
     email = fields.Email(required=True)
     password = fields.Str(required=True, validate=validate.Length(min=1))

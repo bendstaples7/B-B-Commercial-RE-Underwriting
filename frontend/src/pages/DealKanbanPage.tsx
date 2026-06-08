@@ -1,10 +1,9 @@
 /**
- * DealKanbanPage — main Kanban board view for managing deals with drag-and-drop.
+ * DealKanbanPage — main Kanban board view for managing leads with drag-and-drop.
  *
- * Displays pipeline stages as columns, fetches deals per stage, and supports
- * filtering (by user, value range, closing date) and sorting (by value, priority score).
+ * Displays recommended_action columns, fetches leads per column, and supports
+ * filtering and sorting with pagination.
  */
-import React, { useMemo, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   DndContext,
@@ -20,7 +19,6 @@ import {
   Typography,
   CircularProgress,
   Alert,
-  Button,
   TextField,
   Select,
   MenuItem,
@@ -30,27 +28,16 @@ import {
   Tooltip,
   Collapse,
   Stack,
-  Grid,
 } from '@mui/material'
 import FilterListIcon from '@mui/icons-material/FilterList'
 import SortIcon from '@mui/icons-material/Sort'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import ViewKanbanIcon from '@mui/icons-material/ViewKanban'
-import SettingsIcon from '@mui/icons-material/Settings'
-import { DealKanbanProvider, useDealKanban } from '@/context/DealKanbanContext'
+import { LeadKanbanProvider, useLeadKanban } from '@/context/DealKanbanContext'
 import { KanbanColumn } from '@/components/KanbanColumn'
 import { DealCard } from '@/components/DealCard'
-import type { DealKanbanCard, KanbanFilters, KanbanSortField } from '@/types'
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function parseValue(value: string | null | undefined): number {
-  if (!value) return 0
-  const num = parseFloat(value)
-  return isNaN(num) ? 0 : num
-}
+import type { LeadKanbanCard, KanbanFilters, KanbanSortField } from '@/types'
+import { useState, useMemo, useCallback } from 'react';
 
 // ---------------------------------------------------------------------------
 // Filter/sort bar
@@ -96,8 +83,7 @@ function FilterBar({
               onSortChange(e.target.value as KanbanSortField, sortDirection)
             }
           >
-            <MenuItem value="priority_score">Priority Score</MenuItem>
-            <MenuItem value="purchase_price">Deal Value</MenuItem>
+            <MenuItem value="lead_score">Lead Score</MenuItem>
           </Select>
         </FormControl>
 
@@ -125,7 +111,7 @@ function FilterBar({
         <Stack direction="row" spacing={2} sx={{ mb: 2 }} flexWrap="wrap">
           <TextField
             size="small"
-            label="Min Value ($)"
+            label="Min Score"
             type="number"
             value={filters.valueMin ?? ''}
             onChange={(e) =>
@@ -138,7 +124,7 @@ function FilterBar({
           />
           <TextField
             size="small"
-            label="Max Value ($)"
+            label="Max Score"
             type="number"
             value={filters.valueMax ?? ''}
             onChange={(e) =>
@@ -148,34 +134,6 @@ function FilterBar({
               })
             }
             sx={{ minWidth: 120 }}
-          />
-          <TextField
-            size="small"
-            label="Closes After"
-            type="date"
-            value={filters.closingDateFrom ?? ''}
-            onChange={(e) =>
-              onFiltersChange({
-                ...filters,
-                closingDateFrom: e.target.value || undefined,
-              })
-            }
-            InputLabelProps={{ shrink: true }}
-            sx={{ minWidth: 140 }}
-          />
-          <TextField
-            size="small"
-            label="Closes Before"
-            type="date"
-            value={filters.closingDateTo ?? ''}
-            onChange={(e) =>
-              onFiltersChange({
-                ...filters,
-                closingDateTo: e.target.value || undefined,
-              })
-            }
-            InputLabelProps={{ shrink: true }}
-            sx={{ minWidth: 140 }}
           />
         </Stack>
       </Collapse>
@@ -189,9 +147,9 @@ function FilterBar({
 
 function KanbanBoardInner() {
   const navigate = useNavigate()
-  const { state, moveDeal, setFilters, setSort, refetchAll, isLoading, error } =
-    useDealKanban()
-  const [activeDeal, setActiveDeal] = useState<DealKanbanCard | null>(null)
+  const { state, moveLead, setFilters, setSort, refetchAll, isLoading, error, expandColumn, total_counts } =
+    useLeadKanban()
+  const [activeLead, setActiveLead] = useState<LeadKanbanCard | null>(null)
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -199,94 +157,76 @@ function KanbanBoardInner() {
     })
   )
 
-  // Apply filters and sorting to deals before passing to columns
-  const filteredDealsByStage = useMemo(() => {
-    const result: Record<string, DealKanbanCard[]> = {}
+  // Apply filters and sorting to leads before passing to columns
+  const filteredColumns = useMemo(() => {
+    return state.columns.map((col) => {
+      let filtered = [...col.leads]
 
-    for (const [stageName, deals] of Object.entries(state.dealsByStage)) {
-      let filtered = [...deals]
-
-      // Apply value range filter
+      // Apply score range filter
       if (state.filters.valueMin != null) {
         filtered = filtered.filter(
-          (d) => parseValue(d.purchase_price) >= (state.filters.valueMin ?? 0) * 1000
+          (l) => (l.lead_score ?? 0) >= (state.filters.valueMin ?? 0)
         )
       }
       if (state.filters.valueMax != null) {
         filtered = filtered.filter(
-          (d) => parseValue(d.purchase_price) <= (state.filters.valueMax ?? 0) * 1000
+          (l) => (l.lead_score ?? 0) <= (state.filters.valueMax ?? 0)
         )
-      }
-
-      // Apply closing date range filter
-      if (state.filters.closingDateFrom) {
-        const from = new Date(state.filters.closingDateFrom)
-        filtered = filtered.filter((d) => {
-          if (!d.close_date) return true
-          return new Date(d.close_date) >= from
-        })
-      }
-      if (state.filters.closingDateTo) {
-        const to = new Date(state.filters.closingDateTo)
-        filtered = filtered.filter((d) => {
-          if (!d.close_date) return true
-          return new Date(d.close_date) <= to
-        })
       }
 
       // Apply sorting
       filtered.sort((a, b) => {
         let cmp = 0
-        if (state.sortField === 'priority_score') {
-          const aScore = a.priority_score ? parseFloat(a.priority_score) : 0
-          const bScore = b.priority_score ? parseFloat(b.priority_score) : 0
-          cmp = aScore - bScore
-        } else {
-          const aVal = parseValue(a.purchase_price)
-          const bVal = parseValue(b.purchase_price)
-          cmp = aVal - bVal
+        if (state.sortField === 'lead_score') {
+          cmp = (a.lead_score ?? 0) - (b.lead_score ?? 0)
         }
         return state.sortDirection === 'asc' ? cmp : -cmp
       })
 
-      result[stageName] = filtered
-    }
-
-    return result
-  }, [state.dealsByStage, state.filters, state.sortField, state.sortDirection])
+      return { ...col, leads: filtered, count: filtered.length }
+    })
+  }, [state.columns, state.filters, state.sortField, state.sortDirection])
 
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
-      const deal = event.active.data.current?.deal as DealKanbanCard | undefined
-      if (deal) setActiveDeal(deal)
+      const lead = event.active.data.current?.deal as LeadKanbanCard | undefined
+      if (lead) setActiveLead(lead)
     },
     []
   )
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
-      setActiveDeal(null)
+      setActiveLead(null)
       const { active, over } = event
       if (!over) return
 
-      const fromStage = active.data.current?.deal?.status as string | undefined
-      const toStage = over.data.current?.stageName as string | undefined
+      const leadData = active.data.current?.deal as LeadKanbanCard | undefined
+      const fromColId = leadData?.recommended_action ?? ''
+      const toColId = over.data.current?.stageName as string | undefined
 
-      if (!fromStage || !toStage || fromStage === toStage) return
+      if (!fromColId || !toColId || fromColId === toColId) return
 
-      const dealId = Number(active.id.toString().replace('deal-', ''))
-      if (!isNaN(dealId)) {
-        moveDeal(dealId, fromStage, toStage)
+      const leadId = Number(active.id.toString().replace('deal-', ''))
+      if (!isNaN(leadId)) {
+        moveLead(leadId, fromColId, toColId)
       }
     },
-    [moveDeal]
+    [moveLead]
   )
 
-  const handleDealClick = useCallback(
-    (dealId: number) => {
-      navigate(`/multifamily/deals/${dealId}`)
+  const handleLeadClick = useCallback(
+    (leadId: number) => {
+      navigate(`/properties/${leadId}`)
     },
     [navigate]
+  )
+
+  const handleLoadMore = useCallback(
+    (columnId: string) => {
+      expandColumn(columnId)
+    },
+    [expandColumn]
   )
 
   if (error) {
@@ -297,7 +237,7 @@ function KanbanBoardInner() {
     )
   }
 
-  if (state.stages.length === 0 && isLoading) {
+  if (state.columns.length === 0 && isLoading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
         <CircularProgress aria-label="Loading kanban board" />
@@ -305,19 +245,18 @@ function KanbanBoardInner() {
     )
   }
 
-  if (state.stages.length === 0) {
+  if (state.columns.length === 0) {
     return (
       <Box sx={{ p: 4, textAlign: 'center' }}>
         <Typography color="text.secondary">
-          No pipeline stages configured. Run the seed command to set up initial
-          stages.
+          No leads found. Import leads to get started.
         </Typography>
       </Box>
     )
   }
 
   return (
-    <Box>
+    <Box sx={{ width: '100%', overflow: 'hidden' }}>
       {/* Header */}
       <Box
         sx={{
@@ -330,18 +269,13 @@ function KanbanBoardInner() {
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <ViewKanbanIcon color="primary" />
           <Typography variant="h5" component="h1" fontWeight={600}>
-            Pipeline Kanban
+            Lead Pipeline Kanban
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Tooltip title="Refresh">
             <IconButton onClick={refetchAll} size="small">
               <RefreshIcon />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="Configure pipeline stages">
-            <IconButton onClick={() => navigate('/admin/pipeline-stages')} size="small">
-              <SettingsIcon />
             </IconButton>
           </Tooltip>
         </Box>
@@ -368,24 +302,26 @@ function KanbanBoardInner() {
             gap: 2,
             overflowX: 'auto',
             pb: 2,
+            flexWrap: 'nowrap',
           }}
         >
-          {state.stages
-            .sort((a, b) => a.order - b.order)
-            .map((stage) => (
+          {filteredColumns
+            .sort((a, b) => a.sort_order - b.sort_order)
+            .map((col) => (
               <KanbanColumn
-                key={stage.stage_name}
-                stageName={stage.stage_name}
-                deals={filteredDealsByStage[stage.stage_name] ?? []}
-                onDealClick={handleDealClick}
+                key={col.id}
+                column={col}
+                onDealClick={handleLeadClick}
+                onLoadMore={handleLoadMore}
+                totalCount={total_counts[col.id] ?? col.count}
               />
             ))}
         </Box>
 
         <DragOverlay>
-          {activeDeal ? (
+          {activeLead ? (
             <Box sx={{ opacity: 0.8, maxWidth: 280 }}>
-              <DealCard deal={activeDeal} />
+              <DealCard deal={activeLead} />
             </Box>
           ) : null}
         </DragOverlay>
@@ -400,9 +336,9 @@ function KanbanBoardInner() {
 
 export function DealKanbanPage() {
   return (
-    <DealKanbanProvider>
+    <LeadKanbanProvider>
       <KanbanBoardInner />
-    </DealKanbanProvider>
+    </LeadKanbanProvider>
   )
 }
 
