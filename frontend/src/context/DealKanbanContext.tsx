@@ -28,6 +28,7 @@ const DEFAULT_LIMIT = 50
 
 type KanbanAction =
   | { type: 'SET_COLUMNS'; columns: LeadKanbanColumn[] }
+  | { type: 'MERGE_COLUMNS'; expandedColumns: LeadKanbanColumn[] }
   | { type: 'MOVE_LEAD'; leadId: number; fromColId: string; toColId: string }
   | { type: 'SET_FILTERS'; filters: KanbanFilters }
   | { type: 'SET_SORT'; field: KanbanSortField; direction: 'asc' | 'desc' }
@@ -66,6 +67,15 @@ function kanbanReducer(state: KanbanState, action: KanbanAction): KanbanState {
   switch (action.type) {
     case 'SET_COLUMNS':
       return { ...state, columns: action.columns }
+    case 'MERGE_COLUMNS': {
+      // Only replace columns that were returned by the expanded fetch,
+      // keeping existing columns untouched
+      const merged = state.columns.map((col) => {
+        const expanded = action.expandedColumns.find((c) => c.id === col.id)
+        return expanded ?? col
+      })
+      return { ...state, columns: merged }
+    }
     case 'MOVE_LEAD': {
       const { leadId, fromColId, toColId } = action
       const newColumns = state.columns.map((col) => {
@@ -232,19 +242,19 @@ export function LeadKanbanProvider({ children }: { children: React.ReactNode }) 
         return next
       })
 
-      // Refetch with limit=0 and column_id to get all leads for that column
+      // Refetch with column_id to get all leads for that column
       queryClient.fetchQuery({
         queryKey: ['kanban-leads-expand', columnId],
         queryFn: async () => {
           const response = await leadKanbanService.getKanbanLeads({
-            limit: 0,
             column_id: columnId,
           })
           return response
         },
       }).then((response) => {
         // Merge the expanded column's leads into the existing columns
-        dispatch({ type: 'SET_COLUMNS', columns: response.columns })
+        // (only replaces the matching column, keeps others intact)
+        dispatch({ type: 'MERGE_COLUMNS', expandedColumns: response.columns })
         setStoredTotalCounts(response.total_counts)
       })
     },
