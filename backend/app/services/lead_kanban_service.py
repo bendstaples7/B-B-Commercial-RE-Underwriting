@@ -38,6 +38,9 @@ _STATUS_MAP: Dict[str, Optional[str]] = {
     "suppress":           "suppressed",
 }
 
+# Valid recommended_action values derived from column definitions
+_VALID_ACTIONS: set = {col["id"] for col in COLUMN_DEFS}
+
 
 def _lead_to_summary(row: db.Row) -> Dict[str, Any]:
     """Convert a raw lead DB row to a lead summary dict."""
@@ -160,6 +163,12 @@ class LeadKanbanService:
         if not lead:
             raise ValueError(f"Lead {lead_id} not found or not owned by current user.")
 
+        # Validate target_action against known column IDs
+        if target_action not in _VALID_ACTIONS:
+            raise ValueError(
+                f"Invalid target_action '{target_action}'. Must be one of: {', '.join(sorted(_VALID_ACTIONS))}"
+            )
+
         # Update recommended_action
         lead.recommended_action = target_action
 
@@ -199,7 +208,6 @@ class LeadKanbanService:
                 has_property_match
             FROM leads
             WHERE owner_user_id = :user_id
-              AND recommended_action IS NOT NULL
             ORDER BY recommended_action, lead_score DESC NULLS LAST
         """)
         result = db.session.execute(sql, {"user_id": user_id})
