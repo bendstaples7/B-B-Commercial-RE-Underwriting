@@ -123,7 +123,7 @@ export function QuotesPage() {
 
   // Placeholder for "Create New Quote" functionality
   const handleCreateNewQuote = () => {
-    alert('Create New Quote functionality to be implemented!')
+    // Create New Quote functionality to be implemented
     // In a real scenario, this would navigate to a form or open a dialog
     // similar to CreateDealDialog in DealListPage.tsx
   }
