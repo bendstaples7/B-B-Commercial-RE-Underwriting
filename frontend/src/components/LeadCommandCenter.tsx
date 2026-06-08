@@ -201,6 +201,7 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['commandCenter', leadId],
     queryFn: () => commandCenterService.getCommandCenter(leadId),
+    staleTime: 0, // always fetch fresh — command center shows live contact/action data
   })
 
   useEffect(() => {
