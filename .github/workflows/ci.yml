@@ -161,3 +161,17 @@ jobs:
           FLASK_ENV: testing
           SECRET_KEY: ci-test-secret-key
           JWT_SECRET_KEY: ci-test-jwt-secret
+
+      - name: Smoke-test migrations against PostgreSQL
+        # Runs flask db upgrade against the real PostgreSQL service container.
+        # This catches migration failures (wrong API calls, SQL errors, enum
+        # issues) that are invisible when tests use SQLite in-memory.
+        # Runs AFTER pytest so schema changes don't interfere with test fixtures.
+        run: flask db upgrade
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+          FLASK_ENV: testing
+          SECRET_KEY: ci-test-secret-key
+          JWT_SECRET_KEY: ci-test-jwt-secret
+          FLASK_APP: run.py

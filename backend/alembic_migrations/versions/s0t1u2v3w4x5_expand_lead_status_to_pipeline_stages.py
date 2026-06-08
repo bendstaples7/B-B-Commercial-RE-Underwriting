@@ -74,13 +74,18 @@ def upgrade():
 
     # PostgreSQL ADD VALUE must be committed before being used in DML.
     # We run each ADD VALUE in autocommit mode so it's visible immediately.
+    #
+    # bind.connection returns the SQLAlchemy pool proxy (_ConnectionFairy).
+    # We need the underlying psycopg2 DBAPI connection for .autocommit and
+    # .execute() — accessed via .connection on the proxy.
     bind = op.get_bind()
-    raw_conn = bind.connection
+    raw_conn = bind.connection.connection  # unwrap pool proxy → psycopg2 connection
     raw_conn.autocommit = True
     for val in new_values:
-        raw_conn.execute(
-            f"ALTER TYPE lead_status_enum ADD VALUE IF NOT EXISTS '{val}'"
-        )
+        with raw_conn.cursor() as cur:
+            cur.execute(
+                f"ALTER TYPE lead_status_enum ADD VALUE IF NOT EXISTS '{val}'"
+            )
     raw_conn.autocommit = False
 
     logger.info("Added new enum values to lead_status_enum")
