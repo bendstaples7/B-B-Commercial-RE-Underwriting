@@ -217,7 +217,11 @@ class HubSpotMatcherService:
                 line = _re.sub(r'^\d+[).]\s*', '', line).strip()
                 # Extract phone number (digits, spaces, dashes, parens, plus)
                 # and strip trailing annotations like " CONFIRMED", " (disconnected)"
-                phone_match = _re.match(r'^(\+?[\d\s\(\)\-\.]+)', line)
+                # Match up to 15 chars of phone pattern, stop before annotation words
+                phone_match = _re.match(r'^(\+?[\d\s\(\)\-\.]{7,20}?)(?:\s+[A-Za-z(]|$)', line)
+                if not phone_match:
+                    # Fallback: just extract digit groups
+                    phone_match = _re.match(r'^(\+?[\d\(\)\-\.\s]+)', line)
                 if phone_match:
                     phone_val = phone_match.group(1).strip()
                     if phone_val and phone_val not in hs_phones:
