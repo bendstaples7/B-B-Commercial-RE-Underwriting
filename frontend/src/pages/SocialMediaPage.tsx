@@ -24,9 +24,9 @@ const formatDate = (dateStr: string | null | undefined): string => {
     return 'N/A'
   }
 }
-const ImportRunStatusChip: React.FC<{ status: string }> = ({ status }) => {
+const ImportRunStatusChip: React.FC<{ status: string | null | undefined }> = ({ status }) => {
   let color: 'default' | 'primary' | 'success' | 'warning' | 'error' = 'default'
-  switch (status.toLowerCase()) {
+  switch ((status || '').toLowerCase()) {
     case 'completed':
       color = 'success'
       break
@@ -43,7 +43,7 @@ const ImportRunStatusChip: React.FC<{ status: string }> = ({ status }) => {
     default:
       color = 'default'
   }
-  return <Chip label={status} size='small' color={color} />
+  return <Chip label={status ?? 'unknown'} size='small' color={color} />
 }
 // ---------------------------------------------------------------------------
 // SocialMediaPage Component
@@ -54,10 +54,7 @@ export function SocialMediaPage() {
     queryKey: ['hubspot', 'import-runs'],
     queryFn: () => hubSpotService.listImportRuns(1, 5), // Get last 5 import runs
   })
-  // Fetch Marketing Lists
-  const marketingLists: any[] = [];
-  const isLoadingMarketingLists = false;
-  const isErrorMarketingLists = false;
+  // Marketing Lists — no real API available yet, show empty/coming-soon state
   return (
     <Box sx={{ px: { xs: 1, sm: 2 } }}>
       <Typography variant='h5' component='h1' fontWeight={600} mb={3}>
@@ -130,45 +127,14 @@ export function SocialMediaPage() {
           </List>
         )}
       </Paper>
-      {/* Marketing Lists Summary */}
+      {/* Marketing Lists Summary — coming soon */}
       <Paper elevation={1} sx={{ p: 3 }}>
         <Typography variant='h6' component='h2' fontWeight={500} mb={2}>
           Marketing Lists
         </Typography>
-        {isLoadingMarketingLists && (
-          <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-            <CircularProgress size={24} aria-label='Loading marketing lists summary' />
-          </Box>
-        )}
-        {isErrorMarketingLists && (
-          <Alert severity='error' sx={{ mb: 2 }}>
-            {(undefined as unknown as Error)?.message ?? 'Failed to load marketing lists summary.'}
-          </Alert>
-        )}
-        {!isLoadingMarketingLists && !isErrorMarketingLists && marketingLists?.length === 0 && (
-          <Typography variant='body2' color='text.secondary'>
-            No marketing lists found.
-          </Typography>
-        )}
-        {!isLoadingMarketingLists && !isErrorMarketingLists && marketingLists && Array.isArray(marketingLists) && marketingLists.length > 0 && (
-          <List dense>
-            {marketingLists.map((list: any) => (
-              <React.Fragment key={list.id}>
-                <ListItem disablePadding>
-                  <ListItemText
-                    primary={list.name}
-                    secondary={
-                      <Typography variant='caption' color='text.secondary'>
-                        {list.member_count ?? 0} members
-                      </Typography>
-                    }
-                  />
-                </ListItem>
-                <Divider component='li' light />
-              </React.Fragment>
-            ))}
-          </List>
-        )}
+        <Typography variant='body2' color='text.secondary'>
+          Marketing lists integration coming soon.
+        </Typography>
       </Paper>
     </Box>
   )
