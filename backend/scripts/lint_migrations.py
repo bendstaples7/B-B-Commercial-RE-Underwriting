@@ -11,9 +11,11 @@ Catches dangerous patterns that cause silent failures or production crashes:
    SQLAlchemy pool proxy, not the raw DBAPI connection. Accessing .autocommit or
    .execute() on the proxy fails. Must use bind.connection.connection.
 
-3. Bare string-interpolated op.execute(f"...") with user-controlled values —
-   flagged as a warning (not an error) since parameterized queries are safer,
-   but migration DML with hardcoded literals is generally fine.
+3. batch_op.alter_column converting ARRAY/JSONB to JSON without a USING cast —
+   PostgreSQL requires explicit USING; batch_alter_table doesn't support it.
+
+4. ALTER TABLE / batch_alter_table referencing a table not created in the
+   migration chain — catches "relation does not exist" errors on fresh databases.
 
 Usage:
     python scripts/lint_migrations.py                     # lint all migrations
@@ -25,6 +27,26 @@ import ast
 import sys
 import re
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Tables created by the initial schema migration (000000000000).
+# Any migration that ALTERs a table not in this set (or not created by a
+# prior migration in the chain) will fail on a fresh database.
+# Update this set whenever 000000000000_initial_schema.py adds new tables.
+# ---------------------------------------------------------------------------
+_INITIAL_SCHEMA_TABLES = {
+    # From 001_create_schema.sql
+    'analysis_sessions', 'property_facts', 'comparable_sales',
+    'ranked_comparables', 'valuation_results', 'comparable_valuations',
+    'scenarios', 'wholesale_scenarios', 'fix_flip_scenarios',
+    'buy_hold_scenarios',
+    # From 002_lead_management.sql
+    'field_mappings', 'import_jobs', 'oauth_tokens', 'scoring_weights',
+    'data_sources', 'leads', 'lead_audit_trail', 'enrichment_records',
+    'marketing_lists', 'marketing_list_members',
+    # users — created outside Alembic before migrations were introduced
+    'users',
+}
 
 # ---------------------------------------------------------------------------
 # Patterns to flag as ERRORS (will block CI)
@@ -181,6 +203,64 @@ def lint_file(path: Path) -> list[tuple[int, str, str]]:
                     "  Setting autocommit on the pool proxy has no effect and "
                     "silently fails.",
                 ))
+
+    # --------------------------------------------------------------------
+    # Check that ALTER TABLE / batch_alter_table references only tables
+    # that exist in the initial schema or are created somewhere in the
+    # Alembic migration chain (by any migration's op.create_table).
+    #
+    # "relation does not exist" errors on fresh DBs happen when a migration
+    # assumes a table was created by a prior raw SQL file rather than by
+    # the Alembic chain.  This check catches that at lint time.
+    # --------------------------------------------------------------------
+    # Build the full set of tables known to Alembic: start with the initial
+    # schema tables, then add every table created by any migration file.
+    _CREATE_TABLE_RE = re.compile(
+        r"op\.create_table\s*\(\s*['\"](\w+)['\"]",
+    )
+    # Collect tables from ALL migration files in the same directory
+    all_known_tables: set[str] = set(_INITIAL_SCHEMA_TABLES)
+    versions_dir = path.parent
+    if versions_dir.is_dir():
+        for mig_file in versions_dir.glob('*.py'):
+            if mig_file.name == '__init__.py':
+                continue
+            try:
+                mig_text = mig_file.read_text(encoding='utf-8')
+                for m in _CREATE_TABLE_RE.finditer(mig_text):
+                    all_known_tables.add(m.group(1).lower())
+            except Exception:
+                pass
+
+    # Also collect tables created in THIS file
+    for m in _CREATE_TABLE_RE.finditer('\n'.join(lines)):
+        all_known_tables.add(m.group(1).lower())
+
+    # Skip this check for the initial schema file itself
+    _ALTER_TABLE_RE = re.compile(
+        r"(?:op\.batch_alter_table\s*\(\s*['\"](\w+)['\"]"
+        r"|ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?['\"]?(\w+)['\"]?)",
+        re.IGNORECASE,
+    )
+    is_initial_schema = '000000000000' in path.name
+    if not is_initial_schema:
+        for i, line in enumerate(lines, start=1):
+            if line.lstrip().startswith('#'):
+                continue
+            m = _ALTER_TABLE_RE.search(line)
+            if m:
+                tname = m.group(1) or m.group(2)
+                if tname and tname.lower() not in all_known_tables:
+                    issues.append((
+                        i, 'ERROR',
+                        f"ALTER TABLE '{tname}' references a table not created by "
+                        f"any Alembic migration or the initial schema.\n"
+                        f"  This will fail with 'relation \"{tname}\" does not exist' "
+                        f"on a fresh database.\n"
+                        f"  Add CREATE TABLE IF NOT EXISTS for '{tname}' to "
+                        f"000000000000_initial_schema.py, or verify the table is "
+                        f"created by a prior migration in the chain.",
+                    ))
 
     return issues
 
