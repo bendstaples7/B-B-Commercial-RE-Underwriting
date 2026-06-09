@@ -1,0 +1,16 @@
+{
+  "enabled": true,
+  "name": "Believe In Yourself",
+  "description": "When Kiro claims it doesn't have access to the deployed database or similar resources, this hook prompts it to verify that claim — because it often does have access, or can clarify exactly what would be needed to get it.",
+  "version": "1",
+  "when": {
+    "type": "preToolUse",
+    "toolTypes": [
+      "shell"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Before you tell the user \"I don't have access to the deployed database\" or similar statements about lacking access to remote/production resources, stop and verify:\n\n1. Check if the backend/.env file has a DATABASE_URL or similar connection string pointing to a remote/production database.\n2. Check if you can actually connect or query using the psql CLI or the Flask shell with the current environment.\n3. If you genuinely cannot access it, clearly explain to the user EXACTLY what would be needed (e.g., \"I need the production DATABASE_URL added to backend/.env\" or \"I need SSH credentials to tunnel to the VPS\").\n\nDo NOT assume you lack access without checking. Many times the credentials are already present in the environment. Believe in yourself — verify first, then report honestly."
+  }
+}
