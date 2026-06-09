@@ -141,13 +141,17 @@ def test_property3_connection_pool_settings_invariant(config_name):
     pool_size=3, max_overflow=0, pool_pre_ping=True, pool_timeout=30.
     """
     from app import create_app
-    with patch.dict(os.environ, {'DATABASE_URL': 'postgresql://user:pw@host:5432/db'}, clear=False):
+    with patch.dict(os.environ, {
+        'DATABASE_URL': 'postgresql://user:pw@host:5432/db',
+        'SECRET_KEY': 'test-secret-key-for-pool-test',
+    }, clear=False):
         with patch('app._validate_and_log_database_url'):
             with patch('app._assert_pool_pre_ping'):
-                with patch('app.db.init_app'):
-                    with patch('app.migrate.init_app'):
-                        with patch('app.limiter.init_app'):
-                            app = create_app(config_name)
+                with patch('app._assert_single_migration_head'):
+                    with patch('app.db.init_app'):
+                        with patch('app.migrate.init_app'):
+                            with patch('app.limiter.init_app'):
+                                app = create_app(config_name)
     opts = app.config.get('SQLALCHEMY_ENGINE_OPTIONS', {})
     assert opts.get('pool_size') == 3
     assert opts.get('max_overflow') == 0
@@ -173,9 +177,11 @@ def test_property4_superuser_startup_rejection(host, user):
     """
     # Feature: cloud-database-migration, Property 4: Superuser Startup Rejection
     For any database connection where the connected user has usesuper=True,
-    _assert_not_superuser must raise SystemExit.
+    _assert_not_superuser must raise ConfigurationError (not SystemExit).
+    Requirements: 5.1, 5.4
     """
     from app import _assert_not_superuser
+    from app.exceptions import ConfigurationError
     db_url = f'postgresql://{user}:pw@{host}:5432/mydb'
     app = _make_minimal_flask_app(db_url)
     app.config['TESTING'] = False
@@ -190,7 +196,7 @@ def test_property4_superuser_startup_rejection(host, user):
 
     with patch('app.db.session.execute', return_value=mock_result):
         with app.app_context():
-            with pytest.raises(SystemExit):
+            with pytest.raises(ConfigurationError):
                 _assert_not_superuser(app)
 
 
@@ -221,9 +227,11 @@ def test_property5_invalid_database_url_causes_startup_abort(bad_url, caplog):
     """
     # Feature: cloud-database-migration, Property 5: Invalid DATABASE_URL Causes Startup Abort
     For any absent, empty, or non-PostgreSQL DATABASE_URL, _validate_and_log_database_url
-    must raise SystemExit and log an error containing 'DATABASE_URL'.
+    must raise ConfigurationError (not SystemExit) and log an error containing 'DATABASE_URL'.
+    Requirements: 5.1, 5.4
     """
     from app import _validate_and_log_database_url
+    from app.exceptions import ConfigurationError
     app = _make_minimal_flask_app()
     app.config['TESTING'] = False  # guard only runs in non-testing mode
 
@@ -233,11 +241,11 @@ def test_property5_invalid_database_url_causes_startup_abort(bad_url, caplog):
     with caplog.at_level(logging.ERROR, logger=app.logger.name):
         if bad_url.strip() == '':
             with patch.dict(os.environ, env_without, clear=True):
-                with pytest.raises(SystemExit):
+                with pytest.raises(ConfigurationError):
                     _validate_and_log_database_url(app)
         else:
             with patch.dict(os.environ, {'DATABASE_URL': bad_url}, clear=False):
-                with pytest.raises(SystemExit):
+                with pytest.raises(ConfigurationError):
                     _validate_and_log_database_url(app)
 
     log_text = caplog.text
@@ -297,18 +305,27 @@ _rev_id_sets = st.lists(_hex_rev_id, min_size=2, max_size=5, unique=True)
 def test_property7_multiple_alembic_heads_error_contains_revision_ids(head_ids):
     """
     # Feature: cloud-database-migration, Property 7: Multiple Alembic Heads Error Contains Revision IDs
-    For any set of 2+ Alembic head revision IDs, the SystemExit message raised by
+    For any set of 2+ Alembic head revision IDs, the RuntimeError message raised by
     _assert_single_migration_head must contain every revision ID in the set.
+
+    The underlying validator (assert_single_head_and_root) does NOT call
+    SystemExit — _assert_single_migration_head wraps it and raises RuntimeError.
     """
     from app import _assert_single_migration_head
     app = _make_minimal_flask_app()
 
-    mock_script = MagicMock()
-    mock_script.get_heads.return_value = head_ids
-
-    # Patch ScriptDirectory.from_config to return our mock
-    with patch('alembic.script.ScriptDirectory.from_config', return_value=mock_script):
-        with pytest.raises(SystemExit) as exc_info:
+    # Patch assert_single_head_and_root at the app package level.
+    # _assert_single_migration_head resolves the name from the module namespace,
+    # so patching the name in the ``app`` module object is sufficient.
+    mock_result = {
+        "head_count": len(head_ids),
+        "head_revisions": list(head_ids),
+        "root_count": 1,
+        "root_revisions": ["000000000000"],
+    }
+    import app as app_module
+    with patch.object(app_module, 'assert_single_head_and_root', return_value=mock_result):
+        with pytest.raises(RuntimeError) as exc_info:
             _assert_single_migration_head(app)
 
     error_message = str(exc_info.value)
@@ -405,13 +422,17 @@ def test_property9_connection_pool_budget(flask_workers, celery_threads, beat_pr
     max_connections (100). pool_size is read from the application config.
     """
     from app import create_app
-    with patch.dict(os.environ, {'DATABASE_URL': 'postgresql://user:pw@host:5432/db'}, clear=False):
+    with patch.dict(os.environ, {
+        'DATABASE_URL': 'postgresql://user:pw@host:5432/db',
+        'SECRET_KEY': 'test-secret-key-for-pool-budget',
+    }, clear=False):
         with patch('app._validate_and_log_database_url'):
             with patch('app._assert_pool_pre_ping'):
-                with patch('app.db.init_app'):
-                    with patch('app.migrate.init_app'):
-                        with patch('app.limiter.init_app'):
-                            _app = create_app('development')
+                with patch('app._assert_single_migration_head'):
+                    with patch('app.db.init_app'):
+                        with patch('app.migrate.init_app'):
+                            with patch('app.limiter.init_app'):
+                                _app = create_app('development')
     pool_size = _app.config['SQLALCHEMY_ENGINE_OPTIONS']['pool_size']
 
     total = (
@@ -436,13 +457,17 @@ def test_property9_connection_pool_budget_boundary():
     assertion is not vacuous.
     """
     from app import create_app
-    with patch.dict(os.environ, {'DATABASE_URL': 'postgresql://user:pw@host:5432/db'}, clear=False):
+    with patch.dict(os.environ, {
+        'DATABASE_URL': 'postgresql://user:pw@host:5432/db',
+        'SECRET_KEY': 'test-secret-key-for-pool-boundary',
+    }, clear=False):
         with patch('app._validate_and_log_database_url'):
             with patch('app._assert_pool_pre_ping'):
-                with patch('app.db.init_app'):
-                    with patch('app.migrate.init_app'):
-                        with patch('app.limiter.init_app'):
-                            _app = create_app('development')
+                with patch('app._assert_single_migration_head'):
+                    with patch('app.db.init_app'):
+                        with patch('app.migrate.init_app'):
+                            with patch('app.limiter.init_app'):
+                                _app = create_app('development')
     pool_size = _app.config['SQLALCHEMY_ENGINE_OPTIONS']['pool_size']
 
     # Worst-case within deployment envelope: must pass
@@ -549,29 +574,31 @@ def test_guard1_postgres_scheme_accepted(caplog):
 
 
 def test_guard1_missing_database_url_raises_system_exit(caplog):
-    """Guard 1: DATABASE_URL absent → SystemExit raised, log contains 'DATABASE_URL'."""
+    """Guard 1: DATABASE_URL absent → ConfigurationError raised, log contains 'DATABASE_URL'."""
     from app import _validate_and_log_database_url
+    from app.exceptions import ConfigurationError
     app = _make_minimal_flask_app()
     app.config['TESTING'] = False  # guard only runs in non-testing mode
     env_without = {k: v for k, v in os.environ.items() if k != 'DATABASE_URL'}
 
     with caplog.at_level(logging.ERROR, logger=app.logger.name):
         with patch.dict(os.environ, env_without, clear=True):
-            with pytest.raises(SystemExit):
+            with pytest.raises(ConfigurationError):
                 _validate_and_log_database_url(app)
 
     assert 'DATABASE_URL' in caplog.text
 
 
 def test_guard1_mysql_scheme_raises_system_exit(caplog):
-    """Guard 1: mysql:// scheme → SystemExit raised, log contains 'DATABASE_URL'."""
+    """Guard 1: mysql:// scheme → ConfigurationError raised, log contains 'DATABASE_URL'."""
     from app import _validate_and_log_database_url
+    from app.exceptions import ConfigurationError
     app = _make_minimal_flask_app()
     app.config['TESTING'] = False  # guard only runs in non-testing mode
 
     with caplog.at_level(logging.ERROR, logger=app.logger.name):
         with patch.dict(os.environ, {'DATABASE_URL': 'mysql://user:pw@host/db'}, clear=False):
-            with pytest.raises(SystemExit):
+            with pytest.raises(ConfigurationError):
                 _validate_and_log_database_url(app)
 
     assert 'DATABASE_URL' in caplog.text

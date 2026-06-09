@@ -36,29 +36,20 @@ logger = logging.getLogger('alembic.runtime.migration')
 
 def upgrade():
     # ------------------------------------------------------------------
-    # 1. Create enum types
+    # 1. Enum types are created implicitly by the op.create_table() calls
+    # below.  Each enum (contact_role_enum, phone_label_enum,
+    # email_label_enum, property_contact_role_enum) is used by exactly one
+    # table, so SQLAlchemy emits its CREATE TYPE exactly once before the
+    # owning table.
+    #
+    # NOTE: do NOT create these types explicitly here.  ``create_type=False``
+    # is not honoured by op.create_table() in this SQLAlchemy/Alembic version
+    # (it emits the CREATE TYPE regardless), so an explicit create here — or
+    # the historical ``sa.Enum(...).create(checkfirst=True)`` — produced a
+    # duplicate ``CREATE TYPE`` and aborted the fresh-DB upgrade with
+    # ``DuplicateObject``.  Letting create_table own the creation keeps it to
+    # a single emission.
     # ------------------------------------------------------------------
-    contact_role_enum = sa.Enum(
-        'owner', 'property_manager', 'attorney', 'family_member', 'other',
-        name='contact_role_enum'
-    )
-    phone_label_enum = sa.Enum(
-        'mobile', 'home', 'work', 'other',
-        name='phone_label_enum'
-    )
-    email_label_enum = sa.Enum(
-        'personal', 'work', 'other',
-        name='email_label_enum'
-    )
-    property_contact_role_enum = sa.Enum(
-        'owner', 'property_manager', 'attorney', 'family_member', 'other',
-        name='property_contact_role_enum'
-    )
-
-    contact_role_enum.create(op.get_bind(), checkfirst=True)
-    phone_label_enum.create(op.get_bind(), checkfirst=True)
-    email_label_enum.create(op.get_bind(), checkfirst=True)
-    property_contact_role_enum.create(op.get_bind(), checkfirst=True)
 
     # ------------------------------------------------------------------
     # 2. Create contacts table
