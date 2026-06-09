@@ -1,7 +1,7 @@
 /**
  * DealKanbanPage — main Kanban board view for managing leads with drag-and-drop.
  *
- * Displays recommended_action columns, fetches leads per column, and supports
+ * Displays lead_status columns, fetches leads per column, and supports
  * filtering and sorting with pagination.
  */
 import { useNavigate } from 'react-router-dom'
@@ -207,7 +207,7 @@ function KanbanBoardInner() {
       if (!over) return
 
       const leadData = active.data.current?.deal as LeadKanbanCard | undefined
-      const fromColId = leadData?.recommended_action ?? ''
+      const fromColId = leadData?.lead_status ?? ''
       const toColId = over.data.current?.stageName as string | undefined
 
       if (!fromColId || !toColId || fromColId === toColId) return

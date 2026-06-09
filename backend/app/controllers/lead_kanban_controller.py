@@ -52,7 +52,7 @@ def handle_errors(f):
 @handle_errors
 @require_auth
 def get_kanban_leads():
-    """Return kanban columns with leads grouped by recommended_action.
+    """Return kanban columns with leads grouped by lead_status.
 
     Query parameters:
         limit (int, optional): max leads per column, default 50, max 200.
@@ -75,7 +75,7 @@ def get_kanban_leads():
 @handle_errors
 @require_auth
 def move_kanban_lead(lead_id: int):
-    """Move a lead to a different recommended_action column."""
+    """Move a lead to a different lead_status column."""
     data = request.get_json(silent=True) or {}
     target_action = data.get("target_action")
     if not target_action:

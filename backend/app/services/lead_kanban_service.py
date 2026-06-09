@@ -1,7 +1,7 @@
 """LeadKanbanService — provides kanban board data from the leads table.
 
-Groups leads by recommended_action for the current authenticated user,
-returning columns with action names, counts, and lead summaries.
+Groups leads by lead_status (pipeline stages) for the current authenticated user,
+returning columns with status names, counts, and lead summaries.
 """
 
 from app import db
@@ -11,36 +11,44 @@ from sqlalchemy import text
 
 
 # ---------------------------------------------------------------------------
-# Column definitions: recommended_action → label, icon, sort_order
+# Column definitions: lead_status → label, icon, sort_order
+# All 13 pipeline stages from the Lead model.
 # ---------------------------------------------------------------------------
 COLUMN_DEFS: List[Dict[str, Any]] = [
-    {"id": "add_contact_info",   "label": "Inbox",             "icon": "\U0001f4e5", "sort_order": 0},
-    {"id": "resolve_match",      "label": "Resolve Match",     "icon": "\U0001f50d", "sort_order": 1},
-    {"id": "enrich_data",        "label": "Enrich Data",       "icon": "\U0001f4cb", "sort_order": 2},
-    {"id": "analyze_property",   "label": "Analyze",           "icon": "\U0001f4ca", "sort_order": 3},
-    {"id": "ready_for_outreach", "label": "Ready for Outreach","icon": "\U0001f4ec", "sort_order": 4},
-    {"id": "follow_up_now",      "label": "Follow Up",         "icon": "\U0001f4de", "sort_order": 5},
-    {"id": "create_task",        "label": "Needs Task",        "icon": "\U0001f4dd", "sort_order": 6},
-    {"id": "nurture",            "label": "Nurture",           "icon": "\U0001f331", "sort_order": 7},
-    {"id": "suppress",           "label": "Suppressed",        "icon": "\U0001f6ab", "sort_order": 8},
+    {"id": "skip_trace",                  "label": "Skip Trace",                    "icon": "\U0001f50d", "sort_order": 0},
+    {"id": "awaiting_skip_trace",         "label": "Awaiting Skip Trace",           "icon": "\u23f3",     "sort_order": 1},
+    {"id": "mailing_no_contact_made",     "label": "Mailing, No Contact Made",      "icon": "\U0001f4ec", "sort_order": 2},
+    {"id": "mailing_contacted_no_interest","label": "Mailing, Contacted, No Interest","icon": "\U0001f4ed", "sort_order": 3},
+    {"id": "mailing_contacted_interested", "label": "Mailing, Contacted, Interested","icon": "\U0001f4e8", "sort_order": 4},
+    {"id": "negotiating_remote",          "label": "Negotiating Remote",             "icon": "\U0001f91d", "sort_order": 5},
+    {"id": "in_person_appointment",       "label": "In Person Appointment",         "icon": "\U0001f4c5", "sort_order": 6},
+    {"id": "offer_delivered",             "label": "Offer Delivered",               "icon": "\U0001f4c4", "sort_order": 7},
+    {"id": "deprioritize",                "label": "Deprioritize",                  "icon": "\u23f8\ufe0f", "sort_order": 8},
+    {"id": "deal_won",                    "label": "Deal Won",                      "icon": "\U0001f389", "sort_order": 9},
+    {"id": "deal_lost",                   "label": "Deal Lost",                     "icon": "\u274c",     "sort_order": 10},
+    {"id": "suppressed",                  "label": "Suppressed",                    "icon": "\U0001f6ab", "sort_order": 11},
+    {"id": "do_not_contact",              "label": "Do Not Contact",                "icon": "\u26d4",     "sort_order": 12},
 ]
 
-# Map column IDs to the lead_status values appropriate for drag-updates.
-# Uses the new pipeline stage values from the HubSpot-aligned enum.
+# Map column IDs (lead_status values) to themselves — each column maps 1:1.
 _STATUS_MAP: Dict[str, Optional[str]] = {
-    "add_contact_info":   None,                          # keep existing status
-    "resolve_match":      "mailing_no_contact_made",    # need to resolve match before contacting
-    "enrich_data":        "mailing_no_contact_made",    # need more data before outreach
-    "analyze_property":   "mailing_no_contact_made",    # under evaluation, pre-contact
-    "ready_for_outreach": "mailing_no_contact_made",    # ready to reach out
-    "follow_up_now":      "mailing_contacted_interested",  # contact was made, following up
-    "create_task":        "mailing_no_contact_made",    # need a task before advancing
-    "nurture":            "deprioritize",                # long-term nurture, not urgent
-    "suppress":           "suppressed",                  # unchanged
+    "skip_trace":                   "skip_trace",
+    "awaiting_skip_trace":          "awaiting_skip_trace",
+    "mailing_no_contact_made":      "mailing_no_contact_made",
+    "mailing_contacted_no_interest":"mailing_contacted_no_interest",
+    "mailing_contacted_interested": "mailing_contacted_interested",
+    "negotiating_remote":           "negotiating_remote",
+    "in_person_appointment":        "in_person_appointment",
+    "offer_delivered":              "offer_delivered",
+    "deprioritize":                 "deprioritize",
+    "deal_won":                     "deal_won",
+    "deal_lost":                    "deal_lost",
+    "suppressed":                   "suppressed",
+    "do_not_contact":               "do_not_contact",
 }
 
-# Valid recommended_action values derived from column definitions
-_VALID_ACTIONS: set = {col["id"] for col in COLUMN_DEFS}
+# Valid lead_status values derived from column definitions
+_VALID_STATUSES: set = {col["id"] for col in COLUMN_DEFS}
 
 
 def _lead_to_summary(row: db.Row) -> Dict[str, Any]:
@@ -79,7 +87,7 @@ class LeadKanbanService:
         limit: int = 50,
         column_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Return all kanban columns with leads grouped by recommended_action.
+        """Return all kanban columns with leads grouped by lead_status.
 
         Returns ALL column definitions — even columns with zero leads.
 
@@ -91,33 +99,30 @@ class LeadKanbanService:
             If provided, return ALL leads for the matching column (no slicing).
         """
         user_id = get_current_user_id()
-        # Query leads owned by this user, grouped by recommended_action
-        rows = self._query_leads_by_action(user_id)
-        # Build a map: recommended_action → list of lead summaries
-        action_map: Dict[Optional[str], List[Dict[str, Any]]] = {}
+        # Query leads owned by this user, grouped by lead_status
+        rows = self._query_leads_by_status(user_id)
+        # Build a map: lead_status → list of lead summaries
+        status_map: Dict[Optional[str], List[Dict[str, Any]]] = {}
         for row in rows:
-            action = row.recommended_action
-            if action not in action_map:
-                action_map[action] = []
-            action_map[action].append(_lead_to_summary(row))
+            status = row.lead_status
+            if status not in status_map:
+                status_map[status] = []
+            status_map[status].append(_lead_to_summary(row))
 
-        # Build the ordered column list — also include null/empty (→ Inbox)
+        # Build the ordered column list — also include null/empty leads
         columns: List[Dict[str, Any]] = []
-        seen_actions: set = set()
-        # Track full counts before slicing
         total_counts: Dict[str, int] = {}
 
         for col_def in COLUMN_DEFS:
-            action_id = col_def["id"]
-            seen_actions.add(action_id)
-            leads_for_col = action_map.get(action_id, [])
+            col_status = col_def["id"]
+            leads_for_col = status_map.get(col_status, [])
             full_count = len(leads_for_col)
-            total_counts[action_id] = full_count
+            total_counts[col_status] = full_count
 
             # When column_id matches, return ALL leads for that column (no slicing)
-            if column_id and column_id == action_id:
+            if column_id and column_id == col_status:
                 columns.append({
-                    "id": action_id,
+                    "id": col_status,
                     "label": col_def["label"],
                     "icon": col_def["icon"],
                     "leads": leads_for_col,
@@ -128,7 +133,7 @@ class LeadKanbanService:
                 # Otherwise, slice to limit (limit=0 means no limit)
                 sliced = leads_for_col[:limit] if limit > 0 else leads_for_col
                 columns.append({
-                    "id": action_id,
+                    "id": col_status,
                     "label": col_def["label"],
                     "icon": col_def["icon"],
                     "leads": sliced,
@@ -136,15 +141,16 @@ class LeadKanbanService:
                     "sort_order": col_def["sort_order"],
                 })
 
-        # Handle any leads with NULL recommended_action → inbox column
-        null_leads = action_map.get(None, [])
+        # Handle any leads with NULL lead_status — attach them to the first
+        # appropriate column (skip_trace) as an inbox
+        null_leads = status_map.get(None, [])
         if null_leads:
             null_count = len(null_leads)
             for col in columns:
-                if col["id"] == "add_contact_info":
+                if col["id"] == "skip_trace":
                     col["leads"].extend(null_leads[:limit] if limit > 0 and col["id"] != column_id else null_leads)
                     col["count"] += null_count
-                    total_counts["add_contact_info"] = total_counts.get("add_contact_info", 0) + null_count
+                    total_counts["skip_trace"] = total_counts.get("skip_trace", 0) + null_count
                     break
 
         return {
@@ -152,8 +158,11 @@ class LeadKanbanService:
             "total_counts": total_counts,
         }
 
-    def move_lead(self, lead_id: int, target_action: str) -> Dict[str, Any]:
-        """Move a lead to a new recommended_action, updating lead_status too.
+    def move_lead(self, lead_id: int, target_status: str) -> Dict[str, Any]:
+        """Move a lead to a new lead_status (pipeline stage).
+
+        Updates lead_status to the target value. The recommended_action is kept
+        as-is since it is computed by the action engine, not user-driven.
 
         Returns the updated lead summary.
         """
@@ -164,19 +173,14 @@ class LeadKanbanService:
         if not lead:
             raise ValueError(f"Lead {lead_id} not found or not owned by current user.")
 
-        # Validate target_action against known column IDs
-        if target_action not in _VALID_ACTIONS:
+        # Validate target_status against known column IDs
+        if target_status not in _VALID_STATUSES:
             raise ValueError(
-                f"Invalid target_action '{target_action}'. Must be one of: {', '.join(sorted(_VALID_ACTIONS))}"
+                f"Invalid target_status '{target_status}'. Must be one of: {', '.join(sorted(_VALID_STATUSES))}"
             )
 
-        # Update recommended_action
-        lead.recommended_action = target_action
-
-        # Update lead_status based on target action
-        new_status = _STATUS_MAP.get(target_action)
-        if new_status is not None:
-            lead.lead_status = new_status
+        # Update lead_status
+        lead.lead_status = target_status
 
         db.session.commit()
 
@@ -188,8 +192,11 @@ class LeadKanbanService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _query_leads_by_action(self, user_id: str) -> List[db.Row]:
-        """Query all leads for a user, ordered by recommended_action then score desc."""
+    def _query_leads_by_status(self, user_id: str) -> List[db.Row]:
+        """Query all leads for a user, ordered by lead_status, then score desc.
+
+        Uses a CASE expression to sort pipeline stages in the canonical order.
+        """
         sql = text("""
             SELECT
                 id,
@@ -209,7 +216,24 @@ class LeadKanbanService:
                 has_property_match
             FROM leads
             WHERE owner_user_id = :user_id
-            ORDER BY recommended_action, lead_score DESC NULLS LAST
+            ORDER BY
+                CASE lead_status
+                    WHEN 'skip_trace'                    THEN 0
+                    WHEN 'awaiting_skip_trace'           THEN 1
+                    WHEN 'mailing_no_contact_made'       THEN 2
+                    WHEN 'mailing_contacted_no_interest' THEN 3
+                    WHEN 'mailing_contacted_interested'  THEN 4
+                    WHEN 'negotiating_remote'            THEN 5
+                    WHEN 'in_person_appointment'         THEN 6
+                    WHEN 'offer_delivered'               THEN 7
+                    WHEN 'deprioritize'                  THEN 8
+                    WHEN 'deal_won'                      THEN 9
+                    WHEN 'deal_lost'                     THEN 10
+                    WHEN 'suppressed'                    THEN 11
+                    WHEN 'do_not_contact'                THEN 12
+                    ELSE 99
+                END,
+                lead_score DESC NULLS LAST
         """)
         result = db.session.execute(sql, {"user_id": user_id})
         return list(result)

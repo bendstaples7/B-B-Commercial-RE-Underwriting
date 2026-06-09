@@ -2,7 +2,7 @@
  * DealKanbanContext — React context for the Kanban board state.
  *
  * Now reads from the leads table via /api/kanban/leads, grouping leads
- * by recommended_action instead of deal pipeline stages.
+ * by lead_status (pipeline stages) instead of recommended_action.
  *
  * Supports pagination: loads 50 leads per column by default, with
  * "Load all" expand functionality for individual columns.
@@ -95,7 +95,7 @@ function kanbanReducer(state: KanbanState, action: KanbanAction): KanbanState {
               ...col,
               leads: [
                 ...col.leads,
-                { ...moved, recommended_action: toColId },
+                { ...moved, lead_status: toColId },
               ],
               count: col.count + 1,
             }

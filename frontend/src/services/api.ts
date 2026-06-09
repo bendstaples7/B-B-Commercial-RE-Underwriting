@@ -1593,7 +1593,7 @@ export const pipelineConfigService = {
 import type { LeadKanbanResponse } from '@/types'
 
 export const leadKanbanService = {
-  /** GET /api/kanban/leads — fetch kanban columns with leads grouped by recommended_action */
+  /** GET /api/kanban/leads — fetch kanban columns with leads grouped by lead_status */
   getKanbanLeads: async (params?: {
     limit?: number
     column_id?: string
@@ -1602,7 +1602,7 @@ export const leadKanbanService = {
     return response.data
   },
 
-  /** PATCH /api/kanban/leads/:id/move — move a lead to a different recommended_action column */
+  /** PATCH /api/kanban/leads/:id/move — move a lead to a different lead_status column */
   moveKanbanLead: async (leadId: number, targetAction: string): Promise<void> => {
     await api.patch(`/kanban/leads/${leadId}/move`, { target_action: targetAction })
   },
