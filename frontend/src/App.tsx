@@ -147,7 +147,7 @@ const NAV_SECTIONS = [
         label: 'Work Queues',
         items: [
           { label: 'Kanban',                path: '/kanban',                           icon: <ViewKanbanIcon />,             badgeKey: null },
-          { label: "Today's Action",         path: '/',                              icon: <TodayIcon />,                  badgeKey: 'todays_action' as keyof QueueCounts },
+          { label: "Today's Action",         path: '/queues/todays-action',          icon: <TodayIcon />,                  badgeKey: 'todays_action' as keyof QueueCounts },
           { label: 'Previously Warm',        path: '/queues/previously-warm',        icon: <LocalFireDepartmentIcon />,    badgeKey: 'previously_warm' as keyof QueueCounts },
           { label: 'Follow-Up Overdue',      path: '/queues/follow-up-overdue',      icon: <AlarmIcon />,                  badgeKey: 'follow_up_overdue' as keyof QueueCounts },
           { label: 'No Next Action',         path: '/queues/no-next-action',         icon: <RadioButtonUncheckedIcon />,   badgeKey: 'no_next_action' as keyof QueueCounts },
@@ -1583,6 +1583,7 @@ function App() {
           {/* Default landing page — redirect to Kanban */}
           <Route path="/" element={<Navigate to="/kanban" replace />} />
           {/* Queue routes */}
+          <Route path="/queues/todays-action" element={<TodaysActionQueue />} />
           <Route path="/queues/previously-warm" element={<PreviouslyWarmQueue />} />
           <Route path="/queues/follow-up-overdue" element={<FollowUpOverdueQueue />} />
           <Route path="/queues/no-next-action" element={<NoNextActionQueue />} />
