@@ -176,13 +176,10 @@ jobs:
         # issues) that are invisible when tests use SQLite in-memory.
         # Runs AFTER pytest so schema changes don't interfere with test fixtures.
         #
-        # The baseline Alembic migration (267725fe7017) ALTERs tables that were
-        # originally created by migrations/001_create_schema.sql (a raw SQL file
-        # applied once before Alembic was introduced). In CI's fresh DB we must
-        # run that SQL first so the tables exist when Alembic runs.
-        run: |
-          PGPASSWORD=postgres psql -h localhost -U postgres -d test_db -v ON_ERROR_STOP=1 -f migrations/001_create_schema.sql
-          flask db upgrade
+        # The baseline migration (267725fe7017) is self-contained: it creates
+        # the original schema (types + tables) with IF NOT EXISTS before doing
+        # any ALTER operations, so no external seed script is needed.
+        run: flask db upgrade
         working-directory: backend
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
