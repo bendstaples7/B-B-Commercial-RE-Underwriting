@@ -247,3 +247,17 @@ jobs:
           REDIS_URL: redis://localhost:6379/0
           CELERY_BROKER_URL: redis://localhost:6379/0
           KIRO_MIGRATION: "1"
+
+      - name: Enum drift check — models vs DB
+        # Catches any migration that leaves the PostgreSQL enum values out of
+        # sync with what the SQLAlchemy models declare.  This is the class of
+        # bug that caused the production deploy failure: the migration created
+        # 'propertytype' with UPPERCASE values but the models store and read
+        # lowercase values.  Running this check AFTER flask db upgrade ensures
+        # that the schema a fresh database ends up in after the full chain is
+        # exactly what the models expect — no more "invalid input value for
+        # enum" surprises at deploy time.
+        run: python scripts/check_enum_drift.py
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migration_test_db

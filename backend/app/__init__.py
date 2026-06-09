@@ -140,7 +140,7 @@ def _assert_enum_values_match_db(app):
                 missing_in_python = db_values - python_values
 
                 if missing_in_db or missing_in_python:
-                    raise SystemExit(
+                    raise ConfigurationError(
                         f"\n\n*** ENUM MISMATCH: '{pg_type_name}'\n"
                         f"  Python values : {sorted(python_values)}\n"
                         f"  DB values     : {sorted(db_values)}\n"
@@ -149,7 +149,7 @@ def _assert_enum_values_match_db(app):
                         "Fix: align the Python enum values in models/property_facts.py "
                         "with the PostgreSQL enum, then restart.\n"
                     )
-    except SystemExit:
+    except ConfigurationError:
         raise
     except Exception as e:
         app.logger.warning("Could not verify enum values against DB: %s", e)
