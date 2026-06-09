@@ -68,12 +68,16 @@ def upgrade():
     # Pattern: col::text::newtype maps old values via text intermediary.
     #
     # analysis_sessions.current_step: workflow_step → workflowstep
-    # (values are identical — uppercase strings in both old and new type)
+    # Must drop the server_default first: PostgreSQL validates the default expression
+    # against the new type before completing ALTER COLUMN TYPE, and
+    # 'PROPERTY_FACTS'::workflow_step is invalid for the new workflowstep type.
+    op.execute("ALTER TABLE analysis_sessions ALTER COLUMN current_step DROP DEFAULT")
     op.execute("""
         ALTER TABLE analysis_sessions
         ALTER COLUMN current_step TYPE workflowstep
         USING current_step::text::workflowstep
     """)
+    op.execute("ALTER TABLE analysis_sessions ALTER COLUMN current_step SET DEFAULT 'PROPERTY_FACTS'::workflowstep")
 
     # comparable_sales enum renames
     op.execute("""
