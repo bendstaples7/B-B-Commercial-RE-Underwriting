@@ -153,6 +153,14 @@ jobs:
           CELERY_BROKER_URL: redis://localhost:6379/0
           REDIS_URL: redis://localhost:6379/0
 
+      - name: Lint migration files for dangerous patterns
+        # Static analysis — no database needed.
+        # Catches patterns that cause production crashes but are invisible in
+        # SQLite-based tests: raw_conn.execute(), bind.connection used without
+        # unwrapping the pool proxy, etc.
+        run: python scripts/lint_migrations.py
+        working-directory: backend
+
       - name: Run tests
         run: pytest
         working-directory: backend
