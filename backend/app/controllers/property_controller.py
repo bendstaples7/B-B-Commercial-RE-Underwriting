@@ -366,8 +366,6 @@ def list_properties():
             query = query.filter(false())
         else:
             query = query.filter(Lead.owner_user_id == current_user_id)
-        else:
-            query = query.filter(false())
 
     # --- Filters ---
     lead_category = args.get('lead_category')
@@ -542,9 +540,7 @@ def analyze_property(lead_id):
 
     # Ownership check: non-admins can only access leads they own.
     # NULL-owner leads are not accessible to non-admin users.
-    if not _current_user_is_admin():
-        from flask import g
-        current_user_id = getattr(g, 'user_id', None)
+    if not is_admin:
         is_authenticated = current_user_id and current_user_id != 'anonymous'
         if not is_authenticated or lead.owner_user_id != current_user_id:
             return jsonify({
