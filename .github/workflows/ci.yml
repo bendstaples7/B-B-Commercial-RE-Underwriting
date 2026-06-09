@@ -179,7 +179,17 @@ jobs:
         # The baseline migration (267725fe7017) is self-contained: it creates
         # the original schema (types + tables) with IF NOT EXISTS before doing
         # any ALTER operations, so no external seed script is needed.
-        run: flask db upgrade
+        run: |
+          set -euo pipefail
+          echo "=== Running flask db upgrade ==="
+          flask db upgrade 2>&1 | tee /tmp/migration_output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "::error::flask db upgrade failed (exit $EXIT_CODE). Output:"
+            cat /tmp/migration_output.txt
+            exit $EXIT_CODE
+          fi
+          echo "=== Migration complete ==="
         working-directory: backend
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
