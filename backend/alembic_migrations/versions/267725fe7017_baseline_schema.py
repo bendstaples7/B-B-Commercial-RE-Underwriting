@@ -339,6 +339,16 @@ def upgrade():
         USING upper(scenario_type::text)::scenariotype
     """)
 
+    # JSONB → JSON and ARRAY → JSON conversions that require explicit USING casts.
+    # PostgreSQL cannot automatically cast these types; batch_alter_table does not
+    # support postgresql_using so these must be done with raw ALTER TABLE statements.
+    op.execute("ALTER TABLE buy_hold_scenarios ALTER COLUMN capital_structures TYPE JSON USING capital_structures::json")
+    op.execute("ALTER TABLE buy_hold_scenarios ALTER COLUMN price_points TYPE JSON USING price_points::json")
+    op.execute("ALTER TABLE comparable_valuations ALTER COLUMN adjustments TYPE JSON USING adjustments::json")
+    op.execute("ALTER TABLE scenarios ALTER COLUMN summary TYPE JSON USING summary::json")
+    op.execute("ALTER TABLE valuation_results ALTER COLUMN all_valuations TYPE JSON USING array_to_json(all_valuations)")
+    op.execute("ALTER TABLE valuation_results ALTER COLUMN key_drivers TYPE JSON USING array_to_json(key_drivers)")
+
     with op.batch_alter_table('analysis_sessions', schema=None) as batch_op:
         # current_step already retyped above — only do index/constraint changes here
         batch_op.drop_constraint(batch_op.f('analysis_sessions_session_id_key'), type_='unique')
@@ -352,14 +362,7 @@ def upgrade():
                existing_type=sa.NUMERIC(precision=10, scale=2),
                type_=sa.Float(),
                existing_nullable=False)
-        batch_op.alter_column('capital_structures',
-               existing_type=postgresql.JSONB(astext_type=sa.Text()),
-               type_=sa.JSON(),
-               existing_nullable=False)
-        batch_op.alter_column('price_points',
-               existing_type=postgresql.JSONB(astext_type=sa.Text()),
-               type_=sa.JSON(),
-               existing_nullable=False)
+        # capital_structures and price_points retyped above via raw SQL (JSONB→JSON requires USING cast)
 
     with op.batch_alter_table('comparable_sales', schema=None) as batch_op:
         batch_op.alter_column('sale_price',
@@ -405,10 +408,7 @@ def upgrade():
                existing_type=sa.NUMERIC(precision=12, scale=2),
                type_=sa.Float(),
                existing_nullable=False)
-        batch_op.alter_column('adjustments',
-               existing_type=postgresql.JSONB(astext_type=sa.Text()),
-               type_=sa.JSON(),
-               existing_nullable=True)
+        # adjustments retyped above via raw SQL (JSONB→JSON requires USING cast)
         batch_op.drop_index(batch_op.f('idx_comparable_valuations_valuation_result_id'))
         batch_op.create_index(batch_op.f('ix_comparable_valuations_valuation_result_id'), ['valuation_result_id'], unique=False)
 
@@ -524,10 +524,7 @@ def upgrade():
                existing_type=sa.NUMERIC(precision=12, scale=2),
                type_=sa.Float(),
                existing_nullable=False)
-        batch_op.alter_column('summary',
-               existing_type=postgresql.JSONB(astext_type=sa.Text()),
-               type_=sa.JSON(),
-               existing_nullable=False)
+        # summary retyped above via raw SQL (JSONB→JSON requires USING cast)
         batch_op.drop_index(batch_op.f('idx_scenarios_session_id'))
         batch_op.create_index(batch_op.f('ix_scenarios_session_id'), ['session_id'], unique=False)
 
@@ -544,14 +541,7 @@ def upgrade():
                existing_type=sa.NUMERIC(precision=12, scale=2),
                type_=sa.Float(),
                existing_nullable=False)
-        batch_op.alter_column('all_valuations',
-               existing_type=postgresql.ARRAY(sa.NUMERIC(precision=12, scale=2)),
-               type_=sa.JSON(),
-               nullable=False)
-        batch_op.alter_column('key_drivers',
-               existing_type=postgresql.ARRAY(sa.TEXT()),
-               type_=sa.JSON(),
-               existing_nullable=True)
+        # all_valuations and key_drivers retyped above via raw SQL (ARRAY→JSON requires USING cast)
         batch_op.drop_index(batch_op.f('idx_valuation_results_session_id'))
         batch_op.drop_constraint(batch_op.f('valuation_results_session_id_key'), type_='unique')
         batch_op.create_index(batch_op.f('ix_valuation_results_session_id'), ['session_id'], unique=True)

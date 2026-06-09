@@ -44,6 +44,25 @@ _BIND_CONN_DIRECT = re.compile(r'bind\.connection(?!\.connection\b)(?:[\s\.,\[]|
 _RAW_CONN_AUTOCOMMIT_DIRECT = re.compile(r'\braw_conn\.autocommit\b')
 
 
+# Pattern: batch_op.alter_column with type_=sa.JSON() or type_=sa.JSONB() when
+# existing_type is an ARRAY or JSONB — PostgreSQL requires an explicit USING cast
+# for these conversions; batch_alter_table does not support postgresql_using.
+_BATCH_OP_JSON_WITHOUT_USING = re.compile(
+    r'\bbatch_op\.alter_column\s*\('
+)
+
+
+def _is_array_or_jsonb_to_json(block_lines: list[str]) -> bool:
+    """Return True if an alter_column block converts ARRAY or JSONB to JSON."""
+    has_json_target = any('type_=sa.JSON()' in l or 'type_=sa.JSONB()' in l for l in block_lines)
+    has_array_or_jsonb_source = any(
+        'ARRAY(' in l or 'postgresql.JSONB(' in l or 'JSONB(astext_type' in l
+        for l in block_lines
+        if 'existing_type' in l
+    )
+    return has_json_target and has_array_or_jsonb_source
+
+
 def lint_file(path: Path) -> list[tuple[int, str, str]]:
     """
     Lint a single migration file.
@@ -53,6 +72,39 @@ def lint_file(path: Path) -> list[tuple[int, str, str]]:
     """
     issues = []
     lines = path.read_text(encoding='utf-8').splitlines()
+
+    # --------------------------------------------------------------------
+    # Scan for batch_op.alter_column calls that convert ARRAY/JSONB → JSON
+    # without an explicit USING cast.  PostgreSQL rejects these; the fix is
+    # to use a raw op.execute("ALTER TABLE ... TYPE JSON USING ...") instead.
+    # --------------------------------------------------------------------
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.lstrip()
+        if not stripped.startswith('#') and _BATCH_OP_JSON_WITHOUT_USING.search(line):
+            # Collect this alter_column call (may span multiple lines until closing paren)
+            call_start = i + 1  # 1-indexed
+            call_lines = [line]
+            depth = line.count('(') - line.count(')')
+            j = i + 1
+            while depth > 0 and j < len(lines):
+                call_lines.append(lines[j])
+                depth += lines[j].count('(') - lines[j].count(')')
+                j += 1
+            if _is_array_or_jsonb_to_json(call_lines):
+                issues.append((
+                    call_start, 'ERROR',
+                    "batch_op.alter_column converting ARRAY or JSONB to JSON detected.\n"
+                    "  PostgreSQL requires an explicit USING cast for this conversion;\n"
+                    "  batch_alter_table does not support postgresql_using.\n"
+                    "  Fix: replace with op.execute(\n"
+                    "    'ALTER TABLE t ALTER COLUMN col TYPE JSON USING col::json'\n"
+                    "  ) before the batch_alter_table block.",
+                ))
+            i = j
+        else:
+            i += 1
 
     for i, line in enumerate(lines, start=1):
         # Skip comment lines
