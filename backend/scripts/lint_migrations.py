@@ -79,34 +79,48 @@ def lint_file(path: Path) -> list[tuple[int, str, str]]:
                 ))
 
     # --------------------------------------------------------------------
-    # Check raw_conn.autocommit line-by-line.
+    # Check .autocommit usage on any variable.
     #
     # A variable assigned via `x = bind.connection.connection` is safely
-    # unwrapped — setting autocommit on it is correct.  We collect the names
-    # of all such variables from assignment lines in the file, then flag any
-    # `.autocommit` usage on a name that was NOT properly unwrapped.
+    # unwrapped — setting autocommit on it is correct.
+    #
+    # We track safe assignments at the SCOPE where they appear:
+    # we scan line-by-line and maintain a running set of names that have
+    # been safely assigned on a PRECEDING line in the same file.
+    # A safe assignment is immediately invalidated if the same name is later
+    # re-assigned without the double-unwrap (unsafe reassignment).
     # --------------------------------------------------------------------
-    # Build set of variable names obtained via double-unwrap assignment
-    _UNWRAP_ASSIGN = re.compile(
-        r'^\s*(\w+)\s*=\s*.*bind\.connection\.connection\b'
-    )
-    safely_unwrapped_names: set[str] = set()
-    for line in lines:
-        m = _UNWRAP_ASSIGN.match(line)
-        if m:
-            safely_unwrapped_names.add(m.group(1))
-
-    # Pattern: <varname>.autocommit
+    _UNWRAP_ASSIGN = re.compile(r'^\s*(\w+)\s*=\s*.*bind\.connection\.connection\b')
+    _ANY_ASSIGN = re.compile(r'^\s*(\w+)\s*=\s*(.+)')
     _AUTOCOMMIT_USE = re.compile(r'\b(\w+)\.autocommit\b')
+
+    # Map: var_name → True (safely unwrapped) | False (assigned unsafely / reassigned)
+    var_safety: dict[str, bool] = {}
+
     for i, line in enumerate(lines, start=1):
         if line.lstrip().startswith('#'):
             continue
+
+        # Track assignments first (before the autocommit check so the
+        # definition on the SAME line as `.autocommit` is also caught)
+        safe_m = _UNWRAP_ASSIGN.match(line)
+        if safe_m:
+            var_safety[safe_m.group(1)] = True
+        else:
+            any_m = _ANY_ASSIGN.match(line)
+            if any_m:
+                assigned_name = any_m.group(1)
+                # Any reassignment that isn't a double-unwrap marks the var unsafe
+                if assigned_name in var_safety:
+                    var_safety[assigned_name] = False
+
+        # Check .autocommit usage
         for m in _AUTOCOMMIT_USE.finditer(line):
             var_name = m.group(1)
-            # Only flag names that look like raw connection handles but
-            # weren't obtained via a safe double-unwrap assignment.
-            if (var_name not in safely_unwrapped_names
-                    and 'connection' in var_name.lower()):
+            # Flag if the variable is either:
+            # 1. Known to be unsafe (assigned without double-unwrap), or
+            # 2. Never seen as a double-unwrap assignment at all
+            if var_safety.get(var_name, False) is not True:
                 issues.append((
                     i, 'ERROR',
                     f"'{var_name}.autocommit' detected — ensure '{var_name}' is the "
