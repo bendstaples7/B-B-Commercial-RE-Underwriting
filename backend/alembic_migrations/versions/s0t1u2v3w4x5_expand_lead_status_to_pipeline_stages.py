@@ -81,12 +81,14 @@ def upgrade():
     bind = op.get_bind()
     raw_conn = bind.connection.connection  # unwrap pool proxy → psycopg2 connection
     raw_conn.autocommit = True
-    for val in new_values:
-        with raw_conn.cursor() as cur:
-            cur.execute(
-                f"ALTER TYPE lead_status_enum ADD VALUE IF NOT EXISTS '{val}'"
-            )
-    raw_conn.autocommit = False
+    try:
+        for val in new_values:
+            with raw_conn.cursor() as cur:
+                cur.execute(
+                    f"ALTER TYPE lead_status_enum ADD VALUE IF NOT EXISTS '{val}'"
+                )
+    finally:
+        raw_conn.autocommit = False
 
     logger.info("Added new enum values to lead_status_enum")
 

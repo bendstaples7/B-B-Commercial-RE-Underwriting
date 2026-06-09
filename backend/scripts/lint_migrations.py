@@ -35,11 +35,13 @@ _RAW_CONN_EXECUTE = re.compile(r'\braw_conn\.execute\s*\(')
 
 # Pattern: bind.connection[^.] — pool proxy used directly without unwrapping
 # (bind.connection.connection is fine; bind.connection.autocommit is not)
-_BIND_CONN_DIRECT = re.compile(r'bind\.connection(?!\.connection\b)[\s\.,\[]')
+# Also matches bind.connection at end of line (e.g. raw_conn = bind.connection)
+_BIND_CONN_DIRECT = re.compile(r'bind\.connection(?!\.connection\b)(?:[\s\.,\[]|$)')
 
 # Pattern: raw_conn.autocommit — setting autocommit on the pool proxy (not DBAPI)
-# Only flag if it appears without the double .connection.connection unwrap nearby
-_RAW_CONN_AUTOCOMMIT_DIRECT = re.compile(r'(?<!\.\bconnection\b)raw_conn\.autocommit')
+# Flags any use of raw_conn.autocommit when the variable hasn't been properly
+# unwrapped via bind.connection.connection.
+_RAW_CONN_AUTOCOMMIT_DIRECT = re.compile(r'\braw_conn\.autocommit\b')
 
 
 def lint_file(path: Path) -> list[tuple[int, str, str]]:
@@ -74,6 +76,23 @@ def lint_file(path: Path) -> list[tuple[int, str, str]]:
                     "bind.connection used directly — this is the SQLAlchemy pool proxy, "
                     "not the raw DBAPI connection.\n"
                     "  Use bind.connection.connection to get the psycopg2 connection.",
+                ))
+
+    # File-level check: raw_conn.autocommit is only safe when raw_conn was obtained
+    # via bind.connection.connection. If the file uses raw_conn.autocommit but never
+    # unwraps the proxy, flag every occurrence.
+    full_text = '\n'.join(lines)
+    file_has_double_unwrap = 'bind.connection.connection' in full_text
+    if not file_has_double_unwrap:
+        for i, line in enumerate(lines, start=1):
+            if line.lstrip().startswith('#'):
+                continue
+            if _RAW_CONN_AUTOCOMMIT_DIRECT.search(line):
+                issues.append((
+                    i, 'ERROR',
+                    "raw_conn.autocommit detected without bind.connection.connection unwrap — "
+                    "raw_conn is likely the pool proxy, not the DBAPI connection.\n"
+                    "  Use raw_conn = bind.connection.connection before setting autocommit.",
                 ))
 
     return issues
