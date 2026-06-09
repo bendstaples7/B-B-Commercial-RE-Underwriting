@@ -548,6 +548,30 @@ class PasswordSetupRequiredException(RealEstateAnalysisException):
 
 
 # ---------------------------------------------------------------------------
+# Migration / Configuration Exceptions
+# ---------------------------------------------------------------------------
+
+
+class ConfigurationError(RealEstateAnalysisException):
+    """Exception raised when required application configuration is missing or invalid.
+
+    Replaces ``SystemExit`` calls in the app factory so that migration commands
+    (e.g. ``flask db upgrade``) receive a proper Python exception with the
+    originating message preserved in command output rather than having the
+    process terminated before any migration output is written.
+
+    Requirements: 5.4
+    """
+
+    def __init__(self, message: str, config_key: str = None):
+        super().__init__(message, status_code=500)
+        self.payload = {
+            'error_type': 'configuration_error',
+            'config_key': config_key,
+        }
+
+
+# ---------------------------------------------------------------------------
 # Backward-compatible aliases
 #
 # These names were used in admin_service.py (introduced by the admin-panel

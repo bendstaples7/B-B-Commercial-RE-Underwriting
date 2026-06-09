@@ -177,22 +177,11 @@ jobs:
         # interferes with the migration chain validation.
         run: PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE migration_test_db;"
 
-      - name: Smoke-test migrations against PostgreSQL
-        # Runs flask db upgrade against migration_test_db — a completely fresh
-        # database that pytest never touched.  This guarantees a clean Alembic
-        # state so the full migration chain is validated from scratch on every CI run.
-        run: |
-          echo "=== Running flask db upgrade ==="
-          set +e
-          flask db upgrade 2>&1 | tee /tmp/migration_output.txt
-          EXIT_CODE=${PIPESTATUS[0]}
-          set -e
-          if [ $EXIT_CODE -ne 0 ]; then
-            echo "::error::flask db upgrade failed (exit $EXIT_CODE). Output:"
-            cat /tmp/migration_output.txt
-            exit $EXIT_CODE
-          fi
-          echo "=== Migration complete ==="
+      - name: Validate migration chain (head + root count gate)
+        # Runs before any schema change — fails fast if head_count != 1 or root_count != 1.
+        # Reports the detected counts and each offending revision identifier so the
+        # developer knows exactly which revision broke the chain.
+        run: python scripts/check_migration_chain.py
         working-directory: backend
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migration_test_db
@@ -202,3 +191,54 @@ jobs:
           FLASK_APP: app
           REDIS_URL: redis://localhost:6379/0
           CELERY_BROKER_URL: redis://localhost:6379/0
+          KIRO_MIGRATION: "1"
+
+      - name: Migration validation — fresh-DB upgrade (PostgreSQL 15, 300s timeout)
+        # Migration validation job: runs flask db upgrade against a completely fresh
+        # migration_test_db on PostgreSQL 15 (matching production) with a hard 300-second
+        # timeout. KIRO_MIGRATION=1 prevents the app factory's auto-upgrade from firing.
+        # On any non-zero exit the run fails and the error output is surfaced so the
+        # failing revision is visible. No SQLite substitution — PostgreSQL only.
+        run: |
+          echo "=== Running flask db upgrade (timeout 300s) ==="
+          set +e
+          timeout 300 flask db upgrade 2>&1 | tee /tmp/migration_output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+          set -e
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "::error::flask db upgrade failed (exit $EXIT_CODE). Migration output:"
+            cat /tmp/migration_output.txt
+            exit $EXIT_CODE
+          fi
+          echo "=== Initial upgrade complete ==="
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migration_test_db
+          FLASK_ENV: testing
+          SECRET_KEY: ci-test-secret-key
+          JWT_SECRET_KEY: ci-test-jwt-secret
+          FLASK_APP: app
+          REDIS_URL: redis://localhost:6379/0
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          KIRO_MIGRATION: "1"
+
+      - name: Migration round-trip (upgrade → downgrade base → upgrade)
+        # Validates full reversibility: downgrades to base then re-applies the full
+        # chain, asserting exit 0 at every step and a final schema identical to a
+        # direct fresh-DB upgrade. Each step is capped at 300 seconds.
+        run: |
+          echo "=== Downgrade to base ==="
+          timeout 300 flask db downgrade base 2>&1
+          echo "=== Re-upgrade to head ==="
+          timeout 300 flask db upgrade 2>&1
+          echo "=== Round-trip complete ==="
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migration_test_db
+          FLASK_ENV: testing
+          SECRET_KEY: ci-test-secret-key
+          JWT_SECRET_KEY: ci-test-jwt-secret
+          FLASK_APP: app
+          REDIS_URL: redis://localhost:6379/0
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          KIRO_MIGRATION: "1"

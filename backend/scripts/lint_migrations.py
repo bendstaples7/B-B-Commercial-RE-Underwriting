@@ -17,6 +17,22 @@ Catches dangerous patterns that cause silent failures or production crashes:
 4. ALTER TABLE / batch_alter_table referencing a table not created in the
    migration chain — catches "relation does not exist" errors on fresh databases.
 
+Idempotency convention rules (Req 8.1–8.6) — enforced on NEW revisions only
+(revisions not in _LEGACY_REVISION_IDS are considered new):
+
+5. op.create_table() — forbidden; use CREATE TABLE IF NOT EXISTS via op.execute().
+
+6. op.create_index() — forbidden; use CREATE INDEX IF NOT EXISTS via op.execute().
+
+7. op.add_column() — forbidden; use ALTER TABLE ... ADD COLUMN IF NOT EXISTS.
+
+8. batch_alter_table — forbidden on PostgreSQL; use raw ALTER TABLE statements.
+
+9. CREATE TYPE without EXCEPTION WHEN duplicate_object guard — enum creation must
+   be wrapped in DO $$ BEGIN ... EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+10. upgrade() without a corresponding downgrade() that uses DROP ... IF EXISTS.
+
 Usage:
     python scripts/lint_migrations.py                     # lint all migrations
     python scripts/lint_migrations.py path/to/version.py  # lint specific file
@@ -27,6 +43,54 @@ import ast
 import sys
 import re
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Legacy revision IDs — revisions that predate the idempotency convention.
+# These files are EXEMPT from the new idempotency rules (8.1–8.6) because
+# they already exist in production and must not be rewritten.
+#
+# Any migration file whose ``revision`` identifier is NOT listed here is
+# treated as a "new" revision and must comply with all idempotency rules.
+# Add new revision IDs here ONLY when grandfathering a pre-convention file.
+# ---------------------------------------------------------------------------
+_LEGACY_REVISION_IDS = frozenset({
+    '000000000000',
+    '267725fe7017',
+    'a1b2c3d4e5f6',  # add_condo_filter_schema
+    'b2c3d4e5f6g7',  # add_lead_scores_table
+    'c3d4e5f6g7h8',  # multifamily_schema
+    'd4e5f6g7h8i9',  # commercial_om_intake_schema
+    'd4e5f6g7h8i9b', # add_min_comparables_to_scoring_weights
+    'e5f6g7h8i9j0',  # merge_heads
+    'e5f6g7h8i9j0b', # add_completed_steps_and_step_results_to_analysis_sessions
+    'f6g7h8i9j0k1',  # add_confidence_score_to_valuation_results
+    'f6g7h8i9j0k1b', # rentcast_cache
+    'f6g7h8i9j0k1c', # merge_confidence_and_rentcast
+    'fd5451087f07',  # add_loading_column_to_analysis_session
+    'g7h8i9j0k1l2',  # sale_comp_nullable_cap_rate
+    'g7h8i9j0k1l2b', # add_socrata_cache_tables
+    'g7h8i9j0k1l2c', # merge_sale_comp_and_socrata
+    'h8i9j0k1l2m3',  # add_hubspot_crm_tables
+    'i9j0k1l2m3n4',  # add_lead_suppression_and_recommended_action
+    'j0k1l2m3n4o5',  # seed_hubspot_signal_dictionary
+    'k1l2m3n4o5p6',  # add_contact_model
+    'l2m3n4o5p6q7',  # contact_email_lower_index
+    'm3n4o5p6q7r8',  # add_crm_columns_to_leads
+    'n4o5p6q7r8s9',  # create_lead_tasks_table
+    'o5p6q7r8s9t0',  # create_lead_timeline_entries_table
+    'p6q7r8s9t0u1',  # add_lead_id_to_tasks
+    'q7r8s9t0u1v2',  # create_lead_crm_flags_view
+    'r8s9t0u1v2w3',  # add_hubspot_webhook_tables
+    'r9s0t1u2v3w4',  # backfill_lead_enrichment_from_hubspot
+    's0t1u2v3w4x5',  # expand_lead_status_to_pipeline_stages
+    't0u1v2w3x4y5',  # add_is_admin_to_users
+    'u1v2w3x4y5z6',  # add_suggested_comps_columns
+    'v1w2x3y4z5a6',  # add_owner_user_id_to_leads
+    'w2x3y4z5a6b7',  # seed_sub_users_and_reassign_leads
+    'x3y4z5a6b7c8',  # add_dupage_lead_columns
+    'y4z5a6b7c8d9',  # add_import_job_source_type
+    'z5a6b7c8d9e0',  # drop_leads_property_street_unique
+})
 
 # ---------------------------------------------------------------------------
 # Tables created by the initial schema migration (000000000000).
@@ -73,6 +137,161 @@ _BATCH_OP_JSON_WITHOUT_USING = re.compile(
     r'\bbatch_op\.alter_column\s*\('
 )
 
+# ---------------------------------------------------------------------------
+# Idempotency convention patterns (Req 8.1–8.6).
+# These are only enforced on NEW revisions (not in _LEGACY_REVISION_IDS).
+# ---------------------------------------------------------------------------
+
+# Req 8.1: op.create_table() — must use CREATE TABLE IF NOT EXISTS instead
+_OP_CREATE_TABLE = re.compile(r'\bop\.create_table\s*\(')
+
+# Req 8.3: op.create_index() — must use CREATE INDEX IF NOT EXISTS instead
+_OP_CREATE_INDEX = re.compile(r'\bop\.create_index\s*\(')
+
+# Req 8.4: op.add_column() — must use ALTER TABLE ... ADD COLUMN IF NOT EXISTS instead
+_OP_ADD_COLUMN = re.compile(r'\bop\.add_column\s*\(')
+
+# Req 8.5: batch_alter_table — forbidden on PostgreSQL
+_OP_BATCH_ALTER_TABLE = re.compile(r'\bop\.batch_alter_table\s*\(')
+
+# Req 8.2: CREATE TYPE without EXCEPTION WHEN duplicate_object guard.
+# We detect raw "CREATE TYPE" in op.execute() strings that are NOT inside a
+# DO $$ BEGIN ... EXCEPTION WHEN duplicate_object block.
+_CREATE_TYPE_RAW = re.compile(r'\bCREATE\s+TYPE\b', re.IGNORECASE)
+_EXCEPTION_WHEN_DUP = re.compile(r'EXCEPTION\s+WHEN\s+duplicate_object', re.IGNORECASE)
+
+# Req 8.6: upgrade() without downgrade() using DROP ... IF EXISTS.
+_DROP_IF_EXISTS = re.compile(r'\bDROP\b.+\bIF\s+EXISTS\b', re.IGNORECASE)
+
+
+def _extract_revision_id(text: str) -> str | None:
+    """Extract the revision identifier string from migration file text."""
+    m = re.search(r"^revision\s*=\s*['\"]([^'\"]+)['\"]", text, re.MULTILINE)
+    return m.group(1) if m else None
+
+
+def _is_legacy_revision(path: Path, text: str) -> bool:
+    """Return True if this file's revision ID is in the legacy whitelist."""
+    revision_id = _extract_revision_id(text)
+    if revision_id is None:
+        return False
+    return revision_id in _LEGACY_REVISION_IDS
+
+
+def _check_enum_guard(text: str, lines: list[str]) -> list[tuple[int, str, str]]:
+    """
+    Req 8.2: Flag CREATE TYPE statements that are not wrapped in a
+    DO $$ BEGIN ... EXCEPTION WHEN duplicate_object ... END $$; block.
+
+    Strategy: for each line containing CREATE TYPE, check if the surrounding
+    op.execute() call (or DO $$ block) also contains EXCEPTION WHEN duplicate_object.
+    """
+    issues = []
+    for i, line in enumerate(lines, start=1):
+        if line.lstrip().startswith('#'):
+            continue
+        if not _CREATE_TYPE_RAW.search(line):
+            continue
+
+        # Walk backwards to find the opening of the enclosing op.execute() or
+        # triple-quoted string block, then check forward to its closing.
+        # Simple heuristic: scan the surrounding ~20 lines for the guard phrase.
+        window_start = max(0, i - 15)
+        window_end = min(len(lines), i + 15)
+        window = '\n'.join(lines[window_start:window_end])
+
+        if not _EXCEPTION_WHEN_DUP.search(window):
+            issues.append((
+                i, 'ERROR',
+                "CREATE TYPE detected without EXCEPTION WHEN duplicate_object guard.\n"
+                "  Wrap enum creation in:\n"
+                "    DO $$ BEGIN\n"
+                "        CREATE TYPE <name> AS ENUM (...);\n"
+                "    EXCEPTION WHEN duplicate_object THEN NULL;\n"
+                "    END $$;\n"
+                "  This makes the migration safe to re-run (Req 8.2).",
+            ))
+    return issues
+
+
+def _check_downgrade_drop_if_exists(lines: list[str]) -> list[tuple[int, str, str]]:
+    """
+    Req 8.6: Flag upgrade() functions that have no corresponding downgrade()
+    containing at least one DROP ... IF EXISTS statement.
+
+    Returns issues (attached to line 1 of the file) when the rule is violated.
+    """
+    issues = []
+
+    text = '\n'.join(lines)
+
+    # Detect whether upgrade() is defined (non-trivial: has at least one op. call)
+    has_upgrade = bool(re.search(r'def upgrade\s*\(\s*\)\s*:', text))
+    has_downgrade = bool(re.search(r'def downgrade\s*\(\s*\)\s*:', text))
+
+    if not has_upgrade:
+        return issues  # No upgrade — nothing to check
+
+    if not has_downgrade:
+        issues.append((
+            1, 'ERROR',
+            "upgrade() is defined but downgrade() is missing entirely.\n"
+            "  Every migration must define a downgrade() that reverses its changes\n"
+            "  using DROP ... IF EXISTS statements (Req 8.6).",
+        ))
+        return issues
+
+    # Check that downgrade() body contains at least one DROP ... IF EXISTS
+    # Extract the downgrade() function body by finding its def and collecting
+    # indented lines until the next top-level def/class or end of file.
+    in_downgrade = False
+    downgrade_lines: list[str] = []
+    for line in lines:
+        if re.match(r'^def downgrade\s*\(\s*\)\s*:', line):
+            in_downgrade = True
+            downgrade_lines.append(line)
+            continue
+        if in_downgrade:
+            # Stop at the next top-level definition
+            if re.match(r'^(def |class )\S', line):
+                break
+            downgrade_lines.append(line)
+
+    downgrade_body = '\n'.join(downgrade_lines)
+
+    # A downgrade that is only "pass" or empty is non-compliant unless the
+    # upgrade itself is also a no-op (only comments/pass/empty).
+    # Check whether the upgrade body performs any actual schema operations.
+    in_upgrade = False
+    upgrade_lines: list[str] = []
+    for line in lines:
+        if re.match(r'^def upgrade\s*\(\s*\)\s*:', line):
+            in_upgrade = True
+            upgrade_lines.append(line)
+            continue
+        if in_upgrade:
+            if re.match(r'^(def |class )\S', line):
+                break
+            upgrade_lines.append(line)
+
+    upgrade_body = '\n'.join(upgrade_lines)
+
+    # An upgrade is a no-op if its body has only pass/comments/docstrings
+    upgrade_is_noop = not re.search(r'\bop\.execute\b|\bop\.\w+\(|\bconn\.execute\b', upgrade_body)
+    if upgrade_is_noop:
+        return issues  # No-op upgrade — no DROP IF EXISTS requirement
+
+    if not _DROP_IF_EXISTS.search(downgrade_body):
+        issues.append((
+            1, 'ERROR',
+            "upgrade() performs schema changes but downgrade() contains no "
+            "'DROP ... IF EXISTS' statement.\n"
+            "  Add DROP TABLE IF EXISTS / DROP INDEX IF EXISTS / DROP TYPE IF EXISTS\n"
+            "  statements to downgrade() to reverse the changes (Req 8.6).",
+        ))
+
+    return issues
+
 
 def _is_array_or_jsonb_to_json(block_lines: list[str]) -> bool:
     """Return True if an alter_column block converts ARRAY or JSONB to JSON."""
@@ -94,6 +313,11 @@ def lint_file(path: Path) -> list[tuple[int, str, str]]:
     """
     issues = []
     lines = path.read_text(encoding='utf-8').splitlines()
+    text = '\n'.join(lines)
+
+    # Determine whether this is a legacy (pre-convention) revision.
+    # Legacy revisions are exempt from the new idempotency rules (8.1–8.6).
+    is_legacy = _is_legacy_revision(path, text)
 
     # --------------------------------------------------------------------
     # Scan for batch_op.alter_column calls that convert ARRAY/JSONB → JSON
@@ -261,6 +485,59 @@ def lint_file(path: Path) -> list[tuple[int, str, str]]:
                         f"000000000000_initial_schema.py, or verify the table is "
                         f"created by a prior migration in the chain.",
                     ))
+
+    # --------------------------------------------------------------------
+    # Idempotency convention checks (Req 8.1–8.6).
+    # Only applied to NEW revisions — legacy revisions are exempt.
+    # --------------------------------------------------------------------
+    if not is_legacy:
+        for i, line in enumerate(lines, start=1):
+            stripped = line.lstrip()
+            if stripped.startswith('#'):
+                continue
+
+            # Req 8.1: op.create_table() is forbidden — use CREATE TABLE IF NOT EXISTS
+            if _OP_CREATE_TABLE.search(line):
+                issues.append((
+                    i, 'ERROR',
+                    "op.create_table() detected — use raw SQL instead:\n"
+                    "  op.execute('CREATE TABLE IF NOT EXISTS <name> (...)')\n"
+                    "  op.create_table() raises DuplicateObject on re-run (Req 8.1).",
+                ))
+
+            # Req 8.3: op.create_index() is forbidden — use CREATE INDEX IF NOT EXISTS
+            if _OP_CREATE_INDEX.search(line):
+                issues.append((
+                    i, 'ERROR',
+                    "op.create_index() detected — use raw SQL instead:\n"
+                    "  op.execute('CREATE INDEX IF NOT EXISTS <name> ON <table>(<col>)')\n"
+                    "  op.create_index() raises DuplicateObject on re-run (Req 8.3).",
+                ))
+
+            # Req 8.4: op.add_column() is forbidden — use ALTER TABLE ... ADD COLUMN IF NOT EXISTS
+            if _OP_ADD_COLUMN.search(line):
+                issues.append((
+                    i, 'ERROR',
+                    "op.add_column() detected — use raw SQL instead:\n"
+                    "  op.execute('ALTER TABLE <t> ADD COLUMN IF NOT EXISTS <col> <type>')\n"
+                    "  op.add_column() raises DuplicateColumn on re-run (Req 8.4).",
+                ))
+
+            # Req 8.5: batch_alter_table is forbidden on PostgreSQL
+            if _OP_BATCH_ALTER_TABLE.search(line):
+                issues.append((
+                    i, 'ERROR',
+                    "op.batch_alter_table() detected — forbidden on PostgreSQL.\n"
+                    "  batch_alter_table creates a new table + copy + drop, which fails\n"
+                    "  when enum types already exist and doesn't support USING casts.\n"
+                    "  Use raw ALTER TABLE statements via op.execute() instead (Req 8.5).",
+                ))
+
+        # Req 8.2: CREATE TYPE without EXCEPTION WHEN duplicate_object guard
+        issues.extend(_check_enum_guard(text, lines))
+
+        # Req 8.6: upgrade() without downgrade() using DROP ... IF EXISTS
+        issues.extend(_check_downgrade_drop_if_exists(lines))
 
     return issues
 

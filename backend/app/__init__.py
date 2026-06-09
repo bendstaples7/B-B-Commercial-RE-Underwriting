@@ -7,6 +7,11 @@ from flask_limiter.util import get_remote_address
 from flask_migrate import Migrate
 import os
 
+# Re-export the reusable chain validator so callers can import it from either
+# ``app`` or ``app.migration_utils`` without caring where it lives.
+from app.migration_utils import assert_single_head_and_root  # noqa: F401
+from app.exceptions import ConfigurationError
+
 db = SQLAlchemy()
 migrate = Migrate()
 limiter = Limiter(
@@ -17,38 +22,76 @@ limiter = Limiter(
     default_limits=[],
 )
 
-def _assert_single_migration_head(app):
-    """
-    Abort startup if the Alembic migration graph has more than one head.
+def _is_migration_context() -> bool:
+    """Return True when the current process is executing a Flask-Migrate / Alembic command.
 
-    Multiple heads mean two migration files share the same down_revision,
-    creating a branch that `upgrade head` cannot resolve automatically.
-    This check surfaces the problem immediately with a clear error rather
-    than letting Flask start in a partially-migrated or broken state.
+    Three detection mechanisms are used, any of which is sufficient:
+
+    1. **Explicit env-var guard** – the operator (or CI) sets ``KIRO_MIGRATION=1``
+       or ``FLASK_DB_COMMAND=1`` before invoking ``flask db ...``.  This is the
+       most reliable mechanism and is used in deployment scripts.
+
+    2. **sys.argv heuristic** – the ``flask`` CLI is invoked with a ``db``
+       sub-command (e.g. ``flask db upgrade``).  We inspect ``sys.argv`` for the
+       pattern ``db`` appearing as an argument, which covers the common cases
+       ``flask db upgrade``, ``flask db downgrade``, ``flask db stamp``, etc.
+
+    3. **Flask CLI environment variable** – Flask sets ``FLASK_APP`` when
+       running under the ``flask`` command.  Combined with the ``db`` argv
+       check this guards against false positives from other tools that set
+       ``FLASK_APP`` for non-CLI purposes.
+
+    Requirements: 5.1, 5.2, 5.4
+    """
+    import sys
+
+    # Mechanism 1: explicit opt-in guard vars
+    if os.environ.get('KIRO_MIGRATION') == '1':
+        return True
+    if os.environ.get('FLASK_DB_COMMAND') == '1':
+        return True
+
+    # Mechanism 2 + 3: Flask CLI with a db sub-command
+    argv = sys.argv
+    flask_app_set = bool(os.environ.get('FLASK_APP'))
+    if flask_app_set and len(argv) >= 2 and 'db' in argv:
+        return True
+
+    # Mechanism 2 standalone: invoked as "flask db ..."
+    # argv[0] may be the flask script path; check argv[1] is 'db'
+    if len(argv) >= 2 and argv[1] == 'db':
+        return True
+
+    return False
+
+
+def _assert_single_migration_head(app):
+    """Abort startup if the Alembic migration graph has more than one head.
+
+    Delegates to :func:`app.migration_utils.assert_single_head_and_root` for
+    the graph traversal so the logic is reusable by the CLI/CI entry point
+    (``scripts/check_migration_chain.py``) and the Alembic ``env.py`` guard.
+
+    The underlying validator does NOT call ``SystemExit`` — this wrapper
+    raises ``RuntimeError`` on violation, consistent with the non-blocking
+    app factory approach (Req 5.1, 5.4, 7.1).
     """
     try:
-        from alembic.config import Config
-        from alembic.script import ScriptDirectory
+        result = assert_single_head_and_root()
+        head_count = result["head_count"]
+        head_revisions = result["head_revisions"]
 
-        # Use absolute path to alembic_migrations directory
-        # (parent of app/ is backend/, then join with alembic_migrations)
-        backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        migrations_dir = os.path.join(backend_dir, 'alembic_migrations')
-
-        alembic_cfg = Config()
-        alembic_cfg.set_main_option('script_location', migrations_dir)
-        script = ScriptDirectory.from_config(alembic_cfg)
-        heads = script.get_heads()
-
-        if len(heads) > 1:
-            head_list = ', '.join(heads)
-            raise SystemExit(
-                f"\n\n*** MIGRATION ERROR: Multiple Alembic heads detected: {head_list}\n"
-                "Two migration files share the same down_revision, creating a branch.\n"
-                "Fix: set one migration's down_revision to point to the other so the\n"
-                "chain is linear, then restart.\n"
+        if head_count > 1:
+            head_list = ', '.join(head_revisions)
+            msg = (
+                f"Multiple Alembic heads detected: {head_list}. "
+                "Two migration files share the same down_revision, creating a branch. "
+                "Fix: set one migration's down_revision to point to the other so the "
+                "chain is linear, then restart."
             )
-    except SystemExit:
+            app.logger.error("*** MIGRATION ERROR: %s", msg)
+            raise RuntimeError(msg)
+    except RuntimeError:
         raise
     except Exception as e:
         app.logger.warning("Could not check migration heads: %s", e)
@@ -116,7 +159,13 @@ def _warn_missing_optional_keys(app):
     """
     Log a clear warning at startup for env vars that are not strictly required
     to start the app but will cause silent failures mid-workflow if absent.
+
+    Skipped entirely when running in a migration context to avoid blocking or
+    adding latency to ``flask db upgrade`` and related commands (Req 5.6).
     """
+    if _is_migration_context():
+        return
+
     warnings = []
 
     if not os.getenv('GOOGLE_MAPS_API_KEY') or os.getenv('GOOGLE_MAPS_API_KEY') == 'your-google-maps-api-key':
@@ -136,8 +185,9 @@ def _warn_missing_optional_keys(app):
 
     redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
     try:
+        import socket as _socket
         import redis as _redis
-        r = _redis.from_url(redis_url)
+        r = _redis.from_url(redis_url, socket_connect_timeout=2, socket_timeout=2)
         r.ping()
     except Exception:
         # Redact credentials from the URL before logging; fall back to raw URL
@@ -152,7 +202,7 @@ def _warn_missing_optional_keys(app):
         warnings.append(
             f"Redis is not reachable at {safe_url}. "
             "The Celery worker cannot run — comparable search (Step 2) will fail. "
-            "Start Redis with: docker compose up -d"
+            "Start Redis with: wsl -d Ubuntu -- redis-server --daemonize yes"
         )
 
     for w in warnings:
@@ -180,24 +230,26 @@ def _validate_and_log_database_url(app, config_name='development'):
 
     raw_url = os.getenv('DATABASE_URL', '')
     if not raw_url:
-        app.logger.error(
+        msg = (
             "DATABASE_URL is not set. Set DATABASE_URL in backend/.env to a valid "
             "PostgreSQL connection string and restart."
         )
-        raise SystemExit(1)
+        app.logger.error(msg)
+        raise ConfigurationError(msg, config_key='DATABASE_URL')
 
     try:
         parsed = urlparse(raw_url)
         if parsed.scheme not in ('postgresql', 'postgres'):
             raise ValueError(f"Unsupported scheme: {parsed.scheme!r}")
-    except SystemExit:
+    except ConfigurationError:
         raise
     except Exception as exc:
-        app.logger.error(
+        msg = (
             "DATABASE_URL is missing or malformed. Provide a valid PostgreSQL "
-            "connection string in backend/.env. Error: %s", exc
+            f"connection string in backend/.env. Error: {exc}"
         )
-        raise SystemExit(1) from exc
+        app.logger.error(msg)
+        raise ConfigurationError(msg, config_key='DATABASE_URL') from exc
 
     app.logger.info("Database host resolved: %s", _safe_host(raw_url))
     app.config['DB_MODE'] = 'local'
@@ -257,14 +309,16 @@ def _assert_not_superuser(app):
                 text("SELECT usesuper FROM pg_user WHERE usename = current_user")
             ).fetchone()
             if result and result[0]:
-                raise SystemExit(
-                    "\n\n*** SECURITY ERROR: The database user configured in DATABASE_URL "
-                    "has superuser privileges.\n"
+                msg = (
+                    "SECURITY ERROR: The database user configured in DATABASE_URL "
+                    "has superuser privileges. "
                     "Create a dedicated application user with minimum required privileges "
                     "(SELECT, INSERT, UPDATE, DELETE, schema modification for migrations) "
-                    "and update DATABASE_URL in backend/.env.\n"
+                    "and update DATABASE_URL in backend/.env."
                 )
-    except SystemExit:
+                app.logger.error(msg)
+                raise ConfigurationError(msg, config_key='DATABASE_URL')
+    except ConfigurationError:
         raise
     except Exception as e:
         app.logger.warning("Could not verify superuser status: %s", e)
@@ -300,10 +354,12 @@ def create_app(config_name='development'):
     # Require a real SECRET_KEY — never allow the insecure default in production.
     _secret_key = os.getenv('SECRET_KEY', '')
     if config_name != 'testing' and (not _secret_key or _secret_key == 'dev-secret-key'):
-        raise SystemExit(
-            "FATAL: SECRET_KEY is missing or set to the insecure default 'dev-secret-key'. "
+        msg = (
+            "SECRET_KEY is missing or set to the insecure default 'dev-secret-key'. "
             "Set a strong random SECRET_KEY in backend/.env before starting the server."
         )
+        app.logger.error("FATAL: %s", msg)
+        raise ConfigurationError(msg, config_key='SECRET_KEY')
     app.config['SECRET_KEY'] = _secret_key or 'dev-secret-key'  # testing only
     app.config['REDIS_URL'] = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 
@@ -370,9 +426,11 @@ def create_app(config_name='development'):
     # Uses FLASK_ENV if set, otherwise falls back to config_name.
     # Skip in Celery worker/beat processes — they share the same DB but
     # should not run migrations (Flask handles that on startup).
+    # Skip entirely when running under a migration command (flask db ...) so
+    # that the migration command itself is not aborted before producing output.
     effective_env = os.getenv('FLASK_ENV', config_name)
     _is_celery = os.getenv('CELERY_WORKER_RUNNING') == '1'
-    if effective_env == 'development' and not _is_celery:
+    if effective_env == 'development' and not _is_celery and not _is_migration_context():
         with app.app_context():
             _assert_single_migration_head(app)
             try:
@@ -432,7 +490,7 @@ def create_app(config_name='development'):
                     app.logger.warning("Could not verify migration head: %s", check_err)
             _assert_enum_values_match_db(app)
             _assert_not_superuser(app)
-    elif effective_env != 'testing' and not _is_celery:
+    elif effective_env != 'testing' and not _is_celery and not _is_migration_context():
         # In production (and any non-development, non-testing env), run the
         # superuser check without auto-migration. This ensures the security
         # guard fires on every production startup, not just development.
