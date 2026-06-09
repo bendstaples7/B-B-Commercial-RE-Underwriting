@@ -195,7 +195,11 @@ export function LeadKanbanProvider({ children }: { children: React.ReactNode }) 
       targetAction: string
     }) => leadKanbanService.moveKanbanLead(leadId, targetAction),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['kanban-leads'] })
+      // Don't invalidate main kanban-leads query (would collapse expanded columns).
+      // Only refetch expanded column queries to sync counts.
+      expandedColumns.forEach((colId) => {
+        queryClient.invalidateQueries({ queryKey: ['kanban-leads-expand', colId] })
+      })
     },
   })
 

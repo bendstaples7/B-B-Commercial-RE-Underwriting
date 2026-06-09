@@ -28,7 +28,8 @@ class StartAnalysisSchema(RequestSchema):
 class PipelineStageConfigSchema(RequestSchema):
     """Schema for pipeline stage configuration."""
     stage_name = fields.Str(required=True, validate=validate.Length(min=1, max=255))
-    config_data = fields.Dict(required=True)
+    order = fields.Int(required=True, validate=validate.Range(min=1))
+    weight = fields.Decimal(required=True, validate=validate.Range(min=0), as_string=True)
 
 
 class PropertyFactsSchema(Schema):

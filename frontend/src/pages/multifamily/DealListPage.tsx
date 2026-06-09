@@ -4,8 +4,8 @@
  *
  * Requirements: 1.5, 14.1
  */
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Box,
@@ -296,7 +296,17 @@ function DealTable({ deals, onOpen }: DealTableProps) {
 
 export function DealListPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [createOpen, setCreateOpen] = useState(false)
+
+  // Open the create dialog when navigated here with { state: { openCreate: true } }
+  useEffect(() => {
+    if ((location.state as { openCreate?: boolean })?.openCreate) {
+      setCreateOpen(true)
+      // Clear the state so navigating back doesn't re-open
+      window.history.replaceState({}, document.title)
+    }
+  }, [location.state])
 
   const {
     data: deals,

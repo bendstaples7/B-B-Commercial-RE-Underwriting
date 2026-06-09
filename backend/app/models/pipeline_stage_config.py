@@ -1,8 +1,8 @@
-from app.extensions import db
+from app import db
 from datetime import datetime
 
 class PipelineStageConfig(db.Model):
-    __tablename__ = 'pipeline_stage_config'
+    __tablename__ = 'pipeline_stage_configs'
 
     id = db.Column(db.Integer, primary_key=True)
     stage_name = db.Column(db.String(80), unique=True, nullable=False)

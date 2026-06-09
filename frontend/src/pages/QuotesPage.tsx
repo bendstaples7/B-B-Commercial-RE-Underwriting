@@ -121,9 +121,9 @@ export function QuotesPage() {
     queryFn: () => multifamilyService.listDeals(),
   })
 
-  // Placeholder for "Create New Quote" functionality
+  // Navigate to deals page and open the create dialog
   const handleCreateNewQuote = () => {
-    navigate('/multifamily/deals')
+    navigate('/multifamily/deals', { state: { openCreate: true } })
   }
 
   return (

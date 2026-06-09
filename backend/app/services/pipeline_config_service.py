@@ -47,8 +47,9 @@ class PipelineConfigService:
                     order = (max_order or 0) + 1
                 config = PipelineStageConfig(stage_name=stage_name, order=order, weight=weight)
                 db.session.add(config)
-            db.session.flush() # Flush to get ID if new, and to cascade updates
             updated_configs.append(config)
+        # Flush once after all updates to avoid unique constraint violations on order swaps
+        db.session.flush()
         db.session.commit() # Commit all changes at once
         return updated_configs
 

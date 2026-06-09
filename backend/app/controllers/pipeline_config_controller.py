@@ -1,14 +1,13 @@
 import logging
 from functools import wraps
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, g
 from marshmallow import ValidationError
 
 from app import db
 from app.exceptions import RealEstateAnalysisException
-from app.schemas import PipelineStageConfigSchema # Import the newly created schema
-from app.services.pipeline_config_service import PipelineConfigService # Import the service
-from app.api_utils import get_current_user_id # For get_user_id
+from app.schemas import PipelineStageConfigSchema
+from app.services.pipeline_config_service import PipelineConfigService
 
 logger = logging.getLogger(__name__)
 
@@ -64,14 +63,6 @@ def handle_errors(f):
     return decorated_function
 
 
-def get_user_id() -> str:
-    """Extract user ID from g.user_id (set by before_request hook).
-    Falls back to reading the header directly for backwards compatibility,
-    then to 'anonymous' for development/testing.
-    """
-    return get_current_user_id()
-
-
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -88,10 +79,8 @@ def get_pipeline_stages():
 @handle_errors
 def update_pipeline_stage_weights():
     """Accepts a list of {stage_name: weight} pairs to update stage weights (admin-only)."""
-    # Assuming admin check happens via a decorator or a user service call not in this snippet
-    # For now, a simple user_id check (needs to be replaced with actual admin check)
-    user_id = get_user_id()
-    if user_id != 'admin_user_id': # Placeholder for actual admin check
+    # Admin access check using is_admin set by auth middleware
+    if not getattr(g, 'is_admin', False):
         raise RealEstateAnalysisException("Admin access required to update stage weights", status_code=403)
 
     payload = request.get_json()
@@ -102,11 +91,11 @@ def update_pipeline_stage_weights():
     validated_updates = []
     for item in payload:
         try:
-            validated_updates.append(_pipeline_stage_update_schema.load(item, partial=True)) # partial=True allows omitting 'order' for existing stages
+            validated_updates.append(_pipeline_stage_update_schema.load(item))  # no partial=True — all required fields must be present
         except ValidationError as e:
             return jsonify({'error': 'Validation error in stage update payload', 'details': e.messages}), 400
 
     updated_stages = _pipeline_config_service.update_stage_weights(validated_updates)
-    db.session.commit() # Commit changes made by the service
+    # Service already commits; no need for a redundant commit here
 
     return jsonify(_pipeline_stage_config_schema.dump(updated_stages)), 200
