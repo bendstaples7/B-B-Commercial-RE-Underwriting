@@ -170,15 +170,17 @@ jobs:
           SECRET_KEY: ci-test-secret-key
           JWT_SECRET_KEY: ci-test-jwt-secret
 
+      - name: Create isolated migration test database
+        # Create a second PostgreSQL database that pytest never touches.
+        # The smoke-test runs flask db upgrade against this clean database so
+        # that Alembic revision state from pytest's auto-migrate never
+        # interferes with the migration chain validation.
+        run: PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE migration_test_db;"
+
       - name: Smoke-test migrations against PostgreSQL
-        # Runs flask db upgrade against the real PostgreSQL service container.
-        # This catches migration failures (wrong API calls, SQL errors, enum
-        # issues) that are invisible when tests use SQLite in-memory.
-        # Runs AFTER pytest so schema changes don't interfere with test fixtures.
-        #
-        # The baseline migration (267725fe7017) is self-contained: it creates
-        # the original schema (types + tables) with IF NOT EXISTS before doing
-        # any ALTER operations, so no external seed script is needed.
+        # Runs flask db upgrade against migration_test_db — a completely fresh
+        # database that pytest never touched.  This guarantees a clean Alembic
+        # state so the full migration chain is validated from scratch on every CI run.
         run: |
           echo "=== Running flask db upgrade ==="
           set +e
@@ -193,7 +195,7 @@ jobs:
           echo "=== Migration complete ==="
         working-directory: backend
         env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migration_test_db
           FLASK_ENV: testing
           SECRET_KEY: ci-test-secret-key
           JWT_SECRET_KEY: ci-test-jwt-secret
