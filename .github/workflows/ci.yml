@@ -180,10 +180,11 @@ jobs:
         # the original schema (types + tables) with IF NOT EXISTS before doing
         # any ALTER operations, so no external seed script is needed.
         run: |
-          set -euo pipefail
           echo "=== Running flask db upgrade ==="
+          set +e
           flask db upgrade 2>&1 | tee /tmp/migration_output.txt
           EXIT_CODE=${PIPESTATUS[0]}
+          set -e
           if [ $EXIT_CODE -ne 0 ]; then
             echo "::error::flask db upgrade failed (exit $EXIT_CODE). Output:"
             cat /tmp/migration_output.txt

@@ -324,6 +324,13 @@ def upgrade():
         ALTER COLUMN interior_condition TYPE interiorcondition
         USING upper(interior_condition::text)::interiorcondition
     """)
+    # user_modified_fields TEXT[] → JSON: PostgreSQL cannot cast array to json
+    # automatically; must specify USING cast.
+    op.execute("""
+        ALTER TABLE property_facts
+        ALTER COLUMN user_modified_fields TYPE JSON
+        USING array_to_json(user_modified_fields)
+    """)
 
     # scenarios.scenario_type: scenario_type → scenariotype
     op.execute("""
@@ -470,10 +477,7 @@ def upgrade():
                existing_type=sa.NUMERIC(precision=11, scale=8),
                type_=sa.Float(),
                existing_nullable=True)
-        batch_op.alter_column('user_modified_fields',
-               existing_type=postgresql.ARRAY(sa.TEXT()),
-               type_=sa.JSON(),
-               existing_nullable=True)
+        # user_modified_fields retyped above via raw SQL (requires USING array_to_json cast)
         batch_op.drop_index(batch_op.f('idx_property_facts_address'))
         batch_op.drop_index(batch_op.f('idx_property_facts_session_id'))
         batch_op.create_index(batch_op.f('ix_property_facts_address'), ['address'], unique=False)
