@@ -361,7 +361,10 @@ def list_properties():
     if not _current_user_is_admin():
         from flask import g
         current_user_id = getattr(g, 'user_id', None)
-        if current_user_id and current_user_id != 'anonymous':
+        if not current_user_id or current_user_id == 'anonymous':
+            # Fail closed — anonymous callers see no leads
+            query = query.filter(false())
+        else:
             query = query.filter(Lead.owner_user_id == current_user_id)
         else:
             query = query.filter(false())
@@ -515,10 +518,13 @@ def analyze_property(lead_id):
     Returns the new session details.
     """
     # Auth check first -- before lead lookup -- to prevent info leak.
+    # Cache admin status so a transient failure during the DB read doesn't
+    # produce inconsistent behaviour between the two checks.
     # Missing credentials return 400, not 404, so unauthenticated callers
     # cannot distinguish valid lead IDs.
+    is_admin = _current_user_is_admin()
     current_user_id = None
-    if not _current_user_is_admin():
+    if not is_admin:
         from flask import g
         current_user_id = getattr(g, 'user_id', None)
         if not current_user_id or current_user_id == 'anonymous':
@@ -594,6 +600,29 @@ def analyze_property(lead_id):
 
 
 # ---------------------------------------------------------------------------
+# View endpoint helpers
+# ---------------------------------------------------------------------------
+
+
+def _scoped_lead_query():
+    """Return a Lead query scoped to the current user's owned leads.
+
+    Admins see all leads. Non-admins only see leads they own.
+    Anonymous/missing-user requests return no rows (fail closed).
+    """
+    query = Lead.query
+    if _current_user_is_admin():
+        return query
+
+    from flask import g
+
+    current_user_id = getattr(g, "user_id", None)
+    if not current_user_id or current_user_id == "anonymous":
+        return query.filter(false())
+    return query.filter(Lead.owner_user_id == current_user_id)
+
+
+# ---------------------------------------------------------------------------
 # Property View Endpoints (HubSpot CRM Migration — Phase 6)
 # ---------------------------------------------------------------------------
 
@@ -607,7 +636,7 @@ def view_previously_warm():
     page, per_page = _parse_pagination(request.args)
 
     query = (
-        Lead.query
+        _scoped_lead_query()
         .join(HubSpotSignal, HubSpotSignal.lead_id == Lead.id)
         .filter(HubSpotSignal.signal_type.in_(['PRIOR_WARM_CONVERSATION', 'APPOINTMENT_OCCURRED']))
         .distinct(Lead.id)
@@ -660,7 +689,7 @@ def view_needs_review():
     )
 
     query = (
-        Lead.query
+        _scoped_lead_query()
         .filter(
             or_(
                 Lead.id.in_(unmatched_lead_ids),
@@ -701,7 +730,7 @@ def view_follow_up_overdue():
     now = _dt.utcnow()
 
     query = (
-        Lead.query
+        _scoped_lead_query()
         .join(TaskAssociation, (TaskAssociation.target_id == Lead.id) & (TaskAssociation.target_type == 'lead'))
         .join(Task, Task.id == TaskAssociation.task_id)
         .filter(
@@ -767,7 +796,7 @@ def view_no_next_action():
     )
 
     query = (
-        Lead.query
+        _scoped_lead_query()
         .filter(Lead.id.in_(prior_interaction_ids))
         .filter(Lead.id.notin_(has_open_task_ids))
         .filter(Lead.id.notin_(has_future_interaction_ids))
@@ -793,7 +822,7 @@ def view_do_not_contact():
     page, per_page = _parse_pagination(request.args)
 
     query = (
-        Lead.query
+        _scoped_lead_query()
         .filter(Lead.suppression_flag == True)  # noqa: E712
         .order_by(Lead.updated_at.desc())
     )
@@ -829,7 +858,7 @@ def view_missing_property_match():
     )
 
     query = (
-        Lead.query
+        _scoped_lead_query()
         .filter(Lead.source == 'hubspot_import')
         .filter(Lead.id.notin_(confirmed_match_ids))
         .order_by(Lead.created_at.desc())

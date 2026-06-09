@@ -254,7 +254,8 @@ export function LeadKanbanProvider({ children }: { children: React.ReactNode }) 
       }).then((response) => {
         // Merge the expanded column's leads into the existing columns
         // (only replaces the matching column, keeps others intact)
-        dispatch({ type: 'MERGE_COLUMNS', expandedColumns: response.columns })
+        // Only merge the expanded column, keeping previously-expanded columns intact
+        dispatch({ type: 'MERGE_COLUMNS', expandedColumns: response.columns.filter(c => c.id === columnId) })
         setStoredTotalCounts(response.total_counts)
       })
     },
