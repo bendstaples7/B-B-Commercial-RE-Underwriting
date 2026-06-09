@@ -181,7 +181,7 @@ jobs:
         # applied once before Alembic was introduced). In CI's fresh DB we must
         # run that SQL first so the tables exist when Alembic runs.
         run: |
-          PGPASSWORD=postgres psql -h localhost -U postgres -d test_db -f migrations/001_create_schema.sql
+          PGPASSWORD=postgres psql -h localhost -U postgres -d test_db -v ON_ERROR_STOP=1 -f migrations/001_create_schema.sql
           flask db upgrade
         working-directory: backend
         env:
