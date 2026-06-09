@@ -19,7 +19,7 @@ from app.exceptions import LeadTaskValidationError, InvalidTaskStatusTransitionE
 # Helpers / mock factories
 # ---------------------------------------------------------------------------
 
-def make_mock_lead(lead_id=1, lead_status='active'):
+def make_mock_lead(lead_id=1, lead_status='mailing_no_contact_made'):
     """Create a minimal mock Lead object."""
     lead = MagicMock()
     lead.id = lead_id
@@ -457,3 +457,4 @@ def test_property_15_empty_note_rejected(body):
 
         # Timeline unchanged: no commit should have occurred
         mock_db.session.commit.assert_not_called()
+

@@ -1,0 +1,259 @@
+# .github/workflows/fix-lead-owner-assignment.yml
+#
+# ONE-OFF WORKFLOW: Assign all DuPage-sourced leads to userx
+#
+# Steps:
+#   1. Take a pre-fix pg_dump backup on the VPS
+#   2. Look up userx's user_id UUID from the users table
+#   3. Print the UUID and current lead counts for confirmation
+#   4. Run the UPDATE to assign all DuPage leads to userx (only when dry_run=false)
+#   5. Print post-fix counts to confirm the change
+#
+# Trigger: workflow_dispatch only (manual, via GitHub Actions UI)
+# This workflow does NOT run automatically on push or PR.
+#
+# DELETE THIS FILE after the fix has been confirmed.
+
+name: Fix — Assign DuPage leads to userx
+
+on:
+  workflow_dispatch:
+    inputs:
+      userx_email:
+        description: "Email address of userx (used to look up their user_id UUID)"
+        required: true
+        default: ""
+      dry_run:
+        description: "Preview counts without making any changes (set to false to apply)"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  fix-lead-owner:
+    name: Assign DuPage leads to userx
+    runs-on: ubuntu-latest
+    # Never allow concurrent runs of this job
+    concurrency:
+      group: fix-lead-owner
+      cancel-in-progress: false
+
+    steps:
+      # ── Step 1: Set up SSH ─────────────────────────────────────────────────
+      - name: Set up SSH key
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+      - name: Add VPS to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_HOST_KEY }}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      # ── Step 2: Verify SSH connectivity ───────────────────────────────────
+      - name: Verify SSH connectivity
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          ssh -i ~/.ssh/id_deploy \
+            -o ConnectTimeout=10 \
+            "$VPS_USER@$VPS_HOST" \
+            "echo 'SSH OK'" \
+          || { echo "ERROR: Cannot connect to VPS"; exit 1; }
+
+      # ── Step 3: Take a pre-fix backup ─────────────────────────────────────
+      - name: Take pre-fix database backup
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "Taking pre-fix backup before modifying owner_user_id on leads..."
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+            "/home/deploy/backup.sh --pre-deploy" \
+          || {
+            echo "ERROR: Pre-fix backup failed. Aborting — no data changes made."
+            echo "Check /home/deploy/logs/backup.log on the VPS for details."
+            exit 1
+          }
+          echo "Pre-fix backup completed successfully."
+
+      # ── Step 4: Look up userx UUID and preview counts ─────────────────────
+      # Uses Python on the runner to parse DATABASE_URL and build SQL safely.
+      # The script is base64-encoded before transfer so no quoting issues arise
+      # when passing it over SSH — the VPS decodes and runs it directly.
+      - name: Look up userx UUID and preview lead counts
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          USERX_EMAIL: ${{ inputs.userx_email }}
+        run: |
+          echo "Looking up user_id for email: [provided as workflow input]"
+
+          # Build a self-contained Python script that uses psycopg2 (available on VPS)
+          # to query safely with parameterized SQL — no shell injection possible.
+          cat > /tmp/lookup_user.py << 'PYEOF'
+          import os, sys
+          import psycopg2
+
+          db_url = os.environ['DATABASE_URL']
+          email  = os.environ['USERX_EMAIL']
+
+          conn = psycopg2.connect(db_url)
+          cur  = conn.cursor()
+
+          # Look up user by email using parameterized query
+          cur.execute("SELECT user_id FROM users WHERE email = %s LIMIT 1", (email,))
+          row = cur.fetchone()
+
+          if row is None:
+              cur.execute("SELECT COUNT(*) FROM users")
+              count = cur.fetchone()[0]
+              print(f"ERROR: No user found with the provided email.", file=sys.stderr)
+              print(f"Hint: {count} user(s) exist in the database. Check the email and retry.", file=sys.stderr)
+              sys.exit(1)
+
+          userx_uuid = row[0]
+          print(f"Found userx. UUID ends in: ...{userx_uuid[-6:]}")
+
+          # Current lead ownership breakdown (masked UUIDs)
+          cur.execute("""
+              SELECT
+                CASE WHEN owner_user_id = %s THEN '[userx]'
+                     WHEN owner_user_id IS NULL THEN '[unowned]'
+                     ELSE '[other-user]'
+                END AS owner,
+                source_type,
+                COUNT(*) AS lead_count
+              FROM leads
+              WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
+              GROUP BY 1, source_type
+              ORDER BY lead_count DESC
+          """, (userx_uuid,))
+
+          print("\n=== STEP 2: Current lead ownership breakdown ===")
+          rows = cur.fetchall()
+          print(f"{'owner':<15} {'source_type':<20} {'lead_count':>10}")
+          print("-" * 48)
+          for r in rows:
+              print(f"{str(r[0]):<15} {str(r[1]):<20} {str(r[2]):>10}")
+
+          # Leads that will be reassigned
+          cur.execute("""
+              SELECT COUNT(*) AS leads_to_reassign, source_type
+              FROM leads
+              WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
+                AND (owner_user_id != %s OR owner_user_id IS NULL)
+              GROUP BY source_type
+              ORDER BY leads_to_reassign DESC
+          """, (userx_uuid,))
+
+          print("\n=== STEP 3: Leads that WILL BE reassigned to userx ===")
+          rows = cur.fetchall()
+          if not rows:
+              print("No leads need reassignment — all already assigned to userx.")
+          else:
+              print(f"{'count':>10} {'source_type':<20}")
+              print("-" * 32)
+              for r in rows:
+                  print(f"{str(r[0]):>10} {str(r[1]):<20}")
+
+          cur.close()
+          conn.close()
+          PYEOF
+
+          # Transfer the script to the VPS and run it there
+          scp -i ~/.ssh/id_deploy /tmp/lookup_user.py "$VPS_USER@$VPS_HOST:/tmp/lookup_user.py"
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+            DATABASE_URL="$DATABASE_URL" USERX_EMAIL="$USERX_EMAIL" \
+            python3 /tmp/lookup_user.py
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" "rm -f /tmp/lookup_user.py"
+
+      # ── Step 5: Run the UPDATE (only when dry_run is false) ───────────────
+      - name: Update owner_user_id on DuPage leads
+        if: ${{ !inputs.dry_run }}
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          USERX_EMAIL: ${{ inputs.userx_email }}
+        run: |
+          echo "Running UPDATE — assigning all DuPage leads..."
+
+          cat > /tmp/assign_leads.py << 'PYEOF'
+          import os, sys
+          import psycopg2
+
+          db_url = os.environ['DATABASE_URL']
+          email  = os.environ['USERX_EMAIL']
+
+          conn = psycopg2.connect(db_url)
+          cur  = conn.cursor()
+
+          # Look up userx UUID with parameterized query
+          cur.execute("SELECT user_id FROM users WHERE email = %s LIMIT 1", (email,))
+          row = cur.fetchone()
+          if row is None:
+              print("ERROR: Cannot find user with provided email — aborting UPDATE", file=sys.stderr)
+              sys.exit(1)
+
+          userx_uuid = row[0]
+          print(f"Assigning leads to user UUID ending in: ...{userx_uuid[-6:]}")
+
+          # Run the UPDATE with parameterized UUID — only for leads not already assigned to userx
+          cur.execute("""
+              UPDATE leads
+              SET owner_user_id = %s,
+                  updated_at    = NOW()
+              WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
+                AND (owner_user_id != %s OR owner_user_id IS NULL)
+          """, (userx_uuid, userx_uuid))
+
+          updated = cur.rowcount
+          conn.commit()
+          print(f"Updated {updated} leads.")
+
+          # Post-fix verification (masked)
+          cur.execute("""
+              SELECT
+                CASE WHEN owner_user_id = %s THEN '[userx]'
+                     WHEN owner_user_id IS NULL THEN '[unowned]'
+                     ELSE '[other-user]'
+                END AS owner,
+                source_type,
+                COUNT(*) AS lead_count
+              FROM leads
+              WHERE source_type IN ('absentee_owner','long_owned','foreclosure','tax_distress','manual_distress')
+              GROUP BY 1, source_type
+              ORDER BY lead_count DESC
+          """, (userx_uuid,))
+
+          print("\n=== POST-FIX: Lead ownership verification ===")
+          rows = cur.fetchall()
+          print(f"{'owner':<15} {'source_type':<20} {'lead_count':>10}")
+          print("-" * 48)
+          for r in rows:
+              print(f"{str(r[0]):<15} {str(r[1]):<20} {str(r[2]):>10}")
+
+          print(f"\nSUCCESS — DuPage leads reassigned to user ending in ...{userx_uuid[-6:]}")
+
+          cur.close()
+          conn.close()
+          PYEOF
+
+          scp -i ~/.ssh/id_deploy /tmp/assign_leads.py "$VPS_USER@$VPS_HOST:/tmp/assign_leads.py"
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+            DATABASE_URL="$DATABASE_URL" USERX_EMAIL="$USERX_EMAIL" \
+            python3 /tmp/assign_leads.py
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" "rm -f /tmp/assign_leads.py"
+
+      - name: Dry run notice
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "DRY RUN MODE — no changes were made to the database."
+          echo "Review the lead counts above, then re-run with dry_run=false to apply."

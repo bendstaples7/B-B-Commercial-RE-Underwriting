@@ -52,7 +52,7 @@ function makePayload(overrides: Partial<CommandCenterPayload> = {}): CommandCent
     property_city: 'Chicago',
     property_state: 'IL',
     lead_score: 75,
-    lead_status: 'active',
+    lead_status: 'mailing_no_contact_made',
     has_property_match: true,
     analysis_session_id: 42,
     recommended_action: {
@@ -213,12 +213,10 @@ describe('LeadCommandCenter', () => {
       await user.click(statusSelect)
 
       await waitFor(() => {
-        expect(screen.getByTestId('status-option-new')).toBeInTheDocument()
-        expect(screen.getByTestId('status-option-active')).toBeInTheDocument()
-        expect(screen.getByTestId('status-option-follow_up')).toBeInTheDocument()
-        expect(screen.getByTestId('status-option-nurture')).toBeInTheDocument()
-        expect(screen.getByTestId('status-option-under_contract')).toBeInTheDocument()
-        expect(screen.getByTestId('status-option-closed')).toBeInTheDocument()
+        expect(screen.getByTestId('status-option-mailing_no_contact_made')).toBeInTheDocument()
+        expect(screen.getByTestId('status-option-mailing_contacted_interested')).toBeInTheDocument()
+        expect(screen.getByTestId('status-option-negotiating_remote')).toBeInTheDocument()
+        expect(screen.getByTestId('status-option-deprioritize')).toBeInTheDocument()
         expect(screen.getByTestId('status-option-suppressed')).toBeInTheDocument()
         expect(screen.getByTestId('status-option-do_not_contact')).toBeInTheDocument()
       })
@@ -230,8 +228,8 @@ describe('LeadCommandCenter', () => {
       vi.mocked(commandCenterService.updateStatus).mockResolvedValue(undefined)
       // Return updated payload on second call
       vi.mocked(commandCenterService.getCommandCenter)
-        .mockResolvedValueOnce(makePayload({ lead_status: 'active' }))
-        .mockResolvedValue(makePayload({ lead_status: 'follow_up' }))
+        .mockResolvedValueOnce(makePayload({ lead_status: 'mailing_no_contact_made' }))
+        .mockResolvedValue(makePayload({ lead_status: 'mailing_contacted_interested' }))
 
       renderCommandCenter()
       await waitFor(() => {
@@ -243,13 +241,13 @@ describe('LeadCommandCenter', () => {
       await user.click(statusSelect)
 
       await waitFor(() => {
-        expect(screen.getByTestId('status-option-follow_up')).toBeInTheDocument()
+        expect(screen.getByTestId('status-option-mailing_contacted_interested')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByTestId('status-option-follow_up'))
+      await user.click(screen.getByTestId('status-option-mailing_contacted_interested'))
 
       await waitFor(() => {
-        expect(commandCenterService.updateStatus).toHaveBeenCalledWith(1, 'follow_up')
+        expect(commandCenterService.updateStatus).toHaveBeenCalledWith(1, 'mailing_contacted_interested')
       })
     })
 
@@ -266,10 +264,10 @@ describe('LeadCommandCenter', () => {
       await user.click(statusSelect)
 
       await waitFor(() => {
-        expect(screen.getByTestId('status-option-nurture')).toBeInTheDocument()
+        expect(screen.getByTestId('status-option-deprioritize')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByTestId('status-option-nurture'))
+      await user.click(screen.getByTestId('status-option-deprioritize'))
 
       await waitFor(() => {
         expect(commandCenterService.updateStatus).toHaveBeenCalled()
@@ -295,10 +293,10 @@ describe('LeadCommandCenter', () => {
       await user.click(statusSelect)
 
       await waitFor(() => {
-        expect(screen.getByTestId('status-option-nurture')).toBeInTheDocument()
+        expect(screen.getByTestId('status-option-deprioritize')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByTestId('status-option-nurture'))
+      await user.click(screen.getByTestId('status-option-deprioritize'))
 
       await waitFor(() => {
         expect(screen.getByTestId('status-change-error')).toBeInTheDocument()
@@ -324,10 +322,10 @@ describe('LeadCommandCenter', () => {
       await user.click(statusSelect)
 
       await waitFor(() => {
-        expect(screen.getByTestId('status-option-nurture')).toBeInTheDocument()
+        expect(screen.getByTestId('status-option-deprioritize')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByTestId('status-option-nurture'))
+      await user.click(screen.getByTestId('status-option-deprioritize'))
 
       await waitFor(() => {
         expect(screen.getByTestId('status-change-error')).toBeInTheDocument()
@@ -405,7 +403,7 @@ describe('LeadCommandCenter', () => {
       })
     })
 
-    it('does NOT show DNC badge in header when lead_status is active', async () => {
+    it('does NOT show DNC badge in header when lead_status is mailing_no_contact_made', async () => {
       renderCommandCenter()
       await waitFor(() => {
         expect(screen.getByTestId('lead-header')).toBeInTheDocument()
@@ -414,9 +412,9 @@ describe('LeadCommandCenter', () => {
       expect(header.querySelector('[data-testid="dnc-badge"]')).not.toBeInTheDocument()
     })
 
-    it('does NOT show DNC badge in header when lead_status is follow_up', async () => {
+    it('does NOT show DNC badge in header when lead_status is mailing_contacted_interested', async () => {
       vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
-        makePayload({ lead_status: 'follow_up' })
+        makePayload({ lead_status: 'mailing_contacted_interested' })
       )
 
       renderCommandCenter()
@@ -428,3 +426,4 @@ describe('LeadCommandCenter', () => {
     })
   })
 })
+

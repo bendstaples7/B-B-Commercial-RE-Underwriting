@@ -12,10 +12,10 @@ from functools import wraps
 
 from flask import Blueprint, jsonify, redirect, request, url_for
 from marshmallow import ValidationError
-from sqlalchemy import or_
+from sqlalchemy import false, func, or_
 
 from app import db, limiter
-from app.api_utils import get_current_user_id
+from app.api_utils import get_current_user_id, require_auth
 from app.models import (
     AnalysisSession,
     Lead,
@@ -355,14 +355,16 @@ def list_properties():
     query = Lead.query
 
     # --- Ownership scope (security) ---
-    # Non-admin users only see leads they own. Admins see all leads.
-    # There is no NULL exception — leads with no owner_user_id are not
-    # visible to non-admins to prevent accidental cross-user data exposure.
+    # Non-admin users see only leads they own (exact match on owner_user_id).
+    # Leads with owner_user_id IS NULL are not visible to non-admin users.
+    # Unauthenticated requests see no leads.
     if not _current_user_is_admin():
         from flask import g
         current_user_id = getattr(g, 'user_id', None)
         if current_user_id and current_user_id != 'anonymous':
             query = query.filter(Lead.owner_user_id == current_user_id)
+        else:
+            query = query.filter(false())
 
     # --- Filters ---
     lead_category = args.get('lead_category')
@@ -387,7 +389,6 @@ def list_properties():
 
     owner_name = args.get('owner_name')
     if owner_name:
-        from sqlalchemy import or_, func
         # Build a subquery for Contact-based matches (individual fields + full name)
         contact_subquery = (
             db.session.query(PropertyContact.property_id)
@@ -487,17 +488,12 @@ def get_property(lead_id):
         }), 404
 
     # Ownership check: non-admins can only access leads they own.
-    # Anonymous/unauthenticated users are denied (matches list_properties).
-    # NULL-owner leads are not accessible to non-admins.
+    # NULL-owner leads are not accessible to non-admin users.
     if not _current_user_is_admin():
         from flask import g
         current_user_id = getattr(g, 'user_id', None)
-        if not current_user_id or current_user_id == 'anonymous':
-            return jsonify({
-                'error': 'Property not found',
-                'message': f'Property {lead_id} does not exist',
-            }), 404
-        if lead.owner_user_id is None or lead.owner_user_id != current_user_id:
+        is_authenticated = current_user_id and current_user_id != 'anonymous'
+        if not is_authenticated or lead.owner_user_id != current_user_id:
             return jsonify({
                 'error': 'Property not found',
                 'message': f'Property {lead_id} does not exist',
@@ -538,9 +534,13 @@ def analyze_property(lead_id):
             'message': f'Property {lead_id} does not exist',
         }), 404
 
-    # Ownership check for non-admin users (now that lead is confirmed to exist).
+    # Ownership check: non-admins can only access leads they own.
+    # NULL-owner leads are not accessible to non-admin users.
     if not _current_user_is_admin():
-        if lead.owner_user_id is None or lead.owner_user_id != current_user_id:
+        from flask import g
+        current_user_id = getattr(g, 'user_id', None)
+        is_authenticated = current_user_id and current_user_id != 'anonymous'
+        if not is_authenticated or lead.owner_user_id != current_user_id:
             return jsonify({
                 'error': 'Property not found',
                 'message': f'Property {lead_id} does not exist',

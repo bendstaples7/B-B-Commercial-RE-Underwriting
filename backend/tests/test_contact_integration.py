@@ -22,6 +22,8 @@ from app.models.hubspot_contact import HubSpotContact
 from app.models.hubspot_match import HubSpotMatch
 from app.services.hubspot_matcher_service import HubSpotMatcherService
 
+_AUTH_HEADERS = {'X-User-Id': 'test-user'}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -29,7 +31,7 @@ from app.services.hubspot_matcher_service import HubSpotMatcherService
 
 def _make_property(street: str = "100 Integration St") -> Lead:
     """Create and persist a minimal Property (Lead) record."""
-    prop = Lead(property_street=street)
+    prop = Lead(property_street=street, owner_user_id="test-user")
     db.session.add(prop)
     db.session.commit()
     return prop
@@ -82,7 +84,7 @@ class TestOwnerNameFilter:
             _link(prop.id, contact.id, is_primary=True)
             prop_id = prop.id
 
-        resp = client.get("/api/properties/?owner_name=Alice")
+        resp = client.get("/api/properties/?owner_name=Alice", headers=_AUTH_HEADERS)
         assert resp.status_code == 200
         data = resp.get_json()
         ids = [p["id"] for p in data["leads"]]
@@ -96,7 +98,7 @@ class TestOwnerNameFilter:
             _link(prop.id, contact.id, is_primary=True)
             prop_id = prop.id
 
-        resp = client.get("/api/properties/?owner_name=Wonderland")
+        resp = client.get("/api/properties/?owner_name=Wonderland", headers=_AUTH_HEADERS)
         assert resp.status_code == 200
         data = resp.get_json()
         ids = [p["id"] for p in data["leads"]]
@@ -110,7 +112,7 @@ class TestOwnerNameFilter:
             _link(prop.id, contact.id, is_primary=True)
             prop_id = prop.id
 
-        resp = client.get("/api/properties/?owner_name=charlie")
+        resp = client.get("/api/properties/?owner_name=charlie", headers=_AUTH_HEADERS)
         assert resp.status_code == 200
         data = resp.get_json()
         ids = [p["id"] for p in data["leads"]]
@@ -124,7 +126,7 @@ class TestOwnerNameFilter:
             _link(prop.id, contact.id, is_primary=True)
             prop_id = prop.id
 
-        resp = client.get("/api/properties/?owner_name=artho")
+        resp = client.get("/api/properties/?owner_name=artho", headers=_AUTH_HEADERS)
         assert resp.status_code == 200
         data = resp.get_json()
         ids = [p["id"] for p in data["leads"]]
@@ -144,7 +146,7 @@ class TestOwnerNameFilter:
             prop_no_match_id = prop_no_match.id
             prop_no_contacts_id = prop_no_contacts.id
 
-        resp = client.get("/api/properties/?owner_name=Alice")
+        resp = client.get("/api/properties/?owner_name=Alice", headers=_AUTH_HEADERS)
         assert resp.status_code == 200
         data = resp.get_json()
         ids = [p["id"] for p in data["leads"]]
@@ -166,7 +168,7 @@ class TestOwnerNameFilter:
             prop_match_id = prop_match.id
             prop_no_match_id = prop_no_match.id
 
-        resp = client.get("/api/properties/?owner_name=Diana")
+        resp = client.get("/api/properties/?owner_name=Diana", headers=_AUTH_HEADERS)
         assert resp.status_code == 200
         data = resp.get_json()
         ids = [p["id"] for p in data["leads"]]

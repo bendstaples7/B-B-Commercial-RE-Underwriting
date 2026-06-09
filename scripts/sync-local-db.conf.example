@@ -1,0 +1,19 @@
+# sync-local-db.conf.example - Copy this to sync-local-db.conf and fill in your values.
+# sync-local-db.conf is gitignored - never commit it.
+
+# VPS SSH connection
+$VPS_USER = "deploy"
+$VPS_HOST = "YOUR_VPS_IP"
+$SSH_KEY  = "C:\Users\YOUR_USERNAME\.ssh\bbanalyzer_deploy"  # optional: defaults to %USERPROFILE%\.ssh\bbanalyzer_deploy
+
+# VPS PostgreSQL credentials
+$VPS_DB_PASS = "YOUR_VPS_DB_PASSWORD"
+$VPS_DB_NAME = "real_estate_analysis"  # optional: defaults to real_estate_analysis
+$VPS_DB_USER = "app_user"              # optional: defaults to app_user
+$VPS_DB_PORT = "5432"                  # optional: defaults to 5432
+
+# Local PostgreSQL credentials
+$LOCAL_USER     = "postgres"
+$LOCAL_PASSWORD = "YOUR_LOCAL_POSTGRES_PASSWORD"
+$LOCAL_DB       = "real_estate_analysis"
+$PG_BIN         = "C:\Program Files\PostgreSQL\17\bin"  # adjust if your version differs

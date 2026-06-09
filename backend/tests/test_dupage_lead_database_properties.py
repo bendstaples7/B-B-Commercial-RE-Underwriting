@@ -1267,18 +1267,19 @@ def test_property_12_source_type_filter_returns_only_matching_leads(source_type,
         matching_lead = Property(
             property_street=f"100 Match St {unique_id}",
             source_type=source_type,
-            owner_user_id="filter-test-user-prop12",
+            owner_user_id="test-user",  # must match the injected X-User-Id header
         )
         non_matching_lead = Property(
             property_street=f"200 Other St {unique_id}",
             source_type=None,
-            owner_user_id="filter-test-user-prop12",
+            owner_user_id="test-user",  # must match the injected X-User-Id header
         )
         db.session.add_all([matching_lead, non_matching_lead])
         db.session.commit()
 
         try:
-            resp = client.get(f"/api/properties/?source_type={source_type}&per_page=100")
+            resp = client.get(f"/api/properties/?source_type={source_type}&per_page=100",
+                              headers={'X-User-Id': 'test-user'})
             assert resp.status_code == 200, (
                 f"Expected 200, got {resp.status_code}. Body: {resp.get_data(as_text=True)[:200]}"
             )
@@ -1342,8 +1343,11 @@ def test_property_13_owner_user_id_filter_returns_only_matching_leads(owner_ids,
         from app.models.lead import Property
 
         unique_id = uuid.uuid4().hex[:8]
-        target_user = owner_ids[0]
-        other_users = owner_ids[1:]
+        # Use 'test-user' as the target because the injected X-User-Id header
+        # means ownership scoping filters to owner_user_id='test-user' OR NULL.
+        # Other users' leads are intentionally not visible to test-user.
+        target_user = "test-user"
+        other_users = [f"other-user-{uid}" for uid in owner_ids[1:]]
 
         # Create one lead per user
         target_lead = Property(
@@ -1364,7 +1368,8 @@ def test_property_13_owner_user_id_filter_returns_only_matching_leads(owner_ids,
         db.session.commit()
 
         try:
-            resp = client.get(f"/api/properties/?owner_user_id={target_user}&per_page=100")
+            resp = client.get(f"/api/properties/?owner_user_id={target_user}&per_page=100",
+                              headers={'X-User-Id': target_user})
             assert resp.status_code == 200, (
                 f"Expected 200, got {resp.status_code}. Body: {resp.get_data(as_text=True)[:200]}"
             )

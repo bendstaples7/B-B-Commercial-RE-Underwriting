@@ -25,17 +25,18 @@ COLUMN_DEFS: List[Dict[str, Any]] = [
     {"id": "suppress",           "label": "Suppressed",        "icon": "\U0001f6ab", "sort_order": 8},
 ]
 
-# Map column IDs to the lead_status values appropriate for drag-updates
+# Map column IDs to the lead_status values appropriate for drag-updates.
+# Uses the new pipeline stage values from the HubSpot-aligned enum.
 _STATUS_MAP: Dict[str, Optional[str]] = {
-    "add_contact_info":   None,       # keep existing status
-    "resolve_match":      "new",
-    "enrich_data":        "new",
-    "analyze_property":   "new",
-    "ready_for_outreach": "active",
-    "follow_up_now":      "follow_up",
-    "create_task":        "active",
-    "nurture":            "nurture",
-    "suppress":           "suppressed",
+    "add_contact_info":   None,                          # keep existing status
+    "resolve_match":      "mailing_no_contact_made",    # need to resolve match before contacting
+    "enrich_data":        "mailing_no_contact_made",    # need more data before outreach
+    "analyze_property":   "mailing_no_contact_made",    # under evaluation, pre-contact
+    "ready_for_outreach": "mailing_no_contact_made",    # ready to reach out
+    "follow_up_now":      "mailing_contacted_interested",  # contact was made, following up
+    "create_task":        "mailing_no_contact_made",    # need a task before advancing
+    "nurture":            "deprioritize",                # long-term nurture, not urgent
+    "suppress":           "suppressed",                  # unchanged
 }
 
 # Valid recommended_action values derived from column definitions

@@ -18,7 +18,7 @@ def _make_lead(app, street='Timeline Test St'):
 
     lead = Lead(
         property_street=street,
-        lead_status='active',
+        lead_status='mailing_no_contact_made',
         has_phone=True,
         has_email=True,
         has_property_match=True,
@@ -183,3 +183,4 @@ def test_soft_delete_hubspot_entry_raises_error(app):
 
         with pytest.raises(ValueError, match="HubSpot"):
             svc.soft_delete(entry.id, actor='u')
+

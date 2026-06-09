@@ -17,7 +17,7 @@ def _make_lead(app, street, **kwargs):
     from app.models import Lead
 
     defaults = dict(
-        lead_status='active',
+        lead_status='mailing_no_contact_made',
         has_phone=True,
         has_email=True,
         has_property_match=True,
@@ -79,7 +79,7 @@ def test_todays_action_includes_follow_up_now_lead(app):
     """Today's Action includes active lead with recommended_action='follow_up_now'."""
     with app.app_context():
         lead = _make_lead(app, '1 Queue St',
-                          lead_status='active',
+                          lead_status='mailing_no_contact_made',
                           recommended_action='follow_up_now')
         svc = QueueService()
         rows, total = svc.get_todays_action()
@@ -90,7 +90,7 @@ def test_todays_action_includes_follow_up_now_lead(app):
 def test_todays_action_includes_lead_with_task_due_today(app):
     """Today's Action includes active lead with an open task due today."""
     with app.app_context():
-        lead = _make_lead(app, '2 Queue St', lead_status='active')
+        lead = _make_lead(app, '2 Queue St', lead_status='mailing_no_contact_made')
         _make_task(app, lead.id, due_date=date.today())
         svc = QueueService()
         rows, total = svc.get_todays_action()
@@ -102,7 +102,7 @@ def test_todays_action_excludes_nurture_lead(app):
     """Today's Action excludes nurture leads."""
     with app.app_context():
         lead = _make_lead(app, '3 Queue St',
-                          lead_status='nurture',
+                          lead_status='deprioritize',
                           recommended_action='follow_up_now')
         svc = QueueService()
         rows, total = svc.get_todays_action()
@@ -118,7 +118,7 @@ def test_previously_warm_includes_lead_with_hubspot_sync_no_recent_contact(app):
     """Previously Warm includes a lead marked is_warm=True (warm signals set this flag)."""
     with app.app_context():
         from app import db
-        lead = _make_lead(app, '4 Queue St', lead_status='active', is_warm=True)
+        lead = _make_lead(app, '4 Queue St', lead_status='mailing_no_contact_made', is_warm=True)
         db.session.commit()
 
         svc = QueueService()
@@ -131,7 +131,7 @@ def test_previously_warm_excludes_lead_with_recent_platform_contact(app):
     """Previously Warm excludes lead that has a recent call_logged entry."""
     with app.app_context():
         lead = _make_lead(app, '5 Queue St',
-                          lead_status='active',
+                          lead_status='mailing_no_contact_made',
                           last_hubspot_sync_at=datetime.now(timezone.utc) - timedelta(days=10))
         # Recent call within 90 days
         _make_timeline_entry(app, lead.id, 'call_logged',
@@ -146,7 +146,7 @@ def test_previously_warm_excludes_nurture_lead(app):
     """Previously Warm excludes nurture leads."""
     with app.app_context():
         lead = _make_lead(app, '6 Queue St',
-                          lead_status='nurture',
+                          lead_status='deprioritize',
                           last_hubspot_sync_at=datetime.now(timezone.utc))
         svc = QueueService()
         rows, total = svc.get_previously_warm()
@@ -173,7 +173,7 @@ def test_follow_up_overdue_excludes_nurture_lead(app):
     """Follow-Up Overdue excludes nurture leads (they have no overdue tasks by design)."""
     with app.app_context():
         # Nurture lead with no tasks — should not appear
-        lead = _make_lead(app, '8 Queue St', lead_status='nurture')
+        lead = _make_lead(app, '8 Queue St', lead_status='deprioritize')
         svc = QueueService()
         rows, total = svc.get_follow_up_overdue()
         ids = [r['id'] for r in rows]
@@ -188,7 +188,7 @@ def test_no_next_action_includes_active_lead_with_create_task_ra(app):
     """No Next Action includes active lead with recommended_action='create_task' and no open tasks."""
     with app.app_context():
         lead = _make_lead(app, '9 Queue St',
-                          lead_status='active',
+                          lead_status='mailing_no_contact_made',
                           recommended_action='create_task')
         svc = QueueService()
         rows, total = svc.get_no_next_action()
@@ -200,7 +200,7 @@ def test_no_next_action_excludes_lead_with_open_task(app):
     """No Next Action excludes leads that have open tasks."""
     with app.app_context():
         lead = _make_lead(app, '10 Queue St',
-                          lead_status='active',
+                          lead_status='mailing_no_contact_made',
                           recommended_action='create_task')
         _make_task(app, lead.id)
         svc = QueueService()
@@ -213,7 +213,7 @@ def test_no_next_action_excludes_nurture_lead(app):
     """No Next Action excludes nurture leads."""
     with app.app_context():
         lead = _make_lead(app, '11 Queue St',
-                          lead_status='nurture',
+                          lead_status='deprioritize',
                           recommended_action='create_task')
         svc = QueueService()
         rows, total = svc.get_no_next_action()
@@ -257,7 +257,7 @@ def test_lead_in_multiple_queues_appears_in_each(app):
         # This lead qualifies for: Today's Action (follow_up_now) AND
         # Follow-Up Overdue (overdue task)
         lead = _make_lead(app, '14 Queue St',
-                          lead_status='active',
+                          lead_status='mailing_no_contact_made',
                           recommended_action='follow_up_now')
         _make_task(app, lead.id, due_date=date.today() - timedelta(days=2))
 
@@ -326,3 +326,4 @@ def test_get_counts_reflects_actual_leads(app):
         counts = svc.get_counts()
 
         assert counts['do_not_contact'] >= 2
+

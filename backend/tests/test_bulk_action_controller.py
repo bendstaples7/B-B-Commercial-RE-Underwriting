@@ -20,7 +20,7 @@ from app.services.action_engine_service import ActionEngineService
 def _make_lead(app, street, **kwargs):
     """Create a Lead with sensible defaults."""
     defaults = dict(
-        lead_status='active',
+        lead_status='mailing_no_contact_made',
         has_phone=True,
         has_email=True,
         has_property_match=True,
@@ -367,7 +367,7 @@ class TestBulkRecompute:
 
                 lead = Lead(
                     property_street=f'{i + 1} Bulk Recompute St',
-                    lead_status='active',
+                    lead_status='mailing_no_contact_made',
                     has_phone=has_phone,
                     has_email=has_email,
                     has_property_match=has_property_match,
@@ -408,7 +408,7 @@ class TestBulkRecompute:
             for i in range(10):
                 lead = Lead(
                     property_street=f'{i + 1} RA Assign St',
-                    lead_status='active',
+                    lead_status='mailing_no_contact_made',
                     has_phone=True,
                     has_email=True,
                     has_property_match=True,
@@ -440,7 +440,7 @@ class TestBulkRecompute:
             for i in range(5):
                 lead = Lead(
                     property_street=f'{i + 1} AllLeads St',
-                    lead_status='active',
+                    lead_status='mailing_no_contact_made',
                     has_phone=True,
                     has_email=True,
                     has_property_match=True,
@@ -467,7 +467,7 @@ class TestBulkRecompute:
             for i in range(7):
                 lead = Lead(
                     property_street=f'{i + 1} Count St',
-                    lead_status='active',
+                    lead_status='mailing_no_contact_made',
                     has_phone=True,
                     has_email=True,
                     has_property_match=True,
@@ -487,3 +487,4 @@ class TestBulkRecompute:
             lead_ids = [lead.id for lead in leads]
             processed = ActionEngineService.bulk_recompute(lead_ids)
             assert processed == 7
+

@@ -235,6 +235,12 @@ class HubSpotClientService:
         "hs_object_id", "createdate", "hs_lastmodifieddate",
         "associatedcompanyid", "hs_analytics_source", "lifecyclestage",
         "hs_lead_source",
+        # Custom properties — additional contact data stored as multi-line strings
+        "additional_phone_numbers",  # e.g. "1) (630) 430-5720\n2) (630) 202-3839 CONFIRMED"
+        "additional_addresses",      # e.g. "198 Karen Cir, Bolingbrook IL 60440\n..."
+        "hs_additional_emails",      # additional email addresses
+        # Standard address fields
+        "address", "city", "state", "zip",
     ]
     _COMPANY_PROPERTIES = [
         "name", "type", "phone", "hs_object_id",
@@ -266,6 +272,10 @@ class HubSpotClientService:
             "properties": properties,
         }
 
+        # Request contact associations for deals so we can link deal → owner contact
+        if object_type == "deals":
+            params["associations"] = "contacts"
+
         while True:
             response = self._get(path, params=params)
             results = response.get("results", [])
@@ -278,6 +288,38 @@ class HubSpotClientService:
             if not next_cursor:
                 break
             params["after"] = next_cursor
+
+    def fetch_pipeline_stage_labels(self, object_type: str = "deals") -> dict:
+        """Return a dict mapping stage internal ID → display label for all pipelines.
+
+        Example return value::
+
+            {
+                "closedlost": "Negotiating Remote",
+                "closedwon": "Mailing, contact made, interested",
+                "decisionmakerboughtin": "Mailing, no contact made",
+                ...
+            }
+
+        Fetches all pipelines for *object_type* and flattens their stages.
+        On any error, returns an empty dict (caller should fall back to raw ID).
+        """
+        try:
+            response = self._get(f"/crm/v3/pipelines/{object_type}")
+            stage_map = {}
+            for pipeline in response.get("results", []):
+                for stage in pipeline.get("stages", []):
+                    stage_id = stage.get("id")
+                    label = stage.get("label")
+                    if stage_id and label:
+                        stage_map[stage_id] = label
+            return stage_map
+        except Exception as exc:
+            logger.warning(
+                "fetch_pipeline_stage_labels: failed to fetch stages for %s: %s",
+                object_type, exc,
+            )
+            return {}
 
     def fetch_all_deals(self) -> Iterator[dict]:
         """Yield every deal from HubSpot using cursor-based pagination.

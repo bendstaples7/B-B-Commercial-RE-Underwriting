@@ -11,7 +11,7 @@ from app.exceptions import (
 
 logger = logging.getLogger(__name__)
 
-VALID_CALL_OUTCOMES = frozenset(['answered', 'voicemail', 'no_answer', 'busy', 'wrong_number'])
+VALID_CALL_OUTCOMES = frozenset(['answered', 'voicemail', 'no_answer', 'busy', 'wrong_number', 'not_interested'])
 
 
 class CallLogService:
@@ -65,9 +65,12 @@ class CallLogService:
         elif outcome == 'wrong_number':
             lead.has_phone = False
 
-        # Auto-transition new → active
-        if lead.lead_status == 'new':
-            lead.lead_status = 'active'
+        # Auto-transition early pipeline statuses → mailing_contacted_no_interest
+        # only when the call outcome is a definitive "not interested" signal.
+        _CONTACTED_NO_INTEREST_OUTCOMES = {'not_interested'}
+        if (outcome in _CONTACTED_NO_INTEREST_OUTCOMES
+                and lead.lead_status in ('awaiting_skip_trace', 'mailing_no_contact_made', 'skip_trace')):
+            lead.lead_status = 'mailing_contacted_no_interest'
 
         db.session.add(lead)
 
@@ -136,11 +139,6 @@ class CallLogService:
 
         if lead.lead_status == 'do_not_contact':
             raise DoNotContactViolationError(lead_id)
-
-        # Auto-transition new → active
-        if lead.lead_status == 'new':
-            lead.lead_status = 'active'
-            db.session.add(lead)
 
         entry = LeadTimelineEntry(
             lead_id=lead_id,

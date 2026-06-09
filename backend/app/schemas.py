@@ -1597,11 +1597,41 @@ class LeadTimelinePageSchema(Schema):
 # ── Actionable Lead Command Center — Lead Action Schemas ──────────────────
 
 VALID_LEAD_STATUSES = [
-    'new', 'active', 'follow_up', 'nurture',
-    'under_contract', 'closed', 'suppressed', 'do_not_contact',
+    # Pipeline stages — mirror HubSpot pipeline labels
+    'skip_trace',
+    'awaiting_skip_trace',
+    'mailing_no_contact_made',
+    'mailing_contacted_no_interest',
+    'mailing_contacted_interested',
+    'negotiating_remote',
+    'in_person_appointment',
+    'offer_delivered',
+    'deprioritize',
+    'deal_won',
+    'deal_lost',
+    # Platform operational flags
+    'suppressed',
+    'do_not_contact',
 ]
 
-VALID_CALL_OUTCOMES = ['answered', 'voicemail', 'no_answer', 'busy', 'wrong_number']
+# Human-readable labels for each status value
+LEAD_STATUS_LABELS = {
+    'skip_trace': 'Skip Trace',
+    'awaiting_skip_trace': 'Awaiting Skip Trace',
+    'mailing_no_contact_made': 'Mailing, No Contact Made',
+    'mailing_contacted_no_interest': 'Mailing, Contact Made, No Interest',
+    'mailing_contacted_interested': 'Mailing, Contact Made, Interested',
+    'negotiating_remote': 'Negotiating Remote',
+    'in_person_appointment': 'In Person Appointment',
+    'offer_delivered': 'Offer Delivered',
+    'deprioritize': 'Deprioritize',
+    'deal_won': 'Deal Won',
+    'deal_lost': 'Deal Lost',
+    'suppressed': 'Suppressed',
+    'do_not_contact': 'Do Not Contact',
+}
+
+VALID_CALL_OUTCOMES = ['answered', 'voicemail', 'no_answer', 'busy', 'wrong_number', 'not_interested']
 
 
 class LeadStatusUpdateSchema(RequestSchema):
@@ -1703,6 +1733,7 @@ class CommandCenterPayloadSchema(Schema):
     property_street = fields.String(dump_only=True, allow_none=True)
     property_city = fields.String(dump_only=True, allow_none=True)
     property_state = fields.String(dump_only=True, allow_none=True)
+    property_zip = fields.String(dump_only=True, allow_none=True)
     lead_score = fields.Float(dump_only=True)
     lead_status = fields.String(dump_only=True)
     has_property_match = fields.Boolean(dump_only=True)

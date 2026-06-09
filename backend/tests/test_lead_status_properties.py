@@ -18,12 +18,23 @@ from app.services.hubspot_timeline_import_service import HubSpotTimelineImportSe
 # ---------------------------------------------------------------------------
 
 ALL_LEAD_STATUSES = [
-    'new', 'active', 'follow_up', 'nurture',
-    'under_contract', 'closed', 'suppressed', 'do_not_contact',
+    'skip_trace',
+    'awaiting_skip_trace',
+    'mailing_no_contact_made',
+    'mailing_contacted_no_interest',
+    'mailing_contacted_interested',
+    'negotiating_remote',
+    'in_person_appointment',
+    'offer_delivered',
+    'deprioritize',
+    'deal_won',
+    'deal_lost',
+    'suppressed',
+    'do_not_contact',
 ]
 
 
-def make_mock_lead(lead_id=1, lead_status='active'):
+def make_mock_lead(lead_id=1, lead_status='mailing_no_contact_made'):
     """Create a minimal mock Lead object."""
     lead = MagicMock()
     lead.id = lead_id
@@ -419,3 +430,4 @@ def test_property_18_park_reactivation_date_boundary_via_controller(offset_days)
             f"(offset={offset_days}, date={reactivation_date}), "
             f"but got error: '{error_response}'."
         )
+

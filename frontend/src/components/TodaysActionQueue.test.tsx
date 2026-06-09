@@ -32,7 +32,7 @@ function makeQueuePage(total: number, perPage = 20, page = 1) {
         property_city: 'C',
         property_state: 'IL',
         lead_score: 50,
-        lead_status: 'active' as LeadStatus,
+        lead_status: 'mailing_no_contact_made' as LeadStatus,
         recommended_action: null,
         has_property_match: true,
         last_contact_date: null,
@@ -184,3 +184,4 @@ describe('TodaysActionQueue', () => {
     expect(screen.getByTestId('queue-pagination')).toBeInTheDocument()
   })
 })
+

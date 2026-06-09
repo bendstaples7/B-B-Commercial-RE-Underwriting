@@ -43,21 +43,15 @@ import { LeadTaskList } from './LeadTaskList'
 import { LeadTimeline } from './LeadTimeline'
 import { LogNoteForm } from './LogNoteForm'
 import { LogCallForm } from './LogCallForm'
+import { LeadStatusChip, LEAD_STATUS_LABELS } from './LeadStatusChip'
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const ALL_LEAD_STATUSES: LeadStatus[] = [
-  'new', 'active', 'follow_up', 'nurture',
-  'under_contract', 'closed', 'suppressed', 'do_not_contact',
-]
-
-const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
-  new: 'New', active: 'Active', follow_up: 'Follow Up', nurture: 'Nurture',
-  under_contract: 'Under Contract', closed: 'Closed',
-  suppressed: 'Suppressed', do_not_contact: 'Do Not Contact',
-}
+// Derive status options from LEAD_STATUS_LABELS so there's a single source of truth.
+// Casting through unknown is needed because Object.keys always returns string[].
+const ALL_LEAD_STATUSES = Object.keys(LEAD_STATUS_LABELS) as LeadStatus[]
 
 // ---------------------------------------------------------------------------
 // Sidebar helpers
@@ -174,7 +168,7 @@ function deriveQueueContext(data: any): QueueContext[] {
   if (!data.has_property_match) {
     queues.push({ label: 'Missing Property Match', path: '/queues/missing-property-match', reason: 'No confirmed property match exists for this lead.', color: 'info' })
   }
-  if (data.recommended_action?.value === 'create_task' && ['active', 'new'].includes(data.lead_status)) {
+  if (data.recommended_action?.value === 'create_task' && !['suppressed', 'do_not_contact', 'deprioritize', 'deal_won', 'deal_lost'].includes(data.lead_status)) {
     queues.push({ label: 'No Next Action', path: '/queues/no-next-action', reason: 'No open tasks or next action defined.', color: 'default' })
   }
 
@@ -201,6 +195,8 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['commandCenter', leadId],
     queryFn: () => commandCenterService.getCommandCenter(leadId),
+    staleTime: 0,            // treat cached data as immediately stale
+    refetchOnMount: 'always', // always refetch when component mounts, even if data exists in cache
   })
 
   useEffect(() => {
@@ -395,14 +391,10 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
             )}
           </Box>
 
-          {/* HubSpot deal stage — shown prominently if present */}
-          {data.hubspot_deal_stage && (
+          {/* Lead status chip — primary pipeline stage display */}
+          {data.lead_status && (
             <Box sx={{ mt: 1 }}>
-              <Chip
-                label={`HubSpot: ${data.hubspot_deal_stage.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}`}
-                size="small"
-                sx={{ bgcolor: '#ff7a59', color: '#fff', fontWeight: 600 }}
-              />
+              <LeadStatusChip status={data.lead_status} />
             </Box>
           )}
 
@@ -485,22 +477,29 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
         }}
       >
         {/* Contact Info */}
-        {(phones.length > 0 || emails.length > 0) && (
-          <SidebarSection title="Contact Info">
-            {phones.map((p, i) => <CopyablePhone key={i} phone={p} />)}
-            {emails.map((e, i) => <CopyableEmail key={i} email={e} />)}
-            {(data as any).socials && (
-              <SidebarRow label="Socials" value={(data as any).socials} />
-            )}
-            {(data as any).unanswered_call_count > 0 && (
-              <SidebarRow label="Unanswered" value={`${(data as any).unanswered_call_count} unanswered call(s)`} />
-            )}
-          </SidebarSection>
-        )}
+        <SidebarSection title="Contact Info">
+          {ownerName && (
+            <Typography variant="caption" fontWeight={600} display="block" sx={{ mb: 0.75 }}>
+              {ownerName}
+            </Typography>
+          )}
+          {owner2Name && (
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+              {owner2Name}
+            </Typography>
+          )}
+          {phones.map((p, i) => <CopyablePhone key={i} phone={p} />)}
+          {emails.map((e, i) => <CopyableEmail key={i} email={e} />)}
+          {(data as any).socials && (
+            <SidebarRow label="Socials" value={(data as any).socials} />
+          )}
+          {(data as any).unanswered_call_count > 0 && (
+            <SidebarRow label="Unanswered" value={`${(data as any).unanswered_call_count} unanswered call(s)`} />
+          )}
+        </SidebarSection>
 
         {/* Owner */}
         <SidebarSection title="Owner">
-          <SidebarRow label="Name" value={ownerName} />
           {owner2Name && <SidebarRow label="Owner 2" value={owner2Name} />}
           <SidebarRow label="Type" value={data.ownership_type} />
           <SidebarRow label="Acquired" value={data.acquisition_date} />
@@ -508,6 +507,18 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
 
         {/* Property */}
         <SidebarSection title="Property">
+          {(data.property_street || data.property_city) && (
+            <Box sx={{ mb: 0.75 }}>
+              {data.property_street && (
+                <Typography variant="caption" fontWeight={600} display="block">{data.property_street}</Typography>
+              )}
+              {(data.property_city || data.property_state || data.property_zip) && (
+                <Typography variant="caption" color="text.secondary" display="block">
+                  {[data.property_city, data.property_state, data.property_zip].filter(Boolean).join(', ')}
+                </Typography>
+              )}
+            </Box>
+          )}
           <SidebarRow label="Type" value={data.property_type} />
           <SidebarRow label="Beds / Baths" value={
             (data.bedrooms != null || data.bathrooms != null)
@@ -529,9 +540,9 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
           )}
         </SidebarSection>
 
-        {/* Mailing Address */}
+        {/* Owner Mailing Address */}
         {(data.mailing_address || data.mailing_city) && (
-          <SidebarSection title="Mailing Address">
+          <SidebarSection title="Owner Mailing Address">
             {data.mailing_address && (
               <Typography variant="caption" display="block">{data.mailing_address}</Typography>
             )}
@@ -595,7 +606,6 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
           <SidebarRow label="Data Source" value={(data as any).data_source} />
           <SidebarRow label="Identified" value={(data as any).date_identified} />
           <SidebarRow label="Added" value={(data as any).created_at ? new Date((data as any).created_at).toLocaleDateString() : null} />
-          <SidebarRow label="HubSpot Stage" value={data.hubspot_deal_stage} />
           <SidebarRow label="Last Sync" value={
             data.last_hubspot_sync_at
               ? new Date(data.last_hubspot_sync_at).toLocaleDateString()

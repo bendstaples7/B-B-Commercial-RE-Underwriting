@@ -1603,12 +1603,17 @@ export interface ContactUpdatePayload {
 // ── Actionable Lead Command Center Types ──────────────────────────────────
 
 export type LeadStatus =
-  | 'new'
-  | 'active'
-  | 'follow_up'
-  | 'nurture'
-  | 'under_contract'
-  | 'closed'
+  | 'skip_trace'
+  | 'awaiting_skip_trace'
+  | 'mailing_no_contact_made'
+  | 'mailing_contacted_no_interest'
+  | 'mailing_contacted_interested'
+  | 'negotiating_remote'
+  | 'in_person_appointment'
+  | 'offer_delivered'
+  | 'deprioritize'
+  | 'deal_won'
+  | 'deal_lost'
   | 'suppressed'
   | 'do_not_contact';
 
@@ -1733,6 +1738,7 @@ export interface CommandCenterPayload {
   property_street: string | null;
   property_city: string | null;
   property_state: string | null;
+  property_zip?: string | null;
   property_type?: string | null;
   bedrooms?: number | null;
   bathrooms?: number | null;

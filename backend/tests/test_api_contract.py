@@ -118,6 +118,7 @@ def lead_with_string_mailer_history(app):
             lead_score=50.0,
             lead_category='residential',
             mailer_history='Personal, Blue Mosaic, 12/11/2022',
+            owner_user_id='test-user',
         )
         yield lead.id
 
@@ -131,6 +132,7 @@ def lead_with_dict_mailer_history(app):
             lead_score=60.0,
             lead_category='residential',
             mailer_history={'campaign': 'Spring 2024', 'sent': True},
+            owner_user_id='test-user',
         )
         yield lead.id
 
@@ -144,6 +146,7 @@ def lead_with_null_mailer_history(app):
             lead_score=40.0,
             lead_category='residential',
             mailer_history=None,
+            owner_user_id='test-user',
         )
         yield lead.id
 
@@ -294,7 +297,7 @@ class TestLeadViewApiContract:
         Zod schema. This test verifies the endpoint returns 200 and the lead shape
         is valid (mailer_history absent is acceptable).
         """
-        response = client.get('/api/properties/')
+        response = client.get('/api/properties/', headers={'X-User-Id': 'test-user'})
         assert response.status_code == 200
         data = json.loads(response.data)
         matching = [l for l in data['leads'] if l['id'] == lead_with_string_mailer_history]
@@ -308,7 +311,7 @@ class TestLeadViewApiContract:
         self, client, lead_with_dict_mailer_history
     ):
         """A lead with mailer_history as a dict must pass the shape check."""
-        response = client.get('/api/properties/')
+        response = client.get('/api/properties/', headers={'X-User-Id': 'test-user'})
         assert response.status_code == 200
         data = json.loads(response.data)
         matching = [l for l in data['leads'] if l['id'] == lead_with_dict_mailer_history]
@@ -319,7 +322,7 @@ class TestLeadViewApiContract:
         self, client, lead_with_null_mailer_history
     ):
         """A lead with mailer_history=NULL must pass the shape check."""
-        response = client.get('/api/properties/')
+        response = client.get('/api/properties/', headers={'X-User-Id': 'test-user'})
         assert response.status_code == 200
         data = json.loads(response.data)
         matching = [l for l in data['leads'] if l['id'] == lead_with_null_mailer_history]
