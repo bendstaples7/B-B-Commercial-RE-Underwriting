@@ -4,10 +4,26 @@ Revision ID: fd5451087f07
 Revises: f6g7h8i9j0k1
 Create Date: 2026-05-08 09:40:25.005545
 
+Rewritten to guarded, idempotent raw SQL (no ``batch_alter_table``).
+
+The original implementation used ``batch_alter_table`` with ``try/except``
+guards around ``drop_constraint`` / ``drop_index``.  That pattern is broken on
+PostgreSQL: inside a ``batch_alter_table`` block the operations are *buffered*
+and only executed when the ``with`` block exits, so the ``try/except`` around
+each ``batch_op.*`` call never catches the execution error.  On a fresh
+database — where the clean-baseline revisions (``267725fe7017`` /
+``a2b3c4d5e6f7``) have already dropped the legacy ``*_key`` UNIQUE constraints
+and renamed ``idx_*`` indexes to ``ix_*`` — the buffered ``DROP CONSTRAINT`` /
+``DROP INDEX`` statements referenced objects that no longer exist and aborted
+the whole upgrade (``constraint ... does not exist``).
+
+This rewrite performs the same end-state transformation using raw
+``op.execute`` statements with ``IF EXISTS`` / ``IF NOT EXISTS`` guards, so the
+revision is a safe no-op regardless of whether the indexes/constraints were
+already normalised by an earlier revision.  The revision id and down_revision
+pointer are unchanged, so the production chain is preserved.
 """
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = 'fd5451087f07'
@@ -16,169 +32,124 @@ branch_labels = None
 depends_on = None
 
 
-def _is_missing_object_error(exc: Exception) -> bool:
-    """Return True when *exc* indicates the index/constraint being dropped
-    does not exist — which is expected on databases that were already
-    partially migrated.
-
-    Covers both PostgreSQL ('does not exist') and SQLite ('no such index',
-    'no such constraint') error messages so the migration is idempotent
-    across both engines.
-    """
-    msg = str(exc).lower()
-    return (
-        'does not exist' in msg
-        or 'no such index' in msg
-        or 'no such constraint' in msg
-    )
-
-
 def upgrade():
-    # Add loading column to analysis_sessions
-    with op.batch_alter_table('analysis_sessions', schema=None) as batch_op:
-        batch_op.add_column(sa.Column('loading', sa.Boolean(), nullable=False, server_default=sa.false()))
-        try:
-            batch_op.drop_constraint('analysis_sessions_session_id_key', type_='unique')
-        except Exception as e:
-            if not _is_missing_object_error(e):
-                raise
-        try:
-            batch_op.drop_index('idx_analysis_sessions_session_id')
-        except Exception as e:
-            if not _is_missing_object_error(e):
-                raise
-        try:
-            batch_op.drop_index('idx_analysis_sessions_user_id')
-        except Exception as e:
-            if not _is_missing_object_error(e):
-                raise
-        batch_op.create_index('ix_analysis_sessions_session_id', ['session_id'], unique=True)
-        batch_op.create_index('ix_analysis_sessions_user_id', ['user_id'], unique=False)
+    # ------------------------------------------------------------------
+    # analysis_sessions: add `loading`, drop legacy UNIQUE constraint,
+    # normalise idx_* -> ix_* (unique on session_id).
+    # ------------------------------------------------------------------
+    op.execute(
+        "ALTER TABLE analysis_sessions "
+        "ADD COLUMN IF NOT EXISTS loading BOOLEAN NOT NULL DEFAULT FALSE"
+    )
+    op.execute("ALTER TABLE analysis_sessions DROP CONSTRAINT IF EXISTS analysis_sessions_session_id_key")
+    op.execute("DROP INDEX IF EXISTS idx_analysis_sessions_session_id")
+    op.execute("DROP INDEX IF EXISTS idx_analysis_sessions_user_id")
+    op.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_analysis_sessions_session_id ON analysis_sessions(session_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_analysis_sessions_user_id ON analysis_sessions(user_id)")
 
-    # Fix indexes on leads table
-    with op.batch_alter_table('leads', schema=None) as batch_op:
-        try:
-            batch_op.drop_index('idx_leads_lead_category')
-        except Exception as e:
-            if not _is_missing_object_error(e):
-                raise
-        try:
-            batch_op.drop_index('ix_leads_condo_analysis_id')
-        except Exception as e:
-            if not _is_missing_object_error(e):
-                raise
-        batch_op.create_index('ix_leads_lead_category', ['lead_category'], unique=False)
+    # ------------------------------------------------------------------
+    # leads: normalise lead_category index, drop legacy condo index.
+    # ------------------------------------------------------------------
+    op.execute("DROP INDEX IF EXISTS idx_leads_lead_category")
+    op.execute("DROP INDEX IF EXISTS ix_leads_condo_analysis_id")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_leads_lead_category ON leads(lead_category)")
 
-    # Fix indexes on comparable_sales
-    with op.batch_alter_table('comparable_sales', schema=None) as batch_op:
-        try:
-            batch_op.drop_index('idx_comparable_sales_address')
-        except Exception as e:
-            if not _is_missing_object_error(e):
-                raise
-        try:
-            batch_op.drop_index('idx_comparable_sales_session_id')
-        except Exception as e:
-            if not _is_missing_object_error(e):
-                raise
-        batch_op.create_index('ix_comparable_sales_address', ['address'], unique=False)
-        batch_op.create_index('ix_comparable_sales_session_id', ['session_id'], unique=False)
+    # ------------------------------------------------------------------
+    # comparable_sales
+    # ------------------------------------------------------------------
+    op.execute("DROP INDEX IF EXISTS idx_comparable_sales_address")
+    op.execute("DROP INDEX IF EXISTS idx_comparable_sales_session_id")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_comparable_sales_address ON comparable_sales(address)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_comparable_sales_session_id ON comparable_sales(session_id)")
 
-    # Fix indexes on comparable_valuations
-    with op.batch_alter_table('comparable_valuations', schema=None) as batch_op:
-        try:
-            batch_op.drop_index('idx_comparable_valuations_valuation_result_id')
-        except Exception as e:
-            if not _is_missing_object_error(e):
-                raise
-        batch_op.create_index('ix_comparable_valuations_valuation_result_id', ['valuation_result_id'], unique=False)
+    # ------------------------------------------------------------------
+    # comparable_valuations
+    # ------------------------------------------------------------------
+    op.execute("DROP INDEX IF EXISTS idx_comparable_valuations_valuation_result_id")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_comparable_valuations_valuation_result_id ON comparable_valuations(valuation_result_id)")
 
-    # Fix indexes on property_facts
-    with op.batch_alter_table('property_facts', schema=None) as batch_op:
-        try:
-            batch_op.drop_index('idx_property_facts_address')
-        except Exception as e:
-            if not _is_missing_object_error(e):
-                raise
-        try:
-            batch_op.drop_index('idx_property_facts_session_id')
-        except Exception as e:
-            if not _is_missing_object_error(e):
-                raise
-        batch_op.create_index('ix_property_facts_address', ['address'], unique=False)
+    # ------------------------------------------------------------------
+    # property_facts
+    # ------------------------------------------------------------------
+    op.execute("DROP INDEX IF EXISTS idx_property_facts_address")
+    op.execute("DROP INDEX IF EXISTS idx_property_facts_session_id")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_property_facts_address ON property_facts(address)")
 
-    # Fix indexes on ranked_comparables
-    with op.batch_alter_table('ranked_comparables', schema=None) as batch_op:
-        try:
-            batch_op.drop_index('idx_ranked_comparables_session_id')
-        except Exception as e:
-            if not _is_missing_object_error(e):
-                raise
-        batch_op.create_index('ix_ranked_comparables_session_id', ['session_id'], unique=False)
+    # ------------------------------------------------------------------
+    # ranked_comparables
+    # ------------------------------------------------------------------
+    op.execute("DROP INDEX IF EXISTS idx_ranked_comparables_session_id")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_ranked_comparables_session_id ON ranked_comparables(session_id)")
 
-    # Fix indexes on scenarios
-    with op.batch_alter_table('scenarios', schema=None) as batch_op:
-        try:
-            batch_op.drop_index('idx_scenarios_session_id')
-        except Exception as e:
-            if not _is_missing_object_error(e):
-                raise
-        batch_op.create_index('ix_scenarios_session_id', ['session_id'], unique=False)
+    # ------------------------------------------------------------------
+    # scenarios
+    # ------------------------------------------------------------------
+    op.execute("DROP INDEX IF EXISTS idx_scenarios_session_id")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_scenarios_session_id ON scenarios(session_id)")
 
-    # Fix indexes on valuation_results
-    with op.batch_alter_table('valuation_results', schema=None) as batch_op:
-        try:
-            batch_op.drop_index('idx_valuation_results_session_id')
-        except Exception as e:
-            if not _is_missing_object_error(e):
-                raise
-        try:
-            batch_op.drop_constraint('valuation_results_session_id_key', type_='unique')
-        except Exception as e:
-            if not _is_missing_object_error(e):
-                raise
-        batch_op.create_index('ix_valuation_results_session_id', ['session_id'], unique=True)
+    # ------------------------------------------------------------------
+    # valuation_results: drop legacy UNIQUE constraint, unique ix on session_id.
+    # ------------------------------------------------------------------
+    op.execute("DROP INDEX IF EXISTS idx_valuation_results_session_id")
+    op.execute("ALTER TABLE valuation_results DROP CONSTRAINT IF EXISTS valuation_results_session_id_key")
+    op.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_valuation_results_session_id ON valuation_results(session_id)")
 
 
 def downgrade():
-    with op.batch_alter_table('valuation_results', schema=None) as batch_op:
-        batch_op.drop_index('ix_valuation_results_session_id')
-        batch_op.create_unique_constraint('valuation_results_session_id_key', ['session_id'])
-        batch_op.create_index('idx_valuation_results_session_id', ['session_id'], unique=False)
+    # Reverse: restore idx_* indexes and legacy UNIQUE constraints, drop `loading`.
+    # All statements are guarded so the downgrade is idempotent.
 
-    with op.batch_alter_table('scenarios', schema=None) as batch_op:
-        batch_op.drop_index('ix_scenarios_session_id')
-        batch_op.create_index('idx_scenarios_session_id', ['session_id'], unique=False)
+    # valuation_results
+    op.execute("DROP INDEX IF EXISTS ix_valuation_results_session_id")
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'valuation_results_session_id_key') THEN
+                ALTER TABLE valuation_results ADD CONSTRAINT valuation_results_session_id_key UNIQUE (session_id);
+            END IF;
+        END $$;
+    """)
+    op.execute("CREATE INDEX IF NOT EXISTS idx_valuation_results_session_id ON valuation_results(session_id)")
 
-    with op.batch_alter_table('ranked_comparables', schema=None) as batch_op:
-        batch_op.drop_index('ix_ranked_comparables_session_id')
-        batch_op.create_index('idx_ranked_comparables_session_id', ['session_id'], unique=False)
+    # scenarios
+    op.execute("DROP INDEX IF EXISTS ix_scenarios_session_id")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_scenarios_session_id ON scenarios(session_id)")
 
-    with op.batch_alter_table('property_facts', schema=None) as batch_op:
-        batch_op.drop_index('ix_property_facts_address')
-        batch_op.create_index('idx_property_facts_session_id', ['session_id'], unique=False)
-        batch_op.create_index('idx_property_facts_address', ['address'], unique=False)
+    # ranked_comparables
+    op.execute("DROP INDEX IF EXISTS ix_ranked_comparables_session_id")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_ranked_comparables_session_id ON ranked_comparables(session_id)")
 
-    with op.batch_alter_table('comparable_valuations', schema=None) as batch_op:
-        batch_op.drop_index('ix_comparable_valuations_valuation_result_id')
-        batch_op.create_index('idx_comparable_valuations_valuation_result_id', ['valuation_result_id'], unique=False)
+    # property_facts
+    op.execute("DROP INDEX IF EXISTS ix_property_facts_address")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_property_facts_session_id ON property_facts(session_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_property_facts_address ON property_facts(address)")
 
-    with op.batch_alter_table('comparable_sales', schema=None) as batch_op:
-        batch_op.drop_index('ix_comparable_sales_session_id')
-        batch_op.drop_index('ix_comparable_sales_address')
-        batch_op.create_index('idx_comparable_sales_session_id', ['session_id'], unique=False)
-        batch_op.create_index('idx_comparable_sales_address', ['address'], unique=False)
+    # comparable_valuations
+    op.execute("DROP INDEX IF EXISTS ix_comparable_valuations_valuation_result_id")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_comparable_valuations_valuation_result_id ON comparable_valuations(valuation_result_id)")
 
-    with op.batch_alter_table('leads', schema=None) as batch_op:
-        batch_op.drop_index('ix_leads_lead_category')
-        batch_op.create_index('ix_leads_condo_analysis_id', ['condo_analysis_id'], unique=False)
-        batch_op.create_index('idx_leads_lead_category', ['lead_category'], unique=False)
+    # comparable_sales
+    op.execute("DROP INDEX IF EXISTS ix_comparable_sales_session_id")
+    op.execute("DROP INDEX IF EXISTS ix_comparable_sales_address")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_comparable_sales_session_id ON comparable_sales(session_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_comparable_sales_address ON comparable_sales(address)")
 
-    with op.batch_alter_table('analysis_sessions', schema=None) as batch_op:
-        batch_op.drop_index('ix_analysis_sessions_user_id')
-        batch_op.drop_index('ix_analysis_sessions_session_id')
-        batch_op.create_index('idx_analysis_sessions_user_id', ['user_id'], unique=False)
-        batch_op.create_index('idx_analysis_sessions_session_id', ['session_id'], unique=False)
-        batch_op.create_unique_constraint('analysis_sessions_session_id_key', ['session_id'])
-        batch_op.drop_column('loading')
+    # leads
+    op.execute("DROP INDEX IF EXISTS ix_leads_lead_category")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_leads_lead_category ON leads(lead_category)")
+    # Restore the condo-analysis index that upgrade() dropped, so the earlier
+    # condo-filter migration's downgrade can drop it again (round-trip symmetry).
+    op.execute("CREATE INDEX IF NOT EXISTS ix_leads_condo_analysis_id ON leads(condo_analysis_id)")
 
+    # analysis_sessions
+    op.execute("DROP INDEX IF EXISTS ix_analysis_sessions_user_id")
+    op.execute("DROP INDEX IF EXISTS ix_analysis_sessions_session_id")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_analysis_sessions_user_id ON analysis_sessions(user_id)")
+    op.execute("CREATE INDEX IF NOT EXISTS idx_analysis_sessions_session_id ON analysis_sessions(session_id)")
+    op.execute("""
+        DO $$ BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'analysis_sessions_session_id_key') THEN
+                ALTER TABLE analysis_sessions ADD CONSTRAINT analysis_sessions_session_id_key UNIQUE (session_id);
+            END IF;
+        END $$;
+    """)
+    op.execute("ALTER TABLE analysis_sessions DROP COLUMN IF EXISTS loading")
