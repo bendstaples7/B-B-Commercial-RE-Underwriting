@@ -78,21 +78,42 @@ def lint_file(path: Path) -> list[tuple[int, str, str]]:
                     "  Use bind.connection.connection to get the psycopg2 connection.",
                 ))
 
-    # File-level check: raw_conn.autocommit is only safe when raw_conn was obtained
-    # via bind.connection.connection. If the file uses raw_conn.autocommit but never
-    # unwraps the proxy, flag every occurrence.
-    full_text = '\n'.join(lines)
-    file_has_double_unwrap = 'bind.connection.connection' in full_text
-    if not file_has_double_unwrap:
-        for i, line in enumerate(lines, start=1):
-            if line.lstrip().startswith('#'):
-                continue
-            if _RAW_CONN_AUTOCOMMIT_DIRECT.search(line):
+    # --------------------------------------------------------------------
+    # Check raw_conn.autocommit line-by-line.
+    #
+    # A variable assigned via `x = bind.connection.connection` is safely
+    # unwrapped — setting autocommit on it is correct.  We collect the names
+    # of all such variables from assignment lines in the file, then flag any
+    # `.autocommit` usage on a name that was NOT properly unwrapped.
+    # --------------------------------------------------------------------
+    # Build set of variable names obtained via double-unwrap assignment
+    _UNWRAP_ASSIGN = re.compile(
+        r'^\s*(\w+)\s*=\s*.*bind\.connection\.connection\b'
+    )
+    safely_unwrapped_names: set[str] = set()
+    for line in lines:
+        m = _UNWRAP_ASSIGN.match(line)
+        if m:
+            safely_unwrapped_names.add(m.group(1))
+
+    # Pattern: <varname>.autocommit
+    _AUTOCOMMIT_USE = re.compile(r'\b(\w+)\.autocommit\b')
+    for i, line in enumerate(lines, start=1):
+        if line.lstrip().startswith('#'):
+            continue
+        for m in _AUTOCOMMIT_USE.finditer(line):
+            var_name = m.group(1)
+            # Only flag names that look like raw connection handles but
+            # weren't obtained via a safe double-unwrap assignment.
+            if (var_name not in safely_unwrapped_names
+                    and 'connection' in var_name.lower()):
                 issues.append((
                     i, 'ERROR',
-                    "raw_conn.autocommit detected without bind.connection.connection unwrap — "
-                    "raw_conn is likely the pool proxy, not the DBAPI connection.\n"
-                    "  Use raw_conn = bind.connection.connection before setting autocommit.",
+                    f"'{var_name}.autocommit' detected — ensure '{var_name}' is the "
+                    "unwrapped DBAPI connection (from bind.connection.connection), "
+                    "not the pool proxy.\n"
+                    "  Setting autocommit on the pool proxy has no effect and "
+                    "silently fails.",
                 ))
 
     return issues

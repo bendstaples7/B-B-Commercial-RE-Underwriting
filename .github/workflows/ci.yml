@@ -183,3 +183,5 @@ jobs:
           SECRET_KEY: ci-test-secret-key
           JWT_SECRET_KEY: ci-test-jwt-secret
           FLASK_APP: run.py
+          REDIS_URL: redis://localhost:6379/0
+          CELERY_BROKER_URL: redis://localhost:6379/0
