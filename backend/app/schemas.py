@@ -436,6 +436,25 @@ class ImportStartRequestSchema(Schema):
     )
 
 
+class ImportJobResponseSchema(Schema):
+    """Schema for serializing ImportJob responses."""
+    id = fields.Int(dump_only=True)
+    user_id = fields.Str(dump_only=True)
+    spreadsheet_id = fields.Str(dump_only=True, allow_none=True)
+    sheet_name = fields.Str(dump_only=True, allow_none=True)
+    field_mapping_id = fields.Int(dump_only=True, allow_none=True)
+    status = fields.Str(dump_only=True)
+    source_type = fields.Str(dump_only=True, allow_none=True)
+    total_rows = fields.Int(dump_only=True, allow_none=True)
+    rows_processed = fields.Int(dump_only=True, allow_none=True)
+    rows_imported = fields.Int(dump_only=True, allow_none=True)
+    rows_skipped = fields.Int(dump_only=True, allow_none=True)
+    error_log = fields.Raw(dump_only=True, allow_none=True)
+    started_at = fields.DateTime(dump_only=True, allow_none=True)
+    completed_at = fields.DateTime(dump_only=True, allow_none=True)
+    created_at = fields.DateTime(dump_only=True, allow_none=True)
+
+
 class ImportJobsQuerySchema(Schema):
     """Schema for listing import jobs (GET /api/leads/import/jobs)."""
     user_id = fields.Str(load_default=None, validate=validate.Length(max=255))
