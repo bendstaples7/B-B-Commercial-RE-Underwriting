@@ -153,6 +153,14 @@ jobs:
           CELERY_BROKER_URL: redis://localhost:6379/0
           REDIS_URL: redis://localhost:6379/0
 
+      - name: Lint migration files for dangerous patterns
+        # Static analysis — no database needed.
+        # Catches patterns that cause production crashes but are invisible in
+        # SQLite-based tests: raw_conn.execute(), bind.connection used without
+        # unwrapping the pool proxy, etc.
+        run: python scripts/lint_migrations.py
+        working-directory: backend
+
       - name: Run tests
         run: pytest
         working-directory: backend
@@ -161,3 +169,95 @@ jobs:
           FLASK_ENV: testing
           SECRET_KEY: ci-test-secret-key
           JWT_SECRET_KEY: ci-test-jwt-secret
+
+      - name: Create isolated migration test database
+        # Create a second PostgreSQL database that pytest never touches.
+        # The smoke-test runs flask db upgrade against this clean database so
+        # that Alembic revision state from pytest's auto-migrate never
+        # interferes with the migration chain validation.
+        run: PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE migration_test_db;"
+
+      - name: Validate migration chain (head + root count gate)
+        # Runs before any schema change — fails fast if head_count != 1 or root_count != 1.
+        # Reports the detected counts and each offending revision identifier so the
+        # developer knows exactly which revision broke the chain.
+        run: python scripts/check_migration_chain.py
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migration_test_db
+          FLASK_ENV: testing
+          SECRET_KEY: ci-test-secret-key
+          JWT_SECRET_KEY: ci-test-jwt-secret
+          FLASK_APP: app
+          REDIS_URL: redis://localhost:6379/0
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          KIRO_MIGRATION: "1"
+
+      - name: Migration validation — fresh-DB upgrade (PostgreSQL 15, 300s timeout)
+        # Migration validation job: runs flask db upgrade against a completely fresh
+        # migration_test_db on PostgreSQL 15 (matching production) with a hard 300-second
+        # timeout. KIRO_MIGRATION=1 prevents the app factory's auto-upgrade from firing.
+        # On any non-zero exit the run fails and the error output is surfaced so the
+        # failing revision is visible. No SQLite substitution — PostgreSQL only.
+        run: |
+          echo "=== Running flask db upgrade (timeout 300s) ==="
+          set +e
+          timeout 300 flask db upgrade 2>&1 | tee /tmp/migration_output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+          set -e
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "::error::flask db upgrade failed (exit $EXIT_CODE). Migration output:"
+            cat /tmp/migration_output.txt
+            exit $EXIT_CODE
+          fi
+          echo "=== Initial upgrade complete ==="
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migration_test_db
+          FLASK_ENV: testing
+          SECRET_KEY: ci-test-secret-key
+          JWT_SECRET_KEY: ci-test-jwt-secret
+          FLASK_APP: app
+          REDIS_URL: redis://localhost:6379/0
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          KIRO_MIGRATION: "1"
+
+      - name: Migration idempotency + chain re-validation
+        # Production never downgrades to base, and the historical pre-consolidation
+        # migrations were authored against SQLite/incremental dev state — their
+        # downgrade() paths (reverse enum/type casts, batch_alter_table drops) are
+        # not reliably runnable to base on a fresh chain.  Instead of a
+        # downgrade-to-base round-trip, we validate the two production-relevant
+        # reversibility properties: (1) re-running `flask db upgrade` at head is a
+        # clean no-op (idempotency — Req 2.6, 8.7), and (2) the chain still
+        # resolves to exactly one root + one head afterwards.
+        run: |
+          echo "=== Idempotent re-run (upgrade again, must be a no-op) ==="
+          timeout 300 flask db upgrade 2>&1
+          echo "=== Re-validate chain head/root ==="
+          python scripts/check_migration_chain.py
+          echo "=== Idempotency check complete ==="
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migration_test_db
+          FLASK_ENV: testing
+          SECRET_KEY: ci-test-secret-key
+          JWT_SECRET_KEY: ci-test-jwt-secret
+          FLASK_APP: app
+          REDIS_URL: redis://localhost:6379/0
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          KIRO_MIGRATION: "1"
+
+      - name: Enum drift check — models vs DB
+        # Catches any migration that leaves the PostgreSQL enum values out of
+        # sync with what the SQLAlchemy models declare.  This is the class of
+        # bug that caused the production deploy failure: the migration created
+        # 'propertytype' with UPPERCASE values but the models store and read
+        # lowercase values.  Running this check AFTER flask db upgrade ensures
+        # that the schema a fresh database ends up in after the full chain is
+        # exactly what the models expect — no more "invalid input value for
+        # enum" surprises at deploy time.
+        run: python scripts/check_enum_drift.py
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migration_test_db

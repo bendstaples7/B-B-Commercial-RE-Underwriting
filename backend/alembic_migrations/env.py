@@ -1,9 +1,21 @@
 import logging
+import os
+import sys
 from logging.config import fileConfig
 
 from flask import current_app
 
 from alembic import context
+from alembic.migration import MigrationContext as AlembicMigrationContext
+
+# Ensure backend/ is on sys.path so that app.migration_utils is importable
+# when alembic runs from any working directory.
+_env_dir = os.path.dirname(os.path.abspath(__file__))          # .../alembic_migrations/
+_backend_dir = os.path.dirname(_env_dir)                        # .../backend/
+if _backend_dir not in sys.path:
+    sys.path.insert(0, _backend_dir)
+
+from app.migration_utils import assert_single_head_and_root     # noqa: E402
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -13,6 +25,139 @@ config = context.config
 # This line sets up loggers basically.
 fileConfig(config.config_file_name)
 logger = logging.getLogger('alembic.env')
+
+# ---------------------------------------------------------------------------
+# Known-revision set — every revision ID in the documented
+# baseline-replacement mapping (all pre-consolidation revisions plus the
+# two new consolidation revisions).  An upgrade attempted from a revision
+# outside this set is halted before any schema change (Req 9.5).
+# ---------------------------------------------------------------------------
+_KNOWN_REVISIONS = frozenset({
+    '000000000000', '267725fe7017',
+    'a1b2c3d4e5f6', 'b2c3d4e5f6g7', 'c3d4e5f6g7h8',
+    'd4e5f6g7h8i9', 'd4e5f6g7h8i9b', 'e5f6g7h8i9j0', 'e5f6g7h8i9j0b',
+    'f6g7h8i9j0k1', 'f6g7h8i9j0k1b', 'f6g7h8i9j0k1c',
+    'fd5451087f07',
+    'g7h8i9j0k1l2', 'g7h8i9j0k1l2b', 'g7h8i9j0k1l2c',
+    'h8i9j0k1l2m3', 'i9j0k1l2m3n4', 'j0k1l2m3n4o5',
+    'k1l2m3n4o5p6', 'l2m3n4o5p6q7', 'm3n4o5p6q7r8',
+    'n4o5p6q7r8s9', 'o5p6q7r8s9t0', 'p6q7r8s9t0u1',
+    'q7r8s9t0u1v2', 'r8s9t0u1v2w3', 'r9s0t1u2v3w4',
+    's0t1u2v3w4x5', 't0u1v2w3x4y5', 'u1v2w3x4y5z6',
+    'v1w2x3y4z5a6', 'w2x3y4z5a6b7', 'x3y4z5a6b7c8',
+    'y4z5a6b7c8d9', 'z5a6b7c8d9e0',
+    # New consolidation revisions
+    'a2b3c4d5e6f7', 'b3c4d5e6f7a1',
+})
+
+
+def _run_pre_upgrade_guards(connectable=None):
+    """Run the two pre-upgrade guards.
+
+    1. Single-root / single-head check (Req 1.6, 7.1).
+    2. Unrecognized-start-revision check (Req 9.5).
+
+    *connectable* is the SQLAlchemy Engine used to open a dedicated, short-lived
+    connection for the recorded-revision lookup in online mode; pass ``None``
+    for offline mode (in which case the start-revision guard is skipped — we
+    cannot query the DB without a connection).
+
+    On any violation the function prints to stderr, logs an error, and calls
+    ``sys.exit(1)`` so the migration process terminates without changing the
+    schema or the recorded revision.
+    """
+
+    # ------------------------------------------------------------------
+    # Guard 1: single root & single head
+    # ------------------------------------------------------------------
+    result = assert_single_head_and_root()
+    head_count = result['head_count']
+    root_count = result['root_count']
+
+    if head_count != 1 or root_count != 1:
+        msg_parts = [
+            "Migration chain validation failed — pre-upgrade guard halted.",
+            f"  head_count : {head_count}  (expected 1)",
+            f"  root_count : {root_count}  (expected 1)",
+        ]
+        if result['head_revisions']:
+            msg_parts.append(
+                "  head revisions  : " + ", ".join(result['head_revisions'])
+            )
+        if result['root_revisions']:
+            msg_parts.append(
+                "  root revisions  : " + ", ".join(result['root_revisions'])
+            )
+        msg_parts.append(
+            "No schema changes have been applied.  "
+            "Resolve the chain topology and re-run."
+        )
+        full_msg = "\n".join(msg_parts)
+        logger.error(full_msg)
+        print(full_msg, file=sys.stderr)
+        sys.exit(1)
+
+    # ------------------------------------------------------------------
+    # Guard 2: unrecognized start revision (online mode only)
+    #
+    # IMPORTANT: this check MUST use its own short-lived connection that is
+    # fully closed before the migration transaction begins.  Querying the
+    # recorded revision on the *migration* connection corrupts its transaction
+    # state — on a fresh database the ``SELECT FROM alembic_version`` hits a
+    # table that does not exist yet, which aborts the connection's transaction
+    # and silently prevents the migrations from ever committing.  Using a
+    # separate connection (closed via the ``with`` block, rolling back any
+    # implicit transaction) keeps the migration connection pristine.
+    # ------------------------------------------------------------------
+    if connectable is None:
+        # Offline mode — cannot query the DB; skip this guard.
+        return
+
+    # Read the current recorded revision(s) using a dedicated connection.
+    try:
+        with connectable.connect() as guard_conn:
+            mc = AlembicMigrationContext.configure(guard_conn)
+            current_heads = mc.get_current_heads()   # returns a tuple of str
+    except Exception as exc:  # pragma: no cover - defensive
+        # If the recorded revision cannot be read (e.g. brand-new database
+        # with no alembic_version table), treat it as a fresh database and
+        # let the migration proceed.
+        logger.info("Start-revision guard: could not read recorded revision "
+                    "(treating as fresh database): %s", exc)
+        return
+
+    if not current_heads:
+        # Fresh database — no recorded revision yet; that is fine.
+        return
+
+    _assert_known_start_revision(current_heads)
+
+
+def _assert_known_start_revision(current_heads):
+    """Halt (sys.exit 1) if any recorded revision is not in _KNOWN_REVISIONS.
+
+    Pure helper: takes the list/tuple of currently-recorded head revisions and
+    checks them against the documented baseline-replacement mapping (Req 9.5).
+    Kept separate from connection handling so it is trivially unit-testable.
+    """
+    unrecognized = [rev for rev in current_heads if rev not in _KNOWN_REVISIONS]
+    if unrecognized:
+        msg_parts = [
+            "Unrecognized starting revision(s) — pre-upgrade guard halted.",
+            "  The following recorded revision(s) are not present in the "
+            "documented baseline-replacement mapping:",
+        ]
+        for rev in unrecognized:
+            msg_parts.append(f"    {rev}")
+        msg_parts += [
+            "Schema and recorded revision are unchanged.",
+            "Consult MIGRATIONS.md for the documented stamp path, or verify "
+            "that the correct database is targeted.",
+        ]
+        full_msg = "\n".join(msg_parts)
+        logger.error(full_msg)
+        print(full_msg, file=sys.stderr)
+        sys.exit(1)
 
 
 def get_engine():
@@ -63,6 +208,11 @@ def run_migrations_offline():
     script output.
 
     """
+    # Pre-upgrade guard: chain topology check.
+    # The start-revision guard is omitted in offline mode because there is
+    # no live connection available to query the recorded revision.
+    _run_pre_upgrade_guards(connectable=None)
+
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url, target_metadata=get_metadata(), literal_binds=True
@@ -95,6 +245,16 @@ def run_migrations_online():
         conf_args["process_revision_directives"] = process_revision_directives
 
     connectable = get_engine()
+
+    # ------------------------------------------------------------------
+    # Pre-upgrade guards — run BEFORE opening the migration connection so the
+    # start-revision check uses its own short-lived connection and cannot
+    # corrupt the migration transaction (see _run_pre_upgrade_guards docstring).
+    # On any violation sys.exit(1) is called; schema/recorded revision unchanged.
+    # Requirements: 1.6, 7.1, 9.5
+    # ------------------------------------------------------------------
+    if os.environ.get('KIRO_SKIP_GUARD') != '1':
+        _run_pre_upgrade_guards(connectable=connectable)
 
     with connectable.connect() as connection:
         context.configure(
