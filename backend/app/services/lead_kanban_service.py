@@ -148,7 +148,8 @@ class LeadKanbanService:
             null_count = len(null_leads)
             for col in columns:
                 if col["id"] == "skip_trace":
-                    col["leads"].extend(null_leads[:limit] if limit > 0 and col["id"] != column_id else null_leads)
+                    sliced_nulls = null_leads if (col["id"] == column_id or limit == 0) else null_leads[:limit]
+                    col["leads"].extend(sliced_nulls)
                     col["count"] += null_count
                     total_counts["skip_trace"] = total_counts.get("skip_trace", 0) + null_count
                     break

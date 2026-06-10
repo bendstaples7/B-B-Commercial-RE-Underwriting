@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime
 from app import db
 from decimal import Decimal
-from typing import Any
+from typing import Any, Optional
 
 from app.exceptions import AuthorizationException, ValidationException
 from app.models.deal import Deal
@@ -236,7 +236,7 @@ class DealService:
 
         # Recalculate priority_score when status changes
         if "status" in changed_fields:
-            self.calculate_priority_score(deal_id)
+            self.calculate_priority_score(deal_id, deal=deal)
 
         self._log_audit(deal_id, user_id, "update", changed_fields)
         return deal
@@ -245,7 +245,7 @@ class DealService:
     # Priority Scoring
     # ------------------------------------------------------------------
 
-    def calculate_priority_score(self, deal_id: int) -> None:
+    def calculate_priority_score(self, deal_id: int, deal: Optional[Deal] = None) -> None:
         """Calculate and update the priority_score for a deal based on its stage weight.
 
         The score is derived primarily from the PipelineStageConfig weight for
@@ -254,8 +254,10 @@ class DealService:
 
         Args:
             deal_id: The Deal to recalculate.
+            deal: Optional pre-fetched Deal object to avoid a redundant query.
         """
-        deal = Deal.query.get(deal_id)
+        if deal is None:
+            deal = db.session.get(Deal, deal_id)
         if deal is None or deal.deleted_at is not None:
             return
 

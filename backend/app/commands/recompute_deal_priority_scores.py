@@ -20,7 +20,7 @@ def recompute_deal_priority_scores():
     updated_count = 0
     for deal in all_deals:
         initial_score = deal.priority_score
-        deal_service.calculate_priority_score(deal.id)
+        deal_service.calculate_priority_score(deal.id, deal=deal)
         # calculate_priority_score flushes, so we just check if it changed
         if deal.priority_score != initial_score:
             click.echo(f"Updated priority_score for Deal {deal.id} (Old: {initial_score}, New: {deal.priority_score})")

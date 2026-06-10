@@ -5,6 +5,7 @@ from flask import Blueprint, jsonify, request, g
 from marshmallow import ValidationError
 
 from app import db
+from app.api_utils import require_auth
 from app.exceptions import RealEstateAnalysisException
 from app.schemas import PipelineStageConfigSchema
 from app.services.pipeline_config_service import PipelineConfigService
@@ -68,6 +69,7 @@ def handle_errors(f):
 # ---------------------------------------------------------------------------
 
 @pipeline_config_bp.route('/pipeline-stages', methods=['GET'])
+@require_auth
 @handle_errors
 def get_pipeline_stages():
     """Returns an ordered list of pipeline stages with stage_name, order, weight."""
@@ -76,6 +78,7 @@ def get_pipeline_stages():
 
 
 @pipeline_config_bp.route('/pipeline-stages/weights', methods=['PUT'])
+@require_auth
 @handle_errors
 def update_pipeline_stage_weights():
     """Accepts a list of {stage_name: weight} pairs to update stage weights (admin-only)."""
