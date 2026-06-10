@@ -671,6 +671,10 @@ def create_app(config_name='development'):
     # OpenAPI spec endpoint
     from app.openapi import openapi_bp
     app.register_blueprint(openapi_bp, url_prefix='/api')
+
+    # Global search endpoint
+    from app.controllers.search_controller import search_bp
+    app.register_blueprint(search_bp, url_prefix='/api')
     
     # ---------------------------------------------------------------------------
     # Auto-configure HubSpot client secret from environment variable.

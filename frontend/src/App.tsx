@@ -95,6 +95,7 @@ import { MissingPropertyMatchQueue } from './components/MissingPropertyMatchQueu
 import { LeadCommandCenter } from './components/LeadCommandCenter'
 import { AdminPanel } from './components/AdminPanel'
 import AdminUserDetail from './components/AdminUserDetail'
+import GlobalSearchBar from '@/components/GlobalSearchBar'
 import { DealKanbanPage } from './pages/DealKanbanPage'
 import { PipelineConfigAdminPage } from './pages/PipelineConfigAdminPage'
 import type { QueueCounts } from './types'
@@ -1455,9 +1456,11 @@ function App() {
               <MenuIcon />
             </IconButton>
           )}
-          <Typography variant="h6" component="h1" noWrap sx={{ flexGrow: 1 }}>
+          <Typography variant="h6" component="h1" noWrap sx={{ flexGrow: 0, mr: 2 }}>
             Real Estate Analysis Platform
           </Typography>
+          <GlobalSearchBar />
+          <Box sx={{ flexGrow: 1 }} />
           {pipelineStatus?.pipeline_running && (
             <Tooltip title="HubSpot pipeline processing…">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mr: 1 }}>

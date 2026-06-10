@@ -11,6 +11,7 @@ import type {
   PropertyScoreResponse,
   RecalculateRequest,
   RecalculateResponse,
+  SearchResponse,
 } from '@/types'
 import {
   HubSpotConfigSchema,
@@ -1605,5 +1606,19 @@ export const leadKanbanService = {
   /** PATCH /api/kanban/leads/:id/move — move a lead to a different lead_status column */
   moveKanbanLead: async (leadId: number, targetAction: string): Promise<void> => {
     await api.patch(`/kanban/leads/${leadId}/move`, { target_action: targetAction })
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Search Service
+// ---------------------------------------------------------------------------
+
+export const searchService = {
+  search: async (q: string, signal?: AbortSignal): Promise<SearchResponse> => {
+    const response = await api.get<SearchResponse>('/search', {
+      params: { q },
+      signal,
+    })
+    return response.data
   },
 }
