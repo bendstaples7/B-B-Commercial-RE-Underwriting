@@ -4,8 +4,8 @@
  *
  * Requirements: 1.5, 14.1
  */
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Box,
@@ -34,42 +34,7 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import UploadFileIcon from '@mui/icons-material/UploadFile'
 import { multifamilyService } from '@/services/api'
 import type { DealCreatePayload, DealSummary } from '@/types'
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function formatCurrency(value: string | number): string {
-  const num = typeof value === 'string' ? parseFloat(value) : value
-  if (isNaN(num)) return '—'
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 0,
-  }).format(num)
-}
-
-function formatDate(value: string | null): string {
-  if (!value) return '—'
-  return new Date(value).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  })
-}
-
-function statusColor(status: string): 'default' | 'primary' | 'success' | 'warning' {
-  switch (status?.toLowerCase()) {
-    case 'active':
-      return 'success'
-    case 'under_review':
-      return 'primary'
-    case 'draft':
-      return 'warning'
-    default:
-      return 'default'
-  }
-}
+import { formatCurrency, formatDate, statusColor } from '@/utils/helpers'
 
 // ---------------------------------------------------------------------------
 // Create Deal Dialog
@@ -331,7 +296,17 @@ function DealTable({ deals, onOpen }: DealTableProps) {
 
 export function DealListPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [createOpen, setCreateOpen] = useState(false)
+
+  // Open the create dialog when navigated here with { state: { openCreate: true } }
+  useEffect(() => {
+    if ((location.state as { openCreate?: boolean })?.openCreate) {
+      setCreateOpen(true)
+      // Clear the state so navigating back doesn't re-open
+      window.history.replaceState({}, document.title)
+    }
+  }, [location.state])
 
   const {
     data: deals,

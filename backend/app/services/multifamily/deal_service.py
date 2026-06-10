@@ -11,10 +11,10 @@ Requirements: 1.1-1.8, 14.2-14.4, 15.3-15.4
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
-from typing import Any
-
 from app import db
+from decimal import Decimal
+from typing import Any, Optional
+
 from app.exceptions import AuthorizationException, ValidationException
 from app.models.deal import Deal
 from app.models.deal_audit_trail import DealAuditTrail
@@ -25,6 +25,7 @@ from app.models.lead_deal_link import LeadDealLink
 from app.models.lender_profile import LenderProfile
 from app.models.market_rent_assumption import MarketRentAssumption
 from app.models.pro_forma_result import ProFormaResult
+from app.models.pipeline_stage_config import PipelineStageConfig
 from app.models.rehab_plan_entry import RehabPlanEntry
 from app.models.rent_roll_entry import RentRollEntry
 from app.models.unit import Unit
@@ -232,8 +233,48 @@ class DealService:
         self._invalidate_cache(deal_id)
 
         db.session.flush()
+
+        # Recalculate priority_score when status changes
+        if "status" in changed_fields:
+            self.calculate_priority_score(deal_id, deal=deal)
+
         self._log_audit(deal_id, user_id, "update", changed_fields)
         return deal
+
+    # ------------------------------------------------------------------
+    # Priority Scoring
+    # ------------------------------------------------------------------
+
+    def calculate_priority_score(self, deal_id: int, deal: Optional[Deal] = None) -> None:
+        """Calculate and update the priority_score for a deal based on its stage weight.
+
+        The score is derived primarily from the PipelineStageConfig weight for
+        the deal's current status. This runs inside a flush() boundary so the
+        caller is responsible for committing the transaction.
+
+        Args:
+            deal_id: The Deal to recalculate.
+            deal: Optional pre-fetched Deal object to avoid a redundant query.
+        """
+        if deal is None:
+            deal = db.session.get(Deal, deal_id)
+        if deal is None or deal.deleted_at is not None:
+            return
+
+        # Get the stage weight for the deal's current status
+        config = PipelineStageConfig.query.filter_by(
+            stage_name=deal.status
+        ).first()
+
+        if config is not None:
+            # Use the stage weight as the primary priority score factor.
+            # Weight values (e.g. 1, 3, 5, 8, 10, 0) map directly to scores.
+            deal.priority_score = config.weight
+        else:
+            # No config found for this status — score is 0
+            deal.priority_score = Decimal("0.0")
+
+        db.session.flush()
 
     def soft_delete_deal(self, user_id: str, deal_id: int) -> None:
         """Soft-delete a Deal by setting deleted_at timestamp.

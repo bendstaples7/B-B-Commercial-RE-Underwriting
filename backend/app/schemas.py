@@ -16,14 +16,20 @@ class RequestSchema(Schema):
 
 
 class StartAnalysisSchema(RequestSchema):
-    """Schema for starting a new analysis.
-
-    user_id is read from the X-User-Id header via g.user_id, not the body.
-    Unknown fields (including user_id sent by older clients) are silently dropped.
-    """
+    """Schema for starting a new analysis."""
+    
+#     user_id is read from the X-User-Id header via g.user_id, not the body.
+#     Unknown fields (including user_id sent by older clients) are silently dropped.
     address = fields.Str(required=True, validate=validate.Length(min=5, max=500))
     latitude = fields.Float(load_default=None, allow_none=True)
     longitude = fields.Float(load_default=None, allow_none=True)
+
+
+class PipelineStageConfigSchema(RequestSchema):
+    """Schema for pipeline stage configuration."""
+    stage_name = fields.Str(required=True, validate=validate.Length(min=1, max=255))
+    order = fields.Int(required=True, validate=validate.Range(min=1))
+    weight = fields.Decimal(required=True, validate=validate.Range(min=0), as_string=True)
 
 
 class PropertyFactsSchema(Schema):
@@ -31,7 +37,7 @@ class PropertyFactsSchema(Schema):
 
     Unknown fields (e.g. user_id injected by middleware) are silently ignored.
     All fields except address are optional so the endpoint accepts partial
-    updates — the workflow controller merges the diff onto the existing record.
+    updates - the workflow controller merges the diff onto the existing record.
     """
     class Meta:
         unknown = EXCLUDE
@@ -217,6 +223,41 @@ class LeadListQuerySchema(Schema):
                 )
 
 
+class CSVUploadQuerySchema(Schema):
+    """Schema for validating CSV upload query parameters.
+
+    Requires a valid owner_user_id for ownership attribution.
+    Unknown fields are silently dropped.
+    """
+    owner_user_id = fields.Str(
+        required=True,
+        validate=validate.Length(min=1, max=36),
+    )
+
+    class Meta:
+        unknown = EXCLUDE
+
+
+class IngestionRequestSchema(Schema):
+    """Schema for validating DuPage lead database ingestion requests.
+
+    Requires a valid owner_user_id (1-36 chars) and at least one record.
+    Unknown fields are silently dropped.
+    """
+    owner_user_id = fields.Str(
+        required=True,
+        validate=validate.Length(min=1, max=36),
+    )
+    records = fields.List(
+        fields.Dict(),
+        required=True,
+        validate=validate.Length(min=1),
+    )
+
+    class Meta:
+        unknown = EXCLUDE
+
+
 class LeadDetailResponseSchema(Schema):
     """Schema for serializing a full lead detail response."""
     id = fields.Int(dump_only=True)
@@ -395,6 +436,25 @@ class ImportStartRequestSchema(Schema):
     )
 
 
+class ImportJobResponseSchema(Schema):
+    """Schema for serializing ImportJob responses."""
+    id = fields.Int(dump_only=True)
+    user_id = fields.Str(dump_only=True)
+    spreadsheet_id = fields.Str(dump_only=True, allow_none=True)
+    sheet_name = fields.Str(dump_only=True, allow_none=True)
+    field_mapping_id = fields.Int(dump_only=True, allow_none=True)
+    status = fields.Str(dump_only=True)
+    source_type = fields.Str(dump_only=True, allow_none=True)
+    total_rows = fields.Int(dump_only=True, allow_none=True)
+    rows_processed = fields.Int(dump_only=True, allow_none=True)
+    rows_imported = fields.Int(dump_only=True, allow_none=True)
+    rows_skipped = fields.Int(dump_only=True, allow_none=True)
+    error_log = fields.Raw(dump_only=True, allow_none=True)
+    started_at = fields.DateTime(dump_only=True, allow_none=True)
+    completed_at = fields.DateTime(dump_only=True, allow_none=True)
+    created_at = fields.DateTime(dump_only=True, allow_none=True)
+
+
 class ImportJobsQuerySchema(Schema):
     """Schema for listing import jobs (GET /api/leads/import/jobs)."""
     user_id = fields.Str(load_default=None, validate=validate.Length(max=255))
@@ -407,45 +467,6 @@ class ImportJobsQuerySchema(Schema):
 
 
 # ---------------------------------------------------------------------------
-# DuPage Lead Database — Ingestion Schemas
-# ---------------------------------------------------------------------------
-# Note: VALID_SOURCE_TYPES is defined above in the Lead Management section
-# so that LeadListQuerySchema can reference it.
-
-
-class IngestionRequestSchema(RequestSchema):
-    """Base schema for all ingestion endpoints (POST /api/ingestion/*).
-
-    Validates the owner_user_id and records payload that every ingestion
-    endpoint requires. Unknown fields are silently dropped (via RequestSchema).
-    """
-    owner_user_id = fields.Str(required=True, validate=validate.Length(min=1, max=36))
-    records = fields.List(fields.Dict(), required=True, validate=validate.Length(min=1))
-
-
-class CSVUploadQuerySchema(RequestSchema):
-    """Query params for CSV upload endpoint (POST /api/ingestion/csv).
-
-    Validates the owner_user_id query parameter that identifies the account
-    that will own the leads created from the uploaded CSV.
-    """
-    owner_user_id = fields.Str(required=True, validate=validate.Length(min=1, max=36))
-
-
-class ImportJobResponseSchema(Schema):
-    """Serializer for ImportJob status polling response (GET /api/ingestion/jobs/<id>).
-
-    All fields are dump_only — this schema is used exclusively for output.
-    """
-    id = fields.Int(dump_only=True)
-    status = fields.Str(dump_only=True)
-    source_type = fields.Str(dump_only=True, allow_none=True)
-    rows_processed = fields.Int(dump_only=True)
-    rows_imported = fields.Int(dump_only=True)
-    rows_skipped = fields.Int(dump_only=True)
-    error_log = fields.List(fields.Dict(), dump_only=True)
-    created_at = fields.DateTime(dump_only=True)
-    completed_at = fields.DateTime(dump_only=True, allow_none=True)
 
 
 # ---------------------------------------------------------------------------
@@ -701,6 +722,7 @@ class DealResponseSchema(Schema):
     interest_reserve_amount = fields.Float(dump_only=True)
     custom_cap_rate = fields.Float(dump_only=True, allow_none=True)
     status = fields.Str(dump_only=True)
+    priority_score = fields.Float(dump_only=True, allow_none=True)
     created_at = fields.DateTime(dump_only=True)
     updated_at = fields.DateTime(dump_only=True, allow_none=True)
     deleted_at = fields.DateTime(dump_only=True, allow_none=True)
@@ -1046,7 +1068,7 @@ class DatasetStatusResponseSchema(Schema):
 # OM Intake schemas
 # ---------------------------------------------------------------------------
 
-class ScenarioMetricsSchema(Schema):
+class ScenarioMetricsSchema(Schema): # type: ignore
     """Schema for a single scenario's computed metrics."""
     gross_potential_income_annual = fields.Decimal(allow_none=True)
     effective_gross_income_annual = fields.Decimal(allow_none=True)
@@ -1197,7 +1219,7 @@ class InteractionAssociationSchema(Schema):
 class TimelineEntrySchema(Schema):
     """Schema for a unified timeline entry returned by TimelineService.
 
-    Not model-based — represents a merged view of Interactions and Tasks
+    Not model-based - represents a merged view of Interactions and Tasks
     sorted by date for display in the timeline panel.
     """
     entry_type = fields.Str(required=True)          # 'interaction' or 'task'
@@ -1287,7 +1309,7 @@ class OrganizationSchema(Schema):
 class OrganizationAuditLogSchema(Schema):
     """Schema for serializing OrganizationAuditLog records (read-only responses).
 
-    All fields are dump_only — audit log entries are created by the service layer,
+    All fields are dump_only - audit log entries are created by the service layer,
     never directly via API input.
     """
     id = fields.Int(dump_only=True)
@@ -1797,7 +1819,7 @@ class BulkActionResultSchema(Schema):
 class WebhookLogSchema(Schema):
     """Schema for serializing HubSpotWebhookLog records.
 
-    All fields are dump_only — this is a read-only response schema.
+    All fields are dump_only - this is a read-only response schema.
     received_at and processed_at are serialized as ISO 8601 strings.
     """
     id = fields.Int(dump_only=True)
@@ -1813,7 +1835,7 @@ class WebhookLogSchema(Schema):
 class WebhookLogSummarySchema(Schema):
     """Schema for serializing the 24-hour webhook log summary.
 
-    Not tied to a model — used for plain dict serialization.
+    Not tied to a model - used for plain dict serialization.
     """
     processed_count = fields.Integer()
     failed_count = fields.Integer()
@@ -1839,8 +1861,6 @@ class LoginSchema(RequestSchema):
 
     Both fields are required. Email is normalized to lowercase and stripped.
     Password length is validated server-side only (no client-side hints).
-
-    Requirements: 2.1, 2.2
     """
     email = fields.Email(required=True)
     password = fields.Str(required=True, validate=validate.Length(min=1))

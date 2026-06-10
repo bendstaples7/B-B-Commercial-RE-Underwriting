@@ -23,7 +23,7 @@ interface QueueLink {
 }
 
 const QUEUE_LINKS: QueueLink[] = [
-  { label: "Today's Action",         path: '/',                              badgeKey: 'todays_action' },
+  { label: "Today's Action",         path: '/queues/todays-action',          badgeKey: 'todays_action' },
   { label: 'Previously Warm',        path: '/queues/previously-warm',        badgeKey: 'previously_warm' },
   { label: 'Follow-Up Overdue',      path: '/queues/follow-up-overdue',      badgeKey: 'follow_up_overdue' },
   { label: 'No Next Action',         path: '/queues/no-next-action',         badgeKey: 'no_next_action' },

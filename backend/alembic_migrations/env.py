@@ -48,6 +48,8 @@ _KNOWN_REVISIONS = frozenset({
     'y4z5a6b7c8d9', 'z5a6b7c8d9e0',
     # New consolidation revisions
     'a2b3c4d5e6f7', 'b3c4d5e6f7a1',
+    # PR #36 kanban + pipeline revisions
+    '5f9bc65a48ea', 'z0a9b8c7d6e5', 'z1b2c3d4e5f6', 'z9a8b7c6d5e4',
 })
 
 

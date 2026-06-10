@@ -261,6 +261,7 @@ import type {
   DealSummary,
   DealCreatePayload,
   Deal,
+  DealKanbanCard,
   MFUnit,
   RentRollEntry,
   RentRollSummary,
@@ -350,6 +351,14 @@ export const multifamilyService = {
   listDeals: async (): Promise<DealSummary[]> => {
     const response = await api.get<DealListResponse>('/multifamily/deals')
     return response.data.deals
+  },
+
+  /** List deals filtered by status (for Kanban per-column fetch) */
+  listDealsByStatus: async (status: string): Promise<DealKanbanCard[]> => {
+    const response = await api.get<DealListResponse>(
+      `/multifamily/deals?status=${encodeURIComponent(status)}`
+    )
+    return response.data.deals as DealKanbanCard[]
   },
 
   /** Get full deal detail including all child records (Req 1.4) */
@@ -1556,5 +1565,45 @@ export const adminService = {
       Omit<AdminUserSummary, 'lead_count' | 'marketing_list_count' | 'import_job_count'>
     >(`/admin/users/${userId}`, data)
     return response.data
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline Config API Service
+// ---------------------------------------------------------------------------
+import type { PipelineStage } from '@/types'
+
+export const pipelineConfigService = {
+  /** GET /api/pipeline-stages — fetch all configured pipeline stages ordered by order */
+  getStages: async (): Promise<PipelineStage[]> => {
+    const response = await api.get<PipelineStage[]>('/pipeline-stages')
+    return response.data
+  },
+
+  /** PUT /api/pipeline-stages/weights — update stage weights (admin only) */
+  updateWeights: async (stages: { stage_name: string; weight: number }[]): Promise<PipelineStage[]> => {
+    const response = await api.put<PipelineStage[]>('/pipeline-stages/weights', stages)
+    return response.data
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Lead Kanban Service (reads from leads table)
+// ---------------------------------------------------------------------------
+import type { LeadKanbanResponse } from '@/types'
+
+export const leadKanbanService = {
+  /** GET /api/kanban/leads — fetch kanban columns with leads grouped by lead_status */
+  getKanbanLeads: async (params?: {
+    limit?: number
+    column_id?: string
+  }): Promise<LeadKanbanResponse> => {
+    const response = await api.get<LeadKanbanResponse>('/kanban/leads', { params })
+    return response.data
+  },
+
+  /** PATCH /api/kanban/leads/:id/move — move a lead to a different lead_status column */
+  moveKanbanLead: async (leadId: number, targetAction: string): Promise<void> => {
+    await api.patch(`/kanban/leads/${leadId}/move`, { target_action: targetAction })
   },
 }

@@ -43,6 +43,7 @@ class Deal(db.Model):
 
     # Status
     status = db.Column(db.String(50), nullable=False, default='draft')
+    priority_score = db.Column(db.Numeric(10, 2), nullable=False, default=0.0)
 
     # Timestamps and soft-delete
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)

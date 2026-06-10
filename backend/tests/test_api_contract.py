@@ -171,6 +171,7 @@ def warm_lead(app):
             lead_score=75.0,
             lead_category='residential',
             mailer_history='Bes and Ben, OLM, 3/26/2024',  # legacy string format
+            owner_user_id='test-user',
         )
         signal = HubSpotSignal(
             lead_id=lead.id,
@@ -206,7 +207,10 @@ class TestLeadViewApiContract:
 
     def test_previously_warm_view_shape(self, client, warm_lead):
         """GET /api/properties/views/previously-warm returns valid lead shapes."""
-        response = client.get('/api/properties/views/previously-warm')
+        response = client.get(
+            '/api/properties/views/previously-warm',
+            headers={'X-User-Id': 'test-user'},
+        )
         assert response.status_code == 200
         data = json.loads(response.data)
         assert 'leads' in data
@@ -216,7 +220,10 @@ class TestLeadViewApiContract:
 
     def test_previously_warm_view_includes_warm_lead(self, client, warm_lead):
         """The previously-warm view includes leads with warm signals."""
-        response = client.get('/api/properties/views/previously-warm')
+        response = client.get(
+            '/api/properties/views/previously-warm',
+            headers={'X-User-Id': 'test-user'},
+        )
         data = json.loads(response.data)
         lead_ids = [l['id'] for l in data['leads']]
         assert warm_lead in lead_ids, \

@@ -7,6 +7,7 @@ from flask_limiter.util import get_remote_address
 from flask_migrate import Migrate
 import os
 
+from app.api_utils import require_auth
 # Re-export the reusable chain validator so callers can import it from either
 # ``app`` or ``app.migration_utils`` without caring where it lives.
 from app.migration_utils import assert_single_head_and_root  # noqa: F401
@@ -362,6 +363,9 @@ def create_app(config_name='development'):
         raise ConfigurationError(msg, config_key='SECRET_KEY')
     app.config['SECRET_KEY'] = _secret_key or 'dev-secret-key'  # testing only
     app.config['REDIS_URL'] = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    # ENV check removed — ALLOW_LEGACY_X_USER_ID is no longer configurable
+    # via environment. The X-User-Id header fallback is testing-only (set in
+    # the testing config block below). This prevents production impersonation.
 
     # Limit the SQLAlchemy connection pool to prevent exhausting PostgreSQL's
     # max_connections when multiple processes start simultaneously (Flask +
@@ -374,9 +378,9 @@ def create_app(config_name='development'):
         from sqlalchemy.pool import NullPool
         app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'poolclass': NullPool}
         app.config['TESTING'] = True  # set early so guards can check it
-        # Allow X-User-Id header as auth fallback in tests — tests send
-        # this header instead of a Bearer JWT. Never enabled in production.
-        app.config['ALLOW_LEGACY_X_USER_ID'] = True
+        # In testing, allow X-User-Id header as auth fallback — tests cannot
+        # issue real JWTs. Never enable this in production/development.
+        app.config['ALLOW_LEGACY_X_USER_ID'] = True  # testing only
     else:
         app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
             'pool_size': 3,
@@ -533,8 +537,8 @@ def create_app(config_name='development'):
                 pass
 
         if _is_testing:
-            # In tests, allow X-User-Id header as a convenience identity mechanism
-            # since tests don't issue real JWTs.
+            # In tests or when ALLOW_LEGACY_X_USER_ID=true, allow X-User-Id header
+            # as a convenience identity mechanism since the frontend sends it.
             g.user_id = _request.headers.get('X-User-Id', 'anonymous')
         else:
             # In production/development, never trust the unauthenticated X-User-Id
@@ -643,6 +647,14 @@ def create_app(config_name='development'):
     # Actionable Lead Command Center — Command Center endpoints
     from app.controllers.command_center_controller import command_center_bp
     app.register_blueprint(command_center_bp, url_prefix='/api/leads')
+
+    # Pipeline Config — stages and weights for Kanban scoring
+    from app.controllers.pipeline_config_controller import pipeline_config_bp
+    app.register_blueprint(pipeline_config_bp, url_prefix='/api')
+
+    # Lead Kanban board endpoints
+    from app.controllers.lead_kanban_controller import lead_kanban_bp
+    app.register_blueprint(lead_kanban_bp)  # routes already carry full /api/... paths
 
     # Authentication endpoints (public — no token required for login)
     from app.controllers.auth_controller import auth_bp

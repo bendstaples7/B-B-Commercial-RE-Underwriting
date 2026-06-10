@@ -63,6 +63,7 @@ import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import BlockIcon from '@mui/icons-material/Block'
 import LocationOffIcon from '@mui/icons-material/LocationOff'
 import TodayIcon from '@mui/icons-material/Today'
+import ViewKanbanIcon from '@mui/icons-material/ViewKanban'
 import ExpandLess from '@mui/icons-material/ExpandLess'
 import ExpandMore from '@mui/icons-material/ExpandMore'
 import { usePipelineStatus } from './context/PipelineStatusContext'
@@ -94,6 +95,8 @@ import { MissingPropertyMatchQueue } from './components/MissingPropertyMatchQueu
 import { LeadCommandCenter } from './components/LeadCommandCenter'
 import { AdminPanel } from './components/AdminPanel'
 import AdminUserDetail from './components/AdminUserDetail'
+import { DealKanbanPage } from './pages/DealKanbanPage'
+import { PipelineConfigAdminPage } from './pages/PipelineConfigAdminPage'
 import type { QueueCounts } from './types'
 
 const DRAWER_WIDTH = 240
@@ -143,7 +146,8 @@ const NAV_SECTIONS = [
       {
         label: 'Work Queues',
         items: [
-          { label: "Today's Action",         path: '/',                              icon: <TodayIcon />,                  badgeKey: 'todays_action' as keyof QueueCounts },
+          { label: 'Kanban',                path: '/kanban',                           icon: <ViewKanbanIcon />,             badgeKey: null },
+          { label: "Today's Action",         path: '/queues/todays-action',          icon: <TodayIcon />,                  badgeKey: 'todays_action' as keyof QueueCounts },
           { label: 'Previously Warm',        path: '/queues/previously-warm',        icon: <LocalFireDepartmentIcon />,    badgeKey: 'previously_warm' as keyof QueueCounts },
           { label: 'Follow-Up Overdue',      path: '/queues/follow-up-overdue',      icon: <AlarmIcon />,                  badgeKey: 'follow_up_overdue' as keyof QueueCounts },
           { label: 'No Next Action',         path: '/queues/no-next-action',         icon: <RadioButtonUncheckedIcon />,   badgeKey: 'no_next_action' as keyof QueueCounts },
@@ -1576,9 +1580,10 @@ function App() {
           <Route path="/*" element={
             <AuthGuard>
               <Routes>
-          {/* Default landing page — Today's Action Queue */}
-          <Route path="/" element={<TodaysActionQueue />} />
+          {/* Default landing page — redirect to Kanban */}
+          <Route path="/" element={<Navigate to="/kanban" replace />} />
           {/* Queue routes */}
+          <Route path="/queues/todays-action" element={<TodaysActionQueue />} />
           <Route path="/queues/previously-warm" element={<PreviouslyWarmQueue />} />
           <Route path="/queues/follow-up-overdue" element={<FollowUpOverdueQueue />} />
           <Route path="/queues/no-next-action" element={<NoNextActionQueue />} />
@@ -1615,6 +1620,9 @@ function App() {
           {/* Admin routes — guarded by is_admin claim */}
           <Route path="/admin" element={user?.is_admin ? <AdminPanel /> : <Navigate to="/" replace />} />
           <Route path="/admin/users/:userId" element={user?.is_admin ? <AdminUserDetail /> : <Navigate to="/" replace />} />
+          <Route path="/admin/pipeline-stages" element={user?.is_admin ? <PipelineConfigAdminPage /> : <Navigate to="/" replace />} />
+          {/* Kanban view */}
+          <Route path="/kanban" element={<DealKanbanPage />} />
           {/* Old /leads/views/* — redirect to new /queues/* routes */}
           <Route path="/leads/views/previously-warm" element={<Navigate to="/queues/previously-warm" replace />} />
           <Route path="/leads/views/needs-review" element={<Navigate to="/queues/needs-review" replace />} />

@@ -47,19 +47,25 @@ def _make_fake_job(
     rows_processed: int = 1,
     rows_imported: int = 1,
     rows_skipped: int = 0,
-) -> MagicMock:
-    """Return a MagicMock that looks like an ImportJob ORM instance."""
-    job = MagicMock(spec=ImportJob)
-    job.id = job_id
-    job.status = status
-    job.source_type = source_type
-    job.rows_processed = rows_processed
-    job.rows_imported = rows_imported
-    job.rows_skipped = rows_skipped
-    job.error_log = []
-    job.created_at = datetime(2024, 1, 15, 12, 0, 0)
-    job.completed_at = datetime(2024, 1, 15, 12, 0, 5)
-    return job
+) -> dict:
+    """Return a dict matching ImportJobResponseSchema fields for serialization tests."""
+    return {
+        "id": job_id,
+        "user_id": "test-user-001",
+        "spreadsheet_id": None,
+        "sheet_name": None,
+        "field_mapping_id": None,
+        "status": status,
+        "source_type": source_type,
+        "total_rows": rows_processed + rows_skipped,
+        "rows_processed": rows_processed,
+        "rows_imported": rows_imported,
+        "rows_skipped": rows_skipped,
+        "error_log": [],
+        "started_at": datetime(2024, 1, 15, 11, 59, 0),
+        "completed_at": datetime(2024, 1, 15, 12, 0, 5),
+        "created_at": datetime(2024, 1, 15, 11, 59, 0),
+    }
 
 
 def _make_csv_content(num_rows: int) -> bytes:
