@@ -223,6 +223,21 @@ class LeadListQuerySchema(Schema):
                 )
 
 
+class CSVUploadQuerySchema(Schema):
+    """Schema for validating CSV upload query parameters.
+
+    Requires a valid owner_user_id for ownership attribution.
+    Unknown fields are silently dropped.
+    """
+    owner_user_id = fields.Str(
+        required=True,
+        validate=validate.Length(min=1, max=36),
+    )
+
+    class Meta:
+        unknown = EXCLUDE
+
+
 class IngestionRequestSchema(Schema):
     """Schema for validating DuPage lead database ingestion requests.
 
