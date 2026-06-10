@@ -223,6 +223,26 @@ class LeadListQuerySchema(Schema):
                 )
 
 
+class IngestionRequestSchema(Schema):
+    """Schema for validating DuPage lead database ingestion requests.
+
+    Requires a valid owner_user_id (1-36 chars) and at least one record.
+    Unknown fields are silently dropped.
+    """
+    owner_user_id = fields.Str(
+        required=True,
+        validate=validate.Length(min=1, max=36),
+    )
+    records = fields.List(
+        fields.Dict(),
+        required=True,
+        validate=validate.Length(min=1),
+    )
+
+    class Meta:
+        unknown = EXCLUDE
+
+
 class LeadDetailResponseSchema(Schema):
     """Schema for serializing a full lead detail response."""
     id = fields.Int(dump_only=True)

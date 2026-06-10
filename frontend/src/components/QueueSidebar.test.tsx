@@ -191,8 +191,8 @@ describe('QueueSidebar', () => {
   // -------------------------------------------------------------------------
 
   describe('active link highlighted', () => {
-    it('marks Today\'s Action as selected when path is "/"', () => {
-      renderSidebar('/')
+    it('marks Today\'s Action as selected when path is "/queues/todays-action"', () => {
+      renderSidebar('/queues/todays-action')
       const link = screen.getByTestId('queue-link-todays_action')
       // MUI ListItemButton with selected=true gets aria-selected or Mui-selected class
       expect(link).toHaveClass('Mui-selected')
