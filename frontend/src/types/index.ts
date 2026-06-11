@@ -1978,3 +1978,22 @@ export interface LeadKanbanResponse {
   columns: LeadKanbanColumn[]
   total_counts: Record<string, number>
 }
+
+// ---------------------------------------------------------------------------
+// Global Search Types
+// ---------------------------------------------------------------------------
+
+export interface SearchResultItem {
+  id: number
+  type: 'lead' | 'session'
+  label: string
+  nav_path: string
+  lead_score?: number | null
+  created_at?: string | null
+  status?: string | null
+}
+
+export interface SearchResponse {
+  leads: SearchResultItem[]
+  sessions: SearchResultItem[]
+}
