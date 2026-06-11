@@ -166,7 +166,9 @@ class HubSpotActivityConverterService:
         Idempotent: returns None if hubspot_task_id already exists.
         Status mapping: 'COMPLETED' → 'completed', all others → 'open'.
         Title from metadata.subject, body from metadata.body,
-        due_date from metadata.taskDate (milliseconds).
+        due_date from engagement.timestamp (the task's scheduled date).
+        Note: metadata.taskDate is not populated by HubSpot's legacy API;
+        the canonical due date is stored in engagement.timestamp.
         """
         if self._task_exists(engagement.hubspot_id):
             logger.debug(
@@ -176,9 +178,14 @@ class HubSpotActivityConverterService:
             return None
 
         metadata = engagement.raw_payload.get('metadata', {})
+        engagement_obj = engagement.raw_payload.get('engagement', {})
         title = metadata.get('subject') or '(No Subject)'
         body = metadata.get('body') or None
-        due_date = self._parse_ms_timestamp(metadata.get('taskDate'))
+        # Due date lives in engagement.timestamp (milliseconds), not metadata.taskDate.
+        # Only parse when a value is actually present; leave NULL when both are absent
+        # so tasks with no due date don't get stamped with the import time.
+        _ts_value = engagement_obj.get('timestamp') or metadata.get('taskDate')
+        due_date = self._parse_ms_timestamp(_ts_value) if _ts_value is not None else None
         hs_status = (metadata.get('status') or '').upper()
         status = 'completed' if hs_status == 'COMPLETED' else 'open'
 

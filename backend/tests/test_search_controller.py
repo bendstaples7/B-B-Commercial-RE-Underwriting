@@ -45,7 +45,13 @@ def test_search_rejects_short_query(client, q):
 @given(q=st.text(min_size=201))
 @settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_search_rejects_long_query(client, q):
-    """For any q with length > 200, GET /api/search returns 400."""
+    """For any q whose stripped length > 200, GET /api/search returns 400.
+
+    The controller strips whitespace before checking length, so we only test
+    strings whose stripped form is also > 200 characters.
+    """
+    from hypothesis import assume
+    assume(len(q.strip()) > 200)
     encoded_q = urllib.parse.quote(q, safe='')
     response = client.get(f'/api/search?q={encoded_q}', headers=_AUTH_HEADERS)
     assert response.status_code == 400
@@ -538,16 +544,28 @@ _LABEL_SEARCH_TERM = 'LabelPrecedenceTest'
 
 
 def _expected_label(first: str, last: str, street: str) -> str:
-    """Pure helper: compute the expected label from stripped name/street values."""
+    """Pure helper: compute the expected label from stripped name/street values.
+
+    Format: '{name} · {street}' when both present, '{street}' when no name,
+    '{name}' when no street, 'Unknown Lead' when neither.
+    """
     f = (first or '').strip()
     la = (last or '').strip()
     s = (street or '').strip()
+
     if f and la:
-        return f"{f} {la}"
-    if f:
-        return f
-    if la:
-        return la
+        name = f"{f} {la}"
+    elif f:
+        name = f
+    elif la:
+        name = la
+    else:
+        name = ""
+
+    if name and s:
+        return f"{name} · {s}"
+    if name:
+        return name
     if s:
         return s
     return 'Unknown Lead'
@@ -588,21 +606,84 @@ def _seed_and_query_label(client, app, first, last, street):
 
 
 def test_label_both_names(client, app):
-    """6.1 / 6.2: Both first and last name present → '{first} {last}'."""
+    """6.1 / 6.2: Both first and last name present → '{first} {last} · {street}'."""
     label = _seed_and_query_label(client, app, 'Alice', 'Smith', None)
-    assert label == 'Alice Smith', f"Expected 'Alice Smith', got {label!r}"
+    expected = f'Alice Smith · {_LABEL_SEARCH_TERM}'
+    assert label == expected, f"Expected {expected!r}, got {label!r}"
 
 
 def test_label_first_name_only(client, app):
-    """6.3: Only first name present → first name."""
+    """6.3: Only first name present → '{first} · {street}'."""
     label = _seed_and_query_label(client, app, 'Alice', None, None)
-    assert label == 'Alice', f"Expected 'Alice', got {label!r}"
+    expected = f'Alice · {_LABEL_SEARCH_TERM}'
+    assert label == expected, f"Expected {expected!r}, got {label!r}"
 
 
 def test_label_last_name_only(client, app):
-    """6.3: Only last name present → last name."""
+    """6.3: Only last name present → '{last} · {street}'."""
     label = _seed_and_query_label(client, app, None, 'Smith', None)
-    assert label == 'Smith', f"Expected 'Smith', got {label!r}"
+    expected = f'Smith · {_LABEL_SEARCH_TERM}'
+    assert label == expected, f"Expected {expected!r}, got {label!r}"
+
+
+def test_label_no_hybrid_when_primary_first_only(client, app):
+    """Regression: partial primary name (first only) must NOT mix with legacy last name.
+
+    When a property_contact has first_name='Luke' but no last_name, the label
+    should be 'Luke · {street}' — never 'Luke Carlson' by mixing primary_first
+    with legacy_last (owner_last_name from the original import).
+    """
+    with app.app_context():
+        from app.models.lead import Lead as _Lead
+        from app.models.contact import Contact as _Contact
+        from app.models.property_contact import PropertyContact as _PC
+        from app import db as _db
+
+        searchable_street = f'888 Hybrid Test St {_LABEL_SEARCH_TERM}'
+        lead = _Lead(
+            owner_first_name='Gary',
+            owner_last_name='Carlson',   # legacy name from original import
+            property_street=searchable_street,
+            owner_user_id=_TEST_USER_ID,
+            lead_status='awaiting_skip_trace',
+        )
+        _db.session.add(lead)
+        _db.session.flush()
+        lead_id = lead.id
+
+        # Primary contact has only first_name set (like HubSpot "Luke" record)
+        contact = _Contact(first_name='Luke', last_name=None, role='owner')
+        _db.session.add(contact)
+        _db.session.flush()
+        pc = _PC(property_id=lead_id, contact_id=contact.id, role='owner', is_primary=True)
+        _db.session.add(pc)
+        _db.session.commit()
+
+    try:
+        import urllib.parse as _up
+        q = _up.quote(_LABEL_SEARCH_TERM, safe='')
+        response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
+        assert response.status_code == 200
+        data = response.get_json()
+        matching = [result for result in data['leads'] if result.get('nav_path') == f'/properties/{lead_id}']
+        assert len(matching) >= 1, f"Lead {lead_id} not found in results"
+        label = matching[0]['label']
+        # Must use only the primary source — 'Luke' only, not 'Luke Carlson'
+        assert 'Carlson' not in label, (
+            f"Hybrid name detected — label {label!r} mixes primary first with legacy last"
+        )
+        assert 'Luke' in label, f"Primary first name missing from label {label!r}"
+    finally:
+        with app.app_context():
+            from app.models.lead import Lead as _Lead2
+            from app.models.contact import Contact as _Contact2
+            from app.models.property_contact import PropertyContact as _PC2
+            from app import db as _db2
+            # Delete PropertyContact and Contact rows created by this test first
+            _PC2.query.filter_by(property_id=lead_id).delete()
+            _Contact2.query.filter_by(first_name='Luke', last_name=None).delete()
+            _Lead2.query.filter_by(id=lead_id).delete()
+            _db2.session.commit()
 
 
 def test_label_street_fallback(client, app):
@@ -663,9 +744,8 @@ nullable_street = st.one_of(
 def test_lead_label_precedence_pure_logic(first, last, street):
     """Property 10 (pure logic): label precedence holds for all nullable name/street combos.
 
-    This test exercises the _expected_label helper directly — which mirrors the
-    exact same logic as the controller — to verify the precedence rules across
-    500 generated combinations without any DB or HTTP overhead.
+    Format is 'Name · Street' when both present, just street when no name,
+    just name when no street, 'Unknown Lead' when neither.
 
     Validates: Requirements 6.1, 6.2, 6.3, 6.4, 6.5
     """
@@ -676,30 +756,27 @@ def test_lead_label_precedence_pure_logic(first, last, street):
     label = _expected_label(first, last, street)
 
     if first_s and last_s:
-        # Both parts present → full name
-        assert label == f"{first_s} {last_s}", (
-            f"Both names: expected '{first_s} {last_s}', got {label!r}"
-        )
+        name = f"{first_s} {last_s}"
     elif first_s:
-        # Only first name
-        assert label == first_s, (
-            f"First only: expected {first_s!r}, got {label!r}"
-        )
+        name = first_s
     elif last_s:
-        # Only last name
-        assert label == last_s, (
-            f"Last only: expected {last_s!r}, got {label!r}"
-        )
-    elif street_s:
-        # Neither name, street present
-        assert label == street_s, (
-            f"Street fallback: expected {street_s!r}, got {label!r}"
-        )
+        name = last_s
     else:
-        # All absent
-        assert label == 'Unknown Lead', (
-            f"All absent: expected 'Unknown Lead', got {label!r}"
-        )
+        name = ""
+
+    if name and street_s:
+        expected = f"{name} · {street_s}"
+    elif name:
+        expected = name
+    elif street_s:
+        expected = street_s
+    else:
+        expected = 'Unknown Lead'
+
+    assert label == expected, (
+        f"Expected {expected!r}, got {label!r} "
+        f"(first={first!r}, last={last!r}, street={street!r})"
+    )
 
 
 # ---------------------------------------------------------------------------

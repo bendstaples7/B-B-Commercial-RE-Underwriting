@@ -272,9 +272,12 @@ class HubSpotClientService:
             "properties": properties,
         }
 
-        # Request contact associations for deals so we can link deal → owner contact
+        # Request contact associations for deals so we can link deal → owner contact.
+        # Request deal associations for contacts so we can link contact → property.
         if object_type == "deals":
             params["associations"] = "contacts"
+        elif object_type == "contacts":
+            params["associations"] = "deals"
 
         while True:
             response = self._get(path, params=params)
