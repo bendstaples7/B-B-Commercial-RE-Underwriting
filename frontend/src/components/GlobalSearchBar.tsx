@@ -282,13 +282,14 @@ const GlobalSearchBar = () => {
                 <>
                   <ListSubheader>Leads</ListSubheader>
                   {results.leads.map((lead, idx) => (
-                    <ListItem key={lead.id} disablePadding>
+                    <ListItem key={`lead-${lead.id}`} disablePadding>
                       <ListItemButton
                         selected={idx === focusedIndex}
                         sx={idx === focusedIndex ? { backgroundColor: 'action.selected' } : {}}
                         onClick={() => {
                           navigate(lead.nav_path)
                           clearSearch()
+                          if (isMobile) setMobileExpanded(false)
                         }}
                         data-testid={`lead-result-${lead.id}`}
                       >
@@ -320,13 +321,14 @@ const GlobalSearchBar = () => {
                   {results.sessions.map((session, idx) => {
                     const sessionIdx = (results?.leads?.length ?? 0) + idx
                     return (
-                    <ListItem key={session.id} disablePadding>
+                    <ListItem key={`session-${session.id}`} disablePadding>
                       <ListItemButton
                         selected={sessionIdx === focusedIndex}
                         sx={sessionIdx === focusedIndex ? { backgroundColor: 'action.selected' } : {}}
                         onClick={() => {
                           navigate(session.nav_path)
                           clearSearch()
+                          if (isMobile) setMobileExpanded(false)
                         }}
                         data-testid={`session-result-${session.id}`}
                       >

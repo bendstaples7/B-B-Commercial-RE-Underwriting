@@ -64,8 +64,7 @@ def test_search_rejects_long_query(client, q):
 def test_search_response_shape(client, q):
     """For any valid query, response shape is valid."""
     response = client.get(f'/api/search?q={urllib.parse.quote(q.strip(), safe="")}', headers=_AUTH_HEADERS)
-    if response.status_code != 200:
-        return
+    assert response.status_code == 200, response.get_data(as_text=True)
     data = response.get_json()
 
     # Top-level shape
@@ -179,14 +178,14 @@ def test_search_result_caps_property(client, q):
         f'/api/search?q={urllib.parse.quote(q.strip(), safe="")}',
         headers=_AUTH_HEADERS,
     )
-    if response.status_code == 200:
-        data = response.get_json()
-        assert len(data['leads']) <= 10, (
-            f"leads cap exceeded for q={q!r}: got {len(data['leads'])} items (max 10)"
-        )
-        assert len(data['sessions']) <= 5, (
-            f"sessions cap exceeded for q={q!r}: got {len(data['sessions'])} items (max 5)"
-        )
+    assert response.status_code == 200, response.get_data(as_text=True)
+    data = response.get_json()
+    assert len(data['leads']) <= 10, (
+        f"leads cap exceeded for q={q!r}: got {len(data['leads'])} items (max 10)"
+    )
+    assert len(data['sessions']) <= 5, (
+        f"sessions cap exceeded for q={q!r}: got {len(data['sessions'])} items (max 5)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -328,8 +327,13 @@ def test_search_results_match_query(client_with_match_lead, q):
     )
 
     if response.status_code != 200:
-        # 400 is acceptable (Hypothesis may generate edge-case strings that
-        # the server rejects as too short after URL-encoding roundtrip).
+        # 400 is acceptable — Hypothesis may generate strings whose trimmed length
+        # drops below 2 after URL-encoding roundtrip (e.g. whitespace-only strings).
+        # Any other non-200 status is a real failure.
+        assert response.status_code == 400, (
+            f"Expected 200 or 400, got {response.status_code} for q={q_stripped!r}: "
+            f"{response.get_data(as_text=True)}"
+        )
         return
 
     data = response.get_json()

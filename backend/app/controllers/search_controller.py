@@ -108,7 +108,7 @@ def search():
     if len(q_trimmed) < 2:
         return jsonify({'message': 'Query must be at least 2 characters'}), 400
 
-    if len(q) > 200:
+    if len(q_trimmed) > 200:
         return jsonify({'message': 'Query must not exceed 200 characters'}), 400
 
     # --- Ownership context (server-authoritative, never from client) ---
@@ -226,7 +226,7 @@ def search():
                 'prefix_pattern': prefix_pattern,
             }
         ).fetchall()
-    except Exception:
+    except OperationalError:
         # SQLite fallback: ILIKE not supported, use case-insensitive LIKE via LOWER()
         sessions_results = db.session.execute(
             text("""

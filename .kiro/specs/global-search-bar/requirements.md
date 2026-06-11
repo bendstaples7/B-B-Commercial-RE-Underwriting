@@ -151,5 +151,5 @@ A global search bar embedded in the application's top header (AppBar) that allow
 #### Acceptance Criteria
 
 1. WHERE the PostgreSQL `pg_trgm` extension is available, THE Search_Service SHALL use trigram index-backed queries on `owner_first_name`, `owner_last_name`, and `property_street`. IF `pg_trgm` is not available, THEN THE Search_Service SHALL use case-insensitive pattern matching (ILIKE) on those columns.
-2. THE Search_Service SHALL apply LIMIT clauses to all database queries such that no more than 100 rows are scanned per result type before the final result cap is applied.
+2. THE Search_Service SHALL apply LIMIT clauses to all database queries: at most 10 Lead results and at most 5 Analysis_Session results per request (matching Requirement 3.8).
 3. THE Search_Service SHALL respond within 2 seconds at the 95th percentile for queries against a dataset of up to 100,000 lead records.
