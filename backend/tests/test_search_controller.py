@@ -620,6 +620,61 @@ def test_label_last_name_only(client, app):
     assert label == expected, f"Expected {expected!r}, got {label!r}"
 
 
+def test_label_no_hybrid_when_primary_first_only(client, app):
+    """Regression: partial primary name (first only) must NOT mix with legacy last name.
+
+    When a property_contact has first_name='Luke' but no last_name, the label
+    should be 'Luke · {street}' — never 'Luke Carlson' by mixing primary_first
+    with legacy_last (owner_last_name from the original import).
+    """
+    with app.app_context():
+        from app.models.lead import Lead as _Lead
+        from app.models.contact import Contact as _Contact
+        from app.models.property_contact import PropertyContact as _PC
+        from app import db as _db
+
+        searchable_street = f'888 Hybrid Test St {_LABEL_SEARCH_TERM}'
+        lead = _Lead(
+            owner_first_name='Gary',
+            owner_last_name='Carlson',   # legacy name from original import
+            property_street=searchable_street,
+            owner_user_id=_TEST_USER_ID,
+            lead_status='awaiting_skip_trace',
+        )
+        _db.session.add(lead)
+        _db.session.flush()
+        lead_id = lead.id
+
+        # Primary contact has only first_name set (like HubSpot "Luke" record)
+        contact = _Contact(first_name='Luke', last_name=None, role='owner')
+        _db.session.add(contact)
+        _db.session.flush()
+        pc = _PC(property_id=lead_id, contact_id=contact.id, role='owner', is_primary=True)
+        _db.session.add(pc)
+        _db.session.commit()
+
+    try:
+        import urllib.parse as _up
+        q = _up.quote(_LABEL_SEARCH_TERM, safe='')
+        response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
+        assert response.status_code == 200
+        data = response.get_json()
+        matching = [l for l in data['leads'] if l.get('nav_path') == f'/properties/{lead_id}']
+        assert len(matching) >= 1, f"Lead {lead_id} not found in results"
+        label = matching[0]['label']
+        # Must use only the primary source — 'Luke' only, not 'Luke Carlson'
+        assert 'Carlson' not in label, (
+            f"Hybrid name detected — label {label!r} mixes primary first with legacy last"
+        )
+        assert 'Luke' in label, f"Primary first name missing from label {label!r}"
+    finally:
+        with app.app_context():
+            from app.models.lead import Lead as _Lead2
+            from app import db as _db2
+            _Lead2.query.filter_by(id=lead_id).delete()
+            _db2.session.commit()
+
+
 def test_label_street_fallback(client, app):
     """6.4: No name parts present but street present → street (includes embedded search term)."""
     street = '123 Main St'

@@ -72,9 +72,7 @@ class HubSpotMatcherService:
         3. Strip unit/apartment suffixes (APT, UNIT, STE, #, FLOOR, FL, etc.)
            so that '4263 W Montrose Ave Apt 1' matches '4263 W Montrose'.
         4. Remove punctuation characters: . , # - /
-        5. Strip trailing city/state/zip — anything after a two-digit+ zip or
-           a bare state abbreviation preceded by a city name.
-        6. Collapse multiple spaces to a single space.
+        5. Collapse multiple spaces to a single space.
 
         Returns the normalised string, or an empty string if *address* is
         None / empty.
@@ -359,13 +357,20 @@ class HubSpotMatcherService:
             ).first()
 
             if already_linked is None:
-                # Find or create the Contact record
+                # Find or create the Contact record, scoped to this property.
+                # A global name match would collapse unrelated "John Smith"
+                # contacts from different properties into one record, mixing
+                # their phone/email data. Only reuse a Contact that is already
+                # linked to THIS property to avoid cross-property contamination.
                 existing_contact = None
                 if hs_first and hs_last:
-                    existing_contact = Contact.query.filter(
+                    existing_pc = PropertyContact.query.join(Contact).filter(
+                        PropertyContact.property_id == lead.id,
                         db.func.lower(Contact.first_name) == hs_first.lower(),
                         db.func.lower(Contact.last_name)  == hs_last.lower(),
                     ).first()
+                    if existing_pc:
+                        existing_contact = existing_pc.contact
 
                 if existing_contact is None:
                     existing_contact = Contact(
@@ -495,27 +500,41 @@ class HubSpotMatcherService:
                 # If exactly one lead matches the address, auto-confirm — no
                 # ambiguity means human review adds no value.
                 # If multiple leads match (e.g. same street, different units),
-                # keep pending so the user can pick the right one.
+                # keep pending with no internal_record_id so the user picks the
+                # right one. Do NOT enrich any lead in the ambiguous case.
                 auto_confirm = len(address_matches) == 1
-                lead = address_matches[0]
-                logger.debug(
-                    "Deal %s matched Lead %s via address '%s' (auto_confirm=%s)",
-                    deal.hubspot_id, lead.id, norm_address, auto_confirm,
-                )
-                match = self._upsert_match(
-                    hubspot_record_type="deal",
-                    hubspot_id=deal.hubspot_id,
-                    internal_record_type="lead",
-                    internal_record_id=lead.id,
-                    confidence="MEDIUM",
-                    matching_criteria="address_match",
-                    status="confirmed" if auto_confirm else "pending",
-                )
-                # Enrich even on MEDIUM confidence — the stage signal is
-                # always useful regardless of match confidence level.
-                enriched = self.enrich_lead_from_deal(lead, deal, stage_label_map)
-                if enriched:
-                    logger.debug("Deal %s enriched Lead %s fields: %s", deal.hubspot_id, lead.id, enriched)
+                if auto_confirm:
+                    lead = address_matches[0]
+                    logger.debug(
+                        "Deal %s matched Lead %s via address '%s' (auto_confirm=True)",
+                        deal.hubspot_id, lead.id, norm_address,
+                    )
+                    match = self._upsert_match(
+                        hubspot_record_type="deal",
+                        hubspot_id=deal.hubspot_id,
+                        internal_record_type="lead",
+                        internal_record_id=lead.id,
+                        confidence="MEDIUM",
+                        matching_criteria="address_match",
+                        status="confirmed",
+                    )
+                    enriched = self.enrich_lead_from_deal(lead, deal, stage_label_map)
+                    if enriched:
+                        logger.debug("Deal %s enriched Lead %s fields: %s", deal.hubspot_id, lead.id, enriched)
+                else:
+                    logger.debug(
+                        "Deal %s address '%s' matched %d leads — ambiguous, requires manual review",
+                        deal.hubspot_id, norm_address, len(address_matches),
+                    )
+                    match = self._upsert_match(
+                        hubspot_record_type="deal",
+                        hubspot_id=deal.hubspot_id,
+                        internal_record_type=None,
+                        internal_record_id=None,
+                        confidence="MEDIUM",
+                        matching_criteria="address_match",
+                        status="pending",
+                    )
                 return match
 
         # --- 3. No match — record as UNMATCHED with no internal record ----------

@@ -181,10 +181,11 @@ class HubSpotActivityConverterService:
         engagement_obj = engagement.raw_payload.get('engagement', {})
         title = metadata.get('subject') or '(No Subject)'
         body = metadata.get('body') or None
-        # Due date lives in engagement.timestamp (milliseconds), not metadata.taskDate
-        due_date = self._parse_ms_timestamp(
-            engagement_obj.get('timestamp') or metadata.get('taskDate')
-        )
+        # Due date lives in engagement.timestamp (milliseconds), not metadata.taskDate.
+        # Only parse when a value is actually present; leave NULL when both are absent
+        # so tasks with no due date don't get stamped with the import time.
+        _ts_value = engagement_obj.get('timestamp') or metadata.get('taskDate')
+        due_date = self._parse_ms_timestamp(_ts_value) if _ts_value is not None else None
         hs_status = (metadata.get('status') or '').upper()
         status = 'completed' if hs_status == 'COMPLETED' else 'open'
 

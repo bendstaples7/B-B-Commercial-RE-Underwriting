@@ -300,15 +300,20 @@ def search():
     # --- Serialize leads ---
     leads = []
     for row in leads_results:
-        # Prefer primary contact name over legacy flat owner columns
+        # Source-level fallback: if the primary contact has any name part set,
+        # use primary_first + primary_last (blanks for missing parts). Only fall
+        # back to legacy flat columns when the primary contact has no name at all.
+        # This prevents hybrid names like "Luke Carlson" (primary first, legacy last).
         primary_first = (row.primary_contact_first_name or '').strip()
         primary_last = (row.primary_contact_last_name or '').strip()
         legacy_first = (row.owner_first_name or '').strip()
         legacy_last = (row.owner_last_name or '').strip()
         street = (row.property_street or '').strip()
 
-        first = primary_first or legacy_first
-        last = primary_last or legacy_last
+        if primary_first or primary_last:
+            first, last = primary_first, primary_last
+        else:
+            first, last = legacy_first, legacy_last
 
         if first and last:
             name = f"{first} {last}"

@@ -374,24 +374,29 @@ def run_hubspot_matching(run_id: int = None) -> None:
 
         matcher = HubSpotMatcherService()
 
-        # Collect hubspot_ids that already have a CONFIRMED match record.
+        # Collect hubspot_ids that already have a CONFIRMED or REJECTED match record.
+        # CONFIRMED = already processed and accepted; REJECTED = reviewer decided no match.
+        # Both are skipped so _upsert_match() cannot overwrite a reviewer's decision.
         # UNMATCHED and PENDING records are re-evaluated on each run:
         # - UNMATCHED: may now have address data after a re-import
         # - PENDING: single-match address deals are now auto-confirmed, so
         #   re-running match_deal will upgrade them to confirmed
         matched_deals = {
             m.hubspot_id
-            for m in HubSpotMatch.query.filter_by(hubspot_record_type='deal', status='confirmed')
+            for m in HubSpotMatch.query.filter_by(hubspot_record_type='deal')
+            .filter(HubSpotMatch.status.in_(['confirmed', 'rejected']))
             .all()
         }
         matched_contacts = {
             m.hubspot_id
-            for m in HubSpotMatch.query.filter_by(hubspot_record_type='contact', status='confirmed')
+            for m in HubSpotMatch.query.filter_by(hubspot_record_type='contact')
+            .filter(HubSpotMatch.status.in_(['confirmed', 'rejected']))
             .all()
         }
         matched_companies = {
             m.hubspot_id
-            for m in HubSpotMatch.query.filter_by(hubspot_record_type='company', status='confirmed')
+            for m in HubSpotMatch.query.filter_by(hubspot_record_type='company')
+            .filter(HubSpotMatch.status.in_(['confirmed', 'rejected']))
             .all()
         }
 
@@ -621,11 +626,13 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                     # internal_record_id points to the property.  This fixes
                     # the case where match_contact() ran before the deal was
                     # matched and left internal_record_id = NULL.
+                    # Only update still-pending rows — never flip rejected matches.
                     contact_match = HubSpotMatch.query.filter_by(
                         hubspot_record_type='contact',
                         hubspot_id=cid,
-                    ).first()
-                    if contact_match and contact_match.internal_record_id is None:
+                        status='pending',
+                    ).filter(HubSpotMatch.internal_record_id.is_(None)).first()
+                    if contact_match:
                         contact_match.internal_record_type = 'lead'
                         contact_match.internal_record_id = lead.id
                         contact_match.status = 'confirmed'

@@ -653,15 +653,17 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = ({ onLeadSelect
                 )}
               </Box>
               <Box sx={{ display: 'flex', gap: 0.5, ml: 1, flexShrink: 0 }}>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={<OpenInNewIcon />}
-                  onClick={() => { setPanelOpen(false); onLeadSelect?.(panelLead.id) }}
-                  aria-label="Open full property profile"
-                >
-                  Full Profile
-                </Button>
+                {onLeadSelect && (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<OpenInNewIcon />}
+                    onClick={() => { setPanelOpen(false); onLeadSelect(panelLead.id) }}
+                    aria-label="Open full property profile"
+                  >
+                    Full Profile
+                  </Button>
+                )}
                 <IconButton size="small" onClick={() => setPanelOpen(false)} aria-label="Close panel">
                   <CloseIcon fontSize="small" />
                 </IconButton>

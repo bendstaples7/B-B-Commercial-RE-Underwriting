@@ -426,8 +426,8 @@ export interface PropertyContactSummary {
   last_name: string | null
   role: ContactRole
   is_primary: boolean
-  phones: Array<{ id: number; value: string; label: string }>
-  emails: Array<{ id: number; value: string; label: string }>
+  phones: Array<{ id: number; value: string; label: PhoneLabel }>
+  emails: Array<{ id: number; value: string; label: EmailLabel }>
 }
 
 export interface PropertyDetail extends Property {

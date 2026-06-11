@@ -651,12 +651,16 @@ const TasksTab: React.FC<{ leadId: number }> = ({ leadId }) => {
       recommendedAction={null}
       onTaskCreated={(task) => setTasks((prev) => [...prev, task])}
       onTaskCompleted={async (taskId) => {
+        if (typeof taskId !== 'number') return
+        const previous = tasks
         setTasks((prev) => prev.filter((t) => t.id !== taskId))
-        if (typeof taskId === 'number') {
-          try {
-            await leadTaskService.completeTask(leadId, taskId)
-            queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
-          } catch { /* non-critical */ }
+        try {
+          await leadTaskService.completeTask(leadId, taskId)
+          queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+        } catch (err) {
+          // Restore previous state so the task list stays in sync
+          setTasks(previous)
+          console.error('[PropertyDetailPage] completeTask failed:', err)
         }
       }}
     />

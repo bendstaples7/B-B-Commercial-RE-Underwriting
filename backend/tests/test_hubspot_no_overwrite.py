@@ -218,10 +218,9 @@ class TestProperty19NoOverwriteProtectedFields:
             db.session.flush()
 
             # Match should be MEDIUM confidence.
-            # Status is auto-confirmed when there's exactly one address match
-            # (no ambiguity), or pending when multiple leads share the address.
+            # With exactly one lead in the fixture, auto-confirm fires deterministically.
             assert match.confidence == "MEDIUM"
-            assert match.status in ("confirmed", "pending")
+            assert match.status == "confirmed"
 
             # Protected fields must be unchanged
             refreshed_lead = Lead.query.get(lead_id)
@@ -237,6 +236,43 @@ class TestProperty19NoOverwriteProtectedFields:
             assert refreshed_lead.source == original_source, (
                 f"source was overwritten: "
                 f"'{original_source}' → '{refreshed_lead.source}'"
+            )
+
+            db.session.rollback()
+
+    def test_address_match_pending_when_multiple_leads_share_address(self, app) -> None:
+        """When multiple leads share the same normalised address the match must
+        be status='pending' with no internal_record_id (ambiguous — needs review).
+        Neither lead should be enriched.
+
+        # Feature: hubspot-crm-migration, Property 19
+        **Validates: Requirements 22.1, 22.2**
+        """
+        with app.app_context():
+            shared_street = "555 Ambiguous St"
+            lead_a = Lead(property_street=shared_street, lead_score=40.0, source="manual")
+            lead_b = Lead(property_street=shared_street, lead_score=60.0, source="manual")
+            db.session.add_all([lead_a, lead_b])
+            db.session.flush()
+
+            deal = _make_deal(
+                hubspot_id="ambiguous-addr-deal",
+                pin="XXXXXXXXXXX",  # won't match either lead's PIN
+                address=shared_street,
+            )
+            db.session.add(deal)
+            db.session.flush()
+
+            svc = HubSpotMatcherService()
+            match = svc.match_deal(deal)
+            db.session.flush()
+
+            assert match.confidence == "MEDIUM"
+            assert match.status == "pending", (
+                f"Expected 'pending' for ambiguous address, got '{match.status}'"
+            )
+            assert match.internal_record_id is None, (
+                f"Expected no lead anchored for ambiguous match, got {match.internal_record_id}"
             )
 
             db.session.rollback()
