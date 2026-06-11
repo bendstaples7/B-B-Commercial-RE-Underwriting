@@ -20,7 +20,7 @@ import {
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import HomeWorkIcon from '@mui/icons-material/HomeWork'
 import ApartmentIcon from '@mui/icons-material/Apartment'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import type {
   PropertyDetail,
@@ -29,13 +29,18 @@ import type {
   PropertyScoreResponse,
 } from '@/types'
 import { leadService } from '@/services/leadApi'
-import { multifamilyService, leadScoreService } from '@/services/api'
+import { multifamilyService, leadScoreService, commandCenterService, leadTaskService } from '@/services/api'
 import { LeadScoreBadge } from '@/components/LeadScoreBadge'
 import { ScoreBreakdownCard } from '@/components/ScoreBreakdownCard'
 import { ScoreHistoryTimeline } from '@/components/ScoreHistoryTimeline'
 import { RecalculateButton } from '@/components/RecalculateButton'
 import { ScoreLegend } from '@/components/ScoreLegend'
 import { ContactsSection } from '@/components/ContactsSection'
+import { LeadTaskList } from '@/components/LeadTaskList'
+import { LeadTimeline } from '@/components/LeadTimeline'
+import { LogNoteForm } from '@/components/LogNoteForm'
+import { LogCallForm } from '@/components/LogCallForm'
+import type { LeadTask, LeadTimelineEntry } from '@/types'
 
 /** Props accepted by PropertyDetailPage. */
 export interface PropertyDetailPageProps {
@@ -167,6 +172,8 @@ const InfoTab: React.FC<{ lead: PropertyDetail }> = ({ lead }) => {
     </Box>
   )
 
+  const contacts = lead.contacts ?? []
+
   return (
     <>
       {fieldGroup('Property Details', [
@@ -187,14 +194,48 @@ const InfoTab: React.FC<{ lead: PropertyDetail }> = ({ lead }) => {
         ['Tax Bill 2021', lead.tax_bill_2021 != null ? `$${lead.tax_bill_2021.toLocaleString()}` : null],
         ['Most Recent Sale', lead.most_recent_sale],
       ])}
-      {fieldGroup('Owner Information', [
-        ['Owner First Name', lead.owner_first_name],
-        ['Owner Last Name', lead.owner_last_name],
-        ['Ownership Type', lead.ownership_type],
-        ['Acquisition Date', formatDate(lead.acquisition_date)],
-        ['Owner 2 First Name', lead.owner_2_first_name],
-        ['Owner 2 Last Name', lead.owner_2_last_name],
-      ])}
+
+      {/* Contacts — all linked contacts, primary first */}
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
+          Contacts
+        </Typography>
+        {contacts.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">
+            No contacts linked. Use the Contacts tab to add one.
+          </Typography>
+        ) : (
+          <TableContainer>
+            <Table size="small" aria-label="Contacts">
+              <TableBody>
+                {contacts.map((c) => {
+                  const name = [c.first_name, c.last_name].filter(Boolean).join(' ') || '(No name)'
+                  const role = c.role.split('_').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+                  const phone = c.phones[0]?.value ?? null
+                  const email = c.emails[0]?.value ?? null
+                  return (
+                    <TableRow key={c.id}>
+                      <TableCell sx={{ width: '40%', color: 'text.secondary' }}>
+                        {name}
+                        {c.is_primary && (
+                          <Typography component="span" variant="caption" sx={{ ml: 1, color: 'primary.main' }}>
+                            Primary
+                          </Typography>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {role}
+                        {phone && ` · ${phone}`}
+                        {email && ` · ${email}`}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        )}
+      </Box>
       {fieldGroup('Contact Information', [
         ['Phone 1', lead.phone_1],
         ['Phone 2', lead.phone_2],
@@ -488,9 +529,147 @@ const AnalysisTab: React.FC<{
 // Main component
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Activity tab — timeline + log note/call, mirrors HubSpot center panel
+// ---------------------------------------------------------------------------
+
+const ActivityTab: React.FC<{ leadId: number }> = ({ leadId }) => {
+  const [entries, setEntries] = useState<LeadTimelineEntry[]>([])
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      setLoading(true)
+      setFetchError(null)
+      try {
+        const data = await commandCenterService.getCommandCenter(leadId)
+        if (!cancelled) {
+          setEntries(data.timeline?.entries || [])
+          setTotal(data.timeline?.total || 0)
+        }
+      } catch (err: any) {
+        if (!cancelled) setFetchError(err.message || 'Failed to load activity.')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [leadId])
+
+  const handleEntrySaved = (entry: LeadTimelineEntry) => {
+    setEntries((prev) => [entry, ...prev])
+    setTotal((prev) => prev + 1)
+  }
+
+  const handleLoadMore = async (page: number) => {
+    const result = await commandCenterService.getTimeline(leadId, page)
+    return { entries: result.entries, total: result.total }
+  }
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+        <CircularProgress size={32} aria-label="Loading activity" />
+      </Box>
+    )
+  }
+
+  if (fetchError) {
+    return <Alert severity="error">{fetchError}</Alert>
+  }
+
+  return (
+    <Box>
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="subtitle2" fontWeight="bold" gutterBottom>Log Note</Typography>
+        <LogNoteForm leadId={leadId} onSaved={handleEntrySaved} />
+      </Box>
+      <Divider sx={{ mb: 3 }} />
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="subtitle2" fontWeight="bold" gutterBottom>Log Call</Typography>
+        <LogCallForm leadId={leadId} onSaved={handleEntrySaved} />
+      </Box>
+      <Divider sx={{ mb: 2 }} />
+      <LeadTimeline
+        leadId={leadId}
+        initialEntries={entries}
+        initialTotal={total}
+        onLoadMore={handleLoadMore}
+      />
+    </Box>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Tasks panel — always-visible right sidebar
+// ---------------------------------------------------------------------------
+
+const TasksTab: React.FC<{ leadId: number }> = ({ leadId }) => {
+  const queryClient = useQueryClient()
+  const [tasks, setTasks] = useState<LeadTask[]>([])
+  const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      setLoading(true)
+      setFetchError(null)
+      try {
+        const data = await commandCenterService.getCommandCenter(leadId)
+        if (!cancelled) setTasks(data.open_tasks || [])
+      } catch (err: any) {
+        if (!cancelled) setFetchError(err.message || 'Failed to load tasks.')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [leadId])
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+        <CircularProgress size={32} aria-label="Loading tasks" />
+      </Box>
+    )
+  }
+
+  if (fetchError) {
+    return <Alert severity="error">{fetchError}</Alert>
+  }
+
+  return (
+    <LeadTaskList
+      leadId={leadId}
+      tasks={tasks}
+      recommendedAction={null}
+      onTaskCreated={(task) => setTasks((prev) => [...prev, task])}
+      onTaskCompleted={async (taskId) => {
+        setTasks((prev) => prev.filter((t) => t.id !== taskId))
+        if (typeof taskId === 'number') {
+          try {
+            await leadTaskService.completeTask(leadId, taskId)
+            queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+          } catch { /* non-critical */ }
+        }
+      }}
+    />
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
 /**
  * Full property detail view with tabbed sections: Info, Score, Enrichment,
- * Marketing, and Analysis.
+ * Marketing, Analysis, Contacts, and Tasks.
  */
 export const PropertyDetailPage: React.FC<PropertyDetailPageProps> = ({
   leadId,
@@ -622,7 +801,13 @@ export const PropertyDetailPage: React.FC<PropertyDetailPageProps> = ({
           )}
         </Box>
         <Typography variant="body2" color="text.secondary">
-          Owner: {lead.owner_first_name} {lead.owner_last_name}
+          {(() => {
+            const primary = lead.contacts?.find((c) => c.is_primary)
+            const name = primary
+              ? [primary.first_name, primary.last_name].filter(Boolean).join(' ')
+              : null
+            return name ? `Primary contact: ${name}` : 'No primary contact set'
+          })()}
           {lead.property_type ? ` · ${lead.property_type}` : ''}
         </Typography>
       </Box>
@@ -633,54 +818,151 @@ export const PropertyDetailPage: React.FC<PropertyDetailPageProps> = ({
         </Alert>
       )}
 
-      {/* Tabs */}
-      <Paper sx={{ px: { xs: 1, sm: 2 } }}>
-        <Tabs
-          value={tabIndex}
-          onChange={(_e, newValue) => setTabIndex(newValue)}
-          variant="scrollable"
-          scrollButtons="auto"
-          aria-label="Property detail tabs"
+      {/* Two-column layout: tabbed content + sticky right panel */}
+      <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
+
+        {/* Main tabbed content */}
+        <Paper sx={{ flex: 1, minWidth: 0, px: { xs: 1, sm: 2 } }}>
+          <Tabs
+            value={tabIndex}
+            onChange={(_e, newValue) => setTabIndex(newValue)}
+            variant="scrollable"
+            scrollButtons="auto"
+            aria-label="Property detail tabs"
+          >
+            <Tab label="Activity" {...a11yTabProps(0)} />
+            <Tab label="Info" {...a11yTabProps(1)} />
+            <Tab label="Score" {...a11yTabProps(2)} />
+            <Tab label="Enrichment" {...a11yTabProps(3)} />
+            <Tab label="Marketing" {...a11yTabProps(4)} />
+            <Tab label="Analysis" {...a11yTabProps(5)} />
+            <Tab label="Contacts" {...a11yTabProps(6)} />
+          </Tabs>
+          <Divider />
+
+          <TabPanel value={tabIndex} index={0}>
+            <ActivityTab leadId={lead.id} />
+          </TabPanel>
+
+          <TabPanel value={tabIndex} index={1}>
+            <InfoTab lead={lead} />
+          </TabPanel>
+
+          <TabPanel value={tabIndex} index={2}>
+            <ScoreTab leadId={lead.id} />
+          </TabPanel>
+
+          <TabPanel value={tabIndex} index={3}>
+            <EnrichmentTab records={lead.enrichment_records || []} />
+          </TabPanel>
+
+          <TabPanel value={tabIndex} index={4}>
+            <MarketingTab memberships={lead.marketing_lists || []} />
+          </TabPanel>
+
+          <TabPanel value={tabIndex} index={5}>
+            <AnalysisTab
+              lead={lead}
+              onStartSingleFamily={handleStartSingleFamily}
+              onStartMultifamily={() => multifamilyMutation.mutate()}
+              analysisLoading={analysisLoading}
+              multifamilyLoading={multifamilyMutation.isPending}
+            />
+          </TabPanel>
+
+          <TabPanel value={tabIndex} index={6}>
+            <ContactsSection propertyId={lead.id} />
+          </TabPanel>
+        </Paper>
+
+        {/* Sticky right panel — tasks + compact property info */}
+        <Paper
+          variant="outlined"
+          sx={{
+            width: 300,
+            flexShrink: 0,
+            p: 2,
+            position: 'sticky',
+            top: 80,
+            maxHeight: 'calc(100vh - 100px)',
+            overflowY: 'auto',
+            display: { xs: 'none', md: 'block' },
+          }}
         >
-          <Tab label="Info" {...a11yTabProps(0)} />
-          <Tab label="Score" {...a11yTabProps(1)} />
-          <Tab label="Enrichment" {...a11yTabProps(2)} />
-          <Tab label="Marketing" {...a11yTabProps(3)} />
-          <Tab label="Analysis" {...a11yTabProps(4)} />
-          <Tab label="Contacts" {...a11yTabProps(5)} />
-        </Tabs>
-        <Divider />
+          {/* Tasks */}
+          <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
+            Tasks
+          </Typography>
+          <Divider sx={{ mb: 1 }} />
+          <TasksTab leadId={lead.id} />
 
-        <TabPanel value={tabIndex} index={0}>
-          <InfoTab lead={lead} />
-        </TabPanel>
+          {/* Property info summary */}
+          <Divider sx={{ my: 2 }} />
+          <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
+            Property
+          </Typography>
+          {[
+            [lead.property_city && lead.property_state ? `${lead.property_city}, ${lead.property_state} ${lead.property_zip ?? ''}`.trim() : null, 'location'],
+            [lead.property_type, 'type'],
+            [(lead.bedrooms != null || lead.bathrooms != null) ? `${lead.bedrooms ?? '?'} bd · ${lead.bathrooms ?? '?'} ba` : null, 'beds/baths'],
+            [lead.square_footage ? `${lead.square_footage.toLocaleString()} sqft` : null, 'sqft'],
+            [lead.year_built ? `Built ${lead.year_built}` : null, 'year'],
+            [lead.units ? `${lead.units} unit${lead.units !== 1 ? 's' : ''}` : null, 'units'],
+            [lead.county_assessor_pin, 'PIN'],
+            [lead.zoning, 'zoning'],
+          ].filter(([v]) => v).map(([value, key]) => (
+            <Typography key={key as string} variant="caption" display="block" color="text.secondary" sx={{ mb: 0.25 }}>
+              {value}
+            </Typography>
+          ))}
 
-        <TabPanel value={tabIndex} index={1}>
-          <ScoreTab leadId={lead.id} />
-        </TabPanel>
+          {/* Contacts summary */}
+          {lead.contacts && lead.contacts.length > 0 && (
+            <>
+              <Divider sx={{ my: 2 }} />
+              <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
+                Contacts
+              </Typography>
+              {lead.contacts.map((c) => {
+                const name = [c.first_name, c.last_name].filter(Boolean).join(' ') || '(No name)'
+                const phone = c.phones[0]?.value ?? null
+                const email = c.emails[0]?.value ?? null
+                return (
+                  <Box key={c.id} sx={{ mb: 1 }}>
+                    <Typography variant="body2" fontWeight={c.is_primary ? 'bold' : 'normal'}>
+                      {name}{c.is_primary && <Typography component="span" variant="caption" color="primary.main" sx={{ ml: 0.5 }}>Primary</Typography>}
+                    </Typography>
+                    {phone && (
+                      <Typography variant="caption" display="block" color="text.secondary">
+                        <a href={`tel:${phone}`} style={{ textDecoration: 'none', color: 'inherit' }}>📞 {phone}</a>
+                      </Typography>
+                    )}
+                    {email && (
+                      <Typography variant="caption" display="block" color="text.secondary">
+                        <a href={`mailto:${email}`} style={{ textDecoration: 'none', color: 'inherit' }}>✉️ {email}</a>
+                      </Typography>
+                    )}
+                  </Box>
+                )
+              })}
+            </>
+          )}
 
-        <TabPanel value={tabIndex} index={2}>
-          <EnrichmentTab records={lead.enrichment_records || []} />
-        </TabPanel>
+          {/* Key tracking */}
+          {(lead.source || lead.date_identified || lead.notes) && (
+            <>
+              <Divider sx={{ my: 2 }} />
+              <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
+                Tracking
+              </Typography>
+              {lead.source && <Typography variant="caption" display="block" color="text.secondary" sx={{ mb: 0.25 }}>Source: {lead.source}</Typography>}
+              {lead.date_identified && <Typography variant="caption" display="block" color="text.secondary" sx={{ mb: 0.25 }}>Identified: {formatDate(lead.date_identified)}</Typography>}
+              {lead.notes && <Typography variant="caption" display="block" sx={{ mt: 0.5, fontStyle: 'italic' }}>{lead.notes}</Typography>}
+            </>
+          )}
+        </Paper>
 
-        <TabPanel value={tabIndex} index={3}>
-          <MarketingTab memberships={lead.marketing_lists || []} />
-        </TabPanel>
-
-        <TabPanel value={tabIndex} index={4}>
-          <AnalysisTab
-            lead={lead}
-            onStartSingleFamily={handleStartSingleFamily}
-            onStartMultifamily={() => multifamilyMutation.mutate()}
-            analysisLoading={analysisLoading}
-            multifamilyLoading={multifamilyMutation.isPending}
-          />
-        </TabPanel>
-
-        <TabPanel value={tabIndex} index={5}>
-          <ContactsSection propertyId={lead.id} />
-        </TabPanel>
-      </Paper>
+      </Box>
     </Box>
   )
 }

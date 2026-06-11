@@ -374,25 +374,24 @@ def run_hubspot_matching(run_id: int = None) -> None:
 
         matcher = HubSpotMatcherService()
 
-        # Collect hubspot_ids that already have a CONFIRMED or PENDING (non-UNMATCHED) match record.
-        # UNMATCHED records are re-evaluated on each run so that deals that previously
-        # had no address data can be matched after a re-import with proper properties.
+        # Collect hubspot_ids that already have a CONFIRMED match record.
+        # UNMATCHED and PENDING records are re-evaluated on each run:
+        # - UNMATCHED: may now have address data after a re-import
+        # - PENDING: single-match address deals are now auto-confirmed, so
+        #   re-running match_deal will upgrade them to confirmed
         matched_deals = {
             m.hubspot_id
-            for m in HubSpotMatch.query.filter_by(hubspot_record_type='deal')
-            .filter(HubSpotMatch.confidence != 'UNMATCHED')
+            for m in HubSpotMatch.query.filter_by(hubspot_record_type='deal', status='confirmed')
             .all()
         }
         matched_contacts = {
             m.hubspot_id
-            for m in HubSpotMatch.query.filter_by(hubspot_record_type='contact')
-            .filter(HubSpotMatch.confidence != 'UNMATCHED')
+            for m in HubSpotMatch.query.filter_by(hubspot_record_type='contact', status='confirmed')
             .all()
         }
         matched_companies = {
             m.hubspot_id
-            for m in HubSpotMatch.query.filter_by(hubspot_record_type='company')
-            .filter(HubSpotMatch.confidence != 'UNMATCHED')
+            for m in HubSpotMatch.query.filter_by(hubspot_record_type='company', status='confirmed')
             .all()
         }
 
@@ -583,7 +582,9 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         # --- Also match contacts via deal associations ----------------------
         # For each confirmed deal match, check if the HubSpot deal has
         # associated contact IDs in its raw payload and try to enrich the
-        # lead from those contacts.
+        # lead from those contacts.  Also updates the HubSpotMatch record for
+        # each associated contact so its internal_record_id points to the
+        # property instead of being NULL.
         for match in confirmed_deal_matches:
             try:
                 lead = Lead.query.get(match.internal_record_id)
@@ -616,10 +617,88 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                             "run_enrich_leads_from_hubspot: lead_id=%d associated contact %s enriched fields=%s",
                             lead.id, cid, enriched,
                         )
+                    # Update the HubSpotMatch for this contact so its
+                    # internal_record_id points to the property.  This fixes
+                    # the case where match_contact() ran before the deal was
+                    # matched and left internal_record_id = NULL.
+                    contact_match = HubSpotMatch.query.filter_by(
+                        hubspot_record_type='contact',
+                        hubspot_id=cid,
+                    ).first()
+                    if contact_match and contact_match.internal_record_id is None:
+                        contact_match.internal_record_type = 'lead'
+                        contact_match.internal_record_id = lead.id
+                        contact_match.status = 'confirmed'
+                        db.session.commit()
+                        logger.debug(
+                            "run_enrich_leads_from_hubspot: updated contact match %s -> lead_id=%d",
+                            cid, lead.id,
+                        )
             except Exception as exc:
                 logger.warning(
                     "run_enrich_leads_from_hubspot: deal assoc enrich lead_id=%s error: %s",
                     match.internal_record_id, exc,
+                )
+                db.session.rollback()
+
+        # --- Also resolve contacts whose match has internal_record_id=NULL --
+        # When contacts were imported before their associated deals were
+        # matched, their HubSpotMatch ends up with internal_record_id=NULL.
+        # Now that deals are confirmed, use each contact's deal associations
+        # (fetched during import via associations=deals) to find the property.
+        unresolved_contact_matches = (
+            HubSpotMatch.query
+            .filter_by(hubspot_record_type='contact', status='confirmed')
+            .filter(HubSpotMatch.internal_record_id.is_(None))
+            .all()
+        )
+        for contact_match in unresolved_contact_matches:
+            try:
+                hs_contact = HubSpotContact.query.filter_by(
+                    hubspot_id=contact_match.hubspot_id
+                ).first()
+                if hs_contact is None:
+                    continue
+                # Look for deal associations in the contact's raw payload
+                assoc = (hs_contact.raw_payload or {}).get("associations", {})
+                deal_results = (
+                    assoc.get("deals", {}).get("results", [])
+                    if isinstance(assoc.get("deals"), dict)
+                    else []
+                )
+                for deal_entry in deal_results:
+                    did = str(deal_entry.get("id", ""))
+                    if not did:
+                        continue
+                    # Find the confirmed deal match for this deal ID
+                    deal_match = HubSpotMatch.query.filter_by(
+                        hubspot_record_type='deal',
+                        hubspot_id=did,
+                        status='confirmed',
+                    ).filter(HubSpotMatch.internal_record_id.isnot(None)).first()
+                    if deal_match is None:
+                        continue
+                    lead = Lead.query.get(deal_match.internal_record_id)
+                    if lead is None:
+                        continue
+                    # Enrich the lead and link the contact
+                    enriched = matcher.enrich_lead_from_contact(lead, hs_contact)
+                    if enriched:
+                        db.session.commit()
+                        contact_enriched += 1
+                    # Update the contact's match record
+                    contact_match.internal_record_type = 'lead'
+                    contact_match.internal_record_id = lead.id
+                    db.session.commit()
+                    logger.debug(
+                        "run_enrich_leads_from_hubspot: resolved unlinked contact %s -> lead_id=%d via deal %s",
+                        contact_match.hubspot_id, lead.id, did,
+                    )
+                    break  # one deal association is enough to anchor the contact
+            except Exception as exc:
+                logger.warning(
+                    "run_enrich_leads_from_hubspot: unresolved contact %s error: %s",
+                    contact_match.hubspot_id, exc,
                 )
                 db.session.rollback()
 

@@ -415,10 +415,28 @@ export interface PropertySummary {
 /** @deprecated Use `PropertySummary` instead */
 export type LeadSummary = PropertySummary
 
+/** Minimal contact summary embedded inside PropertyDetail.
+ *  Comes from the relational contacts system (property_contacts join table).
+ *  This is the authoritative source — the legacy owner_first_name / owner_last_name
+ *  flat columns on the property record are from the original import and are not
+ *  updated by HubSpot enrichment. */
+export interface PropertyContactSummary {
+  id: number
+  first_name: string | null
+  last_name: string | null
+  role: ContactRole
+  is_primary: boolean
+  phones: Array<{ id: number; value: string; label: string }>
+  emails: Array<{ id: number; value: string; label: string }>
+}
+
 export interface PropertyDetail extends Property {
   enrichment_records: EnrichmentRecord[]
   marketing_lists: PropertyMarketingListMembership[]
   analysis_session: PropertyAnalysisSession | null
+  /** All contacts linked to this property, primary contact first.
+   *  Prefer these over the legacy owner_first_name / owner_last_name fields. */
+  contacts: PropertyContactSummary[]
 }
 
 /** @deprecated Use `PropertyDetail` instead */

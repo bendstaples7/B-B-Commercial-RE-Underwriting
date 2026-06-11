@@ -119,60 +119,102 @@ def search():
     pattern = f'%{q_trimmed}%'
     prefix_pattern = f'{q_trimmed}%'
 
-    # --- Leads query: ILIKE on name/address fields with ownership scoping ---
+    # --- Leads query ---
+    # Joins to property_contacts + contacts so that:
+    #   1. Searching by a contact's name (e.g. "Luke") returns the property.
+    #   2. The result label shows the primary contact name when one exists,
+    #      falling back to the legacy flat owner columns.
     # ILIKE is PostgreSQL-specific; SQLite tests use LIKE via LOWER() fallback.
     _leads_sql_ilike = text("""
         SELECT
-            id,
-            owner_first_name,
-            owner_last_name,
-            property_street,
-            lead_score,
-            owner_user_id
-        FROM leads
+            l.id,
+            l.owner_first_name,
+            l.owner_last_name,
+            l.property_street,
+            l.lead_score,
+            l.owner_user_id,
+            primary_c.first_name  AS primary_contact_first_name,
+            primary_c.last_name   AS primary_contact_last_name
+        FROM leads l
+        LEFT JOIN property_contacts pc_primary
+            ON pc_primary.property_id = l.id
+            AND pc_primary.is_primary = TRUE
+        LEFT JOIN contacts primary_c
+            ON primary_c.id = pc_primary.contact_id
+        LEFT JOIN property_contacts pc_any
+            ON pc_any.property_id = l.id
+        LEFT JOIN contacts any_c
+            ON any_c.id = pc_any.contact_id
         WHERE
-            (owner_user_id = :user_id OR :is_admin = TRUE)
-            AND (owner_user_id IS NOT NULL OR :is_admin = TRUE)
+            (l.owner_user_id = :user_id OR :is_admin = TRUE)
+            AND (l.owner_user_id IS NOT NULL OR :is_admin = TRUE)
             AND (
-                owner_first_name ILIKE :pattern
-                OR owner_last_name  ILIKE :pattern
-                OR property_street  ILIKE :pattern
+                l.owner_first_name ILIKE :pattern
+                OR l.owner_last_name  ILIKE :pattern
+                OR l.property_street  ILIKE :pattern
+                OR any_c.first_name   ILIKE :pattern
+                OR any_c.last_name    ILIKE :pattern
             )
+        GROUP BY
+            l.id, l.owner_first_name, l.owner_last_name,
+            l.property_street, l.lead_score, l.owner_user_id,
+            primary_c.first_name, primary_c.last_name
         ORDER BY
             CASE
-                WHEN owner_first_name ILIKE :prefix_pattern THEN 0
-                WHEN owner_last_name  ILIKE :prefix_pattern THEN 0
-                WHEN property_street  ILIKE :prefix_pattern THEN 0
+                WHEN l.owner_first_name ILIKE :prefix_pattern THEN 0
+                WHEN l.owner_last_name  ILIKE :prefix_pattern THEN 0
+                WHEN l.property_street  ILIKE :prefix_pattern THEN 0
+                WHEN primary_c.first_name ILIKE :prefix_pattern THEN 0
+                WHEN primary_c.last_name  ILIKE :prefix_pattern THEN 0
                 ELSE 1
             END,
-            COALESCE(owner_last_name, property_street)
+            COALESCE(primary_c.last_name, l.owner_last_name, l.property_street)
         LIMIT 10
     """)
     _leads_sql_like = text("""
         SELECT
-            id,
-            owner_first_name,
-            owner_last_name,
-            property_street,
-            lead_score,
-            owner_user_id
-        FROM leads
+            l.id,
+            l.owner_first_name,
+            l.owner_last_name,
+            l.property_street,
+            l.lead_score,
+            l.owner_user_id,
+            primary_c.first_name  AS primary_contact_first_name,
+            primary_c.last_name   AS primary_contact_last_name
+        FROM leads l
+        LEFT JOIN property_contacts pc_primary
+            ON pc_primary.property_id = l.id
+            AND pc_primary.is_primary = 1
+        LEFT JOIN contacts primary_c
+            ON primary_c.id = pc_primary.contact_id
+        LEFT JOIN property_contacts pc_any
+            ON pc_any.property_id = l.id
+        LEFT JOIN contacts any_c
+            ON any_c.id = pc_any.contact_id
         WHERE
-            (owner_user_id = :user_id OR :is_admin = 1)
-            AND (owner_user_id IS NOT NULL OR :is_admin = 1)
+            (l.owner_user_id = :user_id OR :is_admin = 1)
+            AND (l.owner_user_id IS NOT NULL OR :is_admin = 1)
             AND (
-                LOWER(owner_first_name) LIKE LOWER(:pattern)
-                OR LOWER(owner_last_name)  LIKE LOWER(:pattern)
-                OR LOWER(property_street)  LIKE LOWER(:pattern)
+                LOWER(l.owner_first_name) LIKE LOWER(:pattern)
+                OR LOWER(l.owner_last_name)  LIKE LOWER(:pattern)
+                OR LOWER(l.property_street)  LIKE LOWER(:pattern)
+                OR LOWER(any_c.first_name)   LIKE LOWER(:pattern)
+                OR LOWER(any_c.last_name)    LIKE LOWER(:pattern)
             )
+        GROUP BY
+            l.id, l.owner_first_name, l.owner_last_name,
+            l.property_street, l.lead_score, l.owner_user_id,
+            primary_c.first_name, primary_c.last_name
         ORDER BY
             CASE
-                WHEN LOWER(owner_first_name) LIKE LOWER(:prefix_pattern) THEN 0
-                WHEN LOWER(owner_last_name)  LIKE LOWER(:prefix_pattern) THEN 0
-                WHEN LOWER(property_street)  LIKE LOWER(:prefix_pattern) THEN 0
+                WHEN LOWER(l.owner_first_name) LIKE LOWER(:prefix_pattern) THEN 0
+                WHEN LOWER(l.owner_last_name)  LIKE LOWER(:prefix_pattern) THEN 0
+                WHEN LOWER(l.property_street)  LIKE LOWER(:prefix_pattern) THEN 0
+                WHEN LOWER(COALESCE(primary_c.first_name, '')) LIKE LOWER(:prefix_pattern) THEN 0
+                WHEN LOWER(COALESCE(primary_c.last_name, ''))  LIKE LOWER(:prefix_pattern) THEN 0
                 ELSE 1
             END,
-            COALESCE(owner_last_name, property_street)
+            COALESCE(primary_c.last_name, l.owner_last_name, l.property_street)
         LIMIT 10
     """)
     _params = {
@@ -258,16 +300,32 @@ def search():
     # --- Serialize leads ---
     leads = []
     for row in leads_results:
-        first = (row.owner_first_name or '').strip()
-        last = (row.owner_last_name or '').strip()
+        # Prefer primary contact name over legacy flat owner columns
+        primary_first = (row.primary_contact_first_name or '').strip()
+        primary_last = (row.primary_contact_last_name or '').strip()
+        legacy_first = (row.owner_first_name or '').strip()
+        legacy_last = (row.owner_last_name or '').strip()
         street = (row.property_street or '').strip()
 
+        first = primary_first or legacy_first
+        last = primary_last or legacy_last
+
         if first and last:
-            label = f"{first} {last}"
+            name = f"{first} {last}"
         elif first:
-            label = first
+            name = first
         elif last:
-            label = last
+            name = last
+        else:
+            name = ""
+
+        # Always include the address so searching by number shows the property
+        # clearly. Format: "Luke · 4263 W Montrose Ave Apt 1" or just the
+        # address when there's no contact name.
+        if name and street:
+            label = f"{name} · {street}"
+        elif name:
+            label = name
         elif street:
             label = street
         else:

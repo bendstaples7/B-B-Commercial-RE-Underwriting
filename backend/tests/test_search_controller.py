@@ -538,16 +538,28 @@ _LABEL_SEARCH_TERM = 'LabelPrecedenceTest'
 
 
 def _expected_label(first: str, last: str, street: str) -> str:
-    """Pure helper: compute the expected label from stripped name/street values."""
+    """Pure helper: compute the expected label from stripped name/street values.
+
+    Format: '{name} · {street}' when both present, '{street}' when no name,
+    '{name}' when no street, 'Unknown Lead' when neither.
+    """
     f = (first or '').strip()
     la = (last or '').strip()
     s = (street or '').strip()
+
     if f and la:
-        return f"{f} {la}"
-    if f:
-        return f
-    if la:
-        return la
+        name = f"{f} {la}"
+    elif f:
+        name = f
+    elif la:
+        name = la
+    else:
+        name = ""
+
+    if name and s:
+        return f"{name} · {s}"
+    if name:
+        return name
     if s:
         return s
     return 'Unknown Lead'
@@ -588,21 +600,24 @@ def _seed_and_query_label(client, app, first, last, street):
 
 
 def test_label_both_names(client, app):
-    """6.1 / 6.2: Both first and last name present → '{first} {last}'."""
+    """6.1 / 6.2: Both first and last name present → '{first} {last} · {street}'."""
     label = _seed_and_query_label(client, app, 'Alice', 'Smith', None)
-    assert label == 'Alice Smith', f"Expected 'Alice Smith', got {label!r}"
+    expected = f'Alice Smith · {_LABEL_SEARCH_TERM}'
+    assert label == expected, f"Expected {expected!r}, got {label!r}"
 
 
 def test_label_first_name_only(client, app):
-    """6.3: Only first name present → first name."""
+    """6.3: Only first name present → '{first} · {street}'."""
     label = _seed_and_query_label(client, app, 'Alice', None, None)
-    assert label == 'Alice', f"Expected 'Alice', got {label!r}"
+    expected = f'Alice · {_LABEL_SEARCH_TERM}'
+    assert label == expected, f"Expected {expected!r}, got {label!r}"
 
 
 def test_label_last_name_only(client, app):
-    """6.3: Only last name present → last name."""
+    """6.3: Only last name present → '{last} · {street}'."""
     label = _seed_and_query_label(client, app, None, 'Smith', None)
-    assert label == 'Smith', f"Expected 'Smith', got {label!r}"
+    expected = f'Smith · {_LABEL_SEARCH_TERM}'
+    assert label == expected, f"Expected {expected!r}, got {label!r}"
 
 
 def test_label_street_fallback(client, app):
@@ -663,9 +678,8 @@ nullable_street = st.one_of(
 def test_lead_label_precedence_pure_logic(first, last, street):
     """Property 10 (pure logic): label precedence holds for all nullable name/street combos.
 
-    This test exercises the _expected_label helper directly — which mirrors the
-    exact same logic as the controller — to verify the precedence rules across
-    500 generated combinations without any DB or HTTP overhead.
+    Format is 'Name · Street' when both present, just street when no name,
+    just name when no street, 'Unknown Lead' when neither.
 
     Validates: Requirements 6.1, 6.2, 6.3, 6.4, 6.5
     """
@@ -676,30 +690,27 @@ def test_lead_label_precedence_pure_logic(first, last, street):
     label = _expected_label(first, last, street)
 
     if first_s and last_s:
-        # Both parts present → full name
-        assert label == f"{first_s} {last_s}", (
-            f"Both names: expected '{first_s} {last_s}', got {label!r}"
-        )
+        name = f"{first_s} {last_s}"
     elif first_s:
-        # Only first name
-        assert label == first_s, (
-            f"First only: expected {first_s!r}, got {label!r}"
-        )
+        name = first_s
     elif last_s:
-        # Only last name
-        assert label == last_s, (
-            f"Last only: expected {last_s!r}, got {label!r}"
-        )
-    elif street_s:
-        # Neither name, street present
-        assert label == street_s, (
-            f"Street fallback: expected {street_s!r}, got {label!r}"
-        )
+        name = last_s
     else:
-        # All absent
-        assert label == 'Unknown Lead', (
-            f"All absent: expected 'Unknown Lead', got {label!r}"
-        )
+        name = ""
+
+    if name and street_s:
+        expected = f"{name} · {street_s}"
+    elif name:
+        expected = name
+    elif street_s:
+        expected = street_s
+    else:
+        expected = 'Unknown Lead'
+
+    assert label == expected, (
+        f"Expected {expected!r}, got {label!r} "
+        f"(first={first!r}, last={last!r}, street={street!r})"
+    )
 
 
 # ---------------------------------------------------------------------------

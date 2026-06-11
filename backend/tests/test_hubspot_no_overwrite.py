@@ -178,7 +178,12 @@ class TestProperty19NoOverwriteProtectedFields:
         self, app, street, score, source, conflicting_pin
     ) -> None:
         """After an address-matched (MEDIUM confidence) deal import, the Lead's
-        protected fields must remain unchanged because the match is still pending.
+        protected fields must remain unchanged regardless of match status.
+
+        When exactly one lead matches the address, the match is auto-confirmed
+        (no ambiguity → no human review needed). When multiple leads match, the
+        match stays pending for human review. In either case, protected fields
+        on the lead must not be overwritten.
 
         # Feature: hubspot-crm-migration, Property 19: No overwrite of protected fields without confirmation
         **Validates: Requirements 22.1, 22.2, 22.3**
@@ -212,9 +217,11 @@ class TestProperty19NoOverwriteProtectedFields:
             match = svc.match_deal(deal)
             db.session.flush()
 
-            # Match should be MEDIUM confidence and pending
+            # Match should be MEDIUM confidence.
+            # Status is auto-confirmed when there's exactly one address match
+            # (no ambiguity), or pending when multiple leads share the address.
             assert match.confidence == "MEDIUM"
-            assert match.status == "pending"
+            assert match.status in ("confirmed", "pending")
 
             # Protected fields must be unchanged
             refreshed_lead = Lead.query.get(lead_id)

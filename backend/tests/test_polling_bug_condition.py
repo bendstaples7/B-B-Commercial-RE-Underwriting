@@ -30,6 +30,15 @@ class _EmptyRelationship:
     def all(self):
         return []
 
+    def filter_by(self, **kwargs):
+        return self
+
+    def order_by(self, *args):
+        return self
+
+    def first(self):
+        return None
+
 
 class LeadStub:
     """Minimal stub that mimics the Lead ORM model for serializer testing."""
@@ -104,6 +113,7 @@ class LeadStub:
         # Lazy-loaded relationships — return empty queryable-like objects
         self.enrichment_records = _EmptyRelationship()
         self.marketing_list_members = _EmptyRelationship()
+        self.property_contacts = _EmptyRelationship()
 
 
 # ---------------------------------------------------------------------------

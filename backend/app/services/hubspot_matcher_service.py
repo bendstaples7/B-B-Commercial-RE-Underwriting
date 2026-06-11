@@ -69,8 +69,12 @@ class HubSpotMatcherService:
         Steps:
         1. Strip whitespace and convert to uppercase.
         2. Expand common abbreviations as whole-word replacements.
-        3. Remove punctuation characters: . , # - /
-        4. Collapse multiple spaces to a single space.
+        3. Strip unit/apartment suffixes (APT, UNIT, STE, #, FLOOR, FL, etc.)
+           so that '4263 W Montrose Ave Apt 1' matches '4263 W Montrose'.
+        4. Remove punctuation characters: . , # - /
+        5. Strip trailing city/state/zip — anything after a two-digit+ zip or
+           a bare state abbreviation preceded by a city name.
+        6. Collapse multiple spaces to a single space.
 
         Returns the normalised string, or an empty string if *address* is
         None / empty.
@@ -80,6 +84,19 @@ class HubSpotMatcherService:
         result = address.strip().upper()
         for pattern, expansion in _ABBREV_PATTERNS:
             result = pattern.sub(expansion, result)
+
+        # Strip unit/apt suffixes before punctuation removal so that
+        # 'APT 1', 'UNIT 2B', 'STE 300', '# 4', 'FL 2', 'FLOOR 2' etc.
+        # don't prevent an otherwise-correct address from matching.
+        result = re.sub(
+            r'\b(APT|APARTMENT|UNIT|STE|SUITE|FL|FLOOR|RM|ROOM|BLDG|BUILDING)\b[\s#]*[\w-]*',
+            '',
+            result,
+        )
+        # Also strip trailing bare number that follows the street name
+        # (e.g. '4263 W MONTROSE AVENUE 1' → '4263 W MONTROSE AVENUE')
+        result = re.sub(r'\s+\d+\s*$', '', result)
+
         result = _PUNCT_RE.sub("", result)
         result = re.sub(r'\s+', ' ', result).strip()
         return result
@@ -328,6 +345,59 @@ class HubSpotMatcherService:
         if updated_fields:
             db.session.add(lead)
 
+        # --- Ensure a relational Contact + PropertyContact row exists ---------
+        hs_first = (props.get("firstname") or "").strip() or None
+        hs_last  = (props.get("lastname") or "").strip() or None
+        if hs_first or hs_last:
+            # Check if ANY contact with this name is already linked to this property.
+            # This prevents duplicates when multiple HubSpot contact records for the
+            # same person (e.g. two "Luke" records) enrich the same lead.
+            already_linked = db.session.query(PropertyContact).join(Contact).filter(
+                PropertyContact.property_id == lead.id,
+                db.func.lower(Contact.first_name) == (hs_first or "").lower(),
+                db.func.lower(db.func.coalesce(Contact.last_name, "")) == (hs_last or "").lower(),
+            ).first()
+
+            if already_linked is None:
+                # Find or create the Contact record
+                existing_contact = None
+                if hs_first and hs_last:
+                    existing_contact = Contact.query.filter(
+                        db.func.lower(Contact.first_name) == hs_first.lower(),
+                        db.func.lower(Contact.last_name)  == hs_last.lower(),
+                    ).first()
+
+                if existing_contact is None:
+                    existing_contact = Contact(
+                        first_name=hs_first,
+                        last_name=hs_last,
+                        role="owner",
+                    )
+                    db.session.add(existing_contact)
+                    db.session.flush()
+                    logger.debug(
+                        "enrich_lead_from_contact: created Contact id=%d for '%s %s'",
+                        existing_contact.id, hs_first, hs_last,
+                    )
+
+                has_primary = PropertyContact.query.filter_by(
+                    property_id=lead.id, is_primary=True
+                ).first() is not None
+
+                new_pc = PropertyContact(
+                    property_id=lead.id,
+                    contact_id=existing_contact.id,
+                    role="owner",
+                    is_primary=not has_primary,
+                )
+                db.session.add(new_pc)
+                db.session.flush()
+                updated_fields.append("property_contact_linked")
+                logger.debug(
+                    "enrich_lead_from_contact: linked Contact id=%d to lead id=%d (is_primary=%s)",
+                    existing_contact.id, lead.id, new_pc.is_primary,
+                )
+
         logger.debug(
             "enrich_lead_from_contact: lead_id=%s enriched fields=%s",
             lead.id, updated_fields,
@@ -408,31 +478,45 @@ class HubSpotMatcherService:
             leads_with_address = Lead.query.filter(
                 Lead.property_street.isnot(None)
             ).all()
+            address_matches = []
             for lead in leads_with_address:
-                if (
-                    lead.property_street
-                    and HubSpotMatcherService.normalize_address(lead.property_street)
-                    == norm_address
-                ):
-                    logger.debug(
-                        "Deal %s matched Lead %s via address '%s'",
-                        deal.hubspot_id, lead.id, norm_address,
-                    )
-                    match = self._upsert_match(
-                        hubspot_record_type="deal",
-                        hubspot_id=deal.hubspot_id,
-                        internal_record_type="lead",
-                        internal_record_id=lead.id,
-                        confidence="MEDIUM",
-                        matching_criteria="address_match",
-                        status="pending",
-                    )
-                    # Enrich even on MEDIUM confidence — the stage signal is
-                    # always useful regardless of match confidence level.
-                    enriched = self.enrich_lead_from_deal(lead, deal, stage_label_map)
-                    if enriched:
-                        logger.debug("Deal %s enriched Lead %s fields: %s", deal.hubspot_id, lead.id, enriched)
-                    return match
+                if not lead.property_street:
+                    continue
+                norm_lead = HubSpotMatcherService.normalize_address(lead.property_street)
+                # Exact match, or one is a prefix of the other (handles cases
+                # where the HubSpot deal omits the street type, e.g.
+                # '4263 W Montrose' matching '4263 W Montrose Ave Apt 1').
+                if norm_lead == norm_address or \
+                   norm_lead.startswith(norm_address + " ") or \
+                   norm_address.startswith(norm_lead + " "):
+                    address_matches.append(lead)
+
+            if address_matches:
+                # If exactly one lead matches the address, auto-confirm — no
+                # ambiguity means human review adds no value.
+                # If multiple leads match (e.g. same street, different units),
+                # keep pending so the user can pick the right one.
+                auto_confirm = len(address_matches) == 1
+                lead = address_matches[0]
+                logger.debug(
+                    "Deal %s matched Lead %s via address '%s' (auto_confirm=%s)",
+                    deal.hubspot_id, lead.id, norm_address, auto_confirm,
+                )
+                match = self._upsert_match(
+                    hubspot_record_type="deal",
+                    hubspot_id=deal.hubspot_id,
+                    internal_record_type="lead",
+                    internal_record_id=lead.id,
+                    confidence="MEDIUM",
+                    matching_criteria="address_match",
+                    status="confirmed" if auto_confirm else "pending",
+                )
+                # Enrich even on MEDIUM confidence — the stage signal is
+                # always useful regardless of match confidence level.
+                enriched = self.enrich_lead_from_deal(lead, deal, stage_label_map)
+                if enriched:
+                    logger.debug("Deal %s enriched Lead %s fields: %s", deal.hubspot_id, lead.id, enriched)
+                return match
 
         # --- 3. No match — record as UNMATCHED with no internal record ----------
         # If the deal has an address, create a placeholder Lead so the address
