@@ -533,32 +533,17 @@ const AnalysisTab: React.FC<{
 // Activity tab — timeline + log note/call, mirrors HubSpot center panel
 // ---------------------------------------------------------------------------
 
-const ActivityTab: React.FC<{ leadId: number }> = ({ leadId }) => {
+const ActivityTab: React.FC<{ leadId: number; ccData: any }> = ({ leadId, ccData }) => {
   const [entries, setEntries] = useState<LeadTimelineEntry[]>([])
   const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const [fetchError, setFetchError] = useState<string | null>(null)
 
+  // Populate from the shared command-center data when it arrives
   useEffect(() => {
-    let cancelled = false
-    const load = async () => {
-      setLoading(true)
-      setFetchError(null)
-      try {
-        const data = await commandCenterService.getCommandCenter(leadId)
-        if (!cancelled) {
-          setEntries(data.timeline?.entries || [])
-          setTotal(data.timeline?.total || 0)
-        }
-      } catch (err: any) {
-        if (!cancelled) setFetchError(err.message || 'Failed to load activity.')
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
+    if (ccData) {
+      setEntries(ccData.timeline?.entries || [])
+      setTotal(ccData.timeline?.total || 0)
     }
-    load()
-    return () => { cancelled = true }
-  }, [leadId])
+  }, [ccData])
 
   const handleEntrySaved = (entry: LeadTimelineEntry) => {
     setEntries((prev) => [entry, ...prev])
@@ -570,16 +555,12 @@ const ActivityTab: React.FC<{ leadId: number }> = ({ leadId }) => {
     return { entries: result.entries, total: result.total }
   }
 
-  if (loading) {
+  if (!ccData) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
         <CircularProgress size={32} aria-label="Loading activity" />
       </Box>
     )
-  }
-
-  if (fetchError) {
-    return <Alert severity="error">{fetchError}</Alert>
   }
 
   return (
@@ -608,31 +589,22 @@ const ActivityTab: React.FC<{ leadId: number }> = ({ leadId }) => {
 // Tasks panel — always-visible right sidebar
 // ---------------------------------------------------------------------------
 
-const TasksTab: React.FC<{ leadId: number }> = ({ leadId }) => {
+const TasksTab: React.FC<{ leadId: number; ccData: any }> = ({ leadId, ccData }) => {
   const queryClient = useQueryClient()
   const [tasks, setTasks] = useState<LeadTask[]>([])
-  const [loading, setLoading] = useState(true)
-  const [fetchError, setFetchError] = useState<string | null>(null)
+  // Use a ref to always access the latest tasks snapshot in the async handler,
+  // preventing stale closure race conditions when multiple tasks complete rapidly.
+  const tasksRef = React.useRef<LeadTask[]>([])
 
   useEffect(() => {
-    let cancelled = false
-    const load = async () => {
-      setLoading(true)
-      setFetchError(null)
-      try {
-        const data = await commandCenterService.getCommandCenter(leadId)
-        if (!cancelled) setTasks(data.open_tasks || [])
-      } catch (err: any) {
-        if (!cancelled) setFetchError(err.message || 'Failed to load tasks.')
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
+    if (ccData) {
+      const initial = ccData.open_tasks || []
+      setTasks(initial)
+      tasksRef.current = initial
     }
-    load()
-    return () => { cancelled = true }
-  }, [leadId])
+  }, [ccData])
 
-  if (loading) {
+  if (!ccData) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
         <CircularProgress size={32} aria-label="Loading tasks" />
@@ -640,25 +612,28 @@ const TasksTab: React.FC<{ leadId: number }> = ({ leadId }) => {
     )
   }
 
-  if (fetchError) {
-    return <Alert severity="error">{fetchError}</Alert>
-  }
-
   return (
     <LeadTaskList
       leadId={leadId}
       tasks={tasks}
       recommendedAction={null}
-      onTaskCreated={(task) => setTasks((prev) => [...prev, task])}
+      onTaskCreated={(task) => {
+        const updated = [...tasksRef.current, task]
+        tasksRef.current = updated
+        setTasks(updated)
+      }}
       onTaskCompleted={async (taskId) => {
         if (typeof taskId !== 'number') return
-        const previous = tasks
-        setTasks((prev) => prev.filter((t) => t.id !== taskId))
+        const previous = tasksRef.current
+        const updated = previous.filter((t) => t.id !== taskId)
+        tasksRef.current = updated
+        setTasks(updated)
         try {
           await leadTaskService.completeTask(leadId, taskId)
           queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
         } catch (err) {
-          // Restore previous state so the task list stays in sync
+          // Restore the snapshot that was current when this call started
+          tasksRef.current = previous
           setTasks(previous)
           console.error('[PropertyDetailPage] completeTask failed:', err)
         }
@@ -686,6 +661,15 @@ export const PropertyDetailPage: React.FC<PropertyDetailPageProps> = ({
   const [error, setError] = useState<string | null>(null)
   const [tabIndex, setTabIndex] = useState(0)
   const [analysisLoading, setAnalysisLoading] = useState(false)
+
+  // Shared command-center data — used by both ActivityTab and TasksTab to
+  // avoid two separate fetches on the same endpoint when the page mounts.
+  const { data: ccData } = useQuery({
+    queryKey: ['commandCenter', leadId],
+    queryFn: () => commandCenterService.getCommandCenter(leadId),
+    staleTime: 0,
+    refetchOnMount: 'always',
+  })
 
   const { data: scoreData } = useQuery<PropertyScoreResponse>({
     queryKey: ['leadScore', leadId],
@@ -845,7 +829,7 @@ export const PropertyDetailPage: React.FC<PropertyDetailPageProps> = ({
           <Divider />
 
           <TabPanel value={tabIndex} index={0}>
-            <ActivityTab leadId={lead.id} />
+            <ActivityTab leadId={lead.id} ccData={ccData} />
           </TabPanel>
 
           <TabPanel value={tabIndex} index={1}>
@@ -898,7 +882,7 @@ export const PropertyDetailPage: React.FC<PropertyDetailPageProps> = ({
             Tasks
           </Typography>
           <Divider sx={{ mb: 1 }} />
-          <TasksTab leadId={lead.id} />
+          <TasksTab leadId={lead.id} ccData={ccData} />
 
           {/* Property info summary */}
           <Divider sx={{ my: 2 }} />

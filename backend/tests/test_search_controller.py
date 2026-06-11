@@ -45,7 +45,13 @@ def test_search_rejects_short_query(client, q):
 @given(q=st.text(min_size=201))
 @settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_search_rejects_long_query(client, q):
-    """For any q with length > 200, GET /api/search returns 400."""
+    """For any q whose stripped length > 200, GET /api/search returns 400.
+
+    The controller strips whitespace before checking length, so we only test
+    strings whose stripped form is also > 200 characters.
+    """
+    from hypothesis import assume
+    assume(len(q.strip()) > 200)
     encoded_q = urllib.parse.quote(q, safe='')
     response = client.get(f'/api/search?q={encoded_q}', headers=_AUTH_HEADERS)
     assert response.status_code == 400
@@ -659,7 +665,7 @@ def test_label_no_hybrid_when_primary_first_only(client, app):
         response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
         assert response.status_code == 200
         data = response.get_json()
-        matching = [l for l in data['leads'] if l.get('nav_path') == f'/properties/{lead_id}']
+        matching = [result for result in data['leads'] if result.get('nav_path') == f'/properties/{lead_id}']
         assert len(matching) >= 1, f"Lead {lead_id} not found in results"
         label = matching[0]['label']
         # Must use only the primary source — 'Luke' only, not 'Luke Carlson'
@@ -670,7 +676,12 @@ def test_label_no_hybrid_when_primary_first_only(client, app):
     finally:
         with app.app_context():
             from app.models.lead import Lead as _Lead2
+            from app.models.contact import Contact as _Contact2
+            from app.models.property_contact import PropertyContact as _PC2
             from app import db as _db2
+            # Delete PropertyContact and Contact rows created by this test first
+            _PC2.query.filter_by(property_id=lead_id).delete()
+            _Contact2.query.filter_by(first_name='Luke', last_name=None).delete()
             _Lead2.query.filter_by(id=lead_id).delete()
             _db2.session.commit()
 

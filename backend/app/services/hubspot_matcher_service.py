@@ -357,33 +357,20 @@ class HubSpotMatcherService:
             ).first()
 
             if already_linked is None:
-                # Find or create the Contact record, scoped to this property.
-                # A global name match would collapse unrelated "John Smith"
-                # contacts from different properties into one record, mixing
-                # their phone/email data. Only reuse a Contact that is already
-                # linked to THIS property to avoid cross-property contamination.
-                existing_contact = None
-                if hs_first and hs_last:
-                    existing_pc = PropertyContact.query.join(Contact).filter(
-                        PropertyContact.property_id == lead.id,
-                        db.func.lower(Contact.first_name) == hs_first.lower(),
-                        db.func.lower(Contact.last_name)  == hs_last.lower(),
-                    ).first()
-                    if existing_pc:
-                        existing_contact = existing_pc.contact
-
-                if existing_contact is None:
-                    existing_contact = Contact(
-                        first_name=hs_first,
-                        last_name=hs_last,
-                        role="owner",
-                    )
-                    db.session.add(existing_contact)
-                    db.session.flush()
-                    logger.debug(
-                        "enrich_lead_from_contact: created Contact id=%d for '%s %s'",
-                        existing_contact.id, hs_first, hs_last,
-                    )
+                # No contact with this name is linked to the property yet.
+                # always create a new Contact — we don't reuse contacts from
+                # other properties to avoid cross-property data contamination.
+                existing_contact = Contact(
+                    first_name=hs_first,
+                    last_name=hs_last,
+                    role="owner",
+                )
+                db.session.add(existing_contact)
+                db.session.flush()
+                logger.debug(
+                    "enrich_lead_from_contact: created Contact id=%d for '%s %s'",
+                    existing_contact.id, hs_first, hs_last,
+                )
 
                 has_primary = PropertyContact.query.filter_by(
                     property_id=lead.id, is_primary=True
@@ -529,7 +516,7 @@ class HubSpotMatcherService:
                     match = self._upsert_match(
                         hubspot_record_type="deal",
                         hubspot_id=deal.hubspot_id,
-                        internal_record_type=None,
+                        internal_record_type="lead",
                         internal_record_id=None,
                         confidence="MEDIUM",
                         matching_criteria="address_match",
