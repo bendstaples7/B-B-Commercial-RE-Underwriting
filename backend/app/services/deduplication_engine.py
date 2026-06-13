@@ -12,6 +12,52 @@ NORMALIZATION_PATTERN = re.compile(r'[^\w\s]')  # strip punctuation
 WHITESPACE_PATTERN = re.compile(r'\s+')          # collapse whitespace
 
 
+def _normalize_record_names(record: dict) -> dict:
+    """Ensure owner_first_name and owner_last_name are separate.
+
+    Handles the common import pattern where a full name is placed in the
+    first_name field with last_name absent. Splits on the last space so
+    "John Smith" → first="John", last="Smith". Also handles "Last, First"
+    comma format. Applies to both primary and secondary owner fields.
+
+    Mutates record in-place and returns it.
+    """
+    for prefix in ('owner_', 'owner_2_'):
+        first_key = f'{prefix}first_name'
+        last_key = f'{prefix}last_name'
+        first = record.get(first_key)
+        last = record.get(last_key)
+
+        if not first:
+            continue
+        first = first.strip() if isinstance(first, str) else first
+        if not first:
+            record[first_key] = None
+            continue
+
+        # Last already populated — nothing to do
+        if last and isinstance(last, str) and last.strip():
+            continue
+
+        # Comma format: "Smith, John" → last="Smith", first="John"
+        if ',' in first:
+            parts = [p.strip() for p in first.split(',', 1)]
+            record[last_key] = parts[0] if parts[0] else None
+            record[first_key] = parts[1] if len(parts) > 1 and parts[1] else None
+            continue
+
+        # Space-separated: "John Smith" or "Mary Ann Jones"
+        if ' ' in first:
+            idx = first.rfind(' ')
+            record[first_key] = first[:idx].strip() or None
+            record[last_key] = first[idx:].strip() or None
+            continue
+
+        # Single token with no last — leave in first_name as-is (could be a first name only)
+
+    return record
+
+
 @dataclass
 class DeduplicationResult:
     """Result of a deduplication operation.
@@ -233,6 +279,11 @@ class DeduplicationEngine:
         """
         from app.models.lead import Property
         from app import db
+
+        # Normalize owner name fields before any field is written — splits
+        # "First Last" in owner_first_name into separate first/last when
+        # owner_last_name is absent (common pattern from sheet/HubSpot exports).
+        record = _normalize_record_names(record)
 
         property_street = record.get('property_street', '') or ''
         incoming_pin = record.get('county_assessor_pin')

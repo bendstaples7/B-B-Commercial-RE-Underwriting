@@ -40,6 +40,52 @@ _stage_label_cache_ts: float = 0.0
 _STAGE_CACHE_TTL = 300  # seconds — successful refresh
 _STAGE_CACHE_FAILURE_TTL = 30  # seconds — back-off after a failed refresh
 
+# Keywords in lead.notes that suggest contact was made with the owner.
+# Used to detect conflicts between notes content and lead_status.
+_CONTACT_KEYWORDS = (
+    'contact made', 'contacted', 'spoke with', 'spoke to', 'called',
+    'reached out', 'talked to', 'talked with', 'answered', 'connected',
+    'responded', 'replied', 'met with', 'meeting', 'email response',
+)
+
+# Statuses that imply no contact has been made
+_NO_CONTACT_STATUSES = frozenset({'mailing_no_contact_made'})
+
+
+def _detect_notes_status_conflict(notes: str | None, lead_status: str | None) -> bool:
+    """Return True when lead.notes implies contact was made but status says otherwise.
+
+    Checks for contact-indicating keywords in the notes text against a set of
+    statuses that mean no contact has been made. Case-insensitive.
+    """
+    if not notes or not lead_status:
+        return False
+    if lead_status not in _NO_CONTACT_STATUSES:
+        return False
+    notes_lower = notes.lower()
+    return any(kw in notes_lower for kw in _CONTACT_KEYWORDS)
+
+
+def _resolve_actor(user_id_or_label: str | None) -> str:
+    """Resolve a user_id UUID to a human-readable display name.
+
+    Looks up the User record by user_id and returns display_name if found,
+    falls back to email, then the raw value. Non-UUID values (e.g. 'System',
+    'HubSpot', 'anonymous') are returned as-is.
+    """
+    if not user_id_or_label or user_id_or_label in ('anonymous', 'System', 'HubSpot'):
+        return user_id_or_label or 'anonymous'
+    # UUID format: 8-4-4-4-12 hex characters
+    import re as _re
+    if not _re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+                     user_id_or_label, _re.IGNORECASE):
+        return user_id_or_label  # not a UUID — return as-is
+    from app.models.user import User as _User
+    user = _User.query.filter_by(user_id=user_id_or_label).first()
+    if user:
+        return user.display_name or user.email
+    return user_id_or_label  # UUID with no matching user — show raw
+
 
 def _get_stage_label(stage_id: str) -> str:
     """Translate a HubSpot deal stage ID to its portal display label.
@@ -457,6 +503,9 @@ def get_command_center(lead_id: int):
         'hubspot_deal_name': hubspot_deal_name,
         'lead_category': lead.lead_category,
         'notes': lead.notes,
+        # Flag when lead.notes content implies contact was made but status says otherwise.
+        # Used by the frontend to show a warning banner nudging the user to update status.
+        'notes_status_conflict': _detect_notes_status_conflict(lead.notes, lead.lead_status),
         'date_added_to_hubspot': lead.date_added_to_hubspot.isoformat() if lead.date_added_to_hubspot else None,
         # Overdue HubSpot task — drives Today's Action queue membership
         'has_overdue_hubspot_task': has_overdue_hubspot_task,
@@ -542,7 +591,7 @@ def get_command_center(lead_id: int):
                         'event_type': e.event_type,
                         'occurred_at': e.occurred_at.isoformat(),
                         'source': e.source,
-                        'actor': e.actor,
+                        'actor': _resolve_actor(e.actor),
                         'summary': e.summary,
                         'metadata': e.event_metadata,
                         'hubspot_activity_id': e.hubspot_activity_id,
@@ -624,7 +673,8 @@ def update_status(lead_id: int):
 
     old_status = lead.lead_status
     new_status = data['status']
-    actor = getattr(g, 'user_id', None) or data.get('actor') or 'anonymous'
+    reason = data.get('reason') or ''
+    actor = _resolve_actor(getattr(g, 'user_id', None) or data.get('actor') or 'anonymous')
 
     lead.lead_status = new_status
 
@@ -637,6 +687,12 @@ def update_status(lead_id: int):
 
     db.session.add(lead)
 
+    # Build summary — include reason when provided (Requirements 2.5)
+    if reason:
+        summary = f"Status changed from '{old_status}' to '{new_status}'. {reason}"
+    else:
+        summary = f"Status changed from '{old_status}' to '{new_status}'."
+
     # Append status_changed timeline entry
     entry = LeadTimelineEntry(
         lead_id=lead_id,
@@ -644,8 +700,12 @@ def update_status(lead_id: int):
         occurred_at=_dt.datetime.now(_dt.timezone.utc),
         source='manual',
         actor=actor,
-        summary=f"Status changed from '{old_status}' to '{new_status}'.",
-        event_metadata={'previous_status': old_status, 'new_status': new_status},
+        summary=summary,
+        event_metadata={
+            'previous_status': old_status,
+            'new_status': new_status,
+            'reason': reason or None,
+        },
     )
     db.session.add(entry)
     db.session.commit()
@@ -764,7 +824,7 @@ def get_timeline(lead_id: int):
                 'event_type': e.event_type,
                 'occurred_at': e.occurred_at.isoformat(),
                 'source': e.source,
-                'actor': e.actor,
+                'actor': _resolve_actor(e.actor),
                 'summary': e.summary,
                 'metadata': e.event_metadata,
                 'hubspot_activity_id': e.hubspot_activity_id,
@@ -1007,15 +1067,17 @@ def mark_hubspot_task_done(lead_id: int, task_id: int):
     """
     POST /api/leads/<lead_id>/hubspot-tasks/<task_id>/done
 
-    Mark a HubSpot-imported task as completed locally.
-    This does NOT sync back to HubSpot — the integration is read-only.
-    Sets tasks.status = 'completed' and appends a task_completed timeline entry.
-    Triggers RA recomputation so the lead may leave Today's Action queue.
+    Mark a HubSpot-imported task as completed — both locally and in HubSpot.
+    Looks up the task's hubspot_task_id, calls PATCH /crm/v3/objects/tasks/<id>
+    to set hs_task_status=COMPLETED, then marks it done in the local DB.
+
+    If the HubSpot API call fails (no config, auth error, rate limit, etc.),
+    the task is still marked done locally and a warning is noted in the timeline.
     """
     import datetime as _dt
     from app import db
 
-    actor = getattr(g, 'user_id', 'anonymous')
+    actor = _resolve_actor(getattr(g, 'user_id', 'anonymous'))
     now = _dt.datetime.now(_dt.timezone.utc)
 
     # Atomically mark the task completed only if it is still open/overdue
@@ -1039,28 +1101,64 @@ def mark_hubspot_task_done(lead_id: int, task_id: int):
                       AND ta.target_id = :lead_id
                 )
               )
-            RETURNING id, title
+            RETURNING id, title, hubspot_task_id
         """),
         {'task_id': task_id, 'lead_id': lead_id}
     ).fetchone()
 
     if result is None:
-        # Either task doesn't exist, isn't linked to this lead, or was
-        # already completed by a concurrent request — treat as not found.
         db.session.rollback()
         return jsonify({'error': 'Not found', 'message': f'Task {task_id} not found or already completed for lead {lead_id}'}), 404
 
     task_title = result[1]
+    hubspot_task_id = result[2]
 
-    # Append timeline entry only when the UPDATE succeeded
+    # --- Attempt to sync completion back to HubSpot ---
+    hubspot_synced = False
+    hubspot_error = None
+    if hubspot_task_id:
+        try:
+            from app.models.hubspot_config import HubSpotConfig as _HubSpotConfig
+            from app.services.hubspot_client_service import HubSpotClientService as _HCS
+            config = _HubSpotConfig.query.order_by(_HubSpotConfig.id.desc()).first()
+            if config:
+                _HCS(config).complete_task(hubspot_task_id)
+                hubspot_synced = True
+                logger.info("HubSpot task %s marked COMPLETED for lead %s", hubspot_task_id, lead_id)
+            else:
+                hubspot_error = 'No HubSpot config found'
+        except Exception as exc:
+            hubspot_error = str(exc)
+            logger.warning(
+                "Failed to mark HubSpot task %s as completed for lead %s: %s",
+                hubspot_task_id, lead_id, exc,
+            )
+
+    # Build timeline summary based on sync outcome
+    if hubspot_synced:
+        summary = f"HubSpot task completed: {task_title}"
+        metadata_note = 'Marked done in HubSpot and locally'
+    elif hubspot_task_id and hubspot_error:
+        summary = f"HubSpot task marked done locally: {task_title} (HubSpot sync failed: {hubspot_error})"
+        metadata_note = f'Local only — HubSpot sync failed: {hubspot_error}'
+    else:
+        summary = f"HubSpot task marked done locally: {task_title}"
+        metadata_note = 'Marked done locally — no HubSpot config'
+
     entry = LeadTimelineEntry(
         lead_id=lead_id,
         event_type='task_completed',
         occurred_at=now,
         source='manual',
         actor=actor,
-        summary=f"HubSpot task marked done locally: {task_title}",
-        event_metadata={'task_id': task_id, 'title': task_title, 'note': 'Marked done locally — not synced to HubSpot'},
+        summary=summary,
+        event_metadata={
+            'task_id': task_id,
+            'hubspot_task_id': hubspot_task_id,
+            'title': task_title,
+            'hubspot_synced': hubspot_synced,
+            'note': metadata_note,
+        },
     )
     db.session.add(entry)
     db.session.commit()
@@ -1074,4 +1172,9 @@ def mark_hubspot_task_done(lead_id: int, task_id: int):
             lead_id, exc,
         )
 
-    return jsonify({'task_id': task_id, 'status': 'completed'}), 200
+    return jsonify({
+        'task_id': task_id,
+        'status': 'completed',
+        'hubspot_synced': hubspot_synced,
+        'hubspot_task_id': hubspot_task_id,
+    }), 200

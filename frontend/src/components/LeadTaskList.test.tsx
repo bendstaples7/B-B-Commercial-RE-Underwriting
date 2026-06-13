@@ -644,6 +644,89 @@ describe('LeadTaskList', () => {
   })
 
   // -------------------------------------------------------------------------
+  // HubSpot task label (Requirement 3.3)
+  // -------------------------------------------------------------------------
+
+  describe('HubSpot task label', () => {
+    it('shows "HubSpot task — complete in HubSpot to close" label for hubspot tasks', () => {
+      const tasks = [makeTask(1, { source: 'hubspot', title: 'Follow up on deal' })]
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={tasks}
+          onTaskCreated={vi.fn()}
+        />
+      )
+
+      expect(
+        screen.getByText('HubSpot task — complete in HubSpot to close')
+      ).toBeInTheDocument()
+    })
+
+    it('does NOT show the HubSpot label for native tasks', () => {
+      const tasks = [makeTask(1, { source: 'native', title: 'Native task' })]
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={tasks}
+          onTaskCreated={vi.fn()}
+        />
+      )
+
+      expect(
+        screen.queryByText('HubSpot task — complete in HubSpot to close')
+      ).not.toBeInTheDocument()
+    })
+
+    it('does NOT show the HubSpot label when source is undefined', () => {
+      const tasks = [makeTask(1, { title: 'No source task' })]
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={tasks}
+          onTaskCreated={vi.fn()}
+        />
+      )
+
+      expect(
+        screen.queryByText('HubSpot task — complete in HubSpot to close')
+      ).not.toBeInTheDocument()
+    })
+
+    it('shows HubSpot label alongside due date when both exist', () => {
+      const tasks = [makeTask(1, { source: 'hubspot', title: 'HS Task', due_date: '2025-06-15' })]
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={tasks}
+          onTaskCreated={vi.fn()}
+        />
+      )
+
+      expect(screen.getByText('HubSpot task — complete in HubSpot to close')).toBeInTheDocument()
+      expect(screen.getByTestId('task-due-date-1')).toBeInTheDocument()
+    })
+
+    it('shows HubSpot label even when task has no due date', () => {
+      const tasks = [makeTask(1, { source: 'hubspot', title: 'HS No Date', due_date: null })]
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={tasks}
+          onTaskCreated={vi.fn()}
+        />
+      )
+
+      expect(screen.getByText('HubSpot task — complete in HubSpot to close')).toBeInTheDocument()
+    })
+  })
+
+  // -------------------------------------------------------------------------
   // Empty state
   // -------------------------------------------------------------------------
 

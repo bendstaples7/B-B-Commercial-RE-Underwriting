@@ -1696,6 +1696,7 @@ class LeadStatusUpdateSchema(RequestSchema):
         validate=validate.OneOf(VALID_LEAD_STATUSES),
     )
     actor = fields.String(load_default='anonymous')
+    reason = fields.String(load_default=None, validate=validate.Length(max=500))
 
 
 class LogNoteSchema(RequestSchema):

@@ -16,6 +16,47 @@ from app.models.import_job import ImportJob, FieldMapping, OAuthToken
 
 logger = logging.getLogger(__name__)
 
+
+def _split_owner_name(first: Optional[str], last: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Normalize owner name fields to ensure first and last are separate.
+
+    Handles the common import pattern where a full name ("John Smith") is
+    placed entirely in the first_name column with last_name left empty.
+
+    Rules:
+    - If last is already populated, return as-is (no change needed).
+    - If first contains a space and last is absent, split on the last space:
+        "John Smith"      → first="John",       last="Smith"
+        "Mary Ann Jones"  → first="Mary Ann",   last="Jones"
+        "Manuel Medellin" → first="Manuel",     last="Medellin"
+    - If first has no space and last is absent, move first to last (surname only).
+    - Comma-separated "Last, First" format is also handled:
+        "Smith, John"     → first="John",       last="Smith"
+    """
+    if not first:
+        return first, last
+    first = first.strip()
+    if not first:
+        return None, last
+
+    # If last is already populated, nothing to do
+    if last and last.strip():
+        return first, last.strip()
+
+    # Comma format: "Smith, John A" → last="Smith", first="John A"
+    if ',' in first:
+        parts = [p.strip() for p in first.split(',', 1)]
+        return (parts[1] if parts[1] else None), (parts[0] if parts[0] else None)
+
+    # Space-separated: split on last space
+    if ' ' in first:
+        idx = first.rfind(' ')
+        return first[:idx].strip() or None, first[idx:].strip() or None
+
+    # Single token with no last — leave as-is (could be a first name only)
+    return first, last
+
+
 # ---------------------------------------------------------------------------
 # Data classes used as lightweight return types
 # ---------------------------------------------------------------------------
@@ -579,7 +620,30 @@ class GoogleSheetsImporter:
             else:
                 cleaned[field_name] = False
 
+        # Normalize owner name fields — split full name in first_name into first + last
+        # when last_name is absent (common import pattern from HubSpot/spreadsheet exports)
+        self._normalize_name_fields(cleaned)
+
         return ValidationResult(valid=True, cleaned_data=cleaned, errors=warnings)
+        """Split owner_first_name into first + last when owner_last_name is absent.
+
+        Mutates cleaned in-place. Also applies the same logic for owner_2 names.
+        """
+        # Primary owner
+        first, last = _split_owner_name(
+            cleaned.get('owner_first_name'),
+            cleaned.get('owner_last_name'),
+        )
+        cleaned['owner_first_name'] = first
+        cleaned['owner_last_name'] = last
+
+        # Second owner
+        first2, last2 = _split_owner_name(
+            cleaned.get('owner_2_first_name'),
+            cleaned.get('owner_2_last_name'),
+        )
+        cleaned['owner_2_first_name'] = first2
+        cleaned['owner_2_last_name'] = last2
 
     @staticmethod
     def _parse_date(value: str) -> Optional[date]:

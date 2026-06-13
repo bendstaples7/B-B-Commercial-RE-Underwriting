@@ -225,7 +225,7 @@ export function LeadTaskList({
                         <CheckCircleOutlineIcon fontSize="small" />
                       </IconButton>
                     ) : isHubSpot ? (
-                      <Tooltip title="Mark as done locally — does not update HubSpot">
+                      <Tooltip title="Mark as done locally — HubSpot task write access is not available for this portal">
                         <span>
                           <IconButton
                             edge="end"
@@ -276,17 +276,25 @@ export function LeadTaskList({
                       </Stack>
                     }
                     secondary={
-                      task.due_date ? (
-                        <Typography
-                          component="span"
-                          variant="caption"
-                          color={overdue ? 'error' : 'text.secondary'}
-                          data-testid={`task-due-date-${task.id}`}
-                        >
-                          {formatDueDate(task.due_date)}
-                          {overdue && ' (overdue)'}
-                        </Typography>
-                      ) : null
+                      <>
+                        {task.due_date && (
+                          <Typography
+                            component="span"
+                            variant="caption"
+                            color={overdue ? 'error' : 'text.secondary'}
+                            data-testid={`task-due-date-${task.id}`}
+                            sx={{ display: 'block' }}
+                          >
+                            {formatDueDate(task.due_date)}
+                            {overdue && ' (overdue)'}
+                          </Typography>
+                        )}
+                        {task.source === 'hubspot' && (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+                            HubSpot task — complete in HubSpot to close
+                          </Typography>
+                        )}
+                      </>
                     }
                   />
                 </ListItem>
