@@ -17,13 +17,18 @@ logger = logging.getLogger(__name__)
 
 
 class HubSpotClientService:
-    """Read-only HubSpot API client.
+    """HubSpot API client supporting both read and write operations.
 
     Decrypts the Fernet-encrypted token stored in ``HubSpotConfig`` and
     provides paginated iterators for all four importable object types
-    (deals, contacts, companies, engagements).  Every outbound request is
-    a GET; any attempt to call a mutating method raises
-    ``HubSpotReadOnlyViolation``.
+    (deals, contacts, companies, engagements) as well as write methods
+    for completing tasks.
+
+    Read methods use ``_get`` (HTTP GET only). Write methods use ``_patch``
+    (HTTP PATCH) which mutates HubSpot state — callers should ensure the
+    Private App token has the required write scopes before calling them.
+    ``complete_task`` marks a HubSpot task as COMPLETED and requires the
+    ``crm.objects.tasks.write`` scope.
     """
 
     BASE_URL = "https://api.hubapi.com"
@@ -216,6 +221,78 @@ class HubSpotClientService:
 
         resp.raise_for_status()
         return resp.json()
+
+    def _patch(self, path: str, body: dict) -> dict:
+        """Execute a PATCH request against the HubSpot API.
+
+        Used for write operations (e.g. marking a task completed).
+        Raises the same error hierarchy as ``_get``.
+        """
+        url = f"{self.BASE_URL}{path}"
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "application/json",
+        }
+        try:
+            resp = requests.patch(url, headers=headers, json=body, timeout=self.TIMEOUT)
+        except requests.exceptions.Timeout as exc:
+            raise ExternalServiceError(
+                f"HubSpot API request timed out after {self.TIMEOUT}s: {path}",
+                payload={"error_type": "hubspot_timeout", "path": path},
+            ) from exc
+        except requests.exceptions.RequestException as exc:
+            raise ExternalServiceError(
+                f"HubSpot API request failed: {exc}",
+                payload={"error_type": "hubspot_request_error", "path": path},
+            ) from exc
+
+        if resp.status_code in (401, 403):
+            raise HubSpotAuthenticationError(
+                f"HubSpot authentication failed (HTTP {resp.status_code})"
+            )
+        if resp.status_code == 429:
+            retry_after_raw = resp.headers.get("Retry-After")
+            retry_after = None
+            if retry_after_raw is not None:
+                try:
+                    retry_after = int(retry_after_raw)
+                except ValueError:
+                    retry_after = None
+            raise HubSpotRateLimitError(
+                "HubSpot API rate limit exceeded",
+                retry_after=retry_after,
+            )
+        if resp.status_code >= 500:
+            raise ExternalServiceError(
+                f"HubSpot API returned server error (HTTP {resp.status_code}): {path}",
+                payload={
+                    "error_type": "hubspot_server_error",
+                    "path": path,
+                    "status_code": resp.status_code,
+                },
+            )
+        resp.raise_for_status()
+        # 204 No Content is valid for some PATCH endpoints
+        if resp.status_code == 204 or not resp.content:
+            return {}
+        return resp.json()
+
+    def complete_task(self, hubspot_task_id: str) -> dict:
+        """Mark a HubSpot task as COMPLETED via the CRM v3 Tasks API.
+
+        Args:
+            hubspot_task_id: The HubSpot-assigned task ID (e.g. '57292993650').
+
+        Returns:
+            The updated task properties dict from HubSpot, or {} on 204.
+
+        Raises:
+            HubSpotAuthenticationError, HubSpotRateLimitError, ExternalServiceError.
+        """
+        path = f"/crm/v3/objects/tasks/{hubspot_task_id}"
+        body = {"properties": {"hs_task_status": "COMPLETED"}}
+        logger.info("HubSpotClientService.complete_task: marking task %s COMPLETED", hubspot_task_id)
+        return self._patch(path, body)
 
     # ------------------------------------------------------------------ #
     # Paginated object iterators                                           #

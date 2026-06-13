@@ -246,8 +246,14 @@ describe('LeadCommandCenter', () => {
 
       await user.click(screen.getByTestId('status-option-mailing_contacted_interested'))
 
+      // New flow: confirmation UI appears; click Confirm to call the API
       await waitFor(() => {
-        expect(commandCenterService.updateStatus).toHaveBeenCalledWith(1, 'mailing_contacted_interested')
+        expect(screen.getByRole('button', { name: 'Confirm' })).toBeInTheDocument()
+      })
+      await user.click(screen.getByRole('button', { name: 'Confirm' }))
+
+      await waitFor(() => {
+        expect(commandCenterService.updateStatus).toHaveBeenCalledWith(1, 'mailing_contacted_interested', undefined)
       })
     })
 
@@ -268,6 +274,12 @@ describe('LeadCommandCenter', () => {
       })
 
       await user.click(screen.getByTestId('status-option-deprioritize'))
+
+      // New flow: click Confirm to call the API
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Confirm' })).toBeInTheDocument()
+      })
+      await user.click(screen.getByRole('button', { name: 'Confirm' }))
 
       await waitFor(() => {
         expect(commandCenterService.updateStatus).toHaveBeenCalled()
@@ -298,12 +310,18 @@ describe('LeadCommandCenter', () => {
 
       await user.click(screen.getByTestId('status-option-deprioritize'))
 
+      // New flow: click Confirm to trigger the API call (and failure)
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Confirm' })).toBeInTheDocument()
+      })
+      await user.click(screen.getByRole('button', { name: 'Confirm' }))
+
       await waitFor(() => {
         expect(screen.getByTestId('status-change-error')).toBeInTheDocument()
       })
 
       expect(screen.getByTestId('status-change-error')).toHaveTextContent(
-        'Status update failed'
+        'Failed to update status'
       )
     })
 
@@ -327,12 +345,20 @@ describe('LeadCommandCenter', () => {
 
       await user.click(screen.getByTestId('status-option-deprioritize'))
 
+      // New flow: click Confirm to trigger the API call (and failure)
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Confirm' })).toBeInTheDocument()
+      })
+      await user.click(screen.getByRole('button', { name: 'Confirm' }))
+
       await waitFor(() => {
         expect(screen.getByTestId('status-change-error')).toBeInTheDocument()
       })
 
-      // getCommandCenter should have been called again to revert
-      expect(commandCenterService.getCommandCenter).toHaveBeenCalledTimes(2)
+      // In the new confirmation flow, the dropdown never changed the displayed status,
+      // so no refetch is needed to "revert" — the error is shown in the confirmation UI
+      // and the confirmation UI stays open for retry or cancel.
+      expect(screen.getByRole('button', { name: 'Confirm' })).toBeInTheDocument()
     })
   })
 

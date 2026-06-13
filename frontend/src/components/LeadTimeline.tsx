@@ -10,6 +10,7 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Collapse,
   Divider,
   List,
   ListItem,
@@ -18,6 +19,8 @@ import {
   Stack,
   Typography,
 } from '@mui/material'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import HistoryIcon from '@mui/icons-material/History'
 import type { LeadTimelineEntry } from '@/types'
 
@@ -25,16 +28,29 @@ import type { LeadTimelineEntry } from '@/types'
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Number of characters before the summary is considered "long" and gets a
+// collapse toggle.
+const SUMMARY_COLLAPSE_THRESHOLD = 120
+
 /**
- * Format a UTC ISO timestamp for display.
- * Shows date + time in UTC so the value is unambiguous.
+ * Format an ISO timestamp in the browser's local timezone.
+ * Returns "—" for empty or invalid timestamps.
  */
-function formatUtcTimestamp(iso: string): string {
+function formatLocalTimestamp(iso: string): string {
+  if (!iso) return '—'
   try {
     const d = new Date(iso)
-    return d.toUTCString().replace(' GMT', ' UTC')
+    if (isNaN(d.getTime())) return '—'
+    return d.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
   } catch {
-    return iso
+    return '—'
   }
 }
 
@@ -82,6 +98,13 @@ interface TimelineEntryRowProps {
 
 function TimelineEntryRow({ entry }: TimelineEntryRowProps) {
   const isHubSpot = entry.source === 'hubspot' || entry.source === 'hubspot_import'
+  const isLong = (entry.summary?.length ?? 0) > SUMMARY_COLLAPSE_THRESHOLD
+  const [expanded, setExpanded] = useState(false)
+
+  const summaryText = entry.summary ?? ''
+  const displaySummary = isLong && !expanded
+    ? summaryText.slice(0, SUMMARY_COLLAPSE_THRESHOLD).trimEnd() + '…'
+    : summaryText
 
   return (
     <ListItem
@@ -111,22 +134,45 @@ function TimelineEntryRow({ entry }: TimelineEntryRowProps) {
               {formatEventType(entry.event_type)}
             </Typography>
             <Typography variant="caption" color="text.secondary" data-testid={`entry-timestamp-${entry.id}`}>
-              {formatUtcTimestamp(entry.occurred_at)}
+              {formatLocalTimestamp(entry.occurred_at)}
             </Typography>
             <Typography variant="caption" color="text.secondary" data-testid={`entry-actor-${entry.id}`}>
               — {entry.actor}
             </Typography>
+            {isHubSpot && (
+              <Chip
+                label="Imported from HubSpot"
+                size="small"
+                variant="outlined"
+                data-testid={`hubspot-badge-${entry.id}`}
+                sx={{ fontSize: '0.65rem', height: 18, color: 'text.secondary', borderColor: 'divider', ml: 1 }}
+              />
+            )}
           </Stack>
         }
         secondary={
-          <Typography
-            variant="body2"
-            color="text.secondary"
-            sx={{ mt: 0.25 }}
-            data-testid={`entry-summary-${entry.id}`}
-          >
-            {entry.summary}
-          </Typography>
+          <Box>
+            <Collapse in={expanded} collapsedSize={isLong ? 'auto' : undefined}>
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ mt: 0.25, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                data-testid={`entry-summary-${entry.id}`}
+              >
+                {displaySummary}
+              </Typography>
+            </Collapse>
+            {isLong && (
+              <Button
+                size="small"
+                onClick={() => setExpanded((v) => !v)}
+                startIcon={expanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+                sx={{ mt: 0.25, p: 0, minWidth: 0, fontSize: '0.72rem', color: 'text.secondary', textTransform: 'none' }}
+              >
+                {expanded ? 'Show less' : 'Show more'}
+              </Button>
+            )}
+          </Box>
         }
       />
     </ListItem>

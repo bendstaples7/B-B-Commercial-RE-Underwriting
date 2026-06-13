@@ -1,6 +1,8 @@
 """HubSpotTimelineImportService — imports HubSpot activities as LeadTimelineEntry rows."""
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import text as _text
+
 from app import db
 from app.models import Lead, LeadTimelineEntry
 
@@ -15,6 +17,12 @@ _HUBSPOT_TYPE_TO_EVENT_TYPE = {
     'EMAIL': 'hubspot_note',
     'MEETING': 'hubspot_note',
 }
+
+# Activity types that indicate actual contact was made with the owner
+_CONTACT_ACTIVITY_TYPES = {'CALL', 'NOTE', 'EMAIL', 'MEETING'}
+
+# Lead statuses that imply no contact has been made yet
+_NO_CONTACT_STATUSES = {'mailing_no_contact_made'}
 
 
 class HubSpotTimelineImportService:
@@ -51,6 +59,7 @@ class HubSpotTimelineImportService:
 
         new_entries_count = 0
         latest_deal_stage = None
+        contact_activity_imported = False  # tracks whether any contact-type activity was new
 
         for activity in hubspot_activities:
             activity_id = str(activity.get('id', ''))
@@ -80,6 +89,10 @@ class HubSpotTimelineImportService:
             if activity_type == 'DEAL_STAGE_CHANGE':
                 latest_deal_stage = activity.get('deal_stage') or activity.get('to_stage')
 
+            # Track whether a contact-type activity (call, note, email, meeting) was imported
+            if activity_type in _CONTACT_ACTIVITY_TYPES:
+                contact_activity_imported = True
+
             entry = LeadTimelineEntry(
                 lead_id=lead_id,
                 event_type=event_type,
@@ -100,8 +113,29 @@ class HubSpotTimelineImportService:
             lead.hubspot_deal_stage = latest_deal_stage
         if new_entries_count > 0:
             lead.review_required = True
-            lead.review_reason = 'New HubSpot activity'
             lead.review_triggered_at = datetime.now(timezone.utc)
+            # If HubSpot shows contact activity but status still says no contact made,
+            # use a specific review reason so the Needs Review queue surfaces it clearly.
+            # Check the interactions table — that's where HubSpot call/note/email data lives.
+            if lead.lead_status in _NO_CONTACT_STATUSES:
+                has_contact_interaction = db.session.execute(_text("""
+                    SELECT 1
+                    FROM interactions i
+                    JOIN interaction_associations ia ON ia.interaction_id = i.id
+                    WHERE ia.target_type = 'lead'
+                      AND ia.target_id = :lead_id
+                      AND i.interaction_type IN ('call', 'note', 'email', 'meeting')
+                    LIMIT 1
+                """), {'lead_id': lead_id}).fetchone() is not None
+                if has_contact_interaction or contact_activity_imported:
+                    lead.review_reason = (
+                        'HubSpot shows contact activity but status is still '
+                        '"Mailing, No Contact Made" - please update status'
+                    )
+                else:
+                    lead.review_reason = 'New HubSpot activity'
+            else:
+                lead.review_reason = 'New HubSpot activity'
 
         db.session.add(lead)
         db.session.commit()
