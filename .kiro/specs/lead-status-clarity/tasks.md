@@ -40,7 +40,7 @@ Six targeted changes across three frontend components, one API service method, o
 - [x] 1.2 Update `update_status` endpoint in `backend/app/controllers/command_center_controller.py` to use `reason`
   - Read `reason = data.get('reason') or ''` from the validated schema output
   - When `reason` is non-empty, build summary as: `f"Status changed from '{old_status}' to '{new_status}'. {reason}"`
-  - When `reason` is absent/empty, use existing format: `f"Status changed from '{old_status}' to '{new_status}.'"`
+  - When `reason` is absent/empty, use existing format: `f"Status changed from '{old_status}' to '{new_status}'."`
   - Store `reason` in `event_metadata` under key `"reason"` (value `None` when absent, string when present)
   - No change to the response shape — endpoint still returns `{'lead_status': ..., 'recommended_action': ...}`
   - _Requirements: 2.5, 2.6_

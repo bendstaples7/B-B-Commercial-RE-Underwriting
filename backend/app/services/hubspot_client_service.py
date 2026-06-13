@@ -17,13 +17,18 @@ logger = logging.getLogger(__name__)
 
 
 class HubSpotClientService:
-    """Read-only HubSpot API client.
+    """HubSpot API client supporting both read and write operations.
 
     Decrypts the Fernet-encrypted token stored in ``HubSpotConfig`` and
     provides paginated iterators for all four importable object types
-    (deals, contacts, companies, engagements).  Every outbound request is
-    a GET; any attempt to call a mutating method raises
-    ``HubSpotReadOnlyViolation``.
+    (deals, contacts, companies, engagements) as well as write methods
+    for completing tasks.
+
+    Read methods use ``_get`` (HTTP GET only). Write methods use ``_patch``
+    (HTTP PATCH) which mutates HubSpot state — callers should ensure the
+    Private App token has the required write scopes before calling them.
+    ``complete_task`` marks a HubSpot task as COMPLETED and requires the
+    ``crm.objects.tasks.write`` scope.
     """
 
     BASE_URL = "https://api.hubapi.com"

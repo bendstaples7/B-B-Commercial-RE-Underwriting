@@ -1,4 +1,4 @@
-d# Implementation Plan: Global Search Bar
+# Implementation Plan: Global Search Bar
 
 ## Overview
 

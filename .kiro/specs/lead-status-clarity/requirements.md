@@ -79,5 +79,5 @@ This spec resolves the confusion through three coordinated changes:
 - Migrating existing `lead.notes` content to timeline entries. The `notes` column retains its existing data; only the label and position in the UI change.
 - Adding an edit control for `lead.notes` to the Command Center (it is currently display-only in this view and remains so).
 - Changing the `lead_status` enum values or adding new statuses.
-- Bi-directional HubSpot task sync (marking a HubSpot task complete from this platform). HubSpot tasks remain read-only.
+- Bi-directional HubSpot task sync via the `hubspot-tasks/.../done` route attempts to call `PATCH /crm/v3/objects/tasks/{id}` to mark the task COMPLETED in HubSpot. If HubSpot's API returns an error (e.g. missing `crm.objects.tasks.write` scope), the route falls back to marking the task done locally only and records the failure reason in the `task_completed` timeline entry. Full bidirectional sync requires the `crm.objects.tasks.write` scope on the portal's Private App.
 - Retroactively adding reasons to existing `status_changed` timeline entries.

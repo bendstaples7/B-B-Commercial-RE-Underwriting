@@ -225,7 +225,7 @@ export function LeadTaskList({
                         <CheckCircleOutlineIcon fontSize="small" />
                       </IconButton>
                     ) : isHubSpot ? (
-                      <Tooltip title="Mark as done locally — HubSpot task write access is not available for this portal">
+                      <Tooltip title="Attempts to mark as done in HubSpot; will mark locally if HubSpot update fails">
                         <span>
                           <IconButton
                             edge="end"

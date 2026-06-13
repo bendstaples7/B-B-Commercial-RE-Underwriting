@@ -62,7 +62,7 @@ No new files, no migrations, no new API endpoints.
 
 #### Visual layout after changes
 
-```
+```text
 ┌─────────────────────────────────────────────┐
 │ [Queue banners]                              │
 │                                             │
@@ -94,12 +94,13 @@ No new files, no migrations, no new API endpoints.
 
 When the user selects a new status from the dropdown, instead of immediately calling the API, the component transitions to a "pending confirmation" state:
 
-```
+```text
 State machine:
   idle → pending_confirm (user picks new status)
   pending_confirm → idle (user cancels)
   pending_confirm → saving (user confirms)
-  saving → idle (API responds)
+  saving → idle (API responds successfully)
+  saving → pending_confirm (API error — UI stays visible, statusError is shown, pendingStatus/statusReason are NOT reset so user can retry or cancel)
 ```
 
 New state variables added to `LeadCommandCenter`:
@@ -307,7 +308,7 @@ reason = fields.String(load_default=None, validate=validate.Length(max=500))
 
 ## Error Handling
 
-- If `handleStatusConfirm` receives an API error, the existing `statusError` state is set and displayed. `pendingStatus` and `statusReason` are reset so the user can try again or cancel.
+- If `handleStatusConfirm` receives an API error, `statusError` is set and displayed. `pendingStatus` and `statusReason` are NOT reset — the confirmation UI remains visible so the user can retry or cancel. Backend validation (validate.Length(max=500)) returns a 400 in handle_errors format and is treated the same way: statusError is set, confirmation UI stays open.
 - The `reason` field on the backend schema uses `validate.Length(max=500)` — if a client somehow sends a longer string, a 400 validation error is returned with the existing `handle_errors` decorator response format.
 - If the backend is unavailable when the user confirms a status change, the confirmation UI remains visible and shows the error, allowing the user to retry or cancel.
 

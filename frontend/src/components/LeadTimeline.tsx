@@ -34,10 +34,13 @@ const SUMMARY_COLLAPSE_THRESHOLD = 120
 
 /**
  * Format an ISO timestamp in the browser's local timezone.
+ * Returns "—" for empty or invalid timestamps.
  */
 function formatLocalTimestamp(iso: string): string {
+  if (!iso) return '—'
   try {
     const d = new Date(iso)
+    if (isNaN(d.getTime())) return '—'
     return d.toLocaleString(undefined, {
       year: 'numeric',
       month: 'short',
@@ -47,7 +50,7 @@ function formatLocalTimestamp(iso: string): string {
       hour12: false,
     })
   } catch {
-    return iso
+    return '—'
   }
 }
 

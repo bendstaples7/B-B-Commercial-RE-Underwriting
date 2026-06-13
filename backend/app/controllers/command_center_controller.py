@@ -66,12 +66,16 @@ def _detect_notes_status_conflict(notes: str | None, lead_status: str | None) ->
     return any(kw in notes_lower for kw in _CONTACT_KEYWORDS)
 
 
-def _resolve_actor(user_id_or_label: str | None) -> str:
+def _resolve_actor(user_id_or_label: str | None, _cache: dict | None = None) -> str:
     """Resolve a user_id UUID to a human-readable display name.
 
     Looks up the User record by user_id and returns display_name if found,
     falls back to email, then the raw value. Non-UUID values (e.g. 'System',
     'HubSpot', 'anonymous') are returned as-is.
+
+    Pass a dict as `_cache` to avoid repeated DB lookups within a single request
+    (e.g. when resolving multiple actor IDs on a timeline page). The cache is
+    keyed by user_id and stores the resolved display label.
     """
     if not user_id_or_label or user_id_or_label in ('anonymous', 'System', 'HubSpot'):
         return user_id_or_label or 'anonymous'
@@ -80,11 +84,41 @@ def _resolve_actor(user_id_or_label: str | None) -> str:
     if not _re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
                      user_id_or_label, _re.IGNORECASE):
         return user_id_or_label  # not a UUID — return as-is
+    if _cache is not None and user_id_or_label in _cache:
+        return _cache[user_id_or_label]
     from app.models.user import User as _User
     user = _User.query.filter_by(user_id=user_id_or_label).first()
-    if user:
-        return user.display_name or user.email
-    return user_id_or_label  # UUID with no matching user — show raw
+    resolved = (user.display_name or user.email) if user else user_id_or_label
+    if _cache is not None:
+        _cache[user_id_or_label] = resolved
+    return resolved
+
+
+def _resolve_actors_batch(user_ids: list[str]) -> dict[str, str]:
+    """Batch-resolve a list of user_id UUIDs to display labels in one DB query.
+
+    Returns a dict mapping each user_id to its resolved display label.
+    Non-UUID values pass through unchanged. Use this before serializing
+    a page of timeline entries to avoid N+1 queries.
+    """
+    import re as _re
+    uuid_pattern = _re.compile(
+        r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+        _re.IGNORECASE,
+    )
+    result: dict[str, str] = {}
+    uuids = [uid for uid in set(user_ids) if uid and uuid_pattern.match(uid)]
+    if uuids:
+        from app.models.user import User as _User
+        users = _User.query.filter(_User.user_id.in_(uuids)).all()
+        found = {u.user_id: (u.display_name or u.email) for u in users}
+        for uid in uuids:
+            result[uid] = found.get(uid, uid)
+    # Pass-through non-UUID values unchanged
+    for uid in user_ids:
+        if uid not in result:
+            result[uid] = uid or 'anonymous'
+    return result
 
 
 def _get_stage_label(stage_id: str) -> str:
@@ -586,18 +620,25 @@ def get_command_center(lead_id: int):
         'timeline': {
             'entries': sorted(
                 [
+                    # Pre-resolve all actor UUIDs in one batch query to avoid N+1
+                    # The batch result is computed just before the list comprehension
+                ] if False else
+                (lambda actor_cache: [
                     {
                         'id': e.id,
                         'event_type': e.event_type,
                         'occurred_at': e.occurred_at.isoformat(),
                         'source': e.source,
-                        'actor': _resolve_actor(e.actor),
+                        'actor': _resolve_actor(e.actor, actor_cache),
                         'summary': e.summary,
                         'metadata': e.event_metadata,
                         'hubspot_activity_id': e.hubspot_activity_id,
                     }
                     for e in timeline_entries
-                ] + [
+                ])(
+                    # Build the actor cache once for the whole page
+                    _resolve_actors_batch([e.actor for e in timeline_entries if e.actor])
+                ) + [
                     # Inject HubSpot interactions as synthetic timeline entries
                     {
                         'id': -(i + 1),  # negative IDs to avoid collision
@@ -674,7 +715,7 @@ def update_status(lead_id: int):
     old_status = lead.lead_status
     new_status = data['status']
     reason = data.get('reason') or ''
-    actor = _resolve_actor(getattr(g, 'user_id', None) or data.get('actor') or 'anonymous')
+    actor_raw = getattr(g, 'user_id', None) or data.get('actor') or 'anonymous'
 
     lead.lead_status = new_status
 
@@ -693,13 +734,14 @@ def update_status(lead_id: int):
     else:
         summary = f"Status changed from '{old_status}' to '{new_status}'."
 
-    # Append status_changed timeline entry
+    # Append status_changed timeline entry — store raw actor_raw (canonical user_id)
+    # so the DB retains the canonical ID; _resolve_actor is called at read/serialization time
     entry = LeadTimelineEntry(
         lead_id=lead_id,
         event_type='status_changed',
         occurred_at=_dt.datetime.now(_dt.timezone.utc),
         source='manual',
-        actor=actor,
+        actor=actor_raw,
         summary=summary,
         event_metadata={
             'previous_status': old_status,
@@ -817,6 +859,7 @@ def get_timeline(lead_id: int):
         db.session.commit()
 
     entries, total = _lead_timeline_service.get_page(lead_id, page=page, per_page=per_page)
+    actor_cache = _resolve_actors_batch([e.actor for e in entries if e.actor])
     return jsonify({
         'entries': [
             {
@@ -824,7 +867,7 @@ def get_timeline(lead_id: int):
                 'event_type': e.event_type,
                 'occurred_at': e.occurred_at.isoformat(),
                 'source': e.source,
-                'actor': _resolve_actor(e.actor),
+                'actor': _resolve_actor(e.actor, actor_cache),
                 'summary': e.summary,
                 'metadata': e.event_metadata,
                 'hubspot_activity_id': e.hubspot_activity_id,
@@ -1077,7 +1120,7 @@ def mark_hubspot_task_done(lead_id: int, task_id: int):
     import datetime as _dt
     from app import db
 
-    actor = _resolve_actor(getattr(g, 'user_id', 'anonymous'))
+    actor = getattr(g, 'user_id', 'anonymous')
     now = _dt.datetime.now(_dt.timezone.utc)
 
     # Atomically mark the task completed only if it is still open/overdue
@@ -1113,6 +1156,10 @@ def mark_hubspot_task_done(lead_id: int, task_id: int):
     task_title = result[1]
     hubspot_task_id = result[2]
 
+    # Commit the local status change BEFORE calling HubSpot so the DB write
+    # is durable regardless of external call outcome.
+    db.session.commit()
+
     # --- Attempt to sync completion back to HubSpot ---
     hubspot_synced = False
     hubspot_error = None
@@ -1126,25 +1173,27 @@ def mark_hubspot_task_done(lead_id: int, task_id: int):
                 hubspot_synced = True
                 logger.info("HubSpot task %s marked COMPLETED for lead %s", hubspot_task_id, lead_id)
             else:
-                hubspot_error = 'No HubSpot config found'
+                hubspot_error = 'HubSpot sync failed'
         except Exception as exc:
-            hubspot_error = str(exc)
+            # Log full exception to server logs; expose only a sanitized marker to the user
             logger.warning(
                 "Failed to mark HubSpot task %s as completed for lead %s: %s",
                 hubspot_task_id, lead_id, exc,
             )
+            hubspot_error = 'HubSpot sync failed'
 
     # Build timeline summary based on sync outcome
     if hubspot_synced:
         summary = f"HubSpot task completed: {task_title}"
         metadata_note = 'Marked done in HubSpot and locally'
     elif hubspot_task_id and hubspot_error:
-        summary = f"HubSpot task marked done locally: {task_title} (HubSpot sync failed: {hubspot_error})"
-        metadata_note = f'Local only — HubSpot sync failed: {hubspot_error}'
+        summary = f"HubSpot task marked done locally: {task_title} (HubSpot sync failed)"
+        metadata_note = 'Local only — HubSpot sync failed'
     else:
         summary = f"HubSpot task marked done locally: {task_title}"
         metadata_note = 'Marked done locally — no HubSpot config'
 
+    # Store raw actor_raw (canonical user_id) — resolved to display_name at read time
     entry = LeadTimelineEntry(
         lead_id=lead_id,
         event_type='task_completed',

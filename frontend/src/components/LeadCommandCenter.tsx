@@ -212,6 +212,7 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
 
   const handleStatusChange = (newStatus: LeadStatus) => {
     if (!data || newStatus === data.lead_status) return
+    setStatusError(null)  // clear any prior error when user picks a new status
     setPendingStatus(newStatus)
     setStatusReason('')
   }
@@ -221,11 +222,13 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
     try {
       setStatusChanging(true)
       await commandCenterService.updateStatus(leadId, pendingStatus, statusReason.trim() || undefined)
+      setStatusError(null)  // clear error on success before resetting pending state
       queryClient.invalidateQueries({ queryKey: ['lead', leadId] })
       queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
       setPendingStatus(null)
       setStatusReason('')
     } catch (err) {
+      // Keep pendingStatus and statusReason so user can retry or cancel
       setStatusError('Failed to update status')
     } finally {
       setStatusChanging(false)
