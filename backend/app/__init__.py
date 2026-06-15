@@ -675,7 +675,11 @@ def create_app(config_name='development'):
     # Global search endpoint
     from app.controllers.search_controller import search_bp
     app.register_blueprint(search_bp, url_prefix='/api')
-    
+
+    # Data Sources Panel — read-only diagnostic status endpoint
+    from app.controllers.data_sources_controller import data_sources_bp
+    app.register_blueprint(data_sources_bp, url_prefix='/api/data-sources')
+
     # ---------------------------------------------------------------------------
     # Auto-configure HubSpot client secret from environment variable.
     #

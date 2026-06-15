@@ -66,6 +66,7 @@ import TodayIcon from '@mui/icons-material/Today'
 import ViewKanbanIcon from '@mui/icons-material/ViewKanban'
 import ExpandLess from '@mui/icons-material/ExpandLess'
 import ExpandMore from '@mui/icons-material/ExpandMore'
+import StorageIcon from '@mui/icons-material/Storage'
 import { usePipelineStatus } from './context/PipelineStatusContext'
 import Avatar from '@mui/material/Avatar'
 import { WorkflowStep, PropertyFacts, PropertyType, ConstructionType, InteriorCondition } from './types'
@@ -98,6 +99,7 @@ import AdminUserDetail from './components/AdminUserDetail'
 import GlobalSearchBar from '@/components/GlobalSearchBar'
 import { DealKanbanPage } from './pages/DealKanbanPage'
 import { PipelineConfigAdminPage } from './pages/PipelineConfigAdminPage'
+import DataSourcesPanel from '@/components/DataSourcesPanel'
 import type { QueueCounts } from './types'
 
 const DRAWER_WIDTH = 240
@@ -142,6 +144,7 @@ const NAV_SECTIONS = [
           { label: 'HubSpot Import', path: '/import/hubspot', icon: <HubIcon />, badgeKey: null },
           { label: 'Review Queue', path: '/import/hubspot/review-queue', icon: <RateReviewIcon />, badgeKey: null },
           { label: 'Marketing', path: '/marketing', icon: <CampaignIcon />, badgeKey: null },
+          { label: 'Data Sources', path: '/leads/data-sources', icon: <StorageIcon />, badgeKey: null },
         ],
       },
       {
@@ -1606,6 +1609,7 @@ function App() {
           <Route path="/properties/:leadId" element={<LeadDetailRoute />} />
           {/* Legacy /leads routes — redirect to /properties */}
           <Route path="/leads" element={<Navigate to="/properties" replace />} />
+          <Route path="/leads/data-sources" element={<DataSourcesPanel />} />
           <Route path="/leads/:leadId" element={<LeadDetailRedirect />} />
           <Route path="/import" element={<ImportRoute />} />
           <Route path="/import/callback" element={<OAuthCallback />} />
@@ -1620,6 +1624,7 @@ function App() {
           {/* HubSpot CRM routes (Tasks 25.2) */}
           <Route path="/import/hubspot" element={<HubSpotImportArea />} />
           <Route path="/import/hubspot/review-queue" element={<ReviewQueue />} />
+          {/* Data Sources Panel — also accessible at canonical /leads/data-sources (defined above in legacy /leads block) */}
           {/* Admin routes — guarded by is_admin claim */}
           <Route path="/admin" element={user?.is_admin ? <AdminPanel /> : <Navigate to="/" replace />} />
           <Route path="/admin/users/:userId" element={user?.is_admin ? <AdminUserDetail /> : <Navigate to="/" replace />} />

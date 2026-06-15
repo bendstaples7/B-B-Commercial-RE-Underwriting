@@ -425,7 +425,7 @@ class CacheLoaderService:
         per row and skips ``None`` results.  Returns the count of successfully
         upserted rows.
         """
-        mapped_rows = []
+        mapped_by_pin: dict[str, dict] = {}
         for row in rows:
             mapped = self._map_row(
                 row,
@@ -433,7 +433,10 @@ class CacheLoaderService:
                 self.PARCEL_UNIVERSE_NOT_NULL,
             )
             if mapped is not None:
-                mapped_rows.append(mapped)
+                # Keep the last occurrence of each PIN — same as what the upsert converges to.
+                mapped_by_pin[mapped['pin']] = mapped
+
+        mapped_rows = list(mapped_by_pin.values())
 
         if not mapped_rows:
             return 0
@@ -506,7 +509,7 @@ class CacheLoaderService:
         per row and skips ``None`` results.  Returns the count of successfully
         upserted rows.
         """
-        mapped_rows = []
+        mapped_by_pin: dict[str, dict] = {}
         for row in rows:
             mapped = self._map_row(
                 row,
@@ -514,7 +517,10 @@ class CacheLoaderService:
                 self.IMPROVEMENT_CHARS_NOT_NULL,
             )
             if mapped is not None:
-                mapped_rows.append(mapped)
+                # Keep the last occurrence of each PIN — same as what the upsert converges to.
+                mapped_by_pin[mapped['pin']] = mapped
+
+        mapped_rows = list(mapped_by_pin.values())
 
         if not mapped_rows:
             return 0

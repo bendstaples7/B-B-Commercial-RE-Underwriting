@@ -2015,3 +2015,60 @@ export interface SearchResponse {
   leads: SearchResultItem[]
   sessions: SearchResultItem[]
 }
+
+// -----------------------------------------------------------------------
+// Data Sources Panel Types
+// -----------------------------------------------------------------------
+
+export type SocrataDatasetStatusValue = 'fresh' | 'stale' | 'empty' | 'never_synced'
+export type RefreshType = 'periodic' | 'on_demand' | 'static'
+
+export interface SocrataDatasetStatus {
+  name: string
+  source_type: 'socrata'
+  refresh_type: 'periodic'
+  is_active: boolean
+  status: SocrataDatasetStatusValue
+  last_refreshed_at: string | null   // ISO-8601 UTC
+  row_count: number
+  days_since_sync: number | null     // always >= 0 when non-null
+  last_error: string | null
+}
+
+export interface EnrichmentSourceStatus {
+  name: string
+  source_type: 'enrichment'
+  refresh_type: 'on_demand'
+  is_active: boolean
+  last_refreshed_at: string | null
+  success_count: number
+  failed_count: number
+  pending_count: number
+  not_run_count: number
+  total_leads_count: number
+}
+
+export interface ImportSourceStatus {
+  name: string
+  source_type: 'import'
+  refresh_type: 'static'
+  is_active: boolean
+  last_refreshed_at: string | null
+  rows_imported: number | null
+  import_status: string | null
+}
+
+export interface HubSpotSourceStatus {
+  name: string
+  source_type: 'hubspot'
+  refresh_type: 'on_demand'
+  is_active: boolean
+  connected: boolean
+}
+
+export interface DataSourceStatus {
+  socrata_datasets: SocrataDatasetStatus[]
+  enrichment_sources: EnrichmentSourceStatus[]
+  import_source: ImportSourceStatus
+  hubspot_source: HubSpotSourceStatus
+}

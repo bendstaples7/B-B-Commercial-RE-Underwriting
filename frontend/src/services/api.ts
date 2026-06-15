@@ -1622,3 +1622,15 @@ export const searchService = {
     return response.data
   },
 }
+
+// ---------------------------------------------------------------------------
+// Data Sources Panel API Service
+// ---------------------------------------------------------------------------
+import type { DataSourceStatus } from '@/types'
+
+export const dataSourcesService = {
+  getStatus: async (): Promise<DataSourceStatus> => {
+    const response = await api.get<DataSourceStatus>('/data-sources/status')
+    return response.data
+  },
+}
