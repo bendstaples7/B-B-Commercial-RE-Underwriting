@@ -1874,3 +1874,57 @@ class LoginSchema(RequestSchema):
         if email and isinstance(email, str):
             data['email'] = email.strip().lower()
         return data
+
+
+# -----------------------------------------------------------------------
+# Data Sources Panel Schemas
+# -----------------------------------------------------------------------
+
+class SocrataDatasetStatusSchema(Schema):
+    name = fields.Str(required=True)
+    source_type = fields.Str(required=True)
+    refresh_type = fields.Str(required=True)
+    is_active = fields.Bool(required=True)
+    status = fields.Str(required=True)
+    last_refreshed_at = fields.Str(allow_none=True)
+    row_count = fields.Int(required=True)
+    days_since_sync = fields.Int(allow_none=True)
+    last_error = fields.Str(allow_none=True)
+
+
+class EnrichmentSourceStatusSchema(Schema):
+    name = fields.Str(required=True)
+    source_type = fields.Str(required=True)
+    refresh_type = fields.Str(required=True)
+    is_active = fields.Bool(required=True)
+    last_refreshed_at = fields.Str(allow_none=True)
+    success_count = fields.Int(required=True)
+    failed_count = fields.Int(required=True)
+    pending_count = fields.Int(required=True)
+    not_run_count = fields.Int(required=True)
+    total_leads_count = fields.Int(required=True)
+
+
+class ImportSourceStatusSchema(Schema):
+    name = fields.Str(required=True)
+    source_type = fields.Str(required=True)
+    refresh_type = fields.Str(required=True)
+    is_active = fields.Bool(required=True)
+    last_refreshed_at = fields.Str(allow_none=True)
+    rows_imported = fields.Int(allow_none=True)
+    import_status = fields.Str(allow_none=True)
+
+
+class HubSpotSourceStatusSchema(Schema):
+    name = fields.Str(required=True)
+    source_type = fields.Str(required=True)
+    refresh_type = fields.Str(required=True)
+    is_active = fields.Bool(required=True)
+    connected = fields.Bool(required=True)
+
+
+class DataSourceStatusSchema(Schema):
+    socrata_datasets = fields.List(fields.Nested(SocrataDatasetStatusSchema), required=True)
+    enrichment_sources = fields.List(fields.Nested(EnrichmentSourceStatusSchema), required=True)
+    import_source = fields.Nested(ImportSourceStatusSchema, required=True)
+    hubspot_source = fields.Nested(HubSpotSourceStatusSchema, required=True)
