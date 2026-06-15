@@ -190,23 +190,30 @@ export function formatTimestamp(isoString: string | null): string {
 }
 
 /**
- * Returns the next Sunday at 02:00 UTC formatted as "MM/DD/YYYY" local time.
+ * Returns the next Sunday at 02:00 UTC formatted as "MM/DD/YYYY" in UTC.
  * The Celery Beat schedule runs every Sunday at 02:00 UTC.
+ * If today is Sunday and the 02:00 UTC refresh hasn't happened yet, returns today.
  */
 function nextSundayRefresh(): string {
   const now = new Date()
   const utcDay = now.getUTCDay()       // 0=Sun, 1=Mon, ..., 6=Sat
-  const daysUntilSunday = utcDay === 0 ? 7 : 7 - utcDay   // always next Sunday (not today)
+  let daysUntilSunday: number
+  if (utcDay === 0) {
+    // It's Sunday — check if 02:00 UTC refresh has already run today
+    daysUntilSunday = now.getUTCHours() < 2 ? 0 : 7
+  } else {
+    daysUntilSunday = 7 - utcDay
+  }
   const next = new Date(Date.UTC(
     now.getUTCFullYear(),
     now.getUTCMonth(),
     now.getUTCDate() + daysUntilSunday,
     2, 0, 0,
   ))
-  // Format in local timezone
-  const mm = String(next.getMonth() + 1).padStart(2, '0')
-  const dd = String(next.getDate()).padStart(2, '0')
-  const yyyy = next.getFullYear()
+  // Format using UTC date parts so the date matches the UTC schedule
+  const mm = String(next.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(next.getUTCDate()).padStart(2, '0')
+  const yyyy = next.getUTCFullYear()
   return `${mm}/${dd}/${yyyy}`
 }
 
@@ -343,8 +350,11 @@ export default function DataSourcesPanel() {
   if (isLoading) return <DataSourcesSkeleton />
   if (isError) return <DataSourcesError onRetry={() => refetch({ cancelRefetch: true })} />
   if (!data) return <DataSourcesSkeleton />
+  // Only show "no data sources" when all four source categories are empty/null
   const allEmpty = data.socrata_datasets.length === 0 &&
-                   data.enrichment_sources.length === 0
+                   data.enrichment_sources.length === 0 &&
+                   !data.import_source &&
+                   !data.hubspot_source
 
   return (
     <Box sx={{ p: 2 }}>

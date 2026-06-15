@@ -575,7 +575,7 @@ class TestProperty10SyncLogOnSuccess:
             )
         assert len(logs) >= 1, "Expected at least one success sync_log row"
         assert any(log.rows_upserted == total_rows for log in logs), (
-            f"No log with rows_upserted={total_rows} found in {[(l.status, l.rows_upserted) for l in logs]}"
+            f"No log with rows_upserted={total_rows} found in {[(log.status, log.rows_upserted) for log in logs]}"
         )
 
 

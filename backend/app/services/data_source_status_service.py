@@ -177,13 +177,9 @@ class DataSourceStatusService:
     def _get_import_source(self, user_id: str) -> dict:
         """Return most-recent completed ImportJob info for user_id.
 
-        Falls back to any completed job (any user) when the exact user_id
-        match returns nothing — this handles legacy imports that were recorded
-        with user_id='default' before per-user authentication was introduced.
-
-        Returns null fields when no completed job exists at all.
+        Returns null fields when no completed job exists for this user.
         """
-        # First try scoped to this user
+        # Scoped to this user only — no cross-user fallback to prevent data leakage
         job: Optional[ImportJob] = (
             db.session.query(ImportJob)
             .filter(
@@ -194,16 +190,6 @@ class DataSourceStatusService:
             .limit(1)
             .first()
         )
-
-        # Fall back to any completed job (covers legacy user_id='default' records)
-        if job is None:
-            job = (
-                db.session.query(ImportJob)
-                .filter(ImportJob.status == "completed")
-                .order_by(ImportJob.completed_at.desc())
-                .limit(1)
-                .first()
-            )
 
         last_refreshed_at: Optional[str] = None
         rows_imported: Optional[int] = None

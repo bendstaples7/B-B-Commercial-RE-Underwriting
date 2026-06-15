@@ -101,7 +101,7 @@ Implement the Data Sources Panel as a read-only diagnostic UI in the Lead Manage
     - _Requirements: 6.5, 7.3_
 
   - [x] 6.3 Implement `SocrataSourceCard` sub-component
-    - Display `Refresh_Type` label (`Periodic`), `Dataset_Status` chip, last refreshed timestamp formatted as `YYYY-MM-DD HH:MM` in local timezone
+    - Display `Refresh_Type` label (`Periodic`), `Dataset_Status` chip, last refreshed timestamp formatted as `MM/DD/YYYY HH:MM` in local timezone
     - Display amber `WarningAmberIcon` with `aria-label="{name}: stale"` when `status === 'stale'`; include days-since-sync count
     - Display red `ErrorIcon` with `aria-label="{name}: {status}"` when `status === 'never_synced'` or `'empty'`
     - Display "No successful sync has occurred" when `last_refreshed_at` is null
@@ -116,7 +116,7 @@ Implement the Data Sources Panel as a read-only diagnostic UI in the Lead Manage
     - _Requirements: 1.1, 1.5, 2.3, 3.4, 4.1, 4.2, 4.3, 4.4, 4.5, 6.4_
 
   - [x] 6.5 Implement `ImportSourceCard` and `HubSpotSourceCard` sub-components
-    - `ImportSourceCard`: display `Static` refresh type label; when completed job exists, show `completed_at` formatted as `YYYY-MM-DD HH:MM` in local timezone and `rows_imported` count; otherwise display "No imports yet."
+    - `ImportSourceCard`: display `Static` refresh type label; when completed job exists, show `completed_at` formatted as `MM/DD/YYYY HH:MM` in local timezone and `rows_imported` count; otherwise display "No imports yet."
     - `HubSpotSourceCard`: display `On Demand` refresh type label; green "Connected" chip when `connected === true`; grey "Not configured" chip otherwise
     - _Requirements: 1.3, 1.4, 2.4, 3.3_
 

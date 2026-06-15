@@ -55,10 +55,10 @@ The Data Sources Panel is a UI feature in the Lead Management section of the Rea
 
 #### Acceptance Criteria
 
-1. WHEN a Socrata dataset has `Dataset_Status = fresh` or `stale`, THE Data_Sources_Panel SHALL display the `completed_at` timestamp of the most recent successful `Sync_Log` entry for that dataset, formatted as `YYYY-MM-DD HH:MM` in the user's local timezone.
+1. WHEN a Socrata dataset has `Dataset_Status = fresh` or `stale`, THE Data_Sources_Panel SHALL display the `completed_at` timestamp of the most recent successful `Sync_Log` entry for that dataset, formatted as `MM/DD/YYYY HH:MM` in the user's local timezone.
 2. WHEN a Socrata dataset has `Dataset_Status = never_synced` or `empty`, THE Data_Sources_Panel SHALL display the message "No successful sync has occurred" for the last refresh field.
-3. WHEN a Google Sheets import source has a completed `ImportJob` (where `status = 'completed'`), THE Data_Sources_Panel SHALL display the `completed_at` timestamp of the most recent such job, formatted as `YYYY-MM-DD HH:MM` in the user's local timezone.
-4. WHEN an enrichment data source has at least one `Enrichment_Record` for the authenticated User's leads, THE Data_Sources_Panel SHALL display the `created_at` timestamp of the most recent such record, formatted as `YYYY-MM-DD HH:MM` in the user's local timezone.
+3. WHEN a Google Sheets import source has a completed `ImportJob` (where `status = 'completed'`), THE Data_Sources_Panel SHALL display the `completed_at` timestamp of the most recent such job, formatted as `MM/DD/YYYY HH:MM` in the user's local timezone.
+4. WHEN an enrichment data source has at least one `Enrichment_Record` for the authenticated User's leads, THE Data_Sources_Panel SHALL display the `created_at` timestamp of the most recent such record, formatted as `MM/DD/YYYY HH:MM` in the user's local timezone.
 5. IF none of criteria 1–4 apply to a data source (i.e., it has never been synced, imported, or used for enrichment), THEN THE Data_Sources_Panel SHALL display "Never used" for the last refresh field.
 
 ---
@@ -83,7 +83,7 @@ The Data Sources Panel is a UI feature in the Lead Management section of the Rea
 
 #### Acceptance Criteria
 
-1. THE API_Service SHALL expose a `GET /api/data-sources/status` endpoint that returns a JSON array of data source status objects, where each object contains at minimum: `name`, `source_type`, `refresh_type`, `is_active`, `last_refreshed_at`, and `status`.
+1. THE API_Service SHALL expose a `GET /api/data-sources/status` endpoint that returns a JSON object with four keys: `socrata_datasets` (array of Socrata dataset status objects), `enrichment_sources` (array of enrichment source objects), `import_source` (single import source object), and `hubspot_source` (single HubSpot status object). Each source object SHALL contain at minimum: `name`, `source_type`, `refresh_type`, `is_active`, `last_refreshed_at`, and `status` where applicable.
 2. WHEN the authenticated User makes a request, THE API_Service SHALL include per-user enrichment coverage counts scoped to that User's leads, with the fields `success_count`, `failed_count`, `pending_count`, and `total_leads_count` for each `on_demand` source.
 3. WHEN Socrata dataset statuses are retrieved, THE API_Service SHALL delegate to the existing `CacheStatusService` and include the resulting status value, which SHALL be one of `fresh`, `stale`, `empty`, or `never_synced`.
 4. WHEN the authenticated User has a configured import source, THE API_Service SHALL include the most recent `ImportJob` fields `status`, `rows_imported`, and `completed_at` for that source. IF no `ImportJob` exists for the User, THEN those fields SHALL be `null`.
