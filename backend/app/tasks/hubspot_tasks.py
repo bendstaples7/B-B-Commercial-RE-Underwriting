@@ -257,16 +257,123 @@ def _run_import_generic(
 # ---------------------------------------------------------------------------
 
 def run_import_hubspot_deals(run_id: int, self_task=None) -> None:
-    """Paginate and UPSERT all HubSpot deals into hubspot_deals.
+    """Paginate and UPSERT all HubSpot deals into hubspot_deals, then
+    backfill contact associations via the v4 batch API.
+
+    The CRM v3 list endpoint silently returns an empty ``associations`` block
+    for all deals, so we run a separate v4 batch read after the import to
+    populate ``raw_payload["associations"]["contacts"]`` for every deal.
 
     Requirements: 7.6, 7.7, 7.8, 8.1, 8.6, 20.2, 20.3
     """
+    from dotenv import load_dotenv
+    load_dotenv()
+    from app import create_app
+
+    app = create_app()
+
+    # Step 1 — standard paginated import (stores deals without associations)
     _run_import_generic(
         run_id=run_id,
         object_type='deals',
         model_class_name='HubSpotDeal',
         fetch_method_name='fetch_all_deals',
         self_task=self_task,
+    )
+
+    # Step 2 — backfill contact associations via v4 batch API
+    with app.app_context():
+        from app import db
+        from app.models import HubSpotDeal, HubSpotConfig
+        from app.services.hubspot_client_service import HubSpotClientService
+
+        config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
+        if config is None:
+            logger.warning(
+                "run_import_hubspot_deals: skipping association backfill — no HubSpotConfig"
+            )
+            return
+
+        _backfill_deal_contact_associations(app, db, HubSpotClientService(config))
+
+
+def _backfill_deal_contact_associations(app, db, client) -> None:
+    """Fetch contact associations for all deals via the v4 batch API and
+    merge them into each deal's ``raw_payload["associations"]["contacts"]``.
+
+    Safe to call multiple times — existing contact IDs in the payload are
+    preserved; new ones from HubSpot are merged in.
+
+    Processes deals in batches of 100 (the v4 API limit).
+    """
+    from app.models import HubSpotDeal
+    from app.services.hubspot_client_service import HubSpotClientService
+
+    all_deals = HubSpotDeal.query.all()
+    deal_ids = [d.hubspot_id for d in all_deals]
+    id_to_deal = {d.hubspot_id: d for d in all_deals}
+
+    if not deal_ids:
+        logger.info("_backfill_deal_contact_associations: no deals to process")
+        return
+
+    logger.info(
+        "_backfill_deal_contact_associations: fetching associations for %d deals",
+        len(deal_ids),
+    )
+
+    try:
+        assoc_map = client.fetch_deal_contact_associations(deal_ids)
+    except Exception as exc:
+        logger.error(
+            "_backfill_deal_contact_associations: failed to fetch associations: %s", exc
+        )
+        return
+
+    updated = 0
+    for deal_id, contact_ids in assoc_map.items():
+        deal = id_to_deal.get(deal_id)
+        if deal is None:
+            continue
+        if not contact_ids:
+            continue
+
+        # Merge into raw_payload["associations"]["contacts"]["results"]
+        # Preserve any existing entries; add new ones.
+        payload = dict(deal.raw_payload or {})
+        assoc = dict(payload.get("associations", {}))
+        contacts_block = dict(assoc.get("contacts", {}))
+        existing_results = list(contacts_block.get("results", []))
+        existing_ids = {str(r.get("id", "")) for r in existing_results}
+
+        new_results = list(existing_results)
+        for cid in contact_ids:
+            if cid not in existing_ids:
+                new_results.append({"id": cid, "type": "deal_to_contact"})
+                existing_ids.add(cid)
+
+        if len(new_results) == len(existing_results):
+            # Nothing new — skip the write
+            continue
+
+        contacts_block["results"] = new_results
+        assoc["contacts"] = contacts_block
+        payload["associations"] = assoc
+        deal.raw_payload = payload
+        db.session.add(deal)
+        updated += 1
+
+        # Commit in batches of 100 to avoid a huge single transaction
+        if updated % 100 == 0:
+            db.session.commit()
+            logger.debug(
+                "_backfill_deal_contact_associations: committed %d updates so far", updated
+            )
+
+    db.session.commit()
+    logger.info(
+        "_backfill_deal_contact_associations: complete — %d deals updated with contact associations",
+        updated,
     )
 
 
