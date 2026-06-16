@@ -33,11 +33,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _rescore_after_status_change(lead_id: int) -> None:
-    """Recompute lead_score and recommended_action after a pipeline stage change.
+    """Recompute lead_score then recommended_action after a pipeline stage change.
 
-    The LeadScoringEngine._pipeline_stage_bonus varies per status, so score
-    must be refreshed whenever lead_status is written.  Failures are non-fatal
-    because the nightly bulk_rescore beat task is the safety net.
+    Order matters: rescore first (so the new pipeline stage bonus is applied),
+    then recompute recommended_action (so any score-threshold rules see the
+    updated score). Failures are non-fatal — the nightly beat task is the
+    safety net.
     """
     try:
         from app import db
@@ -55,6 +56,18 @@ def _rescore_after_status_change(lead_id: int) -> None:
     except Exception as exc:
         logger.warning(
             "_rescore_after_status_change: rescore failed for lead_id=%d: %s",
+            lead_id, exc,
+        )
+        return  # Don't attempt action recompute if score failed
+
+    # Recompute action AFTER score so any score-threshold rules (e.g. score >= 70
+    # → ready_for_outreach) reflect the freshly updated score.
+    try:
+        ActionEngineService.recompute_and_persist(lead_id)
+        logger.info("_rescore_after_status_change: action recomputed for lead_id=%d", lead_id)
+    except Exception as exc:
+        logger.warning(
+            "_rescore_after_status_change: action recompute failed for lead_id=%d: %s",
             lead_id, exc,
         )
 
@@ -784,18 +797,10 @@ def update_status(lead_id: int):
     db.session.add(entry)
     db.session.commit()
 
-    # Trigger RA recomputation (unless DNC/suppressed)
+    # Rescore first, then recompute RA (inside _rescore_after_status_change)
+    # so the action reflects the updated score.
     if new_status not in ('do_not_contact', 'suppressed'):
-        try:
-            ActionEngineService.recompute_and_persist(lead_id)
-        except Exception as exc:
-            logger.exception(
-                "ActionEngineService.recompute_and_persist failed for lead %s after status update: %s",
-                lead_id, exc,
-            )
-
-    # Rescore — pipeline stage bonus changes with every status transition
-    _rescore_after_status_change(lead_id)
+        _rescore_after_status_change(lead_id)
 
     return jsonify({'lead_status': lead.lead_status, 'recommended_action': lead.recommended_action}), 200
 
@@ -1047,15 +1052,7 @@ def park_lead(lead_id: int):
     db.session.add(entry)
     db.session.commit()
 
-    # Recompute RA — nurture leads get RA=null per Priority 2
-    try:
-        ActionEngineService.recompute_and_persist(lead_id)
-    except Exception as exc:
-        logger.exception(
-            "ActionEngineService.recompute_and_persist failed for lead %s after park: %s",
-            lead_id, exc,
-        )
-
+    # Rescore first, then recompute RA (inside _rescore_after_status_change).
     _rescore_after_status_change(lead_id)
 
     return jsonify({'lead_status': 'deprioritize'}), 200
@@ -1095,14 +1092,7 @@ def reactivate_lead(lead_id: int):
     db.session.add(entry)
     db.session.commit()
 
-    try:
-        ActionEngineService.recompute_and_persist(lead_id)
-    except Exception as exc:
-        logger.exception(
-            "ActionEngineService.recompute_and_persist failed for lead %s after reactivation: %s",
-            lead_id, exc,
-        )
-
+    # Rescore first, then recompute RA (inside _rescore_after_status_change).
     _rescore_after_status_change(lead_id)
 
     return jsonify({'lead_status': 'mailing_no_contact_made', 'recommended_action': lead.recommended_action}), 200

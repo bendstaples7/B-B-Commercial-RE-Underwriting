@@ -919,19 +919,24 @@ def run_extract_incremental_signals(engagement_id: str, lead_id: int) -> None:
 def run_rescore_lead(lead_id: int) -> None:
     """Run LeadScoringEngine and ActionEngineService for a single lead.
 
-    Calls engine.bulk_rescore(lead_ids=[lead_id]) to refresh the lead score,
-    then recomputes recommended_action via ActionEngineService so any
-    HubSpot signal changes are immediately reflected in the UI.
+    Rescores first (so the pipeline stage bonus is applied), then recomputes
+    recommended_action so any HubSpot signal changes are immediately reflected.
 
     Requirements: 3, 5
     """
     with _AppContextManager():
+        from app import db
+        from app.models.lead import Lead
         from app.services import LeadScoringEngine
         from app.services.action_engine_service import ActionEngineService
 
+        # Resolve user_id from the lead's owner — required by bulk_rescore for weights.
+        lead = db.session.get(Lead, lead_id)
+        user_id = (lead.owner_user_id if lead else None) or 'default'
+
         try:
             engine = LeadScoringEngine()
-            rescored = engine.bulk_rescore(lead_ids=[lead_id])
+            rescored = engine.bulk_rescore(user_id=user_id, lead_ids=[lead_id])
             logger.info(
                 "run_rescore_lead: lead_id=%d rescored=%d",
                 lead_id, rescored,
@@ -943,8 +948,8 @@ def run_rescore_lead(lead_id: int) -> None:
             )
             raise
 
-        # Recompute recommended_action so stale values are cleared immediately
-        # after any HubSpot sync — not just during the nightly bulk pass.
+        # Recompute recommended_action AFTER score so score-threshold rules
+        # (e.g. score >= 70 → ready_for_outreach) see the updated value.
         try:
             ActionEngineService.recompute_and_persist(lead_id)
             logger.info(
@@ -952,8 +957,7 @@ def run_rescore_lead(lead_id: int) -> None:
                 lead_id,
             )
         except Exception as exc:
-            # Non-fatal — score was updated, action recompute is best-effort here
-            # since the nightly beat task will catch any misses.
+            # Non-fatal — nightly beat task is the safety net.
             logger.warning(
                 "run_rescore_lead: action recompute failed for lead_id=%d: %s",
                 lead_id, exc,

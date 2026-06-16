@@ -73,13 +73,22 @@ def downgrade():
     #
     # DROP INDEX IF EXISTS -- no index was created; this is a data-only migration.
     #
-    # Reverse the property_type backfill — only clear values that match
-    # exactly what we would have written (avoids nuking manual edits).
+    # Reverse the property_type backfill precisely: only clear rows where the
+    # current property_type matches what the upgrade CASE expression would have
+    # set for that row's unit count.  This avoids clearing values that were
+    # already set before this migration ran (e.g. a row with units=3 and
+    # property_type='triplex' that was manually entered pre-migration).
     op.execute("""
         UPDATE leads
         SET property_type = NULL
-        WHERE property_type IN ('single_family', 'duplex', 'triplex', 'fourplex', 'multi_family')
-          AND units IS NOT NULL
+        WHERE units IS NOT NULL
+          AND property_type = CASE
+              WHEN units = 1 THEN 'single_family'
+              WHEN units = 2 THEN 'duplex'
+              WHEN units = 3 THEN 'triplex'
+              WHEN units = 4 THEN 'fourplex'
+              WHEN units >= 5 THEN 'multi_family'
+          END
     """)
     # recommended_action downgrade is intentionally a no-op — we cannot
     # safely restore stale 'analyze_property' values.
