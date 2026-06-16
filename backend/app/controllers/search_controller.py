@@ -211,13 +211,7 @@ def search():
                 WHEN :phone_digits_pattern IS NOT NULL AND (
                     regexp_replace(COALESCE(l.phone_7,''),'[^0-9]','','g') LIKE :phone_digits_pattern
                 ) THEN l.phone_7
-                WHEN :phone_digits_pattern IS NOT NULL AND EXISTS (
-                    SELECT 1
-                    FROM property_contacts pc2
-                    JOIN contact_phones cp2 ON cp2.contact_id = pc2.contact_id
-                    WHERE pc2.property_id = l.id
-                      AND regexp_replace(COALESCE(cp2.value,''),'[^0-9]','','g') LIKE :phone_digits_pattern
-                ) THEN (
+                WHEN :phone_digits_pattern IS NOT NULL THEN (
                     SELECT cp2.value
                     FROM property_contacts pc2
                     JOIN contact_phones cp2 ON cp2.contact_id = pc2.contact_id
@@ -233,13 +227,7 @@ def search():
                 WHEN l.email_3 ILIKE :pattern THEN l.email_3
                 WHEN l.email_4 ILIKE :pattern THEN l.email_4
                 WHEN l.email_5 ILIKE :pattern THEN l.email_5
-                WHEN EXISTS (
-                    SELECT 1
-                    FROM property_contacts pc3
-                    JOIN contact_emails ce3 ON ce3.contact_id = pc3.contact_id
-                    WHERE pc3.property_id = l.id
-                      AND ce3.value ILIKE :pattern
-                ) THEN (
+                ELSE (
                     SELECT ce3.value
                     FROM property_contacts pc3
                     JOIN contact_emails ce3 ON ce3.contact_id = pc3.contact_id

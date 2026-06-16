@@ -209,6 +209,28 @@ def _process_webhook_event_inner(log_id: int, self_task=None) -> None:
                 or object_type
             )
             to_type = raw.get('toObjectType', '')
+
+            # HubSpot webhook payloads rarely include toObjectType directly.
+            # Derive it from available fields in priority order:
+            #   1. toObjectType (v4 payloads only)
+            #   2. Infer from associationType string (e.g. "HUBSPOT_DEFINED" for
+            #      standard deal↔contact links)
+            #   3. Infer from the subscription_type second segment
+            #      e.g. "deal.associationCreated" → from=deal, so to=contact
+            if not to_type:
+                assoc_type = raw.get('associationType', '').lower()
+                if 'contact' in assoc_type:
+                    to_type = 'contact'
+                elif 'deal' in assoc_type:
+                    to_type = 'deal'
+                elif 'company' in assoc_type:
+                    to_type = 'company'
+                else:
+                    # Fall back: if from_type is "deal", counterpart is "contact" and vice versa
+                    if from_type == 'deal':
+                        to_type = 'contact'
+                    elif from_type == 'contact':
+                        to_type = 'deal'
             to_id = str(raw.get('associatedObjectId', raw.get('toObjectId', '')))
 
             if to_id:
@@ -510,8 +532,12 @@ def run_handle_association_event(
             deal_id_str, contact_id_str = to_object_id, from_object_id
 
         try:
-            # 1. Re-fetch the deal's current contact associations from v4 and merge
-            assoc_map = client.fetch_deal_contact_associations([deal_id_str])
+            # 1. Re-fetch the deal's current contact associations from v4.
+            # allow_partial=False: a single-deal fetch either succeeds or raises —
+            # we don't want a silent empty result masking an API failure.
+            assoc_map = client.fetch_deal_contact_associations(
+                [deal_id_str], allow_partial=False
+            )
             contact_ids = assoc_map.get(deal_id_str, [])
 
             deal = HubSpotDeal.query.filter_by(hubspot_id=deal_id_str).first()
@@ -519,15 +545,13 @@ def run_handle_association_event(
                 payload = dict(deal.raw_payload or {})
                 assoc = dict(payload.get("associations", {}))
                 contacts_block = dict(assoc.get("contacts", {}))
-                existing_results = list(contacts_block.get("results", []))
-                existing_ids = {str(r.get("id", "")) for r in existing_results}
 
-                for cid in contact_ids:
-                    if cid not in existing_ids:
-                        existing_results.append({"id": cid, "type": "deal_to_contact"})
-                        existing_ids.add(cid)
-
-                contacts_block["results"] = existing_results
+                # Replace with the authoritative list from the v4 API so that
+                # association.deleted events correctly remove contacts that are
+                # no longer linked, rather than just appending new ones.
+                contacts_block["results"] = [
+                    {"id": cid, "type": "deal_to_contact"} for cid in contact_ids
+                ]
                 assoc["contacts"] = contacts_block
                 payload["associations"] = assoc
                 deal.raw_payload = payload

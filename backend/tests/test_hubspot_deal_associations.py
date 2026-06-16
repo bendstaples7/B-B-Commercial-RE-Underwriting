@@ -36,9 +36,10 @@ def _seed_deal(hubspot_id, associations=None, run_id=None):
     return deal
 
 
-def _seed_contact(hubspot_id, associations=None):
+def _seed_contact(hubspot_id, associations=None, run_id=None):
     contact = HubSpotContact(
         hubspot_id=hubspot_id,
+        import_run_id=run_id,
         raw_payload={
             "id": hubspot_id,
             "properties": {"firstname": "Test", "lastname": hubspot_id},
@@ -337,6 +338,45 @@ class TestCheckAssociationHealth:
             _seed_deal("deal-pop-2", associations={"contacts": {"results": [{"id": "c2"}]}}, run_id=run_id)
             from app.tasks.hubspot_tasks import _check_association_health
             _check_association_health(db, 'deals', run_id)
+            from app.models import HubSpotImportRun
+            run = HubSpotImportRun.query.get(run_id)
+            assert run.status == 'success'
+
+    def test_contacts_branch_marks_partial_when_all_empty(self, app):
+        """All 10 contacts have empty deal associations → run is marked partial."""
+        from app.models import HubSpotImportRun
+        with app.app_context():
+            run = HubSpotImportRun(object_type='contacts', status='success', total_fetched=10, created_count=10)
+            db.session.add(run)
+            db.session.commit()
+            run_id = run.id
+
+        with app.app_context():
+            for i in range(10):
+                _seed_contact(f"contact-h-{i}", run_id=run_id)
+            from app.tasks.hubspot_tasks import _check_association_health
+            _check_association_health(db, 'contacts', run_id)
+            from app.models import HubSpotImportRun
+            run = HubSpotImportRun.query.get(run_id)
+            assert run.status == 'partial'
+            assert run.error_message is not None
+
+    def test_contacts_branch_stays_success_when_enough_populated(self, app):
+        """If >10% of contacts have deal associations, run stays success."""
+        from app.models import HubSpotImportRun
+        with app.app_context():
+            run = HubSpotImportRun(object_type='contacts', status='success', total_fetched=10, created_count=10)
+            db.session.add(run)
+            db.session.commit()
+            run_id = run.id
+
+        with app.app_context():
+            for i in range(8):
+                _seed_contact(f"contact-empty-{i}", run_id=run_id)
+            _seed_contact("contact-pop-1", associations={"deals": {"results": [{"id": "d1"}]}}, run_id=run_id)
+            _seed_contact("contact-pop-2", associations={"deals": {"results": [{"id": "d2"}]}}, run_id=run_id)
+            from app.tasks.hubspot_tasks import _check_association_health
+            _check_association_health(db, 'contacts', run_id)
             from app.models import HubSpotImportRun
             run = HubSpotImportRun.query.get(run_id)
             assert run.status == 'success'

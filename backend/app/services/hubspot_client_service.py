@@ -509,7 +509,7 @@ class HubSpotClientService:
     # deal IDs per request.
     _ASSOC_BATCH_SIZE = 100
 
-    def fetch_deal_contact_associations(self, deal_ids: list[str]) -> dict[str, list[str]]:
+    def fetch_deal_contact_associations(self, deal_ids: list[str], allow_partial: bool = True) -> dict[str, list[str]]:
         """Fetch contact associations for a list of deal IDs via the v4 batch API.
 
         The CRM v3 list endpoint (``GET /crm/v3/objects/deals?associations=contacts``)
@@ -518,20 +518,20 @@ class HubSpotClientService:
         deal → contact links.
 
         Args:
-            deal_ids: List of HubSpot deal ID strings.
+            deal_ids:      List of HubSpot deal ID strings.
+            allow_partial: Forwarded to ``_fetch_associations_batch``.  Use
+                ``False`` for single-deal webhook calls so API failures are
+                not silently swallowed.
 
         Returns:
             Dict mapping each deal_id → list of associated contact_id strings.
-            Deal IDs with no contacts are mapped to an empty list.
-            Deal IDs that HubSpot returns no result for are omitted entirely
-            (caller should treat them as having no contacts).
 
         Raises:
             HubSpotAuthenticationError, HubSpotRateLimitError, ExternalServiceError.
         """
-        return self._fetch_associations_batch("deals", "contacts", deal_ids)
+        return self._fetch_associations_batch("deals", "contacts", deal_ids, allow_partial=allow_partial)
 
-    def fetch_contact_deal_associations(self, contact_ids: list[str]) -> dict[str, list[str]]:
+    def fetch_contact_deal_associations(self, contact_ids: list[str], allow_partial: bool = True) -> dict[str, list[str]]:
         """Fetch deal associations for a list of contact IDs via the v4 batch API.
 
         Mirror of :meth:`fetch_deal_contact_associations` for the contact → deal
@@ -539,7 +539,8 @@ class HubSpotClientService:
         after a contacts import, which the v3 list endpoint also leaves empty.
 
         Args:
-            contact_ids: List of HubSpot contact ID strings.
+            contact_ids:   List of HubSpot contact ID strings.
+            allow_partial: Forwarded to ``_fetch_associations_batch``.
 
         Returns:
             Dict mapping each contact_id → list of associated deal_id strings.
@@ -547,17 +548,23 @@ class HubSpotClientService:
         Raises:
             HubSpotAuthenticationError, HubSpotRateLimitError, ExternalServiceError.
         """
-        return self._fetch_associations_batch("contacts", "deals", contact_ids)
+        return self._fetch_associations_batch("contacts", "deals", contact_ids, allow_partial=allow_partial)
 
     def _fetch_associations_batch(
-        self, from_type: str, to_type: str, object_ids: list[str]
+        self, from_type: str, to_type: str, object_ids: list[str],
+        allow_partial: bool = True,
     ) -> dict[str, list[str]]:
         """Generic v4 associations batch/read for any from_type → to_type pair.
 
         Args:
-            from_type: Source object type slug (e.g. ``"deals"``, ``"contacts"``).
-            to_type:   Target object type slug (e.g. ``"contacts"``, ``"deals"``).
-            object_ids: List of source object ID strings.
+            from_type:     Source object type slug (e.g. ``"deals"``, ``"contacts"``).
+            to_type:       Target object type slug (e.g. ``"contacts"``, ``"deals"``).
+            object_ids:    List of source object ID strings.
+            allow_partial: When ``True`` (default) an ``ExternalServiceError`` on any
+                single batch is logged as a warning and the loop continues, returning
+                whatever partial results were gathered.  When ``False`` the exception
+                is re-raised immediately so single-batch callers (e.g. webhook refresh)
+                get a hard failure rather than a silent empty result.
 
         Returns:
             Dict mapping each source object ID → list of target object ID strings.
@@ -571,6 +578,8 @@ class HubSpotClientService:
             try:
                 response = self._post(path, body)
             except ExternalServiceError as exc:
+                if not allow_partial:
+                    raise
                 logger.warning(
                     "_fetch_associations_batch: %s→%s batch %d-%d failed: %s",
                     from_type, to_type, i, i + len(batch), exc,
