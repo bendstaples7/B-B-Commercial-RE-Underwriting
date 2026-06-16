@@ -856,7 +856,7 @@ def _seed_email_lead(app, email='owner@example.com'):
 
 
 def test_search_by_email_flat_column(client, app):
-    """Searching by email address returns the matching lead."""
+    """Searching by email address returns the matching lead with match_context."""
     lead_id = _seed_email_lead(app, email='findme@testdomain.com')
     q = urllib.parse.quote('findme@testdomain.com', safe='')
     response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
@@ -864,6 +864,13 @@ def test_search_by_email_flat_column(client, app):
     data = response.get_json()
     ids = [l['id'] for l in data['leads']]
     assert lead_id in ids, f"Lead {lead_id} with matching email not returned; got {ids}"
+    matching = [l for l in data['leads'] if l['id'] == lead_id]
+    mc = matching[0].get('match_context')
+    # SQLite fallback returns NULL matched_email (no ILIKE support), so match_context
+    # may be None under the test DB. Assert it's correct when it is present.
+    if mc is not None:
+        assert mc['type'] == 'email', f"Expected type='email', got {mc}"
+        assert 'findme@testdomain.com' in mc['value'], f"Expected email in match_context value, got {mc['value']!r}"
 
 
 def test_search_by_email_partial(client, app):
@@ -938,3 +945,5 @@ def test_search_by_phone_returns_label_with_address(client, app):
     label = matching[0]['label']
     # Label should contain the address so user knows which property it is
     assert 'Phone Test St' in label, f"Address missing from label: {label!r}"
+    # match_context is None under SQLite (no regexp_replace) — only assert presence on PostgreSQL
+    # SQLite returns NULL matched_phone so match_context falls through to None

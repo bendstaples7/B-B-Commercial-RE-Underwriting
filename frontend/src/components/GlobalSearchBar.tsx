@@ -39,62 +39,62 @@ function matchTypeLabel(type: SearchMatchContext['type']): string {
  * Uses an explicit fontWeight span so MUI Typography doesn't strip bold styling.
  */
 function highlightMatch(value: string, query: string): React.ReactNode {
-  if (!query) return value
-  // For phone searches the query might be digits-only (e.g. "0106") but the
-  // stored value has formatting ("(773) 454-0106"). Try the raw query first,
-  // then fall back to matching just the digit run.
-  const lv = value.toLowerCase()
-  const lq = query.toLowerCase()
-  let idx = lv.indexOf(lq)
+  const q = query.trim()
+  if (!q) return value
 
-  if (idx === -1) {
-    // digits-only query: find the digit sequence within the formatted value
-    const digits = query.replace(/\D/g, '')
-    if (digits.length >= 4) {
-      // Find position in value where the digit run of the query appears
-      let di = 0
-      let vi = 0
-      let startVi = -1
-      while (vi < value.length && di < digits.length) {
+  // Direct substring match first (handles email, formatted phone with exact match, names)
+  const lv = value.toLowerCase()
+  const lq = q.toLowerCase()
+  const idx = lv.indexOf(lq)
+
+  if (idx !== -1) {
+    return (
+      <>
+        {value.slice(0, idx)}
+        <Box component="span" sx={{ fontWeight: 700, color: 'text.primary' }}>
+          {value.slice(idx, idx + q.length)}
+        </Box>
+        {value.slice(idx + q.length)}
+      </>
+    )
+  }
+
+  // Digit-only query (e.g. "0106" or "5551234567"): find the digit run within
+  // the formatted value by stripping non-digits from both sides and locating
+  // the match position, then map back to the original string.
+  const queryDigits = q.replace(/\D/g, '')
+  if (queryDigits.length >= 4) {
+    const valueDigits = value.replace(/\D/g, '')
+    const digitIdx = valueDigits.indexOf(queryDigits)
+    if (digitIdx !== -1) {
+      // Walk the original value, counting only digits, to find the start and
+      // end positions that correspond to digit positions digitIdx and
+      // digitIdx + queryDigits.length - 1.
+      let digitsFound = 0
+      let startOrig = -1
+      let endOrig = -1
+      for (let vi = 0; vi < value.length; vi++) {
         if (/\d/.test(value[vi])) {
-          if (value[vi] === digits[di]) {
-            if (di === 0) startVi = vi
-            di++
-            if (di === digits.length) { idx = startVi; break }
-          } else {
-            di = 0; startVi = -1
-          }
+          if (digitsFound === digitIdx) startOrig = vi
+          if (digitsFound === digitIdx + queryDigits.length - 1) { endOrig = vi; break }
+          digitsFound++
         }
-        vi++
       }
-      if (idx !== -1) {
-        // Bold from startVi through the end of the digit run (skip formatting chars)
-        let endVi = vi
-        // Extend end to include trailing formatting chars like last digit position
+      if (startOrig !== -1 && endOrig !== -1) {
         return (
           <>
-            {value.slice(0, idx)}
+            {value.slice(0, startOrig)}
             <Box component="span" sx={{ fontWeight: 700, color: 'text.primary' }}>
-              {value.slice(idx, endVi + 1)}
+              {value.slice(startOrig, endOrig + 1)}
             </Box>
-            {value.slice(endVi + 1)}
+            {value.slice(endOrig + 1)}
           </>
         )
       }
     }
-    return value
   }
 
-  const matchLen = lq.length
-  return (
-    <>
-      {value.slice(0, idx)}
-      <Box component="span" sx={{ fontWeight: 700, color: 'text.primary' }}>
-        {value.slice(idx, idx + matchLen)}
-      </Box>
-      {value.slice(idx + matchLen)}
-    </>
-  )
+  return value
 }
 
 const GlobalSearchBar = () => {
@@ -394,7 +394,7 @@ const GlobalSearchBar = () => {
                                   {matchTypeLabel(lead.match_context.type)}:&nbsp;
                                 </Box>
                                 <Box component="span" sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
-                                  {highlightMatch(lead.match_context.value, query)}
+                                  {highlightMatch(lead.match_context.value, query.trim())}
                                 </Box>
                               </Box>
                             ) : undefined

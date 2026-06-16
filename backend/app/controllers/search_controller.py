@@ -83,15 +83,10 @@ def _build_match_context(row, q_trimmed: str, q_digits: str) -> dict | None:
     Returns a dict like:
         {"type": "phone", "value": "(773) 454-0106"}
         {"type": "email", "value": "owner@example.com"}
-        {"type": "name",  "value": "Sam Foster"}
-        {"type": "address", "value": "1233 W Foster"}
     or None if the match was on a name/address (already visible in the label).
 
     Priority: phone → email → (name/address → None, already shown in label)
     """
-    q_lower = q_trimmed.lower()
-
-    # Phone match — prefer the value returned by the SQL CASE expression
     matched_phone = getattr(row, 'matched_phone', None)
     if matched_phone:
         return {'type': 'phone', 'value': matched_phone}
@@ -191,37 +186,75 @@ def search():
             l.owner_user_id,
             primary_c.first_name  AS primary_contact_first_name,
             primary_c.last_name   AS primary_contact_last_name,
-            -- Return first matching phone/email for match_context
-            MAX(CASE WHEN regexp_replace(COALESCE(l.phone_1,''),'[^0-9]','','g') LIKE :phone_digits_pattern AND :phone_digits_pattern IS NOT NULL THEN l.phone_1
-                     WHEN regexp_replace(COALESCE(l.phone_2,''),'[^0-9]','','g') LIKE :phone_digits_pattern AND :phone_digits_pattern IS NOT NULL THEN l.phone_2
-                     WHEN regexp_replace(COALESCE(l.phone_3,''),'[^0-9]','','g') LIKE :phone_digits_pattern AND :phone_digits_pattern IS NOT NULL THEN l.phone_3
-                     WHEN regexp_replace(COALESCE(l.phone_4,''),'[^0-9]','','g') LIKE :phone_digits_pattern AND :phone_digits_pattern IS NOT NULL THEN l.phone_4
-                     WHEN regexp_replace(COALESCE(l.phone_5,''),'[^0-9]','','g') LIKE :phone_digits_pattern AND :phone_digits_pattern IS NOT NULL THEN l.phone_5
-                     WHEN regexp_replace(COALESCE(l.phone_6,''),'[^0-9]','','g') LIKE :phone_digits_pattern AND :phone_digits_pattern IS NOT NULL THEN l.phone_6
-                     WHEN regexp_replace(COALESCE(l.phone_7,''),'[^0-9]','','g') LIKE :phone_digits_pattern AND :phone_digits_pattern IS NOT NULL THEN l.phone_7
-                     WHEN regexp_replace(COALESCE(cp.value,''), '[^0-9]','','g') LIKE :phone_digits_pattern AND :phone_digits_pattern IS NOT NULL THEN cp.value
-                     ELSE NULL END) AS matched_phone,
-            MAX(CASE WHEN l.email_1 ILIKE :pattern THEN l.email_1
-                     WHEN l.email_2 ILIKE :pattern THEN l.email_2
-                     WHEN l.email_3 ILIKE :pattern THEN l.email_3
-                     WHEN l.email_4 ILIKE :pattern THEN l.email_4
-                     WHEN l.email_5 ILIKE :pattern THEN l.email_5
-                     WHEN ce.value  ILIKE :pattern THEN ce.value
-                     ELSE NULL END) AS matched_email
+            -- Correlated subqueries for match_context: only set when the SPECIFIC
+            -- field actually matched the query, avoiding the MAX()-over-Cartesian-
+            -- product problem where an unrelated contact's phone leaks through.
+            CASE
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_1,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_1
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_2,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_2
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_3,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_3
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_4,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_4
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_5,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_5
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_6,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_6
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_7,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_7
+                WHEN :phone_digits_pattern IS NOT NULL AND EXISTS (
+                    SELECT 1
+                    FROM property_contacts pc2
+                    JOIN contact_phones cp2 ON cp2.contact_id = pc2.contact_id
+                    WHERE pc2.property_id = l.id
+                      AND regexp_replace(COALESCE(cp2.value,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN (
+                    SELECT cp2.value
+                    FROM property_contacts pc2
+                    JOIN contact_phones cp2 ON cp2.contact_id = pc2.contact_id
+                    WHERE pc2.property_id = l.id
+                      AND regexp_replace(COALESCE(cp2.value,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                    LIMIT 1
+                )
+                ELSE NULL
+            END AS matched_phone,
+            CASE
+                WHEN l.email_1 ILIKE :pattern THEN l.email_1
+                WHEN l.email_2 ILIKE :pattern THEN l.email_2
+                WHEN l.email_3 ILIKE :pattern THEN l.email_3
+                WHEN l.email_4 ILIKE :pattern THEN l.email_4
+                WHEN l.email_5 ILIKE :pattern THEN l.email_5
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM property_contacts pc3
+                    JOIN contact_emails ce3 ON ce3.contact_id = pc3.contact_id
+                    WHERE pc3.property_id = l.id
+                      AND ce3.value ILIKE :pattern
+                ) THEN (
+                    SELECT ce3.value
+                    FROM property_contacts pc3
+                    JOIN contact_emails ce3 ON ce3.contact_id = pc3.contact_id
+                    WHERE pc3.property_id = l.id
+                      AND ce3.value ILIKE :pattern
+                    LIMIT 1
+                )
+                ELSE NULL
+            END AS matched_email
         FROM leads l
         LEFT JOIN property_contacts pc_primary
             ON pc_primary.property_id = l.id
             AND pc_primary.is_primary = TRUE
         LEFT JOIN contacts primary_c
             ON primary_c.id = pc_primary.contact_id
-        LEFT JOIN property_contacts pc_any
-            ON pc_any.property_id = l.id
-        LEFT JOIN contacts any_c
-            ON any_c.id = pc_any.contact_id
-        LEFT JOIN contact_phones cp
-            ON cp.contact_id = any_c.id
-        LEFT JOIN contact_emails ce
-            ON ce.contact_id = any_c.id
         WHERE
             (l.owner_user_id = :user_id OR :is_admin = TRUE)
             AND (l.owner_user_id IS NOT NULL OR :is_admin = TRUE)
@@ -232,15 +265,24 @@ def search():
                 OR l.owner_2_first_name ILIKE :pattern
                 OR l.owner_2_last_name  ILIKE :pattern
                 OR l.property_street   ILIKE :pattern
-                OR any_c.first_name    ILIKE :pattern
-                OR any_c.last_name     ILIKE :pattern
+                OR EXISTS (
+                    SELECT 1 FROM property_contacts pca
+                    JOIN contacts ca ON ca.id = pca.contact_id
+                    WHERE pca.property_id = l.id
+                      AND (ca.first_name ILIKE :pattern OR ca.last_name ILIKE :pattern)
+                )
                 -- Email matching (flat columns + relational)
                 OR l.email_1 ILIKE :pattern
                 OR l.email_2 ILIKE :pattern
                 OR l.email_3 ILIKE :pattern
                 OR l.email_4 ILIKE :pattern
                 OR l.email_5 ILIKE :pattern
-                OR ce.value  ILIKE :pattern
+                OR EXISTS (
+                    SELECT 1 FROM property_contacts pce
+                    JOIN contact_emails cex ON cex.contact_id = pce.contact_id
+                    WHERE pce.property_id = l.id
+                      AND cex.value ILIKE :pattern
+                )
                 -- Phone matching via digit normalisation (PostgreSQL regexp_replace)
                 -- Strips all non-digit characters before comparing, so
                 -- "555-555-5555", "5555555555", and "5555" (last-4) all match.
@@ -253,14 +295,15 @@ def search():
                         OR regexp_replace(COALESCE(l.phone_5,''), '[^0-9]', '', 'g') LIKE :phone_digits_pattern
                         OR regexp_replace(COALESCE(l.phone_6,''), '[^0-9]', '', 'g') LIKE :phone_digits_pattern
                         OR regexp_replace(COALESCE(l.phone_7,''), '[^0-9]', '', 'g') LIKE :phone_digits_pattern
-                        OR regexp_replace(COALESCE(cp.value,''),  '[^0-9]', '', 'g') LIKE :phone_digits_pattern
+                        OR EXISTS (
+                            SELECT 1 FROM property_contacts pcp
+                            JOIN contact_phones cpp ON cpp.contact_id = pcp.contact_id
+                            WHERE pcp.property_id = l.id
+                              AND regexp_replace(COALESCE(cpp.value,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                        )
                     )
                 )
             )
-        GROUP BY
-            l.id, l.owner_first_name, l.owner_last_name,
-            l.property_street, l.lead_score, l.owner_user_id,
-            primary_c.first_name, primary_c.last_name
         ORDER BY
             CASE
                 WHEN l.owner_first_name ILIKE :prefix_pattern THEN 0
