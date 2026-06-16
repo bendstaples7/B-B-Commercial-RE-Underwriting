@@ -301,3 +301,48 @@ jobs:
             exit 1
           fi
           echo "Ownership smoke test passed — queues are non-empty for $SMOKE_TEST_EMAIL."
+
+      # ── Step 8: Post-deploy search smoke test ─────────────────────────────
+      # Verifies that GET /api/search returns HTTP 200 after deploy.
+      # Catches the class of regression where a SQL syntax error in the ILIKE
+      # query path causes every search to 500 (e.g. duplicate ELSE in CASE).
+      # Skipped if smoke test credentials are not configured.
+      - name: Post-deploy search smoke test
+        env:
+          VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+          SMOKE_TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
+          SMOKE_TEST_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
+        run: |
+          BASE_URL="https://${VPS_SUBDOMAIN}.duckdns.org"
+
+          if [ -z "$SMOKE_TEST_EMAIL" ] || [ -z "$SMOKE_TEST_PASSWORD" ]; then
+            echo "SMOKE_TEST_EMAIL or SMOKE_TEST_PASSWORD not set — skipping search smoke test."
+            exit 0
+          fi
+
+          echo "Logging in for search smoke test..."
+          LOGIN_PAYLOAD=$(python3 -c "import json, os; print(json.dumps({'email': os.environ['SMOKE_TEST_EMAIL'], 'password': os.environ['SMOKE_TEST_PASSWORD']}))")
+          LOGIN_RESPONSE=$(curl -s --max-time 15 \
+            -X POST "${BASE_URL}/api/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "$LOGIN_PAYLOAD")
+
+          TOKEN=$(echo "$LOGIN_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+          if [ -z "$TOKEN" ]; then
+            echo "ERROR: Could not obtain auth token for search smoke test. Response: $LOGIN_RESPONSE"
+            exit 1
+          fi
+
+          echo "Running search smoke test (GET /api/search?q=test)..."
+          SEARCH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 \
+            "${BASE_URL}/api/search?q=test" \
+            -H "Authorization: Bearer $TOKEN")
+
+          echo "Search endpoint HTTP status: $SEARCH_STATUS"
+          if [ "$SEARCH_STATUS" != "200" ]; then
+            echo "ERROR: Search endpoint returned $SEARCH_STATUS — expected 200."
+            echo "This indicates a SQL syntax error or unhandled exception in /api/search."
+            echo "Check the Flask logs on the VPS for the full traceback."
+            exit 1
+          fi
+          echo "Search smoke test passed."
