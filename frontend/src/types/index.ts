@@ -2001,6 +2001,11 @@ export interface LeadKanbanResponse {
 // Global Search Types
 // ---------------------------------------------------------------------------
 
+export interface SearchMatchContext {
+  type: 'phone' | 'email' | 'name' | 'address'
+  value: string
+}
+
 export interface SearchResultItem {
   id: number
   type: 'lead' | 'session'
@@ -2009,6 +2014,7 @@ export interface SearchResultItem {
   lead_score?: number | null
   created_at?: string | null
   status?: string | null
+  match_context?: SearchMatchContext | null
 }
 
 export interface SearchResponse {

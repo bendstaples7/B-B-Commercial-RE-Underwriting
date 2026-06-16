@@ -74,6 +74,42 @@ def handle_errors(f):
 
 
 # ---------------------------------------------------------------------------
+# Match context helper
+# ---------------------------------------------------------------------------
+
+def _build_match_context(row, q_trimmed: str, q_digits: str) -> dict | None:
+    """Determine which field caused this row to match and return context for display.
+
+    Returns a dict like:
+        {"type": "phone", "value": "(773) 454-0106"}
+        {"type": "email", "value": "owner@example.com"}
+    or None if the match was on a name/address (already visible in the label).
+
+    Priority: phone → email → (name/address → None, already shown in label)
+    """
+    matched_phone = getattr(row, 'matched_phone', None)
+    if matched_phone:
+        return {'type': 'phone', 'value': matched_phone}
+
+    # If SQL didn't catch it (SQLite fallback), check raw phone columns
+    if q_digits and len(q_digits) >= 4:
+        import re as _re
+        for slot in ('phone_1', 'phone_2', 'phone_3', 'phone_4',
+                     'phone_5', 'phone_6', 'phone_7'):
+            val = getattr(row, slot, None) or ''
+            if val and q_digits in _re.sub(r'\D', '', val):
+                return {'type': 'phone', 'value': val}
+
+    # Email match
+    matched_email = getattr(row, 'matched_email', None)
+    if matched_email:
+        return {'type': 'email', 'value': matched_email}
+
+    # Name / address — these are already visible in the label, so no extra context needed
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
@@ -119,11 +155,26 @@ def search():
     pattern = f'%{q_trimmed}%'
     prefix_pattern = f'{q_trimmed}%'
 
+    # --- Phone digit normalisation ---
+    # Strip all non-digit characters from the query so that "555-555-5555",
+    # "5555555555", and "5555" (last-4) all resolve to the same digit string.
+    # The SQL side strips digits from stored values using regexp_replace so we
+    # can compare apples-to-apples regardless of how the number was formatted.
+    import re as _re
+    q_digits = _re.sub(r'\D', '', q_trimmed)   # e.g. "555-555-5555" → "5555555555"
+    is_phone_query = len(q_digits) >= 4         # at least 4 digits = plausible phone search
+    phone_digits_pattern = f'%{q_digits}%' if is_phone_query else None
+
     # --- Leads query ---
     # Joins to property_contacts + contacts so that:
     #   1. Searching by a contact's name (e.g. "Luke") returns the property.
-    #   2. The result label shows the primary contact name when one exists,
+    #   2. Searching by phone/email returns the property.
+    #   3. The result label shows the primary contact name when one exists,
     #      falling back to the legacy flat owner columns.
+    #
+    # Phone matching (PostgreSQL): strips non-digits from both sides using
+    # regexp_replace so "555-555-5555", "5555555555", and last-4 "5555" all match.
+    #
     # ILIKE is PostgreSQL-specific; SQLite tests use LIKE via LOWER() fallback.
     _leads_sql_ilike = text("""
         SELECT
@@ -134,31 +185,113 @@ def search():
             l.lead_score,
             l.owner_user_id,
             primary_c.first_name  AS primary_contact_first_name,
-            primary_c.last_name   AS primary_contact_last_name
+            primary_c.last_name   AS primary_contact_last_name,
+            -- Correlated subqueries for match_context: only set when the SPECIFIC
+            -- field actually matched the query, avoiding the MAX()-over-Cartesian-
+            -- product problem where an unrelated contact's phone leaks through.
+            CASE
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_1,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_1
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_2,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_2
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_3,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_3
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_4,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_4
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_5,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_5
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_6,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_6
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_7,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_7
+                WHEN :phone_digits_pattern IS NOT NULL THEN (
+                    SELECT cp2.value
+                    FROM property_contacts pc2
+                    JOIN contact_phones cp2 ON cp2.contact_id = pc2.contact_id
+                    WHERE pc2.property_id = l.id
+                      AND regexp_replace(COALESCE(cp2.value,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                    LIMIT 1
+                )
+                ELSE NULL
+            END AS matched_phone,
+            CASE
+                WHEN l.email_1 ILIKE :pattern THEN l.email_1
+                WHEN l.email_2 ILIKE :pattern THEN l.email_2
+                WHEN l.email_3 ILIKE :pattern THEN l.email_3
+                WHEN l.email_4 ILIKE :pattern THEN l.email_4
+                WHEN l.email_5 ILIKE :pattern THEN l.email_5
+                ELSE (
+                    SELECT ce3.value
+                    FROM property_contacts pc3
+                    JOIN contact_emails ce3 ON ce3.contact_id = pc3.contact_id
+                    WHERE pc3.property_id = l.id
+                      AND ce3.value ILIKE :pattern
+                    LIMIT 1
+                )
+                ELSE NULL
+            END AS matched_email
         FROM leads l
         LEFT JOIN property_contacts pc_primary
             ON pc_primary.property_id = l.id
             AND pc_primary.is_primary = TRUE
         LEFT JOIN contacts primary_c
             ON primary_c.id = pc_primary.contact_id
-        LEFT JOIN property_contacts pc_any
-            ON pc_any.property_id = l.id
-        LEFT JOIN contacts any_c
-            ON any_c.id = pc_any.contact_id
         WHERE
             (l.owner_user_id = :user_id OR :is_admin = TRUE)
             AND (l.owner_user_id IS NOT NULL OR :is_admin = TRUE)
             AND (
-                l.owner_first_name ILIKE :pattern
-                OR l.owner_last_name  ILIKE :pattern
-                OR l.property_street  ILIKE :pattern
-                OR any_c.first_name   ILIKE :pattern
-                OR any_c.last_name    ILIKE :pattern
+                -- Name / address matching
+                l.owner_first_name  ILIKE :pattern
+                OR l.owner_last_name   ILIKE :pattern
+                OR l.owner_2_first_name ILIKE :pattern
+                OR l.owner_2_last_name  ILIKE :pattern
+                OR l.property_street   ILIKE :pattern
+                OR EXISTS (
+                    SELECT 1 FROM property_contacts pca
+                    JOIN contacts ca ON ca.id = pca.contact_id
+                    WHERE pca.property_id = l.id
+                      AND (ca.first_name ILIKE :pattern OR ca.last_name ILIKE :pattern)
+                )
+                -- Email matching (flat columns + relational)
+                OR l.email_1 ILIKE :pattern
+                OR l.email_2 ILIKE :pattern
+                OR l.email_3 ILIKE :pattern
+                OR l.email_4 ILIKE :pattern
+                OR l.email_5 ILIKE :pattern
+                OR EXISTS (
+                    SELECT 1 FROM property_contacts pce
+                    JOIN contact_emails cex ON cex.contact_id = pce.contact_id
+                    WHERE pce.property_id = l.id
+                      AND cex.value ILIKE :pattern
+                )
+                -- Phone matching via digit normalisation (PostgreSQL regexp_replace)
+                -- Strips all non-digit characters before comparing, so
+                -- "555-555-5555", "5555555555", and "5555" (last-4) all match.
+                OR (
+                    :phone_digits_pattern IS NOT NULL AND (
+                        regexp_replace(COALESCE(l.phone_1,''), '[^0-9]', '', 'g') LIKE :phone_digits_pattern
+                        OR regexp_replace(COALESCE(l.phone_2,''), '[^0-9]', '', 'g') LIKE :phone_digits_pattern
+                        OR regexp_replace(COALESCE(l.phone_3,''), '[^0-9]', '', 'g') LIKE :phone_digits_pattern
+                        OR regexp_replace(COALESCE(l.phone_4,''), '[^0-9]', '', 'g') LIKE :phone_digits_pattern
+                        OR regexp_replace(COALESCE(l.phone_5,''), '[^0-9]', '', 'g') LIKE :phone_digits_pattern
+                        OR regexp_replace(COALESCE(l.phone_6,''), '[^0-9]', '', 'g') LIKE :phone_digits_pattern
+                        OR regexp_replace(COALESCE(l.phone_7,''), '[^0-9]', '', 'g') LIKE :phone_digits_pattern
+                        OR EXISTS (
+                            SELECT 1 FROM property_contacts pcp
+                            JOIN contact_phones cpp ON cpp.contact_id = pcp.contact_id
+                            WHERE pcp.property_id = l.id
+                              AND regexp_replace(COALESCE(cpp.value,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                        )
+                    )
+                )
             )
-        GROUP BY
-            l.id, l.owner_first_name, l.owner_last_name,
-            l.property_street, l.lead_score, l.owner_user_id,
-            primary_c.first_name, primary_c.last_name
         ORDER BY
             CASE
                 WHEN l.owner_first_name ILIKE :prefix_pattern THEN 0
@@ -171,6 +304,8 @@ def search():
             COALESCE(primary_c.last_name, l.owner_last_name, l.property_street)
         LIMIT 10
     """)
+    # SQLite fallback — no regexp_replace, so phone matching uses LIKE on raw value.
+    # This is acceptable for tests since real phone search only runs on PostgreSQL.
     _leads_sql_like = text("""
         SELECT
             l.id,
@@ -180,7 +315,9 @@ def search():
             l.lead_score,
             l.owner_user_id,
             primary_c.first_name  AS primary_contact_first_name,
-            primary_c.last_name   AS primary_contact_last_name
+            primary_c.last_name   AS primary_contact_last_name,
+            NULL AS matched_phone,
+            NULL AS matched_email
         FROM leads l
         LEFT JOIN property_contacts pc_primary
             ON pc_primary.property_id = l.id
@@ -191,15 +328,35 @@ def search():
             ON pc_any.property_id = l.id
         LEFT JOIN contacts any_c
             ON any_c.id = pc_any.contact_id
+        LEFT JOIN contact_phones cp
+            ON cp.contact_id = any_c.id
+        LEFT JOIN contact_emails ce
+            ON ce.contact_id = any_c.id
         WHERE
             (l.owner_user_id = :user_id OR :is_admin = 1)
             AND (l.owner_user_id IS NOT NULL OR :is_admin = 1)
             AND (
-                LOWER(l.owner_first_name) LIKE LOWER(:pattern)
-                OR LOWER(l.owner_last_name)  LIKE LOWER(:pattern)
-                OR LOWER(l.property_street)  LIKE LOWER(:pattern)
-                OR LOWER(any_c.first_name)   LIKE LOWER(:pattern)
-                OR LOWER(any_c.last_name)    LIKE LOWER(:pattern)
+                LOWER(l.owner_first_name)   LIKE LOWER(:pattern)
+                OR LOWER(l.owner_last_name)    LIKE LOWER(:pattern)
+                OR LOWER(COALESCE(l.owner_2_first_name,'')) LIKE LOWER(:pattern)
+                OR LOWER(COALESCE(l.owner_2_last_name,''))  LIKE LOWER(:pattern)
+                OR LOWER(l.property_street)    LIKE LOWER(:pattern)
+                OR LOWER(any_c.first_name)     LIKE LOWER(:pattern)
+                OR LOWER(any_c.last_name)      LIKE LOWER(:pattern)
+                OR LOWER(COALESCE(l.email_1,'')) LIKE LOWER(:pattern)
+                OR LOWER(COALESCE(l.email_2,'')) LIKE LOWER(:pattern)
+                OR LOWER(COALESCE(l.email_3,'')) LIKE LOWER(:pattern)
+                OR LOWER(COALESCE(l.email_4,'')) LIKE LOWER(:pattern)
+                OR LOWER(COALESCE(l.email_5,'')) LIKE LOWER(:pattern)
+                OR LOWER(COALESCE(ce.value,''))  LIKE LOWER(:pattern)
+                OR COALESCE(l.phone_1,'') LIKE :phone_raw_pattern
+                OR COALESCE(l.phone_2,'') LIKE :phone_raw_pattern
+                OR COALESCE(l.phone_3,'') LIKE :phone_raw_pattern
+                OR COALESCE(l.phone_4,'') LIKE :phone_raw_pattern
+                OR COALESCE(l.phone_5,'') LIKE :phone_raw_pattern
+                OR COALESCE(l.phone_6,'') LIKE :phone_raw_pattern
+                OR COALESCE(l.phone_7,'') LIKE :phone_raw_pattern
+                OR COALESCE(cp.value,'')  LIKE :phone_raw_pattern
             )
         GROUP BY
             l.id, l.owner_first_name, l.owner_last_name,
@@ -222,6 +379,8 @@ def search():
         'is_admin': is_admin,
         'pattern': pattern,
         'prefix_pattern': prefix_pattern,
+        'phone_digits_pattern': phone_digits_pattern,   # None when query has <4 digits
+        'phone_raw_pattern': pattern,                   # SQLite fallback: raw LIKE on stored value
     }
 
     # Detect dialect: SQLite does not support ILIKE
@@ -342,6 +501,7 @@ def search():
             'label': label,
             'nav_path': f"/properties/{row.id}",
             'lead_score': row.lead_score,
+            'match_context': _build_match_context(row, q_trimmed, q_digits),
         })
 
     # --- Serialize sessions ---

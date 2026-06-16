@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   useTheme,
@@ -17,8 +17,85 @@ import {
   Typography,
 } from '@mui/material'
 import SearchIcon from '@mui/icons-material/Search'
-import type { SearchResponse } from '@/types'
+import type { SearchResponse, SearchMatchContext } from '@/types'
 import { searchService } from '@/services/api'
+
+// ---------------------------------------------------------------------------
+// Match context rendering helpers
+// ---------------------------------------------------------------------------
+
+/** Returns a label like "Phone" | "Email" for the match type badge. */
+function matchTypeLabel(type: SearchMatchContext['type']): string {
+  switch (type) {
+    case 'phone': return 'Phone'
+    case 'email': return 'Email'
+    case 'address': return 'Address'
+    case 'name': return 'Name'
+  }
+}
+
+/**
+ * Renders a value string with the query substring highlighted in bold.
+ * Uses an explicit fontWeight span so MUI Typography doesn't strip bold styling.
+ */
+function highlightMatch(value: string, query: string): React.ReactNode {
+  const q = query.trim()
+  if (!q) return value
+
+  // Direct substring match first (handles email, formatted phone with exact match, names)
+  const lv = value.toLowerCase()
+  const lq = q.toLowerCase()
+  const idx = lv.indexOf(lq)
+
+  if (idx !== -1) {
+    return (
+      <>
+        {value.slice(0, idx)}
+        <Box component="span" sx={{ fontWeight: 700, color: 'text.primary' }}>
+          {value.slice(idx, idx + q.length)}
+        </Box>
+        {value.slice(idx + q.length)}
+      </>
+    )
+  }
+
+  // Digit-only query (e.g. "0106" or "5551234567"): find the digit run within
+  // the formatted value by stripping non-digits from both sides and locating
+  // the match position, then map back to the original string.
+  const queryDigits = q.replace(/\D/g, '')
+  if (queryDigits.length >= 4) {
+    const valueDigits = value.replace(/\D/g, '')
+    const digitIdx = valueDigits.indexOf(queryDigits)
+    if (digitIdx !== -1) {
+      // Walk the original value, counting only digits, to find the start and
+      // end positions that correspond to digit positions digitIdx and
+      // digitIdx + queryDigits.length - 1.
+      let digitsFound = 0
+      let startOrig = -1
+      let endOrig = -1
+      for (let vi = 0; vi < value.length; vi++) {
+        if (/\d/.test(value[vi])) {
+          if (digitsFound === digitIdx) startOrig = vi
+          if (digitsFound === digitIdx + queryDigits.length - 1) { endOrig = vi; break }
+          digitsFound++
+        }
+      }
+      if (startOrig !== -1 && endOrig !== -1) {
+        return (
+          <>
+            {value.slice(0, startOrig)}
+            <Box component="span" sx={{ fontWeight: 700, color: 'text.primary' }}>
+              {value.slice(startOrig, endOrig + 1)}
+            </Box>
+            {value.slice(endOrig + 1)}
+          </>
+        )
+      }
+    }
+  }
+
+  return value
+}
 
 const GlobalSearchBar = () => {
   const navigate = useNavigate()
@@ -162,7 +239,7 @@ const GlobalSearchBar = () => {
             inputRef={inputRef}
             value={query}
             onChange={(e) => handleQueryChange(e.target.value)}
-            placeholder="Search leads, addresses…"
+            placeholder="Search name, address, phone, email…"
             inputProps={{ maxLength: 200 }}
             sx={{
               color: 'inherit',
@@ -307,6 +384,22 @@ const GlobalSearchBar = () => {
                               )}
                             </Box>
                           }
+                          secondary={
+                            lead.match_context ? (
+                              <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25 }}>
+                                <Box
+                                  component="span"
+                                  sx={{ color: 'text.disabled', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: '0.6rem' }}
+                                >
+                                  {matchTypeLabel(lead.match_context.type)}:&nbsp;
+                                </Box>
+                                <Box component="span" sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
+                                  {highlightMatch(lead.match_context.value, query.trim())}
+                                </Box>
+                              </Box>
+                            ) : undefined
+                          }
+                          secondaryTypographyProps={{ component: 'span' }}
                         />
                       </ListItemButton>
                     </ListItem>

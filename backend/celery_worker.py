@@ -101,6 +101,15 @@ celery.conf.update(
             'task': 'hubspot_webhook.purge_logs',
             'schedule': crontab(hour=3, minute=0),  # daily at 3 AM UTC
         },
+        # Nightly association re-sync — re-fetches all deal↔contact associations
+        # via the v4 batch API as a catch-all for any links missed by the import
+        # backfill or the real-time webhook handler.  Runs at 4 AM UTC, after
+        # the signal extraction (2 AM) and rescore (2 AM) jobs.
+        'hubspot-nightly-association-sync': {
+            'task': 'hubspot.nightly_association_sync',
+            'schedule': crontab(hour=4, minute=0),
+            'options': {'expires': 7200},
+        },
         # Scheduled engagement sync — imports new HubSpot notes/calls/tasks hourly.
         # Engagements cannot be delivered via webhook (HubSpot legacy app limitation),
         # so this scheduled job is the mechanism for near-real-time engagement updates.
@@ -931,6 +940,38 @@ def purge_old_webhook_logs():
     return run_purge_old_webhook_logs()
 
 
+@celery.task(name='hubspot_webhook.handle_association', bind=True, max_retries=3)
+def handle_association_event(
+    self,
+    from_object_type: str,
+    from_object_id: str,
+    to_object_type: str,
+    to_object_id: str,
+    log_id: int,
+):
+    """Handle a HubSpot association.created webhook event.
+
+    Merges the new association into the stored raw_payload for the deal and
+    immediately enriches the matched lead with the linked contact's data so
+    the contact shows up in the platform without waiting for the next import.
+    """
+    from app.tasks.hubspot_webhook_tasks import run_handle_association_event
+    run_handle_association_event(
+        from_object_type, from_object_id, to_object_type, to_object_id, log_id
+    )
+
+
+@celery.task(name='hubspot.nightly_association_sync')
+def nightly_association_sync():
+    """Re-fetch all deal↔contact associations nightly as a catch-all sync.
+
+    Runs after the nightly rescore so any new associations in HubSpot are
+    reflected in the platform within 24 hours at most.
+    """
+    from app.tasks.hubspot_tasks import run_nightly_association_sync
+    return run_nightly_association_sync()
+
+
 # ---------------------------------------------------------------------------
 # Action Engine Tasks
 #
@@ -1159,6 +1200,8 @@ REQUIRED_TASKS = {
     'hubspot_webhook.extract_signals',
     'hubspot_webhook.rescore_lead',
     'hubspot_webhook.purge_logs',
+    'hubspot_webhook.handle_association',
+    'hubspot.nightly_association_sync',
     'process_csv_ingestion',
     'dupage.enrich_acquisition_dates',
     'dupage.pull_absentee_leads',
