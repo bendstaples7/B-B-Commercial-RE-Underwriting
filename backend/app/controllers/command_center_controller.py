@@ -23,7 +23,6 @@ from app.services.lead_task_service import LeadTaskService
 from app.services.lead_timeline_service import LeadTimelineService
 from app.services.call_log_service import CallLogService
 from app.services.action_engine_service import ActionEngineService, RECOMMENDED_ACTION_METADATA
-from app.services.lead_scoring_engine import LeadScoringEngine
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +40,17 @@ def _rescore_after_status_change(lead_id: int) -> None:
     because the nightly bulk_rescore beat task is the safety net.
     """
     try:
+        from app import db
+        from app.models import Lead
+        from app.services.lead_scoring_engine import LeadScoringEngine
+
+        lead = db.session.get(Lead, lead_id)
+        if lead is None:
+            return
+        # Use the lead's owner_user_id for weights; fall back to 'default'
+        user_id = lead.owner_user_id or 'default'
         engine = LeadScoringEngine()
-        engine.bulk_rescore(lead_ids=[lead_id])
+        engine.bulk_rescore(user_id=user_id, lead_ids=[lead_id])
         logger.info("_rescore_after_status_change: rescored lead_id=%d", lead_id)
     except Exception as exc:
         logger.warning(
