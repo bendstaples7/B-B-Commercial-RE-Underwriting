@@ -235,7 +235,6 @@ def search():
                       AND ce3.value ILIKE :pattern
                     LIMIT 1
                 )
-                ELSE NULL
             END AS matched_email
         FROM leads l
         LEFT JOIN property_contacts pc_primary

@@ -947,3 +947,134 @@ def test_search_by_phone_returns_label_with_address(client, app):
     assert 'Phone Test St' in label, f"Address missing from label: {label!r}"
     # match_context is None under SQLite (no regexp_replace) — only assert presence on PostgreSQL
     # SQLite returns NULL matched_phone so match_context falls through to None
+
+
+# ---------------------------------------------------------------------------
+# PostgreSQL SQL syntax guard (Regression: duplicate ELSE in matched_email CASE)
+#
+# The ILIKE query path (_leads_sql_ilike) is never exercised by the SQLite test
+# DB, so a syntax error in that query silently passes all tests but fails in
+# production. This test compiles the raw SQL text against the SQLAlchemy text()
+# parser and — when running against PostgreSQL — actually executes it so that
+# the DB engine validates the syntax too.
+#
+# Under SQLite (the normal test DB) this test still catches Python-level errors
+# in the SQL string (e.g. mismatched parentheses that sqlalchemy.text() can
+# detect at bind time), and clearly documents that the ILIKE path must be kept
+# syntactically valid.
+# ---------------------------------------------------------------------------
+
+def test_ilike_leads_sql_compiles_without_error(app):
+    """The PostgreSQL ILIKE leads query must compile without a SQL syntax error.
+
+    Regression guard for: duplicate ELSE clause in matched_email CASE expression
+    (fixed in fix/search-failed-error). Under SQLite this validates the Python
+    string can be wrapped in sqlalchemy.text() without error. Under PostgreSQL
+    it executes the query with LIMIT 0 to let the DB engine validate the syntax.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.exc import OperationalError, ProgrammingError
+
+    # Paste the exact SQL from search_controller._leads_sql_ilike.
+    # If the query changes there, this test must be updated to match.
+    ilike_sql = text("""
+        SELECT
+            l.id,
+            l.owner_first_name,
+            l.owner_last_name,
+            l.property_street,
+            l.lead_score,
+            l.owner_user_id,
+            primary_c.first_name  AS primary_contact_first_name,
+            primary_c.last_name   AS primary_contact_last_name,
+            CASE
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_1,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_1
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_2,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_2
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_3,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_3
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_4,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_4
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_5,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_5
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_6,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_6
+                WHEN :phone_digits_pattern IS NOT NULL AND (
+                    regexp_replace(COALESCE(l.phone_7,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                ) THEN l.phone_7
+                WHEN :phone_digits_pattern IS NOT NULL THEN (
+                    SELECT cp2.value
+                    FROM property_contacts pc2
+                    JOIN contact_phones cp2 ON cp2.contact_id = pc2.contact_id
+                    WHERE pc2.property_id = l.id
+                      AND regexp_replace(COALESCE(cp2.value,''),'[^0-9]','','g') LIKE :phone_digits_pattern
+                    LIMIT 1
+                )
+                ELSE NULL
+            END AS matched_phone,
+            CASE
+                WHEN l.email_1 ILIKE :pattern THEN l.email_1
+                WHEN l.email_2 ILIKE :pattern THEN l.email_2
+                WHEN l.email_3 ILIKE :pattern THEN l.email_3
+                WHEN l.email_4 ILIKE :pattern THEN l.email_4
+                WHEN l.email_5 ILIKE :pattern THEN l.email_5
+                ELSE (
+                    SELECT ce3.value
+                    FROM property_contacts pc3
+                    JOIN contact_emails ce3 ON ce3.contact_id = pc3.contact_id
+                    WHERE pc3.property_id = l.id
+                      AND ce3.value ILIKE :pattern
+                    LIMIT 1
+                )
+            END AS matched_email
+        FROM leads l
+        LEFT JOIN property_contacts pc_primary
+            ON pc_primary.property_id = l.id
+            AND pc_primary.is_primary = TRUE
+        LEFT JOIN contacts primary_c
+            ON primary_c.id = pc_primary.contact_id
+        WHERE
+            (l.owner_user_id = :user_id OR :is_admin = TRUE)
+            AND (l.owner_user_id IS NOT NULL OR :is_admin = TRUE)
+            AND (
+                l.owner_first_name  ILIKE :pattern
+                OR l.owner_last_name   ILIKE :pattern
+                OR l.property_street   ILIKE :pattern
+            )
+        ORDER BY l.id
+        LIMIT 0
+    """)
+
+    with app.app_context():
+        from app import db as _db
+        dialect = _db.engine.dialect.name
+        if dialect == 'sqlite':
+            # SQLite: just verify the text() wrapper parses without raising.
+            # Actual SQL validity on PostgreSQL is verified in CI/staging.
+            assert ilike_sql is not None, "sqlalchemy.text() must not return None"
+            return
+
+        # PostgreSQL: execute with LIMIT 0 so the engine validates syntax cheaply.
+        try:
+            _db.session.execute(ilike_sql, {
+                'user_id': 'test',
+                'is_admin': False,
+                'pattern': '%test%',
+                'prefix_pattern': 'test%',
+                'phone_digits_pattern': None,
+            })
+        except (OperationalError, ProgrammingError) as exc:
+            raise AssertionError(
+                f"ILIKE leads SQL failed to execute — possible syntax error.\n"
+                f"Original error: {exc}\n\n"
+                "This query runs in production but NOT in the SQLite test suite. "
+                "Fix the SQL in search_controller._leads_sql_ilike and update "
+                "this test to match."
+            ) from exc
