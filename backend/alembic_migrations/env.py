@@ -52,6 +52,8 @@ _KNOWN_REVISIONS = frozenset({
     '5f9bc65a48ea', 'z0a9b8c7d6e5', 'z1b2c3d4e5f6', 'z9a8b7c6d5e4',
     # Global search bar — pg_trgm + GIN trigram indexes
     'a3b4c5d6e7f8',
+    # Backfill property_type from units + clear stale analyze_property actions
+    'b4c5d6e7f8a9',
 })
 
 

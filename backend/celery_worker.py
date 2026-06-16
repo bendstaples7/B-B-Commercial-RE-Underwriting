@@ -110,6 +110,16 @@ celery.conf.update(
             'schedule': crontab(hour=4, minute=0),
             'options': {'expires': 7200},
         },
+        # Nightly action engine recompute — bulk-recomputes recommended_action
+        # for every lead as a catch-all for any stale values that slipped through
+        # the per-sync recompute calls (webhook errors, new logic, manual DB edits).
+        # Runs at 4:30 AM UTC, after the association sync (4 AM), so any
+        # association-driven enrichment changes are already committed before scoring.
+        'action-engine-nightly-recompute': {
+            'task': 'action_engine.bulk_recompute_all_leads',
+            'schedule': crontab(hour=4, minute=30),
+            'options': {'expires': 7200},
+        },
         # Scheduled engagement sync — imports new HubSpot notes/calls/tasks hourly.
         # Engagements cannot be delivered via webhook (HubSpot legacy app limitation),
         # so this scheduled job is the mechanism for near-real-time engagement updates.
