@@ -284,7 +284,7 @@ def run_import_hubspot_deals(run_id: int, self_task=None) -> None:
     # Step 2 — backfill contact associations via v4 batch API
     with app.app_context():
         from app import db
-        from app.models import HubSpotDeal, HubSpotConfig
+        from app.models import HubSpotDeal, HubSpotConfig, HubSpotImportRun
         from app.services.hubspot_client_service import HubSpotClientService
 
         config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
@@ -294,8 +294,20 @@ def run_import_hubspot_deals(run_id: int, self_task=None) -> None:
             )
             return
 
-        _backfill_deal_contact_associations(app, db, HubSpotClientService(config))
-        _check_association_health(db, 'deals', run_id)
+        try:
+            _backfill_deal_contact_associations(app, db, HubSpotClientService(config))
+            _check_association_health(db, 'deals', run_id)
+        except Exception as exc:
+            logger.error(
+                "run_import_hubspot_deals: association backfill failed for run_id=%d: %s",
+                run_id, exc, exc_info=True,
+            )
+            run = HubSpotImportRun.query.get(run_id)
+            if run:
+                run.status = 'partial'
+                run.error_message = f"Association backfill failed: {exc}"
+                db.session.commit()
+            raise
 
 
 def _backfill_deal_contact_associations(app, db, client) -> None:
@@ -401,13 +413,13 @@ def _check_association_health(db, object_type: str, run_id: int) -> None:
     assoc_key = 'contacts' if object_type == 'deals' else 'deals'
     model_class = getattr(_models, model_name)
 
-    total = model_class.query.count()
+    total = model_class.query.filter_by(import_run_id=run_id).count()
     if total == 0:
         return
 
     # Count records where associations.<assoc_key>.results is a non-empty array.
     # We do this in Python rather than SQL to avoid JSON operator dialect differences.
-    all_records = model_class.query.all()
+    all_records = model_class.query.filter_by(import_run_id=run_id).all()
     populated = 0
     for record in all_records:
         assoc = (record.raw_payload or {}).get('associations', {})
@@ -468,7 +480,7 @@ def run_import_hubspot_contacts(run_id: int, self_task=None) -> None:
     # Step 2 — backfill deal associations via v4 batch API
     with app.app_context():
         from app import db
-        from app.models import HubSpotConfig
+        from app.models import HubSpotConfig, HubSpotImportRun
         from app.services.hubspot_client_service import HubSpotClientService
 
         config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
@@ -478,8 +490,20 @@ def run_import_hubspot_contacts(run_id: int, self_task=None) -> None:
             )
             return
 
-        _backfill_contact_deal_associations(app, db, HubSpotClientService(config))
-        _check_association_health(db, 'contacts', run_id)
+        try:
+            _backfill_contact_deal_associations(app, db, HubSpotClientService(config))
+            _check_association_health(db, 'contacts', run_id)
+        except Exception as exc:
+            logger.error(
+                "run_import_hubspot_contacts: association backfill failed for run_id=%d: %s",
+                run_id, exc, exc_info=True,
+            )
+            run = HubSpotImportRun.query.get(run_id)
+            if run:
+                run.status = 'partial'
+                run.error_message = f"Association backfill failed: {exc}"
+                db.session.commit()
+            raise
 
 
 def _backfill_contact_deal_associations(app, db, client) -> None:

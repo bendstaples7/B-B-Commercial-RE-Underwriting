@@ -1,27 +1,30 @@
-"""Tests for HubSpot deal → contact association backfill.
+"""Tests for HubSpot deal↔contact association backfill and import health check.
 
 Covers:
 - _backfill_deal_contact_associations merges new contact IDs into raw_payload
-- Existing contact IDs are not duplicated
-- Deals with no associations returned by the API are left unchanged
-- HubSpotClientService.fetch_deal_contact_associations parses the v4 response correctly
+- _backfill_contact_deal_associations merges new deal IDs into raw_payload
+- Existing IDs are not duplicated in either direction
+- Records with no associations returned by the API are left unchanged
+- _check_association_health marks the import run partial when >90% empty
+- HubSpotClientService.fetch_deal_contact_associations /
+  fetch_contact_deal_associations parse the v4 response correctly and batch at 100
 """
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from app import db
-from app.models import HubSpotDeal
+from app.models import HubSpotDeal, HubSpotContact
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _seed_deal(hubspot_id, associations=None):
-    """Insert a HubSpotDeal row and return it.  Must be called inside an app context."""
+def _seed_deal(hubspot_id, associations=None, run_id=None):
     deal = HubSpotDeal(
         hubspot_id=hubspot_id,
+        import_run_id=run_id,
         raw_payload={
             "id": hubspot_id,
             "properties": {"dealname": f"Deal {hubspot_id}"},
@@ -33,6 +36,20 @@ def _seed_deal(hubspot_id, associations=None):
     return deal
 
 
+def _seed_contact(hubspot_id, associations=None):
+    contact = HubSpotContact(
+        hubspot_id=hubspot_id,
+        raw_payload={
+            "id": hubspot_id,
+            "properties": {"firstname": "Test", "lastname": hubspot_id},
+            "associations": associations if associations is not None else {},
+        },
+    )
+    db.session.add(contact)
+    db.session.commit()
+    return contact
+
+
 def _make_client():
     from app.services.hubspot_client_service import HubSpotClientService
     config = MagicMock()
@@ -42,11 +59,11 @@ def _make_client():
 
 
 # ---------------------------------------------------------------------------
-# Unit tests for fetch_deal_contact_associations
-# These don't need the DB — they only mock _post.
+# Unit tests for fetch_deal_contact_associations /
+#                fetch_contact_deal_associations
 # ---------------------------------------------------------------------------
 
-class TestFetchDealContactAssociations:
+class TestFetchAssociations:
 
     def test_returns_contact_ids_from_v4_response(self):
         client = _make_client()
@@ -54,10 +71,7 @@ class TestFetchDealContactAssociations:
             "results": [
                 {
                     "from": {"id": "111"},
-                    "to": [
-                        {"toObjectId": "aaa"},
-                        {"toObjectId": "bbb"},
-                    ],
+                    "to": [{"toObjectId": "aaa"}, {"toObjectId": "bbb"}],
                 }
             ],
             "errors": [],
@@ -66,14 +80,22 @@ class TestFetchDealContactAssociations:
             result = client.fetch_deal_contact_associations(["111"])
         assert result == {"111": ["aaa", "bbb"]}
 
+    def test_fetch_contact_deal_uses_correct_path(self):
+        client = _make_client()
+        captured = {}
+
+        def fake_post(path, body):
+            captured['path'] = path
+            return {"results": [], "errors": []}
+
+        with patch.object(client, '_post', side_effect=fake_post):
+            client.fetch_contact_deal_associations(["c1"])
+
+        assert 'contacts/deals' in captured['path']
+
     def test_deal_with_no_contacts_maps_to_empty_list(self):
         client = _make_client()
-        mock_response = {
-            "results": [
-                {"from": {"id": "222"}, "to": []},
-            ],
-            "errors": [],
-        }
+        mock_response = {"results": [{"from": {"id": "222"}, "to": []}], "errors": []}
         with patch.object(client, '_post', return_value=mock_response):
             result = client.fetch_deal_contact_associations(["222"])
         assert result == {"222": []}
@@ -90,7 +112,7 @@ class TestFetchDealContactAssociations:
         with patch.object(client, '_post', side_effect=fake_post):
             client.fetch_deal_contact_associations(deal_ids)
 
-        assert len(post_calls) == 3  # 100 + 100 + 50
+        assert len(post_calls) == 3
         assert len(post_calls[0]["inputs"]) == 100
         assert len(post_calls[1]["inputs"]) == 100
         assert len(post_calls[2]["inputs"]) == 50
@@ -98,9 +120,7 @@ class TestFetchDealContactAssociations:
     def test_missing_from_id_skipped(self):
         client = _make_client()
         mock_response = {
-            "results": [
-                {"from": {}, "to": [{"toObjectId": "zzz"}]},  # no 'id' key
-            ],
+            "results": [{"from": {}, "to": [{"toObjectId": "zzz"}]}],
             "errors": [],
         }
         with patch.object(client, '_post', return_value=mock_response):
@@ -108,7 +128,6 @@ class TestFetchDealContactAssociations:
         assert result == {}
 
     def test_api_error_returns_partial_results(self):
-        """A failure on one batch should not prevent results from other batches."""
         from app.exceptions import ExternalServiceError
         client = _make_client()
         call_count = [0]
@@ -126,21 +145,18 @@ class TestFetchDealContactAssociations:
         with patch.object(client, '_post', side_effect=fake_post):
             result = client.fetch_deal_contact_associations(deal_ids)
 
-        # Second batch succeeded → should have the result from batch 2
         assert "200" in result
         assert result["200"] == ["ccc"]
 
 
 # ---------------------------------------------------------------------------
 # Integration tests for _backfill_deal_contact_associations
-# Use the shared `app` fixture from conftest.py (SQLite in-memory)
 # ---------------------------------------------------------------------------
 
 class TestBackfillDealContactAssociations:
 
     @pytest.fixture(autouse=True)
     def clean_deals(self, app):
-        """Remove all HubSpotDeal rows before and after each test."""
         with app.app_context():
             HubSpotDeal.query.delete()
             db.session.commit()
@@ -154,17 +170,13 @@ class TestBackfillDealContactAssociations:
             _seed_deal("deal-1")
 
         client = MagicMock()
-        client.fetch_deal_contact_associations.return_value = {
-            "deal-1": ["contact-A", "contact-B"]
-        }
+        client.fetch_deal_contact_associations.return_value = {"deal-1": ["contact-A", "contact-B"]}
 
         with app.app_context():
             from app.tasks.hubspot_tasks import _backfill_deal_contact_associations
             _backfill_deal_contact_associations(app, db, client)
-
             deal = HubSpotDeal.query.filter_by(hubspot_id="deal-1").first()
-            results = deal.raw_payload["associations"]["contacts"]["results"]
-            result_ids = {r["id"] for r in results}
+            result_ids = {r["id"] for r in deal.raw_payload["associations"]["contacts"]["results"]}
             assert result_ids == {"contact-A", "contact-B"}
 
     def test_does_not_duplicate_existing_contact_ids(self, app):
@@ -174,19 +186,13 @@ class TestBackfillDealContactAssociations:
             })
 
         client = MagicMock()
-        # HubSpot returns contact-X again plus a new contact-Y
-        client.fetch_deal_contact_associations.return_value = {
-            "deal-2": ["contact-X", "contact-Y"]
-        }
+        client.fetch_deal_contact_associations.return_value = {"deal-2": ["contact-X", "contact-Y"]}
 
         with app.app_context():
             from app.tasks.hubspot_tasks import _backfill_deal_contact_associations
             _backfill_deal_contact_associations(app, db, client)
-
             deal = HubSpotDeal.query.filter_by(hubspot_id="deal-2").first()
-            results = deal.raw_payload["associations"]["contacts"]["results"]
-            result_ids = [r["id"] for r in results]
-            # contact-X must appear exactly once
+            result_ids = [r["id"] for r in deal.raw_payload["associations"]["contacts"]["results"]]
             assert result_ids.count("contact-X") == 1
             assert "contact-Y" in result_ids
 
@@ -200,7 +206,6 @@ class TestBackfillDealContactAssociations:
         with app.app_context():
             from app.tasks.hubspot_tasks import _backfill_deal_contact_associations
             _backfill_deal_contact_associations(app, db, client)
-
             deal = HubSpotDeal.query.filter_by(hubspot_id="deal-3").first()
             assert deal.raw_payload.get("associations") == {}
 
@@ -214,6 +219,124 @@ class TestBackfillDealContactAssociations:
         with app.app_context():
             from app.tasks.hubspot_tasks import _backfill_deal_contact_associations
             _backfill_deal_contact_associations(app, db, client)
-
             deal = HubSpotDeal.query.filter_by(hubspot_id="deal-4").first()
             assert deal.raw_payload.get("associations") == {}
+
+
+# ---------------------------------------------------------------------------
+# Integration tests for _backfill_contact_deal_associations
+# ---------------------------------------------------------------------------
+
+class TestBackfillContactDealAssociations:
+
+    @pytest.fixture(autouse=True)
+    def clean_contacts(self, app):
+        with app.app_context():
+            HubSpotContact.query.delete()
+            db.session.commit()
+        yield
+        with app.app_context():
+            HubSpotContact.query.delete()
+            db.session.commit()
+
+    def test_merges_deal_ids_into_raw_payload(self, app):
+        with app.app_context():
+            _seed_contact("contact-1")
+
+        client = MagicMock()
+        client.fetch_contact_deal_associations.return_value = {"contact-1": ["deal-A", "deal-B"]}
+
+        with app.app_context():
+            from app.tasks.hubspot_tasks import _backfill_contact_deal_associations
+            _backfill_contact_deal_associations(app, db, client)
+            contact = HubSpotContact.query.filter_by(hubspot_id="contact-1").first()
+            result_ids = {r["id"] for r in contact.raw_payload["associations"]["deals"]["results"]}
+            assert result_ids == {"deal-A", "deal-B"}
+
+    def test_does_not_duplicate_existing_deal_ids(self, app):
+        with app.app_context():
+            _seed_contact("contact-2", associations={
+                "deals": {"results": [{"id": "deal-X", "type": "contact_to_deal"}]}
+            })
+
+        client = MagicMock()
+        client.fetch_contact_deal_associations.return_value = {"contact-2": ["deal-X", "deal-Y"]}
+
+        with app.app_context():
+            from app.tasks.hubspot_tasks import _backfill_contact_deal_associations
+            _backfill_contact_deal_associations(app, db, client)
+            contact = HubSpotContact.query.filter_by(hubspot_id="contact-2").first()
+            result_ids = [r["id"] for r in contact.raw_payload["associations"]["deals"]["results"]]
+            assert result_ids.count("deal-X") == 1
+            assert "deal-Y" in result_ids
+
+    def test_contact_with_no_associations_returned_unchanged(self, app):
+        with app.app_context():
+            _seed_contact("contact-3")
+
+        client = MagicMock()
+        client.fetch_contact_deal_associations.return_value = {"contact-3": []}
+
+        with app.app_context():
+            from app.tasks.hubspot_tasks import _backfill_contact_deal_associations
+            _backfill_contact_deal_associations(app, db, client)
+            contact = HubSpotContact.query.filter_by(hubspot_id="contact-3").first()
+            assert contact.raw_payload.get("associations") == {}
+
+
+# ---------------------------------------------------------------------------
+# Integration tests for _check_association_health
+# ---------------------------------------------------------------------------
+
+class TestCheckAssociationHealth:
+
+    @pytest.fixture(autouse=True)
+    def clean_all(self, app):
+        with app.app_context():
+            HubSpotDeal.query.delete()
+            HubSpotContact.query.delete()
+            from app.models import HubSpotImportRun
+            HubSpotImportRun.query.delete()
+            db.session.commit()
+        yield
+        with app.app_context():
+            HubSpotDeal.query.delete()
+            HubSpotContact.query.delete()
+            from app.models import HubSpotImportRun
+            HubSpotImportRun.query.delete()
+            db.session.commit()
+
+    def _make_run(self, app, status='success'):
+        from app.models import HubSpotImportRun
+        with app.app_context():
+            run = HubSpotImportRun(object_type='deals', status=status, total_fetched=10, created_count=10)
+            db.session.add(run)
+            db.session.commit()
+            return run.id
+
+    def test_marks_run_partial_when_all_empty(self, app):
+        """All 10 deals have empty associations → run is marked partial."""
+        run_id = self._make_run(app)
+        with app.app_context():
+            for i in range(10):
+                _seed_deal(f"deal-h-{i}", run_id=run_id)
+            from app.tasks.hubspot_tasks import _check_association_health
+            _check_association_health(db, 'deals', run_id)
+            from app.models import HubSpotImportRun
+            run = HubSpotImportRun.query.get(run_id)
+            assert run.status == 'partial'
+            assert run.error_message is not None
+
+    def test_does_not_mark_partial_when_enough_populated(self, app):
+        """If >10% of deals have associations, run stays success."""
+        run_id = self._make_run(app)
+        with app.app_context():
+            for i in range(8):
+                _seed_deal(f"deal-empty-{i}", run_id=run_id)
+            _seed_deal("deal-pop-1", associations={"contacts": {"results": [{"id": "c1"}]}}, run_id=run_id)
+            _seed_deal("deal-pop-2", associations={"contacts": {"results": [{"id": "c2"}]}}, run_id=run_id)
+            from app.tasks.hubspot_tasks import _check_association_health
+            _check_association_health(db, 'deals', run_id)
+            from app.models import HubSpotImportRun
+            run = HubSpotImportRun.query.get(run_id)
+            assert run.status == 'success'
