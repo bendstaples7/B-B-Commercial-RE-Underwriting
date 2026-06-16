@@ -172,8 +172,8 @@ echo "    Gunicorn reloaded"
 echo "==> (6) Wait for Gunicorn to be healthy on localhost"
 # Poll localhost directly (bypasses nginx) so the CI health check step can
 # start immediately rather than sleeping an arbitrary number of seconds.
-# 20 attempts × 3s = up to 60s. flask db upgrade + app factory init typically
-# completes in <20s on this VPS; 60s is a safe upper bound.
+# Worst case: 20 attempts × (--max-time 10 + sleep 3) = ~260s total.
+# flask db upgrade + app factory init typically completes in <20s on this VPS.
 GUNICORN_READY=0
 for i in $(seq 1 20); do
     HC_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -189,7 +189,7 @@ for i in $(seq 1 20); do
     sleep 3
 done
 if [ "$GUNICORN_READY" = "0" ]; then
-    echo "FAILED: Gunicorn did not become healthy on localhost after 60s"
+    echo "FAILED: Gunicorn did not become healthy on localhost after ~260s"
     exit 1
 fi
 

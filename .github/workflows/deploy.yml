@@ -194,20 +194,26 @@ jobs:
           # deploy.sh already verifies Gunicorn is healthy on localhost before
           # returning, so by the time we reach this step the server is up.
           # This loop is the public-facing (nginx) confirmation: 20 attempts,
-          # 5s apart = up to 100s total, which covers any nginx proxy lag.
+          # worst case (20 × (--max-time 20 + sleep 5)) = ~500s total, which
+          # is ample headroom for any nginx proxy lag or transient network blip.
           #
           # --connect-timeout 5  → fail fast when the port isn't open yet
           #                        (expected early in reload, retry quickly)
           # --max-time 20        → fail if connected but server hangs >20s
           #                        (this is the signal of a real problem)
           # Together these let curl distinguish "not ready yet" from "stuck".
-          echo "Polling ${BASE_URL}/api/health (max 20 attempts × 5s)..."
+          #
+          # IMPORTANT: the `|| echo "000"` guard is required. GitHub Actions
+          # runs each `run:` block under `set -e`. Without the guard, a non-zero
+          # curl exit (e.g. exit 7 = connection refused, exit 28 = timeout) would
+          # terminate the step immediately before the retry loop could continue.
+          echo "Polling ${BASE_URL}/api/health (max 20 attempts, ~500s worst case)..."
           HEALTH_PASSED=0
           for i in $(seq 1 20); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
               --connect-timeout 5 \
               --max-time 20 \
-              "${BASE_URL}/api/health")
+              "${BASE_URL}/api/health" 2>/dev/null || echo "000")
             echo "Attempt $i: HTTP $STATUS"
             if [ "$STATUS" = "200" ]; then
               echo "Health check passed."
