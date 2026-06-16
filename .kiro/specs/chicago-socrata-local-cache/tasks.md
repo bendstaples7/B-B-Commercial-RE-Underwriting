@@ -189,88 +189,88 @@ Implement a local PostgreSQL mirror of three Cook County Socrata datasets (Parce
     - Rolls back after each test to ensure isolation
     - _Requirements: 7.1, 7.2, 7.3_
 
-  - [ ]* 13.2 Write property test for Property 1 — Parcel Universe round-trip data integrity
+  - [x]* 13.2 Write property test for Property 1 — Parcel Universe round-trip data integrity
     - **Property 1: Parcel Universe round-trip data integrity**
     - **Validates: Requirements 7.1**
     - In `backend/tests/test_socrata_cache_properties.py`
     - Use `pin_strategy`, `lat_strategy`, `lon_strategy`; write row, read back, assert exact equality
 
-  - [ ]* 13.3 Write property test for Property 2 — Parcel Sales round-trip data integrity
+  - [x]* 13.3 Write property test for Property 2 — Parcel Sales round-trip data integrity
     - **Property 2: Parcel Sales round-trip data integrity**
     - **Validates: Requirements 7.2**
     - Generate arbitrary `ParcelSalesCache` rows; write, read back by `(pin, sale_date)`, assert all column values match
 
-  - [ ]* 13.4 Write property test for Property 3 — Improvement Characteristics round-trip data integrity
+  - [x]* 13.4 Write property test for Property 3 — Improvement Characteristics round-trip data integrity
     - **Property 3: Improvement Characteristics round-trip data integrity**
     - **Validates: Requirements 7.3**
     - Generate arbitrary `ImprovementCharacteristicsCache` rows; write, read back by `pin`, assert all column values match
 
-  - [ ]* 13.5 Write property test for Property 4 — Upsert overwrites previous values
+  - [x]* 13.5 Write property test for Property 4 — Upsert overwrites previous values
     - **Property 4: Upsert overwrites previous values**
     - **Validates: Requirements 1.8, 7.4**
     - Generate PIN and two distinct value sets V1, V2; upsert V1 then V2; assert read-back returns V2 for all non-PK columns
 
-  - [ ]* 13.6 Write property test for Property 5 — NULL preservation for nullable columns
+  - [x]* 13.6 Write property test for Property 5 — NULL preservation for nullable columns
     - **Property 5: NULL preservation for nullable columns**
     - **Validates: Requirements 7.5**
     - For each nullable column in each cache table, write row with NULL, read back, assert NULL returned
 
-  - [ ]* 13.7 Write property test for Property 6 — Schema drift: extra fields silently dropped
+  - [x]* 13.7 Write property test for Property 6 — Schema drift: extra fields silently dropped
     - **Property 6: Schema drift — extra fields are silently dropped**
     - **Validates: Requirements 6.1**
     - Use `extra_fields_strategy`; pass row dict with extra keys to `_map_row`; assert returned dict contains only whitelisted keys
 
-  - [ ]* 13.8 Write property test for Property 7 — Schema drift: missing nullable fields become NULL
+  - [x]* 13.8 Write property test for Property 7 — Schema drift: missing nullable fields become NULL
     - **Property 7: Schema drift — missing nullable fields become NULL**
     - **Validates: Requirements 6.2, 6.3**
     - Generate subsets of nullable columns to omit; call `_map_row`; assert omitted nullable columns map to `None`
 
-  - [ ]* 13.9 Write property test for Property 8 — Schema drift: rows with missing NOT NULL fields are skipped
+  - [x]* 13.9 Write property test for Property 8 — Schema drift: rows with missing NOT NULL fields are skipped
     - **Property 8: Schema drift — rows with missing NOT NULL fields are skipped**
     - **Validates: Requirements 6.5**
     - Generate batch with some rows missing NOT NULL fields; call upsert method; assert only valid rows inserted
 
-  - [ ]* 13.10 Write property test for Property 9 — Pagination termination
+  - [x]* 13.10 Write property test for Property 9 — Pagination termination
     - **Property 9: Pagination termination**
     - **Validates: Requirements 2.1**
     - Use `page_sequence_strategy`; mock HTTP responses; assert `_fetch_pages` makes exactly `ceil(total_rows / page_size)` requests and stops on short page
 
-  - [ ]* 13.11 Write property test for Property 10 — Sync log written on success with correct row count
+  - [x]* 13.11 Write property test for Property 10 — Sync log written on success with correct row count
     - **Property 10: Sync log written on success with correct row count**
     - **Validates: Requirements 2.3**
     - Mock K total rows across arbitrary pages; run `full_load`; assert exactly one `sync_log` row with `status='success'` and `rows_upserted=K`
 
-  - [ ]* 13.12 Write property test for Property 11 — Retry behavior on transient HTTP errors
+  - [x]* 13.12 Write property test for Property 11 — Retry behavior on transient HTTP errors
     - **Property 11: Retry behavior on transient HTTP errors**
     - **Validates: Requirements 2.4**
     - For k in 0..2 consecutive failures, mock responses; assert `_socrata_get_with_retry` makes exactly k+1 total requests and succeeds
 
-  - [ ]* 13.13 Write property test for Property 12 — Cache status classification is deterministic
+  - [x]* 13.13 Write property test for Property 12 — Cache status classification is deterministic
     - **Property 12: Cache status classification is deterministic**
     - **Validates: Requirements 5.2, 5.3, 5.4, 5.5**
     - Generate `(row_count, days_since_last_success, has_ever_synced)` triples; call `_classify_status`; assert exactly one of the four status values returned per the documented rules
 
-  - [ ]* 13.14 Write property test for Property 13 — Cache-first routing prevents live API calls
+  - [x]* 13.14 Write property test for Property 13 — Cache-first routing prevents live API calls
     - **Property 13: Cache-first routing — non-empty cache prevents live API calls**
     - **Validates: Requirements 4.1, 4.2, 4.3**
     - Populate all three cache tables with at least one row; call `fetch_comparables` with mocked HTTP; assert zero HTTP requests made
 
-  - [ ]* 13.15 Write property test for Property 14 — Output schema consistency regardless of data source
+  - [x]* 13.15 Write property test for Property 14 — Output schema consistency regardless of data source
     - **Property 14: Output schema consistency regardless of data source**
     - **Validates: Requirements 4.7**
     - Call `fetch_comparables` with cache populated and with cache empty (API fallback); assert every returned dict has exactly the same set of keys in both cases
 
-  - [ ]* 13.16 Write property test for Property 15 — Incremental refresh uses correct watermark
+  - [x]* 13.16 Write property test for Property 15 — Incremental refresh uses correct watermark
     - **Property 15: Incremental refresh uses correct watermark**
     - **Validates: Requirements 3.2, 3.3**
     - Generate `sync_log` history with mixed statuses and timestamps; call `_get_last_success_timestamp`; assert returns max `completed_at` among `status='success'` rows, or `None` if none
 
-  - [ ]* 13.17 Write property test for Property 16 — Failed refresh leaves existing cache data intact
+  - [x]* 13.17 Write property test for Property 16 — Failed refresh leaves existing cache data intact
     - **Property 16: Failed refresh leaves existing cache data intact**
     - **Validates: Requirements 3.5**
     - Pre-populate cache tables; simulate API failure during refresh; assert all pre-existing rows unchanged after failure
 
-  - [ ]* 13.18 Write property test for Property 17 — Parcel Sales filter: only LAND AND BUILDING records loaded
+  - [x]* 13.18 Write property test for Property 17 — Parcel Sales filter: only LAND AND BUILDING records loaded
     - **Property 17: Parcel Sales filter — only LAND AND BUILDING records are loaded**
     - **Validates: Requirements 2.7**
     - Generate mock Socrata response with mixed `sale_type` values; run loader; assert only `sale_type='LAND AND BUILDING'` rows present in `parcel_sales_cache`

@@ -656,6 +656,122 @@ class GoogleSheetsImporter:
         return None
 
     # ------------------------------------------------------------------
+    # Deduplication helpers
+    # ------------------------------------------------------------------
+
+    # Unit designators that appear after a street number+name and indicate
+    # a specific unit within a multi-unit building.
+    _UNIT_PATTERNS = (
+        r'\s+(apt|apartment|unit|ste|suite|#|fl|floor|no\.?)\s*\S+$',
+        r'\s+\d+[a-z]?$',   # trailing bare number or number+letter, e.g. "2553 N Drake Ave 1"
+    )
+
+    @classmethod
+    def _strip_unit(cls, street: Optional[str]) -> Optional[str]:
+        """Return the street address with any trailing unit designator removed.
+
+        Examples
+        --------
+        "2553 N Drake Ave 1"          → "2553 N Drake Ave"
+        "470 N Kenilworth Ave # 30"   → "470 N Kenilworth Ave"
+        "1501 Jefferson Ave # 101"    → "1501 Jefferson Ave"
+        "2553 N Drake Ave"            → "2553 N Drake Ave"  (unchanged)
+        """
+        import re
+        if not street:
+            return street
+        s = street.strip()
+        for pattern in cls._UNIT_PATTERNS:
+            s = re.sub(pattern, '', s, flags=re.IGNORECASE).strip()
+        return s or street.strip()
+
+    @classmethod
+    def _find_duplicate(
+        cls,
+        validated_data: dict,
+        owner_user_id: Optional[str] = None,
+    ) -> Optional[Lead]:
+        """Look for an existing Lead that represents the same property+owner.
+
+        Dedup priority (checked in order):
+        1. ``county_assessor_pin`` — unambiguous parcel identifier.
+        2. Exact ``property_street`` match (current behaviour).
+        3. Same owner name + same *base* street (strip unit suffix from both
+           sides) — catches "2553 N Drake Ave" vs "2553 N Drake Ave 1".
+
+        The ``owner_user_id`` scope is applied when provided, so two
+        different users importing the same address create separate records.
+        """
+        from sqlalchemy import func as sa_func
+
+        # 1. PIN match (most authoritative)
+        pin = validated_data.get("county_assessor_pin")
+        if pin:
+            q = Lead.query.filter(Lead.county_assessor_pin == pin)
+            if owner_user_id:
+                q = q.filter(Lead.owner_user_id == owner_user_id)
+            hit = q.first()
+            if hit:
+                return hit
+
+        # 2. Exact street match
+        street = validated_data.get("property_street")
+        if street:
+            q = Lead.query.filter(Lead.property_street == street)
+            if owner_user_id:
+                q = q.filter(Lead.owner_user_id == owner_user_id)
+            hit = q.first()
+            if hit:
+                return hit
+
+        # 3. Same owner + same base street (unit-stripped), bidirectional.
+        #
+        # Covers both import orders:
+        #   a) Incoming has unit suffix → strip it, look for bare or unit records
+        #   b) Incoming is bare → look for existing unit-address records for same owner
+        #
+        # The DB-side match is constrained to known unit suffix patterns via a
+        # regex (rather than a broad ILIKE prefix) to avoid false merges on
+        # streets that share a common prefix (e.g. "123 Main St" vs "123 Main Street").
+        base_street = cls._strip_unit(street)
+        first = validated_data.get("owner_first_name")
+        last = validated_data.get("owner_last_name")
+        if base_street and first and last:
+            incoming_has_unit = base_street.lower() != (street or '').strip().lower()
+            incoming_is_bare = not incoming_has_unit
+
+            # Run if incoming has a unit suffix (original case) OR incoming is bare
+            # and could match an existing unit-address record (reverse case).
+            if incoming_has_unit or incoming_is_bare:
+                import re as _re
+                # Only match DB records whose street is either the exact base
+                # or the base followed by a recognised unit designator pattern.
+                # This prevents "123 Oak St" from matching "123 Oak Street # 1".
+                unit_pattern = (
+                    r'(?i)^'
+                    + _re.escape(base_street)
+                    + r'(\s+(apt|apartment|unit|ste|suite|#|fl|floor|no\.?)\s*\S+|\s+\d+[a-z]?)$'
+                )
+                q = (
+                    Lead.query
+                    .filter(Lead.owner_first_name.ilike(first))
+                    .filter(Lead.owner_last_name.ilike(last))
+                    .filter(
+                        db.or_(
+                            Lead.property_street == base_street,
+                            Lead.property_street.op('~*')(unit_pattern),
+                        )
+                    )
+                )
+                if owner_user_id:
+                    q = q.filter(Lead.owner_user_id == owner_user_id)
+                hit = q.first()
+                if hit:
+                    return hit
+
+        return None
+
+    # ------------------------------------------------------------------
     # Upsert
     # ------------------------------------------------------------------
 
@@ -664,8 +780,16 @@ class GoogleSheetsImporter:
         validated_data: dict,
         import_job_id: Optional[int] = None,
         data_source: str = "google_sheets",
+        owner_user_id: Optional[str] = None,
     ) -> Lead:
-        """Insert a new Lead or update an existing one based on property_street.
+        """Insert a new Lead or update an existing one.
+
+        Deduplication is performed in priority order:
+        1. ``county_assessor_pin`` — parcel identifier, most authoritative.
+        2. Exact ``property_street`` match.
+        3. Same owner name + same base street (unit suffix stripped) —
+           prevents phantom duplicates when a bare building address is
+           imported alongside a specific unit address for the same owner.
 
         When updating, changed fields are recorded in the audit trail.
 
@@ -677,16 +801,15 @@ class GoogleSheetsImporter:
             The current ImportJob id (used for metadata and audit trail).
         data_source : str
             Identifier written to ``Lead.data_source``.
+        owner_user_id : str, optional
+            Scopes the duplicate search to a specific user's leads.
 
         Returns
         -------
         Lead
             The created or updated Lead instance.
         """
-        property_street = validated_data.get("property_street")
-        existing = None
-        if property_street:
-            existing = Lead.query.filter_by(property_street=property_street).first()
+        existing = self._find_duplicate(validated_data, owner_user_id=owner_user_id)
 
         if existing:
             # Update existing lead and record audit trail
@@ -703,6 +826,8 @@ class GoogleSheetsImporter:
                 data_source=data_source,
                 last_import_job_id=import_job_id,
             )
+            if owner_user_id:
+                lead.owner_user_id = owner_user_id
             self._set_lead_fields(lead, validated_data)
             db.session.add(lead)
             return lead
@@ -881,6 +1006,7 @@ class GoogleSheetsImporter:
                                 result.cleaned_data,
                                 import_job_id=job_id,
                                 data_source="google_sheets",
+                                owner_user_id=job.user_id,
                             )
                         rows_imported += 1
                     except Exception as row_exc:
