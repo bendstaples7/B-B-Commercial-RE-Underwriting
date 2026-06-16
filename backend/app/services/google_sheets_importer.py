@@ -760,10 +760,14 @@ class GoogleSheetsImporter:
         if not lead.property_type and lead.units:
             inferred = self._infer_property_type_from_units(lead.units)
             if inferred:
+                # Read the actual current value before overwriting it so the
+                # audit trail is accurate (old_value=None only if it was truly
+                # NULL, not if a prior field in this loop already set it).
+                current_property_type = lead.property_type  # still falsy here
                 audit = LeadAuditTrail(
                     lead_id=lead.id,
                     field_name='property_type',
-                    old_value=None,
+                    old_value=str(current_property_type) if current_property_type else None,
                     new_value=inferred,
                     changed_by=changed_by,
                 )

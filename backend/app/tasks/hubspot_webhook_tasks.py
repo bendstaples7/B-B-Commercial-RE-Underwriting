@@ -727,7 +727,11 @@ def run_incremental_matching(object_type: str, object_id: str) -> None:
 
             # Recompute recommended_action for the matched lead immediately so
             # the UI never shows a stale value after a HubSpot sync.
-            if match.status == 'confirmed' and match.internal_record_id:
+            # Guard: only recompute for lead matches — company matches resolve
+            # to an Organization ID, not a Lead ID, and would raise ValueError.
+            if (match.status == 'confirmed'
+                    and match.internal_record_type == 'lead'
+                    and match.internal_record_id):
                 try:
                     from app.services.action_engine_service import ActionEngineService
                     ActionEngineService.recompute_and_persist(match.internal_record_id)
@@ -922,6 +926,11 @@ def run_rescore_lead(lead_id: int) -> None:
     Rescores first (so the pipeline stage bonus is applied), then recomputes
     recommended_action so any HubSpot signal changes are immediately reflected.
 
+    Both steps are independently non-fatal: a scoring failure does not prevent
+    the action recompute, and vice versa. A db.session.rollback() is issued
+    after each step so a partial dirty session from one step cannot be
+    accidentally committed by the next.
+
     Requirements: 3, 5
     """
     with _AppContextManager():
@@ -934,6 +943,8 @@ def run_rescore_lead(lead_id: int) -> None:
         lead = db.session.get(Lead, lead_id)
         user_id = (lead.owner_user_id if lead else None) or 'default'
 
+        # Step 1: rescore — non-fatal; rollback on failure so the session is
+        # clean before step 2.
         try:
             engine = LeadScoringEngine()
             rescored = engine.bulk_rescore(user_id=user_id, lead_ids=[lead_id])
@@ -946,10 +957,11 @@ def run_rescore_lead(lead_id: int) -> None:
                 "run_rescore_lead: error rescoring lead_id=%d: %s",
                 lead_id, exc, exc_info=True,
             )
-            raise
+            db.session.rollback()
 
-        # Recompute recommended_action AFTER score so score-threshold rules
-        # (e.g. score >= 70 → ready_for_outreach) see the updated value.
+        # Step 2: recompute recommended_action AFTER score so score-threshold
+        # rules (e.g. score >= 70 → ready_for_outreach) see the updated value.
+        # Runs regardless of whether step 1 succeeded or failed.
         try:
             ActionEngineService.recompute_and_persist(lead_id)
             logger.info(
@@ -962,6 +974,7 @@ def run_rescore_lead(lead_id: int) -> None:
                 "run_rescore_lead: action recompute failed for lead_id=%d: %s",
                 lead_id, exc,
             )
+            db.session.rollback()
 
 
 # ---------------------------------------------------------------------------
