@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import React, { useState, useRef, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   useTheme,
@@ -17,8 +17,85 @@ import {
   Typography,
 } from '@mui/material'
 import SearchIcon from '@mui/icons-material/Search'
-import type { SearchResponse } from '@/types'
+import type { SearchResponse, SearchMatchContext } from '@/types'
 import { searchService } from '@/services/api'
+
+// ---------------------------------------------------------------------------
+// Match context rendering helpers
+// ---------------------------------------------------------------------------
+
+/** Returns a label like "Phone" | "Email" for the match type badge. */
+function matchTypeLabel(type: SearchMatchContext['type']): string {
+  switch (type) {
+    case 'phone': return 'Phone'
+    case 'email': return 'Email'
+    case 'address': return 'Address'
+    case 'name': return 'Name'
+  }
+}
+
+/**
+ * Renders a value string with the query substring highlighted in bold.
+ * Uses an explicit fontWeight span so MUI Typography doesn't strip bold styling.
+ */
+function highlightMatch(value: string, query: string): React.ReactNode {
+  if (!query) return value
+  // For phone searches the query might be digits-only (e.g. "0106") but the
+  // stored value has formatting ("(773) 454-0106"). Try the raw query first,
+  // then fall back to matching just the digit run.
+  const lv = value.toLowerCase()
+  const lq = query.toLowerCase()
+  let idx = lv.indexOf(lq)
+
+  if (idx === -1) {
+    // digits-only query: find the digit sequence within the formatted value
+    const digits = query.replace(/\D/g, '')
+    if (digits.length >= 4) {
+      // Find position in value where the digit run of the query appears
+      let di = 0
+      let vi = 0
+      let startVi = -1
+      while (vi < value.length && di < digits.length) {
+        if (/\d/.test(value[vi])) {
+          if (value[vi] === digits[di]) {
+            if (di === 0) startVi = vi
+            di++
+            if (di === digits.length) { idx = startVi; break }
+          } else {
+            di = 0; startVi = -1
+          }
+        }
+        vi++
+      }
+      if (idx !== -1) {
+        // Bold from startVi through the end of the digit run (skip formatting chars)
+        let endVi = vi
+        // Extend end to include trailing formatting chars like last digit position
+        return (
+          <>
+            {value.slice(0, idx)}
+            <Box component="span" sx={{ fontWeight: 700, color: 'text.primary' }}>
+              {value.slice(idx, endVi + 1)}
+            </Box>
+            {value.slice(endVi + 1)}
+          </>
+        )
+      }
+    }
+    return value
+  }
+
+  const matchLen = lq.length
+  return (
+    <>
+      {value.slice(0, idx)}
+      <Box component="span" sx={{ fontWeight: 700, color: 'text.primary' }}>
+        {value.slice(idx, idx + matchLen)}
+      </Box>
+      {value.slice(idx + matchLen)}
+    </>
+  )
+}
 
 const GlobalSearchBar = () => {
   const navigate = useNavigate()
@@ -162,7 +239,7 @@ const GlobalSearchBar = () => {
             inputRef={inputRef}
             value={query}
             onChange={(e) => handleQueryChange(e.target.value)}
-            placeholder="Search leads, addresses…"
+            placeholder="Search name, address, phone, email…"
             inputProps={{ maxLength: 200 }}
             sx={{
               color: 'inherit',
@@ -307,6 +384,22 @@ const GlobalSearchBar = () => {
                               )}
                             </Box>
                           }
+                          secondary={
+                            lead.match_context ? (
+                              <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25 }}>
+                                <Box
+                                  component="span"
+                                  sx={{ color: 'text.disabled', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: '0.6rem' }}
+                                >
+                                  {matchTypeLabel(lead.match_context.type)}:&nbsp;
+                                </Box>
+                                <Box component="span" sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
+                                  {highlightMatch(lead.match_context.value, query)}
+                                </Box>
+                              </Box>
+                            ) : undefined
+                          }
+                          secondaryTypographyProps={{ component: 'span' }}
                         />
                       </ListItemButton>
                     </ListItem>

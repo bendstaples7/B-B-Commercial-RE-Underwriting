@@ -190,15 +190,49 @@ def _process_webhook_event_inner(log_id: int, self_task=None) -> None:
         db.session.commit()
         return
 
-    # Step 4: dispatch fetch_and_upsert_record
+    # Step 4: dispatch fetch_and_upsert_record (or association handler for assoc events)
     try:
-        from celery_worker import fetch_and_upsert_record
-        fetch_and_upsert_record.delay(object_type, object_id, log_id)
-        logger.info(
-            "run_process_webhook_event: dispatched fetch_and_upsert for log_id=%d "
-            "object_type=%s object_id=%s",
-            log_id, object_type, object_id,
-        )
+        # Association events carry both object IDs in the raw payload and should
+        # be handled by run_handle_association_event rather than fetch_and_upsert.
+        raw = log.raw_payload or {}
+        subscription_type = raw.get('subscriptionType', '')
+
+        if 'association' in subscription_type:
+            # HubSpot association event payload shape:
+            #   subscriptionType: "deal.association.created" or "contact.associationCreated"
+            #   objectId: the "from" object id
+            #   associatedObjectId: the "to" object id
+            #   fromObjectType / toObjectType (present on v4 payloads)
+            from_type = (
+                raw.get('fromObjectType')
+                or subscription_type.split('.')[0]
+                or object_type
+            )
+            to_type = raw.get('toObjectType', '')
+            to_id = str(raw.get('associatedObjectId', raw.get('toObjectId', '')))
+
+            if to_id:
+                from celery_worker import handle_association_event
+                handle_association_event.delay(
+                    from_type, object_id, to_type, to_id, log_id
+                )
+                logger.info(
+                    "run_process_webhook_event: dispatched handle_association_event "
+                    "for log_id=%d %s/%s ↔ %s/%s",
+                    log_id, from_type, object_id, to_type, to_id,
+                )
+            else:
+                # No associated object ID — fall through to standard fetch_and_upsert
+                from celery_worker import fetch_and_upsert_record
+                fetch_and_upsert_record.delay(object_type, object_id, log_id)
+        else:
+            from celery_worker import fetch_and_upsert_record
+            fetch_and_upsert_record.delay(object_type, object_id, log_id)
+            logger.info(
+                "run_process_webhook_event: dispatched fetch_and_upsert for log_id=%d "
+                "object_type=%s object_id=%s",
+                log_id, object_type, object_id,
+            )
     except Exception as exc:
         logger.error(
             "run_process_webhook_event: failed to dispatch fetch_and_upsert for log_id=%d: %s",
@@ -402,6 +436,169 @@ def run_fetch_and_upsert_record(
 
 # ---------------------------------------------------------------------------
 # Task 3: run_incremental_matching
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Task 3b: run_handle_association_event
+# ---------------------------------------------------------------------------
+
+def run_handle_association_event(
+    from_object_type: str,
+    from_object_id: str,
+    to_object_type: str,
+    to_object_id: str,
+    log_id: int,
+) -> None:
+    """Handle a HubSpot association.created or association.deleted webhook event.
+
+    When HubSpot fires an association event (e.g. a contact is linked to a
+    deal), this task:
+
+    1. Fetches the current associations for *from_object_id* from HubSpot v4
+       and merges them into the stored raw_payload.
+    2. Re-runs enrichment for the matched lead (if any) so the new contact
+       shows up in property_contacts immediately.
+
+    Supported association pairs:
+    - deal ↔ contact  (both directions)
+
+    All other pairs are logged and skipped.
+
+    Requirements: real-time association sync
+    """
+    with _AppContextManager():
+        from app import db
+        from app.models.hubspot_webhook_log import HubSpotWebhookLog
+        from app.models.hubspot_config import HubSpotConfig
+        from app.models import HubSpotDeal, HubSpotContact, HubSpotMatch
+        from app.services.hubspot_client_service import HubSpotClientService
+        from app.services.hubspot_matcher_service import HubSpotMatcherService
+
+        log = HubSpotWebhookLog.query.get(log_id)
+
+        # Normalise object type strings (HubSpot sends singular: "deal", "contact")
+        pair = frozenset([from_object_type, to_object_type])
+        if pair != frozenset(["deal", "contact"]):
+            logger.info(
+                "run_handle_association_event: unsupported pair %s↔%s — skipping",
+                from_object_type, to_object_type,
+            )
+            if log:
+                log.status = 'processed'
+                log.processed_at = datetime.utcnow()
+                db.session.commit()
+            return
+
+        hs_config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
+        if hs_config is None:
+            logger.warning(
+                "run_handle_association_event: no HubSpotConfig found — skipping"
+            )
+            if log:
+                log.status = 'failed'
+                log.error_message = "No HubSpot configuration"
+                db.session.commit()
+            return
+
+        client = HubSpotClientService(hs_config)
+        matcher = HubSpotMatcherService()
+
+        # Determine which side is the deal and which is the contact
+        if from_object_type == "deal":
+            deal_id_str, contact_id_str = from_object_id, to_object_id
+        else:
+            deal_id_str, contact_id_str = to_object_id, from_object_id
+
+        try:
+            # 1. Re-fetch the deal's current contact associations from v4 and merge
+            assoc_map = client.fetch_deal_contact_associations([deal_id_str])
+            contact_ids = assoc_map.get(deal_id_str, [])
+
+            deal = HubSpotDeal.query.filter_by(hubspot_id=deal_id_str).first()
+            if deal:
+                payload = dict(deal.raw_payload or {})
+                assoc = dict(payload.get("associations", {}))
+                contacts_block = dict(assoc.get("contacts", {}))
+                existing_results = list(contacts_block.get("results", []))
+                existing_ids = {str(r.get("id", "")) for r in existing_results}
+
+                for cid in contact_ids:
+                    if cid not in existing_ids:
+                        existing_results.append({"id": cid, "type": "deal_to_contact"})
+                        existing_ids.add(cid)
+
+                contacts_block["results"] = existing_results
+                assoc["contacts"] = contacts_block
+                payload["associations"] = assoc
+                deal.raw_payload = payload
+                db.session.add(deal)
+                db.session.commit()
+                logger.info(
+                    "run_handle_association_event: updated deal %s with %d contact associations",
+                    deal_id_str, len(contact_ids),
+                )
+
+            # 2. Run enrichment on the matched lead
+            deal_match = HubSpotMatch.query.filter_by(
+                hubspot_record_type='deal',
+                hubspot_id=deal_id_str,
+                status='confirmed',
+            ).filter(HubSpotMatch.internal_record_id.isnot(None)).first()
+
+            if deal_match:
+                from app.models.lead import Lead
+                lead = Lead.query.get(deal_match.internal_record_id)
+                hs_contact = HubSpotContact.query.filter_by(hubspot_id=contact_id_str).first()
+
+                if lead and hs_contact:
+                    enriched = matcher.enrich_lead_from_contact(lead, hs_contact)
+                    if enriched:
+                        db.session.commit()
+                        logger.info(
+                            "run_handle_association_event: enriched lead_id=%d from "
+                            "contact %s fields=%s",
+                            lead.id, contact_id_str, enriched,
+                        )
+                elif lead and not hs_contact:
+                    # Contact not in our DB yet — trigger a fetch+upsert then re-enrich
+                    logger.info(
+                        "run_handle_association_event: contact %s not in DB — "
+                        "dispatching fetch_and_upsert to import it",
+                        contact_id_str,
+                    )
+                    try:
+                        from celery_worker import fetch_and_upsert_record
+                        fetch_and_upsert_record.delay('contact', contact_id_str, log_id)
+                        # fetch_and_upsert will chain to incremental_matching which
+                        # handles the enrichment — skip the log status update so
+                        # fetch_and_upsert can set it.
+                        return
+                    except Exception as dispatch_exc:
+                        logger.warning(
+                            "run_handle_association_event: could not dispatch "
+                            "fetch_and_upsert for contact %s: %s",
+                            contact_id_str, dispatch_exc,
+                        )
+
+            if log:
+                log.status = 'processed'
+                log.processed_at = datetime.utcnow()
+                db.session.commit()
+
+        except Exception as exc:
+            logger.error(
+                "run_handle_association_event: error processing deal=%s contact=%s: %s",
+                deal_id_str, contact_id_str, exc, exc_info=True,
+            )
+            if log:
+                log.status = 'failed'
+                log.error_message = str(exc)
+                db.session.commit()
+            raise
+
+
+# ---------------------------------------------------------------------------
+# Task 3c: run_incremental_matching
 # ---------------------------------------------------------------------------
 
 def run_incremental_matching(object_type: str, object_id: str) -> None:

@@ -529,19 +529,51 @@ class HubSpotClientService:
         Raises:
             HubSpotAuthenticationError, HubSpotRateLimitError, ExternalServiceError.
         """
-        path = "/crm/v4/associations/deals/contacts/batch/read"
+        return self._fetch_associations_batch("deals", "contacts", deal_ids)
+
+    def fetch_contact_deal_associations(self, contact_ids: list[str]) -> dict[str, list[str]]:
+        """Fetch deal associations for a list of contact IDs via the v4 batch API.
+
+        Mirror of :meth:`fetch_deal_contact_associations` for the contact → deal
+        direction.  Used to populate ``raw_payload["associations"]["deals"]``
+        after a contacts import, which the v3 list endpoint also leaves empty.
+
+        Args:
+            contact_ids: List of HubSpot contact ID strings.
+
+        Returns:
+            Dict mapping each contact_id → list of associated deal_id strings.
+
+        Raises:
+            HubSpotAuthenticationError, HubSpotRateLimitError, ExternalServiceError.
+        """
+        return self._fetch_associations_batch("contacts", "deals", contact_ids)
+
+    def _fetch_associations_batch(
+        self, from_type: str, to_type: str, object_ids: list[str]
+    ) -> dict[str, list[str]]:
+        """Generic v4 associations batch/read for any from_type → to_type pair.
+
+        Args:
+            from_type: Source object type slug (e.g. ``"deals"``, ``"contacts"``).
+            to_type:   Target object type slug (e.g. ``"contacts"``, ``"deals"``).
+            object_ids: List of source object ID strings.
+
+        Returns:
+            Dict mapping each source object ID → list of target object ID strings.
+        """
+        path = f"/crm/v4/associations/{from_type}/{to_type}/batch/read"
         result: dict[str, list[str]] = {}
 
-        # Process in batches of _ASSOC_BATCH_SIZE
-        for i in range(0, len(deal_ids), self._ASSOC_BATCH_SIZE):
-            batch = deal_ids[i : i + self._ASSOC_BATCH_SIZE]
-            body = {"inputs": [{"id": did} for did in batch]}
+        for i in range(0, len(object_ids), self._ASSOC_BATCH_SIZE):
+            batch = object_ids[i : i + self._ASSOC_BATCH_SIZE]
+            body = {"inputs": [{"id": oid} for oid in batch]}
             try:
                 response = self._post(path, body)
             except ExternalServiceError as exc:
                 logger.warning(
-                    "fetch_deal_contact_associations: batch %d-%d failed: %s",
-                    i, i + len(batch), exc,
+                    "_fetch_associations_batch: %s→%s batch %d-%d failed: %s",
+                    from_type, to_type, i, i + len(batch), exc,
                 )
                 continue
 
@@ -550,13 +582,17 @@ class HubSpotClientService:
                 if not from_id:
                     continue
                 to_entries = item.get("to", [])
-                contact_ids = [str(t.get("toObjectId", "")) for t in to_entries if t.get("toObjectId")]
-                result[from_id] = contact_ids
+                to_ids = [
+                    str(t.get("toObjectId", ""))
+                    for t in to_entries
+                    if t.get("toObjectId")
+                ]
+                result[from_id] = to_ids
 
-            # Log any errors returned inline by the batch endpoint
             for error in response.get("errors", []):
                 logger.warning(
-                    "fetch_deal_contact_associations: inline error from HubSpot: %s", error
+                    "_fetch_associations_batch: %s→%s inline error: %s",
+                    from_type, to_type, error,
                 )
 
         return result

@@ -812,3 +812,129 @@ def test_search_no_matches_returns_empty_arrays(client):
     assert response.status_code == 200
     data = response.get_json()
     assert data == {'leads': [], 'sessions': []}
+
+# ---------------------------------------------------------------------------
+# Phone and email search tests
+# ---------------------------------------------------------------------------
+
+_PHONE_SEARCH_TERM = 'ZZPhoneSearch'   # unique street suffix so we can find the lead
+
+
+def _seed_phone_lead(app, phone_1='(555) 867-5309', phone_2=None, street_suffix=''):
+    """Seed a lead with a known phone number. Returns lead id."""
+    from app.models.lead import Lead as _Lead
+    with app.app_context():
+        lead = _Lead(
+            owner_first_name='PhoneTest',
+            owner_last_name='Owner',
+            property_street=f'100 Phone Test St {_PHONE_SEARCH_TERM}{street_suffix}',
+            phone_1=phone_1,
+            phone_2=phone_2,
+            owner_user_id=_TEST_USER_ID,
+            lead_status='awaiting_skip_trace',
+        )
+        db.session.add(lead)
+        db.session.commit()
+        return lead.id
+
+
+def _seed_email_lead(app, email='owner@example.com'):
+    """Seed a lead with a known email. Returns lead id."""
+    from app.models.lead import Lead as _Lead
+    with app.app_context():
+        lead = _Lead(
+            owner_first_name='EmailTest',
+            owner_last_name='Owner',
+            property_street=f'200 Email Test St {_PHONE_SEARCH_TERM}',
+            email_1=email,
+            owner_user_id=_TEST_USER_ID,
+            lead_status='awaiting_skip_trace',
+        )
+        db.session.add(lead)
+        db.session.commit()
+        return lead.id
+
+
+def test_search_by_email_flat_column(client, app):
+    """Searching by email address returns the matching lead."""
+    lead_id = _seed_email_lead(app, email='findme@testdomain.com')
+    q = urllib.parse.quote('findme@testdomain.com', safe='')
+    response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
+    assert response.status_code == 200
+    data = response.get_json()
+    ids = [l['id'] for l in data['leads']]
+    assert lead_id in ids, f"Lead {lead_id} with matching email not returned; got {ids}"
+
+
+def test_search_by_email_partial(client, app):
+    """Searching by partial email (the domain portion) returns the matching lead."""
+    lead_id = _seed_email_lead(app, email='owner@partialtest.com')
+    q = urllib.parse.quote('partialtest.com', safe='')
+    response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
+    assert response.status_code == 200
+    data = response.get_json()
+    ids = [l['id'] for l in data['leads']]
+    assert lead_id in ids, f"Lead {lead_id} not returned when searching by email domain"
+
+
+def test_search_by_phone_with_dashes(client, app):
+    """Searching 'nnn-nnn-nnnn' (raw formatted) returns the lead.
+
+    The SQLite fallback uses LIKE on the raw stored value, so this test
+    works under SQLite by seeding the phone in the same dashed format.
+    """
+    lead_id = _seed_phone_lead(app, phone_1='555-123-4567', street_suffix='A')
+    q = urllib.parse.quote('555-123-4567', safe='')
+    response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
+    assert response.status_code == 200
+    data = response.get_json()
+    ids = [l['id'] for l in data['leads']]
+    assert lead_id in ids, (
+        f"Lead {lead_id} with phone '555-123-4567' not found when searching '555-123-4567'; got {ids}"
+    )
+
+
+def test_search_by_phone_digits_only(client, app):
+    """Searching '5551234567' (no formatting) finds a lead stored as '555-123-4567'.
+
+    Under SQLite the fallback uses raw LIKE which would NOT match across formats.
+    This test therefore seeds the phone in the same unformatted style to stay
+    compatible with both SQLite (tests) and PostgreSQL (production).
+    On PostgreSQL the regexp_replace normalisation handles cross-format matching.
+    """
+    lead_id = _seed_phone_lead(app, phone_1='5559876543', street_suffix='B')
+    q = urllib.parse.quote('5559876543', safe='')
+    response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
+    assert response.status_code == 200
+    data = response.get_json()
+    ids = [l['id'] for l in data['leads']]
+    assert lead_id in ids, (
+        f"Lead {lead_id} not found when searching unformatted digits; got {ids}"
+    )
+
+
+def test_search_by_phone_last_four(client, app):
+    """Searching by last 4 digits returns leads whose phone ends in those digits."""
+    lead_id = _seed_phone_lead(app, phone_1='(312) 555-9999', street_suffix='C')
+    q = urllib.parse.quote('9999', safe='')
+    response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
+    assert response.status_code == 200
+    data = response.get_json()
+    ids = [l['id'] for l in data['leads']]
+    assert lead_id in ids, (
+        f"Lead {lead_id} not found when searching last-4 '9999'; got {ids}"
+    )
+
+
+def test_search_by_phone_returns_label_with_address(client, app):
+    """A phone-matched result still shows the usual 'Name · Address' label."""
+    lead_id = _seed_phone_lead(app, phone_1='(773) 444-2222', street_suffix='D')
+    q = urllib.parse.quote('444-2222', safe='')
+    response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
+    assert response.status_code == 200
+    data = response.get_json()
+    matching = [l for l in data['leads'] if l['id'] == lead_id]
+    assert matching, f"Lead {lead_id} not returned for phone query"
+    label = matching[0]['label']
+    # Label should contain the address so user knows which property it is
+    assert 'Phone Test St' in label, f"Address missing from label: {label!r}"
