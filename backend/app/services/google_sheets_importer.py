@@ -755,12 +755,48 @@ class GoogleSheetsImporter:
                 db.session.add(audit)
                 setattr(lead, field_name, new_value)
 
+        # Infer property_type from units when the sheet didn't supply it
+        # and the lead still has no property_type after the update.
+        if not lead.property_type and lead.units:
+            inferred = self._infer_property_type_from_units(lead.units)
+            if inferred:
+                audit = LeadAuditTrail(
+                    lead_id=lead.id,
+                    field_name='property_type',
+                    old_value=None,
+                    new_value=inferred,
+                    changed_by=changed_by,
+                )
+                db.session.add(audit)
+                lead.property_type = inferred
+
+    @staticmethod
+    def _infer_property_type_from_units(units: Optional[int]) -> Optional[str]:
+        """Return a property_type string inferred from unit count.
+
+        Used to back-fill property_type when it is absent from the import
+        but units is known.  Returns None when units is None or zero.
+
+        Mapping:
+            1 unit  → 'single_family'
+            2 units → 'duplex'
+            3 units → 'triplex'
+            4 units → 'fourplex'
+            5+      → 'multi_family'
+        """
+        if units is None or units < 1:
+            return None
+        return {1: 'single_family', 2: 'duplex', 3: 'triplex', 4: 'fourplex'}.get(units, 'multi_family')
+
     @staticmethod
     def _set_lead_fields(lead: Lead, data: dict) -> None:
         """Set fields on a brand-new Lead from validated data."""
         for key, value in data.items():
             if hasattr(lead, key):
                 setattr(lead, key, value)
+        # Infer property_type from units when the sheet didn't supply it
+        if not lead.property_type and lead.units:
+            lead.property_type = GoogleSheetsImporter._infer_property_type_from_units(lead.units)
 
     # ------------------------------------------------------------------
     # Import orchestration
