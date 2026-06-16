@@ -295,6 +295,7 @@ def run_import_hubspot_deals(run_id: int, self_task=None) -> None:
             return
 
         _backfill_deal_contact_associations(app, db, HubSpotClientService(config))
+        _check_association_health(db, 'deals', run_id)
 
 
 def _backfill_deal_contact_associations(app, db, client) -> None:
@@ -328,7 +329,7 @@ def _backfill_deal_contact_associations(app, db, client) -> None:
         logger.error(
             "_backfill_deal_contact_associations: failed to fetch associations: %s", exc
         )
-        return
+        raise
 
     updated = 0
     for deal_id, contact_ids in assoc_map.items():
@@ -381,17 +382,177 @@ def _backfill_deal_contact_associations(app, db, client) -> None:
 # Task 2: import_hubspot_contacts
 # ---------------------------------------------------------------------------
 
+def _check_association_health(db, object_type: str, run_id: int) -> None:
+    """After a backfill, check what fraction of records still have empty associations.
+
+    If >90% of records have no associations populated, the import run is marked
+    ``partial`` with an explanatory warning so operators can see the gap in the
+    import run history rather than a misleading ``success``.
+
+    Args:
+        object_type: ``'deals'`` or ``'contacts'`` — used to select the model and
+            the association key to inspect.
+        run_id:      The ``HubSpotImportRun.id`` to update if the check fails.
+    """
+    import app.models as _models
+    from app.models import HubSpotImportRun
+
+    model_name = 'HubSpotDeal' if object_type == 'deals' else 'HubSpotContact'
+    assoc_key = 'contacts' if object_type == 'deals' else 'deals'
+    model_class = getattr(_models, model_name)
+
+    total = model_class.query.count()
+    if total == 0:
+        return
+
+    # Count records where associations.<assoc_key>.results is a non-empty array.
+    # We do this in Python rather than SQL to avoid JSON operator dialect differences.
+    all_records = model_class.query.all()
+    populated = 0
+    for record in all_records:
+        assoc = (record.raw_payload or {}).get('associations', {})
+        block = assoc.get(assoc_key, {})
+        if isinstance(block, dict) and block.get('results'):
+            populated += 1
+
+    empty_pct = (total - populated) / total * 100
+    logger.info(
+        "_check_association_health: %s — %d/%d records have %s associations populated "
+        "(%.1f%% empty)",
+        object_type, populated, total, assoc_key, empty_pct,
+    )
+
+    if empty_pct > 90:
+        run = HubSpotImportRun.query.get(run_id)
+        if run and run.status == 'success':
+            warning = (
+                f"Association backfill: {populated}/{total} {object_type} records have "
+                f"{assoc_key} associations populated after v4 batch fetch "
+                f"({empty_pct:.0f}% still empty). "
+                f"The HubSpot v4 associations API may be returning incomplete data."
+            )
+            run.status = 'partial'
+            run.error_message = warning
+            db.session.commit()
+            logger.warning(
+                "_check_association_health: marked run_id=%d as partial — %s",
+                run_id, warning,
+            )
+
+
 def run_import_hubspot_contacts(run_id: int, self_task=None) -> None:
-    """Paginate and UPSERT all HubSpot contacts into hubspot_contacts.
+    """Paginate and UPSERT all HubSpot contacts into hubspot_contacts, then
+    backfill deal associations via the v4 batch API.
+
+    The CRM v3 list endpoint silently returns an empty ``associations`` block
+    for all contacts, so we run a separate v4 batch read after the import to
+    populate ``raw_payload["associations"]["deals"]`` for every contact.
 
     Requirements: 7.6, 7.7, 7.8, 8.2, 8.6, 20.2, 20.3
     """
+    from dotenv import load_dotenv
+    load_dotenv()
+    from app import create_app
+
+    app = create_app()
+
+    # Step 1 — standard paginated import (stores contacts without associations)
     _run_import_generic(
         run_id=run_id,
         object_type='contacts',
         model_class_name='HubSpotContact',
         fetch_method_name='fetch_all_contacts',
         self_task=self_task,
+    )
+
+    # Step 2 — backfill deal associations via v4 batch API
+    with app.app_context():
+        from app import db
+        from app.models import HubSpotConfig
+        from app.services.hubspot_client_service import HubSpotClientService
+
+        config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
+        if config is None:
+            logger.warning(
+                "run_import_hubspot_contacts: skipping association backfill — no HubSpotConfig"
+            )
+            return
+
+        _backfill_contact_deal_associations(app, db, HubSpotClientService(config))
+        _check_association_health(db, 'contacts', run_id)
+
+
+def _backfill_contact_deal_associations(app, db, client) -> None:
+    """Fetch deal associations for all contacts via the v4 batch API and
+    merge them into each contact's ``raw_payload["associations"]["deals"]``.
+
+    Mirror of :func:`_backfill_deal_contact_associations` for the contact→deal
+    direction.  Safe to call multiple times — existing deal IDs in the payload
+    are preserved; new ones from HubSpot are merged in.
+    """
+    from app.models import HubSpotContact
+
+    all_contacts = HubSpotContact.query.all()
+    contact_ids = [c.hubspot_id for c in all_contacts]
+    id_to_contact = {c.hubspot_id: c for c in all_contacts}
+
+    if not contact_ids:
+        logger.info("_backfill_contact_deal_associations: no contacts to process")
+        return
+
+    logger.info(
+        "_backfill_contact_deal_associations: fetching associations for %d contacts",
+        len(contact_ids),
+    )
+
+    try:
+        assoc_map = client.fetch_contact_deal_associations(contact_ids)
+    except Exception as exc:
+        logger.error(
+            "_backfill_contact_deal_associations: failed to fetch associations: %s", exc
+        )
+        raise
+
+    updated = 0
+    for contact_id, deal_ids in assoc_map.items():
+        contact = id_to_contact.get(contact_id)
+        if contact is None:
+            continue
+        if not deal_ids:
+            continue
+
+        payload = dict(contact.raw_payload or {})
+        assoc = dict(payload.get("associations", {}))
+        deals_block = dict(assoc.get("deals", {}))
+        existing_results = list(deals_block.get("results", []))
+        existing_ids = {str(r.get("id", "")) for r in existing_results}
+
+        new_results = list(existing_results)
+        for did in deal_ids:
+            if did not in existing_ids:
+                new_results.append({"id": did, "type": "contact_to_deal"})
+                existing_ids.add(did)
+
+        if len(new_results) == len(existing_results):
+            continue
+
+        deals_block["results"] = new_results
+        assoc["deals"] = deals_block
+        payload["associations"] = assoc
+        contact.raw_payload = payload
+        db.session.add(contact)
+        updated += 1
+
+        if updated % 100 == 0:
+            db.session.commit()
+            logger.debug(
+                "_backfill_contact_deal_associations: committed %d updates so far", updated
+            )
+
+    db.session.commit()
+    logger.info(
+        "_backfill_contact_deal_associations: complete — %d contacts updated with deal associations",
+        updated,
     )
 
 
@@ -1189,3 +1350,44 @@ def run_generate_backup_export() -> str:
             len(deals), len(contacts), len(companies), len(engagements), output_path,
         )
         return output_path
+
+
+# ---------------------------------------------------------------------------
+# Task 10: nightly_association_sync
+# ---------------------------------------------------------------------------
+
+def run_nightly_association_sync() -> dict:
+    """Re-fetch deal↔contact associations for all records via the v4 batch API.
+
+    Intended to run nightly via Celery Beat as a catch-all for any associations
+    that were missed by the import backfill or webhook handler.  Significantly
+    faster than a full import — only the v4 associations endpoint is called,
+    not the full CRM list endpoints.
+
+    Returns a summary dict with counts.
+    """
+    from dotenv import load_dotenv
+    load_dotenv()
+    from app import create_app
+
+    app = create_app()
+    with app.app_context():
+        from app import db
+        from app.models import HubSpotConfig
+        from app.services.hubspot_client_service import HubSpotClientService
+
+        config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
+        if config is None:
+            logger.warning("run_nightly_association_sync: no HubSpotConfig — skipping")
+            return {"skipped": True, "reason": "no_config"}
+
+        client = HubSpotClientService(config)
+
+        # Re-sync deal → contact associations
+        _backfill_deal_contact_associations(app, db, client)
+
+        # Re-sync contact → deal associations
+        _backfill_contact_deal_associations(app, db, client)
+
+        logger.info("run_nightly_association_sync: complete")
+        return {"status": "complete"}

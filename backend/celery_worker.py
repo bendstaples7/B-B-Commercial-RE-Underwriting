@@ -1200,6 +1200,8 @@ REQUIRED_TASKS = {
     'hubspot_webhook.extract_signals',
     'hubspot_webhook.rescore_lead',
     'hubspot_webhook.purge_logs',
+    'hubspot_webhook.handle_association',
+    'hubspot.nightly_association_sync',
     'process_csv_ingestion',
     'dupage.enrich_acquisition_dates',
     'dupage.pull_absentee_leads',
