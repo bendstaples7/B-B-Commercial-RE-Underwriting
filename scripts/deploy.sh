@@ -169,5 +169,29 @@ echo "==> (5) Reload Gunicorn (zero-downtime)"
 sudo systemctl reload gunicorn || { echo "FAILED: systemctl reload gunicorn"; exit 1; }
 echo "    Gunicorn reloaded"
 
+echo "==> (6) Wait for Gunicorn to be healthy on localhost"
+# Poll localhost directly (bypasses nginx) so the CI health check step can
+# start immediately rather than sleeping an arbitrary number of seconds.
+# 20 attempts × 3s = up to 60s. flask db upgrade + app factory init typically
+# completes in <20s on this VPS; 60s is a safe upper bound.
+GUNICORN_READY=0
+for i in $(seq 1 20); do
+    HC_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+        --connect-timeout 3 \
+        --max-time 10 \
+        http://localhost:5000/api/health 2>/dev/null || echo "000")
+    echo "    localhost health check attempt $i: HTTP $HC_STATUS"
+    if [ "$HC_STATUS" = "200" ]; then
+        echo "    Gunicorn is healthy on localhost."
+        GUNICORN_READY=1
+        break
+    fi
+    sleep 3
+done
+if [ "$GUNICORN_READY" = "0" ]; then
+    echo "FAILED: Gunicorn did not become healthy on localhost after 60s"
+    exit 1
+fi
+
 echo "==> Deploy complete: $TARGET_SHA"
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Deploy successful: $PREVIOUS_SHA -> $TARGET_SHA" >> "$ROLLBACK_LOG"

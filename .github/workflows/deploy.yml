@@ -188,29 +188,38 @@ jobs:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
           TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
         run: |
-          echo "Waiting for Gunicorn to finish graceful reload..."
-          sleep 15
           BASE_URL="https://${VPS_SUBDOMAIN}.duckdns.org"
 
-          # Health check — 15 attempts, 6s apart = up to ~90s total wait.
-          # --max-time 20 gives Gunicorn time to accept and respond even under
-          # startup load. Exit code 28 (curl timeout) was caused by the old
-          # --max-time 10 firing before the server finished its graceful reload.
-          for i in $(seq 1 15); do
+          # Health check — poll from t=0 with no upfront sleep.
+          # deploy.sh already verifies Gunicorn is healthy on localhost before
+          # returning, so by the time we reach this step the server is up.
+          # This loop is the public-facing (nginx) confirmation: 20 attempts,
+          # 5s apart = up to 100s total, which covers any nginx proxy lag.
+          #
+          # --connect-timeout 5  → fail fast when the port isn't open yet
+          #                        (expected early in reload, retry quickly)
+          # --max-time 20        → fail if connected but server hangs >20s
+          #                        (this is the signal of a real problem)
+          # Together these let curl distinguish "not ready yet" from "stuck".
+          echo "Polling ${BASE_URL}/api/health (max 20 attempts × 5s)..."
+          HEALTH_PASSED=0
+          for i in $(seq 1 20); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              --connect-timeout 5 \
               --max-time 20 \
               "${BASE_URL}/api/health")
             echo "Attempt $i: HTTP $STATUS"
             if [ "$STATUS" = "200" ]; then
               echo "Health check passed."
+              HEALTH_PASSED=1
               break
             fi
-            if [ "$i" = "15" ]; then
-              echo "Health check failed after 15 attempts."
-              exit 1
-            fi
-            sleep 6
+            sleep 5
           done
+          if [ "$HEALTH_PASSED" = "0" ]; then
+            echo "Health check failed after 20 attempts."
+            exit 1
+          fi
 
           # SHA verification — confirm the deployed code matches the triggering commit
           DEPLOYED_SHA=$(curl -s --max-time 10 "${BASE_URL}/api/version" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sha','unknown'))" 2>/dev/null || echo "unknown")
