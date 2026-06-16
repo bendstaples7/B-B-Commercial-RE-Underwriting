@@ -155,27 +155,39 @@ def run(dry_run: bool = False):
                 winner_id = winner['id']
 
                 # Re-point FK tables — use savepoints so a constraint conflict
-                # on one table doesn't abort the whole transaction
+                # on one table doesn't abort the whole transaction.
                 for table, col in FK_TABLES:
-                    try:
-                        cur.execute("SAVEPOINT sp_fk")
-                        cur.execute(
-                            f"UPDATE {table} SET {col} = %s WHERE {col} = %s",
-                            (winner_id, loser_id)
-                        )
-                        cur.execute("RELEASE SAVEPOINT sp_fk")
-                        logger.debug("  Re-pointed %d row(s) in %s.%s", cur.rowcount, table, col)
-                    except psycopg2.errors.UniqueViolation:
-                        cur.execute("ROLLBACK TO SAVEPOINT sp_fk")
-                        cur.execute("RELEASE SAVEPOINT sp_fk")
-                        # Unique conflict (e.g. already member of same marketing list)
-                        # — delete the loser's conflicting rows instead
-                        cur.execute(f"DELETE FROM {table} WHERE {col} = %s", (loser_id,))
-                        logger.debug("  Deleted conflicting rows in %s.%s", table, col)
-                    except Exception as e:
-                        cur.execute("ROLLBACK TO SAVEPOINT sp_fk")
-                        cur.execute("RELEASE SAVEPOINT sp_fk")
-                        logger.debug("  Skipping %s.%s (%s)", table, col, e)
+                    # Fetch all loser row PKs upfront so we can retry row-by-row
+                    # on UniqueViolation rather than deleting the entire table slice.
+                    cur.execute(f"SELECT id FROM {table} WHERE {col} = %s", (loser_id,))
+                    loser_rows = [r['id'] for r in cur.fetchall()]
+
+                    for row_id in loser_rows:
+                        try:
+                            cur.execute("SAVEPOINT sp_fk")
+                            cur.execute(
+                                f"UPDATE {table} SET {col} = %s WHERE id = %s",
+                                (winner_id, row_id)
+                            )
+                            cur.execute("RELEASE SAVEPOINT sp_fk")
+                        except psycopg2.errors.UniqueViolation:
+                            # This specific row already exists on the winner side
+                            # (e.g. lead already in the same marketing list).
+                            # Roll back only this row's savepoint and delete the
+                            # conflicting loser row — don't affect other rows.
+                            cur.execute("ROLLBACK TO SAVEPOINT sp_fk")
+                            cur.execute("RELEASE SAVEPOINT sp_fk")
+                            cur.execute(f"DELETE FROM {table} WHERE id = %s", (row_id,))
+                            logger.debug(
+                                "  %s id=%d: unique conflict, deleted loser row",
+                                table, row_id,
+                            )
+                        except Exception:
+                            # Unexpected DB error — roll back and abort the merge
+                            # rather than silently continuing and deleting the loser.
+                            cur.execute("ROLLBACK TO SAVEPOINT sp_fk")
+                            cur.execute("RELEASE SAVEPOINT sp_fk")
+                            raise
 
                 # Copy non-null fields from loser -> winner where winner is null
                 cur.execute("SELECT * FROM leads WHERE id = %s", (winner_id,))

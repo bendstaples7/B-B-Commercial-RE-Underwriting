@@ -5,33 +5,6 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy import TypeDecorator, JSON as SaJSON
 
 
-def infer_property_type_from_units(units: int | None) -> str | None:
-    """Infer a property_type string from a unit count when type is unknown.
-
-    Rules:
-      1 unit  → 'single_family'
-      2 units → 'duplex'
-      3 units → 'triplex'
-      4 units → 'fourplex'
-      5+      → 'multi_family'
-      None    → None  (can't infer without data)
-
-    This is intentionally conservative — it only fills a null property_type
-    and should never overwrite an existing explicit value.
-    """
-    if units is None:
-        return None
-    if units == 1:
-        return 'single_family'
-    if units == 2:
-        return 'duplex'
-    if units == 3:
-        return 'triplex'
-    if units == 4:
-        return 'fourplex'
-    return 'multi_family'
-
-
 class _JSONBCompatible(TypeDecorator):
     """JSONB on PostgreSQL, portable JSON on other dialects (SQLite)."""
     impl = SaJSON

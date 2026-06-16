@@ -724,23 +724,42 @@ class GoogleSheetsImporter:
             if hit:
                 return hit
 
-        # 3. Same owner + same base street (unit-stripped)
+        # 3. Same owner + same base street (unit-stripped), bidirectional.
+        #
+        # Covers both import orders:
+        #   a) Incoming has unit suffix → strip it, look for bare or unit records
+        #   b) Incoming is bare → look for existing unit-address records for same owner
+        #
+        # The DB-side match is constrained to known unit suffix patterns via a
+        # regex (rather than a broad ILIKE prefix) to avoid false merges on
+        # streets that share a common prefix (e.g. "123 Main St" vs "123 Main Street").
         base_street = cls._strip_unit(street)
         first = validated_data.get("owner_first_name")
         last = validated_data.get("owner_last_name")
         if base_street and first and last:
-            # Only run this check when we actually stripped something, to
-            # avoid spurious matches on records with no unit at all.
-            if base_street.lower() != (street or '').strip().lower():
+            incoming_has_unit = base_street.lower() != (street or '').strip().lower()
+            incoming_is_bare = not incoming_has_unit
+
+            # Run if incoming has a unit suffix (original case) OR incoming is bare
+            # and could match an existing unit-address record (reverse case).
+            if incoming_has_unit or incoming_is_bare:
+                import re as _re
+                # Only match DB records whose street is either the exact base
+                # or the base followed by a recognised unit designator pattern.
+                # This prevents "123 Oak St" from matching "123 Oak Street # 1".
+                unit_pattern = (
+                    r'(?i)^'
+                    + _re.escape(base_street)
+                    + r'(\s+(apt|apartment|unit|ste|suite|#|fl|floor|no\.?)\s*\S+|\s+\d+[a-z]?)$'
+                )
                 q = (
                     Lead.query
                     .filter(Lead.owner_first_name.ilike(first))
                     .filter(Lead.owner_last_name.ilike(last))
-                    # Match either: exact base street, or base street + unit suffix
                     .filter(
                         db.or_(
                             Lead.property_street == base_street,
-                            Lead.property_street.ilike(f"{base_street} %"),
+                            Lead.property_street.op('~*')(unit_pattern),
                         )
                     )
                 )
