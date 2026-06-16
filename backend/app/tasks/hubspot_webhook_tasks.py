@@ -725,6 +725,23 @@ def run_incremental_matching(object_type: str, object_id: str) -> None:
                 object_type, object_id, match.confidence,
             )
 
+            # Recompute recommended_action for the matched lead immediately so
+            # the UI never shows a stale value after a HubSpot sync.
+            if match.status == 'confirmed' and match.internal_record_id:
+                try:
+                    from app.services.action_engine_service import ActionEngineService
+                    ActionEngineService.recompute_and_persist(match.internal_record_id)
+                    logger.info(
+                        "run_incremental_matching: recomputed recommended_action for lead_id=%d",
+                        match.internal_record_id,
+                    )
+                except Exception as ae_exc:
+                    # Non-fatal — nightly beat task is the safety net
+                    logger.warning(
+                        "run_incremental_matching: action recompute failed for lead_id=%d: %s",
+                        match.internal_record_id, ae_exc,
+                    )
+
         except Exception as exc:
             logger.error(
                 "run_incremental_matching: error matching %s hubspot_id=%s: %s",
@@ -900,14 +917,17 @@ def run_extract_incremental_signals(engagement_id: str, lead_id: int) -> None:
 # ---------------------------------------------------------------------------
 
 def run_rescore_lead(lead_id: int) -> None:
-    """Run LeadScoringEngine for a single lead.
+    """Run LeadScoringEngine and ActionEngineService for a single lead.
 
-    Calls engine.bulk_rescore(lead_ids=[lead_id]).
+    Calls engine.bulk_rescore(lead_ids=[lead_id]) to refresh the lead score,
+    then recomputes recommended_action via ActionEngineService so any
+    HubSpot signal changes are immediately reflected in the UI.
 
     Requirements: 3, 5
     """
     with _AppContextManager():
         from app.services import LeadScoringEngine
+        from app.services.action_engine_service import ActionEngineService
 
         try:
             engine = LeadScoringEngine()
@@ -922,6 +942,22 @@ def run_rescore_lead(lead_id: int) -> None:
                 lead_id, exc, exc_info=True,
             )
             raise
+
+        # Recompute recommended_action so stale values are cleared immediately
+        # after any HubSpot sync — not just during the nightly bulk pass.
+        try:
+            ActionEngineService.recompute_and_persist(lead_id)
+            logger.info(
+                "run_rescore_lead: recommended_action recomputed for lead_id=%d",
+                lead_id,
+            )
+        except Exception as exc:
+            # Non-fatal — score was updated, action recompute is best-effort here
+            # since the nightly beat task will catch any misses.
+            logger.warning(
+                "run_rescore_lead: action recompute failed for lead_id=%d: %s",
+                lead_id, exc,
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -23,8 +23,32 @@ from app.services.lead_task_service import LeadTaskService
 from app.services.lead_timeline_service import LeadTimelineService
 from app.services.call_log_service import CallLogService
 from app.services.action_engine_service import ActionEngineService, RECOMMENDED_ACTION_METADATA
+from app.services.lead_scoring_engine import LeadScoringEngine
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Rescore helper — called after any status change so the pipeline stage bonus
+# is immediately reflected in lead_score without waiting for a nightly batch.
+# ---------------------------------------------------------------------------
+
+def _rescore_after_status_change(lead_id: int) -> None:
+    """Recompute lead_score and recommended_action after a pipeline stage change.
+
+    The LeadScoringEngine._pipeline_stage_bonus varies per status, so score
+    must be refreshed whenever lead_status is written.  Failures are non-fatal
+    because the nightly bulk_rescore beat task is the safety net.
+    """
+    try:
+        engine = LeadScoringEngine()
+        engine.bulk_rescore(lead_ids=[lead_id])
+        logger.info("_rescore_after_status_change: rescored lead_id=%d", lead_id)
+    except Exception as exc:
+        logger.warning(
+            "_rescore_after_status_change: rescore failed for lead_id=%d: %s",
+            lead_id, exc,
+        )
 
 command_center_bp = Blueprint('command_center', __name__)
 
@@ -762,6 +786,9 @@ def update_status(lead_id: int):
                 lead_id, exc,
             )
 
+    # Rescore — pipeline stage bonus changes with every status transition
+    _rescore_after_status_change(lead_id)
+
     return jsonify({'lead_status': lead.lead_status, 'recommended_action': lead.recommended_action}), 200
 
 
@@ -957,6 +984,8 @@ def do_not_contact(lead_id: int):
     db.session.add(entry)
     db.session.commit()
 
+    _rescore_after_status_change(lead_id)
+
     return jsonify({'lead_status': 'do_not_contact', 'recommended_action': None}), 200
 
 
@@ -1019,6 +1048,8 @@ def park_lead(lead_id: int):
             lead_id, exc,
         )
 
+    _rescore_after_status_change(lead_id)
+
     return jsonify({'lead_status': 'deprioritize'}), 200
 
 
@@ -1064,6 +1095,8 @@ def reactivate_lead(lead_id: int):
             lead_id, exc,
         )
 
+    _rescore_after_status_change(lead_id)
+
     return jsonify({'lead_status': 'mailing_no_contact_made', 'recommended_action': lead.recommended_action}), 200
 
 
@@ -1100,6 +1133,8 @@ def suppress_lead(lead_id: int):
     db.session.add(lead)
     db.session.add(entry)
     db.session.commit()
+
+    _rescore_after_status_change(lead_id)
 
     return jsonify({'lead_status': 'suppressed', 'recommended_action': None}), 200
 
