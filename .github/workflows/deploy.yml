@@ -189,24 +189,27 @@ jobs:
           TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
         run: |
           echo "Waiting for Gunicorn to finish graceful reload..."
-          sleep 5
+          sleep 15
           BASE_URL="https://${VPS_SUBDOMAIN}.duckdns.org"
 
-          # Health check
-          for i in $(seq 1 10); do
+          # Health check — 15 attempts, 6s apart = up to ~90s total wait.
+          # --max-time 20 gives Gunicorn time to accept and respond even under
+          # startup load. Exit code 28 (curl timeout) was caused by the old
+          # --max-time 10 firing before the server finished its graceful reload.
+          for i in $(seq 1 15); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              --max-time 10 \
+              --max-time 20 \
               "${BASE_URL}/api/health")
             echo "Attempt $i: HTTP $STATUS"
             if [ "$STATUS" = "200" ]; then
               echo "Health check passed."
               break
             fi
-            if [ "$i" = "10" ]; then
-              echo "Health check failed after 10 attempts."
+            if [ "$i" = "15" ]; then
+              echo "Health check failed after 15 attempts."
               exit 1
             fi
-            sleep 3
+            sleep 6
           done
 
           # SHA verification — confirm the deployed code matches the triggering commit
