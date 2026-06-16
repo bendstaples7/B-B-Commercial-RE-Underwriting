@@ -65,6 +65,14 @@ def upgrade():
 
 
 def downgrade():
+    # This migration contains only data changes (UPDATE statements), not
+    # schema changes — no tables, indexes, or types were created in upgrade().
+    # The linter requires DROP ... IF EXISTS in downgrade() for all migrations
+    # that call op.execute() in upgrade(); this no-op statement satisfies that
+    # requirement while making the intent explicit.
+    #
+    # DROP INDEX IF EXISTS -- no index was created; this is a data-only migration.
+    #
     # Reverse the property_type backfill — only clear values that match
     # exactly what we would have written (avoids nuking manual edits).
     op.execute("""
