@@ -75,6 +75,31 @@ def _serialize_task(task):
     return data
 
 
+def _refresh_associated_leads(task):
+    """Refresh lead_score + recommended_action for every lead this task touches.
+
+    A Task may be linked to a lead via its direct ``lead_id`` FK and/or via
+    ``TaskAssociation`` rows with ``target_type='lead'``. Open-task count feeds
+    the action engine, so creating/updating/completing a task must refresh the
+    affected lead(s). Uses the error-isolated ``refresh_lead_scoring`` helper.
+    """
+    from app.services.lead_refresh import refresh_lead_scoring
+
+    lead_ids = set()
+    direct = getattr(task, 'lead_id', None)
+    if direct is not None:
+        lead_ids.add(direct)
+    try:
+        for assoc in task.associations.all():
+            if assoc.target_type == 'lead' and assoc.target_id is not None:
+                lead_ids.add(assoc.target_id)
+    except Exception:  # pragma: no cover — association load is best-effort
+        logger.debug("Could not enumerate task associations for refresh", exc_info=True)
+
+    for lead_id in lead_ids:
+        refresh_lead_scoring(lead_id)
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -171,6 +196,7 @@ def create_task():
     data['associations'] = associations
 
     task = _service.create(data)
+    _refresh_associated_leads(task)
     return jsonify(_serialize_task(task)), 201
 
 
@@ -202,6 +228,7 @@ def update_task(task_id):
     # Use partial=True so only provided fields are validated/updated
     data = _task_schema.load(body, partial=True)
     task = _service.update(task_id, data)
+    _refresh_associated_leads(task)
     return jsonify(_serialize_task(task)), 200
 
 
@@ -222,4 +249,5 @@ def complete_task(task_id):
     SHALL record the completion timestamp.
     """
     task = _service.complete(task_id)
+    _refresh_associated_leads(task)
     return jsonify(_serialize_task(task)), 200

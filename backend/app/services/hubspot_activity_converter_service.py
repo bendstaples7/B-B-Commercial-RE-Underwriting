@@ -41,6 +41,8 @@ class HubSpotActivityConverterService:
             return self.convert_call(engagement)
         elif etype == 'TASK':
             return self.convert_task(engagement)
+        elif etype == 'EMAIL':
+            return self.convert_email(engagement)
         else:
             logger.warning(
                 "Unrecognized HubSpot engagement type '%s' for hubspot_id=%s — skipping.",
@@ -159,6 +161,58 @@ class HubSpotActivityConverterService:
 
         return interaction
 
+    def convert_email(self, engagement):
+        """
+        Convert a HubSpot EMAIL engagement to an internal Interaction(type='email').
+
+        Idempotent: returns None if hubspot_engagement_id already exists.
+        Body is sourced from metadata.body, falling back to engagement.bodyPreview.
+        occurred_at is sourced from engagement.createdAt (milliseconds).
+        """
+        if self._interaction_exists(engagement.hubspot_id):
+            logger.debug(
+                "Interaction for hubspot_engagement_id=%s already exists — skipping.",
+                engagement.hubspot_id,
+            )
+            return None
+
+        body = self._extract_note_body(engagement.raw_payload)  # same extraction as NOTE
+        occurred_at = self._parse_ms_timestamp(
+            engagement.raw_payload.get('engagement', {}).get('createdAt')
+        )
+
+        associations = self._resolve_associations(engagement)
+        is_orphaned = len(associations) == 0
+
+        interaction = Interaction(
+            interaction_type='email',
+            body=body,
+            occurred_at=occurred_at,
+            source='hubspot_import',
+            hubspot_engagement_id=engagement.hubspot_id,
+            raw_payload=engagement.raw_payload,
+            is_orphaned=is_orphaned,
+        )
+        db.session.add(interaction)
+        db.session.flush()
+
+        for assoc in associations:
+            db.session.add(InteractionAssociation(
+                interaction_id=interaction.id,
+                target_type=assoc['target_type'],
+                target_id=assoc['target_id'],
+            ))
+
+        db.session.commit()
+        logger.info(
+            "Created Interaction(id=%s, type=email) from HubSpot engagement %s (orphaned=%s).",
+            interaction.id,
+            engagement.hubspot_id,
+            is_orphaned,
+        )
+        self._extract_signals_for_interaction(interaction, associations)
+        return interaction
+
     def convert_task(self, engagement):
         """
         Convert a HubSpot TASK engagement to an internal Task.
@@ -266,6 +320,20 @@ class HubSpotActivityConverterService:
                     )
 
         return results
+
+    def _resolve_associations_by_engagement_id(self, hubspot_engagement_id):
+        """Look up the HubSpotEngagement by ID and resolve its associations.
+
+        Used by the orphan re-resolution pass in run_convert_hubspot_activities.
+        Returns [] if the engagement no longer exists in the database.
+        """
+        from app.models.hubspot_engagement import HubSpotEngagement
+        engagement = HubSpotEngagement.query.filter_by(
+            hubspot_id=str(hubspot_engagement_id)
+        ).first()
+        if engagement is None:
+            return []
+        return self._resolve_associations(engagement)
 
     @staticmethod
     def _extract_note_body(raw_payload):

@@ -121,6 +121,13 @@ class HubSpotSignalExtractorService:
           - FOLLOW_UP_OVERDUE is determined by checking for an open overdue
             Task associated with the lead, not by keyword matching.
 
+        Idempotent persistence: a candidate signal is omitted from the returned
+        list when an equivalent signal already exists for its dedup key
+        ``(lead_id, signal_type, source_engagement_id)`` (see
+        ``_signal_already_exists``). This makes re-extraction across repeated
+        sync runs safe — the same signal is never persisted twice — while
+        distinct sources/types still produce distinct rows.
+
         The caller is responsible for adding the returned records to the
         session and committing.
 
@@ -144,6 +151,15 @@ class HubSpotSignalExtractorService:
 
             matched_keyword = self._find_keyword(body_lower, keywords)
             if matched_keyword:
+                # Idempotent dedup: skip if an equivalent signal already exists
+                # for this dedup key so re-extraction across sync runs does not
+                # accumulate duplicate rows (see _signal_already_exists).
+                if self._signal_already_exists(lead_id, signal_type, source_engagement_id):
+                    logger.debug(
+                        "Signal %s already exists for lead_id=%d source=%s — skipping (idempotent).",
+                        signal_type, lead_id, source_engagement_id,
+                    )
+                    continue
                 signal = HubSpotSignal(
                     lead_id=lead_id,
                     signal_type=signal_type,
@@ -157,7 +173,9 @@ class HubSpotSignalExtractorService:
                 )
 
         # FOLLOW_UP_OVERDUE: check for an open overdue task on this lead
-        if self._has_overdue_task(lead_id):
+        if self._has_overdue_task(lead_id) and not self._signal_already_exists(
+            lead_id, 'FOLLOW_UP_OVERDUE', source_engagement_id
+        ):
             signal = HubSpotSignal(
                 lead_id=lead_id,
                 signal_type='FOLLOW_UP_OVERDUE',
@@ -171,6 +189,39 @@ class HubSpotSignalExtractorService:
             )
 
         return signals
+
+    # ------------------------------------------------------------------
+    # Idempotent persistence dedup
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _signal_already_exists(lead_id: int, signal_type: str,
+                               source_engagement_id: Optional[str]) -> bool:
+        """Return True if a HubSpotSignal already exists for this dedup key.
+
+        Dedup key: ``(lead_id, signal_type, source_engagement_id)``.
+
+        HubSpot signals represent boolean STATES, not counters. Re-extracting
+        the SAME ``signal_type`` from the SAME source engagement for the SAME
+        lead across multiple sync runs must NOT create duplicate rows (the bug
+        that let a single re-extracted PRIOR_WARM_CONVERSATION stack +15 several
+        times). Distinct sources (different ``source_engagement_id``) and
+        distinct types still create distinct rows — only re-extraction of the
+        exact same signal is skipped.
+
+        ``source_engagement_id`` is the model's source column. When it is None
+        (no source engagement) the key naturally degrades to
+        ``(lead_id, signal_type)``, i.e. one sourceless row per type per lead.
+        """
+        return (
+            HubSpotSignal.query
+            .filter_by(
+                lead_id=lead_id,
+                signal_type=signal_type,
+                source_engagement_id=source_engagement_id,
+            )
+            .first()
+        ) is not None
 
     # ------------------------------------------------------------------
     # Keyword matching helper

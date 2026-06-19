@@ -143,7 +143,15 @@ celery.conf.update(
         'dupage-absentee-lead-pull': {
             'task': 'dupage.pull_absentee_leads',
             'schedule': crontab(hour=3, minute=0, day_of_week='sunday'),
-            'options': {'expires': 7200},
+        },
+        # Fix C: GIS backfill — sweep all leads with property_street but has_property_match=False.
+        # Catches any lead created by an import path that skipped inline GIS enrichment
+        # (Google Sheets, manual CSV, HubSpot, etc.).  Runs every 6 hours; processes up
+        # to 200 leads per run to keep the job short and avoid DB lock contention.
+        'gis-backfill-property-matches': {
+            'task': 'gis.backfill_property_matches',
+            'schedule': 6 * 3600,  # every 6 hours
+            'options': {'expires': 3600},
         },
     },
 )
@@ -1080,7 +1088,17 @@ def run_post_import_pipeline(run_ids: list = None) -> None:
         elapsed = 0
         with app.app_context():
             from app.models import HubSpotImportRun
+            from app import db
             while elapsed < max_wait_seconds:
+                # Re-read import-run status from the database on every poll.
+                # The import tasks commit `status` changes in a SEPARATE
+                # session/process; without ending this read transaction and
+                # expiring the identity-map cache, the polling session keeps
+                # returning the STALE status from its first query and the loop
+                # spins until `max_wait_seconds`. Rollback starts a fresh
+                # snapshot; expire_all forces a reload on the next query.
+                db.session.rollback()
+                db.session.expire_all()
                 runs = HubSpotImportRun.query.filter(HubSpotImportRun.id.in_(run_ids)).all()
                 terminal = {'success', 'partial', 'failed'}
                 if all(r.status in terminal for r in runs):
@@ -1445,4 +1463,106 @@ def pull_dupage_absentee_leads_task(self):
 
     except Exception as exc:
         logger.error("DuPage absentee lead pull failed: %s", exc)
+        raise
+
+# ---------------------------------------------------------------------------
+# Fix C: GIS backfill — sweep all leads missing a confirmed parcel match
+#
+# Any lead with a property_street but has_property_match=False gets a GIS
+# lookup attempt.  This is the permanent safety net that catches leads from
+# any import path (Sheets, CSV, HubSpot, manual entry) that didn't run GIS
+# enrichment inline.  Runs every 6 hours so new imports are cleaned up
+# without waiting for the weekly DuPage pull.
+# ---------------------------------------------------------------------------
+
+@celery.task(bind=True, name='gis.backfill_property_matches')
+def backfill_property_matches_task(self):
+    """Periodic task: GIS-enrich all leads where has_property_match=False
+    and property_street is populated.
+
+    This is the safety-net that ensures no lead stays perpetually unmatched
+    because its import path (Google Sheets, manual CSV, etc.) skipped the
+    GIS enrichment step.
+
+    Run schedule: every 6 hours.
+    """
+    import logging
+    _logger = logging.getLogger('celery.gis.backfill_property_matches')
+
+    try:
+        from app import create_app
+        app = create_app()
+
+        with app.app_context():
+            from app import db
+            from app.models.lead import Property
+            from app.services.gis.base import GISConnectorRegistry
+            import app.services.gis.dupage_gis_connector  # noqa: F401 — triggers self-registration
+            import app.services.gis.cook_county_gis_connector  # noqa: F401
+            from app.services.deduplication_engine import DeduplicationEngine
+            from app.services.lead_ingestion_service import LeadIngestionService
+
+            ingestion_svc = LeadIngestionService(
+                dedup_engine=DeduplicationEngine(),
+                gis_registry=GISConnectorRegistry,
+            )
+
+            from app.services.gis.routing import connector_for_lead
+
+            # Sweep ALL leads in the system where:
+            # - property_street is populated (something to look up)
+            # - has_property_match is still False
+            # Batched at 200 per run to keep each execution short.
+            BATCH_SIZE = 200
+            unmatched = (
+                db.session.query(Property)
+                .filter(
+                    Property.has_property_match == False,   # noqa: E712
+                    Property.property_street != None,        # noqa: E711
+                    Property.property_street != '',
+                )
+                .order_by(Property.id)
+                .limit(BATCH_SIZE)
+                .all()
+            )
+
+            if not unmatched:
+                _logger.info("gis.backfill_property_matches: nothing to do")
+                return {'status': 'completed', 'matched': 0, 'no_match': 0, 'errors': 0}
+
+            matched = 0
+            no_match = 0
+            errors = 0
+            no_connector = 0
+
+            for lead in unmatched:
+                lead_connector = connector_for_lead(lead)
+                if not lead_connector:
+                    no_connector += 1
+                    continue
+                outcome = ingestion_svc._enrich_with_gis(lead, lead_connector, import_job_id=0)
+                if outcome.get('error'):
+                    errors += 1
+                elif outcome.get('match_found'):
+                    matched += 1
+                else:
+                    no_match += 1
+
+            db.session.commit()
+            _logger.info(
+                "gis.backfill_property_matches: %d matched, %d no-match, %d errors, "
+                "%d no-connector (batch=%d)",
+                matched, no_match, errors, no_connector, len(unmatched),
+            )
+            return {
+                'status': 'completed',
+                'matched': matched,
+                'no_match': no_match,
+                'errors': errors,
+                'no_connector': no_connector,
+                'processed': len(unmatched),
+            }
+
+    except Exception as exc:
+        _logger.error("gis.backfill_property_matches failed: %s", exc)
         raise

@@ -1,0 +1,257 @@
+{
+  "pbtResults": {
+    "1. Write bug condition exploration tests (BEFORE implementing any fix)": {
+      "status": "passed",
+      "failingExample": "All 5 exploration tests FAILED as expected on unfixed code, confirming the bugs exist:\n\nBug 1a: lead.hubspot_deal_stage = \"closedlost\" (expected \"Negotiating Remote\")\nBug 1b: lead.lead_status = \"awaiting_skip_trace\" (expected \"negotiating_remote\")  \nBug 2: contact_match.internal_record_id = None (expected lead.id=1), PropertyContact absent\nBug 3a: interaction.is_orphaned = True (expected False after deal match confirmed and re-run)\nBug 3b: convert_engagement returns None for EMAIL type (expected Interaction with type='email')\n\nProperty-based variant (non-buggy path) correctly PASSED: when stage_label_map contains the stage_id key, the display label is always stored.",
+      "lastRunTimestamp": 1781752614999
+    },
+    "2. Write preservation property tests (BEFORE implementing any fix)": {
+      "status": "passed",
+      "lastRunTimestamp": 1781753035356
+    },
+    "3.3 Verify Bug 1 exploration test now passes": {
+      "status": "passed",
+      "lastRunTimestamp": 1781753243178
+    },
+    "6.1 Run full test file — all exploration tests must pass": {
+      "status": "passed",
+      "lastRunTimestamp": 1781788246505
+    },
+    "6.2 Verify preservation tests still pass after all fixes": {
+      "status": "passed",
+      "lastRunTimestamp": 1781788246859
+    }
+  },
+  "executionHistory": {
+    "1. Write bug condition exploration tests (BEFORE implementing any fix)": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788004913
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788044250
+      }
+    ],
+    "2. Write preservation property tests (BEFORE implementing any fix)": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788005024
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788051629
+      }
+    ],
+    "3.1 Add on-demand stage label fetch when `stage_label_map` is empty": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788005060
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788055012
+      }
+    ],
+    "3.2 Add warning log when falling back to raw stage ID": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788005099
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788058429
+      }
+    ],
+    "3.3 Verify Bug 1 exploration test now passes": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788005130
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788061712
+      }
+    ],
+    "4.1 Widen unresolved-contacts query to include `pending` status": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788005162
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788066031
+      }
+    ],
+    "4.2 Add single retry on empty contacts block from v4 API": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788005190
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788070411
+      }
+    ],
+    "4.3 Verify Bug 2 exploration test now passes": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788005227
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788073244
+      }
+    ],
+    "5.1 Add `convert_email` method to `HubSpotActivityConverterService`": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788005256
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788076562
+      }
+    ],
+    "5.2 Route EMAIL in `convert_engagement`": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788005278
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788079383
+      }
+    ],
+    "5.3 Add `_resolve_associations_by_engagement_id` helper to `HubSpotActivityConverterService`": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788005305
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788082980
+      }
+    ],
+    "5.4 Add orphan re-resolution pass to `run_convert_hubspot_activities`": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788005329
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788086170
+      }
+    ],
+    "5.5 Verify Bug 3 exploration tests now pass": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788005354
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788089035
+      }
+    ],
+    "6.1 Run full test file — all exploration tests must pass": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788005377
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788107614
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788759674
+      }
+    ],
+    "6.2 Verify preservation tests still pass after all fixes": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788005411
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788762538
+      }
+    ],
+    "6.3 Run full backend test suite to check for cross-module regressions": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788005438
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781790332783
+      },
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781790982359
+      }
+    ],
+    "3. Fix Bug 1 — `enrich_lead_from_deal` stage label silent fallback": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788061748
+      }
+    ],
+    "4. Fix Bug 2 — `run_enrich_leads_from_hubspot` pending contact resolution and empty association retry": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788073268
+      }
+    ],
+    "5. Fix Bug 3 — Orphan re-resolution pass and EMAIL engagement type support": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781788089061
+      }
+    ],
+    "6. Checkpoint — Verify all tests pass and preservation holds": [
+      {
+        "executionId": "f56796c4-9c7f-4f9d-b1ff-1dd148f385c5",
+        "chatSessionId": "sess_9d7f23af-88da-4b91-92a7-64c8d9c4fa41",
+        "timestamp": 1781790982392
+      }
+    ]
+  }
+}

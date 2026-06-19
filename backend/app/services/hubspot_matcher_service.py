@@ -152,8 +152,23 @@ class HubSpotMatcherService:
         # hubspot_deal_stage: always sync the live value — it is a CRM signal.
         # Translate internal stage ID to the portal's display label.
         stage_id = props.get("dealstage") or None
+        if stage_id and not stage_label_map:
+            try:
+                from app.models.hubspot_config import HubSpotConfig
+                from app.services.hubspot_client_service import HubSpotClientService
+                _config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
+                if _config:
+                    stage_label_map = HubSpotClientService(_config).fetch_pipeline_stage_labels("deals")
+            except Exception as _exc:
+                logger.warning("enrich_lead_from_deal: could not fetch stage labels: %s", _exc)
         if stage_id:
             stage_label = (stage_label_map or {}).get(stage_id, stage_id)
+            if stage_label == stage_id:
+                logger.warning(
+                    "enrich_lead_from_deal: stage_id=%r not in stage_label_map — "
+                    "storing raw ID. Pipeline labels: %s",
+                    stage_id, list((stage_label_map or {}).keys()),
+                )
             if lead.hubspot_deal_stage != stage_label:
                 lead.hubspot_deal_stage = stage_label
                 updated_fields.append("hubspot_deal_stage")

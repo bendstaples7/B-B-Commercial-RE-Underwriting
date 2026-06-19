@@ -268,6 +268,13 @@ class ContactService:
             "Linked Contact id=%d to Property id=%d role=%r is_primary=%s",
             contact_id, property_id, role, is_primary,
         )
+
+        # Linking an owner contact changes the property's data-completeness and
+        # owner-situation sub-scores (a linked Contact plus its phones/emails),
+        # so refresh lead_score + recommended_action (error-isolated).
+        from app.services.lead_refresh import refresh_lead_scoring
+        refresh_lead_scoring(property_id)
+
         return link
 
     def unlink_contact_from_property(self, property_id: int, contact_id: int) -> None:
@@ -299,6 +306,11 @@ class ContactService:
             "Unlinked Contact id=%d from Property id=%d",
             contact_id, property_id,
         )
+
+        # Removing an owner contact lowers data-completeness / owner-situation
+        # inputs — refresh lead_score + recommended_action (error-isolated).
+        from app.services.lead_refresh import refresh_lead_scoring
+        refresh_lead_scoring(property_id)
 
     # ------------------------------------------------------------------
     # Query
