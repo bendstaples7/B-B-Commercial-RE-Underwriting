@@ -118,7 +118,8 @@ def test_response_always_has_four_categories(
     with patch.object(svc, "_get_socrata_statuses", return_value=mock_socrata), \
          patch.object(svc, "_get_enrichment_statuses", return_value=mock_enrichment), \
          patch.object(svc, "_get_import_source", return_value=mock_import), \
-         patch.object(svc, "_get_hubspot_source", return_value=mock_hubspot):
+         patch.object(svc, "_get_hubspot_source", return_value=mock_hubspot), \
+         patch.object(svc, "_get_gis_connector_statuses", return_value=[]):
         result = svc.get_all_statuses("user123")
 
     assert "socrata_datasets" in result
@@ -157,7 +158,8 @@ def test_enrichment_returns_zeroed_counts_when_no_leads():
     with patch.object(svc, "_get_socrata_statuses", return_value=[]), \
          patch.object(svc, "_get_enrichment_statuses", return_value=[zero_source]), \
          patch.object(svc, "_get_import_source", return_value={"name": "Google Sheets", "source_type": "import", "last_refreshed_at": None, "rows_imported": None, "import_status": None}), \
-         patch.object(svc, "_get_hubspot_source", return_value={"name": "HubSpot", "source_type": "hubspot", "connected": False}):
+         patch.object(svc, "_get_hubspot_source", return_value={"name": "HubSpot", "source_type": "hubspot", "connected": False}), \
+         patch.object(svc, "_get_gis_connector_statuses", return_value=[]):
         result = svc.get_all_statuses("user_no_leads")
 
     sources = result["enrichment_sources"]
@@ -189,7 +191,8 @@ def test_import_source_returns_null_fields_when_no_completed_job():
     with patch.object(svc, "_get_socrata_statuses", return_value=[]), \
          patch.object(svc, "_get_enrichment_statuses", return_value=[]), \
          patch.object(svc, "_get_import_source", return_value=null_import), \
-         patch.object(svc, "_get_hubspot_source", return_value={"name": "HubSpot", "source_type": "hubspot", "connected": False}):
+         patch.object(svc, "_get_hubspot_source", return_value={"name": "HubSpot", "source_type": "hubspot", "connected": False}), \
+         patch.object(svc, "_get_gis_connector_statuses", return_value=[]):
         result = svc.get_all_statuses("user_no_jobs")
 
     imp = result["import_source"]
@@ -216,7 +219,8 @@ def test_hubspot_source_returns_connected_false_when_no_config_row():
     with patch.object(svc, "_get_socrata_statuses", return_value=[]), \
          patch.object(svc, "_get_enrichment_statuses", return_value=[]), \
          patch.object(svc, "_get_import_source", return_value={"name": "Google Sheets", "source_type": "import", "last_refreshed_at": None, "rows_imported": None, "import_status": None}), \
-         patch.object(svc, "_get_hubspot_source", return_value=disconnected_hubspot):
+         patch.object(svc, "_get_hubspot_source", return_value=disconnected_hubspot), \
+         patch.object(svc, "_get_gis_connector_statuses", return_value=[]):
         result = svc.get_all_statuses("user_no_hubspot")
 
     assert result["hubspot_source"]["connected"] is False
@@ -247,7 +251,8 @@ def test_enrichment_counts_scoped_to_requesting_user():
     with patch.object(svc, "_get_socrata_statuses", return_value=[]), \
          patch.object(svc, "_get_enrichment_statuses", mock_enrichment), \
          patch.object(svc, "_get_import_source", mock_import), \
-         patch.object(svc, "_get_hubspot_source", mock_hubspot):
+         patch.object(svc, "_get_hubspot_source", mock_hubspot), \
+         patch.object(svc, "_get_gis_connector_statuses", return_value=[]):
         svc.get_all_statuses("target_user_id")
 
     # Verify _get_enrichment_statuses was called with the correct user_id

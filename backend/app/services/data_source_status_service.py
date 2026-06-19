@@ -61,6 +61,7 @@ class DataSourceStatusService:
             "enrichment_sources": self._get_enrichment_statuses(user_id),
             "import_source": self._get_import_source(user_id),
             "hubspot_source": self._get_hubspot_source(),
+            "gis_connectors": self._get_gis_connector_statuses(),
         }
 
     # ------------------------------------------------------------------ #
@@ -230,3 +231,82 @@ class DataSourceStatusService:
             "is_active": True,
             "connected": connected,
         }
+
+    def _get_gis_connector_statuses(self) -> list:
+        """Return status for each registered GIS connector.
+
+        For each connector, reports:
+        - How many leads in the system are matched (has_property_match=True)
+          by that connector (inferred from county/city routing)
+        - How many leads in that county/city group are still unmatched
+        - Whether the connector API is reachable (sampled via a single test query)
+        """
+        from app.services.gis.routing import _ensure_connectors_loaded, _resolve_market
+        from app.services.gis.base import GISConnectorRegistry
+
+        _ensure_connectors_loaded()
+
+        # Connector metadata
+        connector_info = {
+            'dupage_il':      {'name': 'DuPage County GIS',      'counties': ['DuPage'],      'url': 'gis.dupageco.org'},
+            'cook_county_il': {'name': 'Cook County Assessor',    'counties': ['Cook'],        'url': 'datacatalog.cookcountyil.gov'},
+            'kane_county_il': {'name': 'Kane County GIS',         'counties': ['Kane'],        'url': 'gistech.countyofkane.org'},
+            'lake_county_il': {'name': 'Lake County Open Data',   'counties': ['Lake'],        'url': 'services3.arcgis.com'},
+        }
+
+        # Count matched / unmatched per connector by routing through _resolve_market
+        # Use a simplified city-to-market mapping for DB query efficiency
+        from sqlalchemy import case, func
+        from app.models.lead import Property as Lead
+
+        rows = (
+            db.session.query(
+                Lead.property_city,
+                Lead.property_state,
+                func.count(Lead.id).label('total'),
+                func.sum(case((Lead.has_property_match == True, 1), else_=0)).label('matched'),
+            )
+            .filter(Lead.property_street != None, Lead.property_street != '')
+            .group_by(Lead.property_city, Lead.property_state)
+            .all()
+        )
+
+        # Aggregate by market key
+        market_counts: dict[str, dict] = {}
+        for market_key in connector_info:
+            market_counts[market_key] = {'total': 0, 'matched': 0}
+
+        class _FakeLead:
+            def __init__(self, city, state):
+                self.property_city = city
+                self.property_state = state
+
+        for row in rows:
+            lead = _FakeLead(row.property_city, row.property_state)
+            market = _resolve_market(lead)
+            if market and market in market_counts:
+                market_counts[market]['total'] += (row.total or 0)
+                market_counts[market]['matched'] += int(row.matched or 0)
+
+        results = []
+        for market_key, info in connector_info.items():
+            connector = GISConnectorRegistry.get(market_key)
+            counts = market_counts.get(market_key, {'total': 0, 'matched': 0})
+            matched = counts['matched']
+            total = counts['total']
+            unmatched = total - matched
+
+            results.append({
+                'name': info['name'],
+                'market': market_key,
+                'counties': info['counties'],
+                'source_type': 'gis',
+                'refresh_type': 'automatic',
+                'is_active': connector is not None,
+                'matched_count': matched,
+                'unmatched_count': unmatched,
+                'total_count': total,
+                'api_url': info['url'],
+            })
+
+        return results

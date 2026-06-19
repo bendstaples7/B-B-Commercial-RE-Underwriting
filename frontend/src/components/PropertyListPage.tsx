@@ -15,13 +15,10 @@ import {
   Pagination,
   Tabs,
   Tab,
-  Drawer,
-  IconButton,
 } from '@mui/material'
 import FilterListIcon from '@mui/icons-material/FilterList'
 import ClearIcon from '@mui/icons-material/Clear'
-import CloseIcon from '@mui/icons-material/Close'
-import OpenInNewIcon from '@mui/icons-material/OpenInNew'
+import { useNavigate } from 'react-router-dom'
 import { AgGridReact } from 'ag-grid-react'
 import { AllCommunityModule, ModuleRegistry, ColDef } from 'ag-grid-community'
 import type {
@@ -47,15 +44,12 @@ import {
 } from '@/components/ScoreFilterPanel'
 import { RecalculateButton } from '@/components/RecalculateButton'
 import { ScoreLegend } from '@/components/ScoreLegend'
-import { ContactsSection } from '@/components/ContactsSection'
 
 // Register AG Grid community modules
 ModuleRegistry.registerModules([AllCommunityModule])
 
 /** Props accepted by PropertyListPage. */
-export interface PropertyListPageProps {
-  onLeadSelect?: (leadId: number) => void
-}
+export interface PropertyListPageProps {}
 
 const PROPERTY_TYPE_OPTIONS = [
   { value: '', label: 'All' },
@@ -219,17 +213,14 @@ const COLUMN_DEFS: ColDef<LeadRow>[] = [
   { field: 'created_at', headerName: 'Added', width: 110, sortable: true },
 ]
 
-export const PropertyListPage: React.FC<PropertyListPageProps> = ({ onLeadSelect }) => {
+export const PropertyListPage: React.FC<PropertyListPageProps> = () => {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [leads, setLeads] = useState<PropertySummary[]>([])
   const [totalLeads, setTotalLeads] = useState(0)
   const [totalPages, setTotalPages] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
-  // Contacts side panel state
-  const [panelOpen, setPanelOpen] = useState(false)
-  const [panelLead, setPanelLead] = useState<LeadRow | null>(null)
 
   // Tab state
   const [activeTab, setActiveTab] = useState(0)
@@ -579,10 +570,7 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = ({ onLeadSelect
                 loading={loading}
                 rowSelection="single"
                 onRowClicked={(e) => {
-                  if (e.data) {
-                    setPanelLead(e.data)
-                    setPanelOpen(true)
-                  }
+                  if (e.data?.id) navigate('/leads/' + e.data.id)
                 }}
                 onSortChanged={handleSortChanged}
                 suppressMovableColumns={false}
@@ -631,52 +619,6 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = ({ onLeadSelect
         </Box>
       )}
 
-      {/* Contacts side panel — opens when a property row is clicked */}
-      <Drawer
-        anchor="right"
-        open={panelOpen}
-        onClose={() => setPanelOpen(false)}
-        PaperProps={{ sx: { width: { xs: '100%', sm: 420 }, p: 0 } }}
-      >
-        {panelLead && (
-          <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            {/* Panel header */}
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', p: 2, borderBottom: 1, borderColor: 'divider' }}>
-              <Box>
-                <Typography variant="subtitle1" fontWeight="bold" noWrap>
-                  {panelLead.property_street || 'Property'}
-                </Typography>
-                {(panelLead.property_city || panelLead.property_state) && (
-                  <Typography variant="caption" color="text.secondary">
-                    {[panelLead.property_city, panelLead.property_state, panelLead.property_zip].filter(Boolean).join(', ')}
-                  </Typography>
-                )}
-              </Box>
-              <Box sx={{ display: 'flex', gap: 0.5, ml: 1, flexShrink: 0 }}>
-                {onLeadSelect && (
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    startIcon={<OpenInNewIcon />}
-                    onClick={() => { setPanelOpen(false); onLeadSelect(panelLead.id) }}
-                    aria-label="Open full property profile"
-                  >
-                    Full Profile
-                  </Button>
-                )}
-                <IconButton size="small" onClick={() => setPanelOpen(false)} aria-label="Close panel">
-                  <CloseIcon fontSize="small" />
-                </IconButton>
-              </Box>
-            </Box>
-
-            {/* Contacts list */}
-            <Box sx={{ flex: 1, overflowY: 'auto', p: 2 }}>
-              <ContactsSection propertyId={panelLead.id} />
-            </Box>
-          </Box>
-        )}
-      </Drawer>
     </Box>
   )
 }

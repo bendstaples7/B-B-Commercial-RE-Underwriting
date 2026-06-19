@@ -95,6 +95,7 @@ function makeStatus(overrides: Partial<DataSourceStatus> = {}): DataSourceStatus
     enrichment_sources: [makeEnrichmentSource()],
     import_source: makeImportSource(),
     hubspot_source: makeHubSpotSource(),
+    gis_connectors: [],
     ...overrides,
   }
 }
@@ -343,6 +344,7 @@ describe('StatusSummaryBanner — Property 3: green iff ALL sources healthy', ()
             enrichment_sources: enrichmentSources,
             import_source: makeImportSource(),
             hubspot_source: makeHubSpotSource(),
+            gis_connectors: [],
           }
 
           const { container } = render(<StatusSummaryBanner data={data} />)

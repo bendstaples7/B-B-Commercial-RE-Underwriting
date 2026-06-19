@@ -273,14 +273,26 @@ const GlobalSearchBar = () => {
                   if (focusedIndex >= 0 && focusedIndex < allItems.length) {
                     e.preventDefault()
                     const item = allItems[focusedIndex]
-                    if (!item.nav_path) {
-                      setError('Search failed. Please try again.')
-                      return
+                    const leadsCount = results?.leads?.length ?? 0
+                    if (focusedIndex < leadsCount) {
+                      // Lead result — always navigate by ID (Req 4.1, 4.2)
+                      if (!item.id) {
+                        setError('Search failed. Please try again.')
+                        return
+                      }
+                      navigate('/leads/' + item.id)
+                    } else {
+                      // Analysis session result — use nav_path unchanged
+                      if (!item.nav_path) {
+                        setError('Search failed. Please try again.')
+                        return
+                      }
+                      navigate(item.nav_path)
                     }
-                    navigate(item.nav_path)
                     clearSearch()
                     if (isMobile) setMobileExpanded(false)
                   }
+                  // Req 4.3: if no result is focused, take no action
                   break
               }
             }}
@@ -364,7 +376,12 @@ const GlobalSearchBar = () => {
                         selected={idx === focusedIndex}
                         sx={idx === focusedIndex ? { backgroundColor: 'action.selected' } : {}}
                         onClick={() => {
-                          navigate(lead.nav_path)
+                          if (lead.id) {
+                            navigate('/leads/' + lead.id)
+                          } else {
+                            setError('Search failed. Please try again.')
+                            return
+                          }
                           clearSearch()
                           if (isMobile) setMobileExpanded(false)
                         }}

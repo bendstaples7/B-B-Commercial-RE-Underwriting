@@ -70,6 +70,11 @@ export interface LeadTaskListProps {
   onTaskCreated: (task: LeadTask) => void
   onTaskCompleted?: (taskId: number | string) => void
   onHubSpotTaskDone?: (taskId: number) => void
+  /** Called immediately when the user submits the form, before the API call
+   *  completes. Receives a temporary placeholder task (id = 0, status = 'open').
+   *  Use this to add an optimistic entry to the task list.
+   */
+  onOptimisticTaskCreate?: (optimisticTask: LeadTask) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -88,6 +93,7 @@ export function LeadTaskList({
   onTaskCreated,
   onTaskCompleted,
   onHubSpotTaskDone,
+  onOptimisticTaskCreate,
 }: LeadTaskListProps) {
   const [formOpen, setFormOpen] = useState(false)
   const [title, setTitle] = useState('')
@@ -138,6 +144,23 @@ export function LeadTaskList({
     setTitleError(null)
     setSubmitError(null)
     setSubmitting(true)
+
+    // Fire optimistic callback before the API call so the parent can render
+    // a placeholder task immediately (property 12: optimistic task creation).
+    if (onOptimisticTaskCreate) {
+      const optimisticTask: LeadTask = {
+        id: 0,
+        lead_id: leadId,
+        task_type: 'custom',
+        title: title.trim(),
+        status: 'open',
+        due_date: dueDate || null,
+        created_at: new Date().toISOString(),
+        completed_at: null,
+        created_by: 'user',
+      }
+      onOptimisticTaskCreate(optimisticTask)
+    }
 
     try {
       const newTask = await leadTaskService.createTask(leadId, {

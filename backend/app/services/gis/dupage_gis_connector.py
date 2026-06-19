@@ -174,8 +174,20 @@ class DuPageGISConnector(GISConnector):
         return parcel
 
     def lookup_by_address(self, address: str) -> Optional[GISParcel]:
-        """Look up a parcel by property address (PROPADDRL1 LIKE match)."""
-        safe = address.replace("'", "''").replace("%", r"\%").replace("_", r"\_").upper()
+        """Look up a parcel by property address (PROPADDRL1 LIKE match).
+
+        Strips unit-number suffixes before querying — DuPage stores addresses
+        without unit numbers (e.g. '107 MAIN ST' not '107 MAIN ST APT 2').
+        """
+        import re
+        # Normalise to uppercase and strip unit suffixes
+        street_part = address.split(',')[0].strip().upper()
+        street_part = re.sub(
+            r'\s+(APT|UNIT|STE|SUITE|#|FL|FLOOR|FRNT|FRONT|REAR|BSMT|BS)\s*\S*$',
+            '', street_part
+        )
+        street_part = re.sub(r'\s+(\d+[A-Z\-]*|\d+(ST|ND|RD|TH))$', '', street_part)
+        safe = street_part.strip().replace("'", "''").replace("%", r"\%").replace("_", r"\_")
         where_clause = f"UPPER(PROPADDRL1) LIKE '%{safe}%' ESCAPE '\\'"
         return self._query_endpoint(where_clause)
 

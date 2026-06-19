@@ -352,11 +352,12 @@ describe('Property 3: Input length hard cap', () => {
 
 describe('Property 11: Lead result navigation targets correct path', () => {
   /**
-   * **Validates: Requirements 5.1**
+   * **Validates: Requirements 4.1, 4.2**
    *
-   * For any lead id, clicking the lead result navigates to /properties/{id}.
+   * For any lead id, clicking the lead result navigates to /leads/{id},
+   * regardless of the nav_path value returned by the backend.
    */
-  it('navigates to /properties/{id} for any lead id (property-based)', async () => {
+  it('navigates to /leads/{id} for any lead id (property-based)', async () => {
     vi.useFakeTimers()
 
     await fc.assert(
@@ -392,7 +393,7 @@ describe('Property 11: Lead result navigation targets correct path', () => {
           const leadItem = within(container).getByTestId(`lead-result-${leadId}`)
           act(() => { leadItem.click() })
 
-          expect(mockNavigate).toHaveBeenCalledWith(`/properties/${leadId}`)
+          expect(mockNavigate).toHaveBeenCalledWith(`/leads/${leadId}`)
 
           unmount()
           vi.mocked(searchService.search).mockReset()
@@ -647,7 +648,7 @@ describe('GlobalSearchBar — example-based unit tests', () => {
   // -------------------------------------------------------------------------
 
   describe('result navigation', () => {
-    it('clicking a lead result navigates to /properties/{id}', async () => {
+    it('clicking a lead result navigates to /leads/{id}', async () => {
       vi.useFakeTimers()
       vi.spyOn(searchService, 'search').mockResolvedValue({
         leads: [{ id: 42, type: 'lead', label: 'John Doe', nav_path: '/properties/42' }],
@@ -666,7 +667,7 @@ describe('GlobalSearchBar — example-based unit tests', () => {
 
       act(() => { screen.getByTestId('lead-result-42').click() })
 
-      expect(mockNavigate).toHaveBeenCalledWith('/properties/42')
+      expect(mockNavigate).toHaveBeenCalledWith('/leads/42')
     })
 
     it('clicking a session result navigates to nav_path', async () => {

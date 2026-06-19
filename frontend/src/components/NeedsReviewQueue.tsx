@@ -58,8 +58,8 @@ export function NeedsReviewQueue() {
       icon: <AnalyticsIcon fontSize="small" />,
       testId: 'action-view-analysis',
       onClick: async (row: QueueRow) => {
-        // Navigate to command center — analysis tab
-        navigate(`/leads/${row.id}/command-center?tab=analysis`)
+        // Navigate to lead detail — analysis tab
+        navigate(`/leads/${row.id}?tab=analysis`)
       },
     },
     {
@@ -67,8 +67,8 @@ export function NeedsReviewQueue() {
       icon: <HistoryIcon fontSize="small" />,
       testId: 'action-view-activity',
       onClick: async (row: QueueRow) => {
-        // Navigate to command center — timeline tab
-        navigate(`/leads/${row.id}/command-center?tab=timeline`)
+        // Navigate to lead detail — timeline tab
+        navigate(`/leads/${row.id}?tab=timeline`)
       },
     },
   ]

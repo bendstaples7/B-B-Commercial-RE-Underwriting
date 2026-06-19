@@ -334,7 +334,7 @@ export function QueueTable({
                       // Don't navigate if clicking a checkbox or action button
                       const target = e.target as HTMLElement
                       if (target.closest('input[type="checkbox"]') || target.closest('button') || target.closest('a')) return
-                      navigate(`/leads/${row.id}/command-center`)
+                      navigate('/leads/' + row.id)
                     }}
                   >
                     {/* Row checkbox */}
@@ -353,7 +353,7 @@ export function QueueTable({
                     <TableCell data-testid={`row-name-${row.id}`}>
                       <Link
                         component={RouterLink}
-                        to={`/leads/${row.id}/command-center`}
+                        to={'/leads/' + row.id}
                         underline="hover"
                         color="primary"
                         fontWeight={500}
@@ -402,7 +402,7 @@ export function QueueTable({
                           <IconButton
                             size="small"
                             component={RouterLink}
-                            to={`/leads/${row.id}/command-center`}
+                            to={'/leads/' + row.id}
                             aria-label="Open lead detail"
                             data-testid={`row-action-view-${row.id}`}
                           >

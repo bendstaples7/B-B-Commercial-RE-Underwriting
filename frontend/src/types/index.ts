@@ -2072,9 +2072,23 @@ export interface HubSpotSourceStatus {
   connected: boolean
 }
 
+export interface GISConnectorStatus {
+  name: string
+  market: string
+  counties: string[]
+  source_type: 'gis'
+  refresh_type: 'automatic'
+  is_active: boolean
+  matched_count: number
+  unmatched_count: number
+  total_count: number
+  api_url: string
+}
+
 export interface DataSourceStatus {
   socrata_datasets: SocrataDatasetStatus[]
   enrichment_sources: EnrichmentSourceStatus[]
   import_source: ImportSourceStatus
   hubspot_source: HubSpotSourceStatus
+  gis_connectors: GISConnectorStatus[]
 }

@@ -12,6 +12,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@/test/testUtils'
+import { MemoryRouter } from 'react-router-dom'
 import { PropertyListPage } from './PropertyListPage'
 
 // ---------------------------------------------------------------------------
@@ -138,6 +139,14 @@ beforeEach(async () => {
 // Open the filter panel helper
 // ---------------------------------------------------------------------------
 
+function renderPage() {
+  return render(
+    <MemoryRouter>
+      <PropertyListPage />
+    </MemoryRouter>
+  )
+}
+
 async function openFilterPanel() {
   const filtersBtn = screen.getByRole('button', { name: /filters/i })
   fireEvent.click(filtersBtn)
@@ -153,7 +162,7 @@ async function openFilterPanel() {
 
 describe('PropertyListPage — source_type filter', () => {
   it('renders Source Type select with "All Sources" and all 5 source type options', async () => {
-    render(<PropertyListPage />)
+    renderPage()
     await openFilterPanel()
 
     // Open the Source Type dropdown
@@ -175,7 +184,7 @@ describe('PropertyListPage — source_type filter', () => {
   })
 
   it('passes source_type query param when a source type is selected', async () => {
-    render(<PropertyListPage />)
+    renderPage()
     await openFilterPanel()
 
     // Clear any initial calls
@@ -199,7 +208,7 @@ describe('PropertyListPage — source_type filter', () => {
   })
 
   it('passes source_type="long_owned" when Long Owned is selected', async () => {
-    render(<PropertyListPage />)
+    renderPage()
     await openFilterPanel()
 
     vi.mocked(leadService.listLeads).mockClear()
@@ -230,7 +239,7 @@ describe('PropertyListPage — source_type filter', () => {
     }
     vi.mocked(leadService.listLeads).mockResolvedValue(MULTI_PAGE_RESPONSE)
 
-    render(<PropertyListPage />)
+    renderPage()
 
     // Wait for pagination to render
     await waitFor(() => {
@@ -270,7 +279,7 @@ describe('PropertyListPage — source_type filter', () => {
 
 describe('PropertyListPage — owner_user_id filter', () => {
   it('passes owner_user_id query param when text is entered in the Owner user ID field', async () => {
-    render(<PropertyListPage />)
+    renderPage()
     await openFilterPanel()
 
     vi.mocked(leadService.listLeads).mockClear()
@@ -289,7 +298,7 @@ describe('PropertyListPage — owner_user_id filter', () => {
   })
 
   it('resets page to 1 when owner_user_id filter changes', async () => {
-    render(<PropertyListPage />)
+    renderPage()
     await openFilterPanel()
 
     vi.mocked(leadService.listLeads).mockClear()
@@ -308,7 +317,7 @@ describe('PropertyListPage — owner_user_id filter', () => {
   })
 
   it('does not include owner_user_id in params when field is empty', async () => {
-    render(<PropertyListPage />)
+    renderPage()
 
     // On initial render, listLeads should not include owner_user_id
     await waitFor(() => {
