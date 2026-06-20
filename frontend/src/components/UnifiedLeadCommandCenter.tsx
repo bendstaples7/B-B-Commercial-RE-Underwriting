@@ -369,46 +369,50 @@ interface ActivityPanelProps {
   initialTotal: number
 }
 
-function ActivityPanel({ leadId, initialEntries, initialTotal }: ActivityPanelProps) {
-  const [timelineEntries, setTimelineEntries] = useState<LeadTimelineEntry[]>(initialEntries)
-  const [timelineTotal, setTimelineTotal] = useState(initialTotal)
+// forwardRef so the main component can scroll the panel into view when the
+// `?tab=timeline` deep-link is used (the timeline has no tab — it lives here).
+const ActivityPanel = React.forwardRef<HTMLDivElement, ActivityPanelProps>(
+  function ActivityPanel({ leadId, initialEntries, initialTotal }, ref) {
+    const [timelineEntries, setTimelineEntries] = useState<LeadTimelineEntry[]>(initialEntries)
+    const [timelineTotal, setTimelineTotal] = useState(initialTotal)
 
-  const handleNotesSaved = (entry: LeadTimelineEntry) => {
-    // Optimistic prepend — entry already created by LogNoteForm before calling onSaved
-    setTimelineEntries(prev => [entry, ...prev])
-    setTimelineTotal(prev => prev + 1)
-  }
+    const handleNotesSaved = (entry: LeadTimelineEntry) => {
+      // Optimistic prepend — entry already created by LogNoteForm before calling onSaved
+      setTimelineEntries(prev => [entry, ...prev])
+      setTimelineTotal(prev => prev + 1)
+    }
 
-  const handleCallSaved = (entry: LeadTimelineEntry) => {
-    // Optimistic prepend — entry already created by LogCallForm before calling onSaved
-    setTimelineEntries(prev => [entry, ...prev])
-    setTimelineTotal(prev => prev + 1)
-  }
+    const handleCallSaved = (entry: LeadTimelineEntry) => {
+      // Optimistic prepend — entry already created by LogCallForm before calling onSaved
+      setTimelineEntries(prev => [entry, ...prev])
+      setTimelineTotal(prev => prev + 1)
+    }
 
-  const handleLoadMore = async (page: number): Promise<{ entries: LeadTimelineEntry[]; total: number }> => {
-    const result = await commandCenterService.getTimeline(leadId, page)
-    return { entries: result.entries, total: result.total }
-  }
+    const handleLoadMore = async (page: number): Promise<{ entries: LeadTimelineEntry[]; total: number }> => {
+      const result = await commandCenterService.getTimeline(leadId, page)
+      return { entries: result.entries, total: result.total }
+    }
 
-  return (
-    <Box sx={{ mb: 2, overflow: 'auto' }} data-testid="activity-panel">
-      <Box sx={{ mb: 3 }}>
-        <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>Log Note</Typography>
-        <LogNoteForm leadId={leadId} onSaved={handleNotesSaved} />
+    return (
+      <Box ref={ref} sx={{ mb: 2, overflow: 'auto' }} data-testid="activity-panel">
+        <Box sx={{ mb: 3 }}>
+          <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>Log Note</Typography>
+          <LogNoteForm leadId={leadId} onSaved={handleNotesSaved} />
+        </Box>
+        <Box sx={{ mb: 3 }}>
+          <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>Log Call</Typography>
+          <LogCallForm leadId={leadId} onSaved={handleCallSaved} />
+        </Box>
+        <LeadTimeline
+          leadId={leadId}
+          initialEntries={timelineEntries}
+          initialTotal={timelineTotal}
+          onLoadMore={handleLoadMore}
+        />
       </Box>
-      <Box sx={{ mb: 3 }}>
-        <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>Log Call</Typography>
-        <LogCallForm leadId={leadId} onSaved={handleCallSaved} />
-      </Box>
-      <LeadTimeline
-        leadId={leadId}
-        initialEntries={timelineEntries}
-        initialTotal={timelineTotal}
-        onLoadMore={handleLoadMore}
-      />
-    </Box>
-  )
-}
+    )
+  }
+)
 
 // ── Helper functions ──────────────────────────────────────────────────────────
 
@@ -456,7 +460,9 @@ const outreachStatusLabel = (status: string): string =>
 // index. Tab order (Req 5.5): 0 Info · 1 Score · 2 Enrichment · 3 Marketing ·
 // 4 Analysis · 5 Contacts. The activity timeline is NOT a tab — it lives in the
 // always-visible ActivityPanel above the Tab_Panel — so `timeline` and any
-// unknown/absent value fall back to the default Info tab.
+// unknown/absent value fall back to the default Info tab here. The `timeline`
+// value is instead handled by UnifiedLeadCommandCenter, which scrolls the
+// ActivityPanel into view (see the scroll effect in the main component).
 const DEFAULT_TAB_INDEX = 0
 
 const TAB_PARAM_TO_INDEX: Record<string, number> = {
@@ -1171,6 +1177,27 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     refetchOnMount: 'always',
   })
 
+  // Deep-link handling for the `?tab=` query param. The TabPanel selects the
+  // tab named by the param (info/score/enrichment/marketing/analysis/contacts).
+  // There is no "timeline" tab — the activity timeline lives in the always-
+  // visible ActivityPanel above the tabs — so the Needs Review queue's "View
+  // Activity" deep-link (?tab=timeline) instead scrolls the ActivityPanel into
+  // view once the data has loaded and the panel has rendered.
+  const [searchParams] = useSearchParams()
+  const tabParam = searchParams.get('tab')
+  const activityRef = useRef<HTMLDivElement>(null)
+  const showLead = !commandCenterLoading && !leadLoading && !commandCenterError
+
+  useEffect(() => {
+    if (!showLead) return
+    if (tabParam?.toLowerCase() !== 'timeline') return
+    const el = activityRef.current
+    // jsdom (and some non-DOM environments) don't implement scrollIntoView.
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }, [showLead, tabParam])
+
   if (commandCenterLoading || leadLoading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
@@ -1238,6 +1265,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
 
           {/* ActivityPanel — third in ActivityColumn (Req 8.1–8.3) */}
           <ActivityPanel
+            ref={activityRef}
             leadId={leadId}
             initialEntries={commandCenterData!.timeline.entries}
             initialTotal={commandCenterData!.timeline.total}

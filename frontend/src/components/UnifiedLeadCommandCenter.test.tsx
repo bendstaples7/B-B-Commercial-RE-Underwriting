@@ -359,6 +359,55 @@ describe('UnifiedLeadCommandCenter — tab deep-linking', () => {
 })
 
 // ---------------------------------------------------------------------------
+// 2b. Timeline deep-link scrolls the always-visible ActivityPanel into view
+// ---------------------------------------------------------------------------
+
+describe('UnifiedLeadCommandCenter — ?tab=timeline scrolls ActivityPanel into view', () => {
+  it('selects the Analysis tab (no scroll) when ?tab=analysis is present', async () => {
+    // jsdom does not implement scrollIntoView — stub it so we can assert it is
+    // NOT triggered by a plain tab deep-link.
+    const scrollIntoViewMock = vi.fn()
+    const original = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = scrollIntoViewMock as typeof Element.prototype.scrollIntoView
+    try {
+      renderComponentAtSearch('?tab=analysis')
+      await waitFor(() => {
+        expect(screen.getByTestId('tab-panel')).toBeInTheDocument()
+      })
+      const tabs = screen.getByTestId('tab-panel').querySelectorAll('[role="tab"]')
+      expect(tabs[4]).toHaveAttribute('aria-selected', 'true')
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
+    } finally {
+      Element.prototype.scrollIntoView = original
+    }
+  })
+
+  it('invokes scrollIntoView on the ActivityPanel when ?tab=timeline is present', async () => {
+    // jsdom does not implement scrollIntoView — mock it with vi.fn() and restore
+    // it after the test so other suites are unaffected.
+    const scrollIntoViewMock = vi.fn()
+    const original = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = scrollIntoViewMock as typeof Element.prototype.scrollIntoView
+    try {
+      renderComponentAtSearch('?tab=timeline')
+
+      // The panel must render (data loaded) before the scroll effect can fire.
+      await waitFor(() => {
+        expect(screen.getByTestId('activity-panel')).toBeInTheDocument()
+      })
+      await waitFor(() => {
+        expect(scrollIntoViewMock).toHaveBeenCalled()
+      })
+      expect(scrollIntoViewMock).toHaveBeenCalledWith(
+        expect.objectContaining({ behavior: 'smooth', block: 'start' })
+      )
+    } finally {
+      Element.prototype.scrollIntoView = original
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 3. Error state for invalid ID
 // ---------------------------------------------------------------------------
 
