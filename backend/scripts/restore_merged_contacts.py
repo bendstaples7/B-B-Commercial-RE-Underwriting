@@ -34,6 +34,18 @@ logger = logging.getLogger(__name__)
 AFFECTED_LEAD_IDS = [460, 3349, 3362, 3415, 3905, 4037]
 
 
+def _mask_phone(value):
+    """Redact a phone number for logging — expose only the last 4 digits.
+
+    Never logs the full number (PII). Returns '<redacted>' when fewer than
+    4 digits are present.
+    """
+    digits = ''.join(ch for ch in str(value) if ch.isdigit())
+    if len(digits) >= 4:
+        return f"***-***-{digits[-4:]}"
+    return "<redacted>"
+
+
 def restore_contact_for_lead(cur, lead):
     lead_id = lead['id']
 
@@ -65,7 +77,7 @@ def restore_contact_for_lead(cur, lead):
                 "INSERT INTO contact_phones (contact_id, value, label) VALUES (%s, %s, 'mobile')",
                 (contact_id, val),
             )
-            logger.info("  Added phone %s", val)
+            logger.info("  Added phone %s", _mask_phone(val))
 
     # Insert emails
     for col in ('email_1', 'email_2'):
@@ -75,7 +87,7 @@ def restore_contact_for_lead(cur, lead):
                 "INSERT INTO contact_emails (contact_id, value, label) VALUES (%s, %s, 'personal')",
                 (contact_id, val),
             )
-            logger.info("  Added email %s", val)
+            logger.info("  Added email <redacted>")
 
     # Link to lead
     cur.execute(
@@ -87,10 +99,10 @@ def restore_contact_for_lead(cur, lead):
 
 
 def run():
-    db_url = os.environ.get(
-        'DATABASE_URL',
-        'postgresql://app_user:BBanalyzer2025!@localhost:5432/real_estate_analysis',
-    )
+    db_url = os.environ.get('DATABASE_URL')
+    if not db_url:
+        print("DATABASE_URL environment variable is required", file=sys.stderr)
+        sys.exit(1)
     dsn = db_url.replace('postgresql+psycopg2://', 'postgresql://')
     conn = psycopg2.connect(dsn)
     conn.autocommit = False

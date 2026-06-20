@@ -283,6 +283,54 @@ class TestReq86DowngradeDropIfExists:
                             if sev == 'ERROR' and 'downgrade' in msg.lower()]
         assert not downgrade_errors, "Legacy revision must not be flagged for downgrade rule"
 
+    def test_create_or_replace_view_downgrade_compliant(self, tmp_path):
+        """A view migration whose upgrade and downgrade both use
+        CREATE OR REPLACE VIEW is self-reversing and must NOT be flagged for
+        missing DROP ... IF EXISTS (regression for migration c5d6e7f8a9b0)."""
+        upgrade = (
+            'op.execute("""\n'
+            '    CREATE OR REPLACE VIEW lead_crm_flags AS\n'
+            '    SELECT l.id AS lead_id, l.has_property_match AS has_property_match_computed\n'
+            '    FROM leads l\n'
+            '""")'
+        )
+        downgrade = (
+            'op.execute("""\n'
+            '    CREATE OR REPLACE VIEW lead_crm_flags AS\n'
+            '    SELECT l.id AS lead_id, FALSE AS has_property_match_computed\n'
+            '    FROM leads l\n'
+            '""")'
+        )
+        content = new_migration(upgrade, downgrade)
+        issues = lint_content(content, tmp_path)
+        assert not errors_with(issues, 'DROP'), (
+            "CREATE OR REPLACE VIEW downgrade must not be flagged for missing "
+            f"DROP ... IF EXISTS, got: {issues}"
+        )
+        error_issues = [(ln, msg) for ln, sev, msg in issues if sev == 'ERROR']
+        assert not error_issues, (
+            f"Self-reversing CREATE OR REPLACE VIEW migration should have no "
+            f"errors, got: {error_issues}"
+        )
+
+    def test_create_or_replace_function_downgrade_compliant(self, tmp_path):
+        """CREATE OR REPLACE FUNCTION downgrade is also a valid reversal."""
+        upgrade = (
+            'op.execute("""\n'
+            '    CREATE OR REPLACE FUNCTION bump() RETURNS int AS $$ BEGIN RETURN 2; END; $$ LANGUAGE plpgsql\n'
+            '""")'
+        )
+        downgrade = (
+            'op.execute("""\n'
+            '    CREATE OR REPLACE FUNCTION bump() RETURNS int AS $$ BEGIN RETURN 1; END; $$ LANGUAGE plpgsql\n'
+            '""")'
+        )
+        content = new_migration(upgrade, downgrade)
+        issues = lint_content(content, tmp_path)
+        assert not errors_with(issues, 'DROP'), (
+            f"CREATE OR REPLACE FUNCTION downgrade must not be flagged, got: {issues}"
+        )
+
 
 # ===========================================================================
 # Existing rules still work (regression tests)

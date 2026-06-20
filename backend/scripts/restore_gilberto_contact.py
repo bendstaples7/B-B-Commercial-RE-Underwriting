@@ -31,23 +31,36 @@ PHONES = [
 
 
 def run():
-    db_url = os.environ.get(
-        'DATABASE_URL',
-        'postgresql://app_user:BBanalyzer2025!@localhost:5432/real_estate_analysis',
-    )
+    db_url = os.environ.get('DATABASE_URL')
+    if not db_url:
+        print("DATABASE_URL environment variable is required", file=sys.stderr)
+        sys.exit(1)
     dsn = db_url.replace('postgresql+psycopg2://', 'postgresql://')
     conn = psycopg2.connect(dsn)
     conn.autocommit = False
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     try:
-        # 1. Check if contact already exists and is already linked
+        # 1. Check whether the SPECIFIC target contact (Gilberto Olivares) is
+        #    already linked to this lead. The contact is identified by name
+        #    (FIRST_NAME / LAST_NAME) since this restore has no email. A different
+        #    contact being linked must NOT cause us to skip — otherwise Gilberto
+        #    himself can stay missing while some other contact occupies the lead.
         cur.execute(
-            "SELECT pc.id FROM property_contacts pc WHERE pc.property_id = %s",
-            (LEAD_ID,)
+            """SELECT pc.id
+               FROM property_contacts pc
+               JOIN contacts c ON c.id = pc.contact_id
+               WHERE pc.property_id = %s
+                 AND lower(c.first_name) = lower(%s)
+                 AND lower(c.last_name) = lower(%s)
+               LIMIT 1""",
+            (LEAD_ID, FIRST_NAME, LAST_NAME),
         )
         if cur.fetchone():
-            logger.info("Lead %d already has a contact linked — nothing to do.", LEAD_ID)
+            logger.info(
+                "Lead %d already has the %s %s contact linked — nothing to do.",
+                LEAD_ID, FIRST_NAME, LAST_NAME,
+            )
             return
 
         # 2. Create the contact (role is NOT NULL, default 'owner')

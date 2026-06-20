@@ -624,6 +624,11 @@ class TestBug3bEmailEngagement:
         deal association. Call convert_engagement. Assert result is not None and
         Interaction(interaction_type='email') was created.
 
+        EMAIL engagements store content in metadata.text (plaintext) / metadata.html
+        like real HubSpot data — NOT metadata.body. The body must be extracted from
+        metadata.text (preferred) and, for html-only payloads, from metadata.html
+        with tags stripped — exercising the real convert_email/_extract_email_body path.
+
         On unfixed code: returns None, no interaction created because EMAIL
         is not handled (only NOTE, CALL, TASK).
 
@@ -650,7 +655,13 @@ class TestBug3bEmailEngagement:
             db.session.add(deal_match)
             db.session.flush()
 
-            # Create EMAIL engagement
+            # Real HubSpot EMAIL metadata uses 'text' (plaintext) and 'html',
+            # not 'body'. Provide both; 'text' must win.
+            email_text = "Hi, I'm interested in discussing the property at 2553 N Drake."
+            email_html = (
+                "<p>Hi, I'm interested in discussing the property at "
+                "<b>2553 N Drake</b>.</p>"
+            )
             engagement = HubSpotEngagement(
                 hubspot_id="eng_600",
                 engagement_type="EMAIL",
@@ -661,7 +672,8 @@ class TestBug3bEmailEngagement:
                         "createdAt": 1700000000000,
                     },
                     "metadata": {
-                        "body": "Hi, I'm interested in discussing the property at 2553 N Drake.",
+                        "text": email_text,
+                        "html": email_html,
                         "subject": "Property Inquiry",
                     },
                     "associations": {
@@ -689,6 +701,12 @@ class TestBug3bEmailEngagement:
                 f"Expected interaction_type='email' but got '{result.interaction_type}'"
             )
 
+            # Body must come from metadata.text (preferred over html), NOT metadata.body
+            assert result.body == email_text, (
+                f"Expected EMAIL body from metadata.text ('{email_text}') but got "
+                f"'{result.body}'. EMAIL body must be extracted from metadata.text."
+            )
+
             # Assert the interaction is linked (not orphaned) since deal match is confirmed
             assert result.is_orphaned is False, (
                 f"Expected is_orphaned=False (deal match is confirmed) but got "
@@ -703,6 +721,43 @@ class TestBug3bEmailEngagement:
                 "Expected Interaction to be persisted in the database"
             )
             assert saved.interaction_type == 'email'
+            assert saved.body == email_text
+
+            # html-only payload: body is extracted from metadata.html with tags stripped
+            html_only_engagement = HubSpotEngagement(
+                hubspot_id="eng_601",
+                engagement_type="EMAIL",
+                raw_payload={
+                    "engagement": {
+                        "id": 601,
+                        "type": "EMAIL",
+                        "createdAt": 1700000001000,
+                    },
+                    "metadata": {
+                        "html": "<div>Call me back at <strong>noon</strong></div>",
+                        "subject": "Re: Property Inquiry",
+                    },
+                    "associations": {
+                        "dealIds": ["deal_400"],
+                        "contactIds": [],
+                        "companyIds": [],
+                    },
+                },
+            )
+            db.session.add(html_only_engagement)
+            db.session.commit()
+
+            html_result = converter.convert_engagement(html_only_engagement)
+            assert html_result is not None, (
+                "Expected an Interaction for an html-only EMAIL engagement"
+            )
+            assert html_result.body == "Call me back at noon", (
+                f"Expected tag-stripped html body 'Call me back at noon' but got "
+                f"'{html_result.body}'."
+            )
+            assert '<' not in html_result.body and '>' not in html_result.body, (
+                f"Expected HTML tags to be stripped from the body, got '{html_result.body}'"
+            )
 
 
 # ===========================================================================

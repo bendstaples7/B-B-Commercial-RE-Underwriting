@@ -32,6 +32,10 @@ Idempotency convention rules (Req 8.1–8.6) — enforced on NEW revisions only
    be wrapped in DO $$ BEGIN ... EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 10. upgrade() without a corresponding downgrade() that uses DROP ... IF EXISTS.
+    A downgrade that reverses its change by re-issuing CREATE OR REPLACE
+    VIEW/FUNCTION/PROCEDURE (restoring the prior definition) also satisfies this
+    reversibility requirement — a bare DROP is not required and would be unsafe
+    for objects other code depends on.
 
 Usage:
     python scripts/lint_migrations.py                     # lint all migrations
@@ -163,6 +167,14 @@ _EXCEPTION_WHEN_DUP = re.compile(r'EXCEPTION\s+WHEN\s+duplicate_object', re.IGNO
 # Req 8.6: upgrade() without downgrade() using DROP ... IF EXISTS.
 _DROP_IF_EXISTS = re.compile(r'\bDROP\b.+\bIF\s+EXISTS\b', re.IGNORECASE)
 
+# A downgrade that re-issues CREATE OR REPLACE VIEW/FUNCTION/PROCEDURE is itself a
+# valid, idempotent reversal: it restores the object's prior definition in place.
+# Such downgrades intentionally avoid a bare DROP (which would break dependent
+# objects), so they satisfy the reversibility requirement without DROP ... IF EXISTS.
+_CREATE_OR_REPLACE = re.compile(
+    r'\bCREATE\s+OR\s+REPLACE\s+(VIEW|FUNCTION|PROCEDURE)\b', re.IGNORECASE
+)
+
 
 def _extract_revision_id(text: str) -> str | None:
     """Extract the revision identifier string from migration file text."""
@@ -218,6 +230,11 @@ def _check_downgrade_drop_if_exists(lines: list[str]) -> list[tuple[int, str, st
     """
     Req 8.6: Flag upgrade() functions that have no corresponding downgrade()
     containing at least one DROP ... IF EXISTS statement.
+
+    A downgrade that reverses its upgrade by re-issuing CREATE OR REPLACE
+    VIEW/FUNCTION/PROCEDURE is treated as a valid, self-reversing/idempotent
+    downgrade and is NOT flagged: it restores the original definition in place
+    (a bare DROP would be wrong, breaking objects that depend on the view/function).
 
     Returns issues (attached to line 1 of the file) when the rule is violated.
     """
@@ -281,13 +298,15 @@ def _check_downgrade_drop_if_exists(lines: list[str]) -> list[tuple[int, str, st
     if upgrade_is_noop:
         return issues  # No-op upgrade — no DROP IF EXISTS requirement
 
-    if not _DROP_IF_EXISTS.search(downgrade_body):
+    if not _DROP_IF_EXISTS.search(downgrade_body) and not _CREATE_OR_REPLACE.search(downgrade_body):
         issues.append((
             1, 'ERROR',
             "upgrade() performs schema changes but downgrade() contains no "
             "'DROP ... IF EXISTS' statement.\n"
             "  Add DROP TABLE IF EXISTS / DROP INDEX IF EXISTS / DROP TYPE IF EXISTS\n"
-            "  statements to downgrade() to reverse the changes (Req 8.6).",
+            "  statements to downgrade() to reverse the changes (Req 8.6).\n"
+            "  (A downgrade that re-issues CREATE OR REPLACE VIEW/FUNCTION/PROCEDURE\n"
+            "  to restore the prior definition also satisfies this requirement.)",
         ))
 
     return issues
