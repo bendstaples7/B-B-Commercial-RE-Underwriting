@@ -1559,7 +1559,7 @@ def backfill_property_matches_task(self):
                 # page commit succeeds; if the commit is rolled back they are
                 # backed out so a flushed-but-not-committed page can't be reported
                 # as matched/updated (which would hide the data loss).
-                page_first_id = last_id
+                page_first_id = batch[0].id if batch else last_id
                 page_matched = 0
                 page_no_match = 0
 
