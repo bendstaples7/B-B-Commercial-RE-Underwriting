@@ -2,7 +2,7 @@
 from app import db
 from datetime import datetime, date
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy import TypeDecorator, JSON as SaJSON, event, select
+from sqlalchemy import TypeDecorator, JSON as SaJSON, event, select, or_
 
 
 class _JSONBCompatible(TypeDecorator):
@@ -274,14 +274,29 @@ def _cleanup_hubspot_refs_before_lead_delete(mapper, connection, target):
     #    dangling associations. The UPDATE must run first — once the associations
     #    are deleted the subquery would match nothing. The interaction rows
     #    themselves are preserved (only re-flagged + de-associated).
+    #
+    #    Bug 5/7: an interaction is only orphaned when THIS lead is its *last*
+    #    remaining association. An interaction that is also associated with
+    #    another lead/entity stays linked (is_orphaned must NOT be set), so it
+    #    keeps surfacing on its other association(s).
     affected_interaction_ids = (
         select(interaction_assocs.c.interaction_id)
         .where(interaction_assocs.c.target_type == 'lead')
         .where(interaction_assocs.c.target_id == lead_id)
     )
+    # Interactions that retain at least one OTHER association (a different lead,
+    # or any non-lead target) must NOT be orphaned.
+    still_linked_interaction_ids = (
+        select(interaction_assocs.c.interaction_id)
+        .where(or_(
+            interaction_assocs.c.target_type != 'lead',
+            interaction_assocs.c.target_id != lead_id,
+        ))
+    )
     connection.execute(
         interactions.update()
         .where(interactions.c.id.in_(affected_interaction_ids))
+        .where(interactions.c.id.notin_(still_linked_interaction_ids))
         .values(is_orphaned=True)
     )
     connection.execute(

@@ -789,9 +789,12 @@ def create_task(lead_id: int):
     """
     data = LeadTaskCreateSchema().load(request.get_json() or {})
     actor = getattr(g, 'user_id', 'anonymous')
-    task = _lead_task_service.create(lead_id, data, actor=actor)
-    # Refresh lead_score + recommended_action: a new open task changes the
-    # open-task count (and thus the action), and keeps the score in parity.
+    # Pass recompute_action=False: refresh_lead_scoring below recomputes the
+    # recommended_action itself (after rescoring), so letting the service ALSO
+    # recompute would do it twice (duplicate DB work / timeline churn).
+    task = _lead_task_service.create(lead_id, data, actor=actor, recompute_action=False)
+    # Refresh lead_score + recommended_action exactly once: rescore first (so a
+    # stale score is corrected) then recompute the action on the fresh score.
     from app.services.lead_refresh import refresh_lead_scoring
     refresh_lead_scoring(lead_id)
     return jsonify({
@@ -851,9 +854,10 @@ def complete_task(lead_id: int, task_id: int):
     Mark a LeadTask as completed.
     """
     actor = getattr(g, 'user_id', 'anonymous')
-    task = _lead_task_service.complete(task_id, lead_id, actor=actor)
-    # Completing a task changes the open-task count (and thus the action), and
-    # keeps the score in parity.
+    # recompute_action=False — refresh_lead_scoring below owns the single
+    # recommended_action recompute (after rescoring), avoiding a double recompute.
+    task = _lead_task_service.complete(task_id, lead_id, actor=actor, recompute_action=False)
+    # Refresh lead_score + recommended_action exactly once per operation.
     from app.services.lead_refresh import refresh_lead_scoring
     refresh_lead_scoring(lead_id)
     return jsonify({

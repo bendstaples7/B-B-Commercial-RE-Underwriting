@@ -19,14 +19,20 @@ logger = logging.getLogger(__name__)
 class LeadTaskService:
     """Manages the lifecycle of LeadTask records."""
 
-    def create(self, lead_id: int, data: dict, actor: str = 'anonymous') -> LeadTask:
+    def create(self, lead_id: int, data: dict, actor: str = 'anonymous',
+               recompute_action: bool = True) -> LeadTask:
         """Create a new LeadTask for a lead.
 
         - Validates title (1–255 chars)
         - Sets status='open'
         - Appends task_created timeline entry
-        - Triggers RA recomputation
+        - Triggers RA recomputation (unless ``recompute_action=False``)
         - Auto-transitions lead_status from 'new' → 'active'
+
+        ``recompute_action`` lets a caller that will refresh the lead itself
+        afterwards (e.g. via ``refresh_lead_scoring``) suppress the in-service
+        recomputation, so the recommended action is recomputed exactly once per
+        operation instead of twice.
         """
         lead = Lead.query.get(lead_id)
         if lead is None:
@@ -80,25 +86,33 @@ class LeadTaskService:
         db.session.add(entry)
         db.session.commit()
 
-        # Trigger RA recomputation
-        try:
-            from app.services.action_engine_service import ActionEngineService
-            ActionEngineService.recompute_and_persist(lead_id)
-        except Exception as exc:
-            logger.error(
-                "ActionEngineService.recompute_and_persist failed for lead %s: %s",
-                lead_id, exc, exc_info=True,
-            )  # RA recomputation failure should not block task creation
+        # Trigger RA recomputation (skipped when the caller will refresh the
+        # lead itself, so the action is recomputed once per op rather than twice).
+        if recompute_action:
+            try:
+                from app.services.action_engine_service import ActionEngineService
+                ActionEngineService.recompute_and_persist(lead_id)
+            except Exception as exc:
+                logger.error(
+                    "ActionEngineService.recompute_and_persist failed for lead %s: %s",
+                    lead_id, exc, exc_info=True,
+                )  # RA recomputation failure should not block task creation
 
         return task
 
-    def complete(self, task_id: int, lead_id: int, actor: str = 'anonymous') -> LeadTask:
+    def complete(self, task_id: int, lead_id: int, actor: str = 'anonymous',
+                 recompute_action: bool = True) -> LeadTask:
         """Complete an open LeadTask.
 
         - Validates task is 'open' (raises InvalidTaskStatusTransitionError if already completed)
         - Sets status='completed', records completed_at
         - Appends task_completed timeline entry
-        - Triggers RA recomputation
+        - Triggers RA recomputation (unless ``recompute_action=False``)
+
+        ``recompute_action`` lets a caller that will refresh the lead itself
+        afterwards (e.g. via ``refresh_lead_scoring``) suppress the in-service
+        recomputation, so the recommended action is recomputed exactly once per
+        operation instead of twice.
         """
         task = LeadTask.query.filter_by(id=task_id, lead_id=lead_id).first()
         if task is None:
@@ -131,15 +145,17 @@ class LeadTaskService:
         db.session.add(entry)
         db.session.commit()
 
-        # Trigger RA recomputation
-        try:
-            from app.services.action_engine_service import ActionEngineService
-            ActionEngineService.recompute_and_persist(lead_id)
-        except Exception as exc:
-            logger.error(
-                "ActionEngineService.recompute_and_persist failed for lead %s: %s",
-                lead_id, exc, exc_info=True,
-            )
+        # Trigger RA recomputation (skipped when the caller will refresh the
+        # lead itself, so the action is recomputed once per op rather than twice).
+        if recompute_action:
+            try:
+                from app.services.action_engine_service import ActionEngineService
+                ActionEngineService.recompute_and_persist(lead_id)
+            except Exception as exc:
+                logger.error(
+                    "ActionEngineService.recompute_and_persist failed for lead %s: %s",
+                    lead_id, exc, exc_info=True,
+                )
 
         return task
 

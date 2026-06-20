@@ -212,7 +212,19 @@ class HubSpotSignalExtractorService:
         ``source_engagement_id`` is the model's source column. When it is None
         (no source engagement) the key naturally degrades to
         ``(lead_id, signal_type)``, i.e. one sourceless row per type per lead.
+
+        Special case — ``FOLLOW_UP_OVERDUE`` is a LEAD-LEVEL state, not tied to
+        any single engagement. It is deduped on ``(lead_id, signal_type)`` only
+        (ignoring ``source_engagement_id``) so it is not duplicated once per
+        engagement processed for the same lead. All other signal types keep the
+        full ``(lead_id, signal_type, source_engagement_id)`` key.
         """
+        if signal_type == 'FOLLOW_UP_OVERDUE':
+            return (
+                HubSpotSignal.query
+                .filter_by(lead_id=lead_id, signal_type=signal_type)
+                .first()
+            ) is not None
         return (
             HubSpotSignal.query
             .filter_by(

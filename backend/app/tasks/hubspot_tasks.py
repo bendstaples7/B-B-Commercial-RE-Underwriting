@@ -1050,9 +1050,15 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                     if enriched:
                         db.session.commit()
                         contact_enriched += 1
-                    # Update the contact's match record
+                    # Update the contact's match record. Promote it to
+                    # 'confirmed' (not just back-filling internal_record_id) so
+                    # the downstream _resolve_associations() — which only links
+                    # engagements for confirmed matches — includes this contact.
+                    # A resolved-but-still-pending match would otherwise be
+                    # skipped, leaving its activities orphaned.
                     contact_match.internal_record_type = 'lead'
                     contact_match.internal_record_id = lead.id
+                    contact_match.status = 'confirmed'
                     db.session.commit()
                     logger.debug(
                         "run_enrich_leads_from_hubspot: resolved unlinked contact %s -> lead_id=%d via deal %s",

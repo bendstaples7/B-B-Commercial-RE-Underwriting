@@ -235,8 +235,32 @@ def update_task(task_id):
 @task_bp.route('/<int:task_id>', methods=['DELETE'])
 @handle_errors
 def delete_task(task_id):
-    """Delete a task and its associations."""
+    """Delete a task and its associations.
+
+    Bug 8: capture the lead(s) this task touches BEFORE deletion (the delete
+    removes the task's associations), then refresh their scoring afterwards so
+    lead_score + recommended_action don't go stale — open-task count feeds the
+    action engine, so removing a task can change the recommended action.
+    """
+    task = _service.get(task_id)
+
+    affected_lead_ids = set()
+    direct = getattr(task, 'lead_id', None)
+    if direct is not None:
+        affected_lead_ids.add(direct)
+    try:
+        for assoc in task.associations.all():
+            if assoc.target_type == 'lead' and assoc.target_id is not None:
+                affected_lead_ids.add(assoc.target_id)
+    except Exception:  # pragma: no cover — association load is best-effort
+        logger.debug("Could not enumerate task associations for refresh", exc_info=True)
+
     _service.delete(task_id)
+
+    from app.services.lead_refresh import refresh_lead_scoring
+    for lead_id in affected_lead_ids:
+        refresh_lead_scoring(lead_id)
+
     return jsonify({'message': f'Task {task_id} deleted successfully.'}), 200
 
 

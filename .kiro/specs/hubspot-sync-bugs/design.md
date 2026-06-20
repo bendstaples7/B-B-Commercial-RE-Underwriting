@@ -256,14 +256,25 @@ contact match, or an orphaned engagement must be completely unaffected by the fi
    `.first()` check for non-null `internal_record_id` correctly rejects unresolved
    matches, but there is no follow-up pass to re-resolve orphaned interactions after
    the matches are later confirmed.
-2. **No orphan re-resolution step in the pipeline**: `run_convert_hubspot_activities`
-   has no "re-resolve previously orphaned interactions" phase. After
-   `run_enrich_leads_from_hubspot` promotes pending contact matches to confirmed,
-   no code revisits `is_orphaned=True` interactions to link them.
-3. **EMAIL engagement type not handled**: `convert_engagement` routes `NOTE`, `CALL`,
-   and `TASK` only. `EMAIL` type engagements fall through to the `else` branch, log a
-   warning about "unrecognized type", and return `None`. Requirement 2.9 requires EMAIL
-   to be imported as an `Interaction`.
+2. **Orphan re-resolution pass already exists in the pipeline**:
+   `run_convert_hubspot_activities` already runs a "re-resolve previously orphaned
+   interactions" phase after its main conversion loop — it revisits every
+   `is_orphaned=True` HubSpot-imported `Interaction`, re-runs association
+   resolution via `_resolve_associations_by_engagement_id`, adds the missing
+   `InteractionAssociation` rows, and clears `is_orphaned`. The real gap was
+   therefore not a missing phase but that resolved-but-still-`pending` contact
+   matches were never promoted to `confirmed`, so `_resolve_associations` (which
+   only accepts confirmed matches) still returned nothing for them. The fix
+   promotes those contact matches to `confirmed` when they are resolved via deal
+   associations, giving the existing re-resolution pass confirmed matches to
+   re-link.
+3. **EMAIL engagement type already handled**: `convert_engagement` already routes
+   `EMAIL` to `convert_email`, which creates an `Interaction(interaction_type='email')`
+   (Requirement 2.9). Because HubSpot EMAIL engagements store their content in
+   `metadata.text` (plaintext) / `metadata.html` — not the `metadata.body` field
+   used by NOTE and CALL — `convert_email` (via `_extract_email_body`) reads
+   `metadata.text` first and falls back to `metadata.html` with tags stripped.
+   EMAIL engagements are not dropped to the unrecognized-type branch.
 
 ---
 

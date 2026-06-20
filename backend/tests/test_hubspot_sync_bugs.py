@@ -149,6 +149,57 @@ class TestBug1StageLabelFallback:
                 f"doesn't match _HS_STAGE_TO_LEAD_STATUS keys."
             )
 
+    def test_bug1_unmapped_stage_does_not_store_raw_id(self, app):
+        """When a stage ID cannot be mapped to a display label (empty map AND
+        the on-demand fetch also yields nothing), enrich_lead_from_deal must NOT
+        overwrite hubspot_deal_stage with the raw HubSpot stage ID — no silent
+        raw-ID fallback and no raw-ID pollution of the stored label.
+
+        **Validates: Requirements 1.2, 2.2**
+        """
+        with app.app_context():
+            lead = Lead(
+                property_street="2553 N Drake Ave",
+                lead_status="awaiting_skip_trace",
+            )
+            db.session.add(lead)
+            db.session.flush()
+
+            deal = HubSpotDeal(
+                hubspot_id="deal_unmapped_001",
+                raw_payload={
+                    "properties": {
+                        "dealstage": "some_unknown_stage_id",
+                        "dealname": "2553 N Drake Ave",
+                    }
+                },
+            )
+            db.session.add(deal)
+            db.session.flush()
+
+            matcher = HubSpotMatcherService()
+            # On-demand fetch also yields an empty map (API failure / unknown
+            # stage), so the stage ID genuinely cannot be translated.
+            mock_client = MagicMock()
+            mock_client.fetch_pipeline_stage_labels.return_value = {}
+            with patch(
+                'app.services.hubspot_client_service.HubSpotClientService',
+                return_value=mock_client,
+            ):
+                matcher.enrich_lead_from_deal(lead, deal, stage_label_map={})
+            db.session.commit()
+
+            # No raw-ID pollution: the raw stage ID is never persisted as label
+            assert lead.hubspot_deal_stage != "some_unknown_stage_id", (
+                "Raw HubSpot stage ID must not be persisted as the deal stage "
+                "label (no silent raw-ID fallback)."
+            )
+            # Left unmapped — hubspot_deal_stage stays None rather than being
+            # overwritten with the raw ID.
+            assert lead.hubspot_deal_stage is None
+            # lead_status is not changed off an unmappable stage.
+            assert lead.lead_status == "awaiting_skip_trace"
+
     @given(
         stage_id=st.text(
             alphabet="abcdefghijklmnopqrstuvwxyz_",

@@ -162,37 +162,46 @@ class HubSpotMatcherService:
             except Exception as _exc:
                 logger.warning("enrich_lead_from_deal: could not fetch stage labels: %s", _exc)
         if stage_id:
-            stage_label = (stage_label_map or {}).get(stage_id, stage_id)
-            if stage_label == stage_id:
+            stage_label = (stage_label_map or {}).get(stage_id)
+            if stage_label is None:
+                # Unknown stage: neither the caller-supplied map nor the
+                # on-demand fetch above could translate this stage ID. Do NOT
+                # overwrite the stored label with the raw HubSpot stage ID
+                # (Bug 1: 'closedlost' must never be persisted as the label).
+                # Keep any existing human-readable label and leave it otherwise
+                # unmapped — a later sync (once the pipeline labels are
+                # available) will fill it in.
                 logger.warning(
                     "enrich_lead_from_deal: stage_id=%r not in stage_label_map — "
-                    "storing raw ID. Pipeline labels: %s",
+                    "leaving hubspot_deal_stage unchanged (no raw-ID fallback). "
+                    "Pipeline labels: %s",
                     stage_id, list((stage_label_map or {}).keys()),
                 )
-            if lead.hubspot_deal_stage != stage_label:
-                lead.hubspot_deal_stage = stage_label
-                updated_fields.append("hubspot_deal_stage")
+            else:
+                if lead.hubspot_deal_stage != stage_label:
+                    lead.hubspot_deal_stage = stage_label
+                    updated_fields.append("hubspot_deal_stage")
 
-            # Sync lead_status to match the HubSpot pipeline stage label
-            _HS_STAGE_TO_LEAD_STATUS = {
-                'Skip Trace': 'skip_trace',
-                'Awaiting Skip Trace': 'awaiting_skip_trace',
-                'Mailing, no contact made': 'mailing_no_contact_made',
-                'Mailing, contact made, no interest': 'mailing_contacted_no_interest',
-                'Mailing, contact made, interested': 'mailing_contacted_interested',
-                'Negotiating Remote': 'negotiating_remote',
-                'In Person Appointment': 'in_person_appointment',
-                'Offer Delivered': 'offer_delivered',
-                'Deprioritize': 'deprioritize',
-                'Deal Won': 'deal_won',
-                'Deal Lost': 'deal_lost',
-            }
-            new_lead_status = _HS_STAGE_TO_LEAD_STATUS.get(stage_label)
-            if new_lead_status and lead.lead_status != new_lead_status:
-                # Don't override suppressed/do_not_contact with a pipeline stage
-                if lead.lead_status not in ('suppressed', 'do_not_contact'):
-                    lead.lead_status = new_lead_status
-                    updated_fields.append("lead_status")
+                # Sync lead_status to match the HubSpot pipeline stage label
+                _HS_STAGE_TO_LEAD_STATUS = {
+                    'Skip Trace': 'skip_trace',
+                    'Awaiting Skip Trace': 'awaiting_skip_trace',
+                    'Mailing, no contact made': 'mailing_no_contact_made',
+                    'Mailing, contact made, no interest': 'mailing_contacted_no_interest',
+                    'Mailing, contact made, interested': 'mailing_contacted_interested',
+                    'Negotiating Remote': 'negotiating_remote',
+                    'In Person Appointment': 'in_person_appointment',
+                    'Offer Delivered': 'offer_delivered',
+                    'Deprioritize': 'deprioritize',
+                    'Deal Won': 'deal_won',
+                    'Deal Lost': 'deal_lost',
+                }
+                new_lead_status = _HS_STAGE_TO_LEAD_STATUS.get(stage_label)
+                if new_lead_status and lead.lead_status != new_lead_status:
+                    # Don't override suppressed/do_not_contact with a pipeline stage
+                    if lead.lead_status not in ('suppressed', 'do_not_contact'):
+                        lead.lead_status = new_lead_status
+                        updated_fields.append("lead_status")
 
         # Address fields — fill in nulls only
         field_map = {
