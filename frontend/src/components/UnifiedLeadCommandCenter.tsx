@@ -41,7 +41,7 @@ import {
   Tooltip,
 } from '@mui/material'
 import type { SelectChangeEvent } from '@mui/material'
-import { Link as RouterLink, useNavigate } from 'react-router-dom'
+import { Link as RouterLink, useNavigate, useSearchParams } from 'react-router-dom'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import HomeWorkIcon from '@mui/icons-material/HomeWork'
 import ApartmentIcon from '@mui/icons-material/Apartment'
@@ -321,6 +321,12 @@ function TasksPanel({ leadId, initialTasks, onTasksChanged }: TasksPanelProps) {
     setTasks(prev => [optimisticTask, ...prev])
   }
 
+  // Called when the create API call fails — roll back the optimistic placeholder
+  // (id=0) so a failed create doesn't leave a stale task in the list (Req 7.2).
+  const handleOptimisticTaskRevert = () => {
+    setTasks(prev => prev.filter(t => t.id !== 0))
+  }
+
   const handleTaskCompleted = async (taskId: number | string) => {
     const snapshot = tasksRef.current
     // Optimistic remove
@@ -348,6 +354,7 @@ function TasksPanel({ leadId, initialTasks, onTasksChanged }: TasksPanelProps) {
         onTaskCreated={handleTaskCreated}
         onTaskCompleted={handleTaskCompleted}
         onOptimisticTaskCreate={handleOptimisticTaskCreate}
+        onOptimisticTaskRevert={handleOptimisticTaskRevert}
       />
     </Paper>
   )
@@ -444,13 +451,45 @@ const outreachStatusLabel = (status: string): string =>
 // ── TabPanel ──────────────────────────────────────────────────────────────────
 // Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.6
 
+// Maps the `?tab=` deep-link query param (set by navigations such as the Needs
+// Review queue's "View Analysis" / "View Activity" actions) to a Tab_Panel
+// index. Tab order (Req 5.5): 0 Info · 1 Score · 2 Enrichment · 3 Marketing ·
+// 4 Analysis · 5 Contacts. The activity timeline is NOT a tab — it lives in the
+// always-visible ActivityPanel above the Tab_Panel — so `timeline` and any
+// unknown/absent value fall back to the default Info tab.
+const DEFAULT_TAB_INDEX = 0
+
+const TAB_PARAM_TO_INDEX: Record<string, number> = {
+  info: 0,
+  score: 1,
+  enrichment: 2,
+  marketing: 3,
+  analysis: 4,
+  contacts: 5,
+}
+
+export function tabParamToIndex(param: string | null | undefined): number {
+  if (!param) return DEFAULT_TAB_INDEX
+  const index = TAB_PARAM_TO_INDEX[param.toLowerCase()]
+  return index ?? DEFAULT_TAB_INDEX
+}
+
 interface TabPanelComponentProps {
   leadId: number
   leadData: PropertyDetail
 }
 
 function TabPanel({ leadId, leadData }: TabPanelComponentProps) {
-  const [activeTab, setActiveTab] = useState(0)
+  const [searchParams] = useSearchParams()
+  // Initialize the active tab from the ?tab= deep-link param on mount, then keep
+  // it in sync if the param changes (e.g. navigating between leads via queue
+  // actions). Manual tab clicks are preserved because they don't change the param.
+  const tabParam = searchParams.get('tab')
+  const [activeTab, setActiveTab] = useState(() => tabParamToIndex(tabParam))
+
+  useEffect(() => {
+    setActiveTab(tabParamToIndex(tabParam))
+  }, [tabParam])
 
   // Score tab data — only fetched when Score tab is active or pre-loaded
   const { data: scoreData } = useQuery<PropertyScoreResponse>({

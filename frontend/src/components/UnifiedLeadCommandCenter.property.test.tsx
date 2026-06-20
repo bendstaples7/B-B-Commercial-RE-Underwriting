@@ -208,12 +208,17 @@ const commandCenterPayloadArb = fc.record({
   lead_score: fc.integer({ min: 0, max: 100 }),
   lead_status: fc.string(), // use fc.constantFrom(...ALL_LEAD_STATUSES) when importable
   open_tasks: fc.array(taskArb, { maxLength: 20 }),
-  timeline: fc.record({
-    entries: fc.array(timelineEntryArb),
-    total: fc.nat(),
-    page: fc.constant(1),
-    per_page: fc.constant(20),
-  }),
+  // `total` must be >= entries.length, otherwise the generated pagination
+  // metadata is invalid (total < entries.length) and timeline tests flake.
+  // Generate the entries first, then derive a total constrained to >= length.
+  timeline: fc.array(timelineEntryArb).chain((entries) =>
+    fc.record({
+      entries: fc.constant(entries),
+      total: fc.integer({ min: entries.length }),
+      page: fc.constant(1),
+      per_page: fc.constant(20),
+    })
+  ),
   // Fields used by deriveQueueContext
   has_overdue_hubspot_task: fc.boolean(),
   overdue_task_title: fc.option(fc.string()),

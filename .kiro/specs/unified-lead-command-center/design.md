@@ -418,7 +418,17 @@ const commandCenterPayloadArb = fc.record({
   lead_status: fc.constantFrom(...ALL_LEAD_STATUSES),
   recommended_action: fc.record({ value: fc.option(fc.constantFrom(...CRM_ACTIONS)), label: fc.option(fc.string()), explanation: fc.option(fc.string()), signals: fc.constant({}) }),
   open_tasks: fc.array(taskArb, { maxLength: 20 }),
-  timeline: fc.record({ entries: fc.array(timelineEntryArb), total: fc.nat(), page: fc.constant(1), per_page: fc.constant(20) }),
+  // `total` must be >= the number of returned entries; using a bare fc.nat()
+  // can yield total < entries.length, which is invalid pagination metadata and
+  // makes timeline tests flaky. Generate entries first, then derive total.
+  timeline: fc.array(timelineEntryArb).chain(entries =>
+    fc.record({
+      entries: fc.constant(entries),
+      total: fc.integer({ min: entries.length }),
+      page: fc.constant(1),
+      per_page: fc.constant(20),
+    })
+  ),
   // ... other optional fields
 })
 

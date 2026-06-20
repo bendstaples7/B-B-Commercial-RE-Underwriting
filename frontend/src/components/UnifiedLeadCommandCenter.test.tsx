@@ -312,7 +312,54 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 2. Error state for invalid ID
+// 2. Tab deep-linking via ?tab= query param
+// ---------------------------------------------------------------------------
+
+function renderComponentAtSearch(search: string, leadId = 1) {
+  return render(
+    <MemoryRouter initialEntries={[`/leads/${leadId}${search}`]}>
+      <UnifiedLeadCommandCenter leadId={leadId} />
+    </MemoryRouter>
+  )
+}
+
+describe('UnifiedLeadCommandCenter — tab deep-linking', () => {
+  async function getTabs() {
+    await waitFor(() => {
+      expect(screen.getByTestId('tab-panel')).toBeInTheDocument()
+    })
+    return screen.getByTestId('tab-panel').querySelectorAll('[role="tab"]')
+  }
+
+  it('selects the Analysis tab when ?tab=analysis is present', async () => {
+    renderComponentAtSearch('?tab=analysis')
+    const tabs = await getTabs()
+    expect(tabs[4]).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('selects the Score tab when ?tab=score is present', async () => {
+    renderComponentAtSearch('?tab=score')
+    const tabs = await getTabs()
+    expect(tabs[1]).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('defaults to the Info tab when no tab param is present', async () => {
+    renderComponentAtSearch('')
+    const tabs = await getTabs()
+    expect(tabs[0]).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('falls back to the Info tab for an unknown tab param such as timeline', async () => {
+    // The activity timeline is not a tab (it lives in the always-visible
+    // ActivityPanel), so ?tab=timeline falls back to the default Info tab.
+    renderComponentAtSearch('?tab=timeline')
+    const tabs = await getTabs()
+    expect(tabs[0]).toHaveAttribute('aria-selected', 'true')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 3. Error state for invalid ID
 // ---------------------------------------------------------------------------
 
 describe('UnifiedLeadCommandCenter — invalid ID error state', () => {

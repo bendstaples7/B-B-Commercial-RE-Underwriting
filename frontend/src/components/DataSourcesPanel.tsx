@@ -597,8 +597,13 @@ export function HubSpotSourceCard({ source }: { source: HubSpotSourceStatus }) {
  * - API source URL
  */
 export function GISConnectorCard({ source }: { source: GISConnectorStatus }) {
-  const matchPct = source.total_count > 0
+  const rawMatchPct = source.total_count > 0
     ? Math.round((source.matched_count / source.total_count) * 100)
+    : 0
+  // Clamp to [0, 100] and guard NaN/undefined → 0 so the bar and label never
+  // exceed 100% even if matched_count > total_count in the source data.
+  const matchPct = Number.isFinite(rawMatchPct)
+    ? Math.min(100, Math.max(0, rawMatchPct))
     : 0
 
   return (

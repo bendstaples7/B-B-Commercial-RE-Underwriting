@@ -93,8 +93,8 @@ This feature consolidates the two views into a single **Unified Lead Command Cen
 5. THE Unified_Command_Center SHALL display a Tab_Panel with the following tabs in order: Info, Score, Enrichment, Marketing, Analysis, and Contacts.
 6. THE Unified_Command_Center SHALL display a Property_Sidebar that is sticky and remains visible while the agent scrolls through main content.
 7. THE Unified_Command_Center SHALL display a Tasks panel showing all open tasks for the lead, allowing the agent to add new tasks and mark existing tasks as complete.
-8. WHILE the lead data is loading, THE Unified_Command_Center SHALL display a loading indicator and SHALL NOT render any lead data panels; THE Unified_Command_Center SHALL dismiss the loading indicator only after all data panels have rendered their received data and no panel is in a pending state.
-9. IF the lead data fetch fails, THEN THE Unified_Command_Center SHALL display an error message indicating the nature of the failure and a link to return to `/properties`.
+8. WHILE every lead data source is still pending, THE Unified_Command_Center SHALL display a loading indicator and SHALL NOT render partially loaded lead data panels; as each independent data source (command center data and property detail data) resolves or fails, THE Unified_Command_Center SHALL dismiss the loading indicator once no data source remains pending, so that a single failed or slow source never holds the loading indicator open indefinitely.
+9. IF an individual lead data source fails while at least one other source succeeds, THEN THE Unified_Command_Center SHALL render the panels for the source(s) that loaded and SHALL display a per-source error indicator for the failed source; IF every lead data source fails, THEN THE Unified_Command_Center SHALL display an error message indicating the nature of the failure and a link to return to `/properties`.
 
 ---
 
@@ -187,7 +187,7 @@ This feature consolidates the two views into a single **Unified Lead Command Cen
 1. THE Unified_Command_Center SHALL fetch command center data from the `/api/leads/:id/command-center` endpoint once per mount and share the result across the Activity_Panel, Tasks panel, and Property_Sidebar.
 2. THE Unified_Command_Center SHALL fetch full property detail data from the `/api/leads/:id` endpoint once per mount and share the result across all Tab_Panel tabs.
 3. WHEN command center data or property detail data is already in the React Query cache and is not stale, THE Unified_Command_Center SHALL use the cached data without issuing a new network request.
-4. WHEN a task is completed or a status is changed, THE Unified_Command_Center SHALL invalidate the `commandCenter` query key so the next mount or explicit refresh fetches fresh data.
+4. WHEN a task is completed or a status is changed, THE Unified_Command_Center SHALL invalidate both the `commandCenter` query key and the property-detail (`lead`) query key that powers the Tab_Panel tabs, so that the next mount or explicit refresh fetches fresh data for the Activity_Panel, Tasks panel, Property_Sidebar, AND all Tab_Panel tabs (consistent with Requirement 6, Criterion 4).
 
 ---
 
