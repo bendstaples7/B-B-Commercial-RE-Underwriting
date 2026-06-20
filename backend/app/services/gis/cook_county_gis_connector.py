@@ -322,10 +322,14 @@ class CookCountyGISConnector(GISConnector):
         """
         if not pin or not str(pin).strip():
             return None
-        chars = _fetch_improvement_chars(pin, self._improvement_chars_url)
+        # Use the normalized (whitespace-stripped) PIN for the actual lookup —
+        # validating with .strip() but querying with the raw padded value would
+        # make a padded-but-valid PIN miss.
+        normalized_pin = str(pin).strip()
+        chars = _fetch_improvement_chars(normalized_pin, self._improvement_chars_url)
         if not chars:
             return None
-        return _build_parcel(pin, chars)
+        return _build_parcel(normalized_pin, chars)
 
 
 # ---------------------------------------------------------------------------

@@ -33,6 +33,7 @@ from typing import Optional
 import requests
 
 from .base import GISConnector, GISConnectorRegistry, GISParcel
+from .utils import escape_like as _escape_like
 
 logger = logging.getLogger(__name__)
 
@@ -82,21 +83,6 @@ def _normalise_address(address: str) -> str:
     )
     street_part = re.sub(r'\s+(\d+[A-Z\-]*|\d+(ST|ND|RD|TH))$', '', street_part)
     return street_part.strip()
-
-
-def _escape_like(value: str) -> str:
-    """Escape SQL ``LIKE`` wildcards so user input is matched literally.
-
-    Escapes the escape character first, then the ``%`` and ``_`` wildcards,
-    using backslash as the escape char. Must be paired with an explicit
-    ``ESCAPE '\\'`` clause in the query so ``%`` / ``_`` in an address can't
-    act as wildcards (wrong matches) and a stray ``\\`` can't break the clause.
-    """
-    return (
-        value.replace('\\', '\\\\')
-             .replace('%', '\\%')
-             .replace('_', '\\_')
-    )
 
 
 def _map_attributes(attrs: dict) -> GISParcel:

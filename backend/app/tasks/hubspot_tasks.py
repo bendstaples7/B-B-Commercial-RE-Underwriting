@@ -58,7 +58,13 @@ def _fetch_deal_contact_associations_with_retry(
     transient = (HubSpotRateLimitError, ExternalServiceError)
     for attempt in range(1, max_attempts + 1):
         try:
-            assoc_map = client.fetch_deal_contact_associations([deal_id])
+            # allow_partial=False so a transient failure on this single-deal
+            # batch is RAISED into the backoff loop below instead of being
+            # swallowed by the client and returned as an empty/partial result —
+            # otherwise the retry never actually retries.
+            assoc_map = client.fetch_deal_contact_associations(
+                [deal_id], allow_partial=False
+            )
             return assoc_map.get(deal_id, [])
         except transient as exc:
             if attempt >= max_attempts:
@@ -69,7 +75,13 @@ def _fetch_deal_contact_associations_with_retry(
                 return []
             payload = getattr(exc, 'payload', None) or {}
             retry_after = payload.get('retry_after')
-            delay = float(retry_after) if retry_after else base_delay * (2 ** (attempt - 1))
+            # Honour an explicit Retry-After even when it is 0 — `if retry_after`
+            # would treat a legitimate zero-second delay as "missing" and fall
+            # back to exponential backoff.
+            delay = (
+                float(retry_after) if retry_after is not None
+                else base_delay * (2 ** (attempt - 1))
+            )
             logger.warning(
                 "v4 deal->contact association fetch for deal %s failed "
                 "(attempt %d/%d), retrying in %.1fs: %s",

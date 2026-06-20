@@ -377,9 +377,10 @@ class HubSpotActivityConverterService:
         """Extract body text from an EMAIL engagement's metadata.
 
         HubSpot EMAIL engagements store content in metadata.text (plaintext) and
-        metadata.html — NOT metadata.body (which NOTE/CALL use). Prefer the
-        plaintext 'text'; if absent/empty, fall back to 'html' with tags stripped
-        to plain text; final fallback to ''.
+        metadata.html — NOT metadata.body (which NOTE/CALL use). Order of
+        preference: plaintext 'text'; then 'html' with tags stripped to plain
+        text; then 'bodyPreview' (older/partial payloads expose only this);
+        final fallback to ''.
         """
         metadata = metadata or {}
         text = metadata.get('text')
@@ -388,6 +389,9 @@ class HubSpotActivityConverterService:
         html = metadata.get('html')
         if html:
             return _strip_html_tags(html)
+        preview = metadata.get('bodyPreview')
+        if preview:
+            return preview
         return ''
 
     @staticmethod

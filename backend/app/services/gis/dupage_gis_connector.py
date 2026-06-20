@@ -28,6 +28,7 @@ from typing import Optional
 import requests
 
 from .base import GISConnector, GISConnectorRegistry, GISParcel
+from .utils import escape_like as _escape_like
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +206,9 @@ class DuPageGISConnector(GISConnector):
         # ('%%') would match every parcel. Report no match instead of querying.
         if not street_part:
             return None
-        safe = street_part.replace("'", "''").replace("%", r"\%").replace("_", r"\_")
+        # Escape LIKE wildcards (and the escape char) via the shared helper,
+        # then double single quotes; the surrounding %...% are our wildcards.
+        safe = _escape_like(street_part).replace("'", "''")
         where_clause = f"UPPER(PROPADDRL1) LIKE '%{safe}%' ESCAPE '\\'"
         return self._query_endpoint(where_clause)
 

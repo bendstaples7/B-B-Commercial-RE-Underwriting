@@ -810,6 +810,42 @@ class TestBug3bEmailEngagement:
                 f"Expected HTML tags to be stripped from the body, got '{html_result.body}'"
             )
 
+            # bodyPreview-only payload (older/partial EMAIL export): neither
+            # 'text' nor 'html' is present, so the body must fall back to
+            # metadata.bodyPreview rather than coming back empty.
+            preview_only_engagement = HubSpotEngagement(
+                hubspot_id="eng_602",
+                engagement_type="EMAIL",
+                raw_payload={
+                    "engagement": {
+                        "id": 602,
+                        "type": "EMAIL",
+                        "createdAt": 1700000002000,
+                    },
+                    "metadata": {
+                        "bodyPreview": "Following up on our chat about 2553 N Drake.",
+                        "subject": "Re: Property Inquiry",
+                    },
+                    "associations": {
+                        "dealIds": ["deal_400"],
+                        "contactIds": [],
+                        "companyIds": [],
+                    },
+                },
+            )
+            db.session.add(preview_only_engagement)
+            db.session.commit()
+
+            preview_result = converter.convert_engagement(preview_only_engagement)
+            assert preview_result is not None, (
+                "Expected an Interaction for a bodyPreview-only EMAIL engagement"
+            )
+            assert preview_result.body == "Following up on our chat about 2553 N Drake.", (
+                f"Expected EMAIL body to fall back to metadata.bodyPreview but got "
+                f"'{preview_result.body}'. bodyPreview is the final fallback for "
+                f"older/partial EMAIL payloads with no text/html."
+            )
+
 
 # ===========================================================================
 # Preservation Tests — Property 2

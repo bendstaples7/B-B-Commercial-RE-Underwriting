@@ -1535,6 +1535,8 @@ def backfill_property_matches_task(self):
             processed = 0
             last_id = 0
             capped = False
+            failed_pages = 0     # pages whose commit failed and were rolled back
+            rolled_back = 0      # leads whose persisted result was discarded
 
             while not capped:
                 batch = (
@@ -1551,6 +1553,15 @@ def backfill_property_matches_task(self):
                 )
                 if not batch:
                     break  # swept the whole unmatched set — terminate
+
+                # Per-page tallies of the outcomes we optimistically counted as
+                # successful. They are only promoted into the run totals once the
+                # page commit succeeds; if the commit is rolled back they are
+                # backed out so a flushed-but-not-committed page can't be reported
+                # as matched/updated (which would hide the data loss).
+                page_first_id = last_id
+                page_matched = 0
+                page_no_match = 0
 
                 for lead in batch:
                     last_id = lead.id          # advance cursor past every lead we touch
@@ -1570,8 +1581,10 @@ def backfill_property_matches_task(self):
                             errors += 1
                         elif outcome.get('match_found'):
                             matched += 1
+                            page_matched += 1
                         else:
                             no_match += 1
+                            page_no_match += 1
                     except Exception as lead_exc:
                         errors += 1
                         _logger.warning(
@@ -1590,10 +1603,23 @@ def backfill_property_matches_task(self):
                     db.session.commit()
                 except Exception as commit_exc:
                     db.session.rollback()
+                    # The rollback discarded every write this page made, so the
+                    # leads we just counted as matched/no-match were NOT actually
+                    # persisted. Back them out of the totals and reclassify the
+                    # page as failed — otherwise the task reports rolled-back
+                    # leads as successfully matched/updated and hides the loss.
+                    page_lost = page_matched + page_no_match
+                    matched -= page_matched
+                    no_match -= page_no_match
+                    errors += page_lost
+                    rolled_back += page_lost
+                    failed_pages += 1
                     _logger.error(
-                        "gis.backfill_property_matches: page commit failed "
-                        "(ending id=%s), rolled back page: %s",
-                        last_id, commit_exc,
+                        "gis.backfill_property_matches: page commit FAILED for "
+                        "leads id %s..%s — rolled back %d lead result(s) "
+                        "(%d matched, %d no-match) now counted as errors: %s",
+                        page_first_id, last_id, page_lost, page_matched,
+                        page_no_match, commit_exc,
                     )
 
             if processed == 0:
@@ -1604,19 +1630,30 @@ def backfill_property_matches_task(self):
                     "%d; remaining unmatched leads will be swept on the next run",
                     MAX_GIS_LOOKUPS_PER_RUN,
                 )
+            if failed_pages:
+                _logger.error(
+                    "gis.backfill_property_matches: %d page(s) failed to commit "
+                    "and were rolled back, discarding %d lead result(s); these are "
+                    "reported as errors and will be retried on the next run",
+                    failed_pages, rolled_back,
+                )
             _logger.info(
                 "gis.backfill_property_matches: %d matched, %d no-match, %d errors, "
-                "%d no-connector (processed=%d, capped=%s)",
+                "%d no-connector (processed=%d, capped=%s, failed_pages=%d, "
+                "rolled_back=%d)",
                 matched, no_match, errors, no_connector, processed, capped,
+                failed_pages, rolled_back,
             )
             return {
-                'status': 'completed',
+                'status': 'completed' if failed_pages == 0 else 'partial',
                 'matched': matched,
                 'no_match': no_match,
                 'errors': errors,
                 'no_connector': no_connector,
                 'processed': processed,
                 'capped': capped,
+                'failed_pages': failed_pages,
+                'rolled_back': rolled_back,
             }
 
     except Exception as exc:

@@ -175,6 +175,25 @@ _CREATE_OR_REPLACE = re.compile(
     r'\bCREATE\s+OR\s+REPLACE\s+(VIEW|FUNCTION|PROCEDURE)\b', re.IGNORECASE
 )
 
+# Object-creating DDL whose proper reversal is a DROP ... IF EXISTS. Req 8.6's
+# "downgrade must DROP ... IF EXISTS" requirement only applies when an upgrade
+# creates one of these objects. A pure data migration (UPDATE/INSERT/DELETE) or
+# an in-place change (ALTER COLUMN) creates nothing to drop, so requiring a
+# DROP-based downgrade for it would be a false positive — its valid reversal is
+# more data DML, not a DROP.
+# NOTE: "CREATE OR REPLACE VIEW/FUNCTION/PROCEDURE" is deliberately NOT matched
+# here (the object keyword does not immediately follow CREATE) — those are
+# reversed via CREATE OR REPLACE and handled by _CREATE_OR_REPLACE above.
+_CREATES_DROPPABLE_OBJECT = re.compile(
+    r'\bCREATE\s+(?:UNIQUE\s+)?'
+    r'(?:TABLE|INDEX|TYPE|SEQUENCE|MATERIALIZED\s+VIEW|VIEW|SCHEMA|EXTENSION|'
+    r'TRIGGER|DOMAIN)\b'
+    r'|\bADD\s+(?:COLUMN|CONSTRAINT)\b'
+    r'|\bop\.create_\w+\s*\('
+    r'|\bop\.add_column\s*\(',
+    re.IGNORECASE,
+)
+
 
 def _extract_revision_id(text: str) -> str | None:
     """Extract the revision identifier string from migration file text."""
@@ -276,6 +295,16 @@ def _check_downgrade_drop_if_exists(lines: list[str]) -> list[tuple[int, str, st
 
     downgrade_body = '\n'.join(downgrade_lines)
 
+    # Strip full-line Python comments before testing for a real reversal.
+    # The DROP ... IF EXISTS / CREATE OR REPLACE checks run on function text, so
+    # a bare comment such as "# CREATE OR REPLACE VIEW ..." or
+    # "# DROP TABLE IF EXISTS ..." inside downgrade() would otherwise satisfy the
+    # check even though no executable statement reverses the upgrade — a silent
+    # CI-gate false negative (Req 8.6). Only match against executable lines.
+    downgrade_body_executable = '\n'.join(
+        l for l in downgrade_lines if not l.lstrip().startswith('#')
+    )
+
     # A downgrade that is only "pass" or empty is non-compliant unless the
     # upgrade itself is also a no-op (only comments/pass/empty).
     # Check whether the upgrade body performs any actual schema operations.
@@ -298,7 +327,20 @@ def _check_downgrade_drop_if_exists(lines: list[str]) -> list[tuple[int, str, st
     if upgrade_is_noop:
         return issues  # No-op upgrade — no DROP IF EXISTS requirement
 
-    if not _DROP_IF_EXISTS.search(downgrade_body) and not _CREATE_OR_REPLACE.search(downgrade_body):
+    # Req 8.6's "downgrade must DROP ... IF EXISTS" requirement only applies when
+    # the upgrade actually creates a droppable schema object (table/index/type/
+    # column/sequence/view/...). A pure data migration (UPDATE/INSERT/DELETE) or
+    # an in-place ALTER creates nothing to drop, so demanding a DROP-based
+    # downgrade would be a false positive — its valid reversal is more DML.
+    # Match executable lines only so a commented-out CREATE can't switch the
+    # requirement back on.
+    upgrade_body_executable = '\n'.join(
+        l for l in upgrade_lines if not l.lstrip().startswith('#')
+    )
+    if not _CREATES_DROPPABLE_OBJECT.search(upgrade_body_executable):
+        return issues  # Data-only / in-place upgrade — DROP IF EXISTS not applicable
+
+    if not _DROP_IF_EXISTS.search(downgrade_body_executable) and not _CREATE_OR_REPLACE.search(downgrade_body_executable):
         issues.append((
             1, 'ERROR',
             "upgrade() performs schema changes but downgrade() contains no "

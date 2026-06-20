@@ -75,16 +75,14 @@ def _serialize_task(task):
     return data
 
 
-def _refresh_associated_leads(task):
-    """Refresh lead_score + recommended_action for every lead this task touches.
+def _collect_task_lead_ids(task):
+    """Collect the set of lead ids a task touches.
 
-    A Task may be linked to a lead via its direct ``lead_id`` FK and/or via
-    ``TaskAssociation`` rows with ``target_type='lead'``. Open-task count feeds
-    the action engine, so creating/updating/completing a task must refresh the
-    affected lead(s). Uses the error-isolated ``refresh_lead_scoring`` helper.
+    A Task may reference a lead via its direct ``lead_id`` FK and/or via
+    ``TaskAssociation`` rows with ``target_type='lead'``. Association loading is
+    best-effort: a failure to enumerate associations is logged and ignored so a
+    transient association-load error never blocks the caller.
     """
-    from app.services.lead_refresh import refresh_lead_scoring
-
     lead_ids = set()
     direct = getattr(task, 'lead_id', None)
     if direct is not None:
@@ -95,8 +93,20 @@ def _refresh_associated_leads(task):
                 lead_ids.add(assoc.target_id)
     except Exception:  # pragma: no cover — association load is best-effort
         logger.debug("Could not enumerate task associations for refresh", exc_info=True)
+    return lead_ids
 
-    for lead_id in lead_ids:
+
+def _refresh_associated_leads(task):
+    """Refresh lead_score + recommended_action for every lead this task touches.
+
+    A Task may be linked to a lead via its direct ``lead_id`` FK and/or via
+    ``TaskAssociation`` rows with ``target_type='lead'``. Open-task count feeds
+    the action engine, so creating/updating/completing a task must refresh the
+    affected lead(s). Uses the error-isolated ``refresh_lead_scoring`` helper.
+    """
+    from app.services.lead_refresh import refresh_lead_scoring
+
+    for lead_id in _collect_task_lead_ids(task):
         refresh_lead_scoring(lead_id)
 
 
@@ -244,16 +254,7 @@ def delete_task(task_id):
     """
     task = _service.get(task_id)
 
-    affected_lead_ids = set()
-    direct = getattr(task, 'lead_id', None)
-    if direct is not None:
-        affected_lead_ids.add(direct)
-    try:
-        for assoc in task.associations.all():
-            if assoc.target_type == 'lead' and assoc.target_id is not None:
-                affected_lead_ids.add(assoc.target_id)
-    except Exception:  # pragma: no cover — association load is best-effort
-        logger.debug("Could not enumerate task associations for refresh", exc_info=True)
+    affected_lead_ids = _collect_task_lead_ids(task)
 
     _service.delete(task_id)
 
