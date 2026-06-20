@@ -1923,8 +1923,22 @@ class HubSpotSourceStatusSchema(Schema):
     connected = fields.Bool(required=True)
 
 
+class GISConnectorStatusSchema(Schema):
+    name = fields.Str(required=True)
+    market = fields.Str(required=True)
+    counties = fields.List(fields.Str(), required=True)
+    source_type = fields.Str(required=True)
+    refresh_type = fields.Str(required=True)
+    is_active = fields.Bool(required=True)
+    matched_count = fields.Int(required=True)
+    unmatched_count = fields.Int(required=True)
+    total_count = fields.Int(required=True)
+    api_url = fields.Str(required=True)
+
+
 class DataSourceStatusSchema(Schema):
     socrata_datasets = fields.List(fields.Nested(SocrataDatasetStatusSchema), required=True)
     enrichment_sources = fields.List(fields.Nested(EnrichmentSourceStatusSchema), required=True)
     import_source = fields.Nested(ImportSourceStatusSchema, required=True)
     hubspot_source = fields.Nested(HubSpotSourceStatusSchema, required=True)
+    gis_connectors = fields.List(fields.Nested(GISConnectorStatusSchema), required=True)

@@ -48,6 +48,16 @@ def _run_pipeline_after_imports(app, run_ids: list) -> None:
             terminal = {'success', 'partial', 'failed'}
 
             while elapsed < max_wait:
+                # Re-read import-run status from the database on every poll.
+                # The import tasks update `status` and commit in a SEPARATE
+                # session/process; without ending this read transaction and
+                # expiring the identity-map cache, the polling session keeps
+                # returning the STALE status from its first query, so the loop
+                # never observes completion and spins until `max_wait`. Ending
+                # the transaction (rollback) starts a fresh snapshot and
+                # expiring the identity map forces a reload on the next query.
+                db.session.rollback()
+                db.session.expire_all()
                 runs = HubSpotImportRun.query.filter(
                     HubSpotImportRun.id.in_(run_ids)
                 ).all()

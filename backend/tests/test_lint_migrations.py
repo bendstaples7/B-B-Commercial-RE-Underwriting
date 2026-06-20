@@ -283,6 +283,96 @@ class TestReq86DowngradeDropIfExists:
                             if sev == 'ERROR' and 'downgrade' in msg.lower()]
         assert not downgrade_errors, "Legacy revision must not be flagged for downgrade rule"
 
+    def test_create_or_replace_view_downgrade_compliant(self, tmp_path):
+        """A view migration whose upgrade and downgrade both use
+        CREATE OR REPLACE VIEW is self-reversing and must NOT be flagged for
+        missing DROP ... IF EXISTS (regression for migration c5d6e7f8a9b0)."""
+        upgrade = (
+            'op.execute("""\n'
+            '    CREATE OR REPLACE VIEW lead_crm_flags AS\n'
+            '    SELECT l.id AS lead_id, l.has_property_match AS has_property_match_computed\n'
+            '    FROM leads l\n'
+            '""")'
+        )
+        downgrade = (
+            'op.execute("""\n'
+            '    CREATE OR REPLACE VIEW lead_crm_flags AS\n'
+            '    SELECT l.id AS lead_id, FALSE AS has_property_match_computed\n'
+            '    FROM leads l\n'
+            '""")'
+        )
+        content = new_migration(upgrade, downgrade)
+        issues = lint_content(content, tmp_path)
+        assert not errors_with(issues, 'DROP'), (
+            "CREATE OR REPLACE VIEW downgrade must not be flagged for missing "
+            f"DROP ... IF EXISTS, got: {issues}"
+        )
+        error_issues = [(ln, msg) for ln, sev, msg in issues if sev == 'ERROR']
+        assert not error_issues, (
+            f"Self-reversing CREATE OR REPLACE VIEW migration should have no "
+            f"errors, got: {error_issues}"
+        )
+
+    def test_create_or_replace_function_downgrade_compliant(self, tmp_path):
+        """CREATE OR REPLACE FUNCTION downgrade is also a valid reversal."""
+        upgrade = (
+            'op.execute("""\n'
+            '    CREATE OR REPLACE FUNCTION bump() RETURNS int AS $$ BEGIN RETURN 2; END; $$ LANGUAGE plpgsql\n'
+            '""")'
+        )
+        downgrade = (
+            'op.execute("""\n'
+            '    CREATE OR REPLACE FUNCTION bump() RETURNS int AS $$ BEGIN RETURN 1; END; $$ LANGUAGE plpgsql\n'
+            '""")'
+        )
+        content = new_migration(upgrade, downgrade)
+        issues = lint_content(content, tmp_path)
+        assert not errors_with(issues, 'DROP'), (
+            f"CREATE OR REPLACE FUNCTION downgrade must not be flagged, got: {issues}"
+        )
+
+    def test_comment_only_create_or_replace_downgrade_still_flagged(self, tmp_path):
+        """A downgrade() whose only 'reversal' is a Python COMMENT (no executable
+        statement) must still be flagged.
+
+        The DROP ... IF EXISTS / CREATE OR REPLACE exemptions run on function
+        text, so a bare ``# CREATE OR REPLACE VIEW ...`` (or ``# DROP ... IF
+        EXISTS``) comment could otherwise satisfy the check and suppress the
+        error even though nothing actually reverses the upgrade — a silent
+        CI-gate false negative (Req 8.6). Full-line comments must be ignored.
+        """
+        content = new_migration(
+            upgrade_body='op.execute("CREATE TABLE IF NOT EXISTS t (id SERIAL PRIMARY KEY)")',
+            downgrade_body=(
+                '# CREATE OR REPLACE VIEW some_view AS SELECT 1 -- not real\n'
+                '# DROP TABLE IF EXISTS t  -- also just a comment\n'
+                'pass'
+            ),
+        )
+        issues = lint_content(content, tmp_path)
+        drop_errors = [msg for _, sev, msg in issues if sev == 'ERROR' and 'DROP' in msg]
+        assert drop_errors, (
+            "A downgrade() whose only CREATE OR REPLACE / DROP IF EXISTS text is "
+            "inside Python comments must still be flagged as missing a real "
+            f"reversal, got: {issues}"
+        )
+
+    def test_data_only_migration_not_required_to_drop(self, tmp_path):
+        """A data-only migration (UPDATE/INSERT/DELETE, no object creation) has
+        nothing to DROP, so its downgrade is not required to contain
+        DROP ... IF EXISTS — demanding one would be a false positive. Its valid
+        reversal is more DML (regression guard for backfill migrations such as
+        b4c5d6e7f8a9_backfill_property_type_from_units)."""
+        upgrade = "op.execute(\"UPDATE leads SET property_type = 'duplex' WHERE units = 2\")"
+        downgrade = "op.execute(\"UPDATE leads SET property_type = NULL WHERE units = 2\")"
+        content = new_migration(upgrade_body=upgrade, downgrade_body=downgrade)
+        issues = lint_content(content, tmp_path)
+        error_issues = [(ln, msg) for ln, sev, msg in issues if sev == 'ERROR']
+        assert not error_issues, (
+            f"Data-only migration with a DML reversal should have no errors, "
+            f"got: {error_issues}"
+        )
+
 
 # ===========================================================================
 # Existing rules still work (regression tests)

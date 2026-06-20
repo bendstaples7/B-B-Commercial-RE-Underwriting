@@ -54,6 +54,10 @@ _KNOWN_REVISIONS = frozenset({
     'a3b4c5d6e7f8',
     # Backfill property_type from units + clear stale analyze_property actions
     'b4c5d6e7f8a9',
+    # Update lead_crm_flags view: include GIS has_property_match in computed flag
+    'c5d6e7f8a9b0',
+    # HubSpot signal dedup uniqueness index (lead_id, signal_type, source_engagement_id)
+    'd6e7f8a9b0c1',
 })
 
 

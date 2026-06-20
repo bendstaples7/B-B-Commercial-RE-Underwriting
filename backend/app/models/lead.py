@@ -2,7 +2,7 @@
 from app import db
 from datetime import datetime, date
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy import TypeDecorator, JSON as SaJSON
+from sqlalchemy import TypeDecorator, JSON as SaJSON, event, select, or_
 
 
 class _JSONBCompatible(TypeDecorator):
@@ -206,3 +206,109 @@ class LeadAuditTrail(db.Model):
 
     def __repr__(self):
         return f'<LeadAuditTrail lead_id={self.lead_id} field={self.field_name}>'
+
+
+# ---------------------------------------------------------------------------
+# Delete-time cleanup hook — prevent orphaned HubSpot references on lead delete
+# ---------------------------------------------------------------------------
+#
+# WHY A HOOK AND NOT A FOREIGN KEY:
+#   HubSpotMatch.internal_record_id, InteractionAssociation.target_id, and
+#   TaskAssociation.target_id are POLYMORPHIC — each is paired with a *_type
+#   discriminator column ('lead' vs 'organization'/'contact'), so a single id
+#   column may reference a lead OR a different entity. A SQL foreign key (and
+#   therefore ON DELETE CASCADE) can only target one parent table, so it cannot
+#   be used here. A SQLAlchemy ``before_delete`` mapper event is the right
+#   mechanism for the application's own ORM deletes.
+#
+# SCOPE / LIMITATION:
+#   This listener fires only for ORM-level deletes that load the instance and
+#   call ``session.delete(lead)`` (the path the app's own code uses). It does
+#   NOT fire for bulk ``Query.delete()`` (e.g. ``Lead.query.filter(...).delete()``)
+#   or raw SQL deletes, both of which bypass the unit-of-work and never emit
+#   per-instance mapper events. The Bug 4 / Bug 5 sync-time healing in
+#   ``run_hubspot_matching`` / ``run_convert_hubspot_activities`` remains the
+#   catch-all safety net for those bulk/SQL/manual deletions.
+#
+# IMPLEMENTATION NOTE:
+#   We are mid-flush inside this event, so we MUST issue Core statements through
+#   the ``connection`` argument against the models' ``__table__`` constructs —
+#   NOT ORM session operations (which would re-enter the flush) and NOT
+#   hardcoded table-name strings (real table/column names are resolved from the
+#   model metadata so a future rename can't silently break this). Booleans are
+#   set via Core ``.values(is_orphaned=True)`` so the literal renders correctly
+#   on both SQLite (1) and PostgreSQL (TRUE).
+@event.listens_for(Property, 'before_delete')
+def _cleanup_hubspot_refs_before_lead_delete(mapper, connection, target):
+    """Reset/strip HubSpot references that polymorphically point at this lead."""
+    lead_id = target.id
+    if lead_id is None:
+        return
+
+    # Imported lazily so this module carries no import-time dependency on the
+    # HubSpot/activity models and so the real table/column metadata is resolved
+    # at delete time.
+    from app.models.hubspot_match import HubSpotMatch
+    from app.models.interaction import Interaction
+    from app.models.interaction_association import InteractionAssociation
+    from app.models.task_association import TaskAssociation
+
+    hubspot_matches = HubSpotMatch.__table__
+    interactions = Interaction.__table__
+    interaction_assocs = InteractionAssociation.__table__
+    task_assocs = TaskAssociation.__table__
+
+    # 1. Reset this lead's HubSpot matches so they re-match on the next sync.
+    #    Confirmed and pending matches are reset to 'pending' with a NULL
+    #    internal_record_id; 'rejected' matches are deliberately left untouched
+    #    to preserve reviewer decisions.
+    connection.execute(
+        hubspot_matches.update()
+        .where(hubspot_matches.c.internal_record_type == 'lead')
+        .where(hubspot_matches.c.internal_record_id == lead_id)
+        .where(hubspot_matches.c.status.in_(['confirmed', 'pending']))
+        .values(status='pending', internal_record_id=None)
+    )
+
+    # 2. Mark interactions associated with this lead as orphaned, THEN drop the
+    #    dangling associations. The UPDATE must run first — once the associations
+    #    are deleted the subquery would match nothing. The interaction rows
+    #    themselves are preserved (only re-flagged + de-associated).
+    #
+    #    Bug 5/7: an interaction is only orphaned when THIS lead is its *last*
+    #    remaining association. An interaction that is also associated with
+    #    another lead/entity stays linked (is_orphaned must NOT be set), so it
+    #    keeps surfacing on its other association(s).
+    affected_interaction_ids = (
+        select(interaction_assocs.c.interaction_id)
+        .where(interaction_assocs.c.target_type == 'lead')
+        .where(interaction_assocs.c.target_id == lead_id)
+    )
+    # Interactions that retain at least one OTHER association (a different lead,
+    # or any non-lead target) must NOT be orphaned.
+    still_linked_interaction_ids = (
+        select(interaction_assocs.c.interaction_id)
+        .where(or_(
+            interaction_assocs.c.target_type != 'lead',
+            interaction_assocs.c.target_id != lead_id,
+        ))
+    )
+    connection.execute(
+        interactions.update()
+        .where(interactions.c.id.in_(affected_interaction_ids))
+        .where(interactions.c.id.notin_(still_linked_interaction_ids))
+        .values(is_orphaned=True)
+    )
+    connection.execute(
+        interaction_assocs.delete()
+        .where(interaction_assocs.c.target_type == 'lead')
+        .where(interaction_assocs.c.target_id == lead_id)
+    )
+
+    # 3. Drop dangling task associations for this lead. The Task rows themselves
+    #    remain — only the lead-pointing associations are removed.
+    connection.execute(
+        task_assocs.delete()
+        .where(task_assocs.c.target_type == 'lead')
+        .where(task_assocs.c.target_id == lead_id)
+    )

@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@/test/testUtils'
 import * as fc from 'fast-check'
-import DataSourcesPanel, { StatusSummaryBanner } from './DataSourcesPanel'
+import DataSourcesPanel, { StatusSummaryBanner, GISConnectorCard } from './DataSourcesPanel'
 import { dataSourcesService } from '@/services/api'
 import type {
   DataSourceStatus,
@@ -18,6 +18,7 @@ import type {
   EnrichmentSourceStatus,
   ImportSourceStatus,
   HubSpotSourceStatus,
+  GISConnectorStatus,
 } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -95,6 +96,7 @@ function makeStatus(overrides: Partial<DataSourceStatus> = {}): DataSourceStatus
     enrichment_sources: [makeEnrichmentSource()],
     import_source: makeImportSource(),
     hubspot_source: makeHubSpotSource(),
+    gis_connectors: [],
     ...overrides,
   }
 }
@@ -343,6 +345,7 @@ describe('StatusSummaryBanner — Property 3: green iff ALL sources healthy', ()
             enrichment_sources: enrichmentSources,
             import_source: makeImportSource(),
             hubspot_source: makeHubSpotSource(),
+            gis_connectors: [],
           }
 
           const { container } = render(<StatusSummaryBanner data={data} />)
@@ -361,5 +364,42 @@ describe('StatusSummaryBanner — Property 3: green iff ALL sources healthy', ()
         }
       )
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GISConnectorCard — match coverage clamped to [0, 100]
+// ---------------------------------------------------------------------------
+
+function makeGISConnector(overrides: Partial<GISConnectorStatus> = {}): GISConnectorStatus {
+  return {
+    name: 'DuPage County GIS',
+    market: 'dupage_il',
+    counties: ['DuPage'],
+    source_type: 'gis',
+    refresh_type: 'automatic',
+    is_active: true,
+    matched_count: 50,
+    unmatched_count: 50,
+    total_count: 100,
+    api_url: 'https://example.com/gis',
+    ...overrides,
+  }
+}
+
+describe('GISConnectorCard — coverage clamp', () => {
+  it('renders the normal percentage when counts are within range', () => {
+    render(<GISConnectorCard source={makeGISConnector({ matched_count: 40, total_count: 100 })} />)
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '40')
+  })
+
+  it('clamps match coverage to 100% when matched_count exceeds total_count', () => {
+    render(<GISConnectorCard source={makeGISConnector({ matched_count: 150, total_count: 100 })} />)
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100')
+  })
+
+  it('shows a clamped 100% label rather than an out-of-range value', () => {
+    render(<GISConnectorCard source={makeGISConnector({ matched_count: 150, total_count: 100 })} />)
+    expect(screen.getByText(/\(100%\)/)).toBeInTheDocument()
   })
 })

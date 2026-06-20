@@ -571,6 +571,69 @@ describe('LeadTaskList', () => {
   })
 
   // -------------------------------------------------------------------------
+  // Optimistic rollback on failed create
+  // -------------------------------------------------------------------------
+
+  describe('optimistic rollback on failed create', () => {
+    it('adds an optimistic placeholder then rolls it back when createTask fails', async () => {
+      mockCreateTask.mockRejectedValue(new Error('Server error'))
+      const onOptimisticTaskCreate = vi.fn()
+      const onOptimisticTaskRevert = vi.fn()
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[]}
+          onTaskCreated={vi.fn()}
+          onOptimisticTaskCreate={onOptimisticTaskCreate}
+          onOptimisticTaskRevert={onOptimisticTaskRevert}
+        />
+      )
+
+      await user.click(screen.getByTestId('open-task-form-btn'))
+      await user.type(screen.getByTestId('task-title-input'), 'My Task')
+      await user.click(screen.getByTestId('save-task-btn'))
+
+      await waitFor(() => {
+        expect(onOptimisticTaskRevert).toHaveBeenCalledTimes(1)
+      })
+      // The optimistic placeholder was added before the API call...
+      expect(onOptimisticTaskCreate).toHaveBeenCalledTimes(1)
+      // ...and the same placeholder (id=0) is passed back for rollback.
+      const created = onOptimisticTaskCreate.mock.calls[0][0]
+      const reverted = onOptimisticTaskRevert.mock.calls[0][0]
+      expect(created.id).toBe(0)
+      expect(reverted.id).toBe(0)
+    })
+
+    it('does NOT roll back the optimistic placeholder on a successful create', async () => {
+      const newTask = makeTask(99, { title: 'New Task' })
+      mockCreateTask.mockResolvedValue(newTask)
+      const onOptimisticTaskCreate = vi.fn()
+      const onOptimisticTaskRevert = vi.fn()
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[]}
+          onTaskCreated={vi.fn()}
+          onOptimisticTaskCreate={onOptimisticTaskCreate}
+          onOptimisticTaskRevert={onOptimisticTaskRevert}
+        />
+      )
+
+      await user.click(screen.getByTestId('open-task-form-btn'))
+      await user.type(screen.getByTestId('task-title-input'), 'New Task')
+      await user.click(screen.getByTestId('save-task-btn'))
+
+      await waitFor(() => {
+        expect(onOptimisticTaskCreate).toHaveBeenCalledTimes(1)
+      })
+      expect(onOptimisticTaskRevert).not.toHaveBeenCalled()
+    })
+  })
+
+  // -------------------------------------------------------------------------
   // create_task CTA
   // -------------------------------------------------------------------------
 

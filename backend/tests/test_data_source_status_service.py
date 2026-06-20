@@ -118,7 +118,8 @@ def test_response_always_has_four_categories(
     with patch.object(svc, "_get_socrata_statuses", return_value=mock_socrata), \
          patch.object(svc, "_get_enrichment_statuses", return_value=mock_enrichment), \
          patch.object(svc, "_get_import_source", return_value=mock_import), \
-         patch.object(svc, "_get_hubspot_source", return_value=mock_hubspot):
+         patch.object(svc, "_get_hubspot_source", return_value=mock_hubspot), \
+         patch.object(svc, "_get_gis_connector_statuses", return_value=[]):
         result = svc.get_all_statuses("user123")
 
     assert "socrata_datasets" in result
@@ -157,7 +158,8 @@ def test_enrichment_returns_zeroed_counts_when_no_leads():
     with patch.object(svc, "_get_socrata_statuses", return_value=[]), \
          patch.object(svc, "_get_enrichment_statuses", return_value=[zero_source]), \
          patch.object(svc, "_get_import_source", return_value={"name": "Google Sheets", "source_type": "import", "last_refreshed_at": None, "rows_imported": None, "import_status": None}), \
-         patch.object(svc, "_get_hubspot_source", return_value={"name": "HubSpot", "source_type": "hubspot", "connected": False}):
+         patch.object(svc, "_get_hubspot_source", return_value={"name": "HubSpot", "source_type": "hubspot", "connected": False}), \
+         patch.object(svc, "_get_gis_connector_statuses", return_value=[]):
         result = svc.get_all_statuses("user_no_leads")
 
     sources = result["enrichment_sources"]
@@ -189,7 +191,8 @@ def test_import_source_returns_null_fields_when_no_completed_job():
     with patch.object(svc, "_get_socrata_statuses", return_value=[]), \
          patch.object(svc, "_get_enrichment_statuses", return_value=[]), \
          patch.object(svc, "_get_import_source", return_value=null_import), \
-         patch.object(svc, "_get_hubspot_source", return_value={"name": "HubSpot", "source_type": "hubspot", "connected": False}):
+         patch.object(svc, "_get_hubspot_source", return_value={"name": "HubSpot", "source_type": "hubspot", "connected": False}), \
+         patch.object(svc, "_get_gis_connector_statuses", return_value=[]):
         result = svc.get_all_statuses("user_no_jobs")
 
     imp = result["import_source"]
@@ -216,7 +219,8 @@ def test_hubspot_source_returns_connected_false_when_no_config_row():
     with patch.object(svc, "_get_socrata_statuses", return_value=[]), \
          patch.object(svc, "_get_enrichment_statuses", return_value=[]), \
          patch.object(svc, "_get_import_source", return_value={"name": "Google Sheets", "source_type": "import", "last_refreshed_at": None, "rows_imported": None, "import_status": None}), \
-         patch.object(svc, "_get_hubspot_source", return_value=disconnected_hubspot):
+         patch.object(svc, "_get_hubspot_source", return_value=disconnected_hubspot), \
+         patch.object(svc, "_get_gis_connector_statuses", return_value=[]):
         result = svc.get_all_statuses("user_no_hubspot")
 
     assert result["hubspot_source"]["connected"] is False
@@ -247,10 +251,114 @@ def test_enrichment_counts_scoped_to_requesting_user():
     with patch.object(svc, "_get_socrata_statuses", return_value=[]), \
          patch.object(svc, "_get_enrichment_statuses", mock_enrichment), \
          patch.object(svc, "_get_import_source", mock_import), \
-         patch.object(svc, "_get_hubspot_source", mock_hubspot):
+         patch.object(svc, "_get_hubspot_source", mock_hubspot), \
+         patch.object(svc, "_get_gis_connector_statuses", return_value=[]):
         svc.get_all_statuses("target_user_id")
 
     # Verify _get_enrichment_statuses was called with the correct user_id
     mock_enrichment.assert_called_once_with("target_user_id")
     # Verify _get_import_source was also scoped to the correct user
     mock_import.assert_called_once_with("target_user_id")
+
+
+# ---------------------------------------------------------------------------
+# GIS connectors — response contract + per-user scoping (PR review)
+# Validates: Requirements 1.1, 5.1, 5.7
+# ---------------------------------------------------------------------------
+
+def test_response_includes_gis_connectors_contract():
+    """get_all_statuses always returns a ``gis_connectors`` list and each entry
+    carries the documented GIS connector contract keys.
+
+    Validates: Requirements 1.1, 5.1
+    """
+    svc = DataSourceStatusService()
+
+    sample_gis = [{
+        "name": "DuPage County GIS",
+        "market": "dupage_il",
+        "counties": ["DuPage"],
+        "source_type": "gis",
+        "refresh_type": "automatic",
+        "is_active": True,
+        "matched_count": 3,
+        "unmatched_count": 2,
+        "total_count": 5,
+        "api_url": "gis.dupageco.org",
+    }]
+
+    with patch.object(svc, "_get_socrata_statuses", return_value=[]), \
+         patch.object(svc, "_get_enrichment_statuses", return_value=[]), \
+         patch.object(svc, "_get_import_source", return_value={"name": "Google Sheets", "source_type": "import", "last_refreshed_at": None, "rows_imported": None, "import_status": None}), \
+         patch.object(svc, "_get_hubspot_source", return_value={"name": "HubSpot", "source_type": "hubspot", "connected": False}), \
+         patch.object(svc, "_get_gis_connector_statuses", return_value=sample_gis):
+        result = svc.get_all_statuses("user123")
+
+    assert "gis_connectors" in result
+    assert isinstance(result["gis_connectors"], list)
+    assert len(result["gis_connectors"]) == 1
+
+    entry = result["gis_connectors"][0]
+    expected_keys = {
+        "name", "market", "counties", "source_type", "refresh_type",
+        "is_active", "matched_count", "unmatched_count", "total_count", "api_url",
+    }
+    assert expected_keys.issubset(set(entry.keys()))
+
+
+def test_gis_connector_statuses_scoped_to_requesting_user():
+    """_get_gis_connector_statuses is invoked with the exact requesting user_id
+    so GIS match counts cannot include another user's leads.
+
+    Validates: Requirements 5.7
+    """
+    from unittest.mock import MagicMock
+
+    svc = DataSourceStatusService()
+    mock_gis = MagicMock(return_value=[])
+
+    with patch.object(svc, "_get_socrata_statuses", return_value=[]), \
+         patch.object(svc, "_get_enrichment_statuses", return_value=[]), \
+         patch.object(svc, "_get_import_source", return_value={"name": "Google Sheets", "source_type": "import", "last_refreshed_at": None, "rows_imported": None, "import_status": None}), \
+         patch.object(svc, "_get_hubspot_source", return_value={"name": "HubSpot", "source_type": "hubspot", "connected": False}), \
+         patch.object(svc, "_get_gis_connector_statuses", mock_gis):
+        svc.get_all_statuses("target_user_id")
+
+    mock_gis.assert_called_once_with("target_user_id")
+
+
+def test_gis_counts_are_user_scoped(app):
+    """GIS match counts include ONLY the requesting user's leads — another
+    user's leads in the same county must never bleed into the totals.
+
+    Validates: Requirements 5.7
+    """
+    from app import db
+    from app.models.lead import Property
+
+    with app.app_context():
+        # User A: 2 DuPage leads (1 matched, 1 unmatched)
+        db.session.add_all([
+            Property(property_street="1 A St", property_city="WHEATON",
+                     property_state="IL", owner_user_id="user_a",
+                     has_property_match=True),
+            Property(property_street="2 A St", property_city="WHEATON",
+                     property_state="IL", owner_user_id="user_a",
+                     has_property_match=False),
+        ])
+        # User B: 3 DuPage leads (all matched) — must NOT count for user A
+        db.session.add_all([
+            Property(property_street=f"{i} B St", property_city="NAPERVILLE",
+                     property_state="IL", owner_user_id="user_b",
+                     has_property_match=True)
+            for i in range(3)
+        ])
+        db.session.commit()
+
+        svc = DataSourceStatusService()
+        gis = svc._get_gis_connector_statuses("user_a")
+        dupage = next(c for c in gis if c["market"] == "dupage_il")
+
+        assert dupage["total_count"] == 2
+        assert dupage["matched_count"] == 1
+        assert dupage["unmatched_count"] == 1

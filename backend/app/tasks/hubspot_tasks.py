@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import tempfile
+import time
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,67 @@ WARM_SIGNAL_TYPES = frozenset({'PRIOR_WARM_CONVERSATION', 'APPOINTMENT_OCCURRED'
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+def _fetch_deal_contact_associations_with_retry(
+    client, deal_id: str, *, max_attempts: int = 3, base_delay: float = 1.0,
+) -> list:
+    """Fetch one deal's contact associations via the v4 batch API with bounded
+    retry + exponential backoff on *transient* HubSpot failures.
+
+    HubSpot rate limits (429) and server/timeout errors surface as
+    ``HubSpotRateLimitError`` / ``ExternalServiceError`` from the client. Those
+    are retried up to ``max_attempts`` times, honouring a server-provided
+    ``Retry-After`` when present. A non-transient error, or a final exhausted
+    retry, is logged and reported as an empty list so a flaky association fetch
+    degrades gracefully instead of aborting enrichment — consistent with the
+    surrounding best-effort error handling.
+
+    Returns the list of associated contact-id strings (possibly empty).
+    """
+    from app.exceptions import ExternalServiceError, HubSpotRateLimitError
+
+    transient = (HubSpotRateLimitError, ExternalServiceError)
+    for attempt in range(1, max_attempts + 1):
+        try:
+            # allow_partial=False so a transient failure on this single-deal
+            # batch is RAISED into the backoff loop below instead of being
+            # swallowed by the client and returned as an empty/partial result —
+            # otherwise the retry never actually retries.
+            assoc_map = client.fetch_deal_contact_associations(
+                [deal_id], allow_partial=False
+            )
+            return assoc_map.get(deal_id, [])
+        except transient as exc:
+            if attempt >= max_attempts:
+                logger.warning(
+                    "v4 deal->contact association fetch for deal %s failed after "
+                    "%d attempts: %s", deal_id, attempt, exc,
+                )
+                return []
+            payload = getattr(exc, 'payload', None) or {}
+            retry_after = payload.get('retry_after')
+            # Honour an explicit Retry-After even when it is 0 — `if retry_after`
+            # would treat a legitimate zero-second delay as "missing" and fall
+            # back to exponential backoff.
+            delay = (
+                float(retry_after) if retry_after is not None
+                else base_delay * (2 ** (attempt - 1))
+            )
+            logger.warning(
+                "v4 deal->contact association fetch for deal %s failed "
+                "(attempt %d/%d), retrying in %.1fs: %s",
+                deal_id, attempt, max_attempts, delay, exc,
+            )
+            time.sleep(delay)
+        except Exception as exc:
+            # Non-transient (auth / programming) error — don't hammer the API.
+            logger.warning(
+                "v4 deal->contact association fetch for deal %s failed "
+                "(non-retryable): %s", deal_id, exc,
+            )
+            return []
+    return []
+
 
 def _mark_run_failed(db, run, message: str) -> None:
     """Mark an ImportRun as failed with an error message."""
@@ -661,10 +723,56 @@ def run_hubspot_matching(run_id: int = None) -> None:
     app = create_app()
     with app.app_context():
         from app import db
-        from app.models import HubSpotDeal, HubSpotContact, HubSpotCompany, HubSpotMatch
+        from app.models import HubSpotDeal, HubSpotContact, HubSpotCompany, HubSpotMatch, Lead
         from app.services.hubspot_matcher_service import HubSpotMatcherService
 
         matcher = HubSpotMatcherService()
+
+        # --- Heal dangling confirmed matches (Bug 4) -----------------------
+        # ``internal_record_id`` is a plain Integer with no FK/cascade, so
+        # deleting a Lead silently orphans any HubSpotMatch that pointed at it.
+        # Such a match stays status='confirmed' referencing a now-missing lead,
+        # which means: (a) the skip-set below excludes it from re-matching, and
+        # (b) run_enrich_leads_from_hubspot's ``Lead.query.get`` returns None and
+        # bails — so a surviving duplicate lead (same address) is never linked to
+        # the deal/owner/activities. This happened with 2553 N Drake / Gilberto
+        # Olivares after the originally-matched lead was deleted.
+        #
+        # Reset every confirmed lead-match whose referenced lead no longer
+        # exists back to 'pending'/internal_record_id=NULL. Because this runs
+        # BEFORE the skip-sets are built, the healed rows fall through to the
+        # normal match_deal/match_contact calls below and get re-pointed to the
+        # surviving lead in this same run. Only matches whose lead is actually
+        # missing are touched — confirmed matches with a live lead, and all
+        # rejected matches, are left exactly as-is.
+        dangling_candidates = (
+            HubSpotMatch.query
+            .filter_by(status='confirmed', internal_record_type='lead')
+            .filter(HubSpotMatch.internal_record_id.isnot(None))
+            .all()
+        )
+        healed = 0
+        referenced_lead_ids = {m.internal_record_id for m in dangling_candidates}
+        if referenced_lead_ids:
+            # Single batched existence check — never N per-row queries.
+            existing_lead_ids = {
+                row[0]
+                for row in db.session.query(Lead.id)
+                .filter(Lead.id.in_(referenced_lead_ids))
+                .all()
+            }
+            for m in dangling_candidates:
+                if m.internal_record_id not in existing_lead_ids:
+                    m.status = 'pending'
+                    m.internal_record_id = None
+                    healed += 1
+            if healed:
+                db.session.commit()
+        logger.info(
+            "run_hubspot_matching: healed %d dangling confirmed matches "
+            "(referenced lead deleted)",
+            healed,
+        )
 
         # Collect hubspot_ids that already have a CONFIRMED or REJECTED match record.
         # CONFIRMED = already processed and accepted; REJECTED = reviewer decided no match.
@@ -790,6 +898,7 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         # Fetch portal stage label map once — used to translate stage IDs to
         # display labels (e.g. 'closedlost' → 'Negotiating Remote')
         stage_label_map = {}
+        _client = None
         try:
             from app.models.hubspot_config import HubSpotConfig
             from app.services.hubspot_client_service import HubSpotClientService
@@ -897,6 +1006,19 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                     if isinstance(assoc.get("contacts"), dict)
                     else []
                 )
+                if not contact_ids:
+                    logger.warning(
+                        "run_enrich_leads_from_hubspot: deal %s has empty contacts block — "
+                        "retrying v4 associations fetch", deal.hubspot_id,
+                    )
+                    if _client:
+                        # Bounded retry/backoff: a transient v4 failure (rate
+                        # limit / 5xx / timeout) is retried before giving up,
+                        # rather than a single best-effort attempt.
+                        raw_ids = _fetch_deal_contact_associations_with_retry(
+                            _client, deal.hubspot_id
+                        )
+                        contact_ids = [{"id": cid} for cid in raw_ids]
                 for assoc_entry in contact_ids:
                     cid = str(assoc_entry.get("id", ""))
                     if not cid:
@@ -947,7 +1069,8 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         # (fetched during import via associations=deals) to find the property.
         unresolved_contact_matches = (
             HubSpotMatch.query
-            .filter_by(hubspot_record_type='contact', status='confirmed')
+            .filter_by(hubspot_record_type='contact')
+            .filter(HubSpotMatch.status.in_(['confirmed', 'pending']))
             .filter(HubSpotMatch.internal_record_id.is_(None))
             .all()
         )
@@ -985,9 +1108,15 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                     if enriched:
                         db.session.commit()
                         contact_enriched += 1
-                    # Update the contact's match record
+                    # Update the contact's match record. Promote it to
+                    # 'confirmed' (not just back-filling internal_record_id) so
+                    # the downstream _resolve_associations() — which only links
+                    # engagements for confirmed matches — includes this contact.
+                    # A resolved-but-still-pending match would otherwise be
+                    # skipped, leaving its activities orphaned.
                     contact_match.internal_record_type = 'lead'
                     contact_match.internal_record_id = lead.id
+                    contact_match.status = 'confirmed'
                     db.session.commit()
                     logger.debug(
                         "run_enrich_leads_from_hubspot: resolved unlinked contact %s -> lead_id=%d via deal %s",
@@ -1100,6 +1229,229 @@ def run_convert_hubspot_activities(run_id: int = None) -> None:
         logger.info(
             "run_convert_hubspot_activities: complete — converted=%d skipped=%d errors=%d",
             converted, skipped, errors,
+        )
+
+        # --- Re-resolve previously orphaned interactions -------------------
+        # After run_enrich_leads_from_hubspot confirms pending matches, revisit
+        # all orphaned HubSpot-imported Interactions and link them if a confirmed
+        # match now exists for their associated deal/contact.
+        from app.models import Interaction, InteractionAssociation
+
+        orphaned = (
+            Interaction.query
+            .filter_by(is_orphaned=True, source='hubspot_import')
+            .all()
+        )
+        re_linked = 0
+        re_link_errors = 0
+        for interaction in orphaned:
+            try:
+                new_assocs = converter._resolve_associations_by_engagement_id(
+                    interaction.hubspot_engagement_id
+                )
+                if not new_assocs:
+                    continue
+                for assoc in new_assocs:
+                    existing = InteractionAssociation.query.filter_by(
+                        interaction_id=interaction.id,
+                        target_type=assoc['target_type'],
+                        target_id=assoc['target_id'],
+                    ).first()
+                    if existing is None:
+                        db.session.add(InteractionAssociation(
+                            interaction_id=interaction.id,
+                            target_type=assoc['target_type'],
+                            target_id=assoc['target_id'],
+                        ))
+                interaction.is_orphaned = False
+                db.session.commit()
+                re_linked += 1
+                logger.debug(
+                    "run_convert_hubspot_activities: re-linked orphaned interaction id=%s",
+                    interaction.id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "run_convert_hubspot_activities: re-link error for interaction id=%s: %s",
+                    interaction.id, exc,
+                )
+                re_link_errors += 1
+                db.session.rollback()
+
+        logger.info(
+            "run_convert_hubspot_activities: orphan re-resolution — re_linked=%d errors=%d",
+            re_linked, re_link_errors,
+        )
+
+        # --- Re-point associations stranded on a deleted lead (Bug 5) ------
+        # InteractionAssociation.target_id and TaskAssociation.target_id are
+        # plain Integers with no FK/cascade to ``leads``, so deleting a
+        # duplicate lead silently leaves any hubspot-imported activity/task
+        # association pointing at the now-missing lead — with
+        # Interaction.is_orphaned=False. The orphan pass above only revisits
+        # is_orphaned=True rows, and the converter is idempotent, so these
+        # historical rows stay stranded on the dead lead and never surface on
+        # the surviving lead. Bug 4 healing has already re-pointed the deal/
+        # contact match to the surviving lead, so re-resolving the engagement
+        # now yields the correct current lead. (2553 N Drake: lead 916 -> 3415.)
+        #
+        # Only associations whose target lead is ACTUALLY missing are touched;
+        # associations pointing at a live lead are left exactly as-is. Scope is
+        # limited to hubspot-imported interactions (source='hubspot_import' with
+        # a non-null hubspot_engagement_id) and hubspot-imported tasks (non-null
+        # hubspot_task_id) — manually-created records are never touched. The
+        # pass is idempotent: once re-pointed, nothing references the dead lead,
+        # so a second run is a no-op.
+        from app.models import Lead, Task, TaskAssociation
+
+        stranded_interaction_assocs = (
+            db.session.query(InteractionAssociation, Interaction)
+            .join(Interaction, InteractionAssociation.interaction_id == Interaction.id)
+            .filter(
+                InteractionAssociation.target_type == 'lead',
+                Interaction.source == 'hubspot_import',
+                Interaction.hubspot_engagement_id.isnot(None),
+            )
+            .all()
+        )
+        stranded_task_assocs = (
+            db.session.query(TaskAssociation, Task)
+            .join(Task, TaskAssociation.task_id == Task.id)
+            .filter(
+                TaskAssociation.target_type == 'lead',
+                Task.hubspot_task_id.isnot(None),
+            )
+            .all()
+        )
+
+        # Single batched existence check across BOTH passes — never N per-row
+        # queries. Collect distinct lead target_ids, run one Lead.id.in_(...)
+        # query, and derive the set of ids whose lead no longer exists.
+        candidate_lead_ids = (
+            {assoc.target_id for assoc, _ in stranded_interaction_assocs}
+            | {assoc.target_id for assoc, _ in stranded_task_assocs}
+        )
+
+        re_pointed = 0
+        re_point_errors = 0
+        if candidate_lead_ids:
+            existing_lead_ids = {
+                row[0]
+                for row in db.session.query(Lead.id)
+                .filter(Lead.id.in_(candidate_lead_ids))
+                .all()
+            }
+            missing_lead_ids = candidate_lead_ids - existing_lead_ids
+
+            if missing_lead_ids:
+                # Dedupe to affected interactions/tasks BEFORE mutating anything
+                # (so the second pass's captured ids aren't disturbed by commits).
+                affected_interactions = {}
+                for assoc, interaction in stranded_interaction_assocs:
+                    if assoc.target_id in missing_lead_ids:
+                        affected_interactions[interaction.id] = interaction
+
+                affected_tasks = {}
+                for assoc, task in stranded_task_assocs:
+                    if assoc.target_id in missing_lead_ids:
+                        affected_tasks[task.id] = task
+
+                # 1. INTERACTIONS — re-point each affected interaction once.
+                for interaction in affected_interactions.values():
+                    try:
+                        resolved = converter._resolve_associations_by_engagement_id(
+                            interaction.hubspot_engagement_id
+                        )
+                        if resolved:
+                            # Replace the dangling lead association(s): delete the
+                            # row(s) pointing at a missing lead, then add the
+                            # resolved targets (deduped against existing rows).
+                            for row in InteractionAssociation.query.filter_by(
+                                interaction_id=interaction.id, target_type='lead'
+                            ).all():
+                                if row.target_id in missing_lead_ids:
+                                    db.session.delete(row)
+                            db.session.flush()
+                            for a in resolved:
+                                exists = InteractionAssociation.query.filter_by(
+                                    interaction_id=interaction.id,
+                                    target_type=a['target_type'],
+                                    target_id=a['target_id'],
+                                ).first()
+                                if exists is None:
+                                    db.session.add(InteractionAssociation(
+                                        interaction_id=interaction.id,
+                                        target_type=a['target_type'],
+                                        target_id=a['target_id'],
+                                    ))
+                            interaction.is_orphaned = False
+                            db.session.commit()
+                            re_pointed += 1
+                            logger.debug(
+                                "run_convert_hubspot_activities: re-pointed stranded "
+                                "interaction id=%s off deleted lead", interaction.id,
+                            )
+                        else:
+                            # Engagement gone or no confirmed match — keep the data
+                            # but flag for the orphan pass to revisit on a later run.
+                            interaction.is_orphaned = True
+                            db.session.commit()
+                    except Exception as exc:
+                        logger.warning(
+                            "run_convert_hubspot_activities: stranded re-point error "
+                            "for interaction id=%s: %s", interaction.id, exc,
+                        )
+                        re_point_errors += 1
+                        db.session.rollback()
+
+                # 2. TASKS — re-point each affected task once. The Task's
+                #    hubspot_task_id IS the engagement id. Keep only
+                #    ('lead','organization') targets (mirrors convert_task).
+                for task in affected_tasks.values():
+                    try:
+                        resolved = [
+                            a for a in converter._resolve_associations_by_engagement_id(
+                                task.hubspot_task_id
+                            )
+                            if a.get('target_type') in ('lead', 'organization')
+                        ]
+                        if resolved:
+                            for row in TaskAssociation.query.filter_by(
+                                task_id=task.id, target_type='lead'
+                            ).all():
+                                if row.target_id in missing_lead_ids:
+                                    db.session.delete(row)
+                            db.session.flush()
+                            for a in resolved:
+                                exists = TaskAssociation.query.filter_by(
+                                    task_id=task.id,
+                                    target_type=a['target_type'],
+                                    target_id=a['target_id'],
+                                ).first()
+                                if exists is None:
+                                    db.session.add(TaskAssociation(
+                                        task_id=task.id,
+                                        target_type=a['target_type'],
+                                        target_id=a['target_id'],
+                                    ))
+                            db.session.commit()
+                            re_pointed += 1
+                            logger.debug(
+                                "run_convert_hubspot_activities: re-pointed stranded "
+                                "task id=%s off deleted lead", task.id,
+                            )
+                    except Exception as exc:
+                        logger.warning(
+                            "run_convert_hubspot_activities: stranded re-point error "
+                            "for task id=%s: %s", task.id, exc,
+                        )
+                        re_point_errors += 1
+                        db.session.rollback()
+
+        logger.info(
+            "run_convert_hubspot_activities: stranded-lead re-point — "
+            "re_pointed=%d errors=%d",
+            re_pointed, re_point_errors,
         )
 
 

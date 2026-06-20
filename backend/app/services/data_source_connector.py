@@ -235,6 +235,14 @@ class DataSourceConnector:
             "Enriched lead %d from source '%s': %d fields updated",
             lead_id, source_name, len(result.fields),
         )
+
+        # Enrichment may have written new phone/email/property fields, which
+        # change the data-completeness and owner-situation sub-scores. Refresh
+        # lead_score + recommended_action (error-isolated) so the score does not
+        # go stale until the nightly bulk rescore.
+        from app.services.lead_refresh import refresh_lead_scoring
+        refresh_lead_scoring(lead.id)
+
         return record
 
     # ------------------------------------------------------------------

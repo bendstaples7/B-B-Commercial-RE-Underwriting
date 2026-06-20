@@ -1035,6 +1035,89 @@ class GoogleSheetsImporter:
                 job_id, rows_imported, rows_skipped, job.total_rows,
             )
 
+            # ------------------------------------------------------------------
+            # Fix A: GIS enrichment for Sheets-imported leads
+            #
+            # Google Sheets imports land with has_property_match=False because
+            # upsert_lead() never calls the GIS connector.  Run enrichment now
+            # on every lead touched by this job that still lacks a confirmed
+            # parcel match.  Connector is selected per-lead based on county/city
+            # so both DuPage and Cook County leads are handled correctly.
+            # ------------------------------------------------------------------
+            try:
+                from app.services.gis.routing import connector_for_lead
+                from app.services.deduplication_engine import DeduplicationEngine
+                from app.services.gis.base import GISConnectorRegistry
+                from app.services.lead_ingestion_service import LeadIngestionService
+
+                ingestion_svc = LeadIngestionService(
+                    dedup_engine=DeduplicationEngine(),
+                    gis_registry=GISConnectorRegistry,
+                )
+                # Query leads that were created/updated by this job and
+                # still need a parcel match resolved.
+                unmatched = (
+                    Lead.query
+                    .filter(
+                        Lead.last_import_job_id == job_id,
+                        Lead.has_property_match == False,  # noqa: E712
+                        Lead.property_street != None,       # noqa: E711
+                        Lead.property_street != '',
+                    )
+                    .all()
+                )
+                gis_matched = 0
+                gis_errors = 0
+                gis_no_connector = 0
+                matched_lead_ids = []
+                for lead in unmatched:
+                    connector = connector_for_lead(lead)
+                    if not connector:
+                        gis_no_connector += 1
+                        continue
+                    outcome = ingestion_svc._enrich_with_gis(lead, connector, job_id)
+                    if outcome.get('error'):
+                        gis_errors += 1
+                    elif outcome.get('match_found'):
+                        gis_matched += 1
+                        matched_lead_ids.append(lead.id)
+                if unmatched:
+                    db.session.commit()
+                    logger.info(
+                        "ImportJob %s GIS enrichment: %d/%d matched, %d errors, "
+                        "%d no-connector",
+                        job_id, gis_matched, len(unmatched), gis_errors,
+                        gis_no_connector,
+                    )
+                    # Bug 8: GIS enrichment just changed scoring inputs
+                    # (has_property_match / county_assessor_pin) for the matched
+                    # leads. Refresh lead_score + recommended_action now so they
+                    # reflect the enrichment instead of going stale until the
+                    # nightly bulk rescore. refresh_lead_scoring is per-lead and
+                    # error-isolated (never raises into this best-effort block).
+                    if matched_lead_ids:
+                        from app.services.lead_refresh import refresh_lead_scoring
+                        for matched_lead_id in matched_lead_ids:
+                            refresh_lead_scoring(matched_lead_id)
+                        logger.info(
+                            "ImportJob %s GIS enrichment: refreshed scoring for %d lead(s)",
+                            job_id, len(matched_lead_ids),
+                        )
+            except Exception as gis_exc:
+                # GIS enrichment is best-effort — never fail a completed import.
+                # The import data was already committed above, so roll back only
+                # the (uncommitted) GIS sub-step. A failed enrichment or its
+                # commit leaves the session in a "needs rollback" state; without
+                # this the next caller to reuse the session hits a poisoned
+                # transaction. This cannot undo the already-committed import
+                # rows, and the post-commit refresh_lead_scoring loop commits
+                # per-lead internally, so it is unaffected.
+                db.session.rollback()
+                logger.error(
+                    "ImportJob %s: post-import GIS enrichment failed: %s",
+                    job_id, gis_exc,
+                )
+
             return ImportResult(
                 job_id=job_id,
                 total_rows=job.total_rows,

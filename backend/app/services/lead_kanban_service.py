@@ -185,6 +185,12 @@ class LeadKanbanService:
 
         db.session.commit()
 
+        # A pipeline-stage move changes the +stage bonus in lead_score, so
+        # refresh lead_score + recommended_action (error-isolated) before
+        # returning the summary so it reflects the new score.
+        from app.services.lead_refresh import refresh_lead_scoring
+        refresh_lead_scoring(lead_id)
+
         # Re-fetch to get updated values
         db.session.refresh(lead)
         return _lead_to_summary(lead)

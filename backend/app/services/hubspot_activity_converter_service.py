@@ -1,5 +1,7 @@
 """HubSpotActivityConverterService — converts raw HubSpot engagements to internal records."""
+import html as html_lib
 import logging
+import re
 from datetime import datetime, timezone
 
 from app import db
@@ -10,6 +12,25 @@ from app.models.task_association import TaskAssociation
 from app.models.hubspot_match import HubSpotMatch
 
 logger = logging.getLogger(__name__)
+
+_HTML_TAG_RE = re.compile(r'<[^>]+>')
+
+
+def _strip_html_tags(raw_html):
+    """Strip HTML tags from a string and return collapsed plain text.
+
+    Block-level closers and <br> are turned into spaces so adjacent words don't
+    run together, remaining tags are removed, HTML entities are unescaped, and
+    runs of whitespace are collapsed. Returns '' for falsy input.
+    """
+    if not raw_html:
+        return ''
+    text = re.sub(r'(?i)<\s*br\s*/?>', ' ', raw_html)
+    text = re.sub(r'(?i)</\s*(p|div|li|tr|h[1-6])\s*>', ' ', text)
+    text = _HTML_TAG_RE.sub('', text)
+    text = html_lib.unescape(text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
 
 class HubSpotActivityConverterService:
@@ -41,6 +62,8 @@ class HubSpotActivityConverterService:
             return self.convert_call(engagement)
         elif etype == 'TASK':
             return self.convert_task(engagement)
+        elif etype == 'EMAIL':
+            return self.convert_email(engagement)
         else:
             logger.warning(
                 "Unrecognized HubSpot engagement type '%s' for hubspot_id=%s — skipping.",
@@ -159,6 +182,60 @@ class HubSpotActivityConverterService:
 
         return interaction
 
+    def convert_email(self, engagement):
+        """
+        Convert a HubSpot EMAIL engagement to an internal Interaction(type='email').
+
+        Idempotent: returns None if hubspot_engagement_id already exists.
+        Body is sourced from metadata.text (plaintext), falling back to
+        metadata.html with tags stripped — HubSpot EMAIL engagements do not use
+        metadata.body. occurred_at is sourced from engagement.createdAt (milliseconds).
+        """
+        if self._interaction_exists(engagement.hubspot_id):
+            logger.debug(
+                "Interaction for hubspot_engagement_id=%s already exists — skipping.",
+                engagement.hubspot_id,
+            )
+            return None
+
+        metadata = engagement.raw_payload.get('metadata', {})
+        body = self._extract_email_body(metadata)
+        occurred_at = self._parse_ms_timestamp(
+            engagement.raw_payload.get('engagement', {}).get('createdAt')
+        )
+
+        associations = self._resolve_associations(engagement)
+        is_orphaned = len(associations) == 0
+
+        interaction = Interaction(
+            interaction_type='email',
+            body=body,
+            occurred_at=occurred_at,
+            source='hubspot_import',
+            hubspot_engagement_id=engagement.hubspot_id,
+            raw_payload=engagement.raw_payload,
+            is_orphaned=is_orphaned,
+        )
+        db.session.add(interaction)
+        db.session.flush()
+
+        for assoc in associations:
+            db.session.add(InteractionAssociation(
+                interaction_id=interaction.id,
+                target_type=assoc['target_type'],
+                target_id=assoc['target_id'],
+            ))
+
+        db.session.commit()
+        logger.info(
+            "Created Interaction(id=%s, type=email) from HubSpot engagement %s (orphaned=%s).",
+            interaction.id,
+            engagement.hubspot_id,
+            is_orphaned,
+        )
+        self._extract_signals_for_interaction(interaction, associations)
+        return interaction
+
     def convert_task(self, engagement):
         """
         Convert a HubSpot TASK engagement to an internal Task.
@@ -267,6 +344,20 @@ class HubSpotActivityConverterService:
 
         return results
 
+    def _resolve_associations_by_engagement_id(self, hubspot_engagement_id):
+        """Look up the HubSpotEngagement by ID and resolve its associations.
+
+        Used by the orphan re-resolution pass in run_convert_hubspot_activities.
+        Returns [] if the engagement no longer exists in the database.
+        """
+        from app.models.hubspot_engagement import HubSpotEngagement
+        engagement = HubSpotEngagement.query.filter_by(
+            hubspot_id=str(hubspot_engagement_id)
+        ).first()
+        if engagement is None:
+            return []
+        return self._resolve_associations(engagement)
+
     @staticmethod
     def _extract_note_body(raw_payload):
         """Extract body text from a NOTE engagement payload."""
@@ -277,6 +368,28 @@ class HubSpotActivityConverterService:
         # Fallback to bodyPreview on the engagement object
         engagement_obj = raw_payload.get('engagement', {})
         preview = engagement_obj.get('bodyPreview')
+        if preview:
+            return preview
+        return ''
+
+    @staticmethod
+    def _extract_email_body(metadata):
+        """Extract body text from an EMAIL engagement's metadata.
+
+        HubSpot EMAIL engagements store content in metadata.text (plaintext) and
+        metadata.html — NOT metadata.body (which NOTE/CALL use). Order of
+        preference: plaintext 'text'; then 'html' with tags stripped to plain
+        text; then 'bodyPreview' (older/partial payloads expose only this);
+        final fallback to ''.
+        """
+        metadata = metadata or {}
+        text = metadata.get('text')
+        if text:
+            return text
+        html = metadata.get('html')
+        if html:
+            return _strip_html_tags(html)
+        preview = metadata.get('bodyPreview')
         if preview:
             return preview
         return ''

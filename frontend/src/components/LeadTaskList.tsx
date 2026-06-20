@@ -70,6 +70,16 @@ export interface LeadTaskListProps {
   onTaskCreated: (task: LeadTask) => void
   onTaskCompleted?: (taskId: number | string) => void
   onHubSpotTaskDone?: (taskId: number) => void
+  /** Called immediately when the user submits the form, before the API call
+   *  completes. Receives a temporary placeholder task (id = 0, status = 'open').
+   *  Use this to add an optimistic entry to the task list.
+   */
+  onOptimisticTaskCreate?: (optimisticTask: LeadTask) => void
+  /** Called when the create API call fails, to roll back the optimistic
+   *  placeholder added via `onOptimisticTaskCreate`. Receives the same
+   *  placeholder task (id = 0) so the parent can remove it from the list.
+   */
+  onOptimisticTaskRevert?: (optimisticTask: LeadTask) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -88,6 +98,8 @@ export function LeadTaskList({
   onTaskCreated,
   onTaskCompleted,
   onHubSpotTaskDone,
+  onOptimisticTaskCreate,
+  onOptimisticTaskRevert,
 }: LeadTaskListProps) {
   const [formOpen, setFormOpen] = useState(false)
   const [title, setTitle] = useState('')
@@ -139,6 +151,23 @@ export function LeadTaskList({
     setSubmitError(null)
     setSubmitting(true)
 
+    // Fire optimistic callback before the API call so the parent can render
+    // a placeholder task immediately (property 12: optimistic task creation).
+    const optimisticTask: LeadTask = {
+      id: 0,
+      lead_id: leadId,
+      task_type: 'custom',
+      title: title.trim(),
+      status: 'open',
+      due_date: dueDate || null,
+      created_at: new Date().toISOString(),
+      completed_at: null,
+      created_by: 'user',
+    }
+    if (onOptimisticTaskCreate) {
+      onOptimisticTaskCreate(optimisticTask)
+    }
+
     try {
       const newTask = await leadTaskService.createTask(leadId, {
         title: title.trim(),
@@ -148,7 +177,12 @@ export function LeadTaskList({
       onTaskCreated(newTask)
       handleCloseForm()
     } catch (err) {
-      // Preserve form data on failure — do NOT close the form
+      // Roll back the optimistic placeholder (if one was added) so a failed
+      // create doesn't leave a stale task in the list. Preserve form data on
+      // failure — do NOT close the form — so the user can retry.
+      if (onOptimisticTaskCreate) {
+        onOptimisticTaskRevert?.(optimisticTask)
+      }
       setSubmitError(
         err instanceof Error ? err.message : 'Failed to create task. Please try again.'
       )

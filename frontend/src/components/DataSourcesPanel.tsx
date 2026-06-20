@@ -27,7 +27,7 @@ import ErrorIcon from '@mui/icons-material/Error'
 import { useQuery } from '@tanstack/react-query'
 
 import { dataSourcesService } from '@/services/api'
-import type { DataSourceStatus, EnrichmentSourceStatus, HubSpotSourceStatus, ImportSourceStatus, SocrataDatasetStatus } from '@/types'
+import type { DataSourceStatus, EnrichmentSourceStatus, GISConnectorStatus, HubSpotSourceStatus, ImportSourceStatus, SocrataDatasetStatus } from '@/types'
 
 // ---------------------------------------------------------------------------
 // StatusChip
@@ -354,7 +354,8 @@ export default function DataSourcesPanel() {
   const allEmpty = data.socrata_datasets.length === 0 &&
                    data.enrichment_sources.length === 0 &&
                    !data.import_source &&
-                   !data.hubspot_source
+                   !data.hubspot_source &&
+                   (!data.gis_connectors || data.gis_connectors.length === 0)
 
   return (
     <Box sx={{ p: 2 }}>
@@ -392,6 +393,16 @@ export default function DataSourcesPanel() {
           {/* HubSpot section */}
           <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>HubSpot</Typography>
           <HubSpotSourceCard source={data.hubspot_source} />
+
+          {/* GIS Connectors section */}
+          {data.gis_connectors && data.gis_connectors.length > 0 && (
+            <>
+              <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>GIS Parcel Connectors</Typography>
+              {data.gis_connectors.map(gc => (
+                <GISConnectorCard key={gc.market} source={gc} />
+              ))}
+            </>
+          )}
         </>
       )}
     </Box>
@@ -566,6 +577,75 @@ export function HubSpotSourceCard({ source }: { source: HubSpotSourceStatus }) {
             <Chip size="small" color="default" label="Not configured" />
           )}
         </Box>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// GISConnectorCard
+// ---------------------------------------------------------------------------
+
+/**
+ * Card displaying match coverage for a single GIS county connector.
+ *
+ * Shows:
+ * - Connector name and county(ies) covered
+ * - "Automatic" refresh type badge
+ * - Active/Inactive chip
+ * - Match coverage bar: matched vs unmatched vs total
+ * - API source URL
+ */
+export function GISConnectorCard({ source }: { source: GISConnectorStatus }) {
+  const rawMatchPct = source.total_count > 0
+    ? Math.round((source.matched_count / source.total_count) * 100)
+    : 0
+  // Clamp to [0, 100] and guard NaN/undefined → 0 so the bar and label never
+  // exceed 100% even if matched_count > total_count in the source data.
+  const matchPct = Number.isFinite(rawMatchPct)
+    ? Math.min(100, Math.max(0, rawMatchPct))
+    : 0
+
+  return (
+    <Card sx={{ mb: 2, opacity: source.is_active ? 1 : 0.5 }}>
+      <CardContent>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
+          <Typography variant="subtitle1" fontWeight="bold">{source.name}</Typography>
+          <Typography variant="caption" color="text.secondary">Automatic · {source.counties.join(', ')} County</Typography>
+          {source.is_active ? (
+            <Chip size="small" color="success" icon={<CheckCircleIcon />} label="Active" />
+          ) : (
+            <Chip size="small" color="default" label="Inactive" />
+          )}
+        </Box>
+
+        {source.total_count > 0 && (
+          <Box sx={{ mb: 1 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+              <Typography variant="caption" color="text.secondary">
+                PIN match coverage
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {source.matched_count.toLocaleString()} / {source.total_count.toLocaleString()} leads ({matchPct}%)
+              </Typography>
+            </Box>
+            <LinearProgress
+              variant="determinate"
+              value={matchPct}
+              color={matchPct >= 80 ? 'success' : matchPct >= 40 ? 'warning' : 'error'}
+              sx={{ height: 8, borderRadius: 4 }}
+            />
+            {source.unmatched_count > 0 && (
+              <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                {source.unmatched_count.toLocaleString()} leads pending GIS match (backfill runs every 6 hours)
+              </Typography>
+            )}
+          </Box>
+        )}
+
+        <Typography variant="caption" color="text.secondary">
+          Source: {source.api_url}
+        </Typography>
       </CardContent>
     </Card>
   )

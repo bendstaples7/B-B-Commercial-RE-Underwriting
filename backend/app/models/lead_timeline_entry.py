@@ -44,8 +44,20 @@ class LeadTimelineEntry(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     # Relationship — use 'Property' because the SQLAlchemy class is named Property
-    # (Lead is a Python alias, not the registered mapper name)
-    lead = db.relationship('Property', backref=db.backref('timeline_entries', lazy='dynamic'))
+    # (Lead is a Python alias, not the registered mapper name).
+    # cascade='all, delete-orphan' mirrors the Lead.audit_trail relationship so
+    # that deleting a lead also deletes its timeline entries instead of trying
+    # to NULL the NOT NULL lead_id FK (the FK already declares ON DELETE CASCADE
+    # for the database layer; the ORM cascade covers SQLite where FK enforcement
+    # is off).
+    lead = db.relationship(
+        'Property',
+        backref=db.backref(
+            'timeline_entries',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+        ),
+    )
 
     __table_args__ = (
         db.Index('ix_timeline_lead_occurred', 'lead_id', 'occurred_at'),

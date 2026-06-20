@@ -33,43 +33,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _rescore_after_status_change(lead_id: int) -> None:
-    """Recompute lead_score then recommended_action after a pipeline stage change.
+    """Refresh lead_score + recommended_action after a pipeline stage change.
 
-    Order matters: rescore first (so the new pipeline stage bonus is applied),
-    then recompute recommended_action (so any score-threshold rules see the
-    updated score). Failures are non-fatal — the nightly beat task is the
-    safety net.
+    Delegates to the unified, error-isolated ``refresh_lead_scoring`` helper so
+    a status change immediately updates BOTH the pipeline-stage bonus in
+    ``lead_score`` AND the ``recommended_action`` (instead of letting the score
+    go stale until the nightly bulk rescore). The helper recomputes the score
+    first, then the action, and never raises — the nightly beat task remains
+    the safety net.
     """
-    try:
-        from app import db
-        from app.models import Lead
-        from app.services.lead_scoring_engine import LeadScoringEngine
-
-        lead = db.session.get(Lead, lead_id)
-        if lead is None:
-            return
-        # Use the lead's owner_user_id for weights; fall back to 'default'
-        user_id = lead.owner_user_id or 'default'
-        engine = LeadScoringEngine()
-        engine.bulk_rescore(user_id=user_id, lead_ids=[lead_id])
-        logger.info("_rescore_after_status_change: rescored lead_id=%d", lead_id)
-    except Exception as exc:
-        logger.warning(
-            "_rescore_after_status_change: rescore failed for lead_id=%d: %s",
-            lead_id, exc,
-        )
-        return  # Don't attempt action recompute if score failed
-
-    # Recompute action AFTER score so any score-threshold rules (e.g. score >= 70
-    # → ready_for_outreach) reflect the freshly updated score.
-    try:
-        ActionEngineService.recompute_and_persist(lead_id)
-        logger.info("_rescore_after_status_change: action recomputed for lead_id=%d", lead_id)
-    except Exception as exc:
-        logger.warning(
-            "_rescore_after_status_change: action recompute failed for lead_id=%d: %s",
-            lead_id, exc,
-        )
+    from app.services.lead_refresh import refresh_lead_scoring
+    refresh_lead_scoring(lead_id)
 
 command_center_bp = Blueprint('command_center', __name__)
 
@@ -815,7 +789,14 @@ def create_task(lead_id: int):
     """
     data = LeadTaskCreateSchema().load(request.get_json() or {})
     actor = getattr(g, 'user_id', 'anonymous')
-    task = _lead_task_service.create(lead_id, data, actor=actor)
+    # Pass recompute_action=False: refresh_lead_scoring below recomputes the
+    # recommended_action itself (after rescoring), so letting the service ALSO
+    # recompute would do it twice (duplicate DB work / timeline churn).
+    task = _lead_task_service.create(lead_id, data, actor=actor, recompute_action=False)
+    # Refresh lead_score + recommended_action exactly once: rescore first (so a
+    # stale score is corrected) then recompute the action on the fresh score.
+    from app.services.lead_refresh import refresh_lead_scoring
+    refresh_lead_scoring(lead_id)
     return jsonify({
         'id': task.id,
         'task_type': task.task_type,
@@ -852,6 +833,10 @@ def update_task(lead_id: int, task_id: int):
             task.due_date = data['due_date']
         db.session.add(task)
         db.session.commit()
+    # Refresh lead_score + recommended_action after the task change (due-date
+    # / snooze changes can affect follow-up overdue state and the action).
+    from app.services.lead_refresh import refresh_lead_scoring
+    refresh_lead_scoring(lead_id)
     return jsonify({
         'id': task.id,
         'title': task.title,
@@ -869,7 +854,12 @@ def complete_task(lead_id: int, task_id: int):
     Mark a LeadTask as completed.
     """
     actor = getattr(g, 'user_id', 'anonymous')
-    task = _lead_task_service.complete(task_id, lead_id, actor=actor)
+    # recompute_action=False — refresh_lead_scoring below owns the single
+    # recommended_action recompute (after rescoring), avoiding a double recompute.
+    task = _lead_task_service.complete(task_id, lead_id, actor=actor, recompute_action=False)
+    # Refresh lead_score + recommended_action exactly once per operation.
+    from app.services.lead_refresh import refresh_lead_scoring
+    refresh_lead_scoring(lead_id)
     return jsonify({
         'id': task.id,
         'status': task.status,
