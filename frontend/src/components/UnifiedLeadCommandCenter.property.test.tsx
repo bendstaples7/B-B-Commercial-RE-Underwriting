@@ -905,6 +905,9 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
 
     await fc.assert(
       fc.asyncProperty(fc.array(taskArb, { maxLength: 5 }), async (initialTasks) => {
+        // Ensure unique IDs so DOM task-item counts match list length (Property 13 pattern).
+        const tasks = initialTasks.map((t, i) => ({ ...t, id: i + 1 }))
+
         const payload = {
           id: 1,
           lead_status: 'skip_trace' as const,
@@ -914,7 +917,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           property_street: null,
           property_city: null,
           property_state: null,
-          open_tasks: initialTasks,
+          open_tasks: tasks,
           timeline: { entries: [], total: 0, page: 1, per_page: 20 },
           recommended_action: { value: null, label: null, explanation: null, signals: {} },
         }
@@ -948,7 +951,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         const tasksPanel = container.querySelector('[data-testid="tasks-panel"]')
         expect(tasksPanel).not.toBeNull()
         const initialCount = tasksPanel!.querySelectorAll('[data-testid^="task-item-"]').length
-        expect(initialCount).toBe(initialTasks.length)
+        expect(initialCount).toBe(tasks.length)
 
         // Open the task creation form
         const addBtn = tasksPanel!.querySelector('[data-testid="open-task-form-btn"]')
@@ -971,9 +974,9 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           await new Promise(r => setTimeout(r, 0))
         })
 
-        // Assert optimistic update: count should be initialTasks.length + 1
+        // Assert optimistic update: count should be tasks.length + 1
         const newCount = tasksPanel!.querySelectorAll('[data-testid^="task-item-"]').length
-        expect(newCount).toBe(initialTasks.length + 1)
+        expect(newCount).toBe(tasks.length + 1)
 
         unmount()
         document.body.removeChild(container)

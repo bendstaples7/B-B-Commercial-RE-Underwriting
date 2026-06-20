@@ -31,6 +31,7 @@ rollback() {
     echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Auto-rollback: $TARGET_SHA -> $PREVIOUS_SHA (deploy failed)" >> "$ROLLBACK_LOG"
     ROLLBACK_FAILED=0
     git checkout -- . 2>/dev/null || { echo "ROLLBACK WARNING: git checkout -- . failed"; ROLLBACK_FAILED=1; }
+    git clean -fd 2>/dev/null || { echo "ROLLBACK WARNING: git clean -fd failed"; ROLLBACK_FAILED=1; }
     git checkout "$PREVIOUS_SHA" 2>/dev/null || { echo "ROLLBACK WARNING: git checkout $PREVIOUS_SHA failed"; ROLLBACK_FAILED=1; }
     pip install --user -r backend/requirements.txt -q 2>/dev/null || { echo "ROLLBACK WARNING: pip install failed"; ROLLBACK_FAILED=1; }
     # Restore the previous frontend/dist backup to avoid a version mismatch:
@@ -104,6 +105,8 @@ fi
 # ── Deploy steps ─────────────────────────────────────────────────────────────
 echo "==> (1) Discard local changes and checkout SHA: $TARGET_SHA"
 git checkout -- . || { echo "FAILED: git reset local changes"; exit 1; }
+# Remove untracked files that would block checkout (e.g. one-off scripts copied to the VPS).
+git clean -fd || { echo "FAILED: git clean untracked files"; exit 1; }
 # Retry git fetch up to 3 times with 5s delay — guards against transient network failures
 GIT_FETCH_ATTEMPTS=0
 until git fetch origin main; do
