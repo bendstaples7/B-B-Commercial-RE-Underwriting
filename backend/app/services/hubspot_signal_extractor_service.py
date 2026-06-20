@@ -3,6 +3,8 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy.exc import IntegrityError
+
 from app import db
 from app.models.hubspot_signal import HubSpotSignal
 from app.models.hubspot_signal_dictionary import HubSpotSignalDictionary
@@ -128,21 +130,55 @@ class HubSpotSignalExtractorService:
         sync runs safe — the same signal is never persisted twice — while
         distinct sources/types still produce distinct rows.
 
-        The caller is responsible for adding the returned records to the
-        session and committing.
+        Race-safe insert: each new signal is INSERTed inside its own SAVEPOINT
+        (``db.session.begin_nested``) and flushed immediately. The
+        ``_signal_already_exists`` pre-check is a fast path, but two extraction
+        workers can both pass it concurrently; the database unique index
+        ``uq_hubspot_signals_dedup`` then makes the losing INSERT raise
+        ``IntegrityError``. That error is caught and the signal is skipped, so
+        a concurrent duplicate can never poison the surrounding transaction or
+        create a second row. Signals that fail this way are not returned.
+
+        The returned records are already added to the session and flushed; the
+        caller is still responsible for committing (re-adding them is a no-op).
 
         Args:
             engagement: A HubSpotEngagement model instance.
             lead_id:    The internal Lead.id to associate signals with.
 
         Returns:
-            List of unsaved HubSpotSignal instances.
+            List of HubSpotSignal instances that were successfully inserted
+            (added to the session and flushed) and are awaiting commit.
         """
         body_text = self._get_body_text(engagement)
         body_lower = body_text.lower()
 
         source_engagement_id = str(engagement.hubspot_id) if engagement.hubspot_id else None
         signals = []
+
+        def _persist(signal) -> bool:
+            """Insert one signal inside a SAVEPOINT; return True if it stuck.
+
+            The ``_signal_already_exists`` pre-check above already skips known
+            duplicates. This is the race backstop: if a concurrent worker
+            inserted the same dedup key between that check and this flush, the
+            ``uq_hubspot_signals_dedup`` unique index raises ``IntegrityError``
+            on flush. We roll back ONLY this signal's savepoint and skip it,
+            leaving the surrounding transaction usable so the remaining signals
+            still persist.
+            """
+            try:
+                with db.session.begin_nested():
+                    db.session.add(signal)
+                    db.session.flush()
+                return True
+            except IntegrityError:
+                logger.debug(
+                    "Signal %s for lead_id=%d source=%s already created by a "
+                    "concurrent worker (unique index) — skipping (race).",
+                    signal.signal_type, lead_id, source_engagement_id,
+                )
+                return False
 
         for signal_type, keywords in self._dictionary.items():
             # FOLLOW_UP_OVERDUE is handled separately — skip keyword matching
@@ -166,11 +202,12 @@ class HubSpotSignalExtractorService:
                     source_engagement_id=source_engagement_id,
                     raw_evidence=matched_keyword,
                 )
-                signals.append(signal)
-                logger.debug(
-                    "Signal %s extracted for lead_id=%d (keyword=%r).",
-                    signal_type, lead_id, matched_keyword,
-                )
+                if _persist(signal):
+                    signals.append(signal)
+                    logger.debug(
+                        "Signal %s extracted for lead_id=%d (keyword=%r).",
+                        signal_type, lead_id, matched_keyword,
+                    )
 
         # FOLLOW_UP_OVERDUE: check for an open overdue task on this lead
         if self._has_overdue_task(lead_id) and not self._signal_already_exists(
@@ -182,11 +219,12 @@ class HubSpotSignalExtractorService:
                 source_engagement_id=source_engagement_id,
                 raw_evidence='open overdue task detected',
             )
-            signals.append(signal)
-            logger.debug(
-                "Signal FOLLOW_UP_OVERDUE extracted for lead_id=%d (overdue task).",
-                lead_id,
-            )
+            if _persist(signal):
+                signals.append(signal)
+                logger.debug(
+                    "Signal FOLLOW_UP_OVERDUE extracted for lead_id=%d (overdue task).",
+                    lead_id,
+                )
 
         return signals
 

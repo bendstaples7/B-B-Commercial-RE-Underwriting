@@ -2915,3 +2915,118 @@ class TestBug9SignalDedupAndNoInterest:
                 f"Expected exactly one PRIOR_WARM_CONVERSATION row for the "
                 f"(lead, type, source) key after two extractions, got {count}."
             )
+
+    def test_bug9_extraction_race_integrityerror_is_swallowed(self, app):
+        """A concurrent duplicate INSERT that violates the new unique index
+        (uq_hubspot_signals_dedup) raises IntegrityError on flush; extract_signals
+        must CATCH it, skip ONLY that signal, and still persist the rest — the
+        surrounding transaction stays usable and no duplicate row is created.
+
+        This is the race backstop behind the DB uniqueness constraint added in
+        migration d6e7f8a9b0c1: two workers can pass the app-level
+        _signal_already_exists pre-check concurrently, so the losing INSERT must
+        fail gracefully (savepoint rollback) rather than poison the transaction
+        or duplicate the row.
+
+        **Validates: Bug 9 Fix C — race-safe signal extraction (DB unique index)**
+        """
+        from sqlalchemy.exc import IntegrityError
+        from app.models.hubspot_signal import HubSpotSignal
+        from app.models.hubspot_signal_dictionary import HubSpotSignalDictionary
+        from app.services.hubspot_signal_extractor_service import (
+            HubSpotSignalExtractorService,
+        )
+
+        with app.app_context():
+            # Two keyword signal types, both present in the body — one will lose
+            # the simulated race, the other must still be persisted.
+            db.session.add(HubSpotSignalDictionary(
+                signal_type="PRIOR_WARM_CONVERSATION",
+                keywords=["interested"],
+            ))
+            db.session.add(HubSpotSignalDictionary(
+                signal_type="OFFER_PREVIOUSLY_SENT",
+                keywords=["offer sent"],
+            ))
+            db.session.flush()
+
+            lead = Lead(
+                property_street="950 Race Condition Way",
+                lead_status="mailing_no_contact_made",
+            )
+            db.session.add(lead)
+            db.session.flush()
+
+            engagement = HubSpotEngagement(
+                hubspot_id="eng_bug9_race",
+                engagement_type="NOTE",
+                raw_payload={"metadata": {
+                    "body": "Owner is interested; an offer sent last month"
+                }},
+            )
+            db.session.add(engagement)
+            db.session.commit()
+
+            extractor = HubSpotSignalExtractorService()
+
+            # Simulate the race: the FIRST INSERT of a brand-new HubSpotSignal
+            # fails with IntegrityError (exactly what the DB unique index raises
+            # when a concurrent worker already inserted the same dedup key);
+            # every later flush behaves normally. Keying off db.session.new means
+            # the autoflush from the _signal_already_exists SELECT (no pending
+            # signal yet) never trips the simulated failure.
+            SessionClass = type(db.session())
+            real_flush = SessionClass.flush
+            state = {"raised": False}
+
+            def flaky_flush(self, *args, **kwargs):
+                if not state["raised"] and any(
+                    isinstance(obj, HubSpotSignal) for obj in self.new
+                ):
+                    state["raised"] = True
+                    raise IntegrityError(
+                        'duplicate key value violates unique constraint '
+                        '"uq_hubspot_signals_dedup"',
+                        None,
+                        Exception("UniqueViolation"),
+                    )
+                return real_flush(self, *args, **kwargs)
+
+            with patch.object(SessionClass, "flush", flaky_flush):
+                # Must NOT raise — the IntegrityError is swallowed internally.
+                signals = extractor.extract_signals(engagement, lead.id)
+
+            # The IntegrityError path was actually exercised, and exactly one
+            # signal lost the race (was skipped) while the other stuck.
+            assert state["raised"], "Test did not exercise the IntegrityError path."
+            assert len(signals) == 1, (
+                f"Expected exactly one persisted signal (one raced and was "
+                f"skipped), got {[s.signal_type for s in signals]}."
+            )
+
+            # The surrounding transaction is still usable — commit the rest.
+            db.session.commit()
+
+            persisted_type = signals[0].signal_type
+            skipped_type = (
+                "OFFER_PREVIOUSLY_SENT"
+                if persisted_type == "PRIOR_WARM_CONVERSATION"
+                else "PRIOR_WARM_CONVERSATION"
+            )
+
+            # The raced signal created NO row (its savepoint was rolled back).
+            assert HubSpotSignal.query.filter_by(
+                lead_id=lead.id, signal_type=skipped_type
+            ).count() == 0, (
+                f"Raced signal {skipped_type} must not have been inserted."
+            )
+            # The non-raced signal was committed normally — exactly one row.
+            assert HubSpotSignal.query.filter_by(
+                lead_id=lead.id, signal_type=persisted_type
+            ).count() == 1, (
+                f"Non-raced signal {persisted_type} must have been committed."
+            )
+            # No duplicates anywhere for this lead.
+            assert HubSpotSignal.query.filter_by(lead_id=lead.id).count() == 1, (
+                "Exactly one signal row must exist for the lead after the race."
+            )

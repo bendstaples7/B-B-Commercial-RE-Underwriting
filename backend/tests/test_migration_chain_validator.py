@@ -112,11 +112,11 @@ class TestRealChainValidator:
         )
 
     def test_real_chain_head_is_squash_marker(self):
-        """The single head must be the c5d6e7f8a9b0 lead_crm_flags GIS-match view revision."""
+        """The single head must be the d6e7f8a9b0c1 hubspot_signals dedup unique-index revision."""
         from app.migration_utils import assert_single_head_and_root
         result = assert_single_head_and_root()
-        assert result["head_revisions"] == ["c5d6e7f8a9b0"], (
-            f"Expected head revision 'c5d6e7f8a9b0', got {result['head_revisions']}"
+        assert result["head_revisions"] == ["d6e7f8a9b0c1"], (
+            f"Expected head revision 'd6e7f8a9b0c1', got {result['head_revisions']}"
         )
 
     def test_real_chain_result_has_required_keys(self):
@@ -265,8 +265,8 @@ class TestCheckMigrationChainScript:
         assert "000000000000" in output, (
             f"Expected root '000000000000' in script output, got: {output!r}"
         )
-        assert "c5d6e7f8a9b0" in output, (
-            f"Expected head 'c5d6e7f8a9b0' in script output, got: {output!r}"
+        assert "d6e7f8a9b0c1" in output, (
+            f"Expected head 'd6e7f8a9b0c1' in script output, got: {output!r}"
         )
 
 
