@@ -315,14 +315,16 @@ class CookCountyGISConnector(GISConnector):
     def lookup_by_pin(self, pin: str) -> Optional[GISParcel]:
         """Look up a parcel by 14-digit Cook County PIN.
 
-        Fetches improvement characteristics directly.
-        Returns None if no data found for that PIN.
+        Fetches improvement characteristics directly. Returns None when the PIN
+        is missing/empty OR when no characteristics are found for it — an empty
+        PIN or empty result must report *no match* rather than a truthy
+        (false-positive) match.
         """
-        chars = _fetch_improvement_chars(pin, self._improvement_chars_url)
-        if not chars and not pin:
+        if not pin or not str(pin).strip():
             return None
-        # Even if chars is empty we return a parcel with just the PIN —
-        # that's enough to set has_property_match = True.
+        chars = _fetch_improvement_chars(pin, self._improvement_chars_url)
+        if not chars:
+            return None
         return _build_parcel(pin, chars)
 
 

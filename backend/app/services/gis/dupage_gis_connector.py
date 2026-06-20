@@ -180,14 +180,32 @@ class DuPageGISConnector(GISConnector):
         without unit numbers (e.g. '107 MAIN ST' not '107 MAIN ST APT 2').
         """
         import re
-        # Normalise to uppercase and strip unit suffixes
+        # Normalise to uppercase and strip explicit unit suffixes (APT/UNIT/...).
         street_part = address.split(',')[0].strip().upper()
         street_part = re.sub(
             r'\s+(APT|UNIT|STE|SUITE|#|FL|FLOOR|FRNT|FRONT|REAR|BSMT|BS)\s*\S*$',
             '', street_part
         )
-        street_part = re.sub(r'\s+(\d+[A-Z\-]*|\d+(ST|ND|RD|TH))$', '', street_part)
-        safe = street_part.strip().replace("'", "''").replace("%", r"\%").replace("_", r"\_")
+        # Strip a *bare* trailing unit number ONLY when it directly follows a
+        # recognised street-type suffix (e.g. "107 MAIN ST 2" -> "107 MAIN ST").
+        # The previous "strip any trailing number" rule was too broad: it also
+        # removed legitimate content such as route/highway numbers
+        # ("200 ROUTE 59") and numbered streets ("300 5TH"). Requiring a
+        # preceding suffix keeps those intact while still dropping true unit
+        # numbers that DuPage's dataset does not store.
+        street_part = re.sub(
+            r'\b(ST|STREET|AVE|AVENUE|BLVD|BOULEVARD|CIR|CIRCLE|CT|COURT|'
+            r'DR|DRIVE|LN|LANE|PL|PLACE|RD|ROAD|TER|TERRACE|WAY|PKWY|PARKWAY|'
+            r'CRES|CRESCENT|SQ|SQUARE|TRL|TRAIL)\s+\d+[A-Z]?$',
+            r'\1',
+            street_part,
+        )
+        street_part = street_part.strip()
+        # Guard against an empty normalised address: an empty LIKE pattern
+        # ('%%') would match every parcel. Report no match instead of querying.
+        if not street_part:
+            return None
+        safe = street_part.replace("'", "''").replace("%", r"\%").replace("_", r"\_")
         where_clause = f"UPPER(PROPADDRL1) LIKE '%{safe}%' ESCAPE '\\'"
         return self._query_endpoint(where_clause)
 

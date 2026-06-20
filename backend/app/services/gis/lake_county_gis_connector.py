@@ -84,6 +84,21 @@ def _normalise_address(address: str) -> str:
     return street_part.strip()
 
 
+def _escape_like(value: str) -> str:
+    """Escape SQL ``LIKE`` wildcards so user input is matched literally.
+
+    Escapes the escape character first, then the ``%`` and ``_`` wildcards,
+    using backslash as the escape char. Must be paired with an explicit
+    ``ESCAPE '\\'`` clause in the query so ``%`` / ``_`` in an address can't
+    act as wildcards (wrong matches) and a stray ``\\`` can't break the clause.
+    """
+    return (
+        value.replace('\\', '\\\\')
+             .replace('%', '\\%')
+             .replace('_', '\\_')
+    )
+
+
 def _map_attributes(attrs: dict) -> GISParcel:
     """Map Lake County FeatureServer attributes to GISParcel."""
     return GISParcel(
@@ -164,8 +179,12 @@ class LakeCountyGISConnector(GISConnector):
         tokens = normalised.split()
         if len(tokens) >= 2:
             prefix = ' '.join(tokens[:3]) if len(tokens) >= 3 else ' '.join(tokens[:2])
-            safe_prefix = prefix.replace("'", "''")
-            result = self._query(f"UPPER(situs_addr_line_1_First) LIKE '{safe_prefix}%'")
+            # Escape LIKE wildcards (and the escape char) in the user value,
+            # then double single quotes; the trailing % is our intended wildcard.
+            safe_prefix = _escape_like(prefix).replace("'", "''")
+            result = self._query(
+                f"UPPER(situs_addr_line_1_First) LIKE '{safe_prefix}%' ESCAPE '\\'"
+            )
         return result
 
     def lookup_by_pin(self, pin: str) -> Optional[GISParcel]:

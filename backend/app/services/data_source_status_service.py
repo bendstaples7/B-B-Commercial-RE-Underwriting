@@ -61,7 +61,7 @@ class DataSourceStatusService:
             "enrichment_sources": self._get_enrichment_statuses(user_id),
             "import_source": self._get_import_source(user_id),
             "hubspot_source": self._get_hubspot_source(),
-            "gis_connectors": self._get_gis_connector_statuses(),
+            "gis_connectors": self._get_gis_connector_statuses(user_id),
         }
 
     # ------------------------------------------------------------------ #
@@ -232,14 +232,18 @@ class DataSourceStatusService:
             "connected": connected,
         }
 
-    def _get_gis_connector_statuses(self) -> list:
-        """Return status for each registered GIS connector.
+    def _get_gis_connector_statuses(self, user_id: str) -> list:
+        """Return status for each registered GIS connector, scoped to *user_id*.
 
         For each connector, reports:
-        - How many leads in the system are matched (has_property_match=True)
+        - How many of *this user's* leads are matched (has_property_match=True)
           by that connector (inferred from county/city routing)
-        - How many leads in that county/city group are still unmatched
+        - How many of this user's leads in that county/city group are still
+          unmatched
         - Whether the connector API is reachable (sampled via a single test query)
+
+        Counts are filtered by ``owner_user_id`` so one user's match totals can
+        never include another user's leads.
         """
         from app.services.gis.routing import _ensure_connectors_loaded, _resolve_market
         from app.services.gis.base import GISConnectorRegistry
@@ -266,7 +270,11 @@ class DataSourceStatusService:
                 func.count(Lead.id).label('total'),
                 func.sum(case((Lead.has_property_match == True, 1), else_=0)).label('matched'),
             )
-            .filter(Lead.property_street != None, Lead.property_street != '')
+            .filter(
+                Lead.owner_user_id == user_id,   # scope to the requesting user — no cross-user leakage
+                Lead.property_street != None,    # noqa: E711
+                Lead.property_street != '',
+            )
             .group_by(Lead.property_city, Lead.property_state)
             .all()
         )

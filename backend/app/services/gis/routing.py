@@ -130,11 +130,12 @@ def _resolve_market(lead) -> Optional[str]:
     if city in _COOK_COUNTY_CITIES or city == 'CHICAGO':
         return 'cook_county_il'
 
-    # Fallback: if we have no city info and it's an IL lead, try DuPage
-    # (the original behaviour before multi-county support was added).
-    if not city and state in ('IL', 'ILLINOIS'):
-        return 'dupage_il'
-
+    # No explicit county/city signal — do NOT default-route to any connector.
+    # Previously a blank/unknown city on an IL lead fell back to DuPage, which
+    # mis-attributed out-of-area and unknown-location leads to DuPage and could
+    # fire address lookups against the wrong county. Routing now requires a
+    # recognised city (an explicit signal); blank/empty or unrecognised inputs
+    # return None (no connector) per the existing ambiguous-route pattern.
     return None
 
 

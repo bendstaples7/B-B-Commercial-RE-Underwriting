@@ -1104,7 +1104,15 @@ class GoogleSheetsImporter:
                             job_id, len(matched_lead_ids),
                         )
             except Exception as gis_exc:
-                # GIS enrichment is best-effort — never fail a completed import
+                # GIS enrichment is best-effort — never fail a completed import.
+                # The import data was already committed above, so roll back only
+                # the (uncommitted) GIS sub-step. A failed enrichment or its
+                # commit leaves the session in a "needs rollback" state; without
+                # this the next caller to reuse the session hits a poisoned
+                # transaction. This cannot undo the already-committed import
+                # rows, and the post-commit refresh_lead_scoring loop commits
+                # per-lead internally, so it is unaffected.
+                db.session.rollback()
                 logger.error(
                     "ImportJob %s: post-import GIS enrichment failed: %s",
                     job_id, gis_exc,

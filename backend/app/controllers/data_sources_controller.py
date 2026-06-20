@@ -85,4 +85,9 @@ def get_data_source_status():
     """
     svc = DataSourceStatusService()
     payload = svc.get_all_statuses(g.user_id)
-    return jsonify(_status_schema.dump(payload)), 200
+    response = jsonify(_status_schema.dump(payload))
+    # The payload (including GIS match counts) is scoped to this user, so it
+    # must never be served to another user from a shared/proxy cache. Mark it
+    # private + no-store so cached results stay keyed to the requesting user.
+    response.headers['Cache-Control'] = 'private, no-store'
+    return response, 200

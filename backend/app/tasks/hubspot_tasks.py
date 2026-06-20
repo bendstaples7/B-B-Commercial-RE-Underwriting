@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import tempfile
+import time
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,55 @@ WARM_SIGNAL_TYPES = frozenset({'PRIOR_WARM_CONVERSATION', 'APPOINTMENT_OCCURRED'
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+def _fetch_deal_contact_associations_with_retry(
+    client, deal_id: str, *, max_attempts: int = 3, base_delay: float = 1.0,
+) -> list:
+    """Fetch one deal's contact associations via the v4 batch API with bounded
+    retry + exponential backoff on *transient* HubSpot failures.
+
+    HubSpot rate limits (429) and server/timeout errors surface as
+    ``HubSpotRateLimitError`` / ``ExternalServiceError`` from the client. Those
+    are retried up to ``max_attempts`` times, honouring a server-provided
+    ``Retry-After`` when present. A non-transient error, or a final exhausted
+    retry, is logged and reported as an empty list so a flaky association fetch
+    degrades gracefully instead of aborting enrichment — consistent with the
+    surrounding best-effort error handling.
+
+    Returns the list of associated contact-id strings (possibly empty).
+    """
+    from app.exceptions import ExternalServiceError, HubSpotRateLimitError
+
+    transient = (HubSpotRateLimitError, ExternalServiceError)
+    for attempt in range(1, max_attempts + 1):
+        try:
+            assoc_map = client.fetch_deal_contact_associations([deal_id])
+            return assoc_map.get(deal_id, [])
+        except transient as exc:
+            if attempt >= max_attempts:
+                logger.warning(
+                    "v4 deal->contact association fetch for deal %s failed after "
+                    "%d attempts: %s", deal_id, attempt, exc,
+                )
+                return []
+            payload = getattr(exc, 'payload', None) or {}
+            retry_after = payload.get('retry_after')
+            delay = float(retry_after) if retry_after else base_delay * (2 ** (attempt - 1))
+            logger.warning(
+                "v4 deal->contact association fetch for deal %s failed "
+                "(attempt %d/%d), retrying in %.1fs: %s",
+                deal_id, attempt, max_attempts, delay, exc,
+            )
+            time.sleep(delay)
+        except Exception as exc:
+            # Non-transient (auth / programming) error — don't hammer the API.
+            logger.warning(
+                "v4 deal->contact association fetch for deal %s failed "
+                "(non-retryable): %s", deal_id, exc,
+            )
+            return []
+    return []
+
 
 def _mark_run_failed(db, run, message: str) -> None:
     """Mark an ImportRun as failed with an error message."""
@@ -950,17 +1000,13 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                         "retrying v4 associations fetch", deal.hubspot_id,
                     )
                     if _client:
-                        try:
-                            assoc_map = _client.fetch_deal_contact_associations(
-                                [deal.hubspot_id]
-                            )
-                            raw_ids = assoc_map.get(deal.hubspot_id, [])
-                            contact_ids = [{"id": cid} for cid in raw_ids]
-                        except Exception as _retry_exc:
-                            logger.warning(
-                                "run_enrich_leads_from_hubspot: retry failed for deal %s: %s",
-                                deal.hubspot_id, _retry_exc,
-                            )
+                        # Bounded retry/backoff: a transient v4 failure (rate
+                        # limit / 5xx / timeout) is retried before giving up,
+                        # rather than a single best-effort attempt.
+                        raw_ids = _fetch_deal_contact_associations_with_retry(
+                            _client, deal.hubspot_id
+                        )
+                        contact_ids = [{"id": cid} for cid in raw_ids]
                 for assoc_entry in contact_ids:
                     cid = str(assoc_entry.get("id", ""))
                     if not cid:

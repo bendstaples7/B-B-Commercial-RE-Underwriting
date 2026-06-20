@@ -1509,50 +1509,105 @@ def backfill_property_matches_task(self):
 
             from app.services.gis.routing import connector_for_lead
 
-            # Sweep ALL leads in the system where:
+            # Sweep leads where:
             # - property_street is populated (something to look up)
             # - has_property_match is still False
-            # Batched at 200 per run to keep each execution short.
+            #
+            # Forward progress: page through the unmatched set with a strictly
+            # increasing id cursor (id > last_id) instead of re-selecting the
+            # same first N rows every run. Leads that don't resolve (no
+            # connector / no parcel / error) keep has_property_match=False, so
+            # without a cursor the task would reprocess the same first batch
+            # forever and never reach the rest. The cursor guarantees each lead
+            # is touched at most once per run and that the sweep terminates.
             BATCH_SIZE = 200
-            unmatched = (
-                db.session.query(Property)
-                .filter(
-                    Property.has_property_match == False,   # noqa: E712
-                    Property.property_street != None,        # noqa: E711
-                    Property.property_street != '',
-                )
-                .order_by(Property.id)
-                .limit(BATCH_SIZE)
-                .all()
-            )
-
-            if not unmatched:
-                _logger.info("gis.backfill_property_matches: nothing to do")
-                return {'status': 'completed', 'matched': 0, 'no_match': 0, 'errors': 0}
+            # Cap on the number of *network* GIS lookups per invocation. The id
+            # cursor already guarantees termination; this just bounds a single
+            # run's external-API load. Cheap no-connector skips don't count
+            # against it, so out-of-state leads can't starve the lookup budget.
+            MAX_GIS_LOOKUPS_PER_RUN = 1000
 
             matched = 0
             no_match = 0
             errors = 0
             no_connector = 0
+            gis_lookups = 0
+            processed = 0
+            last_id = 0
+            capped = False
 
-            for lead in unmatched:
-                lead_connector = connector_for_lead(lead)
-                if not lead_connector:
-                    no_connector += 1
-                    continue
-                outcome = ingestion_svc._enrich_with_gis(lead, lead_connector, import_job_id=0)
-                if outcome.get('error'):
-                    errors += 1
-                elif outcome.get('match_found'):
-                    matched += 1
-                else:
-                    no_match += 1
+            while not capped:
+                batch = (
+                    db.session.query(Property)
+                    .filter(
+                        Property.has_property_match == False,   # noqa: E712
+                        Property.property_street != None,        # noqa: E711
+                        Property.property_street != '',
+                        Property.id > last_id,                   # cursor — forward progress
+                    )
+                    .order_by(Property.id)
+                    .limit(BATCH_SIZE)
+                    .all()
+                )
+                if not batch:
+                    break  # swept the whole unmatched set — terminate
 
-            db.session.commit()
+                for lead in batch:
+                    last_id = lead.id          # advance cursor past every lead we touch
+                    processed += 1
+                    # Per-lead isolation: one bad lead is logged and skipped,
+                    # never aborting the whole sweep.
+                    try:
+                        lead_connector = connector_for_lead(lead)
+                        if not lead_connector:
+                            no_connector += 1
+                            continue
+                        outcome = ingestion_svc._enrich_with_gis(
+                            lead, lead_connector, import_job_id=0
+                        )
+                        gis_lookups += 1
+                        if outcome.get('error'):
+                            errors += 1
+                        elif outcome.get('match_found'):
+                            matched += 1
+                        else:
+                            no_match += 1
+                    except Exception as lead_exc:
+                        errors += 1
+                        _logger.warning(
+                            "gis.backfill_property_matches: skipping lead id=%s "
+                            "after unexpected error: %s",
+                            getattr(lead, 'id', '?'), lead_exc,
+                        )
+
+                    if gis_lookups >= MAX_GIS_LOOKUPS_PER_RUN:
+                        capped = True
+                        break
+
+                # Persist this page's matches before moving on so a later
+                # failure can't discard progress already made.
+                try:
+                    db.session.commit()
+                except Exception as commit_exc:
+                    db.session.rollback()
+                    _logger.error(
+                        "gis.backfill_property_matches: page commit failed "
+                        "(ending id=%s), rolled back page: %s",
+                        last_id, commit_exc,
+                    )
+
+            if processed == 0:
+                _logger.info("gis.backfill_property_matches: nothing to do")
+            if capped:
+                _logger.warning(
+                    "gis.backfill_property_matches: hit per-run GIS lookup cap of "
+                    "%d; remaining unmatched leads will be swept on the next run",
+                    MAX_GIS_LOOKUPS_PER_RUN,
+                )
             _logger.info(
                 "gis.backfill_property_matches: %d matched, %d no-match, %d errors, "
-                "%d no-connector (batch=%d)",
-                matched, no_match, errors, no_connector, len(unmatched),
+                "%d no-connector (processed=%d, capped=%s)",
+                matched, no_match, errors, no_connector, processed, capped,
             )
             return {
                 'status': 'completed',
@@ -1560,7 +1615,8 @@ def backfill_property_matches_task(self):
                 'no_match': no_match,
                 'errors': errors,
                 'no_connector': no_connector,
-                'processed': len(unmatched),
+                'processed': processed,
+                'capped': capped,
             }
 
     except Exception as exc:
