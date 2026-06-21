@@ -87,3 +87,17 @@ class TestPipelineLock:
         assert try_acquire_pipeline_lock() is True
         assert try_acquire_pipeline_lock() is False
         release_pipeline_lock()
+
+    def test_subprocess_entry_path_runs_pipeline_once(self, app_ctx):
+        """run_pipeline_once must not pre-acquire the lock (same-process double acquire no-ops)."""
+        from app.services.hubspot_pipeline_runner import run_pipeline_after_imports
+
+        calls = []
+
+        with patch(
+            'app.services.hubspot_pipeline_runner.run_post_import_pipeline_sync',
+            side_effect=lambda: calls.append('ran'),
+        ):
+            run_pipeline_after_imports(app_ctx, run_ids=[])
+
+        assert calls == ['ran']

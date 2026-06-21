@@ -2,7 +2,8 @@
 """Run the HubSpot post-import pipeline in a detached subprocess.
 
 Used when Celery is unavailable so pipeline work survives Gunicorn worker
-reloads (daemon threads do not).
+reloads (daemon threads do not). Locking is handled inside
+run_pipeline_after_imports — do not acquire here to avoid double-lock no-ops.
 """
 import json
 import logging
@@ -23,26 +24,15 @@ def main() -> int:
     os.environ.setdefault('FLASK_ENV', 'production')
 
     from app import create_app
-    from app.services.hubspot_pipeline_runner import (
-        release_pipeline_lock,
-        run_pipeline_after_imports,
-        try_acquire_pipeline_lock,
-    )
+    from app.services.hubspot_pipeline_runner import run_pipeline_after_imports
 
     app = create_app('production')
-    if not try_acquire_pipeline_lock():
-        logger.info("Pipeline already running elsewhere — skipping duplicate subprocess run")
-        return 0
-
     try:
         run_pipeline_after_imports(app, run_ids or None)
         return 0
     except Exception as exc:
         logger.error("Detached pipeline run failed: %s", exc, exc_info=True)
         return 1
-    finally:
-        with app.app_context():
-            release_pipeline_lock()
 
 
 if __name__ == '__main__':
