@@ -101,7 +101,8 @@ if [[ "${BOOTSTRAP_OWNER}" == "${DEPLOY_USER}" ]] && [[ -f "${BOOTSTRAP_INSTALL}
         die "Refusing to overwrite ${BOOTSTRAP_INSTALL}: deploy-owned source differs from installed copy — update manually as root"
     fi
 fi
-if [[ "${BOOTSTRAP_MODE}" =~ [2367][2367]?$ ]]; then
+# Reject if group (020) or other (002) write bits are set in the octal mode.
+if (( 8#${BOOTSTRAP_MODE} & 8#022 )); then
     die "Refusing to install bootstrap: ${BOOTSTRAP_SRC} is group/world-writable (mode ${BOOTSTRAP_MODE})"
 fi
 
