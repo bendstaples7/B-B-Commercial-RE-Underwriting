@@ -86,6 +86,25 @@ if [[ ! -f "${BOOTSTRAP_SRC}" ]]; then
     die "Bootstrap source not found: ${BOOTSTRAP_SRC}"
 fi
 
+APP_DIR="${APP_DIR:-/home/deploy/app}"
+BOOTSTRAP_REL="scripts/vps-setup/bootstrap-async-stack.sh"
+if [[ -d "${APP_DIR}/.git" ]]; then
+    if ! (cd "${APP_DIR}" && git diff --quiet HEAD -- "${BOOTSTRAP_REL}"); then
+        die "Refusing to install bootstrap: ${BOOTSTRAP_SRC} has local modifications relative to git HEAD"
+    fi
+fi
+
+BOOTSTRAP_OWNER=$(stat -c '%U' "${BOOTSTRAP_SRC}")
+BOOTSTRAP_MODE=$(stat -c '%a' "${BOOTSTRAP_SRC}")
+if [[ "${BOOTSTRAP_OWNER}" == "${DEPLOY_USER}" ]] && [[ -f "${BOOTSTRAP_INSTALL}" ]]; then
+    if ! cmp -s "${BOOTSTRAP_SRC}" "${BOOTSTRAP_INSTALL}"; then
+        die "Refusing to overwrite ${BOOTSTRAP_INSTALL}: deploy-owned source differs from installed copy — update manually as root"
+    fi
+fi
+if [[ "${BOOTSTRAP_MODE}" =~ [2367][2367]?$ ]]; then
+    die "Refusing to install bootstrap: ${BOOTSTRAP_SRC} is group/world-writable (mode ${BOOTSTRAP_MODE})"
+fi
+
 install -m 755 -o root -g root "${BOOTSTRAP_SRC}" "${BOOTSTRAP_INSTALL}"
 info "  ✓ ${BOOTSTRAP_INSTALL} installed (root:root, 755)."
 
@@ -186,6 +205,20 @@ if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl is-active --quiet redis-server
 else
     error "  Missing passwordless sudo for: /bin/systemctl is-active --quiet redis-server"
     die "Redis is-active sudo rule required by deploy.sh."
+fi
+
+if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl is-active --quiet celery"; then
+    info "  ✓ Rule confirmed: deploy can verify celery is active."
+else
+    error "  Missing passwordless sudo for: /bin/systemctl is-active --quiet celery"
+    die "Celery is-active sudo rule required by deploy.sh."
+fi
+
+if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl is-active --quiet celery-beat"; then
+    info "  ✓ Rule confirmed: deploy can verify celery-beat is active."
+else
+    error "  Missing passwordless sudo for: /bin/systemctl is-active --quiet celery-beat"
+    die "Celery-beat is-active sudo rule required by deploy.sh."
 fi
 
 # =============================================================================

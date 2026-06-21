@@ -765,8 +765,7 @@ def create_app(config_name='development'):
                 )
 
                 dangling_match_count = count_dangling_confirmed_lead_matches()
-                if not os.environ.get('PIPELINE_SUBPROCESS'):
-                    maybe_start_startup_pipeline_recovery(app, dangling_match_count)
+                maybe_start_startup_pipeline_recovery(app, dangling_match_count)
 
                 # Option 2: startup recovery — log if imports completed but no signals exist.
                 # The pipeline will run automatically on the next import trigger via the

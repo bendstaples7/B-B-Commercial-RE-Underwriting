@@ -22,6 +22,8 @@ _TERMINAL_IMPORT_STATUSES = frozenset({'success', 'partial', 'failed'})
 
 # PostgreSQL advisory lock key — prevents concurrent pipeline runs across workers.
 _PIPELINE_ADVISORY_LOCK_KEY = 913372001
+# Separate key so startup recovery spawn is single-flight across Gunicorn workers.
+_RECOVERY_SPAWN_LOCK_KEY = 913372002
 
 # Set on detached subprocess env so Flask startup does not recurse into recovery.
 _PIPELINE_SUBPROCESS_ENV = 'PIPELINE_SUBPROCESS'
@@ -30,6 +32,7 @@ _in_process_pipeline_lock = threading.Lock()
 _advisory_lock_held = False
 # Dedicated DB connection holding the PostgreSQL advisory lock for its lifetime.
 _lock_connection = None
+_spawn_coord_connection = None
 
 
 def run_post_import_pipeline_sync() -> None:
@@ -88,6 +91,14 @@ def _is_non_postgresql_dialect() -> bool:
     return db.engine.dialect.name != 'postgresql'
 
 
+def _open_autocommit_connection():
+    """Return a dedicated autocommit DB connection (PostgreSQL only)."""
+    from app import db
+
+    conn = db.engine.connect()
+    return conn.execution_options(isolation_level='AUTOCOMMIT')
+
+
 def try_acquire_pipeline_lock() -> bool:
     """Acquire a cross-process lock so only one pipeline run executes at a time."""
     global _advisory_lock_held, _lock_connection
@@ -103,9 +114,9 @@ def try_acquire_pipeline_lock() -> bool:
             _advisory_lock_held = False
             return True
 
-        # Hold a dedicated connection for the lock lifetime so pool checkouts
-        # during pipeline commits cannot drop the advisory lock.
-        _lock_connection = db.engine.connect()
+        # Hold a dedicated autocommit connection for the lock lifetime so pool
+        # checkouts during pipeline commits cannot drop the advisory lock.
+        _lock_connection = _open_autocommit_connection()
         acquired = _lock_connection.execute(
             db.text('SELECT pg_try_advisory_lock(:key)'),
             {'key': _PIPELINE_ADVISORY_LOCK_KEY},
@@ -199,7 +210,77 @@ def start_pipeline_subprocess(run_ids: Optional[list[int]] = None) -> None:
     logger.info("Pipeline subprocess started (run_ids=%s)", run_ids)
 
 
-def maybe_start_startup_pipeline_recovery(_app, dangling_match_count: int) -> None:
+def _try_claim_recovery_spawn() -> bool:
+    """Return True when this worker should spawn startup recovery (single-flight)."""
+    try:
+        import redis as redis_lib
+
+        redis_url = os.environ.get('REDIS_URL') or os.environ.get('CELERY_BROKER_URL', '')
+        if redis_url:
+            client = redis_lib.from_url(
+                redis_url, socket_connect_timeout=1, socket_timeout=1,
+            )
+            if client.set('hubspot:pipeline:recovery_spawn', '1', nx=True, ex=600):
+                return True
+            logger.info("Startup recovery spawn already claimed (Redis guard)")
+            return False
+    except Exception:
+        logger.debug("Redis recovery spawn guard unavailable", exc_info=True)
+
+    return _try_acquire_recovery_spawn_lock()
+
+
+def _try_acquire_recovery_spawn_lock() -> bool:
+    """PostgreSQL fallback: non-blocking advisory lock for recovery spawn."""
+    global _spawn_coord_connection
+
+    if _is_non_postgresql_dialect():
+        return True
+
+    try:
+        from app import db
+
+        _spawn_coord_connection = _open_autocommit_connection()
+        acquired = _spawn_coord_connection.execute(
+            db.text('SELECT pg_try_advisory_lock(:key)'),
+            {'key': _RECOVERY_SPAWN_LOCK_KEY},
+        ).scalar()
+        if not acquired:
+            _spawn_coord_connection.close()
+            _spawn_coord_connection = None
+            logger.info("Startup recovery spawn already claimed (PostgreSQL guard)")
+            return False
+        return True
+    except Exception:
+        if _spawn_coord_connection is not None:
+            _spawn_coord_connection.close()
+            _spawn_coord_connection = None
+        logger.debug("PostgreSQL recovery spawn guard unavailable", exc_info=True)
+        return True
+
+
+def _release_recovery_spawn_lock() -> None:
+    """Release the recovery spawn coordination lock after subprocess is started."""
+    global _spawn_coord_connection
+
+    if _spawn_coord_connection is None:
+        return
+
+    try:
+        from app import db
+
+        _spawn_coord_connection.execute(
+            db.text('SELECT pg_advisory_unlock(:key)'),
+            {'key': _RECOVERY_SPAWN_LOCK_KEY},
+        )
+    except Exception:
+        logger.debug("Could not release recovery spawn lock", exc_info=True)
+    finally:
+        _spawn_coord_connection.close()
+        _spawn_coord_connection = None
+
+
+def maybe_start_startup_pipeline_recovery(app, dangling_match_count: int) -> None:
     """Start startup recovery pipeline in a detached subprocess (single-flight via lock)."""
     if dangling_match_count <= 0:
         return
@@ -208,11 +289,19 @@ def maybe_start_startup_pipeline_recovery(_app, dangling_match_count: int) -> No
             "Startup recovery skipped — already running inside pipeline subprocess"
         )
         return
-    logger.warning(
-        "Startup recovery: %d dangling confirmed lead match(es) — spawning detached pipeline",
-        dangling_match_count,
-    )
-    start_pipeline_subprocess(run_ids=[])
+
+    with app.app_context():
+        if not _try_claim_recovery_spawn():
+            return
+
+    try:
+        logger.warning(
+            "Startup recovery: %d dangling confirmed lead match(es) — spawning detached pipeline",
+            dangling_match_count,
+        )
+        start_pipeline_subprocess(run_ids=[])
+    finally:
+        _release_recovery_spawn_lock()
 
 
 def count_dangling_confirmed_lead_matches() -> int:

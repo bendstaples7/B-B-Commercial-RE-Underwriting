@@ -84,6 +84,33 @@ class TestStartupPipelineRecovery:
             _, kwargs = mock_popen.call_args
             assert kwargs['env']['PIPELINE_SUBPROCESS'] == '1'
 
+    def test_spawn_skipped_when_recovery_claim_fails(self, app_ctx):
+        from app.services.hubspot_pipeline_runner import maybe_start_startup_pipeline_recovery
+
+        with patch(
+            'app.services.hubspot_pipeline_runner._try_claim_recovery_spawn',
+            return_value=False,
+        ), patch(
+            'app.services.hubspot_pipeline_runner.start_pipeline_subprocess',
+        ) as mock_subprocess:
+            maybe_start_startup_pipeline_recovery(app_ctx, dangling_match_count=2)
+            mock_subprocess.assert_not_called()
+
+    def test_spawn_claims_guard_before_subprocess(self, app_ctx):
+        from app.services.hubspot_pipeline_runner import maybe_start_startup_pipeline_recovery
+
+        with patch(
+            'app.services.hubspot_pipeline_runner._try_claim_recovery_spawn',
+            return_value=True,
+        ), patch(
+            'app.services.hubspot_pipeline_runner._release_recovery_spawn_lock',
+        ) as mock_release, patch(
+            'app.services.hubspot_pipeline_runner.start_pipeline_subprocess',
+        ) as mock_subprocess:
+            maybe_start_startup_pipeline_recovery(app_ctx, dangling_match_count=2)
+            mock_subprocess.assert_called_once_with(run_ids=[])
+            mock_release.assert_called_once()
+
 
 class TestRunPostImportPipelineSync:
     def test_runs_all_pipeline_steps_in_order(self, app_ctx):

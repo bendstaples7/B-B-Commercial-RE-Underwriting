@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> int:
+    """Run the post-deploy HubSpot sync pipeline and queue engagement fetch."""
     # Ensure backend/ is on sys.path when invoked as scripts/post_deploy_sync.py
     backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if backend_dir not in sys.path:
