@@ -109,20 +109,13 @@ class HubSpotImportService:
         # This guarantees the pipeline runs even if Celery/Redis is unavailable.
         # Also dispatch via Celery as a belt-and-suspenders backup.
         from flask import current_app  # noqa: PLC0415
-        from app.services.hubspot_pipeline_runner import (  # noqa: PLC0415
-            start_pipeline_in_background,
-            try_dispatch_celery_pipeline,
-        )
+        from app.services.hubspot_pipeline_runner import dispatch_post_import_pipeline  # noqa: PLC0415
 
         app = current_app._get_current_object()
         run_ids = [r.id for r in runs]
 
-        # Background thread guarantees the pipeline runs even when Celery is down.
-        start_pipeline_in_background(app, run_ids)
-        logger.info("Pipeline thread started for run_ids=%s", run_ids)
-
-        # Also dispatch via Celery when available (belt-and-suspenders).
-        try_dispatch_celery_pipeline(run_ids)
+        mode = dispatch_post_import_pipeline(app, run_ids)
+        logger.info("Post-import pipeline dispatched for run_ids=%s (mode=%s)", run_ids, mode)
 
         return runs
 

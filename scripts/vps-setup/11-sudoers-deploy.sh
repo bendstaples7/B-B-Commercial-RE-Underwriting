@@ -42,7 +42,7 @@ die()   { error "$*"; exit 1; }
 SUDOERS_FILE="/etc/sudoers.d/deploy"
 DEPLOY_USER="deploy"
 # Exact rules required for zero-downtime deploys and async stack management.
-SUDOERS_RULE="deploy ALL=(ALL) NOPASSWD: /bin/systemctl reload gunicorn, /bin/systemctl restart celery, /bin/systemctl restart celery-beat, /bin/systemctl is-active redis-server, /bin/systemctl is-active celery, /bin/systemctl is-active celery-beat"
+SUDOERS_RULE="deploy ALL=(ALL) NOPASSWD: /bin/systemctl reload gunicorn, /bin/systemctl restart celery, /bin/systemctl restart celery-beat, /bin/systemctl is-active redis-server, /bin/systemctl is-active celery, /bin/systemctl is-active celery-beat, /bin/bash /home/deploy/app/scripts/vps-setup/bootstrap-async-stack.sh"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # ── Verify running as root ────────────────────────────────────────────────────
@@ -143,10 +143,25 @@ else
     die "Sudo rule verification failed."
 fi
 
-if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl restart celery"; then
+if echo "${SUDO_LIST}" | grep -qE '/bin/systemctl restart celery([^-]|$)'; then
     info "  ✓ Rule confirmed: deploy can restart celery without a password."
 else
-    warn "  celery restart rule not found — run bootstrap-async-stack.sh to enable deploy-time Celery restarts."
+    error "  Missing passwordless sudo for: /bin/systemctl restart celery"
+    die "Celery restart sudo rule required by deploy.sh."
+fi
+
+if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl restart celery-beat"; then
+    info "  ✓ Rule confirmed: deploy can restart celery-beat without a password."
+else
+    error "  Missing passwordless sudo for: /bin/systemctl restart celery-beat"
+    die "Celery-beat restart sudo rule required by deploy.sh."
+fi
+
+if echo "${SUDO_LIST}" | grep -qF "/bin/bash /home/deploy/app/scripts/vps-setup/bootstrap-async-stack.sh"; then
+    info "  ✓ Rule confirmed: deploy can run bootstrap-async-stack.sh without a password."
+else
+    error "  Missing passwordless sudo for bootstrap-async-stack.sh"
+    die "Bootstrap sudo rule required by deploy.sh for first-time async stack provisioning."
 fi
 
 # =============================================================================

@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
 # bootstrap-async-stack.sh
-# One-time bootstrap for existing VPS: Redis + Celery worker + Celery Beat.
-#
-# Run ON THE VPS as root:
-#   sudo bash /home/deploy/app/scripts/vps-setup/bootstrap-async-stack.sh
+# Provision Redis + Celery worker + Celery Beat on the VPS.
+# Invoked automatically by deploy.sh when celery.service is missing.
+# Also safe to run manually as root for idempotent re-provisioning.
 # =============================================================================
 
 set -euo pipefail

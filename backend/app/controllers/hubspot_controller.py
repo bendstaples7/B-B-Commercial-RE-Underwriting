@@ -248,7 +248,7 @@ def run_pipeline_now():
     (e.g. Redis was unavailable when the import was triggered).
 
     Returns 202 Accepted immediately. Uses Celery when available; falls back
-    to a background thread in the Gunicorn process when Celery is down.
+    to a detached subprocess when Celery is down.
     """
     from flask import current_app  # noqa: PLC0415
     from app.services.hubspot_pipeline_runner import dispatch_post_import_pipeline  # noqa: PLC0415
@@ -259,7 +259,7 @@ def run_pipeline_now():
     message = (
         'Post-import pipeline queued via Celery'
         if mode == 'celery'
-        else 'Post-import pipeline started in background thread (Celery unavailable)'
+        else 'Post-import pipeline started in detached subprocess (Celery unavailable)'
     )
     return jsonify({'status': 'queued', 'mode': mode, 'message': message}), 202
 

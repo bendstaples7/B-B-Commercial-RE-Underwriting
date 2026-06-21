@@ -29,18 +29,18 @@ class TestCountDanglingConfirmedLeadMatches:
 
 
 class TestDispatchPostImportPipeline:
-    def test_uses_thread_when_celery_unavailable(self, app_ctx):
+    def test_uses_subprocess_when_celery_unavailable(self, app_ctx):
         from app.services.hubspot_pipeline_runner import dispatch_post_import_pipeline
 
         with patch(
             'app.services.hubspot_pipeline_runner.try_dispatch_celery_pipeline',
             return_value=False,
         ), patch(
-            'app.services.hubspot_pipeline_runner.start_pipeline_in_background',
-        ) as mock_thread:
+            'app.services.hubspot_pipeline_runner.start_pipeline_subprocess',
+        ) as mock_subprocess:
             mode = dispatch_post_import_pipeline(app_ctx, run_ids=None)
-            assert mode == 'thread'
-            mock_thread.assert_called_once_with(app_ctx, None)
+            assert mode == 'subprocess'
+            mock_subprocess.assert_called_once_with(None)
 
     def test_uses_celery_when_available(self, app_ctx):
         from app.services.hubspot_pipeline_runner import dispatch_post_import_pipeline
@@ -49,11 +49,11 @@ class TestDispatchPostImportPipeline:
             'app.services.hubspot_pipeline_runner.try_dispatch_celery_pipeline',
             return_value=True,
         ), patch(
-            'app.services.hubspot_pipeline_runner.start_pipeline_in_background',
-        ) as mock_thread:
+            'app.services.hubspot_pipeline_runner.start_pipeline_subprocess',
+        ) as mock_subprocess:
             mode = dispatch_post_import_pipeline(app_ctx, run_ids=[1, 2])
             assert mode == 'celery'
-            mock_thread.assert_not_called()
+            mock_subprocess.assert_not_called()
 
 
 class TestRunPostImportPipelineSync:
@@ -75,3 +75,15 @@ class TestRunPostImportPipelineSync:
             run_post_import_pipeline_sync()
 
         assert calls == ['matching', 'enrich', 'convert', 'signals', 'rescore']
+
+
+class TestPipelineLock:
+    def test_second_acquire_fails_while_held(self, app_ctx):
+        from app.services.hubspot_pipeline_runner import (
+            release_pipeline_lock,
+            try_acquire_pipeline_lock,
+        )
+
+        assert try_acquire_pipeline_lock() is True
+        assert try_acquire_pipeline_lock() is False
+        release_pipeline_lock()

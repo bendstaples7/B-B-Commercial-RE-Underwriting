@@ -198,22 +198,25 @@ if [ "$GUNICORN_READY" = "0" ]; then
     exit 1
 fi
 
-echo "==> (7) Restart async stack (Celery + Beat) when installed"
-if systemctl list-unit-files celery.service &>/dev/null 2>&1; then
-    sudo systemctl restart celery || { echo "FAILED: celery restart"; exit 1; }
-    echo "    celery restarted"
-    if systemctl list-unit-files celery-beat.service &>/dev/null 2>&1; then
-        sudo systemctl restart celery-beat || { echo "FAILED: celery-beat restart"; exit 1; }
-        echo "    celery-beat restarted"
-    fi
-    systemctl is-active --quiet redis-server || { echo "FAILED: redis-server not active"; exit 1; }
-    systemctl is-active --quiet celery || { echo "FAILED: celery not active after restart"; exit 1; }
-    echo "    async stack verified"
-else
-    echo "    WARNING: celery.service not installed — HubSpot imports and scheduled sync"
-    echo "    will not run until bootstrap-async-stack.sh is executed on the VPS."
-    echo "    Post-deploy data sync (step 8) will still run synchronously."
+echo "==> (7) Ensure async stack is provisioned and healthy"
+if ! systemctl list-unit-files celery.service &>/dev/null 2>&1; then
+    echo "    celery.service not found — provisioning async stack"
+    sudo /bin/bash "${APP_DIR}/scripts/vps-setup/bootstrap-async-stack.sh" \
+        || { echo "FAILED: async stack bootstrap"; exit 1; }
 fi
+sudo systemctl restart celery || { echo "FAILED: celery restart"; exit 1; }
+echo "    celery restarted"
+if systemctl list-unit-files celery-beat.service &>/dev/null 2>&1; then
+    sudo systemctl restart celery-beat || { echo "FAILED: celery-beat restart"; exit 1; }
+    echo "    celery-beat restarted"
+fi
+sudo systemctl is-active --quiet redis-server || { echo "FAILED: redis-server not active"; exit 1; }
+sudo systemctl is-active --quiet celery || { echo "FAILED: celery not active after restart"; exit 1; }
+if systemctl list-unit-files celery-beat.service &>/dev/null 2>&1; then
+    sudo systemctl is-active --quiet celery-beat \
+        || { echo "FAILED: celery-beat not active after restart"; exit 1; }
+fi
+echo "    async stack verified"
 
 echo "==> (8) Post-deploy HubSpot data sync (matching → enrich → rescore)"
 cd backend

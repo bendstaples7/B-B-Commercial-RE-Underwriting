@@ -66,10 +66,11 @@ def main() -> int:
             celery_app.send_task('hubspot.scheduled_engagement_sync')
             logger.info("Queued engagement sync for fresh HubSpot data")
         except Exception as exc:
-            logger.info(
+            logger.warning(
                 "Celery unavailable — skipped engagement fetch (%s). "
                 "Existing DB data was still re-processed by the pipeline above.",
                 exc,
+                exc_info=True,
             )
 
         return 0

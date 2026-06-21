@@ -761,17 +761,11 @@ def create_app(config_name='development'):
                 # scripts/post_deploy_sync.py, but gunicorn reload must self-heal too.
                 from app.services.hubspot_pipeline_runner import (  # noqa: PLC0415
                     count_dangling_confirmed_lead_matches,
-                    start_pipeline_in_background,
+                    maybe_start_startup_pipeline_recovery,
                 )
 
                 dangling_match_count = count_dangling_confirmed_lead_matches()
-                if dangling_match_count > 0:
-                    app.logger.warning(
-                        "Startup recovery: %d dangling confirmed lead match(es) detected. "
-                        "Spawning background thread to run post-import pipeline.",
-                        dangling_match_count,
-                    )
-                    start_pipeline_in_background(app, run_ids=[])
+                maybe_start_startup_pipeline_recovery(app, dangling_match_count)
 
                 # Option 2: startup recovery — log if imports completed but no signals exist.
                 # The pipeline will run automatically on the next import trigger via the

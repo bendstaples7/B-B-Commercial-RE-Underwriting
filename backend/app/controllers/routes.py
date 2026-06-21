@@ -198,7 +198,9 @@ def health_check():
 
         redis_url = os.environ.get('REDIS_URL') or os.environ.get('CELERY_BROKER_URL', '')
         if redis_url:
-            redis_lib.from_url(redis_url, socket_connect_timeout=1).ping()
+            redis_lib.from_url(
+                redis_url, socket_connect_timeout=1, socket_timeout=1,
+            ).ping()
             checks['redis'] = 'ok'
         else:
             checks['redis'] = 'WARN: REDIS_URL not configured'
