@@ -242,17 +242,26 @@ def trigger_import():
 @hubspot_bp.route('/pipeline/run', methods=['POST'])
 @handle_errors
 def run_pipeline_now():
-    """Manually trigger the post-import pipeline (matching → signals → rescore).
+    """Manually trigger the post-import pipeline (matching → enrich → rescore).
 
     Use this when imports have completed but the pipeline did not run
     (e.g. Redis was unavailable when the import was triggered).
 
-    Returns 202 Accepted immediately — pipeline runs asynchronously in Celery.
+    Returns 202 Accepted immediately. Uses Celery when available; falls back
+    to a background thread in the Gunicorn process when Celery is down.
     """
-    from celery import current_app as celery_app  # noqa: PLC0415
-    celery_app.send_task('hubspot.post_import_pipeline', kwargs={'run_ids': None})
-    logger.info("Manually triggered post-import pipeline via /pipeline/run")
-    return jsonify({'status': 'queued', 'message': 'Post-import pipeline queued (matching → signals → rescore)'}), 202
+    from flask import current_app  # noqa: PLC0415
+    from app.services.hubspot_pipeline_runner import dispatch_post_import_pipeline  # noqa: PLC0415
+
+    app = current_app._get_current_object()
+    mode = dispatch_post_import_pipeline(app, run_ids=None)
+    logger.info("Manually triggered post-import pipeline via /pipeline/run (mode=%s)", mode)
+    message = (
+        'Post-import pipeline queued via Celery'
+        if mode == 'celery'
+        else 'Post-import pipeline started in background thread (Celery unavailable)'
+    )
+    return jsonify({'status': 'queued', 'mode': mode, 'message': message}), 202
 
 
 @hubspot_bp.route('/import/runs', methods=['GET'])

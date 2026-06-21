@@ -41,8 +41,8 @@ die()   { error "$*"; exit 1; }
 # ── Configuration ─────────────────────────────────────────────────────────────
 SUDOERS_FILE="/etc/sudoers.d/deploy"
 DEPLOY_USER="deploy"
-# Exact rule required by the spec (Requirements 6.3, 8.1)
-SUDOERS_RULE="deploy ALL=(ALL) NOPASSWD: /bin/systemctl reload gunicorn"
+# Exact rules required for zero-downtime deploys and async stack management.
+SUDOERS_RULE="deploy ALL=(ALL) NOPASSWD: /bin/systemctl reload gunicorn, /bin/systemctl restart celery, /bin/systemctl restart celery-beat, /bin/systemctl is-active redis-server, /bin/systemctl is-active celery, /bin/systemctl is-active celery-beat"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # ── Verify running as root ────────────────────────────────────────────────────
@@ -137,11 +137,16 @@ SUDO_LIST=$(sudo -u "${DEPLOY_USER}" sudo -n -l 2>&1 || true)
 if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl reload gunicorn"; then
     info "  ✓ Rule confirmed: deploy can run 'sudo /bin/systemctl reload gunicorn' without a password."
 else
-    error "  Could not confirm the rule via 'sudo -n -l'."
+    error "  Could not confirm gunicorn reload rule via 'sudo -n -l'."
     error "  sudo -l output:"
     echo "${SUDO_LIST}" | sed 's/^/    /'
-    die "Sudo rule verification failed. The rule in ${SUDOERS_FILE} was not recognised by sudo.
-  Check for syntax issues or conflicting rules in /etc/sudoers or /etc/sudoers.d/."
+    die "Sudo rule verification failed."
+fi
+
+if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl restart celery"; then
+    info "  ✓ Rule confirmed: deploy can restart celery without a password."
+else
+    warn "  celery restart rule not found — run bootstrap-async-stack.sh to enable deploy-time Celery restarts."
 fi
 
 # =============================================================================

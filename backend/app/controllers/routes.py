@@ -190,6 +190,36 @@ def health_check():
         checks['queue_counts'] = f'FAIL: {e}'
         degraded = True
 
+    # ------------------------------------------------------------------
+    # Check 5: Async stack (Redis + Celery worker) — warn only
+    # ------------------------------------------------------------------
+    try:
+        import redis as redis_lib
+
+        redis_url = os.environ.get('REDIS_URL') or os.environ.get('CELERY_BROKER_URL', '')
+        if redis_url:
+            redis_lib.from_url(redis_url, socket_connect_timeout=1).ping()
+            checks['redis'] = 'ok'
+        else:
+            checks['redis'] = 'WARN: REDIS_URL not configured'
+    except Exception as e:
+        checks['redis'] = f'WARN: Redis unreachable ({e})'
+
+    try:
+        from celery import current_app as celery_app  # noqa: PLC0415
+
+        inspect = celery_app.control.inspect(timeout=1.0)
+        ping = inspect.ping() if inspect else None
+        if ping:
+            checks['celery_worker'] = f'ok ({len(ping)} worker(s))'
+        else:
+            checks['celery_worker'] = (
+                'WARN: no Celery workers responding — HubSpot imports and '
+                'scheduled sync will not run until Celery is started'
+            )
+    except Exception as e:
+        checks['celery_worker'] = f'WARN: Celery check failed ({e})'
+
     status = 'degraded' if degraded else 'healthy'
     http_status = 503 if degraded else 200
     from flask import current_app

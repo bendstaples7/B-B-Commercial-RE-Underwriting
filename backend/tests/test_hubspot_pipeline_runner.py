@@ -1,0 +1,77 @@
+"""Tests for hubspot_pipeline_runner."""
+from unittest.mock import patch
+
+import pytest
+
+
+@pytest.fixture
+def app_ctx(app):
+    with app.app_context():
+        yield app
+
+
+class TestCountDanglingConfirmedLeadMatches:
+    def test_counts_match_pointing_at_missing_lead(self, app_ctx, db_session):
+        from app.models.hubspot_match import HubSpotMatch
+        from app.services.hubspot_pipeline_runner import count_dangling_confirmed_lead_matches
+
+        db_session.add(HubSpotMatch(
+            hubspot_record_type='deal',
+            hubspot_id='dangling-test-999',
+            internal_record_type='lead',
+            internal_record_id=999999,
+            confidence='HIGH',
+            status='confirmed',
+        ))
+        db_session.commit()
+
+        assert count_dangling_confirmed_lead_matches() >= 1
+
+
+class TestDispatchPostImportPipeline:
+    def test_uses_thread_when_celery_unavailable(self, app_ctx):
+        from app.services.hubspot_pipeline_runner import dispatch_post_import_pipeline
+
+        with patch(
+            'app.services.hubspot_pipeline_runner.try_dispatch_celery_pipeline',
+            return_value=False,
+        ), patch(
+            'app.services.hubspot_pipeline_runner.start_pipeline_in_background',
+        ) as mock_thread:
+            mode = dispatch_post_import_pipeline(app_ctx, run_ids=None)
+            assert mode == 'thread'
+            mock_thread.assert_called_once_with(app_ctx, None)
+
+    def test_uses_celery_when_available(self, app_ctx):
+        from app.services.hubspot_pipeline_runner import dispatch_post_import_pipeline
+
+        with patch(
+            'app.services.hubspot_pipeline_runner.try_dispatch_celery_pipeline',
+            return_value=True,
+        ), patch(
+            'app.services.hubspot_pipeline_runner.start_pipeline_in_background',
+        ) as mock_thread:
+            mode = dispatch_post_import_pipeline(app_ctx, run_ids=[1, 2])
+            assert mode == 'celery'
+            mock_thread.assert_not_called()
+
+
+class TestRunPostImportPipelineSync:
+    def test_runs_all_pipeline_steps_in_order(self, app_ctx):
+        from app.services.hubspot_pipeline_runner import run_post_import_pipeline_sync
+
+        calls = []
+
+        def _track(name):
+            def _fn():
+                calls.append(name)
+            return _fn
+
+        with patch('app.tasks.hubspot_tasks.run_hubspot_matching', _track('matching')), \
+             patch('app.tasks.hubspot_tasks.run_enrich_leads_from_hubspot', _track('enrich')), \
+             patch('app.tasks.hubspot_tasks.run_convert_hubspot_activities', _track('convert')), \
+             patch('app.tasks.hubspot_tasks.run_extract_hubspot_signals', _track('signals')), \
+             patch('app.tasks.hubspot_tasks.run_rescore_leads_after_import', _track('rescore')):
+            run_post_import_pipeline_sync()
+
+        assert calls == ['matching', 'enrich', 'convert', 'signals', 'rescore']

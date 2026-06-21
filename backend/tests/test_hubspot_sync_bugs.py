@@ -1539,7 +1539,7 @@ class TestBug4DanglingConfirmedMatch:
 #
 # Two wait loops poll HubSpotImportRun status to decide when an import batch is
 # finished, then run the post-import pipeline:
-#   1. app.services.hubspot_import_service._run_pipeline_after_imports — the
+#   1. app.services.hubspot_pipeline_runner.run_pipeline_after_imports — the
 #      in-process background thread.
 #   2. celery_worker.run_post_import_pipeline — the Celery backup task.
 #
@@ -1601,7 +1601,7 @@ class TestBug6PipelineAutoAdvance:
     spinning on a stale identity-map read until the 1-hour timeout."""
 
     def test_bug6_inprocess_pipeline_autoadvances_on_committed_status(self, app):
-        """REAL _run_pipeline_after_imports: create two 'running' import runs,
+        """REAL run_pipeline_after_imports: create two 'running' import runs,
         then have the FIRST poll-sleep flip them to 'success' from another
         session.  The loop must detect completion promptly (at most a poll or
         two) and run the five pipeline steps via the all-complete path — NOT the
@@ -1616,7 +1616,7 @@ class TestBug6PipelineAutoAdvance:
         """
         from datetime import datetime
         from app.models.hubspot_import_run import HubSpotImportRun
-        from app.services.hubspot_import_service import _run_pipeline_after_imports
+        from app.services.hubspot_pipeline_runner import run_pipeline_after_imports
 
         with app.app_context():
             run1 = HubSpotImportRun(
@@ -1645,7 +1645,7 @@ class TestBug6PipelineAutoAdvance:
                  patch('app.tasks.hubspot_tasks.run_extract_hubspot_signals') as m_signals, \
                  patch('app.tasks.hubspot_tasks.run_rescore_leads_after_import') as m_rescore, \
                  patch('time.sleep', side_effect=fake_sleep) as m_sleep:
-                _run_pipeline_after_imports(app, run_ids)
+                run_pipeline_after_imports(app, run_ids)
 
             # Detected completion promptly — a couple of polls at most, NOT the
             # 3600/15 = 240 spins an unfixed stale-read loop would take.
