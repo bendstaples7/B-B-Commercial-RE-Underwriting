@@ -754,6 +754,19 @@ def create_app(config_name='development'):
                         len(orphaned),
                     )
 
+                # Dangling confirmed lead matches (Bug 4): a deal/contact match still
+                # points at a deleted lead, so enrichment and activity re-association
+                # skip the surviving duplicate. Run the full post-import pipeline once
+                # on startup when any are detected — deploy also runs this via
+                # scripts/post_deploy_sync.py, but gunicorn reload must self-heal too.
+                from app.services.hubspot_pipeline_runner import (  # noqa: PLC0415
+                    count_dangling_confirmed_lead_matches,
+                    maybe_start_startup_pipeline_recovery,
+                )
+
+                dangling_match_count = count_dangling_confirmed_lead_matches()
+                maybe_start_startup_pipeline_recovery(app, dangling_match_count)
+
                 # Option 2: startup recovery — log if imports completed but no signals exist.
                 # The pipeline will run automatically on the next import trigger via the
                 # background thread (Option 3). We don't spawn a thread here to avoid

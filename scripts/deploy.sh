@@ -45,6 +45,8 @@ rollback() {
         ROLLBACK_FAILED=1
     fi
     sudo systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
+    sudo systemctl restart celery 2>/dev/null || true
+    sudo systemctl restart celery-beat 2>/dev/null || true
     if [ "$ROLLBACK_FAILED" -eq 0 ]; then
         echo "Rollback to $PREVIOUS_SHA complete."
         echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Rollback successful: now at $PREVIOUS_SHA" >> "$ROLLBACK_LOG"
@@ -195,6 +197,39 @@ if [ "$GUNICORN_READY" = "0" ]; then
     echo "FAILED: Gunicorn did not become healthy on localhost after ~260s"
     exit 1
 fi
+
+echo "==> (7) Ensure async stack is provisioned and healthy"
+if ! systemctl list-unit-files celery.service &>/dev/null 2>&1; then
+    echo "    celery.service not found — provisioning async stack"
+    sudo /usr/local/sbin/bootstrap-async-stack \
+        || { echo "FAILED: async stack bootstrap"; exit 1; }
+fi
+sudo systemctl restart celery || { echo "FAILED: celery restart"; exit 1; }
+echo "    celery restarted"
+if systemctl list-unit-files celery-beat.service &>/dev/null 2>&1; then
+    sudo systemctl restart celery-beat || { echo "FAILED: celery-beat restart"; exit 1; }
+    echo "    celery-beat restarted"
+fi
+sudo systemctl is-active --quiet redis-server || { echo "FAILED: redis-server not active"; exit 1; }
+sudo systemctl is-active --quiet celery || { echo "FAILED: celery not active after restart"; exit 1; }
+if systemctl list-unit-files celery-beat.service &>/dev/null 2>&1; then
+    sudo systemctl is-active --quiet celery-beat \
+        || { echo "FAILED: celery-beat not active after restart"; exit 1; }
+fi
+echo "    async stack verified"
+
+echo "==> (8) Post-deploy HubSpot data sync (matching → enrich → rescore)"
+cd backend
+set -a
+# shellcheck source=/dev/null
+source .env
+set +a
+FLASK_ENV=production python3.11 scripts/post_deploy_sync.py || {
+    echo "FAILED: post_deploy_sync.py — HubSpot data sync did not complete"
+    exit 1
+}
+cd ..
+echo "    Post-deploy HubSpot sync complete"
 
 echo "==> Deploy complete: $TARGET_SHA"
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Deploy successful: $PREVIOUS_SHA -> $TARGET_SHA" >> "$ROLLBACK_LOG"

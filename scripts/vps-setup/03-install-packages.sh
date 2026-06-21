@@ -118,6 +118,7 @@ PACKAGES=(
     nginx
     certbot
     python3-certbot-nginx
+    redis-server
 )
 
 apt-get install -y -qq "${PACKAGES[@]}"

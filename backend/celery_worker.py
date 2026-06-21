@@ -1065,73 +1065,18 @@ def scheduled_engagement_sync() -> None:
 
 @celery.task(name='hubspot.post_import_pipeline')
 def run_post_import_pipeline(run_ids: list = None) -> None:
-    """Run the full post-import pipeline: matching → convert activities → extract signals → rescore.
-
-    Queued automatically after every HubSpot import trigger.  Polls until all
-    import runs in the batch are finished (success/partial/failed), then runs
-    matching → convert → signals → rescore sequentially.
-    """
+    """Run the full post-import pipeline via the shared pipeline runner."""
     import logging
-    import time
     logger = logging.getLogger(__name__)
     logger.info("Starting post-import pipeline (triggered by run_ids=%s)", run_ids)
 
     from dotenv import load_dotenv
     load_dotenv()
     from app import create_app
+    from app.services.hubspot_pipeline_runner import run_pipeline_after_imports
+
     app = create_app()
-
-    # Wait for all import runs in this batch to reach a terminal state
-    if run_ids:
-        max_wait_seconds = 3600  # 1 hour max
-        poll_interval = 15
-        elapsed = 0
-        with app.app_context():
-            from app.models import HubSpotImportRun
-            from app import db
-            while elapsed < max_wait_seconds:
-                # Re-read import-run status from the database on every poll.
-                # The import tasks commit `status` changes in a SEPARATE
-                # session/process; without ending this read transaction and
-                # expiring the identity-map cache, the polling session keeps
-                # returning the STALE status from its first query and the loop
-                # spins until `max_wait_seconds`. Rollback starts a fresh
-                # snapshot; expire_all forces a reload on the next query.
-                db.session.rollback()
-                db.session.expire_all()
-                runs = HubSpotImportRun.query.filter(HubSpotImportRun.id.in_(run_ids)).all()
-                terminal = {'success', 'partial', 'failed'}
-                if all(r.status in terminal for r in runs):
-                    logger.info("All import runs complete — proceeding with pipeline")
-                    break
-                logger.info("Waiting for import runs to complete (%ds elapsed)...", elapsed)
-                time.sleep(poll_interval)
-                elapsed += poll_interval
-            else:
-                logger.warning("Post-import pipeline timed out waiting for runs %s", run_ids)
-
-    from app.tasks.hubspot_tasks import (
-        run_hubspot_matching,
-        run_enrich_leads_from_hubspot,
-        run_convert_hubspot_activities,
-        run_extract_hubspot_signals,
-        run_rescore_leads_after_import,
-    )
-
-    run_hubspot_matching()
-    logger.info("Post-import pipeline: matching complete")
-
-    run_enrich_leads_from_hubspot()
-    logger.info("Post-import pipeline: lead enrichment from HubSpot complete")
-
-    run_convert_hubspot_activities()
-    logger.info("Post-import pipeline: activity conversion complete")
-
-    run_extract_hubspot_signals()
-    logger.info("Post-import pipeline: signal extraction complete")
-
-    run_rescore_leads_after_import()
-    logger.info("Post-import pipeline: lead rescoring complete")
+    run_pipeline_after_imports(app, run_ids)
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,5 @@
 """HubSpotImportService — orchestrates HubSpot CRM import runs."""
 import logging
-import threading
 from datetime import datetime
 
 from app import db
@@ -20,79 +19,6 @@ _TASK_MAP = {
     'companies': 'hubspot.import_companies',
     'engagements': 'hubspot.import_engagements',
 }
-
-
-def _run_pipeline_after_imports(app, run_ids: list) -> None:
-    """Run the post-import pipeline in a background thread.
-
-    Waits for all import runs in *run_ids* to reach a terminal state, then
-    runs matching → activity conversion → signal extraction → rescore.
-    This is Option 3: background thread guarantee that the pipeline always
-    runs after an import, regardless of whether Celery is available.
-    """
-    import time
-    from app.tasks.hubspot_tasks import (
-        run_hubspot_matching,
-        run_enrich_leads_from_hubspot,
-        run_convert_hubspot_activities,
-        run_extract_hubspot_signals,
-        run_rescore_leads_after_import,
-    )
-
-    with app.app_context():
-        # Wait for all import runs to reach a terminal state
-        if run_ids:
-            max_wait = 3600  # 1 hour
-            poll_interval = 15
-            elapsed = 0
-            terminal = {'success', 'partial', 'failed'}
-
-            while elapsed < max_wait:
-                # Re-read import-run status from the database on every poll.
-                # The import tasks update `status` and commit in a SEPARATE
-                # session/process; without ending this read transaction and
-                # expiring the identity-map cache, the polling session keeps
-                # returning the STALE status from its first query, so the loop
-                # never observes completion and spins until `max_wait`. Ending
-                # the transaction (rollback) starts a fresh snapshot and
-                # expiring the identity map forces a reload on the next query.
-                db.session.rollback()
-                db.session.expire_all()
-                runs = HubSpotImportRun.query.filter(
-                    HubSpotImportRun.id.in_(run_ids)
-                ).all()
-                if all(r.status in terminal for r in runs):
-                    logger.info(
-                        "Pipeline thread: all import runs complete — starting pipeline"
-                    )
-                    break
-                logger.info(
-                    "Pipeline thread: waiting for import runs %s (%ds elapsed)…",
-                    run_ids, elapsed,
-                )
-                time.sleep(poll_interval)
-                elapsed += poll_interval
-            else:
-                logger.warning(
-                    "Pipeline thread: timed out waiting for runs %s — running pipeline anyway",
-                    run_ids,
-                )
-        else:
-            logger.info("Pipeline thread: no run_ids to wait for — running pipeline immediately")
-
-        try:
-            run_hubspot_matching()
-            logger.info("Pipeline thread: matching complete")
-            run_enrich_leads_from_hubspot()
-            logger.info("Pipeline thread: lead enrichment from HubSpot complete")
-            run_convert_hubspot_activities()
-            logger.info("Pipeline thread: activity conversion complete")
-            run_extract_hubspot_signals()
-            logger.info("Pipeline thread: signal extraction complete")
-            run_rescore_leads_after_import()
-            logger.info("Pipeline thread: rescore complete — pipeline done")
-        except Exception as exc:
-            logger.error("Pipeline thread: pipeline failed: %s", exc, exc_info=True)
 
 
 class HubSpotImportService:
@@ -179,31 +105,16 @@ class HubSpotImportService:
             [r.id for r in runs],
         )
 
-        # Option 3: spawn a background thread to run the pipeline after imports complete.
-        # This guarantees the pipeline runs even if Celery/Redis is unavailable.
-        # Also dispatch via Celery as a belt-and-suspenders backup.
+        # Dispatch post-import pipeline via Celery when workers are live,
+        # otherwise spawn a detached subprocess (survives Gunicorn reloads).
         from flask import current_app  # noqa: PLC0415
+        from app.services.hubspot_pipeline_runner import dispatch_post_import_pipeline  # noqa: PLC0415
+
         app = current_app._get_current_object()
         run_ids = [r.id for r in runs]
 
-        pipeline_thread = threading.Thread(
-            target=_run_pipeline_after_imports,
-            args=(app, run_ids),
-            daemon=True,
-            name=f"hubspot-pipeline-{run_ids[0]}",
-        )
-        pipeline_thread.start()
-        logger.info("Pipeline thread started for run_ids=%s", run_ids)
-
-        # Also try Celery as a backup (will be a no-op if Celery already ran it)
-        try:
-            from celery import current_app as celery_app  # noqa: PLC0415
-            celery_app.send_task('hubspot.post_import_pipeline', kwargs={'run_ids': run_ids})
-        except Exception as celery_exc:
-            logger.warning(
-                "Could not dispatch Celery pipeline task (thread will handle it): %s",
-                celery_exc,
-            )
+        mode = dispatch_post_import_pipeline(app, run_ids)
+        logger.info("Post-import pipeline dispatched for run_ids=%s (mode=%s)", run_ids, mode)
 
         return runs
 
