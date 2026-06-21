@@ -8,11 +8,12 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="${APP_DIR:-/home/deploy/app}"
+VPS_SETUP="${APP_DIR}/scripts/vps-setup"
 
-bash "${SCRIPT_DIR}/03b-install-redis.sh"
-bash "${SCRIPT_DIR}/09b-celery-service.sh"
-bash "${SCRIPT_DIR}/11-sudoers-deploy.sh"
+bash "${VPS_SETUP}/03b-install-redis.sh"
+bash "${VPS_SETUP}/09b-celery-service.sh"
+bash "${VPS_SETUP}/11-sudoers-deploy.sh"
 
 echo ""
 echo "Async stack bootstrap complete."

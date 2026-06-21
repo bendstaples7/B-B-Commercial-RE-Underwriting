@@ -105,9 +105,8 @@ class HubSpotImportService:
             [r.id for r in runs],
         )
 
-        # Option 3: spawn a background thread to run the pipeline after imports complete.
-        # This guarantees the pipeline runs even if Celery/Redis is unavailable.
-        # Also dispatch via Celery as a belt-and-suspenders backup.
+        # Dispatch post-import pipeline via Celery when workers are live,
+        # otherwise spawn a detached subprocess (survives Gunicorn reloads).
         from flask import current_app  # noqa: PLC0415
         from app.services.hubspot_pipeline_runner import dispatch_post_import_pipeline  # noqa: PLC0415
 

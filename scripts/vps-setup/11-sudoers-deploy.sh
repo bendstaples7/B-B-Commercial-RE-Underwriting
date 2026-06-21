@@ -14,10 +14,11 @@
 #   - 09-gunicorn-service.sh has been run (gunicorn.service exists)
 #
 # What this script does:
-#   1. Writes /etc/sudoers.d/deploy with the single passwordless rule
-#   2. Sets permissions to 440 (required by sudo for sudoers.d files)
-#   3. Validates the file with `visudo -c -f` (syntax check)
-#   4. Verifies the rule works by running the command as the deploy user
+#   1. Installs a root-owned bootstrap script at /usr/local/sbin/bootstrap-async-stack
+#   2. Writes /etc/sudoers.d/deploy with the single passwordless rule
+#   3. Sets permissions to 440 (required by sudo for sudoers.d files)
+#   4. Validates the file with `visudo -c -f` (syntax check)
+#   5. Verifies the rule works by running the command as the deploy user
 #
 # This script is IDEMPOTENT — safe to run multiple times.
 #   - Writing the sudoers file overwrites any previous version
@@ -41,8 +42,12 @@ die()   { error "$*"; exit 1; }
 # ── Configuration ─────────────────────────────────────────────────────────────
 SUDOERS_FILE="/etc/sudoers.d/deploy"
 DEPLOY_USER="deploy"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BOOTSTRAP_SRC="${SCRIPT_DIR}/bootstrap-async-stack.sh"
+BOOTSTRAP_INSTALL="/usr/local/sbin/bootstrap-async-stack"
 # Exact rules required for zero-downtime deploys and async stack management.
-SUDOERS_RULE="deploy ALL=(ALL) NOPASSWD: /bin/systemctl reload gunicorn, /bin/systemctl restart celery, /bin/systemctl restart celery-beat, /bin/systemctl is-active redis-server, /bin/systemctl is-active celery, /bin/systemctl is-active celery-beat, /bin/bash /home/deploy/app/scripts/vps-setup/bootstrap-async-stack.sh"
+# is-active uses --quiet to match deploy.sh verification commands.
+SUDOERS_RULE="deploy ALL=(ALL) NOPASSWD: /bin/systemctl reload gunicorn, /bin/systemctl restart celery, /bin/systemctl restart celery-beat, /bin/systemctl is-active --quiet redis-server, /bin/systemctl is-active --quiet celery, /bin/systemctl is-active --quiet celery-beat, /usr/local/sbin/bootstrap-async-stack"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # ── Verify running as root ────────────────────────────────────────────────────
@@ -71,6 +76,18 @@ echo "  Sudoers file: ${SUDOERS_FILE}"
 echo "  Rule:         ${SUDOERS_RULE}"
 echo "============================================================"
 echo ""
+
+# =============================================================================
+# Step 0: Install root-owned bootstrap script (not deploy-writable)
+# =============================================================================
+info "Step 0: Installing ${BOOTSTRAP_INSTALL} from ${BOOTSTRAP_SRC}..."
+
+if [[ ! -f "${BOOTSTRAP_SRC}" ]]; then
+    die "Bootstrap source not found: ${BOOTSTRAP_SRC}"
+fi
+
+install -m 755 -o root -g root "${BOOTSTRAP_SRC}" "${BOOTSTRAP_INSTALL}"
+info "  ✓ ${BOOTSTRAP_INSTALL} installed (root:root, 755)."
 
 # =============================================================================
 # Step 1: Write /etc/sudoers.d/deploy
@@ -157,11 +174,18 @@ else
     die "Celery-beat restart sudo rule required by deploy.sh."
 fi
 
-if echo "${SUDO_LIST}" | grep -qF "/bin/bash /home/deploy/app/scripts/vps-setup/bootstrap-async-stack.sh"; then
-    info "  ✓ Rule confirmed: deploy can run bootstrap-async-stack.sh without a password."
+if echo "${SUDO_LIST}" | grep -qF "/usr/local/sbin/bootstrap-async-stack"; then
+    info "  ✓ Rule confirmed: deploy can run bootstrap-async-stack without a password."
 else
-    error "  Missing passwordless sudo for bootstrap-async-stack.sh"
+    error "  Missing passwordless sudo for ${BOOTSTRAP_INSTALL}"
     die "Bootstrap sudo rule required by deploy.sh for first-time async stack provisioning."
+fi
+
+if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl is-active --quiet redis-server"; then
+    info "  ✓ Rule confirmed: deploy can verify redis-server is active."
+else
+    error "  Missing passwordless sudo for: /bin/systemctl is-active --quiet redis-server"
+    die "Redis is-active sudo rule required by deploy.sh."
 fi
 
 # =============================================================================

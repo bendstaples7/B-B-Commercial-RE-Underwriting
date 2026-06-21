@@ -201,7 +201,7 @@ fi
 echo "==> (7) Ensure async stack is provisioned and healthy"
 if ! systemctl list-unit-files celery.service &>/dev/null 2>&1; then
     echo "    celery.service not found — provisioning async stack"
-    sudo /bin/bash "${APP_DIR}/scripts/vps-setup/bootstrap-async-stack.sh" \
+    sudo /usr/local/sbin/bootstrap-async-stack \
         || { echo "FAILED: async stack bootstrap"; exit 1; }
 fi
 sudo systemctl restart celery || { echo "FAILED: celery restart"; exit 1; }

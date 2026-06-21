@@ -23,8 +23,13 @@ _TERMINAL_IMPORT_STATUSES = frozenset({'success', 'partial', 'failed'})
 # PostgreSQL advisory lock key — prevents concurrent pipeline runs across workers.
 _PIPELINE_ADVISORY_LOCK_KEY = 913372001
 
+# Set on detached subprocess env so Flask startup does not recurse into recovery.
+_PIPELINE_SUBPROCESS_ENV = 'PIPELINE_SUBPROCESS'
+
 _in_process_pipeline_lock = threading.Lock()
 _advisory_lock_held = False
+# Dedicated DB connection holding the PostgreSQL advisory lock for its lifetime.
+_lock_connection = None
 
 
 def run_post_import_pipeline_sync() -> None:
@@ -76,9 +81,16 @@ def _wait_for_import_runs(run_ids: list[int], max_wait: int = 3600, poll_interva
     )
 
 
+def _is_non_postgresql_dialect() -> bool:
+    """Return True when advisory locks are unavailable (e.g. SQLite tests)."""
+    from app import db
+
+    return db.engine.dialect.name != 'postgresql'
+
+
 def try_acquire_pipeline_lock() -> bool:
     """Acquire a cross-process lock so only one pipeline run executes at a time."""
-    global _advisory_lock_held
+    global _advisory_lock_held, _lock_connection
 
     if not _in_process_pipeline_lock.acquire(blocking=False):
         return False
@@ -86,39 +98,50 @@ def try_acquire_pipeline_lock() -> bool:
     try:
         from app import db
 
-        try:
-            acquired = db.session.execute(
-                db.text('SELECT pg_try_advisory_lock(:key)'),
-                {'key': _PIPELINE_ADVISORY_LOCK_KEY},
-            ).scalar()
-            if not acquired:
-                _in_process_pipeline_lock.release()
-                return False
-            _advisory_lock_held = True
-            return True
-        except Exception:
-            # SQLite / non-PostgreSQL tests — in-process lock is sufficient.
+        if _is_non_postgresql_dialect():
+            # SQLite / in-memory tests — in-process lock only.
             _advisory_lock_held = False
             return True
+
+        # Hold a dedicated connection for the lock lifetime so pool checkouts
+        # during pipeline commits cannot drop the advisory lock.
+        _lock_connection = db.engine.connect()
+        acquired = _lock_connection.execute(
+            db.text('SELECT pg_try_advisory_lock(:key)'),
+            {'key': _PIPELINE_ADVISORY_LOCK_KEY},
+        ).scalar()
+        if not acquired:
+            _lock_connection.close()
+            _lock_connection = None
+            _in_process_pipeline_lock.release()
+            return False
+        _advisory_lock_held = True
+        return True
     except Exception:
+        if _lock_connection is not None:
+            _lock_connection.close()
+            _lock_connection = None
         _in_process_pipeline_lock.release()
         raise
 
 
 def release_pipeline_lock() -> None:
     """Release the pipeline advisory lock if this process holds it."""
-    global _advisory_lock_held
+    global _advisory_lock_held, _lock_connection
 
-    if _advisory_lock_held:
+    if _advisory_lock_held and _lock_connection is not None:
         try:
             from app import db
 
-            db.session.execute(
+            _lock_connection.execute(
                 db.text('SELECT pg_advisory_unlock(:key)'),
                 {'key': _PIPELINE_ADVISORY_LOCK_KEY},
             )
         except Exception:
             logger.debug("Could not release advisory lock", exc_info=True)
+        finally:
+            _lock_connection.close()
+            _lock_connection = None
         _advisory_lock_held = False
 
     if _in_process_pipeline_lock.locked():
@@ -165,6 +188,7 @@ def start_pipeline_subprocess(run_ids: Optional[list[int]] = None) -> None:
     payload = json.dumps(run_ids or [])
     env = os.environ.copy()
     env.setdefault('FLASK_ENV', 'production')
+    env[_PIPELINE_SUBPROCESS_ENV] = '1'
 
     subprocess.Popen(  # noqa: S603 — trusted internal script path
         [sys.executable, script, payload],
@@ -178,6 +202,11 @@ def start_pipeline_subprocess(run_ids: Optional[list[int]] = None) -> None:
 def maybe_start_startup_pipeline_recovery(_app, dangling_match_count: int) -> None:
     """Start startup recovery pipeline in a detached subprocess (single-flight via lock)."""
     if dangling_match_count <= 0:
+        return
+    if os.environ.get(_PIPELINE_SUBPROCESS_ENV):
+        logger.info(
+            "Startup recovery skipped — already running inside pipeline subprocess"
+        )
         return
     logger.warning(
         "Startup recovery: %d dangling confirmed lead match(es) — spawning detached pipeline",
@@ -203,9 +232,24 @@ def count_dangling_confirmed_lead_matches() -> int:
     )
 
 
+def _celery_workers_responding() -> bool:
+    """Return True when at least one Celery workers responds to a control ping."""
+    from celery import current_app as celery_app  # noqa: PLC0415
+
+    inspect = celery_app.control.inspect(timeout=1.0)
+    ping = inspect.ping() if inspect else None
+    return bool(ping)
+
+
 def try_dispatch_celery_pipeline(run_ids: Optional[list[int]] = None) -> bool:
-    """Queue the pipeline on Celery. Returns True if dispatched, False if Celery unavailable."""
+    """Queue the pipeline on Celery when a live workers is available."""
     try:
+        if not _celery_workers_responding():
+            logger.warning(
+                "No Celery workers responding — falling back from Celery dispatch"
+            )
+            return False
+
         from celery import current_app as celery_app  # noqa: PLC0415
 
         celery_app.send_task('hubspot.post_import_pipeline', kwargs={'run_ids': run_ids})
@@ -217,9 +261,9 @@ def try_dispatch_celery_pipeline(run_ids: Optional[list[int]] = None) -> bool:
 
 
 def dispatch_post_import_pipeline(app, run_ids: Optional[list[int]] = None) -> str:
-    """Queue via Celery when available, else run in a detached subprocess.
+    """Queue via Celery when a workers is live, else run in a detached subprocess.
 
-    Returns ``'celery'``, ``'subprocess'``, or ``'thread'`` (legacy in-process).
+    Returns ``'celery'`` or ``'subprocess'``.
     """
     if try_dispatch_celery_pipeline(run_ids):
         return 'celery'

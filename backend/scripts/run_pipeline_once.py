@@ -22,6 +22,7 @@ def main() -> int:
     run_ids = json.loads(sys.argv[1]) if len(sys.argv) > 1 else []
 
     os.environ.setdefault('FLASK_ENV', 'production')
+    os.environ['PIPELINE_SUBPROCESS'] = '1'
 
     from app import create_app
     from app.services.hubspot_pipeline_runner import run_pipeline_after_imports

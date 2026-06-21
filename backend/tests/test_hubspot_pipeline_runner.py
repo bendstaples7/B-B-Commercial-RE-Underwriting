@@ -55,6 +55,35 @@ class TestDispatchPostImportPipeline:
             assert mode == 'celery'
             mock_subprocess.assert_not_called()
 
+    def test_try_dispatch_returns_false_when_no_workers(self, app_ctx):
+        from app.services.hubspot_pipeline_runner import try_dispatch_celery_pipeline
+
+        with patch(
+            'app.services.hubspot_pipeline_runner._celery_workers_responding',
+            return_value=False,
+        ):
+            assert try_dispatch_celery_pipeline(run_ids=[1]) is False
+
+
+class TestStartupPipelineRecovery:
+    def test_skipped_when_pipeline_subprocess_env_set(self, app_ctx, monkeypatch):
+        from app.services.hubspot_pipeline_runner import maybe_start_startup_pipeline_recovery
+
+        monkeypatch.setenv('PIPELINE_SUBPROCESS', '1')
+        with patch(
+            'app.services.hubspot_pipeline_runner.start_pipeline_subprocess',
+        ) as mock_subprocess:
+            maybe_start_startup_pipeline_recovery(app_ctx, dangling_match_count=3)
+            mock_subprocess.assert_not_called()
+
+    def test_subprocess_env_set_on_detached_spawn(self, app_ctx):
+        from app.services.hubspot_pipeline_runner import start_pipeline_subprocess
+
+        with patch('app.services.hubspot_pipeline_runner.subprocess.Popen') as mock_popen:
+            start_pipeline_subprocess(run_ids=[42])
+            _, kwargs = mock_popen.call_args
+            assert kwargs['env']['PIPELINE_SUBPROCESS'] == '1'
+
 
 class TestRunPostImportPipelineSync:
     def test_runs_all_pipeline_steps_in_order(self, app_ctx):
