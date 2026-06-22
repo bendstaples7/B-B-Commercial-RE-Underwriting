@@ -53,25 +53,22 @@ done
 
 echo ""
 info "Verifying deploy user passwordless sudo rules..."
-SUDO_LIST=$(sudo -u "${DEPLOY_USER}" sudo -n -l 2>&1 || true)
-
 check_sudo_rule() {
-    local pattern="$1"
-    local label="$2"
-    if echo "${SUDO_LIST}" | grep -qF "${pattern}"; then
-        info "  ✓ ${label}"
-    else
-        die "Missing passwordless sudo for deploy user: ${label}"
+    local label="$1"
+    shift
+    if ! sudo -u "${DEPLOY_USER}" sudo -n -l "$@" >/dev/null 2>&1; then
+        die "Missing passwordless sudo for deploy user: ${label} ($*)"
     fi
+    info "  ✓ ${label}"
 }
 
-check_sudo_rule "/bin/systemctl reload gunicorn" "gunicorn reload"
-check_sudo_rule "/bin/systemctl restart celery" "celery restart"
-check_sudo_rule "/bin/systemctl restart celery-beat" "celery-beat restart"
-check_sudo_rule "/bin/systemctl is-active --quiet redis-server" "redis is-active"
-check_sudo_rule "/bin/systemctl is-active --quiet celery" "celery is-active"
-check_sudo_rule "/bin/systemctl is-active --quiet celery-beat" "celery-beat is-active"
-check_sudo_rule "/usr/local/sbin/bootstrap-async-stack" "bootstrap-async-stack"
+check_sudo_rule "gunicorn reload" /bin/systemctl reload gunicorn
+check_sudo_rule "celery restart" /bin/systemctl restart celery
+check_sudo_rule "celery-beat restart" /bin/systemctl restart celery-beat
+check_sudo_rule "redis is-active" /bin/systemctl is-active --quiet redis-server
+check_sudo_rule "celery is-active" /bin/systemctl is-active --quiet celery
+check_sudo_rule "celery-beat is-active" /bin/systemctl is-active --quiet celery-beat
+check_sudo_rule "bootstrap-async-stack" /usr/local/sbin/bootstrap-async-stack
 
 echo ""
 info "Verifying deploy user can run bootstrap idempotently..."

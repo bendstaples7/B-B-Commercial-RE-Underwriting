@@ -114,28 +114,28 @@ jobs:
 
           echo "Checking passwordless sudo for deploy (non-interactive)..."
           _require_sudo() {
-            local pattern="$1"
-            local label="$2"
-            if ! sudo -n -l 2>/dev/null | grep -qF "${pattern}"; then
+            local label="$1"
+            shift
+            if ! sudo -n -l "$@" >/dev/null 2>&1; then
               echo "ERROR: deploy user lacks passwordless sudo for: ${label}"
-              echo "  Required: ${pattern}"
+              echo "  Required: $*"
               echo "Run on VPS as root: sudo bash ${APP_DIR}/scripts/vps-setup/migrate-async-stack.sh"
               exit 1
             fi
           }
 
-          _require_sudo "/bin/systemctl reload gunicorn" "gunicorn reload"
+          _require_sudo "gunicorn reload" /bin/systemctl reload gunicorn
           echo "    gunicorn reload sudo: ok"
 
-          _require_sudo "/bin/systemctl restart celery" "celery restart"
-          _require_sudo "/bin/systemctl restart celery-beat" "celery-beat restart"
-          _require_sudo "/bin/systemctl is-active --quiet redis-server" "redis is-active"
-          _require_sudo "/bin/systemctl is-active --quiet celery" "celery is-active"
-          _require_sudo "/bin/systemctl is-active --quiet celery-beat" "celery-beat is-active"
+          _require_sudo "celery restart" /bin/systemctl restart celery
+          _require_sudo "celery-beat restart" /bin/systemctl restart celery-beat
+          _require_sudo "redis is-active" /bin/systemctl is-active --quiet redis-server
+          _require_sudo "celery is-active" /bin/systemctl is-active --quiet celery
+          _require_sudo "celery-beat is-active" /bin/systemctl is-active --quiet celery-beat
 
           if ! systemctl list-unit-files celery.service &>/dev/null 2>&1; then
             echo "    celery.service not installed — checking bootstrap sudo..."
-            _require_sudo "/usr/local/sbin/bootstrap-async-stack" "async stack bootstrap"
+            _require_sudo "async stack bootstrap" /usr/local/sbin/bootstrap-async-stack
             echo "NOTE: Async stack not yet provisioned. Deploy will run bootstrap in step 7."
             echo "      If bootstrap fails, run on VPS as root:"
             echo "        sudo bash ${APP_DIR}/scripts/vps-setup/migrate-async-stack.sh"

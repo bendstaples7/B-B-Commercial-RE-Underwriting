@@ -256,7 +256,13 @@ ASYNC_STATUS=$(curl -s \
     --max-time 20 \
     "${HEALTH_URL}" 2>/dev/null || echo "000")
 
-if [[ "${ASYNC_STATUS}" == "200" ]] && command -v python3 &>/dev/null; then
+if [[ "${ASYNC_STATUS}" != "200" ]]; then
+    record_fail "/api/health async stack check skipped — health endpoint unavailable"
+    error "  Could not fetch ${HEALTH_URL} (HTTP ${ASYNC_STATUS})"
+elif ! command -v python3 &>/dev/null; then
+    record_fail "/api/health async stack check skipped — python3 is unavailable"
+    error "  python3 is required to parse ${HEALTH_URL}"
+else
     if python3 -c "
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -288,9 +294,6 @@ print('celery:', checks.get('celery', 'missing'))
         error "  Re-run sudoers after deploy.sh gains new sudo commands:"
         error "    sudo bash /home/deploy/app/scripts/vps-setup/11-sudoers-deploy.sh"
     fi
-else
-    record_fail "/api/health async stack check skipped — health endpoint unavailable"
-    error "  Could not fetch ${HEALTH_URL} (HTTP ${ASYNC_STATUS})"
 fi
 
 rm -f "${ASYNC_HEALTH_FILE}"

@@ -175,11 +175,16 @@ cd ..
 echo "    Migrations applied"
 
 echo "==> (5) Reload Gunicorn (zero-downtime)"
-sudo -n systemctl reload gunicorn || {
-    echo "FAILED: passwordless sudo for 'systemctl reload gunicorn' is missing"
-    echo "Run on VPS as root: sudo bash ${APP_DIR}/scripts/vps-setup/migrate-async-stack.sh"
+if ! sudo -n systemctl reload gunicorn; then
+    if ! sudo -n -l /bin/systemctl reload gunicorn >/dev/null 2>&1; then
+        echo "FAILED: passwordless sudo for 'systemctl reload gunicorn' is missing"
+        echo "Run on VPS as root: sudo bash ${APP_DIR}/scripts/vps-setup/migrate-async-stack.sh"
+        exit 1
+    fi
+    echo "FAILED: systemctl reload gunicorn failed (service error, not sudo)"
+    sudo -n systemctl status gunicorn --no-pager -n 20 2>/dev/null || true
     exit 1
-}
+fi
 echo "    Gunicorn reloaded"
 
 echo "==> (6) Wait for Gunicorn to be healthy on localhost"
