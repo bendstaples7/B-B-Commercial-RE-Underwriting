@@ -4,7 +4,11 @@
 # Runs on the VPS during CI/CD deployment.
 # Called by .github/workflows/deploy.yml via SSH.
 #
-# Usage: bash /home/deploy/app/scripts/deploy.sh <TARGET_SHA>
+# Usage: bash /home/deploy/deploy.sh <TARGET_SHA>
+#
+# When this script adds new sudo commands, existing VPSes require a one-time
+# root run before the next deploy:
+#   sudo bash /home/deploy/app/scripts/vps-setup/migrate-async-stack.sh
 # =============================================================================
 
 set -euo pipefail
@@ -44,9 +48,9 @@ rollback() {
         echo "ROLLBACK WARNING: no frontend-dist-backup found — frontend may be at $TARGET_SHA while backend rolls back to $PREVIOUS_SHA"
         ROLLBACK_FAILED=1
     fi
-    sudo systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
-    sudo systemctl restart celery 2>/dev/null || true
-    sudo systemctl restart celery-beat 2>/dev/null || true
+    sudo -n systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
+    sudo -n systemctl restart celery 2>/dev/null || true
+    sudo -n systemctl restart celery-beat 2>/dev/null || true
     if [ "$ROLLBACK_FAILED" -eq 0 ]; then
         echo "Rollback to $PREVIOUS_SHA complete."
         echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Rollback successful: now at $PREVIOUS_SHA" >> "$ROLLBACK_LOG"
@@ -171,7 +175,11 @@ cd ..
 echo "    Migrations applied"
 
 echo "==> (5) Reload Gunicorn (zero-downtime)"
-sudo systemctl reload gunicorn || { echo "FAILED: systemctl reload gunicorn"; exit 1; }
+sudo -n systemctl reload gunicorn || {
+    echo "FAILED: passwordless sudo for 'systemctl reload gunicorn' is missing"
+    echo "Run on VPS as root: sudo bash ${APP_DIR}/scripts/vps-setup/migrate-async-stack.sh"
+    exit 1
+}
 echo "    Gunicorn reloaded"
 
 echo "==> (6) Wait for Gunicorn to be healthy on localhost"
@@ -199,23 +207,30 @@ if [ "$GUNICORN_READY" = "0" ]; then
 fi
 
 echo "==> (7) Ensure async stack is provisioned and healthy"
+CHECKS_SCRIPT="${APP_DIR}/scripts/deploy-async-stack-checks.sh"
+if [[ ! -f "${CHECKS_SCRIPT}" ]] && [[ -f /home/deploy/deploy-async-stack-checks.sh ]]; then
+    CHECKS_SCRIPT=/home/deploy/deploy-async-stack-checks.sh
+fi
+# shellcheck source=deploy-async-stack-checks.sh
+source "${CHECKS_SCRIPT}"
+assert_async_stack_sudo_ready || exit 1
+
 if ! systemctl list-unit-files celery.service &>/dev/null 2>&1; then
     echo "    celery.service not found — provisioning async stack"
-    sudo /usr/local/sbin/bootstrap-async-stack \
-        || { echo "FAILED: async stack bootstrap"; exit 1; }
+    sudo -n /usr/local/sbin/bootstrap-async-stack \
+        || {
+            echo "FAILED: async stack bootstrap"
+            echo "Run on VPS as root: sudo bash ${APP_DIR}/scripts/vps-setup/migrate-async-stack.sh"
+            exit 1
+        }
 fi
-sudo systemctl restart celery || { echo "FAILED: celery restart"; exit 1; }
+sudo -n systemctl restart celery || { echo "FAILED: celery restart"; exit 1; }
 echo "    celery restarted"
 if systemctl list-unit-files celery-beat.service &>/dev/null 2>&1; then
-    sudo systemctl restart celery-beat || { echo "FAILED: celery-beat restart"; exit 1; }
+    sudo -n systemctl restart celery-beat || { echo "FAILED: celery-beat restart"; exit 1; }
     echo "    celery-beat restarted"
 fi
-sudo systemctl is-active --quiet redis-server || { echo "FAILED: redis-server not active"; exit 1; }
-sudo systemctl is-active --quiet celery || { echo "FAILED: celery not active after restart"; exit 1; }
-if systemctl list-unit-files celery-beat.service &>/dev/null 2>&1; then
-    sudo systemctl is-active --quiet celery-beat \
-        || { echo "FAILED: celery-beat not active after restart"; exit 1; }
-fi
+verify_async_stack_services || exit 1
 echo "    async stack verified"
 
 echo "==> (8) Post-deploy HubSpot data sync (matching → enrich → rescore)"
