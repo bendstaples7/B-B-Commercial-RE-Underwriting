@@ -22,9 +22,55 @@ The deploy script (`scripts/deploy.sh`) performs these steps in order:
 5. Install the pre-built frontend dist (built on the CI runner to avoid VPS OOM)
 6. **Apply database migrations** — `flask db upgrade`
 7. Reload Gunicorn (zero-downtime graceful reload via `SIGHUP`)
+8. Ensure async stack is healthy (Redis, Celery worker, Celery Beat)
+9. Post-deploy HubSpot sync (`scripts/post_deploy_sync.py`)
 
 If any step fails, the deploy script aborts immediately and automatically rolls
 back to the previous commit.
+
+---
+
+## Async stack prerequisite (existing VPSes)
+
+PR #57+ requires Redis, Celery, and expanded deploy-user sudoers. **Before the
+first deploy** after merging async-stack changes, run this **once as root** on
+the VPS:
+
+```bash
+cd /home/deploy/app
+git fetch origin main && git pull origin main
+sudo bash scripts/vps-setup/migrate-async-stack.sh
+```
+
+Verify:
+
+```bash
+sudo -u deploy sudo -n -l /usr/local/sbin/bootstrap-async-stack
+systemctl is-active redis-server celery celery-beat
+```
+
+### Optional: automatic migration on deploy
+
+Add GitHub secret **`VPS_ROOT_SSH_KEY`** (private key for `root@VPS_HOST`). When
+the deploy workflow detects an un-provisioned async stack, it will run
+`migrate-async-stack.sh` as root before continuing.
+
+When `deploy.sh` gains **new sudo commands**, re-run on the VPS as root:
+
+```bash
+sudo bash /home/deploy/app/scripts/vps-setup/11-sudoers-deploy.sh
+```
+
+---
+
+## CI gates (prevent deploy surprises)
+
+| Check | When | What it catches |
+|-------|------|----------------|
+| `deploy-contract` | Every PR | `deploy.sh` / sudoers drift, shell syntax errors |
+| `vps-readiness` | PRs touching deploy infra | VPS not migrated before merge |
+| `vps-smoke-test` | Every push to `main` | VPS drift between deploys |
+| `Ensure VPS readiness` | Deploy workflow | Blocks deploy; auto-migrates if `VPS_ROOT_SSH_KEY` set |
 
 ---
 
@@ -75,8 +121,9 @@ See `backend/migrations/README.md` for details. The Alembic chain in
 ### Automatic (normal workflow)
 
 1. Open a pull request against `main`
-2. CI runs and must pass (tests, lint, migration smoke test)
-3. Merge the PR — the deploy workflow triggers automatically
+2. CI runs and must pass (tests, lint, migration smoke test, deploy contract)
+3. If the PR changes deploy infra, `vps-readiness` must pass on the live VPS
+4. Merge the PR — the deploy workflow triggers automatically
 
 ### Manual (emergency / after workflow file change)
 
@@ -125,13 +172,14 @@ journalctl -u gunicorn -f
 See `docs/deployment/github-secrets.md` for the full list and setup instructions.
 
 | Secret | Purpose |
-|---|---|
+|--------|---------|
 | `VPS_SSH_KEY` | Private SSH key for the `deploy` user |
 | `VPS_USER` | `deploy` |
 | `VPS_HOST` | VPS public IP address |
 | `VPS_HOST_KEY` | VPS host key for known_hosts |
 | `VPS_SUBDOMAIN` | DuckDNS subdomain prefix (e.g. `bbanalyzer`) |
 | `DATABASE_URL` | PostgreSQL connection string — used by `flask db upgrade` |
+| `VPS_ROOT_SSH_KEY` | Optional — root SSH key for auto-migrate on deploy |
 
 ---
 

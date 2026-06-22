@@ -218,6 +218,7 @@ if [[ ! -f "${CHECKS_SCRIPT}" ]] && [[ -f /home/deploy/deploy-async-stack-checks
 fi
 # shellcheck source=deploy-async-stack-checks.sh
 source "${CHECKS_SCRIPT}"
+assert_gunicorn_sudo_ready || exit 1
 assert_async_stack_sudo_ready || exit 1
 
 if ! systemctl list-unit-files celery.service &>/dev/null 2>&1; then
