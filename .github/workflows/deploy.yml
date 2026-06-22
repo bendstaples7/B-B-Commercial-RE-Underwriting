@@ -85,100 +85,31 @@ jobs:
             "echo 'SSH connection verified'" \
           || { echo "ERROR: Cannot connect to VPS at $VPS_HOST as $VPS_USER"; exit 1; }
 
-      # ── Step 4b: Verify VPS readiness — required files exist ─────────────
-      - name: Verify VPS readiness
-        env:
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: |
-          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST bash << 'READINESS'
-          set -euo pipefail
-          APP_DIR="/home/deploy/app"
-          MISSING=""
-          [ -d "${APP_DIR}" ]              || MISSING="$MISSING /home/deploy/app (app directory)"
-          [ -f "${APP_DIR}/backend/.env" ] || MISSING="$MISSING /home/deploy/app/backend/.env"
-          [ -d "${APP_DIR}/frontend" ]     || MISSING="$MISSING /home/deploy/app/frontend"
-          git -C "${APP_DIR}" rev-parse --git-dir > /dev/null 2>&1 \
-            || MISSING="$MISSING /home/deploy/app/.git (not a git repo — run vps-setup clone step)"
-          if [ ! -f /home/deploy/backup.conf ]; then
-            echo "NOTE: /home/deploy/backup.conf not found — Deploy step will create a stub automatically."
-          fi
-          if [ -n "$MISSING" ]; then
-            echo "ERROR: Required VPS files/directories missing:$MISSING"
-            echo "The VPS may not be fully provisioned. Run the vps-setup scripts first."
-            exit 1
-          fi
-          if [ ! -f /home/deploy/deploy.sh ]; then
-            echo "NOTE: /home/deploy/deploy.sh not yet present — will be copied in the Deploy step."
-          fi
-
-          echo "Checking passwordless sudo for deploy (non-interactive)..."
-          _require_sudo() {
-            local label="$1"
-            shift
-            if ! sudo -n -l "$@" >/dev/null 2>&1; then
-              echo "ERROR: deploy user lacks passwordless sudo for: ${label}"
-              echo "  Required: $*"
-              echo "Run on VPS as root: sudo bash ${APP_DIR}/scripts/vps-setup/migrate-async-stack.sh"
-              exit 1
-            fi
-          }
-
-          _require_sudo "gunicorn reload" /bin/systemctl reload gunicorn
-          echo "    gunicorn reload sudo: ok"
-
-          _require_sudo "celery restart" /bin/systemctl restart celery
-          _require_sudo "celery-beat restart" /bin/systemctl restart celery-beat
-          _require_sudo "redis is-active" /bin/systemctl is-active --quiet redis-server
-          _require_sudo "celery is-active" /bin/systemctl is-active --quiet celery
-          _require_sudo "celery-beat is-active" /bin/systemctl is-active --quiet celery-beat
-
-          if ! systemctl list-unit-files celery.service &>/dev/null 2>&1; then
-            echo "    celery.service not installed — checking bootstrap sudo..."
-            _require_sudo "async stack bootstrap" /usr/local/sbin/bootstrap-async-stack
-            echo "NOTE: Async stack not yet provisioned. Deploy will run bootstrap in step 7."
-            echo "      If bootstrap fails, run on VPS as root:"
-            echo "        sudo bash ${APP_DIR}/scripts/vps-setup/migrate-async-stack.sh"
-          else
-            echo "    async stack unit files: present"
-            if ! sudo -n systemctl is-active --quiet redis-server; then
-              echo "ERROR: redis-server is not active"
-              echo "Run on VPS as root: sudo bash ${APP_DIR}/scripts/vps-setup/migrate-async-stack.sh"
-              exit 1
-            fi
-            if ! sudo -n systemctl is-active --quiet celery; then
-              echo "ERROR: celery is not active"
-              echo "Run on VPS as root: sudo systemctl restart celery"
-              exit 1
-            fi
-            if systemctl list-unit-files celery-beat.service &>/dev/null 2>&1; then
-              if ! sudo -n systemctl is-active --quiet celery-beat; then
-                echo "ERROR: celery-beat is not active"
-                echo "Run on VPS as root: sudo systemctl restart celery-beat"
-                exit 1
-              fi
-            fi
-            echo "    redis/celery services: active"
-          fi
-
-          echo "VPS readiness check passed."
-          READINESS
-
-      # ── Step 5: Checkout repo, build frontend on runner, deploy ──────────
-      - name: Checkout repo (to get deploy script and build frontend)
+      # ── Step 4b: Checkout repo (needed for readiness scripts + deploy) ───
+      - name: Checkout repo
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           ref: ${{ inputs.target_sha || github.event.workflow_run.head_sha || 'main' }}
           persist-credentials: false
 
-      # Resolve the actual commit SHA after checkout so TARGET_SHA is always a
-      # full commit hash — never a branch name like 'main'. This matters for the
-      # post-deploy SHA verification step which compares against the deployed app's
-      # reported SHA.
       - name: Resolve target SHA
         id: resolve_sha
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      # ── Step 4c: VPS readiness (+ optional root auto-migrate) ───────────
+      - name: Ensure VPS readiness
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_ROOT_SSH_KEY: ${{ secrets.VPS_ROOT_SSH_KEY }}
+          SSH_KEY_PATH: ~/.ssh/id_deploy
+        run: |
+          chmod +x scripts/ci-ensure-vps-readiness.sh scripts/run-vps-readiness-check.sh
+          VPS_USER="$VPS_USER" VPS_HOST="$VPS_HOST" SSH_KEY_PATH="$SSH_KEY_PATH" \
+            VPS_ROOT_SSH_KEY="$VPS_ROOT_SSH_KEY" \
+            bash scripts/ci-ensure-vps-readiness.sh
+
+      # ── Step 5: Build frontend on runner ────────────────────────────────
       - name: Build frontend on runner (avoids OOM on 2GB VPS)
         run: |
           cd frontend
@@ -197,6 +128,7 @@ jobs:
           # Copy deploy script and shared checks
           scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
           scp -i ~/.ssh/id_deploy scripts/deploy-async-stack-checks.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy-async-stack-checks.sh
+          scp -i ~/.ssh/id_deploy scripts/run-vps-readiness-check.sh $VPS_USER@$VPS_HOST:/home/deploy/run-vps-readiness-check.sh
           # Copy backup scripts and library (idempotent — safe to overwrite on every deploy)
           scp -i ~/.ssh/id_deploy scripts/backup.sh $VPS_USER@$VPS_HOST:/home/deploy/backup.sh
           scp -i ~/.ssh/id_deploy scripts/restore.sh $VPS_USER@$VPS_HOST:/home/deploy/restore.sh

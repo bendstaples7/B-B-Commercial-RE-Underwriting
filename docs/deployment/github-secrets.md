@@ -128,16 +128,47 @@ FLASK_ENV=production DATABASE_URL="${DATABASE_URL}" flask db upgrade head
 
 ---
 
+### `VPS_HOST_KEY`
+
+**What it is:** The VPS SSH host public key line for `known_hosts`, preventing
+MITM prompts during CI SSH connections.
+
+**How to obtain:**
+
+```bash
+ssh-keyscan -H <VPS_IP>
+```
+
+**Used in workflow:** Added to `~/.ssh/known_hosts` before deploy and VPS readiness
+checks.
+
+---
+
+### `VPS_ROOT_SSH_KEY` (optional)
+
+**What it is:** Private SSH key for `root@VPS_HOST`. When set, the deploy workflow
+can automatically run `scripts/vps-setup/migrate-async-stack.sh` if the async stack
+(Redis/Celery/sudoers) is not yet provisioned.
+
+**When to set:** Recommended after PR #57+ so first async-stack deploy does not
+require manual root SSH.
+
+**Security:** Grants root access. Use a dedicated deploy automation key and
+restrict to the VPS IP in `sshd_config` if possible.
+
+---
+
 ## Workflow Secret Reference Summary
 
 | Secret | Workflow Step | How Referenced |
 |--------|--------------|----------------|
-| `VPS_SSH_KEY` | Load SSH key | `${{ secrets.VPS_SSH_KEY }}` |
-| `VPS_HOST` | Add VPS to known hosts | `${{ secrets.VPS_HOST }}` |
+| `VPS_SSH_KEY` | Deploy / CI VPS checks | `${{ secrets.VPS_SSH_KEY }}` |
+| `VPS_HOST_KEY` | Deploy / CI VPS checks | `${{ secrets.VPS_HOST_KEY }}` |
 | `VPS_USER` | Deploy | `${{ secrets.VPS_USER }}` |
 | `VPS_HOST` | Deploy | `${{ secrets.VPS_HOST }}` |
 | `DATABASE_URL` | Deploy | `${{ secrets.DATABASE_URL }}` |
 | `VPS_SUBDOMAIN` | Post-deploy health check | `${{ secrets.VPS_SUBDOMAIN }}` |
+| `VPS_ROOT_SSH_KEY` | Optional auto-migrate | `${{ secrets.VPS_ROOT_SSH_KEY }}` |
 
 All secrets are passed via `${{ secrets.SECRET_NAME }}` syntax — no secret values
 are hardcoded anywhere in the workflow YAML.
@@ -150,7 +181,7 @@ are hardcoded anywhere in the workflow YAML.
   `.gitignore`.
 - The SSH private key grants shell access to the VPS as the `deploy` user. Treat
   it with the same care as a password.
-- The `deploy` user's sudo access is intentionally scoped to a single command
-  (`/bin/systemctl reload gunicorn`) to minimize privilege escalation risk.
+- The `deploy` user's sudo access is scoped to specific `systemctl` commands and
+  `/usr/local/sbin/bootstrap-async-stack` — see `scripts/vps-setup/11-sudoers-deploy.sh`.
 - Rotate the `DATABASE_URL` password if you suspect it has been compromised. Update
   both the GitHub secret and the `/home/deploy/app/backend/.env` file on the VPS.
