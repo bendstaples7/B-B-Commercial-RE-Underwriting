@@ -244,6 +244,62 @@ fi
 echo ""
 
 # =============================================================================
+# Check 3: /api/health reports Redis and Celery (async stack)
+# =============================================================================
+step "Check 3: /api/health async stack (redis + celery)"
+echo ""
+
+ASYNC_HEALTH_FILE=$(mktemp)
+ASYNC_STATUS=$(curl -s \
+    -o "${ASYNC_HEALTH_FILE}" \
+    -w "%{http_code}" \
+    --max-time 20 \
+    "${HEALTH_URL}" 2>/dev/null || echo "000")
+
+if [[ "${ASYNC_STATUS}" != "200" ]]; then
+    record_fail "/api/health async stack check skipped — health endpoint unavailable"
+    error "  Could not fetch ${HEALTH_URL} (HTTP ${ASYNC_STATUS})"
+elif ! command -v python3 &>/dev/null; then
+    record_fail "/api/health async stack check skipped — python3 is unavailable"
+    error "  python3 is required to parse ${HEALTH_URL}"
+else
+    if python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+checks = d.get('checks', {})
+redis = checks.get('redis', '')
+celery = checks.get('celery', '')
+if redis == 'ok' and celery == 'ok':
+    sys.exit(0)
+if 'ok' not in redis:
+    print(f'redis: {redis}')
+if 'ok' not in celery:
+    print(f'celery: {celery}')
+sys.exit(1)
+" "${ASYNC_HEALTH_FILE}" 2>/dev/null; then
+        record_pass "/api/health reports redis=ok and celery=ok"
+    else
+        ASYNC_DETAIL=$(python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+checks = d.get('checks', {})
+print('redis:', checks.get('redis', 'missing'))
+print('celery:', checks.get('celery', 'missing'))
+" "${ASYNC_HEALTH_FILE}" 2>/dev/null || echo "(could not parse health JSON)")
+        record_fail "/api/health async stack check failed"
+        error "  ${ASYNC_DETAIL}"
+        error ""
+        error "  On the VPS, provision or repair the async stack:"
+        error "    sudo bash /home/deploy/app/scripts/vps-setup/migrate-async-stack.sh"
+        error "  Re-run sudoers after deploy.sh gains new sudo commands:"
+        error "    sudo bash /home/deploy/app/scripts/vps-setup/11-sudoers-deploy.sh"
+    fi
+fi
+
+rm -f "${ASYNC_HEALTH_FILE}"
+echo ""
+
+# =============================================================================
 # Provisioning Scripts Summary
 # =============================================================================
 echo "============================================================"
@@ -275,8 +331,12 @@ echo "  │                                  enable + start                 │"
 echo "  │  10-build-frontend.sh            npm ci && npm run build        │"
 echo "  │  11-nginx-config.sh              Write Nginx site config,       │"
 echo "  │                                  symlink, disable default site  │"
-echo "  │  11-sudoers-deploy.sh            Passwordless sudo for          │"
-echo "  │                                  systemctl reload gunicorn      │"
+echo "  │  03b-install-redis.sh            Redis server for Celery broker     │"
+echo "  │  09b-celery-service.sh           Celery worker + Beat systemd units │"
+echo "  │  bootstrap-async-stack.sh        Redis + Celery + sudoers (combo)  │"
+echo "  │  migrate-async-stack.sh          One-time migration for existing   │"
+echo "  │                                  VPSes before async-stack deploys  │"
+echo "  │  11-sudoers-deploy.sh            Passwordless sudo for deploy user  │"
 echo "  │  12-duckdns.sh                   DuckDNS update script +        │"
 echo "  │                                  cron job (every 5 min)        │"
 echo "  │  13-certbot.sh                   Let's Encrypt certificate via  │"
@@ -375,6 +435,7 @@ if [[ ${FAIL_COUNT} -eq 0 ]]; then
     echo ""
     echo "  The deployment is fully verified:"
     echo "    ✓  https://${DOMAIN}/api/health  →  HTTP 200"
+    echo "    ✓  /api/health redis + celery      →  ok"
     echo "    ✓  http://${DOMAIN}/             →  301 → https://${DOMAIN}/"
     echo ""
     echo "  The application is live at:"
