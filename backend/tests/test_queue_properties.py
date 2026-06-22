@@ -784,9 +784,10 @@ _lead_record = st.fixed_dictionaries({
 })
 
 
+@pytest.mark.usefixtures('app')
 @settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(lead_dicts=st.lists(_lead_record, min_size=0, max_size=20))
-def test_property_2_badge_counts_equal_paginated_totals(lead_dicts):
+def test_property_2_badge_counts_equal_paginated_totals(app, lead_dicts):
     """
     Property 2: Badge counts equal paginated totals.
 
@@ -798,14 +799,7 @@ def test_property_2_badge_counts_equal_paginated_totals(lead_dicts):
 
     Validates: Requirements 1.5, 2.3, 3.4, 4.5, 5.5, 6.5, 12.1
     """
-    os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
-    os.environ['FLASK_ENV'] = 'testing'
-
-    app = create_app('testing')
-    app.config['TESTING'] = True
-
     with app.app_context():
-        db.create_all()
         try:
             # Seed the database with the Hypothesis-generated lead population
             for i, ld in enumerate(lead_dicts):
@@ -825,7 +819,10 @@ def test_property_2_badge_counts_equal_paginated_totals(lead_dicts):
                     unanswered_call_count=0,
                 )
                 db.session.add(lead)
-            db.session.commit()
+            # Flush (not commit) so the per-example rollback in the finally
+            # discards the seeded rows; this keeps the in-memory DB and the
+            # SQLAlchemy identity map from accumulating across Hypothesis examples.
+            db.session.flush()
 
             svc = QueueService()
             counts = svc.get_counts()
@@ -874,8 +871,9 @@ def test_property_2_badge_counts_equal_paginated_totals(lead_dicts):
             )
 
         finally:
-            db.session.remove()
-            db.drop_all()
+            # Discard everything this example seeded so the next example starts
+            # from an empty leads table (bounds memory across examples).
+            db.session.rollback()
 
 
 # ---------------------------------------------------------------------------
@@ -889,9 +887,10 @@ _warm_lead_record = st.fixed_dictionaries({
 })
 
 
+@pytest.mark.usefixtures('app')
 @settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(lead_dicts=st.lists(_warm_lead_record, min_size=0, max_size=20))
-def test_property_3_previously_warm_equals_is_warm(lead_dicts):
+def test_property_3_previously_warm_equals_is_warm(app, lead_dicts):
     """
     Property 3: Previously Warm queue is exactly the set of is_warm=True leads.
 
@@ -904,14 +903,7 @@ def test_property_3_previously_warm_equals_is_warm(lead_dicts):
 
     Validates: Requirements 4.1, 4.2
     """
-    os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
-    os.environ['FLASK_ENV'] = 'testing'
-
-    app = create_app('testing')
-    app.config['TESTING'] = True
-
     with app.app_context():
-        db.create_all()
         try:
             # Seed the database with the Hypothesis-generated lead population
             warm_ids = set()
@@ -938,7 +930,10 @@ def test_property_3_previously_warm_equals_is_warm(lead_dicts):
                 else:
                     not_warm_ids.add(lead.id)
 
-            db.session.commit()
+            # Flush (not commit) so the per-example rollback in the finally
+            # discards the seeded rows; this keeps the in-memory DB and the
+            # SQLAlchemy identity map from accumulating across Hypothesis examples.
+            db.session.flush()
 
             svc = QueueService()
             rows, total = svc.get_previously_warm(per_page=10000)
@@ -967,8 +962,9 @@ def test_property_3_previously_warm_equals_is_warm(lead_dicts):
             )
 
         finally:
-            db.session.remove()
-            db.drop_all()
+            # Discard everything this example seeded so the next example starts
+            # from an empty leads table (bounds memory across examples).
+            db.session.rollback()
 
 
 # ---------------------------------------------------------------------------
@@ -1157,12 +1153,13 @@ _scoping_lead_record = st.fixed_dictionaries({
 })
 
 
+@pytest.mark.usefixtures('app')
 @settings(max_examples=100, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(
     owner_a_leads=st.lists(_scoping_lead_record, min_size=0, max_size=10),
     owner_b_leads=st.lists(_scoping_lead_record, min_size=1, max_size=10),
 )
-def test_property_10_owner_scoping_uniform(owner_a_leads, owner_b_leads):
+def test_property_10_owner_scoping_uniform(app, owner_a_leads, owner_b_leads):
     """
     Property 10: Owner scoping is applied uniformly across all 7 queues.
 
@@ -1182,14 +1179,7 @@ def test_property_10_owner_scoping_uniform(owner_a_leads, owner_b_leads):
     """
     from datetime import date as _date
 
-    os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
-    os.environ['FLASK_ENV'] = 'testing'
-
-    app = create_app('testing')
-    app.config['TESTING'] = True
-
     with app.app_context():
-        db.create_all()
         try:
             owner_b_ids: set[int] = set()
 
@@ -1235,7 +1225,10 @@ def test_property_10_owner_scoping_uniform(owner_a_leads, owner_b_leads):
                 lead_id = _seed_lead(ld, 'owner-B', base + j)
                 owner_b_ids.add(lead_id)
 
-            db.session.commit()
+            # Flush (not commit) so the per-example rollback in the finally
+            # discards the seeded rows; this keeps the in-memory DB and the
+            # SQLAlchemy identity map from accumulating across Hypothesis examples.
+            db.session.flush()
 
             # Create a QueueService scoped to owner-A only
             svc = QueueService(owner_user_id='owner-A')
@@ -1309,7 +1302,8 @@ def test_property_10_owner_scoping_uniform(owner_a_leads, owner_b_leads):
                 )
 
         finally:
-            db.session.remove()
-            db.drop_all()
+            # Discard everything this example seeded so the next example starts
+            # from an empty leads table (bounds memory across examples).
+            db.session.rollback()
 
 
