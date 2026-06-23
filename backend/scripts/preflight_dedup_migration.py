@@ -177,10 +177,15 @@ def count_pin_duplicate_clusters(conn: sa.Connection) -> tuple[int, list[dict]]:
     return len(rows), examples
 
 
+def _script_directory() -> ScriptDirectory:
+    cfg = Config()
+    cfg.set_main_option('script_location', os.path.join(_BACKEND_DIR, 'alembic_migrations'))
+    return ScriptDirectory.from_config(cfg)
+
+
 def is_f9_pending(conn: sa.Connection) -> bool:
     current = get_current_revision(conn)
-    config = Config(os.path.join(_BACKEND_DIR, 'alembic.ini'))
-    script = ScriptDirectory.from_config(config)
+    script = _script_directory()
     head = script.get_current_head()
 
     if current is None:
