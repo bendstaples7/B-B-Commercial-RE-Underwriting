@@ -1,0 +1,62 @@
+"""Add deal_source and deal_description to leads.
+
+Revision ID: g1h2i3j4k5l6
+Revises: f9a0b1c2d3e4
+Create Date: 2026-06-23
+
+General deal context (where the lead was found / why it matters), populated
+from HubSpot and other sources — not HubSpot-specific columns.
+"""
+
+from alembic import op
+from sqlalchemy import text
+
+revision = 'g1h2i3j4k5l6'
+down_revision = 'f9a0b1c2d3e4'
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    op.execute("""
+        ALTER TABLE leads
+        ADD COLUMN IF NOT EXISTS deal_source VARCHAR(255)
+    """)
+    op.execute("""
+        ALTER TABLE leads
+        ADD COLUMN IF NOT EXISTS deal_description TEXT
+    """)
+
+    conn = op.get_bind()
+    conn.execute(text("""
+        WITH ranked_deals AS (
+            SELECT
+                hm.internal_record_id AS lead_id,
+                NULLIF(TRIM(hd.raw_payload->'properties'->>'deal_source'), '') AS deal_source,
+                NULLIF(TRIM(hd.raw_payload->'properties'->>'description'), '') AS deal_description,
+                ROW_NUMBER() OVER (
+                    PARTITION BY hm.internal_record_id
+                    ORDER BY hd.last_updated_at DESC NULLS LAST, hd.hubspot_id DESC
+                ) AS rn
+            FROM hubspot_matches hm
+            JOIN hubspot_deals hd ON hd.hubspot_id = hm.hubspot_id
+            WHERE hm.internal_record_type = 'lead'
+              AND hm.hubspot_record_type = 'deal'
+              AND hm.status = 'confirmed'
+              AND (
+                NULLIF(TRIM(hd.raw_payload->'properties'->>'deal_source'), '') IS NOT NULL
+                OR NULLIF(TRIM(hd.raw_payload->'properties'->>'description'), '') IS NOT NULL
+              )
+        )
+        UPDATE leads l
+        SET deal_source = rd.deal_source,
+            deal_description = rd.deal_description
+        FROM ranked_deals rd
+        WHERE rd.lead_id = l.id
+          AND rd.rn = 1
+    """))
+
+
+def downgrade():
+    op.execute("ALTER TABLE leads DROP COLUMN IF EXISTS deal_description")
+    op.execute("ALTER TABLE leads DROP COLUMN IF EXISTS deal_source")

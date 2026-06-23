@@ -240,16 +240,18 @@ class HubSpotActivityConverterService:
         """
         Convert a HubSpot TASK engagement to an internal Task.
 
-        Idempotent: returns None if hubspot_task_id already exists.
+        Idempotent on create: if hubspot_task_id already exists, reconciles status
+        from the latest engagement payload instead of creating a duplicate.
         Status mapping: 'COMPLETED' → 'completed', all others → 'open'.
-        Title from metadata.subject, body from metadata.body,
-        due_date from engagement.timestamp (the task's scheduled date).
-        Note: metadata.taskDate is not populated by HubSpot's legacy API;
-        the canonical due date is stored in engagement.timestamp.
         """
         if self._task_exists(engagement.hubspot_id):
+            updated = self.reconcile_task_from_engagement(engagement)
+            if updated:
+                return Task.query.filter_by(
+                    hubspot_task_id=str(engagement.hubspot_id)
+                ).first()
             logger.debug(
-                "Task for hubspot_task_id=%s already exists — skipping.",
+                "Task for hubspot_task_id=%s already exists — reconcile unchanged.",
                 engagement.hubspot_id,
             )
             return None
@@ -298,8 +300,178 @@ class HubSpotActivityConverterService:
         )
         return task
 
+    def reconcile_task_from_engagement(self, engagement) -> bool:
+        """Update an existing imported Task from the latest HubSpot engagement payload.
+
+        Returns True when task.status (or completion_timestamp) changed.
+        """
+        task = Task.query.filter_by(hubspot_task_id=str(engagement.hubspot_id)).first()
+        if task is None:
+            return False
+
+        new_status = self._map_hubspot_task_status(engagement)
+        old_status = task.status
+        changed = old_status != new_status
+
+        task.raw_payload = engagement.raw_payload
+        task.status = new_status
+        if new_status == 'completed':
+            if task.completion_timestamp is None:
+                task.completion_timestamp = datetime.utcnow()
+                changed = True
+        elif task.completion_timestamp is not None:
+            task.completion_timestamp = None
+            changed = True
+
+        db.session.commit()
+
+        if changed:
+            logger.info(
+                "Reconciled Task(id=%s) hubspot_task_id=%s status %s → %s",
+                task.id,
+                engagement.hubspot_id,
+                old_status,
+                new_status,
+            )
+            self._recompute_action_for_task(task)
+
+        return changed
+
+    def sync_task_from_crm_v3(self, record: dict, *, lead_id: int) -> str:
+        """Sync a live HubSpot CRM v3 task onto a local Task row.
+
+        Returns 'created', 'updated', or 'unchanged'.
+        """
+        hs_id = str(record.get('id', ''))
+        if not hs_id:
+            return 'unchanged'
+
+        props = record.get('properties') or {}
+        new_status = self._map_crm_v3_task_status(props)
+        title = props.get('hs_task_subject') or '(No Subject)'
+        body = props.get('hs_task_body') or None
+        due_date = self._parse_hubspot_due_date(props.get('hs_timestamp'))
+        raw_payload = {'properties': props, 'id': hs_id}
+
+        from app.models.task_association import TaskAssociation
+
+        task = Task.query.filter_by(hubspot_task_id=hs_id).first()
+        if task is None:
+            task = Task(
+                title=title,
+                body=body,
+                due_date=due_date,
+                status=new_status,
+                source='hubspot_import',
+                hubspot_task_id=hs_id,
+                raw_payload=raw_payload,
+            )
+            db.session.add(task)
+            db.session.flush()
+            db.session.add(TaskAssociation(
+                task_id=task.id,
+                target_type='lead',
+                target_id=lead_id,
+            ))
+            if new_status == 'completed':
+                task.completion_timestamp = datetime.utcnow()
+            db.session.commit()
+            logger.info(
+                'Created Task(id=%s) from live HubSpot CRM task %s (status=%s).',
+                task.id, hs_id, new_status,
+            )
+            return 'created'
+
+        old_status = task.status
+
+        association_added = False
+        if TaskAssociation.query.filter_by(
+            task_id=task.id,
+            target_type='lead',
+            target_id=lead_id,
+        ).first() is None:
+            db.session.add(TaskAssociation(
+                task_id=task.id,
+                target_type='lead',
+                target_id=lead_id,
+            ))
+            association_added = True
+
+        changed = (
+            association_added
+            or task.status != new_status
+            or task.title != title
+            or task.body != body
+            or task.due_date != due_date
+        )
+        task.title = title
+        task.body = body
+        task.due_date = due_date
+        task.raw_payload = raw_payload
+        task.status = new_status
+        if new_status == 'completed':
+            if task.completion_timestamp is None:
+                task.completion_timestamp = datetime.utcnow()
+                changed = True
+        elif task.completion_timestamp is not None:
+            task.completion_timestamp = None
+            changed = True
+
+        if not changed:
+            return 'unchanged'
+
+        db.session.commit()
+        logger.info(
+            'Synced Task(id=%s) hubspot_task_id=%s status %s → %s',
+            task.id, hs_id, old_status, new_status,
+        )
+        self._recompute_action_for_task(task)
+        return 'updated'
+
     # ------------------------------------------------------------------ #
     # Private helpers                                                      #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _map_crm_v3_task_status(props: dict) -> str:
+        hs_status = (props.get('hs_task_status') or '').upper()
+        return 'completed' if hs_status == 'COMPLETED' else 'open'
+
+    @staticmethod
+    def _map_hubspot_task_status(engagement) -> str:
+        """Map HubSpot task status fields to internal task status."""
+        metadata = engagement.raw_payload.get('metadata', {}) or {}
+        hs_status = (metadata.get('status') or '').upper()
+        if not hs_status:
+            props = engagement.raw_payload.get('properties', {}) or {}
+            hs_status = (props.get('hs_task_status') or '').upper()
+        return 'completed' if hs_status == 'COMPLETED' else 'open'
+
+    def _recompute_action_for_task(self, task) -> None:
+        """Recompute recommended_action for leads linked to this task."""
+        from app.models.task_association import TaskAssociation
+        from app.services.action_engine_service import ActionEngineService
+
+        lead_ids = [
+            row.target_id
+            for row in TaskAssociation.query.filter_by(
+                task_id=task.id,
+                target_type='lead',
+            ).all()
+        ]
+        for lead_id in lead_ids:
+            try:
+                ActionEngineService.recompute_and_persist(lead_id)
+            except Exception as exc:
+                db.session.rollback()
+                logger.warning(
+                    "recompute_and_persist failed for lead_id=%s after task reconcile: %s",
+                    lead_id,
+                    exc,
+                )
+
+    # ------------------------------------------------------------------ #
+    # Private helpers (continued)                                          #
     # ------------------------------------------------------------------ #
 
     def _resolve_associations(self, engagement):
@@ -411,6 +583,25 @@ class HubSpotActivityConverterService:
         if preview:
             return preview
         return ''
+
+    @staticmethod
+    def _parse_hubspot_due_date(value):
+        """Parse HubSpot task due date from ms epoch or ISO-8601 string."""
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return HubSpotActivityConverterService._parse_ms_timestamp(value)
+        text = str(value).strip()
+        if text.isdigit():
+            return HubSpotActivityConverterService._parse_ms_timestamp(text)
+        try:
+            dt = datetime.fromisoformat(text.replace('Z', '+00:00'))
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt
+        except (ValueError, TypeError, OSError):
+            logger.warning('Could not parse HubSpot due date value: %r', value)
+            return None
 
     @staticmethod
     def _parse_ms_timestamp(ms_value):

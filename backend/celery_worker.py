@@ -121,6 +121,8 @@ celery.conf.update(
             'options': {'expires': 7200},
         },
         # Scheduled engagement sync — imports new HubSpot notes/calls/tasks hourly.
+        # Legacy engagement payloads can be stale for task status; the post-import
+        # pipeline also runs live CRM v3 task sync for confirmed deal leads.
         # Engagements cannot be delivered via webhook (HubSpot legacy app limitation),
         # so this scheduled job is the mechanism for near-real-time engagement updates.
         # Interval is configurable via HUBSPOT_ENGAGEMENT_SYNC_INTERVAL_MINUTES (default: 60).
@@ -128,6 +130,12 @@ celery.conf.update(
             'task': 'hubspot.scheduled_engagement_sync',
             'schedule': int(os.environ.get('HUBSPOT_ENGAGEMENT_SYNC_INTERVAL_MINUTES', 60)) * 60,
             'options': {'expires': 3300},  # expire if not consumed within 55 min
+        },
+        # Refresh confirmed deal payloads from HubSpot API (stage changes, etc.)
+        'hubspot-refresh-confirmed-deals': {
+            'task': 'hubspot.refresh_confirmed_deals',
+            'schedule': int(os.environ.get('HUBSPOT_DEAL_REFRESH_INTERVAL_SECONDS', 2 * 3600)),
+            'options': {'expires': 3600},
         },
         # Weekly enrichment: pull DuPage acquisition dates from Illinois MyDec PTAX-203 API
         # (data.illinois.gov, updated weekly by IDOR). Runs Sunday 3:30 AM UTC, 30 minutes
@@ -152,6 +160,13 @@ celery.conf.update(
             'task': 'gis.backfill_property_matches',
             'schedule': 6 * 3600,  # every 6 hours
             'options': {'expires': 3600},
+        },
+        # Nightly duplicate sentinel — auto-merge clear owner+street duplicates,
+        # flag ambiguous clusters for review. Runs after other nightly jobs.
+        'lead-dedup-nightly-sentinel': {
+            'task': 'leads.run_duplicate_sentinel',
+            'schedule': crontab(hour=5, minute=0),
+            'options': {'expires': 7200},
         },
     },
 )
@@ -417,14 +432,29 @@ def bulk_rescore_task(user_id: str, lead_ids: list[int] | None = None) -> int:
         return engine.bulk_rescore(user_id, lead_ids)
 
 
+@celery.task(name='leads.run_duplicate_sentinel')
+def run_duplicate_sentinel_task(dry_run: bool = False, max_merges: int = 100) -> dict:
+    """Nightly/post-import scan for duplicate leads."""
+    from app.tasks.lead_dedup_tasks import run_lead_duplicate_sentinel
+    return run_lead_duplicate_sentinel(dry_run=dry_run, max_merges=max_merges)
+
+
 @celery.task(name='import.process')
 def import_task(job_id: int, lead_category: str = 'residential') -> dict:
     from app import create_app
     from app.services.google_sheets_importer import GoogleSheetsImporter
+    from app.tasks.lead_dedup_tasks import run_lead_duplicate_sentinel
     app = create_app()
     with app.app_context():
         importer_service = GoogleSheetsImporter()
         result = importer_service.process_import(job_id, lead_category=lead_category)
+        try:
+            run_lead_duplicate_sentinel(dry_run=False, max_merges=50)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Post-import duplicate sentinel failed for job %s: %s", job_id, exc,
+            )
         return {
             'job_id': result.job_id,
             'status': result.status,
@@ -877,6 +907,13 @@ def enrich_leads_from_hubspot(run_id: int = None) -> dict:
     return _run(run_id)
 
 
+@celery.task(name='hubspot.refresh_confirmed_deals')
+def refresh_confirmed_hubspot_deals(limit: int = 200) -> dict:
+    """Re-fetch confirmed deals from HubSpot and sync linked lead stages."""
+    from app.tasks.hubspot_tasks import run_refresh_confirmed_hubspot_deals as _run
+    return _run(limit=limit)
+
+
 @celery.task(name='hubspot.convert_activities')
 def convert_hubspot_activities(run_id: int = None) -> None:
     """Convert all unconverted HubSpot engagements to Interactions/Tasks."""
@@ -1157,6 +1194,7 @@ REQUIRED_TASKS = {
     'hubspot.import_engagements',
     'hubspot.run_matching',
     'hubspot.enrich_leads',
+    'hubspot.refresh_confirmed_deals',
     'hubspot.convert_activities',
     'hubspot.extract_signals',
     'hubspot.rescore_leads',

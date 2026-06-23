@@ -315,6 +315,8 @@ export interface Property {
   analysis_session_id: number | null
   // Research tracking
   source: string | null
+  deal_source: string | null
+  deal_description: string | null
   date_identified: string | null
   notes: string | null
   needs_skip_trace: boolean | null
@@ -1788,7 +1790,15 @@ export interface CommandCenterPayload {
   has_property_match: boolean;
   analysis_session_id: number | null;
   hubspot_deal_stage?: string | null;
+  hubspot_deal_name?: string | null;
+  deal_source?: string | null;
+  deal_description?: string | null;
+  source?: string | null;
+  data_source?: string | null;
   last_hubspot_sync_at?: string | null;
+  hubspot_has_confirmed_deal?: boolean;
+  hubspot_sync_stale?: boolean;
+  hubspot_deal_last_updated_at?: string | null;
   last_contact_date?: string | null;
   date_added_to_hubspot?: string | null;
   recommended_action: RecommendedActionMeta;
@@ -2012,14 +2022,28 @@ export interface SearchResultItem {
   label: string
   nav_path: string
   lead_score?: number | null
+  lead_status?: string | null
+  relevance_score?: number | null
   created_at?: string | null
   status?: string | null
   match_context?: SearchMatchContext | null
 }
 
 export interface SearchResponse {
+  q: string
+  page: number
+  per_page: number
   leads: SearchResultItem[]
+  leads_total: number
   sessions: SearchResultItem[]
+  sessions_total: number
+}
+
+export interface SearchParams {
+  q: string
+  page?: number
+  per_page?: number
+  signal?: AbortSignal
 }
 
 // -----------------------------------------------------------------------

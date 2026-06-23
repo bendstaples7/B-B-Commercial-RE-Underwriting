@@ -361,6 +361,7 @@ class HubSpotClientService:
         "dealname", "pipeline", "dealstage", "closedate", "amount",
         "county_assessor_pin", "pin", "address", "hs_object_id",
         "createdate", "hs_lastmodifieddate",
+        "deal_source", "description",
     ]
     _CONTACT_PROPERTIES = [
         "firstname", "lastname", "email", "phone", "mobilephone",

@@ -4,7 +4,7 @@
  *
  * Requirements: 3.2, 3.3, 3.6, 4.3, 7.5, 7.6
  */
-import { useState } from 'react'
+import { forwardRef, useImperativeHandle, useState } from 'react'
 import {
   Alert,
   Box,
@@ -63,6 +63,10 @@ function isDueDateOverdue(dueDate: string | null): boolean {
 // Props
 // ---------------------------------------------------------------------------
 
+export interface LeadTaskListHandle {
+  openCreateForm: () => void
+}
+
 export interface LeadTaskListProps {
   leadId: number
   tasks: LeadTask[]
@@ -91,16 +95,19 @@ export interface LeadTaskListProps {
  * an inline task creation form, and a "Create Task" CTA when RA is
  * `create_task` and no open tasks exist.
  */
-export function LeadTaskList({
-  leadId,
-  tasks,
-  recommendedAction,
-  onTaskCreated,
-  onTaskCompleted,
-  onHubSpotTaskDone,
-  onOptimisticTaskCreate,
-  onOptimisticTaskRevert,
-}: LeadTaskListProps) {
+export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(function LeadTaskList(
+  {
+    leadId,
+    tasks,
+    recommendedAction,
+    onTaskCreated,
+    onTaskCompleted,
+    onHubSpotTaskDone,
+    onOptimisticTaskCreate,
+    onOptimisticTaskRevert,
+  },
+  ref,
+) {
   const [formOpen, setFormOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [dueDate, setDueDate] = useState('')
@@ -124,6 +131,10 @@ export function LeadTaskList({
     setTitleError(null)
     setSubmitError(null)
   }
+
+  useImperativeHandle(ref, () => ({
+    openCreateForm: handleOpenForm,
+  }))
 
   const handleCloseForm = () => {
     setFormOpen(false)
@@ -427,6 +438,6 @@ export function LeadTaskList({
       )}
     </Box>
   )
-}
+})
 
 export default LeadTaskList

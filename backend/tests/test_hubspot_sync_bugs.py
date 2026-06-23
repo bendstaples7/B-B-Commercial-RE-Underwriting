@@ -1641,6 +1641,7 @@ class TestBug6PipelineAutoAdvance:
 
             with patch('app.tasks.hubspot_tasks.run_hubspot_matching') as m_match, \
                  patch('app.tasks.hubspot_tasks.run_enrich_leads_from_hubspot') as m_enrich, \
+                 patch('app.tasks.hubspot_tasks.run_sync_hubspot_tasks_for_confirmed_leads') as m_task_sync, \
                  patch('app.tasks.hubspot_tasks.run_convert_hubspot_activities') as m_convert, \
                  patch('app.tasks.hubspot_tasks.run_extract_hubspot_signals') as m_signals, \
                  patch('app.tasks.hubspot_tasks.run_rescore_leads_after_import') as m_rescore, \
@@ -1660,6 +1661,7 @@ class TestBug6PipelineAutoAdvance:
             for name, mock in (
                 ('run_hubspot_matching', m_match),
                 ('run_enrich_leads_from_hubspot', m_enrich),
+                ('run_sync_hubspot_tasks_for_confirmed_leads', m_task_sync),
                 ('run_convert_hubspot_activities', m_convert),
                 ('run_extract_hubspot_signals', m_signals),
                 ('run_rescore_leads_after_import', m_rescore),
@@ -1715,6 +1717,7 @@ class TestBug6PipelineAutoAdvance:
             with patch('app.create_app', return_value=app), \
                  patch('app.tasks.hubspot_tasks.run_hubspot_matching') as m_match, \
                  patch('app.tasks.hubspot_tasks.run_enrich_leads_from_hubspot') as m_enrich, \
+                 patch('app.tasks.hubspot_tasks.run_sync_hubspot_tasks_for_confirmed_leads') as m_task_sync, \
                  patch('app.tasks.hubspot_tasks.run_convert_hubspot_activities') as m_convert, \
                  patch('app.tasks.hubspot_tasks.run_extract_hubspot_signals') as m_signals, \
                  patch('app.tasks.hubspot_tasks.run_rescore_leads_after_import') as m_rescore, \
@@ -1730,6 +1733,7 @@ class TestBug6PipelineAutoAdvance:
             for name, mock in (
                 ('run_hubspot_matching', m_match),
                 ('run_enrich_leads_from_hubspot', m_enrich),
+                ('run_sync_hubspot_tasks_for_confirmed_leads', m_task_sync),
                 ('run_convert_hubspot_activities', m_convert),
                 ('run_extract_hubspot_signals', m_signals),
                 ('run_rescore_leads_after_import', m_rescore),

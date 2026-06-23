@@ -22,6 +22,7 @@ import PersonAddIcon from '@mui/icons-material/PersonAdd'
 import CloseIcon from '@mui/icons-material/Close'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { contactService } from '@/services/api'
+import { formatPhoneNumber, phoneTelHref } from '@/utils/phone'
 import type { PropertyContact, ContactRole } from '@/types'
 import { ContactFormModal } from './ContactFormModal'
 
@@ -321,7 +322,7 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
                   <Typography variant="subtitle2" color="text.secondary" gutterBottom>Phone</Typography>
                   {detailContact.phones.map((p) => (
                     <Typography key={p.id} variant="body1" sx={{ mb: 0.5 }}>
-                      📞 <a href={`tel:${p.value}`} style={{ textDecoration: 'none', color: 'inherit' }}>{p.value}</a>
+                      📞 <a href={phoneTelHref(p.value)} style={{ textDecoration: 'none', color: 'inherit' }}>{formatPhoneNumber(p.value)}</a>
                       {p.label && p.label !== 'other' && (
                         <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>({p.label})</Typography>
                       )}

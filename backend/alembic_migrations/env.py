@@ -58,6 +58,13 @@ _KNOWN_REVISIONS = frozenset({
     'c5d6e7f8a9b0',
     # HubSpot signal dedup uniqueness index (lead_id, signal_type, source_engagement_id)
     'd6e7f8a9b0c1',
+    # Ranked fuzzy search — leads.search_document generated column + GIN trgm
+    'e7f8a9b0c1d2',
+    # Lead dedup — normalized_street column + unique owner+street/PIN indexes
+    'f8a9b0c1d2e3',
+    'f9a0b1c2d3e4',
+    # Lead deal context — deal_source + deal_description from HubSpot / manual
+    'g1h2i3j4k5l6',
 })
 
 

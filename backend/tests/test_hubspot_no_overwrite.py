@@ -240,10 +240,10 @@ class TestProperty19NoOverwriteProtectedFields:
 
             db.session.rollback()
 
-    def test_address_match_pending_when_multiple_leads_share_address(self, app) -> None:
-        """When multiple leads share the same normalised address the match must
-        be status='pending' with no internal_record_id (ambiguous — needs review).
-        Neither lead should be enriched.
+    def test_address_match_disambiguates_when_multiple_leads_share_address(self, app) -> None:
+        """When multiple leads share the same normalised address the matcher
+        picks the best candidate (HubSpot match / stage / contact data) instead
+        of leaving the deal pending and creating a placeholder.
 
         # Feature: hubspot-crm-migration, Property 19
         **Validates: Requirements 22.1, 22.2**
@@ -268,12 +268,13 @@ class TestProperty19NoOverwriteProtectedFields:
             db.session.flush()
 
             assert match.confidence == "MEDIUM"
-            assert match.status == "pending", (
-                f"Expected 'pending' for ambiguous address, got '{match.status}'"
+            assert match.status == "confirmed", (
+                f"Expected 'confirmed' after disambiguation, got '{match.status}'"
             )
-            assert match.internal_record_id is None, (
-                f"Expected no lead anchored for ambiguous match, got {match.internal_record_id}"
+            assert match.internal_record_id == lead_a.id, (
+                "Lower id wins when stage/HubSpot/contact data are tied"
             )
+            assert lead_b.review_required is True
 
             db.session.rollback()
 

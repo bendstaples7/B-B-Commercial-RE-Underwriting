@@ -43,6 +43,7 @@ def run_post_import_pipeline_sync() -> None:
         run_extract_hubspot_signals,
         run_hubspot_matching,
         run_rescore_leads_after_import,
+        run_sync_hubspot_tasks_for_confirmed_leads,
     )
 
     run_hubspot_matching()
@@ -50,6 +51,9 @@ def run_post_import_pipeline_sync() -> None:
 
     run_enrich_leads_from_hubspot()
     logger.info("Post-import pipeline: lead enrichment complete")
+
+    run_sync_hubspot_tasks_for_confirmed_leads()
+    logger.info("Post-import pipeline: HubSpot task sync complete")
 
     run_convert_hubspot_activities()
     logger.info("Post-import pipeline: activity conversion complete")

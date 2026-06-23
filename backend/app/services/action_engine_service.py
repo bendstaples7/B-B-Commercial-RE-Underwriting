@@ -47,8 +47,8 @@ RECOMMENDED_ACTION_METADATA = {
         'explanation': 'This lead has no open tasks and no specific next action. Create a task to define the next concrete step.',
     },
     'nurture': {
-        'label': 'Nurture',
-        'explanation': 'This lead does not meet criteria for immediate action. Park it in the nurture pipeline and revisit when conditions change.',
+        'label': 'Quick actions',
+        'explanation': '',
     },
     'suppress': {
         'label': 'Suppress',

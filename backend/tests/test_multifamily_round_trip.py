@@ -308,7 +308,7 @@ def test_round_trip_export_import(app_context, inputs):
 
     for orig, imp in zip(original_fs, imported_fs):
         assert imp.source_type == orig.source_type
-        assert _float_to_decimal_2dp(imp.total_available) == _quantize_2dp(orig.total_available)
+        assert _float_to_decimal_2dp(imp.total_available) == _float_to_decimal_2dp(float(orig.total_available))
         assert _float_to_decimal_6dp(imp.interest_rate) == _quantize_6dp(orig.interest_rate)
         assert _float_to_decimal_6dp(imp.origination_fee_rate) == _quantize_6dp(orig.origination_fee_rate)
 

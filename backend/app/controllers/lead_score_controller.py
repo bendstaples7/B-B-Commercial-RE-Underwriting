@@ -104,6 +104,16 @@ def get_lead_score(lead_id):
         .all()
     )
 
+    latest_record = score_records[0] if score_records else None
+    if scoring_engine.score_needs_refresh(lead, latest_record):
+        latest_record = scoring_engine.recalculate_lead_score(lead)
+        score_records = (
+            LeadScore.query
+            .filter_by(lead_id=lead_id)
+            .order_by(LeadScore.created_at.desc())
+            .all()
+        )
+
     latest = _serialize_lead_score(score_records[0]) if score_records else None
     history = [_serialize_lead_score(s) for s in score_records]
 

@@ -76,15 +76,22 @@ def test_search_response_shape(client, q):
     # Top-level shape
     assert 'leads' in data
     assert 'sessions' in data
+    assert 'leads_total' in data
+    assert 'sessions_total' in data
+    assert 'page' in data
+    assert 'per_page' in data
+    assert 'q' in data
     assert isinstance(data['leads'], list)
     assert isinstance(data['sessions'], list)
+    assert isinstance(data['leads_total'], int)
+    assert isinstance(data['sessions_total'], int)
 
     # Lead item shape
     for lead in data['leads']:
         assert isinstance(lead.get('id'), int)
         assert lead.get('type') == 'lead'
         assert isinstance(lead.get('label'), str) and len(lead['label']) > 0
-        assert lead.get('nav_path', '').startswith('/properties/')
+        assert lead.get('nav_path', '').startswith('/leads/')
 
     # Session item shape
     for session in data['sessions']:
@@ -102,17 +109,14 @@ def test_search_response_shape(client, q):
 
 
 # ---------------------------------------------------------------------------
-# Property 7: Result count caps are always respected
-# Feature: global-search-bar, Property 7: result count caps are always respected
-# Validates: Requirements 3.8, 4.7
+# Pagination: all matching leads are reachable across pages
 # ---------------------------------------------------------------------------
 
-# The search term used to seed all cap-test leads — distinctive enough that
-# a normal test DB will never contain accidental matches.
+# The search term used to seed pagination test leads.
 _CAP_SEARCH_TERM = 'TestSearchCap'
 
-# Number of leads to seed — comfortably above the leads cap (10).
-_CAP_SEED_COUNT = 15
+# Number of leads to seed — above default per_page (25).
+_CAP_SEED_COUNT = 30
 
 
 def _seed_cap_leads(app_ctx):
@@ -147,51 +151,41 @@ def client_with_many_leads(app, client):
 # Example-based test: verify the cap is enforced when DB has >10 matching leads
 # ---------------------------------------------------------------------------
 
-def test_search_leads_cap_example(client_with_many_leads):
-    """Seeding 15 matching leads and searching returns at most 10 leads."""
+def test_search_leads_pagination_example(client_with_many_leads):
+    """Seeding 30 matching leads returns paginated results with correct total."""
     q = urllib.parse.quote(_CAP_SEARCH_TERM, safe='')
-    response = client_with_many_leads.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
+    response = client_with_many_leads.get(
+        f'/api/search?q={q}&page=1&per_page=10', headers=_AUTH_HEADERS,
+    )
     assert response.status_code == 200, f"Expected 200, got {response.status_code}"
     data = response.get_json()
 
-    assert 'leads' in data
-    assert 'sessions' in data
-    assert len(data['leads']) <= 10, (
-        f"leads cap exceeded: got {len(data['leads'])} items (max 10)"
-    )
-    assert len(data['sessions']) <= 5, (
-        f"sessions cap exceeded: got {len(data['sessions'])} items (max 5)"
-    )
-    # Also verify we actually matched some leads (not an empty result)
-    assert len(data['leads']) > 0, "Expected at least one matching lead"
+    assert data['leads_total'] >= _CAP_SEED_COUNT
+    assert len(data['leads']) == 10
+    assert data['page'] == 1
+    assert data['per_page'] == 10
+
+    page2 = client_with_many_leads.get(
+        f'/api/search?q={q}&page=2&per_page=10', headers=_AUTH_HEADERS,
+    ).get_json()
+    assert len(page2['leads']) == 10
+    assert page2['leads_total'] == data['leads_total']
 
 
-# ---------------------------------------------------------------------------
-# Property-based test: result arrays are always within cap limits for any query
-# ---------------------------------------------------------------------------
-
-# Feature: global-search-bar, Property 7: result count caps are always respected
-# Validates: Requirements 3.8, 4.7
 @given(q=st.text(min_size=2, max_size=100).filter(lambda s: len(s.strip()) >= 2))
 @settings(max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture])
-def test_search_result_caps_property(client, q):
-    """For any valid query, leads array <= 10 items and sessions array <= 5 items.
-
-    The DB may be empty (no matches), but if 200 is returned the shape must
-    always respect the caps — the property holds regardless of result count.
-    """
+def test_search_pagination_respects_per_page(client, q):
+    """For any valid query, returned leads count never exceeds per_page."""
+    per_page = 5
     response = client.get(
-        f'/api/search?q={urllib.parse.quote(q.strip(), safe="")}',
+        f'/api/search?q={urllib.parse.quote(q.strip(), safe="")}&per_page={per_page}',
         headers=_AUTH_HEADERS,
     )
     assert response.status_code == 200, response.get_data(as_text=True)
     data = response.get_json()
-    assert len(data['leads']) <= 10, (
-        f"leads cap exceeded for q={q!r}: got {len(data['leads'])} items (max 10)"
-    )
-    assert len(data['sessions']) <= 5, (
-        f"sessions cap exceeded for q={q!r}: got {len(data['sessions'])} items (max 5)"
-    )
+    assert len(data['leads']) <= per_page
+    assert data['per_page'] == per_page
+    assert data['leads_total'] >= len(data['leads'])
 
 
 # ---------------------------------------------------------------------------
@@ -261,8 +255,8 @@ def test_search_match_correctness_example(client_with_match_lead):
 
     # Verify nav_path format
     for lead in data['leads']:
-        assert lead.get('nav_path', '').startswith('/properties/'), (
-            f"nav_path {lead.get('nav_path')!r} does not start with /properties/"
+        assert lead.get('nav_path', '').startswith('/leads/'), (
+            f"nav_path {lead.get('nav_path')!r} does not start with /leads/"
         )
 
 
@@ -299,7 +293,7 @@ def test_search_match_by_street_example(client_with_match_lead):
     # Lead returned by property_street — label may be the full name, not the street
     # (since both owner names are set). We only verify it was returned and nav_path is correct.
     for lead in data['leads']:
-        assert lead.get('nav_path', '').startswith('/properties/')
+        assert lead.get('nav_path', '').startswith('/leads/')
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +342,7 @@ def test_search_results_match_query(client_with_match_lead, q):
     # Every returned lead must have nav_path in the correct format.
     # Full label match is verified for leads that must match the seeded data.
     for lead in data['leads']:
-        assert lead.get('nav_path', '').startswith('/properties/'), (
+        assert lead.get('nav_path', '').startswith('/leads/'), (
             f"Lead nav_path {lead.get('nav_path')!r} invalid for q={q_stripped!r}"
         )
         assert isinstance(lead.get('id'), int), (
@@ -596,7 +590,7 @@ def _seed_and_query_label(client, app, first, last, street):
         response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
         data = response.get_json()
-        matching = [l for l in data['leads'] if l.get('nav_path') == f'/properties/{lead_id}']
+        matching = [l for l in data['leads'] if l.get('nav_path') == f'/leads/{lead_id}']
         assert len(matching) >= 1, f"Seeded lead {lead_id} not found in results"
         return matching[0]['label']
     finally:
@@ -665,7 +659,7 @@ def test_label_no_hybrid_when_primary_first_only(client, app):
         response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
         assert response.status_code == 200
         data = response.get_json()
-        matching = [result for result in data['leads'] if result.get('nav_path') == f'/properties/{lead_id}']
+        matching = [result for result in data['leads'] if result.get('nav_path') == f'/leads/{lead_id}']
         assert len(matching) >= 1, f"Lead {lead_id} not found in results"
         label = matching[0]['label']
         # Must use only the primary source — 'Luke' only, not 'Luke Carlson'
@@ -811,7 +805,10 @@ def test_search_no_matches_returns_empty_arrays(client):
     response = client.get('/api/search?q=xyz_no_match_zq9', headers=_AUTH_HEADERS)
     assert response.status_code == 200
     data = response.get_json()
-    assert data == {'leads': [], 'sessions': []}
+    assert data['leads'] == []
+    assert data['sessions'] == []
+    assert data['leads_total'] == 0
+    assert data['sessions_total'] == 0
 
 # ---------------------------------------------------------------------------
 # Phone and email search tests
@@ -950,131 +947,203 @@ def test_search_by_phone_returns_label_with_address(client, app):
 
 
 # ---------------------------------------------------------------------------
-# PostgreSQL SQL syntax guard (Regression: duplicate ELSE in matched_email CASE)
-#
-# The ILIKE query path (_leads_sql_ilike) is never exercised by the SQLite test
-# DB, so a syntax error in that query silently passes all tests but fails in
-# production. This test compiles the raw SQL text against the SQLAlchemy text()
-# parser and — when running against PostgreSQL — actually executes it so that
-# the DB engine validates the syntax too.
-#
-# Under SQLite (the normal test DB) this test still catches Python-level errors
-# in the SQL string (e.g. mismatched parentheses that sqlalchemy.text() can
-# detect at bind time), and clearly documents that the ILIKE path must be kept
-# syntactically valid.
+# Ranked / fuzzy search (multi-token cross-field)
 # ---------------------------------------------------------------------------
 
-def test_ilike_leads_sql_compiles_without_error(app):
-    """The PostgreSQL ILIKE leads query must compile without a SQL syntax error.
+def test_ronald_j_finds_jutkins(client, app):
+    """Multi-token query 'Ronald J' matches first=Ronald, last=Jutkins."""
+    with app.app_context():
+        lead = Lead(
+            owner_first_name='Ronald',
+            owner_last_name='Jutkins',
+            property_street='1915 W Schiller',
+            owner_user_id=_TEST_USER_ID,
+            lead_status='negotiating_remote',
+        )
+        db.session.add(lead)
+        db.session.commit()
+        lead_id = lead.id
 
-    Regression guard for: duplicate ELSE clause in matched_email CASE expression
-    (fixed in fix/search-failed-error). Under SQLite this validates the Python
-    string can be wrapped in sqlalchemy.text() without error. Under PostgreSQL
-    it executes the query with LIMIT 0 to let the DB engine validate the syntax.
-    """
+    try:
+        q = urllib.parse.quote('Ronald J', safe='')
+        response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
+        assert response.status_code == 200
+        ids = [l['id'] for l in response.get_json()['leads']]
+        assert lead_id in ids
+    finally:
+        with app.app_context():
+            Lead.query.filter_by(id=lead_id).delete()
+            db.session.commit()
+
+
+def test_ronald_jutkins_full_name(client, app):
+    """Full-name query matches via multi-token logic."""
+    with app.app_context():
+        lead = Lead(
+            owner_first_name='Ronald',
+            owner_last_name='Jutkins',
+            property_street='1915 W Schiller St',
+            owner_user_id=_TEST_USER_ID,
+            lead_status='mailing_no_contact_made',
+        )
+        db.session.add(lead)
+        db.session.commit()
+        lead_id = lead.id
+
+    try:
+        q = urllib.parse.quote('Ronald Jutkins', safe='')
+        response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
+        assert response.status_code == 200
+        ids = [l['id'] for l in response.get_json()['leads']]
+        assert lead_id in ids
+    finally:
+        with app.app_context():
+            Lead.query.filter_by(id=lead_id).delete()
+            db.session.commit()
+
+
+def test_1915_schiller_address_tokens(client, app):
+    """Address tokens match across street field."""
+    with app.app_context():
+        lead = Lead(
+            owner_first_name='Ronald',
+            owner_last_name='Jutkins',
+            property_street='1915 W Schiller Ave',
+            property_city='Chicago',
+            owner_user_id=_TEST_USER_ID,
+            lead_status='awaiting_skip_trace',
+        )
+        db.session.add(lead)
+        db.session.commit()
+        lead_id = lead.id
+
+    try:
+        q = urllib.parse.quote('1915 Schiller', safe='')
+        response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
+        assert response.status_code == 200
+        ids = [l['id'] for l in response.get_json()['leads']]
+        assert lead_id in ids
+    finally:
+        with app.app_context():
+            Lead.query.filter_by(id=lead_id).delete()
+            db.session.commit()
+
+
+def test_fuzzy_last_name_typo(client, app):
+    """Typo 'Jutkin' still finds 'Jutkins'."""
+    with app.app_context():
+        lead = Lead(
+            owner_first_name='Ronald',
+            owner_last_name='Jutkins',
+            property_street='200 Main St',
+            owner_user_id=_TEST_USER_ID,
+            lead_status='awaiting_skip_trace',
+        )
+        db.session.add(lead)
+        db.session.commit()
+        lead_id = lead.id
+
+    try:
+        q = urllib.parse.quote('Jutkin', safe='')
+        response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
+        assert response.status_code == 200
+        ids = [l['id'] for l in response.get_json()['leads']]
+        assert lead_id in ids
+    finally:
+        with app.app_context():
+            Lead.query.filter_by(id=lead_id).delete()
+            db.session.commit()
+
+
+def test_warm_lead_ranks_higher(client, app):
+    """Warm lead appears before cold lead with same name match."""
+    with app.app_context():
+        cold = Lead(
+            owner_first_name='RankTest',
+            owner_last_name='ColdLead',
+            property_street='RankTest Cold St',
+            owner_user_id=_TEST_USER_ID,
+            lead_status='mailing_no_contact_made',
+            is_warm=False,
+            lead_score=40,
+        )
+        warm = Lead(
+            owner_first_name='RankTest',
+            owner_last_name='WarmLead',
+            property_street='RankTest Warm St',
+            owner_user_id=_TEST_USER_ID,
+            lead_status='mailing_no_contact_made',
+            is_warm=True,
+            lead_score=40,
+        )
+        db.session.add_all([cold, warm])
+        db.session.commit()
+        cold_id, warm_id = cold.id, warm.id
+
+    try:
+        q = urllib.parse.quote('RankTest', safe='')
+        response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
+        assert response.status_code == 200
+        leads = response.get_json()['leads']
+        ids = [l['id'] for l in leads if l['id'] in (cold_id, warm_id)]
+        assert warm_id in ids and cold_id in ids
+        assert ids.index(warm_id) < ids.index(cold_id)
+    finally:
+        with app.app_context():
+            Lead.query.filter(Lead.id.in_([cold_id, warm_id])).delete(synchronize_session=False)
+            db.session.commit()
+
+
+def test_search_returns_relevance_score(client, app):
+    """Response includes optional relevance_score on lead items."""
+    with app.app_context():
+        lead = Lead(
+            owner_first_name='ScoreTest',
+            owner_last_name='Lead',
+            property_street='ScoreTest Ave',
+            owner_user_id=_TEST_USER_ID,
+            lead_status='awaiting_skip_trace',
+        )
+        db.session.add(lead)
+        db.session.commit()
+        lead_id = lead.id
+
+    try:
+        q = urllib.parse.quote('ScoreTest', safe='')
+        response = client.get(f'/api/search?q={q}', headers=_AUTH_HEADERS)
+        data = response.get_json()
+        matching = [l for l in data['leads'] if l['id'] == lead_id]
+        assert matching
+        assert matching[0].get('relevance_score') is not None
+        assert matching[0]['relevance_score'] >= 0
+    finally:
+        with app.app_context():
+            Lead.query.filter_by(id=lead_id).delete()
+            db.session.commit()
+
+
+# ---------------------------------------------------------------------------
+# PostgreSQL ranked search SQL syntax guard
+# ---------------------------------------------------------------------------
+
+def test_postgres_search_sql_compiles_without_error(app):
+    """SearchService PostgreSQL query must compile and execute on PostgreSQL."""
     from sqlalchemy import text
     from sqlalchemy.exc import OperationalError, ProgrammingError
 
-    # Paste the exact SQL from search_controller._leads_sql_ilike.
-    # If the query changes there, this test must be updated to match.
-    ilike_sql = text("""
-        SELECT
-            l.id,
-            l.owner_first_name,
-            l.owner_last_name,
-            l.property_street,
-            l.lead_score,
-            l.owner_user_id,
-            primary_c.first_name  AS primary_contact_first_name,
-            primary_c.last_name   AS primary_contact_last_name,
-            CASE
-                WHEN :phone_digits_pattern IS NOT NULL AND (
-                    regexp_replace(COALESCE(l.phone_1,''),'[^0-9]','','g') LIKE :phone_digits_pattern
-                ) THEN l.phone_1
-                WHEN :phone_digits_pattern IS NOT NULL AND (
-                    regexp_replace(COALESCE(l.phone_2,''),'[^0-9]','','g') LIKE :phone_digits_pattern
-                ) THEN l.phone_2
-                WHEN :phone_digits_pattern IS NOT NULL AND (
-                    regexp_replace(COALESCE(l.phone_3,''),'[^0-9]','','g') LIKE :phone_digits_pattern
-                ) THEN l.phone_3
-                WHEN :phone_digits_pattern IS NOT NULL AND (
-                    regexp_replace(COALESCE(l.phone_4,''),'[^0-9]','','g') LIKE :phone_digits_pattern
-                ) THEN l.phone_4
-                WHEN :phone_digits_pattern IS NOT NULL AND (
-                    regexp_replace(COALESCE(l.phone_5,''),'[^0-9]','','g') LIKE :phone_digits_pattern
-                ) THEN l.phone_5
-                WHEN :phone_digits_pattern IS NOT NULL AND (
-                    regexp_replace(COALESCE(l.phone_6,''),'[^0-9]','','g') LIKE :phone_digits_pattern
-                ) THEN l.phone_6
-                WHEN :phone_digits_pattern IS NOT NULL AND (
-                    regexp_replace(COALESCE(l.phone_7,''),'[^0-9]','','g') LIKE :phone_digits_pattern
-                ) THEN l.phone_7
-                WHEN :phone_digits_pattern IS NOT NULL THEN (
-                    SELECT cp2.value
-                    FROM property_contacts pc2
-                    JOIN contact_phones cp2 ON cp2.contact_id = pc2.contact_id
-                    WHERE pc2.property_id = l.id
-                      AND regexp_replace(COALESCE(cp2.value,''),'[^0-9]','','g') LIKE :phone_digits_pattern
-                    LIMIT 1
-                )
-                ELSE NULL
-            END AS matched_phone,
-            CASE
-                WHEN l.email_1 ILIKE :pattern THEN l.email_1
-                WHEN l.email_2 ILIKE :pattern THEN l.email_2
-                WHEN l.email_3 ILIKE :pattern THEN l.email_3
-                WHEN l.email_4 ILIKE :pattern THEN l.email_4
-                WHEN l.email_5 ILIKE :pattern THEN l.email_5
-                ELSE (
-                    SELECT ce3.value
-                    FROM property_contacts pc3
-                    JOIN contact_emails ce3 ON ce3.contact_id = pc3.contact_id
-                    WHERE pc3.property_id = l.id
-                      AND ce3.value ILIKE :pattern
-                    LIMIT 1
-                )
-            END AS matched_email
-        FROM leads l
-        LEFT JOIN property_contacts pc_primary
-            ON pc_primary.property_id = l.id
-            AND pc_primary.is_primary = TRUE
-        LEFT JOIN contacts primary_c
-            ON primary_c.id = pc_primary.contact_id
-        WHERE
-            (l.owner_user_id = :user_id OR :is_admin = TRUE)
-            AND (l.owner_user_id IS NOT NULL OR :is_admin = TRUE)
-            AND (
-                l.owner_first_name  ILIKE :pattern
-                OR l.owner_last_name   ILIKE :pattern
-                OR l.property_street   ILIKE :pattern
-            )
-        ORDER BY l.id
-        LIMIT 0
-    """)
+    from app.services.search_service import SearchService
 
     with app.app_context():
-        from app import db as _db
-        dialect = _db.engine.dialect.name
-        if dialect == 'sqlite':
-            # SQLite: just verify the text() wrapper parses without raising.
-            # Actual SQL validity on PostgreSQL is verified in CI/staging.
-            assert ilike_sql is not None, "sqlalchemy.text() must not return None"
-            return
+        svc = SearchService()
+        if svc._dialect_name() != 'postgresql':
+            pytest.skip('PostgreSQL-only syntax guard')
+        if not svc._supports_trgm():
+            pytest.skip('pg_trgm extension not available')
 
-        # PostgreSQL: execute with LIMIT 0 so the engine validates syntax cheaply.
         try:
-            _db.session.execute(ilike_sql, {
-                'user_id': 'test',
-                'is_admin': False,
-                'pattern': '%test%',
-                'prefix_pattern': 'test%',
-                'phone_digits_pattern': None,
-            })
+            svc._search_leads_postgres(
+                'test', ['test'], '', _TEST_USER_ID, False, per_page=1, offset=0,
+            )
+            svc._search_sessions_postgres('test', ['test'], _TEST_USER_ID, False)
         except (OperationalError, ProgrammingError) as exc:
-            raise AssertionError(
-                f"ILIKE leads SQL failed to execute — possible syntax error.\n"
-                f"Original error: {exc}\n\n"
-                "This query runs in production but NOT in the SQLite test suite. "
-                "Fix the SQL in search_controller._leads_sql_ilike and update "
-                "this test to match."
-            ) from exc
+            pytest.fail(f'SearchService PostgreSQL query failed: {exc}')

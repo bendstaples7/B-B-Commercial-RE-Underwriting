@@ -12,6 +12,7 @@ from functools import wraps
 from flask import Blueprint, jsonify, g, request
 from marshmallow import ValidationError
 
+from app.api_utils import require_auth
 from app.exceptions import RealEstateAnalysisException
 from app.models import Lead, LeadTask, LeadTimelineEntry
 from app.schemas import (
@@ -342,6 +343,13 @@ def get_command_center(lead_id: int):
         db.session.add(lead)
         db.session.commit()
 
+    from app.services.hubspot_deal_sync_service import HubSpotDealSyncService
+
+    if HubSpotDealSyncService.auto_sync_lead_if_stale(lead_id):
+        lead = Lead.query.get(lead_id)
+
+    _hs_health = HubSpotDealSyncService.get_lead_sync_health(lead_id)
+
     ra = lead.recommended_action
     ra_metadata = RECOMMENDED_ACTION_METADATA.get(ra, {}) if ra else {}
     open_tasks = _lead_task_service.list_open(lead_id)
@@ -457,7 +465,9 @@ def get_command_center(lead_id: int):
     # Stage IDs are translated to display labels via the portal's pipeline API.
     row = _db.session.execute(_text("""
         SELECT hd.raw_payload->'properties'->>'dealname' AS dealname,
-               hd.raw_payload->'properties'->>'dealstage' AS dealstage
+               hd.raw_payload->'properties'->>'dealstage' AS dealstage,
+               NULLIF(TRIM(hd.raw_payload->'properties'->>'deal_source'), '') AS deal_source,
+               NULLIF(TRIM(hd.raw_payload->'properties'->>'description'), '') AS deal_description
         FROM hubspot_deals hd
         JOIN hubspot_matches hm ON hm.hubspot_id = hd.hubspot_id
             AND hm.hubspot_record_type = 'deal'
@@ -487,6 +497,25 @@ def get_command_center(lead_id: int):
                     _db.session.add(lead)
                     _db.session.commit()
 
+    # Deal context — prefer lead columns; fall back to cached HubSpot deal payload.
+    deal_source = (lead.deal_source or '').strip() or None
+    deal_description = (lead.deal_description or '').strip() or None
+    if row:
+        cached_source = row[2] if len(row) > 2 else None
+        cached_description = row[3] if len(row) > 3 else None
+        deal_context_dirty = False
+        if not deal_source and cached_source:
+            deal_source = cached_source
+            lead.deal_source = cached_source
+            deal_context_dirty = True
+        if not deal_description and cached_description:
+            deal_description = cached_description
+            lead.deal_description = cached_description
+            deal_context_dirty = True
+        if deal_context_dirty:
+            _db.session.add(lead)
+            _db.session.commit()
+
     # ------------------------------------------------------------------
     # HubSpot interactions (calls, emails, notes from HubSpot import)
     # ------------------------------------------------------------------
@@ -509,6 +538,8 @@ def get_command_center(lead_id: int):
         WHERE mlm.lead_id = :lead_id
         ORDER BY mlm.added_at DESC
     """), {'lead_id': lead_id}).fetchall()
+
+    hubspot_sync = HubSpotDealSyncService.get_lead_sync_health(lead_id)
 
     return jsonify({
         'id': lead.id,
@@ -554,6 +585,8 @@ def get_command_center(lead_id: int):
         # Source / metadata
         'source': source,
         'hubspot_deal_name': hubspot_deal_name,
+        'deal_source': deal_source,
+        'deal_description': deal_description,
         'lead_category': lead.lead_category,
         'notes': lead.notes,
         # Flag when lead.notes content implies contact was made but status says otherwise.
@@ -601,6 +634,9 @@ def get_command_center(lead_id: int):
         'last_contact_date': lead.last_contact_date.isoformat() if lead.last_contact_date else None,
         'last_hubspot_sync_at': lead.last_hubspot_sync_at.isoformat() if lead.last_hubspot_sync_at else None,
         'hubspot_deal_stage': live_deal_stage or lead.hubspot_deal_stage,
+        'hubspot_has_confirmed_deal': hubspot_sync['hubspot_has_confirmed_deal'],
+        'hubspot_sync_stale': hubspot_sync['hubspot_sync_stale'],
+        'hubspot_deal_last_updated_at': hubspot_sync['hubspot_deal_last_updated_at'],
         'review_required': lead.review_required,
         'review_reason': lead.review_reason,
         'recommended_action': {
@@ -1125,6 +1161,42 @@ def suppress_lead(lead_id: int):
     _rescore_after_status_change(lead_id)
 
     return jsonify({'lead_status': 'suppressed', 'recommended_action': None}), 200
+
+
+@command_center_bp.route('/<int:lead_id>/hubspot-sync', methods=['POST'])
+@require_auth
+@handle_errors
+def sync_lead_from_hubspot(lead_id: int):
+    """POST /api/leads/<lead_id>/hubspot-sync
+
+    Re-fetch confirmed HubSpot deal(s) from the API and sync stage/status
+    onto the lead. Works without Celery (local dev) and in production.
+    """
+    from app.controllers.property_controller import _current_user_is_admin
+    from app.services.hubspot_deal_sync_service import HubSpotDealSyncService
+
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    if not _current_user_is_admin():
+        current_user_id = getattr(g, 'user_id', None)
+        if not current_user_id or current_user_id == 'anonymous' or lead.owner_user_id != current_user_id:
+            return jsonify({'error': 'Not found'}), 404
+
+    try:
+        result = HubSpotDealSyncService().refresh_and_enrich_lead(lead_id)
+    except RuntimeError as exc:
+        return jsonify({'error': str(exc)}), 500
+
+    if not result.get('synced'):
+        reason = result.get('reason', 'sync_failed')
+        if reason == 'no_confirmed_deal':
+            return jsonify({'error': reason}), 404
+        return jsonify({'error': reason}), 422
+
+    health = HubSpotDealSyncService.get_lead_sync_health(lead_id)
+    return jsonify({**result, **health}), 200
 
 
 @command_center_bp.route('/<int:lead_id>/hubspot-tasks/<int:task_id>/done', methods=['POST'])

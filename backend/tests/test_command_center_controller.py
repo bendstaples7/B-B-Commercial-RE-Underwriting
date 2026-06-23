@@ -8,6 +8,7 @@ Covers:
 import json
 import pytest
 from datetime import date, datetime, timedelta, timezone
+from unittest.mock import patch
 
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry
@@ -122,6 +123,16 @@ class TestGetCommandCenter:
             data = json.loads(response.data)
             assert 'entries' in data['timeline']
             assert 'total' in data['timeline']
+
+    @patch('app.services.hubspot_deal_sync_service.HubSpotDealSyncService.auto_sync_lead_if_stale')
+    def test_auto_syncs_stale_hubspot_on_load(self, mock_auto_sync, client, app):
+        """Opening command center triggers background HubSpot sync when data is stale."""
+        with app.app_context():
+            lead = _make_lead(app, '6 Auto Sync St')
+            mock_auto_sync.return_value = True
+            response = client.get(f'/api/leads/{lead.id}/command-center')
+            assert response.status_code == 200
+            mock_auto_sync.assert_called_once_with(lead.id)
 
 
 # ---------------------------------------------------------------------------
