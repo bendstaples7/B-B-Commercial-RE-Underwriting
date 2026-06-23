@@ -81,13 +81,23 @@ if [ "$FREE_KB" -lt 1048576 ]; then
 fi
 echo "    disk space: ${FREE_KB}KB free (OK)"
 
-# Check memory (require at least 300MB MemAvailable — swap is not a substitute for RAM)
+# Check memory headroom before deploy.
+# Frontend is pre-built on CI; pip/migrations still need headroom on this 2GB VPS.
+# Require a hard RAM floor (OOM guard) plus total RAM+swap for deploy steps.
 FREE_MEM_KB=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
-if [ "$FREE_MEM_KB" -lt 307200 ]; then
-    echo "FAILED: Less than 300MB memory available (${FREE_MEM_KB}KB free). VPS may be under memory pressure."
+SWAP_FREE_KB=$(awk '/SwapFree/ {print $2}' /proc/meminfo)
+HEADROOM_KB=$((FREE_MEM_KB + SWAP_FREE_KB))
+MIN_RAM_KB=153600       # 150MB — never deploy with critically low real memory
+MIN_HEADROOM_KB=307200    # 300MB RAM+swap combined
+if [ "$FREE_MEM_KB" -lt "$MIN_RAM_KB" ]; then
+    echo "FAILED: Less than 150MB RAM available (${FREE_MEM_KB}KB MemAvailable). VPS is critically low on memory."
     exit 1
 fi
-echo "    memory: ${FREE_MEM_KB}KB available (OK)"
+if [ "$HEADROOM_KB" -lt "$MIN_HEADROOM_KB" ]; then
+    echo "FAILED: Less than 300MB memory+swap headroom (${FREE_MEM_KB}KB RAM + ${SWAP_FREE_KB}KB swap free). VPS may be under memory pressure."
+    exit 1
+fi
+echo "    memory: ${FREE_MEM_KB}KB RAM + ${SWAP_FREE_KB}KB swap available (OK)"
 
 # ── Pre-deploy backup (blocks deploy on failure) ──────────────────────────────
 echo "==> (0) Pre-deploy backup"
