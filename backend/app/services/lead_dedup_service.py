@@ -1,0 +1,292 @@
+"""Lead deduplication service — identity lookup, merge, and duplicate sentinel."""
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from typing import Any, Optional
+
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
+
+from app import db
+from app.models.hubspot_match import HubSpotMatch
+from app.models.lead import Lead, LeadAuditTrail
+from app.services.lead_merge_utils import (
+    dedup_street_key,
+    pick_merge_winner,
+    streets_match_normalized,
+    winner_sort_key,
+)
+
+logger = logging.getLogger(__name__)
+
+COPYABLE_FIELDS = [
+    'phone_1', 'phone_2', 'phone_3', 'phone_4', 'phone_5', 'phone_6', 'phone_7',
+    'email_1', 'email_2', 'email_3', 'email_4', 'email_5',
+    'mailing_address', 'mailing_city', 'mailing_state', 'mailing_zip',
+    'notes', 'source', 'date_identified',
+    'needs_skip_trace', 'skip_tracer', 'date_skip_traced',
+    'date_added_to_hubspot', 'county_assessor_pin',
+    'ownership_type', 'acquisition_date',
+    'bedrooms', 'bathrooms', 'square_footage', 'lot_size', 'year_built',
+    'units', 'units_allowed', 'zoning',
+    'most_recent_sale', 'owner_2_first_name', 'owner_2_last_name',
+    'address_2', 'returned_addresses', 'up_next_to_mail',
+    'lead_score', 'lead_category', 'property_type',
+]
+
+FK_REPOINTS = [
+    ('lead_audit_trail', 'lead_id'),
+    ('lead_tasks', 'lead_id'),
+    ('lead_timeline_entries', 'lead_id'),
+    ('lead_scores', 'lead_id'),
+    ('enrichment_records', 'lead_id'),
+    ('hubspot_signals', 'lead_id'),
+    ('lead_deal_links', 'lead_id'),
+    ('marketing_list_members', 'lead_id'),
+    ('property_contacts', 'property_id'),
+    ('property_organization_links', 'property_id'),
+    ('owner_organization_links', 'owner_id'),
+    ('tasks', 'lead_id'),
+]
+
+
+def refresh_lead_dedup_fields(lead: Lead) -> None:
+    """Recompute persisted dedup column from current property_street."""
+    key = dedup_street_key(lead.property_street)
+    lead.normalized_street = key or None
+
+
+def _owner_name_filters(
+    query,
+    owner_first: Optional[str],
+    owner_last: Optional[str],
+):
+    first = (owner_first or '').strip()
+    last = (owner_last or '').strip()
+    if first:
+        query = query.filter(func.lower(func.trim(Lead.owner_first_name)) == first.lower())
+    if last:
+        query = query.filter(func.lower(func.trim(Lead.owner_last_name)) == last.lower())
+    return query
+
+
+def find_lead_by_identity(
+    *,
+    owner_user_id: Optional[str] = None,
+    owner_first_name: Optional[str] = None,
+    owner_last_name: Optional[str] = None,
+    property_street: Optional[str] = None,
+    county_assessor_pin: Optional[str] = None,
+) -> Optional[Lead]:
+    """Find an existing lead by PIN or owner + building-level street identity."""
+    pin = (county_assessor_pin or '').strip()
+    if pin:
+        q = Lead.query.filter(Lead.county_assessor_pin == pin)
+        if owner_user_id:
+            q = q.filter(Lead.owner_user_id == owner_user_id)
+        hit = q.first()
+        if hit:
+            return hit
+
+    street_key = dedup_street_key(property_street)
+    first = (owner_first_name or '').strip()
+    last = (owner_last_name or '').strip()
+    if not street_key or not first or not last:
+        return None
+
+    q = Lead.query.filter(Lead.normalized_street == street_key)
+    q = _owner_name_filters(q, first, last)
+    if owner_user_id:
+        q = q.filter(Lead.owner_user_id == owner_user_id)
+    hit = q.first()
+    if hit:
+        return hit
+
+    # Fallback when normalized_street not yet backfilled on older rows.
+    q = Lead.query.filter(Lead.property_street.isnot(None))
+    q = _owner_name_filters(q, first, last)
+    if owner_user_id:
+        q = q.filter(Lead.owner_user_id == owner_user_id)
+    for candidate in q:
+        if streets_match_normalized(property_street, candidate.property_street):
+            refresh_lead_dedup_fields(candidate)
+            return candidate
+    return None
+
+
+def confirmed_hubspot_lead_ids() -> set[int]:
+    rows = HubSpotMatch.query.filter(
+        HubSpotMatch.internal_record_type == 'lead',
+        HubSpotMatch.status == 'confirmed',
+        HubSpotMatch.internal_record_id.isnot(None),
+    ).all()
+    return {int(r.internal_record_id) for r in rows}
+
+
+def _lead_to_merge_record(lead: Lead) -> dict[str, Any]:
+    return {
+        'id': lead.id,
+        'property_street': lead.property_street,
+        'owner_first_name': lead.owner_first_name,
+        'owner_last_name': lead.owner_last_name,
+        'owner_user_id': lead.owner_user_id,
+        'lead_status': lead.lead_status,
+        'has_phone': lead.has_phone,
+        'has_email': lead.has_email,
+        'last_hubspot_sync_at': lead.last_hubspot_sync_at,
+    }
+
+
+def merge_confidence(
+    records: list[dict[str, Any]],
+    confirmed_ids: set[int],
+) -> str:
+    """Return 'clear' when auto-merge is safe, else 'ambiguous'."""
+    if len(records) < 2:
+        return 'clear'
+    confirmed_in_cluster = [r for r in records if r['id'] in confirmed_ids]
+    if len(confirmed_in_cluster) > 1:
+        return 'ambiguous'
+    winner = pick_merge_winner(records, confirmed_ids)
+    winner_core = winner_sort_key(winner, confirmed_ids)[:4]
+    for record in records:
+        if record['id'] == winner['id']:
+            continue
+        if winner_sort_key(record, confirmed_ids)[:4] == winner_core:
+            return 'ambiguous'
+    return 'clear'
+
+
+def _repoint_hubspot_matches(winner_id: int, loser_id: int) -> None:
+    loser_matches = HubSpotMatch.query.filter(
+        HubSpotMatch.internal_record_type == 'lead',
+        HubSpotMatch.internal_record_id == loser_id,
+    ).all()
+    for hm in loser_matches:
+        existing = HubSpotMatch.query.filter(
+            HubSpotMatch.hubspot_record_type == hm.hubspot_record_type,
+            HubSpotMatch.hubspot_id == hm.hubspot_id,
+            HubSpotMatch.internal_record_id == winner_id,
+        ).first()
+        if existing:
+            db.session.delete(hm)
+        else:
+            hm.internal_record_id = winner_id
+
+
+def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedup_sentinel') -> None:
+    """Merge loser into winner (ORM). Caller must commit."""
+    winner_id = winner.id
+    loser_id = loser.id
+
+    for table_name, col_name in FK_REPOINTS:
+        table = db.metadata.tables[table_name]
+        rows = db.session.execute(
+            db.select(table.c.id).where(table.c[col_name] == loser_id)
+        ).fetchall()
+        for (row_id,) in rows:
+            try:
+                with db.session.begin_nested():
+                    db.session.execute(
+                        table.update().where(table.c.id == row_id).values({col_name: winner_id})
+                    )
+            except IntegrityError:
+                db.session.execute(table.delete().where(table.c.id == row_id))
+
+    _repoint_hubspot_matches(winner_id, loser_id)
+
+    for field in COPYABLE_FIELDS:
+        w_val = getattr(winner, field, None)
+        l_val = getattr(loser, field, None)
+        if (w_val is None or w_val == '') and l_val not in (None, ''):
+            setattr(winner, field, l_val)
+
+    db.session.add(LeadAuditTrail(
+        lead_id=winner_id,
+        field_name='dedup_merge',
+        old_value=str(loser_id),
+        new_value=f"merged from lead {loser_id} ({loser.property_street})",
+        changed_by=changed_by,
+    ))
+    db.session.delete(loser)
+    logger.info("Merged lead %s into %s", loser_id, winner_id)
+
+
+def find_duplicate_clusters() -> list[list[Lead]]:
+    """Return groups of duplicate leads (same owner + dedup street key)."""
+    rows = Lead.query.filter(
+        Lead.owner_first_name.isnot(None),
+        Lead.owner_first_name != '',
+        Lead.owner_last_name.isnot(None),
+        Lead.owner_last_name != '',
+        Lead.property_street.isnot(None),
+        Lead.property_street != '',
+        Lead.normalized_street.isnot(None),
+        Lead.normalized_street != '',
+    ).all()
+
+    buckets: dict[tuple, list[Lead]] = {}
+    for lead in rows:
+        key = (
+            lead.owner_user_id,
+            (lead.owner_first_name or '').strip().lower(),
+            (lead.owner_last_name or '').strip().lower(),
+            lead.normalized_street,
+        )
+        buckets.setdefault(key, []).append(lead)
+
+    return [group for group in buckets.values() if len(group) >= 2]
+
+
+def run_duplicate_sentinel(
+    *,
+    dry_run: bool = False,
+    max_merges: int = 100,
+) -> dict[str, int]:
+    """Scan for duplicate clusters; auto-merge clear winners, flag ambiguous."""
+    confirmed_ids = confirmed_hubspot_lead_ids()
+    clusters = find_duplicate_clusters()
+    stats = {
+        'clusters_found': len(clusters),
+        'merged': 0,
+        'flagged': 0,
+        'skipped': 0,
+    }
+
+    for cluster in clusters:
+        if stats['merged'] >= max_merges:
+            stats['skipped'] += 1
+            continue
+
+        records = [_lead_to_merge_record(lead) for lead in cluster]
+        confidence = merge_confidence(records, confirmed_ids)
+
+        if confidence == 'ambiguous':
+            if not dry_run:
+                for lead in cluster:
+                    lead.review_required = True
+                    lead.review_reason = 'duplicate_lead_cluster'
+                    lead.review_triggered_at = datetime.utcnow()
+            stats['flagged'] += len(cluster)
+            continue
+
+        winner_record = pick_merge_winner(records, confirmed_ids)
+        winner = next(l for l in cluster if l.id == winner_record['id'])
+        losers = [l for l in cluster if l.id != winner.id]
+
+        if dry_run:
+            stats['merged'] += len(losers)
+            continue
+
+        for loser in losers:
+            merge_lead_into_winner(winner, loser)
+            stats['merged'] += 1
+
+    if not dry_run:
+        db.session.commit()
+    else:
+        db.session.rollback()
+
+    logger.info("Duplicate sentinel complete: %s", stats)
+    return stats

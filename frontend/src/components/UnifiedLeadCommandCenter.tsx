@@ -10,7 +10,7 @@
  *
  * Requirements: 5.8, 5.9, 12.1, 12.2
  */
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   CircularProgress,
@@ -21,11 +21,6 @@ import {
   Toolbar,
   IconButton,
   Typography,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
-  TextField,
   Paper,
   Tabs,
   Tab,
@@ -40,31 +35,41 @@ import {
   Link,
   Tooltip,
 } from '@mui/material'
-import type { SelectChangeEvent } from '@mui/material'
-import { Link as RouterLink, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link as RouterLink, useNavigate, useSearchParams, useLocation } from 'react-router-dom'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import HomeWorkIcon from '@mui/icons-material/HomeWork'
 import ApartmentIcon from '@mui/icons-material/Apartment'
 import PhoneIcon from '@mui/icons-material/Phone'
 import EmailIcon from '@mui/icons-material/Email'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
+import BarChartIcon from '@mui/icons-material/BarChart'
 import { commandCenterService, leadTaskService, multifamilyService, leadScoreService } from '@/services/api'
 import { leadService } from '@/services/leadApi'
 import { deriveQueueContext } from '@/utils/deriveQueueContext'
-import type { CommandCenterPayload, PropertyDetail, LeadStatus, LeadTask, LeadTimelineEntry, PropertyScoreResponse } from '@/types'
+import { formatPhoneNumber, phoneCopyText, phoneTelHref } from '@/utils/phone'
+import type { CommandCenterPayload, PropertyDetail, LeadStatus, LeadTask, LeadTimelineEntry, PropertyScoreResponse, PropertyScoreRecord } from '@/types'
 import { LeadScoreBadge } from '@/components/LeadScoreBadge'
 import type { ScoreTier } from '@/components/LeadScoreBadge'
-import { LeadStatusChip } from '@/components/LeadStatusChip'
-import { LeadTaskList } from '@/components/LeadTaskList'
-import { LogNoteForm } from '@/components/LogNoteForm'
-import { LogCallForm } from '@/components/LogCallForm'
+import { LeadStatusSelector } from '@/components/LeadStatusSelector'
+import { LeadTaskList, type LeadTaskListHandle } from '@/components/LeadTaskList'
+import { LogEmailForm, type LogEmailFormHandle } from '@/components/LogEmailForm'
+import { LogNoteForm, type LogNoteFormHandle } from '@/components/LogNoteForm'
+import { LogCallForm, type LogCallFormHandle } from '@/components/LogCallForm'
 import { LeadTimeline } from '@/components/LeadTimeline'
 import { ScoreBreakdownCard } from '@/components/ScoreBreakdownCard'
+import { ScoreBreakdownDialog } from '@/components/ScoreBreakdownDialog'
 import { ScoreHistoryTimeline } from '@/components/ScoreHistoryTimeline'
 import { RecalculateButton } from '@/components/RecalculateButton'
 import { ScoreLegend } from '@/components/ScoreLegend'
 import { ContactsSection } from '@/components/ContactsSection'
 import { RecommendedActionPanel } from '@/components/RecommendedActionPanel'
+
+function formatImportedSource(data: CommandCenterPayload): string | null {
+  if (data.source === 'hubspot_import') {
+    return `HubSpot${data.hubspot_deal_name ? ` — ${data.hubspot_deal_name}` : ''}`
+  }
+  return data.source ?? null
+}
 
 // All valid lead status values — derived from the LeadStatus union type
 export const ALL_LEAD_STATUSES: LeadStatus[] = [
@@ -87,9 +92,14 @@ export interface UnifiedLeadCommandCenterProps {
   leadId: number
 }
 
-// ── Score tier derivation ──────────────────────────────────────────────────────
-// Matches the tier thresholds defined in ScoreLegend:
-//   A = 75–100, B = 60–74, C = 40–59, D = 0–39
+// ── Score tier derivation (fallback when no LeadScoreRecord exists yet) ────────
+
+const TIER_RANGE_LABELS: Record<ScoreTier, string> = {
+  A: '75–100 (strong fit)',
+  B: '60–74 (good fit)',
+  C: '40–59 (marginal)',
+  D: '0–39 (low priority)',
+}
 
 function scoreToTier(score: number): ScoreTier {
   if (score >= 75) return 'A'
@@ -102,10 +112,15 @@ function scoreToTier(score: number): ScoreTier {
 // Requirements: 5.1, 10.1, 10.2
 
 interface StickyHeaderProps {
+  leadId: number
   commandCenterData: CommandCenterPayload
+  scoreRecord?: PropertyScoreRecord | null
+  onStatusChanged: () => void
+  onViewFullBreakdown?: () => void
 }
 
-function StickyHeader({ commandCenterData }: StickyHeaderProps) {
+function StickyHeader({ leadId, commandCenterData, scoreRecord, onStatusChanged, onViewFullBreakdown }: StickyHeaderProps) {
+  const [scoreDialogOpen, setScoreDialogOpen] = useState(false)
   const navigate = useNavigate()
 
   const ownerName =
@@ -121,135 +136,75 @@ function StickyHeader({ commandCenterData }: StickyHeaderProps) {
     .filter(Boolean)
     .join(', ')
 
-  const scoreTier = scoreToTier(commandCenterData.lead_score)
+  const scoreTier = scoreRecord?.score_tier ?? scoreToTier(commandCenterData.lead_score)
+  const displayScore = scoreRecord?.total_score ?? commandCenterData.lead_score
+  const tierTooltip = `Tier ${scoreTier}: ${TIER_RANGE_LABELS[scoreTier]} — letter grade from total score (0–100)`
 
   return (
-    <AppBar position="sticky" color="default" elevation={1} sx={{ top: 0, zIndex: 100 }}>
-      <Toolbar>
-        <IconButton
-          data-testid="back-button"
-          onClick={() => navigate(-1)}
-          edge="start"
-          aria-label="Go back"
-          sx={{ mr: 1 }}
-        >
-          <ArrowBackIcon />
-        </IconButton>
+    <Box sx={{ position: 'sticky', top: 0, zIndex: 100 }}>
+      <AppBar position="static" color="default" elevation={1}>
+        <Toolbar>
+          <IconButton
+            data-testid="back-button"
+            onClick={() => navigate(-1)}
+            edge="start"
+            aria-label="Go back"
+            sx={{ mr: 1 }}
+          >
+            <ArrowBackIcon />
+          </IconButton>
 
-        <Box sx={{ flexGrow: 1 }}>
-          <Typography variant="subtitle1" fontWeight="bold">
-            {ownerName}
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            {address}
-          </Typography>
-        </Box>
-
-        {/* Lead score badge */}
-        <Box sx={{ mr: 2, display: 'flex', alignItems: 'center', gap: 0.5 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5 }}>
-            {commandCenterData.lead_score}
-          </Typography>
-          <LeadScoreBadge tier={scoreTier} size="small" />
-        </Box>
-
-        {/* Lead status chip */}
-        <LeadStatusChip status={commandCenterData.lead_status} />
-      </Toolbar>
-    </AppBar>
-  )
-}
-
-// ── StatusManagementPanel ─────────────────────────────────────────────────────
-// Requirements: 6.1, 6.2, 6.3, 6.4, 6.5, 6.6
-
-interface StatusManagementPanelProps {
-  leadId: number
-  currentStatus: LeadStatus
-  onStatusChanged: () => void
-}
-
-function StatusManagementPanel({ leadId, currentStatus, onStatusChanged }: StatusManagementPanelProps) {
-  const queryClient = useQueryClient()
-  const [pendingStatus, setPendingStatus] = useState<LeadStatus | null>(null)
-  const [statusReason, setStatusReason] = useState('')
-  const [statusChanging, setStatusChanging] = useState(false)
-  const [statusError, setStatusError] = useState<string | null>(null)
-
-  const otherStatuses = ALL_LEAD_STATUSES.filter(s => s !== currentStatus)
-
-  const handleSelectStatus = (e: SelectChangeEvent<string>) => {
-    setPendingStatus(e.target.value as LeadStatus)
-    setStatusError(null)
-  }
-
-  const handleSubmit = async () => {
-    if (!pendingStatus) return
-    setStatusChanging(true)
-    setStatusError(null)
-    try {
-      await commandCenterService.updateStatus(leadId, pendingStatus, statusReason || undefined)
-      setPendingStatus(null)
-      setStatusReason('')
-      queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
-      onStatusChanged()
-    } catch (err) {
-      setStatusError(err instanceof Error ? err.message : 'Failed to update status')
-    } finally {
-      setStatusChanging(false)
-    }
-  }
-
-  const handleCancel = () => {
-    setPendingStatus(null)
-    setStatusReason('')
-    setStatusError(null)
-  }
-
-  return (
-    <Box sx={{ p: 2 }}>
-      <FormControl size="small" sx={{ minWidth: 200 }}>
-        <InputLabel>Status</InputLabel>
-        <Select
-          value={currentStatus}
-          label="Status"
-          onChange={handleSelectStatus}
-        >
-          {otherStatuses.map(status => (
-            <MenuItem key={status} value={status}>{status}</MenuItem>
-          ))}
-        </Select>
-      </FormControl>
-
-      {pendingStatus && (
-        <Box sx={{ mt: 2 }}>
-          <TextField
-            label="Reason (optional)"
-            multiline
-            rows={3}
-            fullWidth
-            inputProps={{ maxLength: 500 }}
-            value={statusReason}
-            onChange={e => setStatusReason(e.target.value)}
-            sx={{ mb: 1 }}
-          />
-          {statusError && (
-            <Alert severity="error" sx={{ mb: 1 }}>{statusError}</Alert>
-          )}
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            <Button
-              variant="contained"
-              disabled={statusChanging}
-              onClick={handleSubmit}
-              data-testid="status-submit-btn"
-            >
-              {statusChanging ? 'Saving...' : 'Confirm Status Change'}
-            </Button>
-            <Button variant="outlined" onClick={handleCancel}>
-              Cancel
-            </Button>
+          <Box sx={{ flexGrow: 1 }}>
+            <Typography variant="subtitle1" fontWeight="bold">
+              {ownerName}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {address}
+            </Typography>
           </Box>
-        </Box>
+
+          {/* Lead score — opens breakdown dialog */}
+          <Tooltip title={scoreRecord ? `${tierTooltip} — click for breakdown` : tierTooltip}>
+            <span>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => scoreRecord && setScoreDialogOpen(true)}
+                disabled={!scoreRecord}
+                data-testid="header-lead-score"
+                aria-label="View lead score breakdown"
+                startIcon={<BarChartIcon sx={{ fontSize: 18 }} />}
+                sx={{
+                  mr: 2,
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  flexShrink: 0,
+                }}
+              >
+                {Math.round(displayScore)} / 100
+                <Box component="span" sx={{ ml: 0.75 }}>
+                  <LeadScoreBadge tier={scoreTier} size="small" />
+                </Box>
+              </Button>
+            </span>
+          </Tooltip>
+
+          <LeadStatusSelector
+            leadId={leadId}
+            status={commandCenterData.lead_status}
+            allStatuses={ALL_LEAD_STATUSES}
+            onStatusChanged={onStatusChanged}
+          />
+        </Toolbar>
+      </AppBar>
+
+      {scoreRecord && (
+        <ScoreBreakdownDialog
+          score={scoreRecord}
+          open={scoreDialogOpen}
+          onClose={() => setScoreDialogOpen(false)}
+          onViewFullBreakdown={onViewFullBreakdown}
+        />
       )}
     </Box>
   )
@@ -296,10 +251,32 @@ interface TasksPanelProps {
   onTasksChanged: () => void
 }
 
-function TasksPanel({ leadId, initialTasks, onTasksChanged }: TasksPanelProps) {
+export interface TasksPanelHandle {
+  scrollIntoView: () => void
+  openCreateForm: () => void
+}
+
+const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function TasksPanel(
+  { leadId, initialTasks, onTasksChanged },
+  ref,
+) {
   const queryClient = useQueryClient()
+  const panelRef = useRef<HTMLDivElement>(null)
+  const taskListRef = useRef<LeadTaskListHandle>(null)
   const [tasks, setTasks] = useState<LeadTask[]>(initialTasks)
   const tasksRef = useRef<LeadTask[]>(initialTasks)
+
+  React.useImperativeHandle(ref, () => ({
+    scrollIntoView: () => {
+      const el = panelRef.current
+      if (el && typeof el.scrollIntoView === 'function') {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
+    },
+    openCreateForm: () => {
+      taskListRef.current?.openCreateForm()
+    },
+  }))
 
   // Keep ref in sync with state for rollback on failure
   useEffect(() => {
@@ -347,8 +324,9 @@ function TasksPanel({ leadId, initialTasks, onTasksChanged }: TasksPanelProps) {
   }
 
   return (
-    <Paper sx={{ p: 2, mb: 2 }} data-testid="tasks-panel">
+    <Paper ref={panelRef} sx={{ p: 2, mb: 2 }} data-testid="tasks-panel">
       <LeadTaskList
+        ref={taskListRef}
         leadId={leadId}
         tasks={tasks}
         onTaskCreated={handleTaskCreated}
@@ -358,7 +336,7 @@ function TasksPanel({ leadId, initialTasks, onTasksChanged }: TasksPanelProps) {
       />
     </Paper>
   )
-}
+})
 
 // ── ActivityPanel ─────────────────────────────────────────────────────────
 // Requirements: 8.1, 8.2, 8.3
@@ -369,12 +347,39 @@ interface ActivityPanelProps {
   initialTotal: number
 }
 
-// forwardRef so the main component can scroll the panel into view when the
-// `?tab=timeline` deep-link is used (the timeline has no tab — it lives here).
-const ActivityPanel = React.forwardRef<HTMLDivElement, ActivityPanelProps>(
+export interface ActivityPanelHandle {
+  scrollIntoView: () => void
+  focusLogCall: () => void
+  focusLogNote: () => void
+  focusLogEmail: () => void
+}
+
+const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
   function ActivityPanel({ leadId, initialEntries, initialTotal }, ref) {
+    const panelRef = useRef<HTMLDivElement>(null)
+    const logCallRef = useRef<LogCallFormHandle>(null)
+    const logNoteRef = useRef<LogNoteFormHandle>(null)
+    const logEmailRef = useRef<LogEmailFormHandle>(null)
     const [timelineEntries, setTimelineEntries] = useState<LeadTimelineEntry[]>(initialEntries)
     const [timelineTotal, setTimelineTotal] = useState(initialTotal)
+
+    React.useImperativeHandle(ref, () => ({
+      scrollIntoView: () => {
+        const el = panelRef.current
+        if (el && typeof el.scrollIntoView === 'function') {
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        }
+      },
+      focusLogCall: () => {
+        logCallRef.current?.focus()
+      },
+      focusLogNote: () => {
+        logNoteRef.current?.focus()
+      },
+      focusLogEmail: () => {
+        logEmailRef.current?.focus()
+      },
+    }))
 
     const handleNotesSaved = (entry: LeadTimelineEntry) => {
       // Optimistic prepend — entry already created by LogNoteForm before calling onSaved
@@ -394,14 +399,18 @@ const ActivityPanel = React.forwardRef<HTMLDivElement, ActivityPanelProps>(
     }
 
     return (
-      <Box ref={ref} sx={{ mb: 2, overflow: 'auto' }} data-testid="activity-panel">
-        <Box sx={{ mb: 3 }}>
-          <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>Log Note</Typography>
-          <LogNoteForm leadId={leadId} onSaved={handleNotesSaved} />
+      <Box ref={panelRef} sx={{ mb: 2, overflow: 'auto' }} data-testid="activity-panel">
+        <Box sx={{ mb: 3 }} data-testid="log-email-section">
+          <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>Log Email</Typography>
+          <LogEmailForm ref={logEmailRef} leadId={leadId} onSaved={handleNotesSaved} />
         </Box>
-        <Box sx={{ mb: 3 }}>
+        <Box sx={{ mb: 3 }} data-testid="log-note-section">
+          <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>Log Note</Typography>
+          <LogNoteForm ref={logNoteRef} leadId={leadId} onSaved={handleNotesSaved} />
+        </Box>
+        <Box sx={{ mb: 3 }} data-testid="log-call-section">
           <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>Log Call</Typography>
-          <LogCallForm leadId={leadId} onSaved={handleCallSaved} />
+          <LogCallForm ref={logCallRef} leadId={leadId} onSaved={handleCallSaved} />
         </Box>
         <LeadTimeline
           leadId={leadId}
@@ -483,9 +492,12 @@ export function tabParamToIndex(param: string | null | undefined): number {
 interface TabPanelComponentProps {
   leadId: number
   leadData: PropertyDetail
+  commandCenterData: CommandCenterPayload
+  scoreData?: PropertyScoreResponse
+  scoreLoading?: boolean
 }
 
-function TabPanel({ leadId, leadData }: TabPanelComponentProps) {
+function TabPanel({ leadId, leadData, commandCenterData, scoreData, scoreLoading }: TabPanelComponentProps) {
   const [searchParams] = useSearchParams()
   // Initialize the active tab from the ?tab= deep-link param on mount, then keep
   // it in sync if the param changes (e.g. navigating between leads via queue
@@ -497,15 +509,8 @@ function TabPanel({ leadId, leadData }: TabPanelComponentProps) {
     setActiveTab(tabParamToIndex(tabParam))
   }, [tabParam])
 
-  // Score tab data — only fetched when Score tab is active or pre-loaded
-  const { data: scoreData } = useQuery<PropertyScoreResponse>({
-    queryKey: ['leadScore', leadId],
-    queryFn: async () => {
-      const response = await leadScoreService.getLeadScore(leadId)
-      return response.data
-    },
-  })
-
+  // Score data is fetched by the parent and passed in so the summary card and
+  // Score tab share one request.
   // Analysis tab handlers
   const navigate = useNavigate()
   const [analysisLoading, setAnalysisLoading] = useState(false)
@@ -611,9 +616,9 @@ function TabPanel({ leadId, leadData }: TabPanelComponentProps) {
             ['Most Recent Sale', leadData.most_recent_sale],
           ])}
           {fieldGroup('Contact Information', [
-            ['Phone 1', leadData.phone_1],
-            ['Phone 2', leadData.phone_2],
-            ['Phone 3', leadData.phone_3],
+            ['Phone 1', leadData.phone_1 ? formatPhoneNumber(leadData.phone_1) : null],
+            ['Phone 2', leadData.phone_2 ? formatPhoneNumber(leadData.phone_2) : null],
+            ['Phone 3', leadData.phone_3 ? formatPhoneNumber(leadData.phone_3) : null],
             ['Email 1', leadData.email_1],
             ['Email 2', leadData.email_2],
           ])}
@@ -624,7 +629,9 @@ function TabPanel({ leadId, leadData }: TabPanelComponentProps) {
             ['Zip Code', leadData.mailing_zip],
           ])}
           {fieldGroup('Research & Tracking', [
-            ['Source', leadData.source],
+            ['Deal Source', commandCenterData.deal_source ?? '—'],
+            ['Deal Description', commandCenterData.deal_description ?? '—'],
+            ['Imported Source', formatImportedSource(commandCenterData) ?? '—'],
             ['Date Identified', formatDate(leadData.date_identified)],
             ['Notes', leadData.notes],
             ['Needs Skip Trace', leadData.needs_skip_trace != null ? (leadData.needs_skip_trace ? 'Yes' : 'No') : null],
@@ -648,7 +655,7 @@ function TabPanel({ leadId, leadData }: TabPanelComponentProps) {
           <Box sx={{ mb: 2 }}>
             <ScoreLegend />
           </Box>
-          {!scoreData && (
+          {!scoreData && scoreLoading && (
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
               <CircularProgress size={32} aria-label="Loading score" />
             </Box>
@@ -841,15 +848,29 @@ function SidebarSection({ title, children }: { title: string; children: React.Re
   )
 }
 
-function SidebarRow({ label, value }: { label: string; value: React.ReactNode }) {
-  if (value == null) return null
+function SidebarRow({
+  label,
+  value,
+  alwaysShow = false,
+  testId,
+}: {
+  label: string
+  value: React.ReactNode
+  alwaysShow?: boolean
+  testId?: string
+}) {
+  const isEmpty = value == null || value === ''
+  if (isEmpty && !alwaysShow) return null
   return (
-    <Box sx={{ display: 'flex', gap: 1, mb: 0.5 }}>
+    <Box sx={{ display: 'flex', gap: 1, mb: 0.5 }} data-testid={testId}>
       <Typography variant="caption" color="text.secondary" sx={{ minWidth: 90, flexShrink: 0 }}>
         {label}
       </Typography>
-      <Typography variant="caption" sx={{ wordBreak: 'break-word' }}>
-        {value}
+      <Typography
+        variant="caption"
+        sx={{ wordBreak: 'break-word', color: isEmpty ? 'text.disabled' : 'text.primary' }}
+      >
+        {isEmpty ? '—' : value}
       </Typography>
     </Box>
   )
@@ -857,16 +878,17 @@ function SidebarRow({ label, value }: { label: string; value: React.ReactNode })
 
 function CopyablePhone({ phone }: { phone: string }) {
   const [copied, setCopied] = useState(false)
+  const displayPhone = formatPhoneNumber(phone)
   const handleCopy = () => {
-    navigator.clipboard.writeText(phone)
+    navigator.clipboard.writeText(phoneCopyText(phone))
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
       <PhoneIcon sx={{ fontSize: 13, color: 'text.secondary' }} />
-      <Link href={`tel:${phone}`} variant="caption" underline="hover">
-        {phone}
+      <Link href={phoneTelHref(phone)} variant="caption" underline="hover">
+        {displayPhone}
       </Link>
       <Tooltip title={copied ? 'Copied!' : 'Copy'}>
         <IconButton size="small" onClick={handleCopy} sx={{ p: 0.25 }}>
@@ -904,10 +926,9 @@ function CopyableEmail({ email }: { email: string }) {
 
 interface PropertySidebarProps {
   commandCenterData: CommandCenterPayload
-  leadScore: number
 }
 
-function PropertySidebar({ commandCenterData, leadScore }: PropertySidebarProps) {
+function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
   const data = commandCenterData as any
 
   const ownerName =
@@ -1033,6 +1054,26 @@ function PropertySidebar({ commandCenterData, leadScore }: PropertySidebarProps)
           value={data.tax_bill_2021 ? `$${Number(data.tax_bill_2021).toLocaleString()}` : null}
         />
         <SidebarRow label="Last Sale" value={data.most_recent_sale} />
+        <SidebarRow
+          label="Deal Source"
+          value={commandCenterData.deal_source}
+          alwaysShow
+          testId="sidebar-deal-source"
+        />
+        <Box sx={{ mt: 0.5, mb: 0.75 }} data-testid="sidebar-deal-description">
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.25 }}>
+            Deal Description
+          </Typography>
+          <Typography
+            variant="body2"
+            sx={{
+              whiteSpace: 'pre-wrap',
+              color: commandCenterData.deal_description ? 'text.primary' : 'text.disabled',
+            }}
+          >
+            {commandCenterData.deal_description || '—'}
+          </Typography>
+        </Box>
         {data.address_2 && <SidebarRow label="Address 2" value={data.address_2} />}
         {data.returned_addresses && (
           <SidebarRow label="Other Addresses" value={data.returned_addresses} />
@@ -1099,15 +1140,11 @@ function PropertySidebar({ commandCenterData, leadScore }: PropertySidebarProps)
         </SidebarSection>
       )}
 
-      {/* Source & Metadata — Req 11.3 */}
-      <SidebarSection title="Source">
+      {/* Import & sync metadata — Req 11.3 */}
+      <SidebarSection title="Import & Sync">
         <SidebarRow
-          label="Source"
-          value={
-            data.source === 'hubspot_import'
-              ? `HubSpot${data.hubspot_deal_name ? ` — ${data.hubspot_deal_name}` : ''}`
-              : data.source
-          }
+          label="Imported Source"
+          value={formatImportedSource(commandCenterData)}
         />
         <SidebarRow label="Category" value={commandCenterData.lead_category} />
         <SidebarRow label="Data Source" value={data.data_source} />
@@ -1136,9 +1173,8 @@ function PropertySidebar({ commandCenterData, leadScore }: PropertySidebarProps)
         <SidebarRow label="Added to HS" value={commandCenterData.date_added_to_hubspot} />
       </SidebarSection>
 
-      {/* Scores — Req 11.4 */}
-      <SidebarSection title="Scores">
-        <SidebarRow label="Lead Score" value={leadScore} />
+      {/* Data quality — completeness only (lead score lives in header) */}
+      <SidebarSection title="Data Quality">
         <SidebarRow
           label="Completeness"
           value={
@@ -1156,6 +1192,8 @@ function PropertySidebar({ commandCenterData, leadScore }: PropertySidebarProps)
 
 export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterProps) {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const location = useLocation()
   const {
     data: commandCenterData,
     isLoading: commandCenterLoading,
@@ -1163,6 +1201,19 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   } = useQuery<CommandCenterPayload, Error>({
     queryKey: ['commandCenter', leadId],
     queryFn: () => commandCenterService.getCommandCenter(leadId),
+    staleTime: 0,
+    refetchOnMount: 'always',
+  })
+
+  const {
+    data: scoreData,
+    isLoading: scoreLoading,
+  } = useQuery<PropertyScoreResponse>({
+    queryKey: ['leadScore', leadId],
+    queryFn: async () => {
+      const response = await leadScoreService.getLeadScore(leadId)
+      return response.data
+    },
     staleTime: 0,
     refetchOnMount: 'always',
   })
@@ -1185,17 +1236,53 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   // view once the data has loaded and the panel has rendered.
   const [searchParams] = useSearchParams()
   const tabParam = searchParams.get('tab')
-  const activityRef = useRef<HTMLDivElement>(null)
+  const activityRef = useRef<ActivityPanelHandle>(null)
+  const tasksPanelRef = useRef<TasksPanelHandle>(null)
   const showLead = !commandCenterLoading && !leadLoading && !commandCenterError
+
+  const handleStatusChanged = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+  }, [queryClient, leadId])
+
+  const handleRaAction = useCallback(async (action: string) => {
+    switch (action) {
+      case 'log_call':
+        activityRef.current?.scrollIntoView()
+        window.setTimeout(() => activityRef.current?.focusLogCall(), 300)
+        return
+      case 'log_note':
+        activityRef.current?.scrollIntoView()
+        window.setTimeout(() => activityRef.current?.focusLogNote(), 300)
+        return
+      case 'log_email':
+        activityRef.current?.scrollIntoView()
+        window.setTimeout(() => activityRef.current?.focusLogEmail(), 300)
+        return
+      case 'create_task':
+        tasksPanelRef.current?.scrollIntoView()
+        window.setTimeout(() => tasksPanelRef.current?.openCreateForm(), 300)
+        return
+      default:
+        await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+    }
+  }, [queryClient, leadId])
+
+  const handleCreateTask = useCallback(() => {
+    tasksPanelRef.current?.scrollIntoView()
+    window.setTimeout(() => tasksPanelRef.current?.openCreateForm(), 300)
+  }, [])
+
+  const handleViewScoreBreakdown = useCallback(() => {
+    navigate(`${location.pathname}?tab=score`, { replace: true })
+    window.setTimeout(() => {
+      document.querySelector('[data-testid="tab-panel"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 100)
+  }, [navigate, location.pathname])
 
   useEffect(() => {
     if (!showLead) return
     if (tabParam?.toLowerCase() !== 'timeline') return
-    const el = activityRef.current
-    // jsdom (and some non-DOM environments) don't implement scrollIntoView.
-    if (el && typeof el.scrollIntoView === 'function') {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }
+    activityRef.current?.scrollIntoView()
   }, [showLead, tabParam])
 
   if (commandCenterLoading || leadLoading) {
@@ -1227,7 +1314,13 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   return (
     <Box>
       {/* Sticky header — owner name, address, score, status, back button (Req 5.1, 10.1, 10.2) */}
-      <StickyHeader commandCenterData={commandCenterData!} />
+      <StickyHeader
+        leadId={leadId}
+        commandCenterData={commandCenterData!}
+        scoreRecord={scoreData?.latest}
+        onStatusChanged={handleStatusChanged}
+        onViewFullBreakdown={handleViewScoreBreakdown}
+      />
 
       {/* Queue context banners — one per queue membership (Req 5.2) */}
       <QueueContextBanners commandCenterData={commandCenterData!} />
@@ -1236,28 +1329,20 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', p: { xs: 1, sm: 2 } }}>
         {/* Activity column — order: RecommendedActionPanel → TasksPanel → ActivityPanel → TabPanel */}
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          {/* Status management (outside the prescribed column order — sits above RA panel) */}
-          <StatusManagementPanel
-            leadId={leadId}
-            currentStatus={commandCenterData!.lead_status}
-            onStatusChanged={() => queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })}
-          />
-
           {/* RecommendedActionPanel — first in ActivityColumn (Req 5.3) */}
           <Box sx={{ mb: 2 }}>
             <RecommendedActionPanel
               recommendedAction={commandCenterData!.recommended_action}
               leadStatus={commandCenterData!.lead_status}
               openTasks={commandCenterData!.open_tasks ?? []}
-              onAction={async (_action: string) => {
-                // Re-fetch command center after any RA action so the next RA is shown
-                await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
-              }}
+              onAction={handleRaAction}
+              onCreateTask={handleCreateTask}
             />
           </Box>
 
           {/* TasksPanel — second in ActivityColumn (Req 7.1–7.4) */}
           <TasksPanel
+            ref={tasksPanelRef}
             leadId={leadId}
             initialTasks={commandCenterData!.open_tasks ?? []}
             onTasksChanged={() => queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })}
@@ -1272,14 +1357,17 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           />
 
           {/* TabPanel — fourth in ActivityColumn (Req 9.1–9.6) */}
-          <TabPanel leadId={leadId} leadData={leadData!} />
+          <TabPanel
+            leadId={leadId}
+            leadData={leadData!}
+            commandCenterData={commandCenterData!}
+            scoreData={scoreData}
+            scoreLoading={scoreLoading}
+          />
         </Box>
 
         {/* Property sidebar — sticky, hidden below lg breakpoint (Req 11.1–11.5) */}
-        <PropertySidebar
-          commandCenterData={commandCenterData!}
-          leadScore={commandCenterData!.lead_score}
-        />
+        <PropertySidebar commandCenterData={commandCenterData!} />
       </Box>
     </Box>
   )

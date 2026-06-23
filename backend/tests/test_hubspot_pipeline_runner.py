@@ -125,12 +125,13 @@ class TestRunPostImportPipelineSync:
 
         with patch('app.tasks.hubspot_tasks.run_hubspot_matching', _track('matching')), \
              patch('app.tasks.hubspot_tasks.run_enrich_leads_from_hubspot', _track('enrich')), \
+             patch('app.tasks.hubspot_tasks.run_sync_hubspot_tasks_for_confirmed_leads', _track('sync_tasks')), \
              patch('app.tasks.hubspot_tasks.run_convert_hubspot_activities', _track('convert')), \
              patch('app.tasks.hubspot_tasks.run_extract_hubspot_signals', _track('signals')), \
              patch('app.tasks.hubspot_tasks.run_rescore_leads_after_import', _track('rescore')):
             run_post_import_pipeline_sync()
 
-        assert calls == ['matching', 'enrich', 'convert', 'signals', 'rescore']
+        assert calls == ['matching', 'enrich', 'sync_tasks', 'convert', 'signals', 'rescore']
 
 
 class TestPipelineLock:

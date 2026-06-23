@@ -12,6 +12,7 @@ import type {
   RecalculateRequest,
   RecalculateResponse,
   SearchResponse,
+  SearchParams,
 } from '@/types'
 import {
   HubSpotConfigSchema,
@@ -1483,6 +1484,15 @@ export const commandCenterService = {
     api.post(`/leads/${leadId}/suppress`).then(r => r.data),
   getTimeline: (leadId: number, page = 1): Promise<{ entries: LeadTimelineEntry[]; total: number; page: number; per_page: number }> =>
     api.get(`/leads/${leadId}/timeline`, { params: { page } }).then(r => r.data),
+  syncHubSpot: (leadId: number): Promise<{
+    lead_id: number;
+    synced: boolean;
+    lead_status?: string;
+    hubspot_deal_stage?: string;
+    last_hubspot_sync_at?: string | null;
+    hubspot_sync_stale?: boolean;
+  }> =>
+    api.post(`/leads/${leadId}/hubspot-sync`).then(r => r.data),
 }
 
 export const leadTaskService = {
@@ -1614,9 +1624,9 @@ export const leadKanbanService = {
 // ---------------------------------------------------------------------------
 
 export const searchService = {
-  search: async (q: string, signal?: AbortSignal): Promise<SearchResponse> => {
+  search: async ({ q, page = 1, per_page = 25, signal }: SearchParams): Promise<SearchResponse> => {
     const response = await api.get<SearchResponse>('/search', {
-      params: { q },
+      params: { q, page, per_page },
       signal,
     })
     return response.data

@@ -1,217 +1,55 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
-import {
-  useTheme,
-  useMediaQuery,
-  Box,
-  InputBase,
-  IconButton,
-  Paper,
-  List,
-  ListItem,
-  ListItemButton,
-  ListItemText,
-  ListSubheader,
-  CircularProgress,
-  Chip,
-  Typography,
-} from '@mui/material'
+import { useRef, useState, useEffect } from 'react'
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
+import { useTheme, useMediaQuery, Box, InputBase, IconButton } from '@mui/material'
 import SearchIcon from '@mui/icons-material/Search'
-import type { SearchResponse, SearchMatchContext } from '@/types'
-import { searchService } from '@/services/api'
-
-// ---------------------------------------------------------------------------
-// Match context rendering helpers
-// ---------------------------------------------------------------------------
-
-/** Returns a label like "Phone" | "Email" for the match type badge. */
-function matchTypeLabel(type: SearchMatchContext['type']): string {
-  switch (type) {
-    case 'phone': return 'Phone'
-    case 'email': return 'Email'
-    case 'address': return 'Address'
-    case 'name': return 'Name'
-  }
-}
 
 /**
- * Renders a value string with the query substring highlighted in bold.
- * Uses an explicit fontWeight span so MUI Typography doesn't strip bold styling.
+ * GlobalSearchBar — header search input that navigates to the full search results page.
  */
-function highlightMatch(value: string, query: string): React.ReactNode {
-  const q = query.trim()
-  if (!q) return value
-
-  // Direct substring match first (handles email, formatted phone with exact match, names)
-  const lv = value.toLowerCase()
-  const lq = q.toLowerCase()
-  const idx = lv.indexOf(lq)
-
-  if (idx !== -1) {
-    return (
-      <>
-        {value.slice(0, idx)}
-        <Box component="span" sx={{ fontWeight: 700, color: 'text.primary' }}>
-          {value.slice(idx, idx + q.length)}
-        </Box>
-        {value.slice(idx + q.length)}
-      </>
-    )
-  }
-
-  // Digit-only query (e.g. "0106" or "5551234567"): find the digit run within
-  // the formatted value by stripping non-digits from both sides and locating
-  // the match position, then map back to the original string.
-  const queryDigits = q.replace(/\D/g, '')
-  if (queryDigits.length >= 4) {
-    const valueDigits = value.replace(/\D/g, '')
-    const digitIdx = valueDigits.indexOf(queryDigits)
-    if (digitIdx !== -1) {
-      // Walk the original value, counting only digits, to find the start and
-      // end positions that correspond to digit positions digitIdx and
-      // digitIdx + queryDigits.length - 1.
-      let digitsFound = 0
-      let startOrig = -1
-      let endOrig = -1
-      for (let vi = 0; vi < value.length; vi++) {
-        if (/\d/.test(value[vi])) {
-          if (digitsFound === digitIdx) startOrig = vi
-          if (digitsFound === digitIdx + queryDigits.length - 1) { endOrig = vi; break }
-          digitsFound++
-        }
-      }
-      if (startOrig !== -1 && endOrig !== -1) {
-        return (
-          <>
-            {value.slice(0, startOrig)}
-            <Box component="span" sx={{ fontWeight: 700, color: 'text.primary' }}>
-              {value.slice(startOrig, endOrig + 1)}
-            </Box>
-            {value.slice(endOrig + 1)}
-          </>
-        )
-      }
-    }
-  }
-
-  return value
-}
-
 const GlobalSearchBar = () => {
   const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams] = useSearchParams()
   const theme = useTheme()
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
 
-  const [query, setQuery] = useState('')
-  const [results, setResults] = useState<SearchResponse | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [isOpen, setIsOpen] = useState(false)
-  const [focusedIndex, setFocusedIndex] = useState(-1)
-  const [mobileExpanded, setMobileExpanded] = useState(false)
+  const onSearchPage = location.pathname === '/search'
+  const urlQuery = onSearchPage ? (searchParams.get('q') ?? '') : ''
 
-  // Refs for debounce, AbortController, and input element
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const abortControllerRef = useRef<AbortController | null>(null)
+  const [query, setQuery] = useState(urlQuery)
+  const [mobileExpanded, setMobileExpanded] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const handleQueryChange = useCallback((newQuery: string) => {
-    setQuery(newQuery)
-    setFocusedIndex(-1)
-
-    // Cancel any pending debounce timer
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current)
-      debounceTimerRef.current = null
+  useEffect(() => {
+    if (onSearchPage) {
+      setQuery(urlQuery)
     }
+  }, [onSearchPage, urlQuery])
 
-    // Cancel any in-flight request
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      abortControllerRef.current = null
-    }
+  const submitSearch = () => {
+    const trimmed = query.trim()
+    if (trimmed.length < 2) return
+    navigate(`/search?q=${encodeURIComponent(trimmed)}&page=1`)
+    if (isMobile) setMobileExpanded(false)
+    inputRef.current?.blur()
+  }
 
-    const trimmed = newQuery.trim()
+  const clearSearch = () => {
+    setQuery('')
+    if (isMobile) setMobileExpanded(false)
+  }
 
-    if (trimmed.length < 2) {
-      setResults(null)
-      setIsOpen(false)
-      setError(null)
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      submitSearch()
       return
     }
-
-    // Debounce: dispatch search after 300ms
-    debounceTimerRef.current = setTimeout(async () => {
-      const controller = new AbortController()
-      abortControllerRef.current = controller
-
-      setIsLoading(true)
-      setIsOpen(true)
-      setError(null)
-
-      try {
-        const data = await searchService.search(trimmed, controller.signal)
-        if (!controller.signal.aborted) {
-          setResults(data)
-          setIsOpen(true)
-        }
-      } catch (err: unknown) {
-        if (err instanceof Error && err.name === 'AbortError') {
-          // Cancelled — ignore silently
-          return
-        }
-        // Also handle Axios CanceledError
-        if (err instanceof Error && err.name === 'CanceledError') {
-          return
-        }
-        if (!controller.signal.aborted) {
-          setError('Search failed. Please try again.')
-          setIsOpen(true)
-        }
-      } finally {
-        if (!controller.signal.aborted) {
-          setIsLoading(false)
-        }
-      }
-    }, 300)
-  }, [])
-
-  const clearSearch = useCallback(() => {
-    setQuery('')
-    setResults(null)
-    setIsOpen(false)
-    setError(null)
-    setFocusedIndex(-1)
-
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current)
-      debounceTimerRef.current = null
+    if (e.key === 'Escape') {
+      clearSearch()
+      inputRef.current?.blur()
     }
-
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      abortControllerRef.current = null
-    }
-  }, [])
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current)
-      if (abortControllerRef.current) abortControllerRef.current.abort()
-    }
-  }, [])
-
-  // Build a flat list of all result items for keyboard navigation
-  const allItems = [
-    ...(results?.leads ?? []),
-    ...(results?.sessions ?? []),
-  ]
-
-  // Determine dropdown content
-  const hasLeads = results?.leads && results.leads.length > 0
-  const hasSessions = results?.sessions && results.sessions.length > 0
-  const isEmpty = !isLoading && !error && !hasLeads && !hasSessions
+  }
 
   return (
     <Box
@@ -222,9 +60,13 @@ const GlobalSearchBar = () => {
       }}
       data-testid="global-search-bar"
     >
-      {/* Desktop input — shown when not mobile OR when mobile and expanded */}
       {(!isMobile || mobileExpanded) && (
         <Box
+          component="form"
+          onSubmit={(e) => {
+            e.preventDefault()
+            submitSearch()
+          }}
           sx={{
             display: 'flex',
             alignItems: 'center',
@@ -234,11 +76,20 @@ const GlobalSearchBar = () => {
             '&:hover': { backgroundColor: 'rgba(255,255,255,0.25)' },
           }}
         >
-          <SearchIcon sx={{ color: 'inherit', mr: 0.5, opacity: 0.7 }} />
+          <IconButton
+            type="submit"
+            size="small"
+            color="inherit"
+            aria-label="Search"
+            sx={{ opacity: 0.85, p: 0.5 }}
+            data-testid="search-submit-button"
+          >
+            <SearchIcon fontSize="small" />
+          </IconButton>
           <InputBase
             inputRef={inputRef}
             value={query}
-            onChange={(e) => handleQueryChange(e.target.value)}
+            onChange={(e) => setQuery(e.target.value)}
             placeholder="Search name, address, phone, email…"
             inputProps={{ maxLength: 200 }}
             sx={{
@@ -250,69 +101,20 @@ const GlobalSearchBar = () => {
                 '&:focus': { width: isMobile ? '100%' : '260px' },
               },
             }}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') {
-                clearSearch()
-                if (isMobile) setMobileExpanded(false)
-                inputRef.current?.blur()
-                return
-              }
-
-              if (!isOpen || allItems.length === 0) return
-
-              switch (e.key) {
-                case 'ArrowDown':
-                  e.preventDefault()
-                  setFocusedIndex(prev => Math.min(prev + 1, allItems.length - 1))
-                  break
-                case 'ArrowUp':
-                  e.preventDefault()
-                  setFocusedIndex(prev => Math.max(prev - 1, 0))
-                  break
-                case 'Enter':
-                  if (focusedIndex >= 0 && focusedIndex < allItems.length) {
-                    e.preventDefault()
-                    const item = allItems[focusedIndex]
-                    const leadsCount = results?.leads?.length ?? 0
-                    if (focusedIndex < leadsCount) {
-                      // Lead result — always navigate by ID (Req 4.1, 4.2)
-                      if (!item.id) {
-                        setError('Search failed. Please try again.')
-                        return
-                      }
-                      navigate('/leads/' + item.id)
-                    } else {
-                      // Analysis session result — use nav_path unchanged
-                      if (!item.nav_path) {
-                        setError('Search failed. Please try again.')
-                        return
-                      }
-                      navigate(item.nav_path)
-                    }
-                    clearSearch()
-                    if (isMobile) setMobileExpanded(false)
-                  }
-                  // Req 4.3: if no result is focused, take no action
-                  break
-              }
-            }}
+            onKeyDown={handleKeyDown}
             onBlur={() => {
-              if (isMobile && !query) {
-                setMobileExpanded(false)
-              }
+              if (isMobile && !query) setMobileExpanded(false)
             }}
             data-testid="search-input"
           />
         </Box>
       )}
 
-      {/* Mobile collapsed icon button — shown when mobile and not expanded */}
       {isMobile && !mobileExpanded && (
         <IconButton
           color="inherit"
           onClick={() => {
             setMobileExpanded(true)
-            // Auto-focus the input after state update
             setTimeout(() => inputRef.current?.focus(), 0)
           }}
           data-testid="search-icon-button"
@@ -320,161 +122,6 @@ const GlobalSearchBar = () => {
         >
           <SearchIcon />
         </IconButton>
-      )}
-
-      {/* Results dropdown */}
-      {isOpen && (
-        <Paper
-          elevation={8}
-          sx={{
-            position: 'absolute',
-            top: '100%',
-            left: 0,
-            right: 0,
-            zIndex: 1300,
-            maxHeight: 400,
-            overflowY: 'auto',
-            minWidth: 280,
-          }}
-          data-testid="search-dropdown"
-        >
-          {/* Loading state */}
-          {isLoading && (
-            <Box sx={{ display: 'flex', justifyContent: 'center', p: 2 }}>
-              <CircularProgress size={24} color="inherit" />
-            </Box>
-          )}
-
-          {/* Error state */}
-          {!isLoading && error && (
-            <Box sx={{ p: 2 }}>
-              <Typography variant="body2" color="error">
-                Search failed. Please try again.
-              </Typography>
-            </Box>
-          )}
-
-          {/* Empty state */}
-          {isEmpty && isOpen && (
-            <Box sx={{ p: 2 }}>
-              <Typography variant="body2" color="text.secondary">
-                No results found
-              </Typography>
-            </Box>
-          )}
-
-          {/* Results grouped by section */}
-          {!isLoading && !error && (hasLeads || hasSessions) && (
-            <List dense disablePadding>
-              {/* Leads section */}
-              {results?.leads && results.leads.length > 0 && (
-                <>
-                  <ListSubheader>Leads</ListSubheader>
-                  {results.leads.map((lead, idx) => (
-                    <ListItem key={`lead-${lead.id}`} disablePadding>
-                      <ListItemButton
-                        selected={idx === focusedIndex}
-                        sx={idx === focusedIndex ? { backgroundColor: 'action.selected' } : {}}
-                        onClick={() => {
-                          if (lead.id) {
-                            navigate('/leads/' + lead.id)
-                          } else {
-                            setError('Search failed. Please try again.')
-                            return
-                          }
-                          clearSearch()
-                          if (isMobile) setMobileExpanded(false)
-                        }}
-                        data-testid={`lead-result-${lead.id}`}
-                      >
-                        <ListItemText
-                          primary={
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <Typography variant="body2">{lead.label}</Typography>
-                              {lead.lead_score != null && (
-                                <Chip
-                                  label={lead.lead_score}
-                                  size="small"
-                                  variant="outlined"
-                                  sx={{ height: 18, fontSize: '0.7rem' }}
-                                />
-                              )}
-                            </Box>
-                          }
-                          secondary={
-                            lead.match_context ? (
-                              <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25 }}>
-                                <Box
-                                  component="span"
-                                  sx={{ color: 'text.disabled', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', fontSize: '0.6rem' }}
-                                >
-                                  {matchTypeLabel(lead.match_context.type)}:&nbsp;
-                                </Box>
-                                <Box component="span" sx={{ fontSize: '0.75rem', color: 'text.secondary' }}>
-                                  {highlightMatch(lead.match_context.value, query.trim())}
-                                </Box>
-                              </Box>
-                            ) : undefined
-                          }
-                          secondaryTypographyProps={{ component: 'span' }}
-                        />
-                      </ListItemButton>
-                    </ListItem>
-                  ))}
-                </>
-              )}
-
-              {/* Analysis Sessions section */}
-              {results?.sessions && results.sessions.length > 0 && (
-                <>
-                  <ListSubheader>Analysis Sessions</ListSubheader>
-                  {results.sessions.map((session, idx) => {
-                    const sessionIdx = (results?.leads?.length ?? 0) + idx
-                    return (
-                    <ListItem key={`session-${session.id}`} disablePadding>
-                      <ListItemButton
-                        selected={sessionIdx === focusedIndex}
-                        sx={sessionIdx === focusedIndex ? { backgroundColor: 'action.selected' } : {}}
-                        onClick={() => {
-                          navigate(session.nav_path)
-                          clearSearch()
-                          if (isMobile) setMobileExpanded(false)
-                        }}
-                        data-testid={`session-result-${session.id}`}
-                      >
-                        <ListItemText
-                          primary={
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                              <Typography variant="body2">{session.label}</Typography>
-                              {session.status && (
-                                <Chip
-                                  label={session.status}
-                                  size="small"
-                                  color={session.status === 'Complete' ? 'success' : 'default'}
-                                  sx={{ height: 18, fontSize: '0.7rem' }}
-                                />
-                              )}
-                            </Box>
-                          }
-                          secondary={
-                            session.created_at
-                              ? new Date(session.created_at).toLocaleDateString('en-US', {
-                                  month: '2-digit',
-                                  day: '2-digit',
-                                  year: 'numeric',
-                                })
-                              : undefined
-                          }
-                        />
-                      </ListItemButton>
-                    </ListItem>
-                    )
-                  })}
-                </>
-              )}
-            </List>
-          )}
-        </Paper>
       )}
     </Box>
   )

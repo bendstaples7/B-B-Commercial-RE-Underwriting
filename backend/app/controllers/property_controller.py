@@ -187,6 +187,8 @@ def _serialize_property_summary(lead):
         'address_2': lead.address_2,
         'returned_addresses': lead.returned_addresses,
         'source': lead.source,
+        'deal_source': getattr(lead, 'deal_source', None),
+        'deal_description': getattr(lead, 'deal_description', None),
         'date_identified': lead.date_identified.isoformat() if lead.date_identified else None,
         'needs_skip_trace': lead.needs_skip_trace,
         'skip_tracer': lead.skip_tracer,
@@ -254,6 +256,8 @@ def _serialize_property_detail(lead):
         'most_recent_sale': lead.most_recent_sale,
         # Research tracking
         'source': lead.source,
+        'deal_source': getattr(lead, 'deal_source', None),
+        'deal_description': getattr(lead, 'deal_description', None),
         'date_identified': lead.date_identified.isoformat() if lead.date_identified else None,
         'notes': lead.notes,
         'needs_skip_trace': lead.needs_skip_trace,

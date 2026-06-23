@@ -41,6 +41,7 @@ import { LeadTimeline } from '@/components/LeadTimeline'
 import { LogNoteForm } from '@/components/LogNoteForm'
 import { LogCallForm } from '@/components/LogCallForm'
 import type { LeadTask, LeadTimelineEntry } from '@/types'
+import { formatPhoneNumber, phoneTelHref } from '@/utils/phone'
 
 /** Props accepted by PropertyDetailPage. */
 export interface PropertyDetailPageProps {
@@ -922,7 +923,7 @@ export const PropertyDetailPage: React.FC<PropertyDetailPageProps> = ({
                     </Typography>
                     {phone && (
                       <Typography variant="caption" display="block" color="text.secondary">
-                        <a href={`tel:${phone}`} style={{ textDecoration: 'none', color: 'inherit' }}>📞 {phone}</a>
+                        <a href={phoneTelHref(phone)} style={{ textDecoration: 'none', color: 'inherit' }}>📞 {formatPhoneNumber(phone)}</a>
                       </Typography>
                     )}
                     {email && (

@@ -9,6 +9,7 @@ orchestration methods.
 """
 import json
 import logging
+import re
 from datetime import date, datetime
 from typing import Optional
 
@@ -112,6 +113,66 @@ class DeterministicScoringEngine:
     point-based rules. Stores full score breakdowns in LeadScore records.
     """
 
+    _SALE_DATE_FORMATS = (
+        '%m/%d/%Y',
+        '%m/%d/%y',
+        '%Y-%m-%d',
+        '%m-%d-%Y',
+        '%m-%d-%y',
+        '%B %d, %Y',
+        '%b %d, %Y',
+        '%B %d %Y',
+        '%b %d %Y',
+    )
+
+    @staticmethod
+    def parse_sale_date_string(value: Optional[str]) -> Optional[date]:
+        """Parse a human-entered sale date string (e.g. most_recent_sale)."""
+        if not value or not str(value).strip():
+            return None
+        text = str(value).strip()
+        for fmt in DeterministicScoringEngine._SALE_DATE_FORMATS:
+            try:
+                return datetime.strptime(text, fmt).date()
+            except ValueError:
+                continue
+        # Fallback: extract first M/D/YYYY or M-D-YYYY substring
+        match = re.search(r'(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})', text)
+        if match:
+            month, day, year = match.groups()
+            year_int = int(year)
+            if year_int < 100:
+                year_int += 1900 if year_int >= 50 else 2000
+            try:
+                return date(year_int, int(month), int(day))
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def effective_acquisition_date(lead: Lead) -> Optional[date]:
+        """Acquisition date for scoring — uses acquisition_date or parses most_recent_sale."""
+        if lead.acquisition_date:
+            return lead.acquisition_date
+        return DeterministicScoringEngine.parse_sale_date_string(
+            getattr(lead, 'most_recent_sale', None),
+        )
+
+    @staticmethod
+    def score_needs_refresh(lead: Lead, score: Optional[LeadScore]) -> bool:
+        """True when stored score likely predates current lead property data."""
+        if score is None:
+            return True
+        if lead.updated_at and score.created_at and score.created_at < lead.updated_at:
+            return True
+        details = score.score_details or {}
+        if lead.property_type and details.get('property_type_fit', 0) == 0:
+            return True
+        if DeterministicScoringEngine.effective_acquisition_date(lead):
+            if details.get('years_owned', 0) == 0:
+                return True
+        return False
+
     # ------------------------------------------------------------------
     # Residential Scoring
     # ------------------------------------------------------------------
@@ -162,22 +223,31 @@ class DeterministicScoringEngine:
     @staticmethod
     def _residential_property_type_fit(lead: Lead) -> float:
         """Multi-family/2-4 unit = 20, SFR = 10, other = 5, missing = 0."""
-        if not lead.property_type:
-            return 0.0
+        if lead.property_type and lead.property_type.strip():
+            pt = lead.property_type.strip().lower()
+            multi_family_types = {
+                "multi_family", "multi family", "multifamily", "multi-family",
+                "duplex", "triplex", "fourplex", "2-4 unit", "2 unit", "3 unit", "4 unit",
+            }
+            sfr_types = {"single_family", "single family", "sfr"}
 
-        pt = lead.property_type.strip().lower()
-        multi_family_types = {
-            "multi_family", "multi family", "multifamily",
-            "duplex", "triplex", "fourplex", "2-4 unit",
-        }
-        sfr_types = {"single_family", "single family", "sfr"}
+            if pt in multi_family_types:
+                return 20.0
+            elif pt in sfr_types:
+                return 10.0
+            else:
+                return 5.0
 
-        if pt in multi_family_types:
-            return 20.0
-        elif pt in sfr_types:
-            return 10.0
-        else:
-            return 5.0
+        # Infer from unit count when property_type is absent
+        units = lead.units
+        if units is not None:
+            if 2 <= units <= 4:
+                return 20.0
+            if units >= 5:
+                return 15.0
+            if units == 1:
+                return 10.0
+        return 0.0
 
     @staticmethod
     def _residential_neighborhood_fit(lead: Lead) -> float:
@@ -236,11 +306,12 @@ class DeterministicScoringEngine:
         data and score 0 — a lead cannot have been owned for a negative
         duration.
         """
-        if not lead.acquisition_date:
+        acquisition = DeterministicScoringEngine.effective_acquisition_date(lead)
+        if not acquisition:
             return 0.0
 
         today = date.today()
-        delta = today - lead.acquisition_date
+        delta = today - acquisition
         years = delta.days / 365.25
 
         if years < 0:
@@ -544,7 +615,7 @@ class DeterministicScoringEngine:
             "assessor_class": lambda: lead.property_type and lead.property_type.strip(),
             "estimated_units": lambda: lead.units is not None,
             "building_sqft": lambda: lead.square_footage is not None,
-            "years_owned": lambda: lead.acquisition_date is not None,
+            "years_owned": lambda: DeterministicScoringEngine.effective_acquisition_date(lead) is not None,
             "neighborhood": lambda: (
                 (lead.property_city and lead.property_city.strip()) or
                 (lead.property_zip and lead.property_zip.strip())

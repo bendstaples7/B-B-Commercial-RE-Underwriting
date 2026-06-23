@@ -97,6 +97,7 @@ import { UnifiedLeadCommandCenter } from '@/components/UnifiedLeadCommandCenter'
 import { AdminPanel } from './components/AdminPanel'
 import AdminUserDetail from './components/AdminUserDetail'
 import GlobalSearchBar from '@/components/GlobalSearchBar'
+import SearchResultsPage from '@/pages/SearchResultsPage'
 import { DealKanbanPage } from './pages/DealKanbanPage'
 import { PipelineConfigAdminPage } from './pages/PipelineConfigAdminPage'
 import DataSourcesPanel from '@/components/DataSourcesPanel'
@@ -1590,6 +1591,7 @@ function App() {
           {/* Legacy ARV workflow — still accessible directly */}
           <Route path="/analysis/arv" element={<AnalysisRoute />} />
           {/* Properties routes — /properties/:leadId now redirects to canonical /leads/:id */}
+          <Route path="/search" element={<SearchResultsPage />} />
           <Route path="/properties" element={<LeadListRoute />} />
           <Route path="/properties/:leadId" element={<LegacyPropertyDetailRedirect />} />
           {/* Legacy /leads routes — redirect to /properties or handled by canonical /leads/:id above */}

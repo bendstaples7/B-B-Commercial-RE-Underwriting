@@ -696,6 +696,7 @@ class GoogleSheetsImporter:
         Dedup priority (checked in order):
         1. ``county_assessor_pin`` — unambiguous parcel identifier.
         2. Exact ``property_street`` match (current behaviour).
+        2b. Normalized ``property_street`` for same owner (e.g. Schiller vs Schiller St).
         3. Same owner name + same *base* street (strip unit suffix from both
            sides) — catches "2553 N Drake Ave" vs "2553 N Drake Ave 1".
 
@@ -703,19 +704,25 @@ class GoogleSheetsImporter:
         different users importing the same address create separate records.
         """
         from sqlalchemy import func as sa_func
+        from app.services.lead_dedup_service import find_lead_by_identity
 
-        # 1. PIN match (most authoritative)
+        # 1. PIN + owner/street identity (PIN, exact street, normalized street)
         pin = validated_data.get("county_assessor_pin")
-        if pin:
-            q = Lead.query.filter(Lead.county_assessor_pin == pin)
-            if owner_user_id:
-                q = q.filter(Lead.owner_user_id == owner_user_id)
-            hit = q.first()
-            if hit:
-                return hit
-
-        # 2. Exact street match
         street = validated_data.get("property_street")
+        first = validated_data.get("owner_first_name")
+        last = validated_data.get("owner_last_name")
+
+        hit = find_lead_by_identity(
+            owner_user_id=owner_user_id,
+            owner_first_name=first,
+            owner_last_name=last,
+            property_street=street,
+            county_assessor_pin=pin,
+        )
+        if hit:
+            return hit
+
+        # 2. Exact street match (legacy path when owner names missing)
         if street:
             q = Lead.query.filter(Lead.property_street == street)
             if owner_user_id:
@@ -723,6 +730,22 @@ class GoogleSheetsImporter:
             hit = q.first()
             if hit:
                 return hit
+
+        # 2b. Normalized street match (e.g. "Schiller" vs "Schiller St")
+        if street and first and last:
+            from app.services.lead_merge_utils import streets_match_normalized
+
+            q = (
+                Lead.query
+                .filter(Lead.owner_first_name.ilike(first))
+                .filter(Lead.owner_last_name.ilike(last))
+                .filter(Lead.property_street.isnot(None))
+            )
+            if owner_user_id:
+                q = q.filter(Lead.owner_user_id == owner_user_id)
+            for candidate in q:
+                if streets_match_normalized(street, candidate.property_street):
+                    return candidate
 
         # 3. Same owner + same base street (unit-stripped), bidirectional.
         #
@@ -787,6 +810,7 @@ class GoogleSheetsImporter:
         Deduplication is performed in priority order:
         1. ``county_assessor_pin`` — parcel identifier, most authoritative.
         2. Exact ``property_street`` match.
+        2b. Normalized ``property_street`` for same owner (abbreviation variants).
         3. Same owner name + same base street (unit suffix stripped) —
            prevents phantom duplicates when a bare building address is
            imported alongside a specific unit address for the same owner.
@@ -822,6 +846,9 @@ class GoogleSheetsImporter:
             return existing
         else:
             # Create new lead
+            from sqlalchemy.exc import IntegrityError
+            from app.services.lead_dedup_service import find_lead_by_identity
+
             lead = Lead(
                 data_source=data_source,
                 last_import_job_id=import_job_id,
@@ -830,6 +857,26 @@ class GoogleSheetsImporter:
                 lead.owner_user_id = owner_user_id
             self._set_lead_fields(lead, validated_data)
             db.session.add(lead)
+            try:
+                with db.session.begin_nested():
+                    db.session.flush()
+            except IntegrityError:
+                existing = find_lead_by_identity(
+                    owner_user_id=owner_user_id,
+                    owner_first_name=validated_data.get("owner_first_name"),
+                    owner_last_name=validated_data.get("owner_last_name"),
+                    property_street=validated_data.get("property_street"),
+                    county_assessor_pin=validated_data.get("county_assessor_pin"),
+                )
+                if not existing:
+                    raise
+                changed_by = f"import_job:{import_job_id}" if import_job_id else "manual"
+                self._update_lead_fields(existing, validated_data, changed_by)
+                existing.data_source = data_source
+                if import_job_id:
+                    existing.last_import_job_id = import_job_id
+                existing.updated_at = datetime.utcnow()
+                return existing
             return lead
 
     # ------------------------------------------------------------------

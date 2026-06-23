@@ -1,27 +1,31 @@
-"""One-time script to merge duplicate Lead records where the same owner
-appears at both a bare building address and a specific unit address.
+"""One-time script to merge duplicate Lead records.
 
-Pattern:
-  Lead A: "2553 N Drake Ave"      (bare building address — no unit)
-  Lead B: "2553 N Drake Ave 1"    (specific unit address — keep this one)
-
-Strategy:
-  1. Find all (owner_name, base_street, owner_user_id) groups with > 1 record
-     where at least one record has a bare address (no unit suffix).
-  2. Within each group, keep the record with the most specific address
-     (has a unit), or if ambiguous, keep the oldest (lowest id).
-  3. Re-point all FK references from the "loser" to the "winner".
-  4. Copy any non-null fields from loser -> winner that winner is missing.
-  5. Delete the loser.
+Modes:
+  unit (default) — bare building vs unit suffix (e.g. "2553 N Drake" vs "2553 N Drake 1")
+  normalized     — same owner + normalized street variants (e.g. "Schiller" vs "Schiller St")
 
 Run from the backend/ directory:
-    python scripts/merge_duplicate_leads.py [--dry-run]
+    python scripts/merge_duplicate_leads.py [--mode unit|normalized] [--dry-run]
 """
 import re
 import sys
 import argparse
 import logging
 import os
+from collections import defaultdict
+
+# Allow imports from backend/app when run as a script
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
+
+from app.services.lead_merge_utils import (  # noqa: E402
+    cluster_leads_by_normalized_street,
+    dedup_street_key,
+    owner_group_key,
+    pick_merge_winner,
+)
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
@@ -80,12 +84,178 @@ COPYABLE_FIELDS = [
 ]
 
 
-def run(dry_run: bool = False):
+def _fetch_confirmed_hubspot_lead_ids(cur) -> set[int]:
+    cur.execute("""
+        SELECT DISTINCT internal_record_id
+        FROM hubspot_matches
+        WHERE internal_record_type = 'lead'
+          AND status = 'confirmed'
+          AND internal_record_id IS NOT NULL
+    """)
+    return {int(r['internal_record_id']) for r in cur.fetchall()}
+
+
+def _repoint_hubspot_matches(cur, winner_id: int, loser_id: int) -> None:
+    """Move hubspot_matches from loser to winner, resolving unique conflicts."""
+    import psycopg2
+
+    cur.execute("""
+        SELECT id, hubspot_record_type, hubspot_id
+        FROM hubspot_matches
+        WHERE internal_record_type = 'lead' AND internal_record_id = %s
+    """, (loser_id,))
+    loser_matches = cur.fetchall()
+
+    for hm in loser_matches:
+        cur.execute("""
+            SELECT id FROM hubspot_matches
+            WHERE hubspot_record_type = %s AND hubspot_id = %s
+              AND internal_record_id = %s
+        """, (hm['hubspot_record_type'], hm['hubspot_id'], winner_id))
+        if cur.fetchone():
+            cur.execute("DELETE FROM hubspot_matches WHERE id = %s", (hm['id'],))
+            logger.debug(
+                "  hubspot_matches id=%d: winner already linked, deleted loser row",
+                hm['id'],
+            )
+        else:
+            try:
+                cur.execute("SAVEPOINT sp_hs")
+                cur.execute(
+                    "UPDATE hubspot_matches SET internal_record_id = %s WHERE id = %s",
+                    (winner_id, hm['id']),
+                )
+                cur.execute("RELEASE SAVEPOINT sp_hs")
+            except psycopg2.errors.UniqueViolation:
+                cur.execute("ROLLBACK TO SAVEPOINT sp_hs")
+                cur.execute("RELEASE SAVEPOINT sp_hs")
+                cur.execute("DELETE FROM hubspot_matches WHERE id = %s", (hm['id'],))
+
+
+def _merge_loser_into_winner(cur, winner: dict, loser: dict) -> None:
+    """Re-point FKs, copy fields, repoint hubspot_matches, delete loser."""
+    import psycopg2
+
+    loser_id = loser['id']
+    winner_id = winner['id']
+
+    for table, col in FK_TABLES:
+        cur.execute(f"SELECT id FROM {table} WHERE {col} = %s", (loser_id,))
+        loser_rows = [r['id'] for r in cur.fetchall()]
+
+        for row_id in loser_rows:
+            try:
+                cur.execute("SAVEPOINT sp_fk")
+                cur.execute(
+                    f"UPDATE {table} SET {col} = %s WHERE id = %s",
+                    (winner_id, row_id),
+                )
+                cur.execute("RELEASE SAVEPOINT sp_fk")
+            except psycopg2.errors.UniqueViolation:
+                cur.execute("ROLLBACK TO SAVEPOINT sp_fk")
+                cur.execute("RELEASE SAVEPOINT sp_fk")
+                cur.execute(f"DELETE FROM {table} WHERE id = %s", (row_id,))
+                logger.debug(
+                    "  %s id=%d: unique conflict, deleted loser row",
+                    table, row_id,
+                )
+            except Exception:
+                cur.execute("ROLLBACK TO SAVEPOINT sp_fk")
+                cur.execute("RELEASE SAVEPOINT sp_fk")
+                raise
+
+    _repoint_hubspot_matches(cur, winner_id, loser_id)
+
+    cur.execute("SELECT * FROM leads WHERE id = %s", (winner_id,))
+    winner_row = cur.fetchone()
+    cur.execute("SELECT * FROM leads WHERE id = %s", (loser_id,))
+    loser_row = cur.fetchone()
+
+    if winner_row and loser_row:
+        updates = {}
+        for field in COPYABLE_FIELDS:
+            if field in winner_row and field in loser_row:
+                w_val = winner_row[field]
+                l_val = loser_row[field]
+                if (w_val is None or w_val == '') and l_val not in (None, ''):
+                    updates[field] = l_val
+
+        if updates:
+            set_clause = ', '.join(f'"{k}" = %s' for k in updates)
+            cur.execute(
+                f"UPDATE leads SET {set_clause} WHERE id = %s",
+                list(updates.values()) + [winner_id],
+            )
+            logger.debug("  Copied %d field(s) from loser to winner", len(updates))
+
+    logger.info("  Deleting loser id=%d '%s'", loser_id, loser.get('property_street'))
+    cur.execute("DELETE FROM leads WHERE id = %s", (loser_id,))
+
+
+def _find_unit_merge_groups(rows: list[dict]) -> list[tuple]:
+    groups: dict = {}
+    for row in rows:
+        key = (
+            (row['owner_first_name'] or '').strip().lower(),
+            (row['owner_last_name'] or '').strip().lower(),
+            strip_unit(row['property_street'] or '').strip().lower(),
+            row['owner_user_id'],
+        )
+        groups.setdefault(key, []).append(dict(row))
+
+    merge_groups = []
+    for key, members in groups.items():
+        if len(members) < 2:
+            continue
+        bare = [m for m in members if not has_unit(m['property_street'])]
+        with_unit = [m for m in members if has_unit(m['property_street'])]
+        if bare and with_unit:
+            merge_groups.append((key, bare, with_unit))
+    return merge_groups
+
+
+def _find_normalized_merge_groups(rows: list[dict]) -> list[list[dict]]:
+    owner_buckets: dict[tuple, list[dict]] = defaultdict(list)
+    for row in rows:
+        key = owner_group_key(
+            row.get('owner_first_name'),
+            row.get('owner_last_name'),
+            row.get('property_street'),
+            row.get('owner_user_id'),
+        )
+        owner_buckets[key].append(dict(row))
+
+    merge_groups: list[list[dict]] = []
+    for members in owner_buckets.values():
+        merge_groups.extend(cluster_leads_by_normalized_street(members))
+    return merge_groups
+
+
+def _find_dedup_merge_groups(rows: list[dict]) -> list[list[dict]]:
+    """Group by owner + building-level dedup_street_key (matches DB unique index)."""
+    buckets: dict[tuple, list[dict]] = defaultdict(list)
+    for row in rows:
+        street_key = dedup_street_key(row.get('property_street'))
+        if not street_key:
+            continue
+        key = (
+            row.get('owner_user_id'),
+            (row.get('owner_first_name') or '').strip().lower(),
+            (row.get('owner_last_name') or '').strip().lower(),
+            street_key,
+        )
+        buckets[key].append(dict(row))
+    return [members for members in buckets.values() if len(members) >= 2]
+
+
+def run(dry_run: bool = False, mode: str = 'unit'):
     import psycopg2
     import psycopg2.extras
 
-    db_url = os.environ.get('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/real_estate_analysis')
-    # Convert SQLAlchemy URL format to psycopg2 DSN if needed
+    db_url = os.environ.get(
+        'DATABASE_URL',
+        'postgresql://postgres:postgres@localhost:5432/real_estate_analysis',
+    )
     dsn = db_url.replace('postgresql+psycopg2://', 'postgresql://')
 
     conn = psycopg2.connect(dsn)
@@ -93,129 +263,88 @@ def run(dry_run: bool = False):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     try:
-        # ----------------------------------------------------------------
-        # Step 1: find candidate groups
-        # ----------------------------------------------------------------
-        cur.execute("""
-            SELECT id, owner_first_name, owner_last_name, property_street, owner_user_id
-            FROM leads
-            WHERE owner_first_name IS NOT NULL AND owner_first_name != ''
-              AND owner_last_name  IS NOT NULL AND owner_last_name  != ''
-              AND property_street  IS NOT NULL AND property_street  != ''
-        """)
-        rows = cur.fetchall()
-
-        # Group by (lower first, lower last, base_street, user_id)
-        groups: dict = {}
-        for row in rows:
-            key = (
-                (row['owner_first_name'] or '').strip().lower(),
-                (row['owner_last_name']  or '').strip().lower(),
-                strip_unit(row['property_street'] or '').strip().lower(),
-                row['owner_user_id'],
-            )
-            groups.setdefault(key, []).append(dict(row))
-
-        # Keep only groups where bare + unit both exist
-        merge_groups = []
-        for key, members in groups.items():
-            if len(members) < 2:
-                continue
-            bare = [m for m in members if not has_unit(m['property_street'])]
-            with_unit = [m for m in members if has_unit(m['property_street'])]
-            if bare and with_unit:
-                merge_groups.append((key, bare, with_unit))
-
-        logger.info("Found %d duplicate group(s) to merge", len(merge_groups))
-
-        # ----------------------------------------------------------------
-        # Step 2: merge each group
-        # ----------------------------------------------------------------
-        total_merged = 0
-
-        for key, bare_records, unit_records in merge_groups:
-            # Winner: most specific address (longest), then lowest id
-            winner = max(unit_records, key=lambda r: (len(r['property_street'] or ''), -r['id']))
-            losers = [r for r in bare_records + unit_records if r['id'] != winner['id']]
-
-            owner_display = f"{key[0].title()} {key[1].title()}"
+        if mode in ('normalized', 'dedup'):
+            cur.execute("""
+                SELECT id, owner_first_name, owner_last_name, property_street,
+                       owner_user_id, lead_status, has_phone, has_email,
+                       last_hubspot_sync_at
+                FROM leads
+                WHERE owner_first_name IS NOT NULL AND owner_first_name != ''
+                  AND owner_last_name  IS NOT NULL AND owner_last_name  != ''
+                  AND property_street  IS NOT NULL AND property_street  != ''
+            """)
+            rows = cur.fetchall()
+            confirmed_hs_ids = _fetch_confirmed_hubspot_lead_ids(cur)
+            if mode == 'dedup':
+                merge_groups = _find_dedup_merge_groups(rows)
+                label = 'dedup-key'
+            else:
+                merge_groups = _find_normalized_merge_groups(rows)
+                label = 'normalized'
             logger.info(
-                "Group '%s' base='%s' -> KEEP id=%d '%s', MERGE %d record(s): %s",
-                owner_display, key[2],
-                winner['id'], winner['property_street'],
-                len(losers), [r['id'] for r in losers],
+                "Found %d %s duplicate group(s) to merge",
+                len(merge_groups), label,
             )
 
-            if dry_run:
-                total_merged += len(losers)
-                continue
+            total_merged = 0
+            for members in merge_groups:
+                winner = pick_merge_winner(members, confirmed_hs_ids)
+                losers = [m for m in members if m['id'] != winner['id']]
+                owner_display = (
+                    f"{(members[0]['owner_first_name'] or '').strip().title()} "
+                    f"{(members[0]['owner_last_name'] or '').strip().title()}"
+                )
+                logger.info(
+                    "Group '%s' -> KEEP id=%d '%s' (%s), MERGE %d record(s): %s",
+                    owner_display,
+                    winner['id'], winner['property_street'],
+                    winner.get('lead_status'),
+                    len(losers), [r['id'] for r in losers],
+                )
 
-            for loser in losers:
-                loser_id = loser['id']
-                winner_id = winner['id']
+                if dry_run:
+                    total_merged += len(losers)
+                    continue
 
-                # Re-point FK tables — use savepoints so a constraint conflict
-                # on one table doesn't abort the whole transaction.
-                for table, col in FK_TABLES:
-                    # Fetch all loser row PKs upfront so we can retry row-by-row
-                    # on UniqueViolation rather than deleting the entire table slice.
-                    cur.execute(f"SELECT id FROM {table} WHERE {col} = %s", (loser_id,))
-                    loser_rows = [r['id'] for r in cur.fetchall()]
+                for loser in losers:
+                    _merge_loser_into_winner(cur, winner, loser)
+                    total_merged += 1
 
-                    for row_id in loser_rows:
-                        try:
-                            cur.execute("SAVEPOINT sp_fk")
-                            cur.execute(
-                                f"UPDATE {table} SET {col} = %s WHERE id = %s",
-                                (winner_id, row_id)
-                            )
-                            cur.execute("RELEASE SAVEPOINT sp_fk")
-                        except psycopg2.errors.UniqueViolation:
-                            # This specific row already exists on the winner side
-                            # (e.g. lead already in the same marketing list).
-                            # Roll back only this row's savepoint and delete the
-                            # conflicting loser row — don't affect other rows.
-                            cur.execute("ROLLBACK TO SAVEPOINT sp_fk")
-                            cur.execute("RELEASE SAVEPOINT sp_fk")
-                            cur.execute(f"DELETE FROM {table} WHERE id = %s", (row_id,))
-                            logger.debug(
-                                "  %s id=%d: unique conflict, deleted loser row",
-                                table, row_id,
-                            )
-                        except Exception:
-                            # Unexpected DB error — roll back and abort the merge
-                            # rather than silently continuing and deleting the loser.
-                            cur.execute("ROLLBACK TO SAVEPOINT sp_fk")
-                            cur.execute("RELEASE SAVEPOINT sp_fk")
-                            raise
+        else:
+            cur.execute("""
+                SELECT id, owner_first_name, owner_last_name, property_street, owner_user_id
+                FROM leads
+                WHERE owner_first_name IS NOT NULL AND owner_first_name != ''
+                  AND owner_last_name  IS NOT NULL AND owner_last_name  != ''
+                  AND property_street  IS NOT NULL AND property_street  != ''
+            """)
+            rows = cur.fetchall()
+            merge_groups = _find_unit_merge_groups(rows)
+            logger.info("Found %d unit duplicate group(s) to merge", len(merge_groups))
 
-                # Copy non-null fields from loser -> winner where winner is null
-                cur.execute("SELECT * FROM leads WHERE id = %s", (winner_id,))
-                winner_row = cur.fetchone()
-                cur.execute("SELECT * FROM leads WHERE id = %s", (loser_id,))
-                loser_row = cur.fetchone()
+            total_merged = 0
+            for key, bare_records, unit_records in merge_groups:
+                winner = max(
+                    unit_records,
+                    key=lambda r: (len(r['property_street'] or ''), -r['id']),
+                )
+                losers = [r for r in bare_records + unit_records if r['id'] != winner['id']]
 
-                if winner_row and loser_row:
-                    updates = {}
-                    for field in COPYABLE_FIELDS:
-                        if field in winner_row and field in loser_row:
-                            w_val = winner_row[field]
-                            l_val = loser_row[field]
-                            if (w_val is None or w_val == '') and l_val not in (None, ''):
-                                updates[field] = l_val
+                owner_display = f"{key[0].title()} {key[1].title()}"
+                logger.info(
+                    "Group '%s' base='%s' -> KEEP id=%d '%s', MERGE %d record(s): %s",
+                    owner_display, key[2],
+                    winner['id'], winner['property_street'],
+                    len(losers), [r['id'] for r in losers],
+                )
 
-                    if updates:
-                        set_clause = ', '.join(f'"{k}" = %s' for k in updates)
-                        cur.execute(
-                            f"UPDATE leads SET {set_clause} WHERE id = %s",
-                            list(updates.values()) + [winner_id]
-                        )
-                        logger.debug("  Copied %d field(s) from loser to winner", len(updates))
+                if dry_run:
+                    total_merged += len(losers)
+                    continue
 
-                # Delete the loser
-                logger.info("  Deleting loser id=%d '%s'", loser_id, loser['property_street'])
-                cur.execute("DELETE FROM leads WHERE id = %s", (loser_id,))
-                total_merged += 1
+                for loser in losers:
+                    _merge_loser_into_winner(cur, winner, loser)
+                    total_merged += 1
 
         if not dry_run:
             conn.commit()
@@ -236,5 +365,11 @@ def run(dry_run: bool = False):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Merge duplicate lead records')
     parser.add_argument('--dry-run', action='store_true', help='Preview without making changes')
+    parser.add_argument(
+        '--mode',
+        choices=['unit', 'normalized', 'dedup'],
+        default='unit',
+        help='Merge mode: unit, normalized (prefix cluster), or dedup (DB identity key)',
+    )
     args = parser.parse_args()
-    run(dry_run=args.dry_run)
+    run(dry_run=args.dry_run, mode=args.mode)

@@ -99,6 +99,36 @@ class HubSpotMatcherService:
         result = re.sub(r'\s+', ' ', result).strip()
         return result
 
+    @classmethod
+    def _address_matches_for(cls, raw_address: str) -> list:
+        """Return leads whose normalized street matches *raw_address*."""
+        norm_address = cls.normalize_address(raw_address)
+        if not norm_address:
+            return []
+        leads_with_address = Lead.query.filter(
+            Lead.property_street.isnot(None)
+        ).all()
+        matches = []
+        for lead in leads_with_address:
+            if not lead.property_street:
+                continue
+            norm_lead = cls.normalize_address(lead.property_street)
+            if norm_lead == norm_address or \
+               norm_lead.startswith(norm_address + " ") or \
+               norm_address.startswith(norm_lead + " "):
+                matches.append(lead)
+        return matches
+
+    @staticmethod
+    def _confirmed_hubspot_lead_ids() -> set[int]:
+        """Lead ids with a confirmed HubSpot match row."""
+        rows = HubSpotMatch.query.filter(
+            HubSpotMatch.internal_record_type == 'lead',
+            HubSpotMatch.status == 'confirmed',
+            HubSpotMatch.internal_record_id.isnot(None),
+        ).all()
+        return {int(r.internal_record_id) for r in rows}
+
     @staticmethod
     def normalize_phone(phone: str) -> str:
         """Strip all non-digit characters from a phone number.
@@ -223,8 +253,22 @@ class HubSpotMatcherService:
             lead.county_assessor_pin = pin
             updated_fields.append("county_assessor_pin")
 
-        if updated_fields:
-            db.session.add(lead)
+        # Deal context — always sync from HubSpot when the linked deal has values.
+        # These are general lead fields (not HubSpot-specific); HubSpot is one feeder.
+        deal_source = (props.get("deal_source") or "").strip() or None
+        if deal_source and lead.deal_source != deal_source:
+            lead.deal_source = deal_source
+            updated_fields.append("deal_source")
+
+        deal_description = (props.get("description") or "").strip() or None
+        if deal_description and lead.deal_description != deal_description:
+            lead.deal_description = deal_description
+            updated_fields.append("deal_description")
+
+        lead.last_hubspot_sync_at = datetime.utcnow()
+        if 'last_hubspot_sync_at' not in updated_fields:
+            updated_fields.append('last_hubspot_sync_at')
+        db.session.add(lead)
 
         return updated_fields
 
@@ -489,33 +533,29 @@ class HubSpotMatcherService:
 
         if raw_address:
             norm_address = HubSpotMatcherService.normalize_address(raw_address)
-            # Query all leads that have a property_street set and compare
-            # normalised values in Python (avoids DB-level normalisation).
-            leads_with_address = Lead.query.filter(
-                Lead.property_street.isnot(None)
-            ).all()
-            address_matches = []
-            for lead in leads_with_address:
-                if not lead.property_street:
-                    continue
-                norm_lead = HubSpotMatcherService.normalize_address(lead.property_street)
-                # Exact match, or one is a prefix of the other (handles cases
-                # where the HubSpot deal omits the street type, e.g.
-                # '4263 W Montrose' matching '4263 W Montrose Ave Apt 1').
-                if norm_lead == norm_address or \
-                   norm_lead.startswith(norm_address + " ") or \
-                   norm_address.startswith(norm_lead + " "):
-                    address_matches.append(lead)
+            address_matches = HubSpotMatcherService._address_matches_for(raw_address)
 
             if address_matches:
-                # If exactly one lead matches the address, auto-confirm — no
-                # ambiguity means human review adds no value.
-                # If multiple leads match (e.g. same street, different units),
-                # keep pending with no internal_record_id so the user picks the
-                # right one. Do NOT enrich any lead in the ambiguous case.
+                from app.services.lead_merge_utils import pick_best_lead_for_deal
+
+                confirmed_ids = HubSpotMatcherService._confirmed_hubspot_lead_ids()
                 auto_confirm = len(address_matches) == 1
                 if auto_confirm:
                     lead = address_matches[0]
+                else:
+                    lead = pick_best_lead_for_deal(
+                        address_matches, confirmed_ids, props,
+                    )
+                    for candidate in address_matches:
+                        if candidate.id != lead.id:
+                            candidate.review_required = True
+                    auto_confirm = True
+                    logger.debug(
+                        "Deal %s address '%s' matched %d leads — disambiguated to Lead %s",
+                        deal.hubspot_id, norm_address, len(address_matches), lead.id,
+                    )
+
+                if auto_confirm:
                     logger.debug(
                         "Deal %s matched Lead %s via address '%s' (auto_confirm=True)",
                         deal.hubspot_id, lead.id, norm_address,
@@ -531,7 +571,10 @@ class HubSpotMatcherService:
                     )
                     enriched = self.enrich_lead_from_deal(lead, deal, stage_label_map)
                     if enriched:
-                        logger.debug("Deal %s enriched Lead %s fields: %s", deal.hubspot_id, lead.id, enriched)
+                        logger.debug(
+                            "Deal %s enriched Lead %s fields: %s",
+                            deal.hubspot_id, lead.id, enriched,
+                        )
                 else:
                     logger.debug(
                         "Deal %s address '%s' matched %d leads — ambiguous, requires manual review",
@@ -548,15 +591,70 @@ class HubSpotMatcherService:
                     )
                 return match
 
-        # --- 3. No match — record as UNMATCHED with no internal record ----------
-        # If the deal has an address, create a placeholder Lead so the address
-        # is preserved for manual review. If there's no address at all, just
-        # record UNMATCHED with no internal record to avoid blank placeholder leads.
+        # --- 3. No match — link to existing normalized address or placeholder ---
         if raw_address:
+            existing_matches = HubSpotMatcherService._address_matches_for(raw_address)
+            if existing_matches:
+                from app.services.lead_merge_utils import pick_best_lead_for_deal
+
+                confirmed_ids = HubSpotMatcherService._confirmed_hubspot_lead_ids()
+                lead = pick_best_lead_for_deal(existing_matches, confirmed_ids, props)
+                logger.debug(
+                    "Deal %s linked to existing Lead %s via normalized address '%s'",
+                    deal.hubspot_id, lead.id, raw_address,
+                )
+                match = self._upsert_match(
+                    hubspot_record_type="deal",
+                    hubspot_id=deal.hubspot_id,
+                    internal_record_type="lead",
+                    internal_record_id=lead.id,
+                    confidence="MEDIUM",
+                    matching_criteria="address_match",
+                    status="confirmed",
+                )
+                enriched = self.enrich_lead_from_deal(lead, deal, stage_label_map)
+                if enriched:
+                    logger.debug(
+                        "Deal %s enriched Lead %s fields: %s",
+                        deal.hubspot_id, lead.id, enriched,
+                    )
+                return match
+
             logger.debug(
                 "Deal %s unmatched; creating placeholder Lead with address '%s'.",
                 deal.hubspot_id, raw_address,
             )
+            from app.services.lead_dedup_service import find_lead_by_identity
+            from app.services.lead_merge_utils import owner_names_from_deal_props
+
+            owner_first, owner_last = owner_names_from_deal_props(props)
+            existing = find_lead_by_identity(
+                owner_first_name=owner_first,
+                owner_last_name=owner_last,
+                property_street=raw_address,
+            )
+            if existing:
+                logger.debug(
+                    "Deal %s linked to existing Lead %s via dedup identity (no placeholder)",
+                    deal.hubspot_id, existing.id,
+                )
+                match = self._upsert_match(
+                    hubspot_record_type="deal",
+                    hubspot_id=deal.hubspot_id,
+                    internal_record_type="lead",
+                    internal_record_id=existing.id,
+                    confidence="MEDIUM",
+                    matching_criteria="address_match",
+                    status="confirmed",
+                )
+                enriched = self.enrich_lead_from_deal(existing, deal, stage_label_map)
+                if enriched:
+                    logger.debug(
+                        "Deal %s enriched Lead %s fields: %s",
+                        deal.hubspot_id, existing.id, enriched,
+                    )
+                return match
+
             placeholder = Lead(
                 property_street=raw_address,
                 source="hubspot_import",

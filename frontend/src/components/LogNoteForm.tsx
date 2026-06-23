@@ -3,7 +3,7 @@
  *
  * Requirements: 9.1, 21.1
  */
-import { useState } from 'react'
+import { forwardRef, useImperativeHandle, useRef, useState } from 'react'
 import {
   Alert,
   Box,
@@ -32,6 +32,10 @@ export interface LogNoteFormProps {
   onCancel?: () => void
 }
 
+export interface LogNoteFormHandle {
+  focus: () => void
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -41,11 +45,22 @@ export interface LogNoteFormProps {
  * count display, Save button, and validation errors for empty or over-limit
  * submissions. Form data is preserved on server error.
  */
-export function LogNoteForm({ leadId, onSaved, onCancel }: LogNoteFormProps) {
+export const LogNoteForm = forwardRef<LogNoteFormHandle, LogNoteFormProps>(function LogNoteForm(
+  { leadId, onSaved, onCancel },
+  ref,
+) {
+  const formRef = useRef<HTMLDivElement>(null)
   const [body, setBody] = useState('')
   const [bodyError, setBodyError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  useImperativeHandle(ref, () => ({
+    focus: () => {
+      const input = formRef.current?.querySelector('[data-testid="note-body-input"]') as HTMLElement | null
+      input?.focus()
+    },
+  }))
 
   // ---------------------------------------------------------------------------
   // Validation
@@ -102,6 +117,7 @@ export function LogNoteForm({ leadId, onSaved, onCancel }: LogNoteFormProps) {
 
   return (
     <Box
+      ref={formRef}
       component="form"
       onSubmit={handleSubmit}
       data-testid="log-note-form"
@@ -166,6 +182,6 @@ export function LogNoteForm({ leadId, onSaved, onCancel }: LogNoteFormProps) {
       </Stack>
     </Box>
   )
-}
+})
 
 export default LogNoteForm

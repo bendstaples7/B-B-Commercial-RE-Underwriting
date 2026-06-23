@@ -47,6 +47,7 @@ def _make_lead(**kwargs):
         "mailing_zip": None,
         "property_street": None,
         "acquisition_date": None,
+        "most_recent_sale": None,
         "notes": None,
         "manual_priority": None,
         "source_type": None,
@@ -476,3 +477,34 @@ class TestScoreDetailsCompleteness:
         )
         result = self.engine.calculate_residential_score(lead)
         assert result["score_details"]["source_type_distress"] <= float(SOURCE_TYPE_DISTRESS_COMBINED_CAP)
+
+
+# ---------------------------------------------------------------------------
+# Sale date parsing and years owned
+# ---------------------------------------------------------------------------
+
+class TestSaleDateAndYearsOwned:
+    def setup_method(self):
+        self.engine = DeterministicScoringEngine()
+
+    def test_parse_sale_date_slash_format(self):
+        from datetime import date
+        assert self.engine.parse_sale_date_string('5/1/1987') == date(1987, 5, 1)
+
+    def test_years_owned_uses_most_recent_sale_when_acquisition_missing(self):
+        from datetime import date
+        lead = _make_lead(acquisition_date=None, most_recent_sale='5/1/1987')
+        score = self.engine._years_owned_score(lead)
+        assert score == 10.0
+
+    def test_property_type_fit_triplex_scores_max(self):
+        lead = _make_lead(property_type='triplex', units=3)
+        assert self.engine._residential_property_type_fit(lead) == 20.0
+
+    def test_score_needs_refresh_when_property_type_added_after_score(self):
+        from datetime import datetime
+        lead = _make_lead(property_type='triplex', updated_at=datetime.utcnow())
+        old_score = MagicMock()
+        old_score.created_at = datetime(2020, 1, 1)
+        old_score.score_details = {'property_type_fit': 0.0}
+        assert self.engine.score_needs_refresh(lead, old_score) is True

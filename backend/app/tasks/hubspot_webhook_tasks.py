@@ -279,7 +279,7 @@ _OBJECT_TYPE_CONFIG = {
             'properties': (
                 'dealname,pipeline,dealstage,closedate,amount,'
                 'county_assessor_pin,pin,address,hs_object_id,'
-                'createdate,hs_lastmodifieddate'
+                'createdate,hs_lastmodifieddate,deal_source,description'
             )
         },
         'extra_values': None,
@@ -309,6 +309,14 @@ _OBJECT_TYPE_CONFIG = {
         'path_template': '/engagements/v1/engagements/{object_id}',
         'params': {},
         'extra_values': 'engagement_type',  # special marker — extracted from record
+    },
+    'task': {
+        'model': None,
+        'path_template': '/crm/v3/objects/tasks/{object_id}',
+        'params': {
+            'properties': 'hs_task_status,hs_task_subject,hs_timestamp,hs_task_body',
+        },
+        'extra_values': None,
     },
 }
 
@@ -369,6 +377,26 @@ def run_fetch_and_upsert_record(
             params = config_obj['params'] or {}
             record = client._get(path, params)
 
+            if object_type == 'task':
+                from app.services.hubspot_deal_sync_service import HubSpotDealSyncService
+                task_result = HubSpotDealSyncService(client).sync_task_to_linked_leads(record)
+                sync_run = HubSpotSyncRun(
+                    trigger='webhook',
+                    object_type=object_type,
+                    hubspot_id=object_id,
+                    upsert_result='updated' if task_result.get('synced') else 'skipped',
+                    webhook_log_id=log_id,
+                )
+                db.session.add(sync_run)
+                log.status = 'processed'
+                log.processed_at = datetime.utcnow()
+                db.session.commit()
+                logger.info(
+                    "run_fetch_and_upsert_record: task webhook synced object_id=%s result=%s",
+                    object_id, task_result,
+                )
+                return
+
             # Resolve model class
             model_class = getattr(_models, config_obj['model'])
 
@@ -417,6 +445,25 @@ def run_fetch_and_upsert_record(
             log.status = 'processed'
             log.processed_at = datetime.utcnow()
             db.session.commit()
+
+            # Confirmed deal upserts: always enrich the linked lead from fresh payload.
+            if object_type == 'deal':
+                try:
+                    from app.models.hubspot_deal import HubSpotDeal
+                    from app.services.hubspot_deal_sync_service import HubSpotDealSyncService
+                    sync_svc = HubSpotDealSyncService()
+                    deal = HubSpotDeal.query.filter_by(hubspot_id=object_id).first()
+                    if deal:
+                        enrich_result = sync_svc.enrich_confirmed_lead_for_deal(deal)
+                        lead_id = enrich_result.get('lead_id')
+                        if lead_id:
+                            sync_svc.sync_tasks_for_lead(lead_id)
+                except Exception as enrich_exc:
+                    logger.warning(
+                        "run_fetch_and_upsert_record: deal enrich failed for %s: %s",
+                        object_id, enrich_exc,
+                    )
+                    db.session.rollback()
 
             # Chain to incremental matching
             try:
@@ -784,8 +831,15 @@ def run_convert_incremental_activity(engagement_id: str) -> None:
         ).first()
 
         if existing_interaction is not None or existing_task is not None:
+            engagement = HubSpotEngagement.query.filter_by(
+                hubspot_id=str(engagement_id)
+            ).first()
+            if existing_task is not None and engagement is not None:
+                converter = HubSpotActivityConverterService()
+                if (engagement.engagement_type or '').upper() == 'TASK':
+                    converter.reconcile_task_from_engagement(engagement)
             logger.debug(
-                "run_convert_incremental_activity: engagement_id=%s already converted — skipping",
+                "run_convert_incremental_activity: engagement_id=%s already converted — skipping create",
                 engagement_id,
             )
             return

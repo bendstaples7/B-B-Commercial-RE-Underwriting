@@ -673,8 +673,8 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
             ? LEAD_STATUS_LABELS[payload.lead_status]
             : payload.lead_status.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
 
-        // The status chip label element (not the score badge chip)
-        const chipLabel = headerEl.querySelector('.MuiChip-root:not([data-testid="lead-score-badge"]) .MuiChip-label')
+        // The status chip label element (LeadStatusSelector in header)
+        const chipLabel = headerEl.querySelector('[data-testid="lead-status-selector"] .MuiChip-label')
         expect(chipLabel).not.toBeNull()
         expect(chipLabel!.textContent).toBe(statusLabel)
 

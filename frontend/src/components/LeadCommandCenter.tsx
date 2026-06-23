@@ -39,6 +39,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import type { LeadStatus, LeadTask, LeadTimelineEntry } from '@/types'
 import { deriveQueueContext } from '@/utils/deriveQueueContext'
+import { formatPhoneNumber, phoneCopyText, phoneTelHref } from '@/utils/phone'
 import { commandCenterService, leadTaskService } from '@/services/api'
 import { RecommendedActionPanel } from './RecommendedActionPanel'
 import { LeadTaskList } from './LeadTaskList'
@@ -89,16 +90,17 @@ function SidebarRow({ label, value }: { label: string; value: React.ReactNode })
 
 function CopyablePhone({ phone }: { phone: string }) {
   const [copied, setCopied] = useState(false)
+  const displayPhone = formatPhoneNumber(phone)
   const handleCopy = () => {
-    navigator.clipboard.writeText(phone)
+    navigator.clipboard.writeText(phoneCopyText(phone))
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
       <PhoneIcon sx={{ fontSize: 13, color: 'text.secondary' }} />
-      <Link href={`tel:${phone}`} variant="caption" underline="hover">
-        {phone}
+      <Link href={phoneTelHref(phone)} variant="caption" underline="hover">
+        {displayPhone}
       </Link>
       <Tooltip title={copied ? 'Copied!' : 'Copy'}>
         <IconButton size="small" onClick={handleCopy} sx={{ p: 0.25 }}>

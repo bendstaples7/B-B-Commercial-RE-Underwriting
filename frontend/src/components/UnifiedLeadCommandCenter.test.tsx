@@ -138,6 +138,8 @@ function makePropertyDetail(overrides: Partial<PropertyDetail> = {}): PropertyDe
     updated_at: null,
     analysis_session_id: null,
     source: null,
+    deal_source: null,
+    deal_description: null,
     date_identified: null,
     notes: null,
     needs_skip_trace: null,

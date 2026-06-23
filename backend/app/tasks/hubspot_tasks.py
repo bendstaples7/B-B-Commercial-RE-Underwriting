@@ -871,8 +871,8 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
 
     This is a source-agnostic enrichment pass: for every lead that has a
     confirmed deal or contact match (regardless of how the lead was originally
-    imported — Driving for Dollars, Google Sheets, DuPage GIS, etc.), we pull
-    live contact and deal data from the stored HubSpot payloads and write any
+    imported — Driving for Dollars, Google Sheets, DuPage GIS, etc.), each
+    confirmed deal is **re-fetched live from HubSpot** before enriching the lead.
     missing fields onto the lead.
 
     Safe to run repeatedly — existing non-null lead fields are never overwritten
@@ -899,12 +899,15 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         # display labels (e.g. 'closedlost' → 'Negotiating Remote')
         stage_label_map = {}
         _client = None
+        _sync = None
         try:
             from app.models.hubspot_config import HubSpotConfig
             from app.services.hubspot_client_service import HubSpotClientService
+            from app.services.hubspot_deal_sync_service import HubSpotDealSyncService
             _config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
             if _config:
                 _client = HubSpotClientService(_config)
+                _sync = HubSpotDealSyncService(_client)
                 stage_label_map = _client.fetch_pipeline_stage_labels("deals")
                 logger.info(
                     "run_enrich_leads_from_hubspot: loaded %d stage labels",
@@ -917,6 +920,7 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
 
         deal_enriched = 0
         deal_errors = 0
+        deal_refreshed = 0
         contact_enriched = 0
         contact_errors = 0
         action_recomputed = 0
@@ -932,10 +936,18 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         for match in confirmed_deal_matches:
             try:
                 lead = Lead.query.get(match.internal_record_id)
-                deal = HubSpotDeal.query.filter_by(
-                    hubspot_id=match.hubspot_id
-                ).first()
-                if lead is None or deal is None:
+                if lead is None:
+                    continue
+                deal = None
+                if _sync is not None:
+                    deal = _sync.refresh_deal_from_api(match.hubspot_id)
+                    if deal:
+                        deal_refreshed += 1
+                else:
+                    deal = HubSpotDeal.query.filter_by(
+                        hubspot_id=match.hubspot_id
+                    ).first()
+                if deal is None:
                     continue
                 enriched = matcher.enrich_lead_from_deal(lead, deal, stage_label_map)
                 if enriched:
@@ -1148,6 +1160,7 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                 db.session.rollback()
 
         summary = {
+            'deal_refreshed': deal_refreshed,
             'deal_enriched': deal_enriched,
             'deal_errors': deal_errors,
             'contact_enriched': contact_enriched,
@@ -1156,6 +1169,38 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         }
         logger.info("run_enrich_leads_from_hubspot: complete — %s", summary)
         return summary
+
+
+# ---------------------------------------------------------------------------
+# Task 5b: sync_hubspot_tasks_for_confirmed_leads
+# ---------------------------------------------------------------------------
+
+def run_sync_hubspot_tasks_for_confirmed_leads(limit: int = 200) -> dict:
+    """Live-sync HubSpot CRM tasks for all leads with confirmed deal matches."""
+    from dotenv import load_dotenv
+    load_dotenv()
+    from app import create_app
+
+    app = create_app()
+    with app.app_context():
+        from app.services.hubspot_deal_sync_service import HubSpotDealSyncService
+        return HubSpotDealSyncService().sync_all_confirmed_lead_tasks(limit=limit)
+
+
+# ---------------------------------------------------------------------------
+# Task 5c: refresh_confirmed_hubspot_deals
+# ---------------------------------------------------------------------------
+
+def run_refresh_confirmed_hubspot_deals(limit: int = 200) -> dict:
+    """Re-fetch confirmed deals from HubSpot API and enrich linked leads."""
+    from dotenv import load_dotenv
+    load_dotenv()
+    from app import create_app
+
+    app = create_app()
+    with app.app_context():
+        from app.services.hubspot_deal_sync_service import HubSpotDealSyncService
+        return HubSpotDealSyncService().refresh_all_confirmed_deals(limit=limit)
 
 
 # ---------------------------------------------------------------------------
@@ -1204,8 +1249,27 @@ def run_convert_hubspot_activities(run_id: int = None) -> None:
         for engagement in HubSpotEngagement.query.all():
             eid = engagement.hubspot_id
 
-            # Skip if already converted to an Interaction or Task
-            if eid in existing_interaction_ids or eid in existing_task_ids:
+            # Reconcile existing HubSpot tasks from updated engagement payloads
+            if eid in existing_task_ids:
+                if (engagement.engagement_type or '').upper() == 'TASK':
+                    try:
+                        if converter.reconcile_task_from_engagement(engagement):
+                            converted += 1
+                        else:
+                            skipped += 1
+                    except Exception as exc:
+                        logger.warning(
+                            "run_convert_hubspot_activities: reconcile error hubspot_id=%s: %s",
+                            eid, exc,
+                        )
+                        errors += 1
+                        db.session.rollback()
+                else:
+                    skipped += 1
+                continue
+
+            # Skip if already converted to an Interaction
+            if eid in existing_interaction_ids:
                 skipped += 1
                 continue
 

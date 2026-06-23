@@ -24,6 +24,7 @@ class Property(db.Model):
 
     # Property details
     property_street = db.Column(db.String(500), nullable=True)
+    normalized_street = db.Column(db.String(500), nullable=True, index=True)
     property_city = db.Column(db.String(100), nullable=True)
     property_state = db.Column(db.String(50), nullable=True)
     property_zip = db.Column(db.String(20), nullable=True)
@@ -55,6 +56,8 @@ class Property(db.Model):
 
     # Research tracking
     source = db.Column(db.String(100), nullable=True)  # where the property was found
+    deal_source = db.Column(db.String(255), nullable=True)  # how/where deal was sourced (e.g. Cityscape)
+    deal_description = db.Column(db.Text, nullable=True)  # free-text deal context from CRM or manual entry
     date_identified = db.Column(db.Date, nullable=True)  # when it was found
     notes = db.Column(db.Text, nullable=True)  # general notes
 
@@ -185,6 +188,15 @@ class Property(db.Model):
 
     def __repr__(self):
         return f'<Property {self.property_street}>'
+
+
+@event.listens_for(Property, 'before_insert')
+@event.listens_for(Property, 'before_update')
+def _refresh_lead_normalized_street(mapper, connection, target):
+    """Keep normalized_street in sync with property_street for dedup enforcement."""
+    from app.services.lead_merge_utils import dedup_street_key
+    key = dedup_street_key(target.property_street)
+    target.normalized_street = key or None
 
 
 # Backward-compatibility alias — defined immediately after Property so it is
