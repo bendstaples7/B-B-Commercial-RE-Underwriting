@@ -115,6 +115,25 @@ def main() -> int:
     if re.search(r'(?<!-n )\bsudo systemctl\b', deploy_text):
         errors.append("deploy.sh contains 'sudo systemctl' without -n — use sudo -n")
 
+    # 7. post_deploy_sync dispatches async (must not block SSH on sync runner)
+    post_deploy_path = REPO_ROOT / "backend" / "scripts" / "post_deploy_sync.py"
+    if post_deploy_path.exists():
+        post_deploy_text = _read(post_deploy_path)
+        if "run_post_import_pipeline_sync" in post_deploy_text:
+            errors.append(
+                "post_deploy_sync.py must not call run_post_import_pipeline_sync "
+                "(blocks deploy SSH — use dispatch_post_import_pipeline)"
+            )
+        if "dispatch_post_import_pipeline" not in post_deploy_text:
+            errors.append(
+                "post_deploy_sync.py must use dispatch_post_import_pipeline"
+            )
+    if "Post-deploy HubSpot sync dispatched" not in deploy_text:
+        errors.append(
+            "deploy.sh step 8 must log non-blocking dispatch "
+            "(Post-deploy HubSpot sync dispatched)"
+        )
+
     if errors:
         print("Deploy contract validation FAILED:", file=sys.stderr)
         for err in errors:
