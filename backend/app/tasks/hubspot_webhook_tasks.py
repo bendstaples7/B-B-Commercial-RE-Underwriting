@@ -463,7 +463,6 @@ def run_fetch_and_upsert_record(
                         "run_fetch_and_upsert_record: deal enrich failed for %s: %s",
                         object_id, enrich_exc,
                     )
-                    db.session.rollback()
 
             # Chain to incremental matching
             try:

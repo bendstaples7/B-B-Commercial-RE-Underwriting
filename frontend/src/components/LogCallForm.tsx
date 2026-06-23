@@ -200,7 +200,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
           label="Outcome *"
           value={outcome}
           onChange={(e) => handleOutcomeChange(e.target.value)}
-          inputProps={{ 'data-testid': 'call-outcome-select' }}
+          SelectDisplayProps={{ 'data-testid': 'call-outcome-select' } as React.HTMLAttributes<HTMLDivElement>}
         >
           {OUTCOME_OPTIONS.map((opt) => (
             <MenuItem key={opt.value} value={opt.value}>

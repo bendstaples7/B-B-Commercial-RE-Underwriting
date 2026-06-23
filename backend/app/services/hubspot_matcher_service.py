@@ -182,18 +182,16 @@ class HubSpotMatcherService:
     # ------------------------------------------------------------------
 
     def enrich_lead_from_deal(self, lead: Lead, deal: HubSpotDeal,
-                              stage_label_map: dict = None) -> list[str]:
+                              stage_label_map: dict = None,
+                              *, sync_deal_context: bool = False) -> list[str]:
         """Enrich a Lead with data from a matched HubSpot deal.
 
         Copies fields that are currently null/empty on the Lead from the
-        deal's raw_payload.  This is intentionally non-destructive for most
-        fields: existing non-null values on the lead are never overwritten.
+        deal's raw_payload.  This is intentionally non-destructive: existing
+        non-null values on the lead are never overwritten unless
+        ``sync_deal_context=True`` (used during explicit HubSpot refresh).
 
-        ``deal_source`` and ``deal_description`` are synced from the linked
-        HubSpot deal when the deal has values (HubSpot is the feeder for
-        those general lead fields).  ``hubspot_deal_stage`` is always synced.
-
-        Returns a list of field names that were updated.
+        ``hubspot_deal_stage`` is always synced from the linked deal.
         """
         props = (deal.raw_payload or {}).get("properties", {})
         updated_fields = []
@@ -272,17 +270,17 @@ class HubSpotMatcherService:
             lead.county_assessor_pin = pin
             updated_fields.append("county_assessor_pin")
 
-        # Deal context — always sync from HubSpot when the linked deal has values.
-        # These are general lead fields (not HubSpot-specific); HubSpot is one feeder.
         deal_source = (props.get("deal_source") or "").strip() or None
-        if deal_source and lead.deal_source != deal_source:
-            lead.deal_source = deal_source
-            updated_fields.append("deal_source")
+        if deal_source and (sync_deal_context or not (lead.deal_source or '').strip()):
+            if lead.deal_source != deal_source:
+                lead.deal_source = deal_source
+                updated_fields.append("deal_source")
 
         deal_description = (props.get("description") or "").strip() or None
-        if deal_description and lead.deal_description != deal_description:
-            lead.deal_description = deal_description
-            updated_fields.append("deal_description")
+        if deal_description and (sync_deal_context or not (lead.deal_description or '').strip()):
+            if lead.deal_description != deal_description:
+                lead.deal_description = deal_description
+                updated_fields.append("deal_description")
 
         lead.last_hubspot_sync_at = datetime.utcnow()
         if 'last_hubspot_sync_at' not in updated_fields:

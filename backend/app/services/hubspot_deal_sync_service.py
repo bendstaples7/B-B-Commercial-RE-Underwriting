@@ -99,7 +99,9 @@ class HubSpotDealSyncService:
 
         labels = stage_label_map if stage_label_map is not None else self.get_stage_label_map()
         matcher = HubSpotMatcherService()
-        enriched = matcher.enrich_lead_from_deal(lead, deal, labels)
+        enriched = matcher.enrich_lead_from_deal(
+            lead, deal, labels, sync_deal_context=True,
+        )
         lead.last_hubspot_sync_at = datetime.now(timezone.utc).replace(tzinfo=None)
         db.session.add(lead)
         db.session.commit()
