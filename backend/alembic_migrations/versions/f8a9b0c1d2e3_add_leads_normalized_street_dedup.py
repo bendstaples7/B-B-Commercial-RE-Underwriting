@@ -15,8 +15,7 @@ import os
 import sys
 
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy import inspect, text
+from sqlalchemy import text
 
 revision = 'f8a9b0c1d2e3'
 down_revision = 'e7f8a9b0c1d2'
@@ -57,18 +56,18 @@ def _backfill_normalized_street(connection) -> None:
 
 
 def upgrade():
-    bind = op.get_bind()
-    columns = {c['name'] for c in inspect(bind).get_columns('leads')}
-    if 'normalized_street' not in columns:
-        op.add_column(
-            'leads',
-            sa.Column('normalized_street', sa.String(length=500), nullable=True),
-        )
-        op.create_index('ix_leads_normalized_street', 'leads', ['normalized_street'])
+    op.execute("""
+        ALTER TABLE leads
+        ADD COLUMN IF NOT EXISTS normalized_street VARCHAR(500)
+    """)
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS ix_leads_normalized_street
+        ON leads (normalized_street)
+    """)
 
-    _backfill_normalized_street(bind)
+    _backfill_normalized_street(op.get_bind())
 
 
 def downgrade():
-    op.drop_index('ix_leads_normalized_street', table_name='leads')
-    op.drop_column('leads', 'normalized_street')
+    op.execute("DROP INDEX IF EXISTS ix_leads_normalized_street")
+    op.execute("ALTER TABLE leads DROP COLUMN IF EXISTS normalized_street")

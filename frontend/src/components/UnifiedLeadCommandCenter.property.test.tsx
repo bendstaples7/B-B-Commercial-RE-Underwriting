@@ -12,11 +12,11 @@
 import React from 'react'
 import { describe, it, expect, vi } from 'vitest'
 import * as fc from 'fast-check'
-import { render, screen, act, fireEvent, within, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom'
 import { deriveQueueContext } from '@/utils/deriveQueueContext'
-import { UnifiedLeadCommandCenter } from './UnifiedLeadCommandCenter'
+import { UnifiedLeadCommandCenter, ALL_LEAD_STATUSES } from './UnifiedLeadCommandCenter'
 import { QueueTable } from './QueueTable'
 import GlobalSearchBar from './GlobalSearchBar'
 import { ThemeProvider, createTheme } from '@mui/material'
@@ -42,7 +42,7 @@ vi.mock('@/services/api', async (importOriginal) => {
       search: vi.fn(),
     },
     leadScoreService: {
-      getLeadScore: vi.fn().mockResolvedValue({ data: { latest: null } }),
+      getLeadScore: vi.fn().mockResolvedValue({ data: { latest: null, history: [] } }),
     },
   }
 })
@@ -58,6 +58,86 @@ vi.mock('@/services/leadApi', async (importOriginal) => {
     },
   }
 })
+
+import type { PropertyDetail } from '@/types'
+
+function minimalPropertyDetail(id: number): PropertyDetail {
+  return {
+    id,
+    property_street: '',
+    property_city: null,
+    property_state: null,
+    property_zip: null,
+    property_type: null,
+    bedrooms: null,
+    bathrooms: null,
+    square_footage: null,
+    lot_size: null,
+    year_built: null,
+    owner_first_name: null,
+    owner_last_name: null,
+    ownership_type: null,
+    acquisition_date: null,
+    phone_1: null,
+    phone_2: null,
+    phone_3: null,
+    email_1: null,
+    email_2: null,
+    mailing_address: null,
+    mailing_city: null,
+    mailing_state: null,
+    mailing_zip: null,
+    lead_score: 50,
+    lead_category: 'standard',
+    data_source: null,
+    last_import_job_id: null,
+    created_at: null,
+    updated_at: null,
+    analysis_session_id: null,
+    source: null,
+    deal_source: null,
+    deal_description: null,
+    date_identified: null,
+    notes: null,
+    needs_skip_trace: null,
+    skip_tracer: null,
+    date_skip_traced: null,
+    date_added_to_hubspot: null,
+    units: null,
+    units_allowed: null,
+    zoning: null,
+    county_assessor_pin: null,
+    tax_bill_2021: null,
+    most_recent_sale: null,
+    owner_2_first_name: null,
+    owner_2_last_name: null,
+    address_2: null,
+    returned_addresses: null,
+    phone_4: null,
+    phone_5: null,
+    phone_6: null,
+    phone_7: null,
+    email_3: null,
+    email_4: null,
+    email_5: null,
+    socials: null,
+    up_next_to_mail: null,
+    mailer_history: null,
+    enrichment_records: [],
+    marketing_lists: [],
+    analysis_session: null,
+    contacts: [],
+  }
+}
+
+async function waitForCommandCenterLoaded(container: HTMLElement) {
+  await waitFor(
+    () => {
+      expect(container.querySelector('header')).not.toBeNull()
+    },
+    { timeout: 5000 },
+  )
+}
 
 // Mock LogNoteForm — renders a button that calls onSaved with a synthetic entry
 // Used by Property 14 to trigger the prepend logic in ActivityPanel
@@ -206,7 +286,7 @@ const commandCenterPayloadArb = fc.record({
   property_city: fc.option(fc.string()),
   property_state: fc.option(fc.string()),
   lead_score: fc.integer({ min: 0, max: 100 }),
-  lead_status: fc.string(), // use fc.constantFrom(...ALL_LEAD_STATUSES) when importable
+  lead_status: fc.constantFrom(...ALL_LEAD_STATUSES),
   open_tasks: fc.array(taskArb, { maxLength: 20 }),
   // `total` must be >= entries.length, otherwise the generated pagination
   // metadata is invalid (total < entries.length) and timeline tests flake.
@@ -496,46 +576,23 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
     )
   }, 30000)
 
-  // Feature: unified-lead-command-center, Property 6: Global search navigation always uses canonical route
+  // Feature: unified-lead-command-center, Property 6: Global search navigates to search results page
   // **Validates: Requirements 4.1, 4.2**
-  it('Property 6: Global search navigation always uses canonical route', async () => {
-    vi.useFakeTimers()
-
-    const { searchService } = await import('@/services/api')
-    const mockSearch = searchService.search as ReturnType<typeof vi.fn>
-
+  it('Property 6: Global search navigates to search results page', async () => {
     const searchTheme = createTheme()
 
-    // LocationTracker captures all pathname changes driven by useNavigate()
-    // inside MemoryRouter — GlobalSearchBar calls navigate('/leads/' + id) on click,
-    // which updates the MemoryRouter location that this component reads.
     function LocationTracker({ paths }: { paths: string[] }) {
       const loc = useLocation()
       React.useEffect(() => {
-        paths.push(loc.pathname)
+        paths.push(`${loc.pathname}${loc.search}`)
       })
       return null
     }
 
     await fc.assert(
       fc.asyncProperty(
-        fc.record({
-          id: validLeadId,
-          nav_path: fc.option(fc.string()),  // can be anything, including legacy /properties/:id
-        }),
-        async (leadResult) => {
-          // Arrange: mock searchService.search to return a single lead result
-          mockSearch.mockReset()
-          mockSearch.mockResolvedValue({
-            leads: [{
-              id: leadResult.id,
-              type: 'lead',
-              label: `Lead ${leadResult.id}`,
-              nav_path: leadResult.nav_path ?? `/properties/${leadResult.id}`,
-            }],
-            sessions: [],
-          })
-
+        fc.string({ minLength: 2, maxLength: 30 }).filter((s) => s.trim().length >= 2),
+        async (query) => {
           const capturedPaths: string[] = []
           const container = document.createElement('div')
           document.body.appendChild(container)
@@ -547,45 +604,28 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
                 <GlobalSearchBar />
               </ThemeProvider>
             </MemoryRouter>,
-            { container }
+            { container },
           )
 
-          // Type a query that is long enough (≥2 chars) to trigger the search
           const inputWrapper = within(container).getByTestId('search-input')
           const inputEl = inputWrapper.querySelector('input') as HTMLInputElement
-
-          // Use the native value setter so React's synthetic event system picks it up
           const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
             HTMLInputElement.prototype,
-            'value'
+            'value',
           )?.set
-          nativeInputValueSetter?.call(inputEl, 'te')
+          nativeInputValueSetter?.call(inputEl, query)
           inputEl.dispatchEvent(new Event('input', { bubbles: true }))
-          inputEl.dispatchEvent(new Event('change', { bubbles: true }))
+          fireEvent.keyDown(inputEl, { key: 'Enter' })
 
-          // Advance the debounce timer (300ms)
-          act(() => { vi.advanceTimersByTime(300) })
-
-          // Flush promises so the mock resolves and results render
-          await act(async () => { await Promise.resolve() })
-          await act(async () => { await Promise.resolve() })
-
-          // Click the lead result — GlobalSearchBar calls navigate('/leads/' + lead.id)
-          const leadItem = within(container).getByTestId(`lead-result-${leadResult.id}`)
-          act(() => { fireEvent.click(leadItem) })
-
-          // Assert: navigation used the canonical /leads/:id path
-          const expectedPath = '/leads/' + leadResult.id
-          expect(capturedPaths).toContain(expectedPath)
+          const expected = `/search?q=${encodeURIComponent(query.trim())}&page=1`
+          expect(capturedPaths).toContain(expected)
 
           unmount()
           document.body.removeChild(container)
-        }
+        },
       ),
-      { numRuns: 20 }
+      { numRuns: 20 },
     )
-
-    vi.useRealTimers()
   }, 30000)
 
   // Feature: unified-lead-command-center, Property 7: Sticky header renders all required fields for any lead
@@ -602,7 +642,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         mockGetCommandCenter.mockReset()
         mockGetLeadDetail.mockReset()
         mockGetCommandCenter.mockResolvedValue(payload)
-        mockGetLeadDetail.mockResolvedValue({ id: payload.id })
+        mockGetLeadDetail.mockResolvedValue(minimalPropertyDetail(payload.id))
 
         const queryClient = new QueryClient({
           defaultOptions: { queries: { retry: false } },
@@ -645,10 +685,11 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         expect(ownerNameEl).not.toBeNull()
         expect(ownerNameEl!.textContent).toBe(displayName)
 
-        // 2. Lead score — find the caption span in the header that shows the numeric score
-        const scoreEl = headerEl.querySelector('.MuiTypography-caption')
+        // 2. Lead score — header button shows "N / 100"
+        const scoreEl = headerEl.querySelector('[data-testid="header-lead-score"]')
         expect(scoreEl).not.toBeNull()
-        expect(scoreEl!.textContent).toBe(String(payload.lead_score))
+        expect(scoreEl!.textContent).toContain(String(payload.lead_score))
+        expect(scoreEl!.textContent).toContain('/ 100')
 
         // 3. Lead status — LeadStatusChip in the header renders a chip
         //   - Known statuses → LEAD_STATUS_LABELS map
@@ -668,10 +709,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           suppressed: 'Suppressed',
           do_not_contact: 'Do Not Contact',
         }
-        const statusLabel =
-          Object.hasOwn(LEAD_STATUS_LABELS, payload.lead_status)
-            ? LEAD_STATUS_LABELS[payload.lead_status]
-            : payload.lead_status.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())
+        const statusLabel = LEAD_STATUS_LABELS[payload.lead_status]
 
         // The status chip label element (LeadStatusSelector in header)
         const chipLabel = headerEl.querySelector('[data-testid="lead-status-selector"] .MuiChip-label')
@@ -782,7 +820,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         mockGetCommandCenter.mockReset()
         mockGetLeadDetail.mockReset()
         mockGetCommandCenter.mockResolvedValue(payload)
-        mockGetLeadDetail.mockResolvedValue({ id: 1 })
+        mockGetLeadDetail.mockResolvedValue(minimalPropertyDetail(1))
 
         const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
         const container = document.createElement('div')
@@ -797,21 +835,19 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           { container }
         )
 
-        await new Promise(r => setTimeout(r, 50))
+        await waitForCommandCenterLoaded(container)
 
-        // The Select's displayed value should show the current status
-        const selectEl = container.querySelector('[role="combobox"]')
-        expect(selectEl).not.toBeNull()
+        const chip = within(container).getByTestId('lead-status-selector')
+        fireEvent.click(chip)
 
-        // Open the dropdown to check available options
-        const { fireEvent } = await import('@testing-library/react')
-        fireEvent.mouseDown(selectEl!)
+        await waitFor(() => {
+          expect(document.querySelector('[data-testid="lead-status-menu"]')).not.toBeNull()
+        })
 
-        await new Promise(r => setTimeout(r, 50))
-
-        // Find all MenuItems that are in the dropdown (they render in a portal/body)
-        const menuItems = document.querySelectorAll('[role="option"]')
-        const itemValues = Array.from(menuItems).map(el => el.getAttribute('data-value'))
+        const menuItems = document.querySelectorAll('[data-testid^="lead-status-option-"]')
+        const itemValues = Array.from(menuItems).map((el) =>
+          el.getAttribute('data-testid')!.replace('lead-status-option-', ''),
+        )
 
         // Current status should NOT be in the options
         expect(itemValues).not.toContain(status)
@@ -856,7 +892,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         mockGetCommandCenter.mockReset()
         mockGetLeadDetail.mockReset()
         mockGetCommandCenter.mockResolvedValue(payload)
-        mockGetLeadDetail.mockResolvedValue({ id: 1 })
+        mockGetLeadDetail.mockResolvedValue(minimalPropertyDetail(1))
 
         const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
         const container = document.createElement('div')
@@ -871,7 +907,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           { container }
         )
 
-        await new Promise(r => setTimeout(r, 100))
+        await waitForCommandCenterLoaded(container)
 
         // Find the tasks panel rendered by TasksPanel (data-testid="tasks-panel")
         const tasksPanel = container.querySelector('[data-testid="tasks-panel"]')
@@ -927,7 +963,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         mockCreateTask.mockReset()
 
         mockGetCommandCenter.mockResolvedValue(payload)
-        mockGetLeadDetail.mockResolvedValue({ id: 1 })
+        mockGetLeadDetail.mockResolvedValue(minimalPropertyDetail(1))
         // Never-resolving promise — backend call never completes
         mockCreateTask.mockReturnValue(new Promise(() => {}))
 
@@ -944,8 +980,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           { container }
         )
 
-        // Wait for queries to resolve
-        await new Promise(r => setTimeout(r, 100))
+        await waitForCommandCenterLoaded(container)
 
         // Get initial task count using the task-item-{id} pattern
         const tasksPanel = container.querySelector('[data-testid="tasks-panel"]')
@@ -1017,7 +1052,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         mockGetCommandCenter.mockReset()
         mockGetLeadDetail.mockReset()
         mockGetCommandCenter.mockResolvedValue(payload)
-        mockGetLeadDetail.mockResolvedValue({ id: 1 })
+        mockGetLeadDetail.mockResolvedValue(minimalPropertyDetail(1))
 
         // Mock completeTask to never resolve — tests optimistic removal before backend completes
         mockCompleteTask.mockReturnValue(new Promise(() => {}))
@@ -1035,7 +1070,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           { container }
         )
 
-        await new Promise(r => setTimeout(r, 100))
+        await waitForCommandCenterLoaded(container)
 
         const tasksPanel = container.querySelector('[data-testid="tasks-panel"]')
         expect(tasksPanel).not.toBeNull()
@@ -1105,7 +1140,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           mockGetCommandCenter.mockReset()
           mockGetLeadDetail.mockReset()
           mockGetCommandCenter.mockResolvedValue(payload)
-          mockGetLeadDetail.mockResolvedValue({ id: 1 })
+          mockGetLeadDetail.mockResolvedValue(minimalPropertyDetail(1))
 
           const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
           const container = document.createElement('div')
@@ -1120,8 +1155,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
             { container }
           )
 
-          // Wait for async queries to resolve
-          await new Promise(r => setTimeout(r, 100))
+          await waitForCommandCenterLoaded(container)
 
           // Verify the activity panel is rendered
           const activityPanel = container.querySelector('[data-testid="activity-panel"]')
@@ -1200,7 +1234,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
             timeline: { entries: initialEntries, total, page: 1, per_page: 20 },
             recommended_action: { value: null, label: null, explanation: null, signals: {} },
           })
-          mockGetLeadDetail.mockResolvedValue({ id: 1 })
+          mockGetLeadDetail.mockResolvedValue(minimalPropertyDetail(1))
           mockGetTimeline.mockResolvedValue({ entries: moreEntries, total, page: 2, per_page: 20 })
 
           const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -1216,8 +1250,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
             { container }
           )
 
-          // Wait for the initial query to resolve and entries to render
-          await new Promise(r => setTimeout(r, 100))
+          await waitForCommandCenterLoaded(container)
 
           // Verify initial entry count is N
           const initialRendered = container.querySelectorAll('[data-testid^="timeline-entry-"]')
@@ -1265,17 +1298,14 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           property_city: null,
           property_state: null,
           lead_score: 50,
-          lead_status: 'new',
+          lead_status: 'skip_trace',
+          has_property_match: false,
+          analysis_session_id: null,
           open_tasks: [],
           timeline: { entries: [], total: 0, page: 1, per_page: 20 },
           recommended_action: { value: null, label: null, explanation: null, signals: {} },
         })
-        mockGetLeadDetail.mockResolvedValue({
-          id: leadId,
-          property_street: null,
-          property_city: null,
-          property_state: null,
-        })
+        mockGetLeadDetail.mockResolvedValue(minimalPropertyDetail(leadId))
         mockGetCommandCenter.mockClear()
         mockGetLeadDetail.mockClear()
 
@@ -1283,25 +1313,29 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           defaultOptions: { queries: { retry: false } },
         })
 
+        const container = document.createElement('div')
+        document.body.appendChild(container)
+
         const { unmount } = render(
           <QueryClientProvider client={queryClient}>
             <MemoryRouter>
               <UnifiedLeadCommandCenter leadId={leadId} />
             </MemoryRouter>
-          </QueryClientProvider>
+          </QueryClientProvider>,
+          { container },
         )
 
-        // Wait for queries to settle
-        await new Promise(r => setTimeout(r, 50))
-
-        expect(mockGetCommandCenter).toHaveBeenCalledTimes(1)
+        await waitFor(() => {
+          expect(mockGetCommandCenter).toHaveBeenCalledTimes(1)
+        }, { timeout: 5000 })
 
         unmount()
+        document.body.removeChild(container)
         queryClient.clear()
       }),
-      { numRuns: 5 }
+      { numRuns: 5 },
     )
-  })
+  }, 30000)
 
   // Feature: unified-lead-command-center, Property 17: Lead detail endpoint called exactly once per mount
   // **Validates: Requirements 12.2**
@@ -1322,17 +1356,14 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           property_city: null,
           property_state: null,
           lead_score: 50,
-          lead_status: 'new',
+          lead_status: 'skip_trace',
+          has_property_match: false,
+          analysis_session_id: null,
           open_tasks: [],
           timeline: { entries: [], total: 0, page: 1, per_page: 20 },
           recommended_action: { value: null, label: null, explanation: null, signals: {} },
         })
-        mockGetLeadDetail.mockResolvedValue({
-          id: leadId,
-          property_street: null,
-          property_city: null,
-          property_state: null,
-        })
+        mockGetLeadDetail.mockResolvedValue(minimalPropertyDetail(leadId))
         mockGetCommandCenter.mockClear()
         mockGetLeadDetail.mockClear()
 
@@ -1340,23 +1371,27 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           defaultOptions: { queries: { retry: false } },
         })
 
+        const container = document.createElement('div')
+        document.body.appendChild(container)
+
         const { unmount } = render(
           <QueryClientProvider client={queryClient}>
             <MemoryRouter>
               <UnifiedLeadCommandCenter leadId={leadId} />
             </MemoryRouter>
-          </QueryClientProvider>
+          </QueryClientProvider>,
+          { container },
         )
 
-        // Wait for queries to settle
-        await new Promise(r => setTimeout(r, 50))
-
-        expect(mockGetLeadDetail).toHaveBeenCalledTimes(1)
+        await waitFor(() => {
+          expect(mockGetLeadDetail).toHaveBeenCalledTimes(1)
+        }, { timeout: 5000 })
 
         unmount()
+        document.body.removeChild(container)
         queryClient.clear()
       }),
-      { numRuns: 5 }
+      { numRuns: 5 },
     )
-  })
+  }, 30000)
 })

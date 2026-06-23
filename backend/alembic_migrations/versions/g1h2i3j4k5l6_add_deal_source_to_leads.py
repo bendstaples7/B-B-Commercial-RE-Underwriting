@@ -9,7 +9,6 @@ from HubSpot and other sources — not HubSpot-specific columns.
 """
 
 from alembic import op
-import sqlalchemy as sa
 from sqlalchemy import text
 
 revision = 'g1h2i3j4k5l6'
@@ -19,10 +18,15 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column('leads', sa.Column('deal_source', sa.String(255), nullable=True))
-    op.add_column('leads', sa.Column('deal_description', sa.Text(), nullable=True))
+    op.execute("""
+        ALTER TABLE leads
+        ADD COLUMN IF NOT EXISTS deal_source VARCHAR(255)
+    """)
+    op.execute("""
+        ALTER TABLE leads
+        ADD COLUMN IF NOT EXISTS deal_description TEXT
+    """)
 
-    # Backfill from linked HubSpot deals where available
     conn = op.get_bind()
     conn.execute(text("""
         UPDATE leads l
@@ -42,5 +46,5 @@ def upgrade():
 
 
 def downgrade():
-    op.drop_column('leads', 'deal_description')
-    op.drop_column('leads', 'deal_source')
+    op.execute("ALTER TABLE leads DROP COLUMN IF EXISTS deal_description")
+    op.execute("ALTER TABLE leads DROP COLUMN IF EXISTS deal_source")
