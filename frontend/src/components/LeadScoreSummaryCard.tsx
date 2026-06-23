@@ -14,22 +14,7 @@ import {
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import type { PropertyScoreRecord } from '@/types'
 import { LeadScoreBadge } from './LeadScoreBadge'
-import type { ScoreTier } from './LeadScoreBadge'
-
-const TIER_RANGE_LABELS: Record<ScoreTier, string> = {
-  A: '75–100 (strong fit)',
-  B: '60–74 (good fit)',
-  C: '40–59 (marginal)',
-  D: '0–39 (low priority)',
-}
-
-function fieldLabel(field: string): string {
-  return field
-    .split('_')
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-    .join(' ')
-}
+import { TIER_RANGE_LABELS, formatScoreFieldLabel } from '@/utils/scoreTierMeta'
 
 export interface LeadScoreSummaryCardProps {
   score: PropertyScoreRecord
@@ -88,7 +73,7 @@ export function LeadScoreSummaryCard({ score, onViewFullBreakdown }: LeadScoreSu
                   sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}
                 >
                   <Typography variant="body2" noWrap sx={{ flex: 1 }}>
-                    {fieldLabel(dimension)}
+                    {formatScoreFieldLabel(dimension)}
                   </Typography>
                   <Typography variant="body2" sx={{ fontVariantNumeric: 'tabular-nums' }}>
                     +{points}

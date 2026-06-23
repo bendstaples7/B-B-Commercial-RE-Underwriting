@@ -102,14 +102,32 @@ class HubSpotMatcherService:
     @classmethod
     def _address_matches_for(cls, raw_address: str) -> list:
         """Return leads whose normalized street matches *raw_address*."""
+        from app.services.lead_merge_utils import dedup_street_key
+
         norm_address = cls.normalize_address(raw_address)
-        if not norm_address:
+        dedup_key = dedup_street_key(raw_address)
+        if not norm_address and not dedup_key:
             return []
-        leads_with_address = Lead.query.filter(
-            Lead.property_street.isnot(None)
-        ).all()
+
+        candidates: list = []
+        seen_ids: set[int] = set()
+        if dedup_key:
+            for lead in Lead.query.filter(Lead.normalized_street == dedup_key).all():
+                if lead.id not in seen_ids:
+                    candidates.append(lead)
+                    seen_ids.add(lead.id)
+
+        # Legacy rows before normalized_street backfill
+        for lead in Lead.query.filter(
+            Lead.property_street.isnot(None),
+            Lead.normalized_street.is_(None),
+        ).all():
+            if lead.id not in seen_ids:
+                candidates.append(lead)
+                seen_ids.add(lead.id)
+
         matches = []
-        for lead in leads_with_address:
+        for lead in candidates:
             if not lead.property_street:
                 continue
             norm_lead = cls.normalize_address(lead.property_street)
@@ -168,11 +186,12 @@ class HubSpotMatcherService:
         """Enrich a Lead with data from a matched HubSpot deal.
 
         Copies fields that are currently null/empty on the Lead from the
-        deal's raw_payload.  This is intentionally non-destructive: existing
-        non-null values on the lead are never overwritten.
+        deal's raw_payload.  This is intentionally non-destructive for most
+        fields: existing non-null values on the lead are never overwritten.
 
-        hubspot_deal_stage is always synced and translated to the portal's
-        display label via stage_label_map (so 'closedlost' → 'Negotiating Remote').
+        ``deal_source`` and ``deal_description`` are synced from the linked
+        HubSpot deal when the deal has values (HubSpot is the feeder for
+        those general lead fields).  ``hubspot_deal_stage`` is always synced.
 
         Returns a list of field names that were updated.
         """
@@ -591,35 +610,8 @@ class HubSpotMatcherService:
                     )
                 return match
 
-        # --- 3. No match — link to existing normalized address or placeholder ---
+        # --- 3. No match — dedup identity or placeholder ---
         if raw_address:
-            existing_matches = HubSpotMatcherService._address_matches_for(raw_address)
-            if existing_matches:
-                from app.services.lead_merge_utils import pick_best_lead_for_deal
-
-                confirmed_ids = HubSpotMatcherService._confirmed_hubspot_lead_ids()
-                lead = pick_best_lead_for_deal(existing_matches, confirmed_ids, props)
-                logger.debug(
-                    "Deal %s linked to existing Lead %s via normalized address '%s'",
-                    deal.hubspot_id, lead.id, raw_address,
-                )
-                match = self._upsert_match(
-                    hubspot_record_type="deal",
-                    hubspot_id=deal.hubspot_id,
-                    internal_record_type="lead",
-                    internal_record_id=lead.id,
-                    confidence="MEDIUM",
-                    matching_criteria="address_match",
-                    status="confirmed",
-                )
-                enriched = self.enrich_lead_from_deal(lead, deal, stage_label_map)
-                if enriched:
-                    logger.debug(
-                        "Deal %s enriched Lead %s fields: %s",
-                        deal.hubspot_id, lead.id, enriched,
-                    )
-                return match
-
             logger.debug(
                 "Deal %s unmatched; creating placeholder Lead with address '%s'.",
                 deal.hubspot_id, raw_address,

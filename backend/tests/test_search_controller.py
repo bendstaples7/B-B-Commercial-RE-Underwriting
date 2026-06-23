@@ -1141,6 +1141,9 @@ def test_postgres_search_sql_compiles_without_error(app):
             pytest.skip('pg_trgm extension not available')
 
         try:
-            svc.search('test', user_id=_TEST_USER_ID, is_admin=False, page=1, per_page=1)
+            svc._search_leads_postgres(
+                'test', ['test'], '', _TEST_USER_ID, False, per_page=1, offset=0,
+            )
+            svc._search_sessions_postgres('test', ['test'], _TEST_USER_ID, False)
         except (OperationalError, ProgrammingError) as exc:
             pytest.fail(f'SearchService PostgreSQL query failed: {exc}')

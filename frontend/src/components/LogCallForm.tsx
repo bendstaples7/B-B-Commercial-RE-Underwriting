@@ -63,6 +63,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
   ref,
 ) {
   const formRef = useRef<HTMLDivElement>(null)
+  const outcomeInputRef = useRef<HTMLInputElement>(null)
   const [outcome, setOutcome] = useState<LogCallPayload['outcome'] | ''>('')
   const [duration, setDuration] = useState('')
   const [notes, setNotes] = useState('')
@@ -75,8 +76,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
 
   useImperativeHandle(ref, () => ({
     focus: () => {
-      const select = formRef.current?.querySelector('[data-testid="call-outcome-select"]') as HTMLElement | null
-      select?.focus()
+      outcomeInputRef.current?.focus()
     },
   }))
 
@@ -195,11 +195,12 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
       >
         <InputLabel id="call-outcome-label">Outcome *</InputLabel>
         <Select
+          inputRef={outcomeInputRef}
           labelId="call-outcome-label"
           label="Outcome *"
           value={outcome}
           onChange={(e) => handleOutcomeChange(e.target.value)}
-          SelectDisplayProps={{ 'data-testid': 'call-outcome-select' } as any}
+          inputProps={{ 'data-testid': 'call-outcome-select' }}
         >
           {OUTCOME_OPTIONS.map((opt) => (
             <MenuItem key={opt.value} value={opt.value}>

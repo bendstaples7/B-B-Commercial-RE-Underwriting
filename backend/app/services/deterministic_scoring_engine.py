@@ -168,8 +168,10 @@ class DeterministicScoringEngine:
         details = score.score_details or {}
         if lead.property_type and details.get('property_type_fit', 0) == 0:
             return True
-        if DeterministicScoringEngine.effective_acquisition_date(lead):
-            if details.get('years_owned', 0) == 0:
+        acquisition = DeterministicScoringEngine.effective_acquisition_date(lead)
+        if acquisition:
+            # Future acquisition dates legitimately score 0 — do not treat as stale.
+            if acquisition <= date.today() and details.get('years_owned', 0) == 0:
                 return True
         return False
 

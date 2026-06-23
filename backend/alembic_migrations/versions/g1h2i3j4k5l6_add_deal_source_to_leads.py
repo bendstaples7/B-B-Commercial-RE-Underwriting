@@ -29,19 +29,31 @@ def upgrade():
 
     conn = op.get_bind()
     conn.execute(text("""
+        WITH ranked_deals AS (
+            SELECT
+                hm.internal_record_id AS lead_id,
+                NULLIF(TRIM(hd.raw_payload->'properties'->>'deal_source'), '') AS deal_source,
+                NULLIF(TRIM(hd.raw_payload->'properties'->>'description'), '') AS deal_description,
+                ROW_NUMBER() OVER (
+                    PARTITION BY hm.internal_record_id
+                    ORDER BY hd.last_updated_at DESC NULLS LAST, hd.hubspot_id DESC
+                ) AS rn
+            FROM hubspot_matches hm
+            JOIN hubspot_deals hd ON hd.hubspot_id = hm.hubspot_id
+            WHERE hm.internal_record_type = 'lead'
+              AND hm.hubspot_record_type = 'deal'
+              AND hm.status = 'confirmed'
+              AND (
+                NULLIF(TRIM(hd.raw_payload->'properties'->>'deal_source'), '') IS NOT NULL
+                OR NULLIF(TRIM(hd.raw_payload->'properties'->>'description'), '') IS NOT NULL
+              )
+        )
         UPDATE leads l
-        SET deal_source = NULLIF(TRIM(hd.raw_payload->'properties'->>'deal_source'), ''),
-            deal_description = NULLIF(TRIM(hd.raw_payload->'properties'->>'description'), '')
-        FROM hubspot_matches hm
-        JOIN hubspot_deals hd ON hd.hubspot_id = hm.hubspot_id
-        WHERE hm.internal_record_type = 'lead'
-          AND hm.internal_record_id = l.id
-          AND hm.hubspot_record_type = 'deal'
-          AND hm.status = 'confirmed'
-          AND (
-            NULLIF(TRIM(hd.raw_payload->'properties'->>'deal_source'), '') IS NOT NULL
-            OR NULLIF(TRIM(hd.raw_payload->'properties'->>'description'), '') IS NOT NULL
-          )
+        SET deal_source = rd.deal_source,
+            deal_description = rd.deal_description
+        FROM ranked_deals rd
+        WHERE rd.lead_id = l.id
+          AND rd.rn = 1
     """))
 
 

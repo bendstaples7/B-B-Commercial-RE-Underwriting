@@ -384,6 +384,7 @@ class SearchService:
                 )
             except (OperationalError, ProgrammingError) as exc:
                 logger.warning('Postgres search failed, falling back to Python: %s', exc)
+                self.session.rollback()
                 use_postgres = False
 
         if not use_postgres:

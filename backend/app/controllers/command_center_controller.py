@@ -12,6 +12,7 @@ from functools import wraps
 from flask import Blueprint, jsonify, g, request
 from marshmallow import ValidationError
 
+from app.api_utils import require_auth
 from app.exceptions import RealEstateAnalysisException
 from app.models import Lead, LeadTask, LeadTimelineEntry
 from app.schemas import (
@@ -343,24 +344,11 @@ def get_command_center(lead_id: int):
         db.session.commit()
 
     from app.services.hubspot_deal_sync_service import HubSpotDealSyncService
-    _sync_svc = HubSpotDealSyncService()
-    _hs_health = HubSpotDealSyncService.get_lead_sync_health(lead_id)
-    if _hs_health.get('hubspot_has_confirmed_deal'):
-        try:
-            _sync_svc.sync_tasks_for_lead(lead_id)
-        except Exception as exc:
-            logger.warning('HubSpot task sync failed for lead_id=%s: %s', lead_id, exc)
-            from app import db as _sync_db
-            _sync_db.session.rollback()
-        try:
-            HubSpotDealSyncService.ensure_deal_context_for_lead(lead_id)
-            lead = Lead.query.get(lead_id)
-        except Exception as exc:
-            logger.warning('HubSpot deal context refresh failed for lead_id=%s: %s', lead_id, exc)
-            from app import db as _sync_db
-            _sync_db.session.rollback()
+
     if HubSpotDealSyncService.auto_sync_lead_if_stale(lead_id):
         lead = Lead.query.get(lead_id)
+
+    _hs_health = HubSpotDealSyncService.get_lead_sync_health(lead_id)
 
     ra = lead.recommended_action
     ra_metadata = RECOMMENDED_ACTION_METADATA.get(ra, {}) if ra else {}
@@ -1176,6 +1164,7 @@ def suppress_lead(lead_id: int):
 
 
 @command_center_bp.route('/<int:lead_id>/hubspot-sync', methods=['POST'])
+@require_auth
 @handle_errors
 def sync_lead_from_hubspot(lead_id: int):
     """POST /api/leads/<lead_id>/hubspot-sync
@@ -1183,20 +1172,28 @@ def sync_lead_from_hubspot(lead_id: int):
     Re-fetch confirmed HubSpot deal(s) from the API and sync stage/status
     onto the lead. Works without Celery (local dev) and in production.
     """
-    from app.models.lead import Lead
+    from app.controllers.property_controller import _current_user_is_admin
     from app.services.hubspot_deal_sync_service import HubSpotDealSyncService
 
     lead = Lead.query.get(lead_id)
     if lead is None:
         return jsonify({'error': 'Not found'}), 404
 
+    if not _current_user_is_admin():
+        current_user_id = getattr(g, 'user_id', None)
+        if not current_user_id or current_user_id == 'anonymous' or lead.owner_user_id != current_user_id:
+            return jsonify({'error': 'Not found'}), 404
+
     try:
         result = HubSpotDealSyncService().refresh_and_enrich_lead(lead_id)
     except RuntimeError as exc:
-        return jsonify({'error': str(exc)}), 503
+        return jsonify({'error': str(exc)}), 500
 
     if not result.get('synced'):
-        return jsonify({'error': result.get('reason', 'sync_failed')}), 404
+        reason = result.get('reason', 'sync_failed')
+        if reason == 'no_confirmed_deal':
+            return jsonify({'error': reason}), 404
+        return jsonify({'error': reason}), 422
 
     health = HubSpotDealSyncService.get_lead_sync_health(lead_id)
     return jsonify({**result, **health}), 200

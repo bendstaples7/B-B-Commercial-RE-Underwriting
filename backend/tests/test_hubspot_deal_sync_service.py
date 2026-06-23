@@ -87,7 +87,7 @@ class TestHubSpotDealSyncService:
 
             mock_refresh.return_value = {'synced': True}
             assert HubSpotDealSyncService.auto_sync_lead_if_stale(lead.id) is True
-            mock_refresh.assert_called_once_with(lead.id, include_tasks=False)
+            mock_refresh.assert_called_once_with(lead.id, include_tasks=True)
 
     @patch.object(HubSpotDealSyncService, 'refresh_and_enrich_lead')
     def test_auto_sync_skips_when_fresh(self, mock_refresh, app):
@@ -136,7 +136,7 @@ class TestHubSpotDealSyncService:
                 hubspot_id='deal-empty',
                 raw_payload={'properties': {'deal_source': '', 'description': ''}},
             )
-            assert HubSpotDealSyncService.deal_missing_context_properties(deal3) is True
+            assert HubSpotDealSyncService.deal_missing_context_properties(deal3) is False
 
     @patch.object(HubSpotDealSyncService, 'refresh_and_enrich_lead')
     def test_auto_sync_when_deal_context_properties_missing(self, mock_refresh, app):
@@ -164,7 +164,7 @@ class TestHubSpotDealSyncService:
 
             mock_refresh.return_value = {'synced': True}
             assert HubSpotDealSyncService.auto_sync_lead_if_stale(lead.id) is True
-            mock_refresh.assert_called_once_with(lead.id, include_tasks=False)
+            mock_refresh.assert_called_once_with(lead.id, include_tasks=True)
 
     @patch.object(HubSpotDealSyncService, 'refresh_deal_from_api')
     @patch('app.services.hubspot_deal_sync_service.HubSpotDealSyncService._get_client')
@@ -305,4 +305,4 @@ class TestHubSpotDealSyncService:
 
             mock_refresh.return_value = {'synced': True}
             assert HubSpotDealSyncService.auto_sync_lead_if_stale(lead.id) is True
-            mock_refresh.assert_called_once_with(lead.id, include_tasks=False)
+            mock_refresh.assert_called_once_with(lead.id, include_tasks=True)

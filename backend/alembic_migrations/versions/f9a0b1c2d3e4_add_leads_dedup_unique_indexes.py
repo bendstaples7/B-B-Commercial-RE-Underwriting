@@ -18,6 +18,30 @@ branch_labels = None
 depends_on = None
 
 
+def _assert_no_owner_pin_duplicates(connection) -> None:
+    rows = connection.execute(text(
+        """
+        SELECT owner_user_id, county_assessor_pin, count(*) AS cnt
+        FROM leads
+        WHERE owner_user_id IS NOT NULL
+          AND county_assessor_pin IS NOT NULL AND county_assessor_pin != ''
+        GROUP BY 1, 2
+        HAVING count(*) > 1
+        LIMIT 5
+        """
+    )).fetchall()
+    if rows:
+        sample = ', '.join(
+            f"user={r.owner_user_id} pin={r.county_assessor_pin} ({r.cnt})"
+            for r in rows
+        )
+        raise RuntimeError(
+            "Cannot add unique dedup index — duplicate owner+PIN clusters remain. "
+            f"Run: python scripts/merge_duplicate_leads.py --mode dedup. "
+            f"Examples: {sample}"
+        )
+
+
 def _assert_no_owner_street_duplicates(connection) -> None:
     rows = connection.execute(text(
         """
@@ -67,23 +91,13 @@ def upgrade():
           AND owner_last_name IS NOT NULL AND owner_last_name != ''
           AND normalized_street IS NOT NULL AND normalized_street != ''
     """)
-    pin_dupes = bind.execute(text(
-        """
-        SELECT 1 FROM leads
+    _assert_no_owner_pin_duplicates(bind)
+    op.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_leads_owner_assessor_pin
+        ON leads (owner_user_id, county_assessor_pin)
         WHERE owner_user_id IS NOT NULL
           AND county_assessor_pin IS NOT NULL AND county_assessor_pin != ''
-        GROUP BY owner_user_id, county_assessor_pin
-        HAVING count(*) > 1
-        LIMIT 1
-        """
-    )).fetchone()
-    if not pin_dupes:
-        op.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS uq_leads_owner_assessor_pin
-            ON leads (owner_user_id, county_assessor_pin)
-            WHERE owner_user_id IS NOT NULL
-              AND county_assessor_pin IS NOT NULL AND county_assessor_pin != ''
-        """)
+    """)
 
 
 def downgrade():

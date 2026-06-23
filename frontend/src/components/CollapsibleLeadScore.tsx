@@ -15,23 +15,8 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import type { PropertyScoreRecord } from '@/types'
 import { LeadScoreBadge } from './LeadScoreBadge'
-import type { ScoreTier } from './LeadScoreBadge'
+import { TIER_RANGE_LABELS, formatScoreFieldLabel } from '@/utils/scoreTierMeta'
 import { ScoreBreakdownCard } from './ScoreBreakdownCard'
-
-const TIER_RANGE_LABELS: Record<ScoreTier, string> = {
-  A: '75–100 (strong fit)',
-  B: '60–74 (good fit)',
-  C: '40–59 (marginal)',
-  D: '0–39 (low priority)',
-}
-
-function fieldLabel(field: string): string {
-  return field
-    .split('_')
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-    .join(' ')
-}
 
 export interface CollapsibleLeadScoreProps {
   score: PropertyScoreRecord
@@ -57,6 +42,13 @@ export function CollapsibleLeadScore({ score, onViewFullBreakdown }: Collapsible
           '&:hover': { bgcolor: 'action.hover' },
         }}
         onClick={() => setExpanded((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setExpanded((v) => !v)
+          }
+        }}
+        tabIndex={0}
         role="button"
         aria-expanded={expanded}
         data-testid="collapsible-lead-score-toggle"
@@ -77,7 +69,7 @@ export function CollapsibleLeadScore({ score, onViewFullBreakdown }: Collapsible
             </Tooltip>
             {!expanded && topDrivers.length > 0 && (
               <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                {fieldLabel(topDrivers[0][0])} +{topDrivers[0][1]}
+                {formatScoreFieldLabel(topDrivers[0][0])} +{topDrivers[0][1]}
                 {topDrivers.length > 1 ? ` · +${topDrivers.length - 1} more` : ''}
               </Typography>
             )}

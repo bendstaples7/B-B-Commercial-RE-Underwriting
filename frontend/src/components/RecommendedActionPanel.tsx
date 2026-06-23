@@ -141,9 +141,9 @@ export function RecommendedActionPanel({
   const renderActionButton = (btn: ActionButton, testIdPrefix = 'ra-action-btn') => {
     const isDisabled = isDNC && btn.isOutreach === true
     const isLoading = pendingAction === btn.action
-    const title = btn.action === 'park'
+    const title = btn.title ?? (btn.action === 'park'
       ? 'Hide this lead from active queues until a future re-activation date'
-      : undefined
+      : undefined)
 
     return (
       <Button

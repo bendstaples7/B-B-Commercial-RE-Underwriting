@@ -120,7 +120,9 @@ class HubSpotDealSyncService:
         *,
         include_tasks: bool = True,
     ) -> dict[str, Any]:
-        """Refresh all confirmed deals for a lead and enrich from the first."""
+        """Refresh all confirmed deals for a lead; enrich lead fields from the newest deal."""
+        from app.models.hubspot_deal import HubSpotDeal
+
         matches = HubSpotMatch.query.filter_by(
             hubspot_record_type='deal',
             internal_record_type='lead',
@@ -130,14 +132,24 @@ class HubSpotDealSyncService:
         if not matches:
             return {'lead_id': lead_id, 'synced': False, 'reason': 'no_confirmed_deal'}
 
+        def _match_sort_key(match: HubSpotMatch) -> tuple:
+            deal = HubSpotDeal.query.filter_by(hubspot_id=match.hubspot_id).first()
+            updated = deal.last_updated_at if deal else None
+            return (updated or datetime.min.replace(tzinfo=None), match.hubspot_id)
+
+        ordered_matches = sorted(matches, key=_match_sort_key, reverse=True)
+
         labels = self.get_stage_label_map()
         all_enriched: list[str] = []
-        for match in matches:
+        enriched_primary = False
+        for match in ordered_matches:
             deal = self.refresh_deal_from_api(match.hubspot_id)
             if deal is None:
                 continue
-            result = self.enrich_confirmed_lead_for_deal(deal, stage_label_map=labels)
-            all_enriched.extend(result.get('enriched_fields') or [])
+            if not enriched_primary:
+                result = self.enrich_confirmed_lead_for_deal(deal, stage_label_map=labels)
+                all_enriched.extend(result.get('enriched_fields') or [])
+                enriched_primary = True
 
         task_sync: dict[str, Any] = {}
         if include_tasks:
@@ -317,7 +329,7 @@ class HubSpotDealSyncService:
                     continue
                 stats['deals_refreshed'] += 1
                 result = self.enrich_confirmed_lead_for_deal(deal, stage_label_map=labels)
-                if result.get('enriched_fields') is not None:
+                if result.get('enriched_fields'):
                     stats['leads_enriched'] += 1
                 lead_id = result.get('lead_id')
                 if lead_id and lead_id not in seen_lead_ids:
@@ -401,11 +413,10 @@ class HubSpotDealSyncService:
         """True when cached deal payload lacks deal_source/description from HubSpot."""
         if deal is None:
             return True
-        source, description = HubSpotDealSyncService.deal_context_from_payload(deal.raw_payload)
         props = (deal.raw_payload or {}).get('properties') or {}
         if any(key not in props for key in DEAL_CONTEXT_PROPERTY_KEYS):
             return True
-        return not source and not description
+        return False
 
     @staticmethod
     def enrich_lead_deal_context_if_needed(lead_id: int) -> bool:
@@ -492,7 +503,7 @@ class HubSpotDealSyncService:
         try:
             result = HubSpotDealSyncService().refresh_and_enrich_lead(
                 lead_id,
-                include_tasks=False,
+                include_tasks=True,
             )
             if result.get('synced'):
                 logger.info('Auto-synced HubSpot deal for lead_id=%s', lead_id)

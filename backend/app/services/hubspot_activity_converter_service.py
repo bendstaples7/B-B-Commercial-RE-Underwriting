@@ -353,6 +353,8 @@ class HubSpotActivityConverterService:
         due_date = self._parse_hubspot_due_date(props.get('hs_timestamp'))
         raw_payload = {'properties': props, 'id': hs_id}
 
+        from app.models.task_association import TaskAssociation
+
         task = Task.query.filter_by(hubspot_task_id=hs_id).first()
         if task is None:
             task = Task(
@@ -381,8 +383,23 @@ class HubSpotActivityConverterService:
             return 'created'
 
         old_status = task.status
+
+        association_added = False
+        if TaskAssociation.query.filter_by(
+            task_id=task.id,
+            target_type='lead',
+            target_id=lead_id,
+        ).first() is None:
+            db.session.add(TaskAssociation(
+                task_id=task.id,
+                target_type='lead',
+                target_id=lead_id,
+            ))
+            association_added = True
+
         changed = (
-            task.status != new_status
+            association_added
+            or task.status != new_status
             or task.title != title
             or task.body != body
             or task.due_date != due_date
@@ -446,6 +463,7 @@ class HubSpotActivityConverterService:
             try:
                 ActionEngineService.recompute_and_persist(lead_id)
             except Exception as exc:
+                db.session.rollback()
                 logger.warning(
                     "recompute_and_persist failed for lead_id=%s after task reconcile: %s",
                     lead_id,

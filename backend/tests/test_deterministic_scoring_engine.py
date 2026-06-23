@@ -508,3 +508,14 @@ class TestSaleDateAndYearsOwned:
         old_score.created_at = datetime(2020, 1, 1)
         old_score.score_details = {'property_type_fit': 0.0}
         assert self.engine.score_needs_refresh(lead, old_score) is True
+
+    def test_score_needs_refresh_false_for_future_acquisition_date(self):
+        from datetime import date, datetime
+        lead = _make_lead(
+            acquisition_date=date(2099, 1, 1),
+            updated_at=datetime.utcnow(),
+        )
+        old_score = MagicMock()
+        old_score.created_at = datetime.utcnow()
+        old_score.score_details = {'years_owned': 0.0}
+        assert self.engine.score_needs_refresh(lead, old_score) is False

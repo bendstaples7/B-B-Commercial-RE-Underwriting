@@ -81,16 +81,13 @@ if [ "$FREE_KB" -lt 1048576 ]; then
 fi
 echo "    disk space: ${FREE_KB}KB free (OK)"
 
-# Check memory headroom (2GB VPS + Redis/Celery often has <300MB MemAvailable; include swap)
+# Check memory (require at least 300MB MemAvailable — swap is not a substitute for RAM)
 FREE_MEM_KB=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
-SWAP_FREE_KB=$(awk '/SwapFree/ {print $2}' /proc/meminfo)
-HEADROOM_KB=$((FREE_MEM_KB + SWAP_FREE_KB))
-MIN_HEADROOM_KB=307200
-if [ "$HEADROOM_KB" -lt "$MIN_HEADROOM_KB" ]; then
-    echo "FAILED: Less than 300MB memory+swap headroom (${FREE_MEM_KB}KB RAM + ${SWAP_FREE_KB}KB swap free). VPS may be under memory pressure."
+if [ "$FREE_MEM_KB" -lt 307200 ]; then
+    echo "FAILED: Less than 300MB memory available (${FREE_MEM_KB}KB free). VPS may be under memory pressure."
     exit 1
 fi
-echo "    memory: ${FREE_MEM_KB}KB RAM + ${SWAP_FREE_KB}KB swap available (OK)"
+echo "    memory: ${FREE_MEM_KB}KB available (OK)"
 
 # ── Pre-deploy backup (blocks deploy on failure) ──────────────────────────────
 echo "==> (0) Pre-deploy backup"
