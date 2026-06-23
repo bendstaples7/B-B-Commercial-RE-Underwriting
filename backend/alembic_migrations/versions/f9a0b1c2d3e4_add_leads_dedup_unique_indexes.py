@@ -4,9 +4,11 @@ Revision ID: f9a0b1c2d3e4
 Revises: f8a9b0c1d2e3
 Create Date: 2026-06-22
 
-Requires no remaining owner+normalized_street duplicates. Run first:
+Requires no remaining owner+normalized_street duplicates. Run merge first
+(deploy.sh step 4a automates this on the VPS):
 
     python scripts/merge_duplicate_leads.py --mode dedup
+    flask db upgrade
 """
 
 from alembic import op

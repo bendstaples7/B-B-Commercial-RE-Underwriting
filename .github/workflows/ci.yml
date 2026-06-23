@@ -253,6 +253,9 @@ jobs:
         # interferes with the migration chain validation.
         run: PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE migration_test_db;"
 
+      - name: Create dedup migration gate test database
+        run: PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE migration_dedup_test_db;"
+
       - name: Validate migration chain (head + root count gate)
         # Runs before any schema change — fails fast if head_count != 1 or root_count != 1.
         # Reports the detected counts and each offending revision identifier so the
@@ -290,6 +293,22 @@ jobs:
         working-directory: backend
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migration_test_db
+          FLASK_ENV: testing
+          SECRET_KEY: ci-test-secret-key
+          JWT_SECRET_KEY: ci-test-jwt-secret
+          FLASK_APP: app
+          REDIS_URL: redis://localhost:6379/0
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          KIRO_MIGRATION: "1"
+
+      - name: Dedup migration gate regression (f9 blocked without merge)
+        # Production deploy failed when f9 ran against legacy duplicate clusters.
+        # CI fresh-DB upgrades never hit this — seed dupes at f8, assert f9 fails,
+        # merge, then assert f9 succeeds.
+        run: python scripts/ci_test_dedup_migration_gate.py
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migration_dedup_test_db
           FLASK_ENV: testing
           SECRET_KEY: ci-test-secret-key
           JWT_SECRET_KEY: ci-test-jwt-secret

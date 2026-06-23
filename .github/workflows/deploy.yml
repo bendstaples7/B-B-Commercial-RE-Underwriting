@@ -162,6 +162,28 @@ jobs:
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
             "chmod +x /home/deploy/deploy.sh && bash /home/deploy/deploy.sh '$TARGET_SHA'"
 
+      - name: Deploy failure diagnostics
+        if: failure()
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "=== Deploy failed — collecting VPS migration diagnostics ==="
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST bash -s <<'REMOTE'
+          set +e
+          cd /home/deploy/app/backend || cd /home/deploy/app/backend 2>/dev/null
+          if [ -f .env ]; then
+            set -a
+            # shellcheck source=/dev/null
+            source .env
+            set +a
+          fi
+          echo "--- Alembic revision ---"
+          FLASK_ENV=production flask db current 2>&1 || true
+          echo "--- Dedup preflight ---"
+          python scripts/preflight_dedup_migration.py --json 2>&1 || true
+          REMOTE
+
       # ── Step 6: Post-deploy health check + SHA verification ──────────────
       - name: Post-deploy health check
         env:
