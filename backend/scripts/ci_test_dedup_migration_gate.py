@@ -15,6 +15,7 @@ _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
+from app.services.lead_merge_utils import dedup_street_key  # noqa: E402
 from scripts.preflight_dedup_migration import (  # noqa: E402
     F8_REVISION,
     F9_REVISION,
@@ -104,13 +105,20 @@ def _seed_duplicate_leads(conn: sa.Connection) -> None:
         '107 South Grant',
     ]
     for street in streets:
+        street_key = dedup_street_key(street)
         conn.execute(sa.text("""
             INSERT INTO leads (
-                property_street, owner_first_name, owner_last_name, owner_user_id
+                property_street, normalized_street,
+                owner_first_name, owner_last_name, owner_user_id
             ) VALUES (
-                :street, '107 S Grant Street', 'LLC', :owner_user_id
+                :street, :normalized_street,
+                '107 S Grant Street', 'LLC', :owner_user_id
             )
-        """), {'street': street, 'owner_user_id': TEST_USER_ID})
+        """), {
+            'street': street,
+            'normalized_street': street_key,
+            'owner_user_id': TEST_USER_ID,
+        })
     conn.commit()
 
 

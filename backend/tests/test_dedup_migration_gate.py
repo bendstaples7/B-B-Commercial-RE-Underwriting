@@ -86,11 +86,16 @@ def _seed_duplicate_leads(db_url: str) -> None:
         for street in ('107 S Grant Street', '107 S Grant St', '107 South Grant'):
             conn.execute(sa.text("""
                 INSERT INTO leads (
-                    property_street, owner_first_name, owner_last_name, owner_user_id
+                    property_street, normalized_street,
+                    owner_first_name, owner_last_name, owner_user_id
                 ) VALUES (
-                    :street, '107 S Grant Street', 'LLC', 'test-dedup-user'
+                    :street, :normalized_street,
+                    '107 S Grant Street', 'LLC', 'test-dedup-user'
                 )
-            """), {'street': street})
+            """), {
+                'street': street,
+                'normalized_street': dedup_street_key(street),
+            })
         conn.commit()
     engine.dispose()
 
