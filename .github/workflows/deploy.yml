@@ -181,7 +181,7 @@ jobs:
           echo "--- Alembic revision ---"
           FLASK_ENV=production flask db current 2>&1 || true
           echo "--- Dedup preflight ---"
-          python scripts/preflight_dedup_migration.py --json 2>&1 || true
+          python3.11 scripts/preflight_dedup_migration.py --json 2>&1 || true
           REMOTE
 
       # ── Step 6: Post-deploy health check + SHA verification ──────────────

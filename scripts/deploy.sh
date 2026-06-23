@@ -184,18 +184,24 @@ FLASK_ENV=production flask db check 2>/dev/null || {
 echo "==> (4a) Pre-migration dedup cleanup"
 # Migration f9a0b1c2d3e4 requires zero owner+street duplicate clusters.
 # Production legacy data must be merged before the unique index is created.
-if python scripts/preflight_dedup_migration.py --f9-pending; then
+F9_PENDING_RC=0
+python3.11 scripts/preflight_dedup_migration.py --f9-pending || F9_PENDING_RC=$?
+if [ "$F9_PENDING_RC" -gt 1 ]; then
+    echo "FAILED: preflight_dedup_migration.py --f9-pending exited $F9_PENDING_RC"
+    exit 1
+fi
+if [ "$F9_PENDING_RC" -eq 0 ]; then
     echo "    f9 dedup index migration pending — running preflight"
-    python scripts/preflight_dedup_migration.py --report || true
-    if ! python scripts/preflight_dedup_migration.py --verify; then
+    python3.11 scripts/preflight_dedup_migration.py --report || true
+    if ! python3.11 scripts/preflight_dedup_migration.py --verify; then
         echo "    Duplicate clusters detected — running merge_duplicate_leads --mode dedup"
-        python scripts/merge_duplicate_leads.py --mode dedup || {
+        python3.11 scripts/merge_duplicate_leads.py --mode dedup || {
             echo "FAILED: dedup merge"
             exit 1
         }
-        python scripts/preflight_dedup_migration.py --verify || {
+        python3.11 scripts/preflight_dedup_migration.py --verify || {
             echo "FAILED: duplicate clusters remain after dedup merge"
-            python scripts/preflight_dedup_migration.py --report
+            python3.11 scripts/preflight_dedup_migration.py --report
             exit 1
         }
     else
