@@ -84,20 +84,37 @@ echo "    disk space: ${FREE_KB}KB free (OK)"
 # Check memory headroom before deploy.
 # Frontend is pre-built on CI; pip/migrations still need headroom on this 2GB VPS.
 # Require a hard RAM floor (OOM guard) plus total RAM+swap for deploy steps.
-FREE_MEM_KB=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
-SWAP_FREE_KB=$(awk '/SwapFree/ {print $2}' /proc/meminfo)
-HEADROOM_KB=$((FREE_MEM_KB + SWAP_FREE_KB))
+# After a heavy or interrupted deploy, RAM may be temporarily low — poll before failing.
 MIN_RAM_KB=153600       # 150MB — never deploy with critically low real memory
 MIN_HEADROOM_KB=307200    # 300MB RAM+swap combined
-if [ "$FREE_MEM_KB" -lt "$MIN_RAM_KB" ]; then
-    echo "FAILED: Less than 150MB RAM available (${FREE_MEM_KB}KB MemAvailable). VPS is critically low on memory."
+MEMORY_WAIT_ATTEMPTS=10   # 10 × 30s = 5 minutes max wait
+MEMORY_WAIT_SECS=30
+memory_ok=0
+for attempt in $(seq 1 "$MEMORY_WAIT_ATTEMPTS"); do
+    FREE_MEM_KB=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
+    SWAP_FREE_KB=$(awk '/SwapFree/ {print $2}' /proc/meminfo)
+    HEADROOM_KB=$((FREE_MEM_KB + SWAP_FREE_KB))
+    if [ "$FREE_MEM_KB" -ge "$MIN_RAM_KB" ] && [ "$HEADROOM_KB" -ge "$MIN_HEADROOM_KB" ]; then
+        memory_ok=1
+        echo "    memory: ${FREE_MEM_KB}KB RAM + ${SWAP_FREE_KB}KB swap available (OK)"
+        break
+    fi
+    echo "    memory attempt ${attempt}/${MEMORY_WAIT_ATTEMPTS}: ${FREE_MEM_KB}KB RAM + ${SWAP_FREE_KB}KB swap — waiting ${MEMORY_WAIT_SECS}s..."
+    if [ "$attempt" -lt "$MEMORY_WAIT_ATTEMPTS" ]; then
+        sleep "$MEMORY_WAIT_SECS"
+    fi
+done
+if [ "$memory_ok" -eq 0 ]; then
+    FREE_MEM_KB=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
+    SWAP_FREE_KB=$(awk '/SwapFree/ {print $2}' /proc/meminfo)
+    HEADROOM_KB=$((FREE_MEM_KB + SWAP_FREE_KB))
+    if [ "$FREE_MEM_KB" -lt "$MIN_RAM_KB" ]; then
+        echo "FAILED: Less than 150MB RAM available (${FREE_MEM_KB}KB MemAvailable) after ${MEMORY_WAIT_ATTEMPTS} attempts."
+        exit 1
+    fi
+    echo "FAILED: Less than 300MB memory+swap headroom (${FREE_MEM_KB}KB RAM + ${SWAP_FREE_KB}KB swap) after ${MEMORY_WAIT_ATTEMPTS} attempts."
     exit 1
 fi
-if [ "$HEADROOM_KB" -lt "$MIN_HEADROOM_KB" ]; then
-    echo "FAILED: Less than 300MB memory+swap headroom (${FREE_MEM_KB}KB RAM + ${SWAP_FREE_KB}KB swap free). VPS may be under memory pressure."
-    exit 1
-fi
-echo "    memory: ${FREE_MEM_KB}KB RAM + ${SWAP_FREE_KB}KB swap available (OK)"
 
 # ── Pre-deploy backup (blocks deploy on failure) ──────────────────────────────
 echo "==> (0) Pre-deploy backup"
@@ -280,18 +297,18 @@ fi
 verify_async_stack_services || exit 1
 echo "    async stack verified"
 
-echo "==> (8) Post-deploy HubSpot data sync (matching → enrich → rescore)"
+echo "==> (8) Post-deploy HubSpot sync dispatch (non-blocking)"
 cd backend
 set -a
 # shellcheck source=/dev/null
 source .env
 set +a
 FLASK_ENV=production python3.11 scripts/post_deploy_sync.py || {
-    echo "FAILED: post_deploy_sync.py — HubSpot data sync did not complete"
+    echo "FAILED: post_deploy_sync.py — could not dispatch HubSpot sync"
     exit 1
 }
 cd ..
-echo "    Post-deploy HubSpot sync complete"
+echo "    Post-deploy HubSpot sync dispatched (runs via Celery or subprocess)"
 
 echo "==> Deploy complete: $TARGET_SHA"
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Deploy successful: $PREVIOUS_SHA -> $TARGET_SHA" >> "$ROLLBACK_LOG"

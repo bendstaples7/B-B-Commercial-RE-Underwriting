@@ -65,6 +65,14 @@ jobs:
           mkdir -p ~/.ssh
           echo "$VPS_SSH_KEY" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
+          cat >> ~/.ssh/config <<'EOF'
+          Host *
+            IdentityFile ~/.ssh/id_deploy
+            ServerAliveInterval 30
+            ServerAliveCountMax 20
+            TCPKeepAlive yes
+          EOF
+          chmod 600 ~/.ssh/config
 
       # ── Step 3: Add VPS to known hosts ────────────────────────────────────
       - name: Add VPS to known hosts
@@ -158,8 +166,12 @@ jobs:
             || { echo "ERROR: backup.sh --check failed — PostgreSQL connectivity issue. Check /home/deploy/logs/backup.log on VPS."; exit 1; }
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "rm -rf /home/deploy/frontend-dist"
           scp -i ~/.ssh/id_deploy -r frontend/dist $VPS_USER@$VPS_HOST:/home/deploy/frontend-dist
-          # Run deploy script
-          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
+          # Run deploy script (keepalive in ~/.ssh/config; explicit opts on long session)
+          ssh -i ~/.ssh/id_deploy \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            -o TCPKeepAlive=yes \
+            $VPS_USER@$VPS_HOST \
             "chmod +x /home/deploy/deploy.sh && bash /home/deploy/deploy.sh '$TARGET_SHA'"
 
       - name: Deploy failure diagnostics
