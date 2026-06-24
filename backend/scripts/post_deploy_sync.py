@@ -58,6 +58,7 @@ def dispatch_post_deploy_sync(app) -> str:
 
 
 def main() -> int:
+    """Create app, dispatch post-deploy sync, and return process exit code."""
     backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if backend_dir not in sys.path:
         sys.path.insert(0, backend_dir)

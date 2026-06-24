@@ -128,6 +128,10 @@ def main() -> int:
             errors.append(
                 "post_deploy_sync.py must use dispatch_post_import_pipeline"
             )
+    else:
+        errors.append(
+            "Missing expected script: backend/scripts/post_deploy_sync.py"
+        )
     if "Post-deploy HubSpot sync dispatched" not in deploy_text:
         errors.append(
             "deploy.sh step 8 must log non-blocking dispatch "
