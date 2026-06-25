@@ -67,6 +67,8 @@ _KNOWN_REVISIONS = frozenset({
     'g1h2i3j4k5l6',
     # email_logged timeline event type — outbound email activity logs
     'h2i3j4k5l6m7',
+    # backfill relational contacts from legacy flat phone_1..7 / email_1..5
+    'i3j4k5l6m7n8',
 })
 
 
