@@ -12,6 +12,7 @@ import {
   CircularProgress,
   Collapse,
   Divider,
+  IconButton,
   List,
   ListItem,
   ListItemAvatar,
@@ -197,7 +198,7 @@ export function buildTimelineDetailRows(entry: LeadTimelineEntry): TimelineDetai
 
   if (entry.event_type === 'note_added') {
     const body = getFullNoteBody(entry)
-    if (body) {
+    if (body && body.length > SUMMARY_COLLAPSE_THRESHOLD) {
       rows.push({ label: 'Note', value: body })
     }
     return rows
@@ -307,7 +308,8 @@ function TimelineEntryRow({ entry, highlighted = false }: TimelineEntryRowProps)
 
   const previewText = hasExpandableDetails ? getPreviewText(entry) : summaryText
 
-  const handleToggleDetails = () => {
+  const handleToggleDetails = (event: React.MouseEvent | React.KeyboardEvent) => {
+    event.stopPropagation()
     if (hasExpandableDetails) {
       setDetailsExpanded((v) => !v)
     }
@@ -317,15 +319,10 @@ function TimelineEntryRow({ entry, highlighted = false }: TimelineEntryRowProps)
     <ListItem
       alignItems="flex-start"
       data-testid={`timeline-entry-${entry.id}`}
-      onClick={hasExpandableDetails ? handleToggleDetails : undefined}
       sx={{
         px: 0,
         borderRadius: 1,
         transition: 'background-color 0.3s ease',
-        ...(hasExpandableDetails && {
-          cursor: 'pointer',
-          '&:hover': { bgcolor: 'action.hover' },
-        }),
         ...(highlighted && {
           bgcolor: 'success.light',
           animation: 'timelineHighlightFade 2s ease-out forwards',
@@ -373,17 +370,20 @@ function TimelineEntryRow({ entry, highlighted = false }: TimelineEntryRowProps)
               />
             )}
             {hasExpandableDetails && (
-              <Box
-                component="span"
+              <IconButton
+                size="small"
+                onClick={handleToggleDetails}
+                aria-expanded={detailsExpanded}
+                aria-label={detailsExpanded ? 'Hide details' : 'Show details'}
                 data-testid={`entry-details-toggle-${entry.id}`}
-                sx={{ display: 'inline-flex', alignItems: 'center', color: 'text.secondary', ml: 'auto' }}
+                sx={{ ml: 'auto', color: 'text.secondary' }}
               >
                 {detailsExpanded ? (
-                  <ExpandLessIcon fontSize="small" aria-hidden />
+                  <ExpandLessIcon fontSize="small" />
                 ) : (
-                  <ExpandMoreIcon fontSize="small" aria-hidden />
+                  <ExpandMoreIcon fontSize="small" />
                 )}
-              </Box>
+              </IconButton>
             )}
           </Stack>
         }

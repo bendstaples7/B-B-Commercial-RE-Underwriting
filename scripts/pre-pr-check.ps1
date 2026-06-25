@@ -24,7 +24,7 @@ function Stop-PortListener {
 function Wait-ForPort {
     param([int]$Port, [string]$Label)
     for ($i = 0; $i -lt 60; $i++) {
-        if (Test-NetConnection -ComputerName 127.0.0.1 -Port $Port -WarningAction SilentlyContinue).TcpTestSucceeded {
+        if ((Test-NetConnection -ComputerName 127.0.0.1 -Port $Port -WarningAction SilentlyContinue).TcpTestSucceeded) {
             Write-Host "$Label listening on :$Port" -ForegroundColor Green
             return
         }
@@ -71,7 +71,7 @@ try {
 
         Set-Location (Join-Path $Root "backend")
         $backendChanged = $mapJson.changed | Where-Object { $_ -like "backend/*" }
-        if ($mapJson.backend.Count -gt 0 -and $mapJson.backend -ne @("tests/")) {
+        if ($mapJson.backend.Count -gt 0 -and -not ($mapJson.backend.Count -eq 1 -and $mapJson.backend[0] -eq "tests/")) {
             Write-Host "pytest $($mapJson.backend -join ' ')" -ForegroundColor Yellow
             pytest -m "not performance" @($mapJson.backend)
         }

@@ -34,17 +34,11 @@ MAX_HANDLE_ERRORS_COPIES = 29
 API_TS_MAX_LINES = 1600
 
 ROUTE_RE = re.compile(
-    r"@\w+\.route\(\s*['\"]([^'\"]+)['\"].*?methods\s*=\s*\[(.*?)\]",
+    r"@\w+\.route\(\s*['\"]([^'\"]+)['\"](?:.*?methods\s*=\s*\[(.*?)\])?",
     re.DOTALL,
 )
 METHOD_RE = re.compile(r"['\"](\w+)['\"]")
-LEAD_SCORE_ASSIGN_RE = re.compile(r"\blead\.lead_score\s*=")
-
-# Full-path routes that must not be registered twice (method, path pattern).
-# Blueprint-prefixed routes like GET '/' on /api/tasks vs /api/interactions are OK.
-FORBIDDEN_ROUTE_COLLISIONS = [
-    ("GET", "/api/leads/<int:lead_id>/timeline"),
-]
+LEAD_SCORE_ASSIGN_RE = re.compile(r"\blead\.lead_score\s*(?:[-+*/]=|(?!=)=)")
 
 
 def _fail(errors: list[str]) -> None:
@@ -75,7 +69,8 @@ def check_duplicate_routes() -> list[str]:
             route_path = match.group(1)
             if not route_path.startswith("/api/"):
                 continue
-            methods = METHOD_RE.findall(match.group(2))
+            methods_raw = match.group(2)
+            methods = METHOD_RE.findall(methods_raw) if methods_raw else ["GET"]
             for method in methods:
                 key = (method.upper(), route_path)
                 if key in seen:
@@ -85,14 +80,6 @@ def check_duplicate_routes() -> list[str]:
                     )
                 else:
                     seen[key] = rel
-
-    for method, route_path in FORBIDDEN_ROUTE_COLLISIONS:
-        count = sum(1 for (m, p), _ in seen.items() if m == method and p == route_path)
-        if count > 1:
-            errors.append(
-                f"Forbidden duplicate route {method} {route_path!r} "
-                f"registered {count} times"
-            )
 
     return errors
 

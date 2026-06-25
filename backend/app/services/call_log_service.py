@@ -46,6 +46,50 @@ def _validate_contact_for_lead(lead_id: int, contact_id: int | None) -> None:
         )
 
 
+def _validate_contact_phone_for_lead(
+    lead_id: int,
+    contact_id: int | None,
+    contact_phone_id: int | None,
+) -> None:
+    if contact_phone_id is None:
+        return
+    from app.models.contact_phone import ContactPhone
+    phone = ContactPhone.query.get(contact_phone_id)
+    if phone is None:
+        raise LeadTaskValidationError(
+            f"Contact phone {contact_phone_id} not found.",
+            field='contact_phone_id',
+        )
+    if contact_id is not None and phone.contact_id != contact_id:
+        raise LeadTaskValidationError(
+            f"Contact phone {contact_phone_id} does not belong to contact {contact_id}.",
+            field='contact_phone_id',
+        )
+    _validate_contact_for_lead(lead_id, phone.contact_id)
+
+
+def _validate_contact_email_for_lead(
+    lead_id: int,
+    contact_id: int | None,
+    contact_email_id: int | None,
+) -> None:
+    if contact_email_id is None:
+        return
+    from app.models.contact_email import ContactEmail
+    email = ContactEmail.query.get(contact_email_id)
+    if email is None:
+        raise LeadTaskValidationError(
+            f"Contact email {contact_email_id} not found.",
+            field='contact_email_id',
+        )
+    if contact_id is not None and email.contact_id != contact_id:
+        raise LeadTaskValidationError(
+            f"Contact email {contact_email_id} does not belong to contact {contact_id}.",
+            field='contact_email_id',
+        )
+    _validate_contact_for_lead(lead_id, email.contact_id)
+
+
 def _resolve_contact_name(lead_id: int, contact_id: int | None) -> str | None:
     if contact_id is None:
         return None
@@ -154,6 +198,7 @@ class CallLogService:
             raise DoNotContactViolationError(lead_id)
 
         _validate_contact_for_lead(lead_id, contact_id)
+        _validate_contact_phone_for_lead(lead_id, contact_id, contact_phone_id)
         contact_name = _resolve_contact_name(lead_id, contact_id)
 
         if outcome == 'answered':
@@ -242,10 +287,11 @@ class CallLogService:
             raise DoNotContactViolationError(lead_id)
 
         _validate_contact_for_lead(lead_id, contact_id)
+        _validate_contact_email_for_lead(lead_id, contact_id, contact_email_id)
         contact_name = _resolve_contact_name(lead_id, contact_id)
 
         has_email_context = any([
-            contact_id, contact_email_id, email_address, email_label, subject,
+            contact_email_id, email_address, email_label, subject,
         ])
         if has_email_context or body.strip().startswith('[Email]'):
             summary = _build_email_summary(body, subject, contact_name, email_address, email_label)

@@ -552,7 +552,7 @@ describe('LeadTimeline', () => {
 
       expect(screen.queryByTestId('entry-details-1')).not.toBeVisible()
 
-      await user.click(screen.getByTestId('timeline-entry-1'))
+      await user.click(screen.getByTestId('entry-details-toggle-1'))
 
       expect(screen.getByTestId('entry-details-1')).toBeVisible()
       expect(screen.getByTestId('entry-detail-value-1-outcome')).toHaveTextContent('answered')
@@ -585,7 +585,7 @@ describe('LeadTimeline', () => {
         />,
       )
 
-      await user.click(screen.getByTestId('timeline-entry-1'))
+      await user.click(screen.getByTestId('entry-details-toggle-1'))
 
       expect(screen.getByTestId('entry-event-type-1')).toHaveTextContent('Email Logged')
       expect(screen.getByTestId('entry-detail-value-1-subject')).toHaveTextContent('Follow up')
@@ -612,7 +612,7 @@ describe('LeadTimeline', () => {
         />,
       )
 
-      await user.click(screen.getByTestId('timeline-entry-1'))
+      await user.click(screen.getByTestId('entry-details-toggle-1'))
 
       expect(screen.getByTestId('entry-detail-value-1-note')).toHaveTextContent(longNote)
     })
@@ -632,10 +632,10 @@ describe('LeadTimeline', () => {
         />,
       )
 
-      await user.click(screen.getByTestId('timeline-entry-1'))
+      await user.click(screen.getByTestId('entry-details-toggle-1'))
       expect(screen.getByTestId('entry-details-1')).toBeVisible()
 
-      await user.click(screen.getByTestId('timeline-entry-1'))
+      await user.click(screen.getByTestId('entry-details-toggle-1'))
       await waitFor(() => {
         expect(screen.getByTestId('entry-detail-value-1-outcome')).not.toBeVisible()
       })
