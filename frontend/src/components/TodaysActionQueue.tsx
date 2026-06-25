@@ -9,22 +9,24 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Box, Link, Typography } from '@mui/material'
-import PhoneIcon from '@mui/icons-material/Phone'
-import NoteIcon from '@mui/icons-material/Note'
-import AddTaskIcon from '@mui/icons-material/AddTask'
-import { Link as RouterLink } from 'react-router-dom'
+import { Link as RouterLink, useNavigate } from 'react-router-dom'
 import { QueueTable } from './QueueTable'
 import type { RowAction } from './QueueTable'
+import { queueService } from '@/services/api'
 import {
-  queueService,
-  callLogService,
-  leadTaskService,
-} from '@/services/api'
-import type { QueueRow } from '@/types'
+  createCreateTaskRowAction,
+  createLogCallRowAction,
+  createLogNoteRowAction,
+} from './queueRowActions'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 
-export function TodaysActionQueue() {
+export interface TodaysActionQueueProps {
+  extraQueryKeys?: string[]
+}
+
+export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {}) {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [page, setPage] = useState(1)
 
   const { data } = useQuery({
@@ -44,37 +46,18 @@ export function TodaysActionQueue() {
   const overdueCount = rows.filter((r) => r.follow_up_overdue).length
   const followUpNowCount = rows.filter((r) => r.recommended_action === 'follow_up_now').length
 
+  const navigateOptions = { navigate }
+  const taskOptions = {
+    queryClient,
+    queryKey: 'queue-todays-action',
+    extraQueryKeys,
+    onAfterAction: () => setPage(1),
+  }
+
   const rowActions: RowAction[] = [
-    {
-      label: 'Log Call',
-      icon: <PhoneIcon fontSize="small" />,
-      testId: 'action-log-call',
-      onClick: async (row: QueueRow) => {
-        await callLogService.logCall(row.id, { outcome: 'answered' })
-        queryClient.invalidateQueries({ queryKey: ['queue-todays-action'] })
-        setPage(1)
-      },
-    },
-    {
-      label: 'Log Note',
-      icon: <NoteIcon fontSize="small" />,
-      testId: 'action-log-note',
-      onClick: async (row: QueueRow) => {
-        await callLogService.logNote(row.id, { body: '' })
-        queryClient.invalidateQueries({ queryKey: ['queue-todays-action'] })
-        setPage(1)
-      },
-    },
-    {
-      label: 'Create Task',
-      icon: <AddTaskIcon fontSize="small" />,
-      testId: 'action-create-task',
-      onClick: async (row: QueueRow) => {
-        await leadTaskService.createTask(row.id, { title: 'Follow up', task_type: 'call_owner_today' })
-        queryClient.invalidateQueries({ queryKey: ['queue-todays-action'] })
-        setPage(1)
-      },
-    },
+    createLogCallRowAction(navigateOptions),
+    createLogNoteRowAction(navigateOptions),
+    createCreateTaskRowAction(taskOptions),
   ]
 
   return (
@@ -83,7 +66,6 @@ export function TodaysActionQueue() {
         Today's Action
       </Typography>
 
-      {/* Summary header */}
       <Box sx={{ display: 'flex', gap: 3, mb: 2 }}>
         <Typography variant="body2" color="text.secondary">
           Total: <strong>{total}</strong>
@@ -96,7 +78,6 @@ export function TodaysActionQueue() {
         </Typography>
       </Box>
 
-      {/* Empty state */}
       {rows.length === 0 && total === 0 ? (
         <Box sx={{ py: 4, textAlign: 'center' }} data-testid="todays-action-empty">
           <Typography variant="body1" color="text.secondary" gutterBottom>

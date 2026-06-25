@@ -199,99 +199,33 @@ def suppressed_lead(app):
 
 
 # ---------------------------------------------------------------------------
-# Contract tests — GET /api/properties/views/*
+# Contract tests — GET /api/properties/views/* (deprecated → queue redirects)
 # ---------------------------------------------------------------------------
 
-class TestLeadViewApiContract:
-    """Verify that all lead view endpoints return correctly-shaped responses."""
+class TestLeadViewApiRedirects:
+    """Legacy property view endpoints redirect to canonical queue API."""
 
-    def test_previously_warm_view_shape(self, client, warm_lead):
-        """GET /api/properties/views/previously-warm returns valid lead shapes."""
-        response = client.get(
-            '/api/properties/views/previously-warm',
-            headers={'X-User-Id': 'test-user'},
-        )
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        assert 'leads' in data
-        assert isinstance(data['leads'], list)
-        for lead in data['leads']:
-            _assert_lead_shape(lead, is_list_response=True)
+    VIEW_TO_QUEUE = [
+        ('/api/properties/views/previously-warm', '/api/queues/previously-warm'),
+        ('/api/properties/views/needs-review', '/api/queues/needs-review'),
+        ('/api/properties/views/follow-up-overdue', '/api/queues/follow-up-overdue'),
+        ('/api/properties/views/no-next-action', '/api/queues/no-next-action'),
+        ('/api/properties/views/do-not-contact', '/api/queues/do-not-contact'),
+        ('/api/properties/views/missing-property-match', '/api/queues/missing-property-match'),
+    ]
 
-    def test_previously_warm_view_includes_warm_lead(self, client, warm_lead):
-        """The previously-warm view includes leads with warm signals."""
-        response = client.get(
-            '/api/properties/views/previously-warm',
-            headers={'X-User-Id': 'test-user'},
-        )
-        data = json.loads(response.data)
-        lead_ids = [l['id'] for l in data['leads']]
-        assert warm_lead in lead_ids, \
-            f"Expected warm_lead id={warm_lead} in results, got {lead_ids}"
+    @pytest.mark.parametrize('view_path,queue_path', VIEW_TO_QUEUE)
+    def test_property_view_redirects_to_queue(self, client, view_path, queue_path):
+        response = client.get(view_path, headers={'X-User-Id': 'test-user'})
+        assert response.status_code == 301
+        assert queue_path in response.location
 
-    def test_do_not_contact_view_shape(self, client, suppressed_lead):
-        """GET /api/properties/views/do-not-contact returns valid lead shapes."""
-        response = client.get('/api/properties/views/do-not-contact')
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        assert 'leads' in data
-        for lead in data['leads']:
-            _assert_lead_shape(lead, is_list_response=True)
-
-    def test_follow_up_overdue_view_shape(self, client, app):
-        """GET /api/properties/views/follow-up-overdue returns valid lead shapes."""
-        with app.app_context():
-            from datetime import datetime, timedelta
-            lead = _seed_lead(
-                property_street='222 Overdue St',
-                lead_score=55.0,
-                lead_category='residential',
-                mailer_history='Test mailer',
-            )
-            task = Task(
-                title='Follow up',
-                status='overdue',
-                source='manual',
-                due_date=datetime.utcnow() - timedelta(days=3),
-            )
-            db.session.add(task)
-            db.session.flush()
-            db.session.add(TaskAssociation(
-                task_id=task.id,
-                target_type='lead',
-                target_id=lead.id,
-            ))
-            db.session.commit()
-
-        response = client.get('/api/properties/views/follow-up-overdue')
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        for lead in data['leads']:
-            _assert_lead_shape(lead, is_list_response=True)
-
-    def test_needs_review_view_shape(self, client, app):
-        """GET /api/properties/views/needs-review returns valid lead shapes."""
-        response = client.get('/api/properties/views/needs-review')
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        for lead in data['leads']:
-            _assert_lead_shape(lead, is_list_response=True)
-
-    def test_no_next_action_view_shape(self, client, app):
-        """GET /api/properties/views/no-next-action returns valid lead shapes."""
-        response = client.get('/api/properties/views/no-next-action')
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        for lead in data['leads']:
-            _assert_lead_shape(lead, is_list_response=True)
-
-    def test_missing_property_match_view_shape(self, client, app):
-        """GET /api/properties/views/missing-property-match returns valid lead shapes."""
-        response = client.get('/api/properties/views/missing-property-match')
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        for lead in data['leads']:
-            _assert_lead_shape(lead, is_list_response=True)
+    @pytest.mark.parametrize('view_path,queue_path', VIEW_TO_QUEUE)
+    def test_legacy_leads_view_redirects_to_queue(self, client, view_path, queue_path):
+        legacy_path = view_path.replace('/api/properties/', '/api/leads/')
+        response = client.get(legacy_path, headers={'X-User-Id': 'test-user'})
+        assert response.status_code == 301
+        assert queue_path in response.location
 
     def test_mailer_history_string_does_not_break_view(
         self, client, lead_with_string_mailer_history

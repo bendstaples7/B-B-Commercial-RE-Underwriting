@@ -17,21 +17,23 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
 import { NoNextActionQueue } from './NoNextActionQueue'
-import { queueService, callLogService, commandCenterService } from '@/services/api'
+import { queueService, commandCenterService } from '@/services/api'
 import type { LeadStatus } from '@/types'
-
-// ---------------------------------------------------------------------------
-// Mocks
-// ---------------------------------------------------------------------------
 
 vi.mock('@/services/api', () => ({
   queueService: { getNoNextAction: vi.fn() },
-  callLogService: { logNote: vi.fn() },
   commandCenterService: { suppress: vi.fn() },
 }))
 
-// Mock window.prompt to return a value by default
-vi.stubGlobal('prompt', vi.fn().mockReturnValue('test note'))
+const mockNavigate = vi.fn()
+
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  }
+})
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -88,7 +90,6 @@ function renderComponent() {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(queueService.getNoNextAction).mockResolvedValue(makeQueuePage(20))
-  vi.mocked(callLogService.logNote).mockResolvedValue(undefined as any)
   vi.mocked(commandCenterService.suppress).mockResolvedValue(undefined as any)
 })
 
@@ -334,23 +335,17 @@ describe('P5: Successful row action resets page to 1', () => {
 // ---------------------------------------------------------------------------
 
 describe('P6: Failed row action leaves page unchanged', () => {
-  it('page remains unchanged after a failed Log Note action', async () => {
-    // Validates: Requirements 4.2
+  it('page remains unchanged after Log Note navigates away without resetting pagination', async () => {
     await fc.assert(
       fc.asyncProperty(
         fc.integer({ min: 2, max: 5 }),
         async (initialPage) => {
           vi.clearAllMocks()
 
-          // Enough total rows that initialPage is reachable
           const total = initialPage * 20 + 1
           vi.mocked(queueService.getNoNextAction).mockResolvedValue(
             makeQueuePage(total)
           )
-          // Log Note will fail
-          vi.mocked(callLogService.logNote).mockRejectedValue(new Error('Log note failed'))
-          // Make prompt return a value so the action proceeds past the prompt check
-          vi.mocked(window.prompt).mockReturnValue('test note')
 
           const queryClient = new QueryClient({
             defaultOptions: { queries: { retry: false } },
@@ -365,33 +360,23 @@ describe('P6: Failed row action leaves page unchanged', () => {
 
           const user = userEvent.setup({ pointerEventsCheck: 0 })
 
-          // Wait for pagination
           await waitFor(() => {
             expect(screen.getByTestId('queue-pagination')).toBeInTheDocument()
           })
 
-          // Navigate to initialPage
           await user.click(
             screen.getByRole('button', { name: new RegExp(`page ${initialPage}`, 'i') })
           )
 
-          // Verify we're on the correct page via the page label
           await waitFor(() => {
             expect(screen.getByTestId('queue-page-label')).toHaveTextContent(
               `Page ${initialPage} of`
             )
           })
 
-          // Trigger Log Note (will fail)
           await user.click(screen.getByTestId('action-log-note'))
 
-          // Wait for the error to appear (confirms the action completed/failed)
-          await waitFor(() => {
-            expect(screen.getByTestId('row-error-1')).toBeInTheDocument()
-          })
-
-          // After a failed action, the page label should STILL show initialPage
-          // (not reset to page 1)
+          expect(mockNavigate).toHaveBeenCalledWith('/leads/1?log=note')
           expect(screen.getByTestId('queue-page-label')).toHaveTextContent(
             `Page ${initialPage} of`
           )
@@ -402,44 +387,5 @@ describe('P6: Failed row action leaves page unchanged', () => {
       { numRuns: 20, timeout: 30000 }
     )
   }, 60000)
-
-  it('page=1 stays at 1 after a failed Log Note action (boundary: page=1)', async () => {
-    // Validates: Requirements 4.2 — page=1 is a valid starting point
-    // Explicitly set the mock for this test (don't rely on beforeEach after PBT cleanup)
-    vi.mocked(queueService.getNoNextAction).mockResolvedValue(makeQueuePage(41))
-    vi.mocked(callLogService.logNote).mockRejectedValue(new Error('Log note failed'))
-    vi.mocked(window.prompt).mockReturnValue('test note')
-
-    renderComponent()
-
-    // Wait for data to load and the action button to appear
-    await waitFor(() => {
-      expect(screen.getByTestId('action-log-note')).toBeInTheDocument()
-    })
-
-    // Verify we're on page 1
-    await waitFor(() => {
-      expect(queueService.getNoNextAction).toHaveBeenCalledWith(1, 20)
-    })
-
-    vi.mocked(queueService.getNoNextAction).mockClear()
-
-    const user = userEvent.setup({ pointerEventsCheck: 0 })
-    await user.click(screen.getByTestId('action-log-note'))
-
-    // Wait for error to be handled
-    await waitFor(() => {
-      expect(screen.getByTestId('row-error-1')).toBeInTheDocument()
-    })
-
-    // Should not have called getNoNextAction with page=1 as a "reset" call
-    // (in this case it might not be called at all since the action failed)
-    const calls = vi.mocked(queueService.getNoNextAction).mock.calls
-    // If called, it should only be from a background refetch at page=1 (unchanged)
-    // The point is: page was 1, stayed at 1, no "reset to page 1" side-effect needed
-    calls.forEach(([page]) => {
-      expect(page).toBe(1)
-    })
-  })
 })
 

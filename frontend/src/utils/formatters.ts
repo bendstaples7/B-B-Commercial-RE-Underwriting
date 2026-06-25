@@ -1,0 +1,60 @@
+export function formatDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return '—'
+  try {
+    return new Date(dateStr).toLocaleDateString()
+  } catch {
+    return '—'
+  }
+}
+
+export function formatDateTime(dateStr: string | null | undefined): string {
+  if (!dateStr) return '—'
+  try {
+    return new Date(dateStr).toLocaleString()
+  } catch {
+    return '—'
+  }
+}
+
+export function humanize(snake: string): string {
+  return snake
+    .split('_')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ')
+}
+
+export function outreachStatusLabel(status: string): string {
+  return humanize(status)
+}
+
+export function getEnrichmentStatusColor(
+  status: string,
+): 'success' | 'error' | 'warning' | 'default' {
+  switch (status) {
+    case 'success':
+      return 'success'
+    case 'failed':
+      return 'error'
+    case 'pending':
+      return 'warning'
+    default:
+      return 'default'
+  }
+}
+
+export function getOutreachStatusColor(
+  status: string,
+): 'success' | 'info' | 'warning' | 'error' | 'default' {
+  switch (status) {
+    case 'converted':
+      return 'success'
+    case 'responded':
+      return 'info'
+    case 'contacted':
+      return 'warning'
+    case 'opted_out':
+      return 'error'
+    default:
+      return 'default'
+  }
+}

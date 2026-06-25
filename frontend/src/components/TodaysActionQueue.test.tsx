@@ -2,24 +2,25 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { TodaysActionQueue } from './TodaysActionQueue'
-import { queueService, callLogService } from '@/services/api'
+import { queueService, leadTaskService } from '@/services/api'
 import type { LeadStatus } from '@/types'
-
-// ---------------------------------------------------------------------------
-// Mocks
-// ---------------------------------------------------------------------------
 
 vi.mock('@/services/api', () => ({
   queueService: { getTodaysAction: vi.fn() },
-  callLogService: { logCall: vi.fn(), logNote: vi.fn() },
   leadTaskService: { createTask: vi.fn() },
 }))
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+const mockNavigate = vi.fn()
+
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  }
+})
 
 function makeQueuePage(total: number, perPage = 20, page = 1) {
   return {
@@ -62,8 +63,10 @@ function renderComponent() {
   })
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <TodaysActionQueue />
+      <MemoryRouter initialEntries={['/queues/todays-action']}>
+        <Routes>
+          <Route path="/queues/todays-action" element={<TodaysActionQueue />} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>
   )
@@ -72,10 +75,6 @@ function renderComponent() {
 beforeEach(() => {
   vi.clearAllMocks()
 })
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 describe('TodaysActionQueue', () => {
   it('fetches with page=1 on mount', async () => {
@@ -89,7 +88,6 @@ describe('TodaysActionQueue', () => {
   })
 
   it('renders pagination controls when total > per_page', async () => {
-    // 41 leads with per_page=20 → 3 pages → pagination should appear
     vi.mocked(queueService.getTodaysAction).mockResolvedValue(makeQueuePage(41, 20))
 
     renderComponent()
@@ -100,12 +98,10 @@ describe('TodaysActionQueue', () => {
   })
 
   it('does not render pagination when total <= per_page', async () => {
-    // 15 leads with per_page=20 → 1 page → no pagination
     vi.mocked(queueService.getTodaysAction).mockResolvedValue(makeQueuePage(15, 20))
 
     renderComponent()
 
-    // Wait for the table to appear first so we know data loaded
     await waitFor(() => {
       expect(screen.getByTestId('queue-table')).toBeInTheDocument()
     })
@@ -125,63 +121,58 @@ describe('TodaysActionQueue', () => {
     expect(screen.queryByTestId('queue-table')).not.toBeInTheDocument()
   })
 
-  it('successful Log Call action eventually refetches with page=1', async () => {
+  it('Log Call navigates to lead detail with log=call deep link', async () => {
     const user = userEvent.setup()
-
-    // First call returns 2 pages so pagination is visible
-    vi.mocked(queueService.getTodaysAction).mockResolvedValue(makeQueuePage(41, 20))
-    vi.mocked(callLogService.logCall).mockResolvedValue(undefined as any)
+    vi.mocked(queueService.getTodaysAction).mockResolvedValue(makeQueuePage(5))
 
     renderComponent()
 
-    // Wait for the data to load and the action button to appear
     await waitFor(() => {
       expect(screen.getByTestId('action-log-call')).toBeInTheDocument()
     })
 
-    // Clear the call count so we can check fresh calls after the action
+    await user.click(screen.getByTestId('action-log-call'))
+
+    expect(mockNavigate).toHaveBeenCalledWith('/leads/1?log=call')
+  })
+
+  it('Log Note navigates to lead detail with log=note deep link', async () => {
+    const user = userEvent.setup()
+    vi.mocked(queueService.getTodaysAction).mockResolvedValue(makeQueuePage(5))
+
+    renderComponent()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('action-log-note')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByTestId('action-log-note'))
+
+    expect(mockNavigate).toHaveBeenCalledWith('/leads/1?log=note')
+  })
+
+  it('Create Task calls API and refetches queue', async () => {
+    const user = userEvent.setup()
+    vi.mocked(queueService.getTodaysAction).mockResolvedValue(makeQueuePage(41, 20))
+    vi.mocked(leadTaskService.createTask).mockResolvedValue(undefined as never)
+
+    renderComponent()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('action-create-task')).toBeInTheDocument()
+    })
+
     vi.mocked(queueService.getTodaysAction).mockClear()
     vi.mocked(queueService.getTodaysAction).mockResolvedValue(makeQueuePage(41, 20))
 
-    // Click the Log Call action
-    await user.click(screen.getByTestId('action-log-call'))
+    await user.click(screen.getByTestId('action-create-task'))
 
-    // After the action the component calls setPage(1) and invalidates the query,
-    // which triggers a refetch with page=1
     await waitFor(() => {
+      expect(leadTaskService.createTask).toHaveBeenCalledWith(1, {
+        title: 'Follow up',
+        task_type: 'call_owner_today',
+      })
       expect(queueService.getTodaysAction).toHaveBeenCalledWith(1, 20)
     })
   })
-
-  it('failed Log Call action does not reset page or trigger a new page-1 fetch', async () => {
-    const user = userEvent.setup()
-
-    vi.mocked(queueService.getTodaysAction).mockResolvedValue(makeQueuePage(41, 20))
-    vi.mocked(callLogService.logCall).mockRejectedValue(new Error('Network error'))
-
-    renderComponent()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('action-log-call')).toBeInTheDocument()
-    })
-
-    // Clear mock so we can observe any subsequent calls
-    vi.mocked(queueService.getTodaysAction).mockClear()
-
-    // Click the Log Call action — it should throw
-    await user.click(screen.getByTestId('action-log-call'))
-
-    // Wait for the error to surface in the UI
-    await waitFor(() => {
-      expect(screen.getByTestId('row-error-1')).toBeInTheDocument()
-    })
-
-    // The service should NOT have been called again because the action failed
-    // before reaching setPage(1) / invalidateQueries
-    expect(queueService.getTodaysAction).not.toHaveBeenCalled()
-
-    // The pagination should still be visible (page was not reset)
-    expect(screen.getByTestId('queue-pagination')).toBeInTheDocument()
-  })
 })
-

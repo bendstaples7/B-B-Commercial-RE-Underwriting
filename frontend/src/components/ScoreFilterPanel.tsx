@@ -35,6 +35,7 @@ import {
   Typography,
 } from '@mui/material'
 import type { PropertyScoreRecord, RecommendedAction } from '@/types'
+import { SCORING_ACTION_LABELS } from '@/constants/scoringRecommendedActions'
 
 export type ScoreTier = PropertyScoreRecord['score_tier']
 
@@ -97,17 +98,7 @@ const ALL_ACTIONS: RecommendedAction[] = [
   'needs_manual_review',
 ]
 
-/** Human-readable labels for recommended actions. */
-const ACTION_LABELS: Record<RecommendedAction, string> = {
-  review_now: 'Review Now',
-  enrich_data: 'Enrich Data',
-  mail_ready: 'Mail Ready',
-  call_ready: 'Call Ready',
-  valuation_needed: 'Valuation Needed',
-  suppress: 'Suppress',
-  nurture: 'Nurture',
-  needs_manual_review: 'Needs Manual Review',
-}
+/** Human-readable labels for recommended actions — see scoringRecommendedActions.ts */
 
 export function ScoreFilterPanel({
   filters,
@@ -171,7 +162,7 @@ export function ScoreFilterPanel({
             options={ALL_ACTIONS}
             value={filters.actions}
             onChange={(_, value) => update({ actions: value })}
-            getOptionLabel={(option) => ACTION_LABELS[option] ?? option}
+            getOptionLabel={(option) => SCORING_ACTION_LABELS[option] ?? option}
             isOptionEqualToValue={(option, value) => option === value}
             renderTags={(value, getTagProps) =>
               value.map((option, index) => {
@@ -179,7 +170,7 @@ export function ScoreFilterPanel({
                 return (
                   <Chip
                     key={key}
-                    label={ACTION_LABELS[option] ?? option}
+                    label={SCORING_ACTION_LABELS[option] ?? option}
                     size="small"
                     {...tagProps}
                   />

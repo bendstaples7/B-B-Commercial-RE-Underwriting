@@ -1,27 +1,15 @@
-import { useState} from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import {
   Box,
   Typography,
   Paper,
   CircularProgress,
   Alert,
-  Link as MuiLink,
   Grid,
 } from '@mui/material'
-import PhoneIcon from '@mui/icons-material/Phone'
-import NoteIcon from '@mui/icons-material/Note'
-import AddTaskIcon from '@mui/icons-material/AddTask'
-import { Link as RouterLink } from 'react-router-dom'
-import { QueueTable } from '@/components/QueueTable'
-import type { RowAction } from '@/components/QueueTable'
-import {
-  queueService,
-  callLogService,
-  leadTaskService,
-  hubSpotService,
-} from '@/services/api'
-import type { QueueRow } from '@/types'
+import { hubSpotService } from '@/services/api'
+import { TodaysActionQueue } from '@/components/TodaysActionQueue'
+
 type PipelineStatus = {
   matches: { total: number };
   interactions: number;
@@ -29,119 +17,12 @@ type PipelineStatus = {
   signals: number;
   pipeline_running: boolean;
 };
-import { computeTotalPages, clampPage } from '@/utils/pagination'
-
-// ---------------------------------------------------------------------------
-// Today's Action Queue (adapted from TodaysActionQueue.tsx)
-// ---------------------------------------------------------------------------
-
-function TodaysActionQueueSection() {
-  const queryClient = useQueryClient()
-  const [page, setPage] = useState(1)
-
-  const { data } = useQuery({
-    queryKey: ['queue-todays-action', page],
-    queryFn: () => queueService.getTodaysAction(page, 20),
-    refetchInterval: 60_000,
-    refetchIntervalInBackground: false,
-  })
-
-  const rows = data?.rows ?? []
-  const total = data?.total ?? 0
-  const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
-  const handlePageChange = (newPage: number) => {
-    setPage(clampPage(newPage, totalPages))
-  }
-
-  const overdueCount = rows.filter((r) => r.follow_up_overdue).length
-  const followUpNowCount = rows.filter((r) => r.recommended_action === 'follow_up_now').length
-
-  const rowActions: RowAction[] = [
-    {
-      label: 'Log Call',
-      icon: <PhoneIcon fontSize="small" />,
-      testId: 'action-log-call',
-      onClick: async (row: QueueRow) => {
-        await callLogService.logCall(row.id, { outcome: 'answered' })
-        queryClient.invalidateQueries({ queryKey: ['queue-todays-action'] })
-        queryClient.invalidateQueries({ queryKey: ['queue-counts'] }) // Invalidate counts for sidebar
-        setPage(1)
-      },
-    },
-    {
-      label: 'Log Note',
-      icon: <NoteIcon fontSize="small" />,
-      testId: 'action-log-note',
-      onClick: async (row: QueueRow) => {
-        await callLogService.logNote(row.id, { body: '' })
-        queryClient.invalidateQueries({ queryKey: ['queue-todays-action'] })
-        queryClient.invalidateQueries({ queryKey: ['queue-counts'] }) // Invalidate counts for sidebar
-        setPage(1)
-      },
-    },
-    {
-      label: 'Create Task',
-      icon: <AddTaskIcon fontSize="small" />,
-      testId: 'action-create-task',
-      onClick: async (row: QueueRow) => {
-        await leadTaskService.createTask(row.id, { title: 'Follow up', task_type: 'call_owner_today' })
-        queryClient.invalidateQueries({ queryKey: ['queue-todays-action'] })
-        queryClient.invalidateQueries({ queryKey: ['queue-counts'] }) // Invalidate counts for sidebar
-        setPage(1)
-      },
-    },
-  ]
-
-  return (
-    <Box data-testid="todays-action-queue">
-      <Typography variant="h6" gutterBottom>
-        Today's Action
-      </Typography>
-
-      {/* Summary header */}
-      <Box sx={{ display: 'flex', gap: 3, mb: 2 }}>
-        <Typography variant="body2" color="text.secondary">
-          Total: <strong>{total}</strong>
-        </Typography>
-        <Typography variant="body2" color="error.main">
-          Overdue: <strong>{overdueCount}</strong>
-        </Typography>
-        <Typography variant="body2" color="warning.main">
-          Follow Up Now: <strong>{followUpNowCount}</strong>
-        </Typography>
-      </Box>
-
-      {/* Empty state */}
-      {rows.length === 0 && total === 0 ? (
-        <Box sx={{ py: 4, textAlign: 'center' }} data-testid="todays-action-empty">
-          <Typography variant="body1" color="text.secondary" gutterBottom>
-            You're all caught up!
-          </Typography>
-          <MuiLink component={RouterLink} to="/queues/no-next-action" variant="body2">
-            View leads with no next action →
-          </MuiLink>
-        </Box>
-      ) : (
-        <QueueTable
-          rows={rows}
-          total={total}
-          rowActions={rowActions}
-          {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
-        />
-      )}
-    </Box>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Social Media Summary Stats
-// ---------------------------------------------------------------------------
 
 function SocialMediaSummaryStats() {
   const { data: pipelineStatus, isLoading, isError, error } = useQuery<PipelineStatus>({
     queryKey: ['hubspot', 'pipeline-status'],
     queryFn: () => hubSpotService.getPipelineStatus(),
-    refetchInterval: 30_000, // Refresh every 30 seconds
+    refetchInterval: 30_000,
     refetchIntervalInBackground: false,
   })
 
@@ -213,10 +94,6 @@ function SocialMediaSummaryStats() {
   )
 }
 
-// ---------------------------------------------------------------------------
-// HomePage (Deathclock Dashboard)
-// ---------------------------------------------------------------------------
-
 export function HomePage() {
   return (
     <Box sx={{ px: { xs: 1, sm: 2 } }}>
@@ -227,7 +104,7 @@ export function HomePage() {
       <Grid container spacing={4}>
         <Grid item xs={12} md={8}>
           <Paper elevation={1} sx={{ p: 3 }}>
-            <TodaysActionQueueSection />
+            <TodaysActionQueue extraQueryKeys={['queue-counts']} />
           </Paper>
         </Grid>
         <Grid item xs={12} md={4}>

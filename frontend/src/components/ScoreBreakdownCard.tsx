@@ -13,6 +13,8 @@ import {
 } from '@mui/material'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import type { PropertyScoreRecord, RecommendedAction } from '@/types'
+import { SCORING_ACTION_LABELS } from '@/constants/scoringRecommendedActions'
+import { humanize } from '@/utils/formatters'
 import { LeadScoreBadge } from './LeadScoreBadge'
 import { getDimensionMeta, getScoreVersionMeta } from '@/utils/scoreDimensionMeta'
 
@@ -23,7 +25,7 @@ export interface ScoreBreakdownCardProps {
   compact?: boolean
 }
 
-function humanize(snake: string): string {
+function humanizeField(snake: string): string {
   if (!snake) return ''
   return snake
     .split('_')
@@ -39,18 +41,7 @@ const FIELD_LABEL_OVERRIDES: Record<string, string> = {
 }
 
 function fieldLabel(field: string): string {
-  return FIELD_LABEL_OVERRIDES[field] ?? humanize(field)
-}
-
-const ACTION_LABELS: Record<RecommendedAction, string> = {
-  review_now: 'Review Now',
-  enrich_data: 'Enrich Data',
-  mail_ready: 'Mail Ready',
-  call_ready: 'Call Ready',
-  valuation_needed: 'Valuation Needed',
-  suppress: 'Suppress',
-  nurture: 'Nurture',
-  needs_manual_review: 'Needs Manual Review',
+  return FIELD_LABEL_OVERRIDES[field] ?? humanizeField(field)
 }
 
 const ACTION_COLORS: Record<
@@ -84,7 +75,7 @@ export function ScoreBreakdownCard({ score, className, compact = false }: ScoreB
     missing_data,
   } = score
 
-  const actionLabel = ACTION_LABELS[recommended_action] ?? humanize(recommended_action)
+  const actionLabel = SCORING_ACTION_LABELS[recommended_action] ?? humanize(recommended_action)
   const actionColor = ACTION_COLORS[recommended_action] ?? 'default'
   const versionMeta = getScoreVersionMeta(score_version)
 
