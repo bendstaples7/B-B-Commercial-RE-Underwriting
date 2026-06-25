@@ -243,6 +243,58 @@ export const ScoreLegend: React.FC<ScoreLegendProps> = ({
           mailing address. Reducing this number raises the Quality score and
           often the Tier.
         </LegendRow>
+
+        <Divider />
+
+        {/* -------- Enrichment Dimensions -------- */}
+        <Box sx={{ mt: 1 }}>
+          <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1 }}>
+            Data Enrichment Dimensions
+          </Typography>
+          <Stack spacing={1}>
+            <LegendRow
+              label={
+                <Typography variant="caption" fontWeight={600}>
+                  Contactability
+                </Typography>
+              }
+            >
+              Can we reach this owner? Scored on: mailing address, phone,
+              email, and skip trace status.
+            </LegendRow>
+            <LegendRow
+              label={
+                <Typography variant="caption" fontWeight={600}>
+                  Property Equity
+                </Typography>
+              }
+            >
+              Estimated property value from county assessor data. Scored on:
+              assessed value, lot size, square footage, and value density.
+            </LegendRow>
+            <LegendRow
+              label={
+                <Typography variant="caption" fontWeight={600}>
+                  Ownership Duration
+                </Typography>
+              }
+            >
+              How long has the current owner held the property? Determined by
+              the most recent arm&apos;s-length sale from county records (back
+              to 1999).
+            </LegendRow>
+            <LegendRow
+              label={
+                <Typography variant="caption" fontWeight={600}>
+                  Engagement
+                </Typography>
+              }
+            >
+              Is the lead responsive to outreach? Scored on: mailer history,
+              follow-up scheduling, recent contact, and response signals.
+            </LegendRow>
+          </Stack>
+        </Box>
       </AccordionDetails>
     </Accordion>
   )

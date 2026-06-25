@@ -23,9 +23,12 @@ interface CriterionConfig {
     | 'data_completeness_weight'
     | 'owner_situation_weight'
     | 'location_desirability_weight'
+    | 'data_enrichment_weight'
   >
   label: string
   description: string
+  min?: number
+  max?: number
 }
 
 const CRITERIA: CriterionConfig[] = [
@@ -49,6 +52,13 @@ const CRITERIA: CriterionConfig[] = [
     label: 'Location Desirability',
     description: 'Market area attractiveness',
   },
+  {
+    key: 'data_enrichment_weight',
+    label: 'Data Enrichment',
+    description:
+      'Weight given to contactability, property equity, ownership duration, and engagement signals from enriched data sources',
+    max: 0.5,
+  },
 ]
 
 const WEIGHT_STEP = 0.01
@@ -68,10 +78,11 @@ const SUM_TOLERANCE = 0.005
  */
 export const ScoringWeightsEditor: React.FC = () => {
   const [weights, setWeights] = useState<Record<CriterionConfig['key'], number>>({
-    property_characteristics_weight: 0.3,
-    data_completeness_weight: 0.2,
-    owner_situation_weight: 0.3,
-    location_desirability_weight: 0.2,
+    property_characteristics_weight: 0.25,
+    data_completeness_weight: 0.15,
+    owner_situation_weight: 0.25,
+    location_desirability_weight: 0.15,
+    data_enrichment_weight: 0.2,
   })
   const [savedWeights, setSavedWeights] = useState<Record<CriterionConfig['key'], number> | null>(null)
   const [loading, setLoading] = useState(true)
@@ -99,6 +110,7 @@ export const ScoringWeightsEditor: React.FC = () => {
         data_completeness_weight: data.data_completeness_weight,
         owner_situation_weight: data.owner_situation_weight,
         location_desirability_weight: data.location_desirability_weight,
+        data_enrichment_weight: data.data_enrichment_weight,
       }
       setWeights(loaded)
       setSavedWeights(loaded)
@@ -141,12 +153,14 @@ export const ScoringWeightsEditor: React.FC = () => {
         data_completeness_weight: weights.data_completeness_weight,
         owner_situation_weight: weights.owner_situation_weight,
         location_desirability_weight: weights.location_desirability_weight,
+        data_enrichment_weight: weights.data_enrichment_weight,
       })
       const updated: Record<CriterionConfig['key'], number> = {
         property_characteristics_weight: result.property_characteristics_weight,
         data_completeness_weight: result.data_completeness_weight,
         owner_situation_weight: result.owner_situation_weight,
         location_desirability_weight: result.location_desirability_weight,
+        data_enrichment_weight: result.data_enrichment_weight,
       }
       setWeights(updated)
       setSavedWeights(updated)
@@ -223,8 +237,8 @@ export const ScoringWeightsEditor: React.FC = () => {
             <Slider
               value={weights[criterion.key]}
               onChange={(_e, value) => handleWeightChange(criterion.key, value as number)}
-              min={WEIGHT_MIN}
-              max={WEIGHT_MAX}
+              min={criterion.min ?? WEIGHT_MIN}
+              max={criterion.max ?? WEIGHT_MAX}
               step={WEIGHT_STEP}
               valueLabelDisplay="auto"
               valueLabelFormat={formatPercent}

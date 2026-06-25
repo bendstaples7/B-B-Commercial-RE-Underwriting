@@ -499,6 +499,7 @@ export interface ScoringWeights {
   data_completeness_weight: number
   owner_situation_weight: number
   location_desirability_weight: number
+  data_enrichment_weight: number
   created_at: string | null
   updated_at: string | null
 }

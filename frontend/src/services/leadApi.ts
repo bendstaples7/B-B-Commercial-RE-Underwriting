@@ -81,6 +81,7 @@ export const leadService = {
     data_completeness_weight: number
     owner_situation_weight: number
     location_desirability_weight: number
+    data_enrichment_weight: number
   }): Promise<ScoringWeights & { leads_rescored: number }> {
     const response = await api.put<ScoringWeights & { leads_rescored: number }>(
       '/properties/scoring/weights',
