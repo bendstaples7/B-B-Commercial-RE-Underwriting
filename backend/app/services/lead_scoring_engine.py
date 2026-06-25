@@ -24,10 +24,11 @@ logger = logging.getLogger(__name__)
 
 # Default weights when no user-specific weights exist
 DEFAULT_WEIGHTS = {
-    "property_characteristics_weight": 0.30,
-    "data_completeness_weight": 0.20,
-    "owner_situation_weight": 0.30,
-    "location_desirability_weight": 0.20,
+    "property_characteristics_weight": 0.25,
+    "data_completeness_weight": 0.15,
+    "owner_situation_weight": 0.25,
+    "location_desirability_weight": 0.15,
+    "data_enrichment_weight": 0.20,
 }
 
 # Weight sum tolerance for floating-point comparison
@@ -388,6 +389,16 @@ class LeadScoringEngine:
             + location_sub * weights.location_desirability_weight
         )
 
+        # Apply data enrichment sub-scores — average of 4 enrichment dimensions
+        # weighted by the configurable data_enrichment_weight.
+        enrichment_score = (
+            self._contactability_score(lead)
+            + self._property_equity_score(lead)
+            + self._ownership_duration_score(lead)
+            + self._engagement_score(lead)
+        ) / 4.0
+        total += enrichment_score * weights.data_enrichment_weight
+
         # Apply pipeline stage bonus — leads farther along the pipeline are
         # more valuable and should rank higher in outreach queues.
         pipeline_stage_bonus = self._pipeline_stage_bonus(lead)
@@ -522,10 +533,11 @@ class LeadScoringEngine:
         data_completeness_weight: float,
         owner_situation_weight: float,
         location_desirability_weight: float,
+        data_enrichment_weight: float,
     ) -> ScoringWeights:
         """Update scoring weights for a user.
 
-        Validates that the four weights sum to 1.0 (within tolerance).
+        Validates that the five weights sum to 1.0 (within tolerance).
 
         Parameters
         ----------
@@ -534,6 +546,7 @@ class LeadScoringEngine:
         data_completeness_weight : float
         owner_situation_weight : float
         location_desirability_weight : float
+        data_enrichment_weight : float
 
         Returns
         -------
@@ -551,6 +564,7 @@ class LeadScoringEngine:
             data_completeness_weight,
             owner_situation_weight,
             location_desirability_weight,
+            data_enrichment_weight,
         ]
 
         # Validate non-negative
@@ -571,6 +585,7 @@ class LeadScoringEngine:
             weights.data_completeness_weight = data_completeness_weight
             weights.owner_situation_weight = owner_situation_weight
             weights.location_desirability_weight = location_desirability_weight
+            weights.data_enrichment_weight = data_enrichment_weight
             weights.updated_at = datetime.utcnow()
         else:
             weights = ScoringWeights(
@@ -579,6 +594,7 @@ class LeadScoringEngine:
                 data_completeness_weight=data_completeness_weight,
                 owner_situation_weight=owner_situation_weight,
                 location_desirability_weight=location_desirability_weight,
+                data_enrichment_weight=data_enrichment_weight,
             )
             db.session.add(weights)
 
@@ -753,3 +769,203 @@ class LeadScoringEngine:
             lead.mailing_address.strip().lower()
             != lead.property_street.strip().lower()
         )
+
+    # ------------------------------------------------------------------
+    # Data Enrichment sub-scores
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _contactability_score(lead: Lead) -> float:
+        """Score based on contactability of the lead (0-100).
+
+        Rewards leads for which contact information is available:
+        - Mailing address present: +25
+        - Any phone number (phone_1 through phone_7): +25
+        - Any email (email_1 through email_5): +25
+        - Has been skip traced (date_skip_traced is set): +25
+
+        Parameters
+        ----------
+        lead : Lead
+
+        Returns
+        -------
+        float
+            Sub-score between 0 and 100.
+        """
+        score = 0.0
+
+        # Mailing address exists
+        if lead.mailing_address:
+            score += 25.0
+
+        # Any phone number exists
+        for i in range(1, 8):
+            phone = getattr(lead, f"phone_{i}", None)
+            if phone:
+                score += 25.0
+                break
+
+        # Any email exists
+        for i in range(1, 6):
+            email = getattr(lead, f"email_{i}", None)
+            if email:
+                score += 25.0
+                break
+
+        # Has been skip traced
+        if getattr(lead, "date_skip_traced", None):
+            score += 25.0
+
+        return min(score, 100.0)
+
+    @staticmethod
+    def _property_equity_score(lead: Lead) -> float:
+        """Score based on property equity indicators (0-100).
+
+        Rewards leads with known property value data:
+        - Has assessed_value: +20
+        - Has lot_size: +20
+        - Has square_footage: +20
+        - Value per sqft > $100: +20
+        - Value per sqft > $50 (but <= $100): +10
+
+        Parameters
+        ----------
+        lead : Lead
+
+        Returns
+        -------
+        float
+            Sub-score between 0 and 100.
+        """
+        score = 0.0
+
+        if lead.assessed_value is not None:
+            score += 20.0
+
+        if lead.lot_size is not None:
+            score += 20.0
+
+        if lead.square_footage is not None:
+            score += 20.0
+
+            # Value per square foot calculation
+            if lead.assessed_value is not None and lead.square_footage > 0:
+                value_per_sqft = lead.assessed_value / lead.square_footage
+                if value_per_sqft > 100:
+                    score += 20.0
+                elif value_per_sqft > 50:
+                    score += 10.0
+
+        return min(score, 100.0)
+
+    @staticmethod
+    def _ownership_duration_score(lead: Lead) -> float:
+        """Score based on how long the lead has owned the property (0-100).
+
+        Longer ownership suggests higher equity and motivation to sell:
+        - 20+ years: 100
+        - 10-19 years: 80
+        - 5-9 years: 55
+        - 2-4 years: 35
+        - < 2 years: 15
+        - No acquisition_date or negative: 0
+
+        Parameters
+        ----------
+        lead : Lead
+
+        Returns
+        -------
+        float
+            Sub-score between 0 and 100.
+        """
+        acquisition_date = getattr(lead, "acquisition_date", None)
+        if acquisition_date is None:
+            return 0.0
+
+        today = date.today()
+        delta = today - acquisition_date
+        if delta.days <= 0:
+            return 0.0
+
+        years = delta.days / 365.25
+
+        if years >= 20:
+            return 100.0
+        elif years >= 10:
+            return 80.0
+        elif years >= 5:
+            return 55.0
+        elif years >= 2:
+            return 35.0
+        else:
+            return 15.0
+
+    @staticmethod
+    def _engagement_score(lead: Lead) -> float:
+        """Score based on engagement history of the lead (0-100).
+
+        Rewards leads with prior outreach activity:
+        - Has mailer_history (non-empty): +30
+        - Has follow_up_date set: +25
+        - Contacted in last 30 days (updated_at): +25
+        - Has responded to outreach (timeline positive signal): +20
+
+        Parameters
+        ----------
+        lead : Lead
+
+        Returns
+        -------
+        float
+            Sub-score between 0 and 100.
+        """
+        from datetime import timedelta
+
+        score = 0.0
+
+        # Mailer history present (non-empty dict or list)
+        mailer_history = getattr(lead, "mailer_history", None)
+        if mailer_history:
+            score += 30.0
+
+        # Follow-up date set
+        if getattr(lead, "follow_up_date", None):
+            score += 25.0
+
+        # Contacted in last 30 days
+        updated_at = getattr(lead, "updated_at", None)
+        if updated_at:
+            if isinstance(updated_at, datetime):
+                age = datetime.utcnow() - updated_at
+            else:
+                age = datetime.utcnow() - datetime.combine(updated_at, datetime.min.time())
+            if age.days <= 30:
+                score += 25.0
+
+        # Has responded to outreach (check timeline for positive interaction)
+        timeline = getattr(lead, "timeline", None)
+        if timeline:
+            positive_signals = [
+                "interested", "responded", "positive", "appointment",
+                "offer", "negotiation", "callback",
+            ]
+            if isinstance(timeline, (list, tuple)):
+                for entry in timeline:
+                    if isinstance(entry, str):
+                        lower = entry.lower()
+                    elif isinstance(entry, dict):
+                        lower = str(entry.get("type", entry.get("note", ""))).lower()
+                    else:
+                        lower = str(entry).lower()
+                    if any(sig in lower for sig in positive_signals):
+                        score += 20.0
+                        break
+            elif isinstance(timeline, dict):
+                lower = str(timeline).lower()
+                if any(sig in lower for sig in positive_signals):
+                    score += 20.0
+
+        return min(score, 100.0)
