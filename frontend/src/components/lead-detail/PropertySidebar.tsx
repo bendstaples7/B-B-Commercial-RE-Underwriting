@@ -243,12 +243,16 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
         />
         <SidebarRow
           label="Sq Ft"
-          value={commandCenterData.square_footage ? commandCenterData.square_footage.toLocaleString() : null}
+          value={
+            commandCenterData.square_footage != null
+              ? commandCenterData.square_footage.toLocaleString()
+              : null
+          }
         />
         <SidebarRow label="Year Built" value={commandCenterData.year_built} />
         <SidebarRow
           label="Lot Size"
-          value={data.lot_size ? `${Number(data.lot_size).toLocaleString()} sqft` : null}
+          value={data.lot_size != null ? `${Number(data.lot_size).toLocaleString()} sqft` : null}
         />
         <SidebarRow label="Units" value={data.units} />
         <SidebarRow label="Units Allowed" value={data.units_allowed} />
@@ -256,7 +260,9 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
         <SidebarRow label="PIN" value={commandCenterData.county_assessor_pin} />
         <SidebarRow
           label="Tax Bill"
-          value={data.tax_bill_2021 ? `$${Number(data.tax_bill_2021).toLocaleString()}` : null}
+          value={
+            data.tax_bill_2021 != null ? `$${Number(data.tax_bill_2021).toLocaleString()}` : null
+          }
         />
         <SidebarRow label="Last Sale" value={data.most_recent_sale} />
         <SidebarRow
@@ -300,9 +306,12 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
         </SidebarSection>
       )}
 
-      {(data.needs_skip_trace || data.skip_tracer || data.date_skip_traced) && (
+      {(data.needs_skip_trace != null || data.skip_tracer || data.date_skip_traced) && (
         <SidebarSection title="Skip Trace">
-          <SidebarRow label="Needed" value={data.needs_skip_trace ? 'Yes' : 'No'} />
+          <SidebarRow
+            label="Needed"
+            value={data.needs_skip_trace != null ? (data.needs_skip_trace ? 'Yes' : 'No') : null}
+          />
           <SidebarRow label="Tracer" value={data.skip_tracer} />
           <SidebarRow label="Date" value={data.date_skip_traced} />
         </SidebarSection>

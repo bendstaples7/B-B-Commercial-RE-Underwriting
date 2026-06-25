@@ -97,6 +97,7 @@ export function LeadDetailTabPanel({
   }
 
   const handleStartMultifamily = async () => {
+    setAnalysisLoading(true)
     setAnalysisError(null)
     try {
       const deal = await multifamilyService.createDeal({
@@ -110,6 +111,8 @@ export function LeadDetailTabPanel({
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to start multifamily analysis.'
       setAnalysisError(message)
+    } finally {
+      setAnalysisLoading(false)
     }
   }
 
@@ -343,7 +346,7 @@ export function LeadDetailTabPanel({
                 {(showMultifamily || showBoth) && (
                   <Button
                     variant="contained"
-                    startIcon={<ApartmentIcon />}
+                    startIcon={analysisLoading ? <CircularProgress size={18} /> : <ApartmentIcon />}
                     onClick={handleStartMultifamily}
                     disabled={analysisLoading}
                     aria-label="Start multifamily analysis"

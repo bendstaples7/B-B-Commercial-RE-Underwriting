@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import {
   Button,
   Dialog,
@@ -20,28 +21,55 @@ export function SuppressLeadDialog({
   onClose,
   onConfirm,
 }: SuppressLeadDialogProps) {
+  const [confirming, setConfirming] = useState(false)
+  const [localError, setLocalError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) {
+      setConfirming(false)
+      setLocalError(null)
+    }
+  }, [open])
+
+  const displayError = error ?? localError
+
+  const handleConfirm = async () => {
+    setConfirming(true)
+    setLocalError(null)
+    try {
+      await onConfirm()
+    } catch (err) {
+      console.error('[SuppressLeadDialog] Suppress failed:', err)
+      setLocalError(err instanceof Error ? err.message : 'Suppress failed. Please try again.')
+      setConfirming(false)
+    }
+  }
+
   return (
-    <Dialog open={open} onClose={onClose} data-testid="suppress-confirm-dialog">
+    <Dialog open={open} onClose={confirming ? undefined : onClose} data-testid="suppress-confirm-dialog">
       <DialogTitle>Suppress Lead?</DialogTitle>
       <DialogContent>
         <DialogContentText>
           This will suppress the lead and remove it from active queues. Are you sure?
         </DialogContentText>
-        {error && (
+        {displayError && (
           <DialogContentText color="error" sx={{ mt: 1 }} data-testid="suppress-error">
-            {error}
+            {displayError}
           </DialogContentText>
         )}
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose} disabled={confirming}>
+          Cancel
+        </Button>
         <Button
-          onClick={onConfirm}
+          onClick={handleConfirm}
           color="error"
           variant="contained"
+          disabled={confirming}
           data-testid="suppress-confirm-btn"
         >
-          Suppress
+          {confirming ? 'Suppressing…' : 'Suppress'}
         </Button>
       </DialogActions>
     </Dialog>

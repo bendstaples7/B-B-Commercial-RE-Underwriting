@@ -1,6 +1,6 @@
 # Consolidation Roadmap
 
-Follow-up work from the [architecture audit](ARCHITECTURE.md). Each item is a **separate PR** — do not batch unrelated refactors.
+Follow-up work from the [architecture audit](ARCHITECTURE.md). Prefer **one focused PR per item** — batch only when items are tightly coupled (see PR 2–4 note below).
 
 ## PR 1 — This branch (merge first)
 
@@ -16,9 +16,9 @@ Follow-up work from the [architecture audit](ARCHITECTURE.md). Each item is a **
 - [x] Stop `DeterministicScoringEngine` writing `leads.lead_score`
 - [x] Activity logging UX: `LogActivityModal`, contact method fields, ULCC wiring
 
-## PR 2–4 — Queues, ULCC extraction, retire property views (combined)
+## PR 2–4 — Queues, ULCC extraction, retire property views (combined in PR #68)
 
-**Theme:** One logging UX in queues; slimmer ULCC; canonical queue API only.
+**Theme:** One logging UX in queues; slimmer ULCC; canonical queue API only. Shipped as one PR because queue logging, ULCC extraction, and view retirement were coordinated in a single user-facing migration.
 
 - [x] Navigate queue row actions to `/leads/:id?log=note|call|email`; ULCC opens `LogActivityModal`
 - [x] Remove `window.prompt` and direct `callLogService` calls from queue row actions

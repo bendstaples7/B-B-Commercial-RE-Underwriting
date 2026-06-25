@@ -1,19 +1,15 @@
 export function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '—'
-  try {
-    return new Date(dateStr).toLocaleDateString()
-  } catch {
-    return '—'
-  }
+  const d = new Date(dateStr)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleDateString()
 }
 
 export function formatDateTime(dateStr: string | null | undefined): string {
   if (!dateStr) return '—'
-  try {
-    return new Date(dateStr).toLocaleString()
-  } catch {
-    return '—'
-  }
+  const d = new Date(dateStr)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString()
 }
 
 export function humanize(snake: string): string {
