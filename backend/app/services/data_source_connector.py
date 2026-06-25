@@ -30,6 +30,8 @@ ENRICHABLE_FIELDS = [
     "assessed_value", "most_recent_sale_price",
     "phone_1", "phone_2", "phone_3", "email_1", "email_2",
     "mailing_address", "mailing_city", "mailing_state", "mailing_zip",
+    # Enrichment-specific JSON data fields
+    "violation_data", "permit_data", "tax_distress_data",
 ]
 
 
@@ -391,3 +393,32 @@ class DataSourceConnector:
                 setattr(lead, field_name, new_value)
 
         lead.updated_at = datetime.utcnow()
+
+
+# ---------------------------------------------------------------------------
+# Auto-registration: ensure all known plugins can be discovered and
+# registered by default when a DataSourceConnector is used.
+# ---------------------------------------------------------------------------
+
+# Lazy imports to avoid circular imports at module load time
+def _register_default_plugins(connector: "DataSourceConnector") -> None:
+    """Register all built-in data source plugins on *connector*.
+
+    This is called automatically by the app factory to ensure every
+    plugin is available without manual registration.
+    """
+    from app.services.plugins.cook_county_assessor import CookCountyAssessorPlugin
+    from app.services.plugins.cook_county_permits import CookCountyPermitsPlugin
+    from app.services.plugins.cook_county_tax_sales import CookCountyTaxSalesPlugin
+
+    for plugin_cls in (
+        CookCountyAssessorPlugin,
+        CookCountyPermitsPlugin,
+        CookCountyTaxSalesPlugin,
+    ):
+        plugin = plugin_cls()
+        try:
+            connector.register_source(plugin)
+        except ValueError:
+            # Already registered — skip silently
+            pass
