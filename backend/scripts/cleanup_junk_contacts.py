@@ -8,10 +8,14 @@ Log Call / Log Email dropdowns.
 
 This script finds junk contacts via the shared heuristic
 ``app.services.contact_backfill.looks_synthetic_name`` and -- only with
-``--apply`` -- deletes them. A junk contact is deleted **only** when every one of
-its phone/email values is already preserved elsewhere (on a linked lead's flat
-fields or on a real contact of that lead), so nothing unique is ever lost. FK
-cascades remove the contact's phones, emails, and property links.
+``--apply`` -- deletes them. Safety is decided by
+``app.services.contact_backfill.preservation_gaps``: a junk contact is deleted
+**only** when, for *every* property it links to, each of its phone/email values
+is already held by another real (non-synthetic) contact of that *same* property
+(checked per property, never as a global union). So every property keeps a usable
+relational contact in the Log Call / Log Email dropdowns. Flat ``leads`` fields
+are never counted (and never deleted). FK cascades remove the contact's phones,
+emails, and property links.
 
 Run AFTER the backfill migration, from the ``backend/`` directory:
 
@@ -33,6 +37,7 @@ if BACKEND_DIR not in sys.path:
 from app.services.contact_backfill import (  # noqa: E402
     looks_synthetic_name,
     phone_digits,
+    preservation_gaps,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -69,76 +74,6 @@ def find_junk_contacts(conn):
     ]
 
 
-def _contact_methods(conn, contact_id):
-    phones = {
-        phone_digits(r._mapping["value"])
-        for r in conn.execute(
-            sa.text("SELECT value FROM contact_phones WHERE contact_id = :cid"),
-            {"cid": contact_id},
-        ).fetchall()
-    }
-    phones.discard("")
-    emails = {
-        (r._mapping["value"] or "").strip().lower()
-        for r in conn.execute(
-            sa.text("SELECT value FROM contact_emails WHERE contact_id = :cid"),
-            {"cid": contact_id},
-        ).fetchall()
-    }
-    emails.discard("")
-    return phones, emails
-
-
-def _preserved_methods(conn, contact_id):
-    """Phones/emails that survive a delete of ``contact_id``.
-
-    Union, across every property the junk contact links to, of the phone/email
-    values held by every *other* non-synthetic contact of that property.
-
-    Flat ``leads`` fields are intentionally NOT counted: a junk contact is only
-    safe to delete when a *real* relational contact already carries its data, so
-    the property keeps a usable contact for the Log Call / Log Email dropdowns.
-    (Flat fields are never deleted, so no data is lost either way.)
-    """
-    property_ids = [
-        r._mapping["property_id"]
-        for r in conn.execute(
-            sa.text(
-                "SELECT property_id FROM property_contacts WHERE contact_id = :cid"
-            ),
-            {"cid": contact_id},
-        ).fetchall()
-    ]
-
-    preserved_phones: set[str] = set()
-    preserved_emails: set[str] = set()
-    for pid in property_ids:
-        others = conn.execute(
-            sa.text(
-                """
-                SELECT c.id AS contact_id, c.first_name AS first_name,
-                       c.last_name AS last_name
-                FROM property_contacts pc
-                JOIN contacts c ON c.id = pc.contact_id
-                WHERE pc.property_id = :pid AND c.id != :cid
-                """
-            ),
-            {"pid": pid, "cid": contact_id},
-        ).fetchall()
-        for other in others:
-            if looks_synthetic_name(
-                other._mapping["first_name"], other._mapping["last_name"]
-            ):
-                continue
-            other_phones, other_emails = _contact_methods(
-                conn, other._mapping["contact_id"]
-            )
-            preserved_phones |= other_phones
-            preserved_emails |= other_emails
-
-    return property_ids, preserved_phones, preserved_emails
-
-
 def run(apply: bool, database_url) -> int:
     engine = sa.create_engine(_resolve_database_url(database_url))
     deletable: list[int] = []
@@ -151,13 +86,11 @@ def run(apply: bool, database_url) -> int:
 
         logger.info("Found %d junk contact(s):", len(junk))
         for contact_id, first, last in junk:
-            phones, emails = _contact_methods(conn, contact_id)
-            property_ids, preserved_phones, preserved_emails = _preserved_methods(
-                conn, contact_id
-            )
-            phones_safe = phones <= preserved_phones
-            emails_safe = emails <= preserved_emails
-            safe = phones_safe and emails_safe
+            gaps = preservation_gaps(conn, contact_id)
+            phones = gaps["phones"]
+            emails = gaps["emails"]
+            property_ids = gaps["property_ids"]
+            safe = gaps["safe"]
 
             logger.info(
                 "  contact id=%s name=%r linked_properties=%s phones=%s emails=%d safe=%s",
@@ -169,16 +102,26 @@ def run(apply: bool, database_url) -> int:
                 safe,
             )
             if not safe:
-                lost_phones = phones - preserved_phones
-                if lost_phones:
+                if gaps["orphan_with_methods"]:
                     logger.warning(
-                        "    SKIP: %d phone(s) not preserved elsewhere", len(lost_phones)
+                        "    SKIP: orphan contact still holds %d phone(s)/%d email(s) "
+                        "and links to no property",
+                        len(phones),
+                        len(emails),
                     )
-                if emails - preserved_emails:
-                    logger.warning(
-                        "    SKIP: %d email(s) not preserved elsewhere",
-                        len(emails - preserved_emails),
-                    )
+                for pid, (lost_phones, lost_emails) in gaps["missing_by_property"].items():
+                    if lost_phones:
+                        logger.warning(
+                            "    SKIP: property %s would lose %d phone(s) not on a real contact",
+                            pid,
+                            len(lost_phones),
+                        )
+                    if lost_emails:
+                        logger.warning(
+                            "    SKIP: property %s would lose %d email(s) not on a real contact",
+                            pid,
+                            len(lost_emails),
+                        )
                 continue
             deletable.append(contact_id)
 

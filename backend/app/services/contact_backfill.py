@@ -26,12 +26,17 @@ Design notes
 - Idempotent: phones are deduped by digits-only value, emails by ``lower()``.
   Re-running adds nothing.
 - Dialect-aware (Postgres in production, SQLite in tests).
+
+This module is also the single home for the shared relational-contact helpers
+used by ``scripts/cleanup_junk_contacts.py`` (``looks_synthetic_name``,
+``phone_digits``, ``contact_methods``, ``preservation_gaps``) so that field
+lists and merge/preservation logic are declared exactly once.
 """
 from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 import sqlalchemy as sa
 
@@ -87,6 +92,104 @@ def phone_digits(value) -> str:
     return re.sub(r"\D", "", value or "")
 
 
+def contact_methods(connection, contact_id):
+    """Return a contact's ``(phone_digits_set, lowercased_email_set)``.
+
+    The single normalized read of a contact's relational methods, shared by the
+    backfill (dedup against what a target contact already has) and by
+    ``scripts/cleanup_junk_contacts.py`` (preservation check) so neither
+    re-declares the merge logic.
+    """
+    phones = {
+        phone_digits(r._mapping["value"])
+        for r in connection.execute(
+            sa.text("SELECT value FROM contact_phones WHERE contact_id = :cid"),
+            {"cid": contact_id},
+        ).fetchall()
+    }
+    phones.discard("")
+    emails = {
+        (r._mapping["value"] or "").strip().lower()
+        for r in connection.execute(
+            sa.text("SELECT value FROM contact_emails WHERE contact_id = :cid"),
+            {"cid": contact_id},
+        ).fetchall()
+    }
+    emails.discard("")
+    return phones, emails
+
+
+def preservation_gaps(connection, contact_id) -> dict:
+    """Per-property check of what deleting ``contact_id`` would orphan.
+
+    Used by ``scripts/cleanup_junk_contacts.py`` to decide whether a junk contact
+    is safe to delete. A contact is safe to delete only when, for *every* property
+    it links to, all of its phones/emails are still held by some *other*
+    non-synthetic contact of that property -- evaluated per property, never as a
+    global union, so a contact linked to several properties is not deleted when
+    even one property would lose its only relational copy of a value.
+
+    Flat ``leads`` fields are intentionally NOT counted (they are never deleted),
+    so the test is purely "does a real relational contact still carry this value".
+
+    Returns a dict: ``property_ids``, ``phones``, ``emails``,
+    ``missing_by_property`` (``{property_id: (lost_phones, lost_emails)}``),
+    ``orphan_with_methods`` (has methods but links to no property), and a derived
+    ``safe`` flag.
+    """
+    phones, emails = contact_methods(connection, contact_id)
+    property_ids = [
+        r._mapping["property_id"]
+        for r in connection.execute(
+            sa.text(
+                "SELECT property_id FROM property_contacts WHERE contact_id = :cid"
+            ),
+            {"cid": contact_id},
+        ).fetchall()
+    ]
+
+    missing_by_property: dict = {}
+    for pid in property_ids:
+        kept_phones: set[str] = set()
+        kept_emails: set[str] = set()
+        others = connection.execute(
+            sa.text(
+                """
+                SELECT c.id AS contact_id, c.first_name AS first_name,
+                       c.last_name AS last_name
+                FROM property_contacts pc
+                JOIN contacts c ON c.id = pc.contact_id
+                WHERE pc.property_id = :pid AND c.id != :cid
+                """
+            ),
+            {"pid": pid, "cid": contact_id},
+        ).fetchall()
+        for other in others:
+            if looks_synthetic_name(
+                other._mapping["first_name"], other._mapping["last_name"]
+            ):
+                continue
+            other_phones, other_emails = contact_methods(
+                connection, other._mapping["contact_id"]
+            )
+            kept_phones |= other_phones
+            kept_emails |= other_emails
+        lost_phones = phones - kept_phones
+        lost_emails = emails - kept_emails
+        if lost_phones or lost_emails:
+            missing_by_property[pid] = (lost_phones, lost_emails)
+
+    orphan_with_methods = not property_ids and bool(phones or emails)
+    return {
+        "property_ids": property_ids,
+        "phones": phones,
+        "emails": emails,
+        "missing_by_property": missing_by_property,
+        "orphan_with_methods": orphan_with_methods,
+        "safe": not missing_by_property and not orphan_with_methods,
+    }
+
+
 def _insert_returning_id(connection, insert_sql: str, params: dict) -> int:
     """Run an INSERT and return the new row id, portably across dialects."""
     if connection.dialect.name == "sqlite":
@@ -121,7 +224,9 @@ def backfill_contacts_from_flat_fields(
         A stats dict: ``leads_processed``, ``leads_skipped``,
         ``contacts_created``, ``phones_added``, ``emails_added``.
     """
-    now = datetime.utcnow()
+    # contacts.created_at / updated_at are naive (db.DateTime); keep naive UTC
+    # while avoiding the deprecated datetime.utcnow().
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     stats = {
         "leads_processed": 0,
         "leads_skipped": 0,
@@ -138,7 +243,10 @@ def backfill_contacts_from_flat_fields(
     flat_predicate = " OR ".join(
         f"coalesce({col}, '') <> ''" for col in PHONE_COLUMNS + EMAIL_COLUMNS
     )
-    base_sql = f"SELECT {select_cols} FROM leads WHERE ({flat_predicate})"
+    # select_cols / flat_predicate are built only from the module-level
+    # PHONE_COLUMNS / EMAIL_COLUMNS constants (no user input), so this f-string
+    # is not an injection vector.
+    base_sql = f"SELECT {select_cols} FROM leads WHERE ({flat_predicate})"  # noqa: S608
 
     params: dict = {}
     if lead_ids is not None:
@@ -191,10 +299,23 @@ def backfill_contacts_from_flat_fields(
 
         target_contact_id = None
         if non_synthetic:
+            # existing_links is ordered is_primary-first, so non_synthetic[0] is
+            # the real primary if one exists, else the first real contact.
             target = non_synthetic[0]
             target_contact_id = target._mapping["contact_id"]
-            # Guarantee a primary exists so the form's default selection works.
-            if not has_primary and not dry_run:
+            # Make the *real* contact the primary so the form defaults to it. A
+            # synthetic junk contact may currently hold is_primary=True; counting
+            # it in has_primary would leave the junk row as the default while the
+            # repaired contact gets the data. Demote whatever is primary now and
+            # promote the real target (mirrors the create branch below).
+            if not target._mapping["is_primary"] and not dry_run:
+                connection.execute(
+                    sa.text(
+                        "UPDATE property_contacts SET is_primary = :flag "
+                        "WHERE property_id = :pid AND is_primary = :was"
+                    ),
+                    {"flag": False, "was": True, "pid": lead_id},
+                )
                 connection.execute(
                     sa.text(
                         "UPDATE property_contacts SET is_primary = :flag "
@@ -249,16 +370,9 @@ def backfill_contacts_from_flat_fields(
         existing_phone_digits: set[str] = set()
         existing_emails_lower: set[str] = set()
         if target_contact_id is not None:
-            for prow in connection.execute(
-                sa.text("SELECT value FROM contact_phones WHERE contact_id = :cid"),
-                {"cid": target_contact_id},
-            ).fetchall():
-                existing_phone_digits.add(phone_digits(prow._mapping["value"]))
-            for erow in connection.execute(
-                sa.text("SELECT value FROM contact_emails WHERE contact_id = :cid"),
-                {"cid": target_contact_id},
-            ).fetchall():
-                existing_emails_lower.add((erow._mapping["value"] or "").strip().lower())
+            existing_phone_digits, existing_emails_lower = contact_methods(
+                connection, target_contact_id
+            )
 
         for phone in flat_phones:
             digits = phone_digits(phone)
