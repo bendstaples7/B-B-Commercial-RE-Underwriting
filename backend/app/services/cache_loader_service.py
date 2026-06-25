@@ -52,6 +52,9 @@ class CacheLoaderService:
         'pin',
         'lat',
         'lon',
+        'class',
+        'lot_size',
+        'assessed_value',
         'last_synced_at',
     })
     PARCEL_UNIVERSE_NOT_NULL: frozenset[str] = frozenset({
@@ -445,7 +448,7 @@ class CacheLoaderService:
             stmt = pg_insert(ParcelUniverseCache).values(mapped_rows)
             update_cols = {
                 col: stmt.excluded[col]
-                for col in ['lat', 'lon', 'last_synced_at']
+                for col in ['lat', 'lon', 'class', 'lot_size', 'assessed_value', 'last_synced_at']
             }
             stmt = stmt.on_conflict_do_update(
                 index_elements=['pin'],

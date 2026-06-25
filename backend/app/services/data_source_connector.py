@@ -27,6 +27,7 @@ BULK_ENRICH_BATCH_SIZE = 100
 ENRICHABLE_FIELDS = [
     "property_type", "bedrooms", "bathrooms", "square_footage",
     "lot_size", "year_built", "ownership_type", "acquisition_date",
+    "assessed_value", "most_recent_sale_price",
     "phone_1", "phone_2", "phone_3", "email_1", "email_2",
     "mailing_address", "mailing_city", "mailing_state", "mailing_zip",
 ]
