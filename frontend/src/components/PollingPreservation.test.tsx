@@ -315,38 +315,36 @@ describe('Preservation 3.5 — Queue page components poll at 60s while tab is vi
     expect(missing).toEqual([])
   })
 
-  it('property: TodaysActionQueue must have queue action invalidations (onSuccess callbacks)', () => {
+  it('property: TodaysActionQueue must wire queue row actions with invalidation for Create Task', () => {
     /**
-     * Preservation 3.8: When a queue action is performed, the system must
-     * immediately invalidate and refetch the relevant queue query.
-     *
-     * Static analysis: TodaysActionQueue must contain invalidateQueries calls
-     * in its action handlers.
-     *
-     * PASSES on both unfixed and fixed code.
+     * Preservation 3.8: Create Task must invalidate the queue query after success.
+     * Log Call / Log Note navigate to ULCC (?log=) instead of inline API logging.
      */
-    const source = readSource('TodaysActionQueue.tsx')
+    const queueSource = readSource('TodaysActionQueue.tsx')
+    const actionsSource = readSource('queueRowActions.tsx')
 
-    // Must have invalidateQueries for the queue key
-    const hasInvalidation = source.includes('invalidateQueries')
-    const hasQueueKey = source.includes("'queue-todays-action'")
+    expect(queueSource).toContain('createLogCallRowAction')
+    expect(queueSource).toContain('createLogNoteRowAction')
+    expect(queueSource).toContain('createCreateTaskRowAction')
+    expect(queueSource).toContain("queryKey: 'queue-todays-action'")
 
-    expect(hasInvalidation).toBe(true)
-    expect(hasQueueKey).toBe(true)
+    expect(actionsSource).toContain('invalidateQueries')
+    expect(actionsSource).toContain('Create Task')
   })
 
-  it('property: TodaysActionQueue must have Log Call, Log Note, and Create Task actions', () => {
+  it('property: TodaysActionQueue must expose Log Call, Log Note, and Create Task via shared row actions', () => {
     /**
-     * Preservation 3.8: Queue actions (Log Call, Log Note, Create Task) must
-     * remain intact and trigger immediate refetch.
-     *
-     * PASSES on both unfixed and fixed code.
+     * Preservation 3.8: All three queue actions remain available; labels live in
+     * queueRowActions.tsx after consolidation.
      */
-    const source = readSource('TodaysActionQueue.tsx')
+    const actionsSource = readSource('queueRowActions.tsx')
 
-    expect(source).toContain('Log Call')
-    expect(source).toContain('Log Note')
-    expect(source).toContain('Create Task')
+    expect(actionsSource).toContain('Log Call')
+    expect(actionsSource).toContain('Log Note')
+    expect(actionsSource).toContain('Create Task')
+    expect(actionsSource).toContain('action-log-call')
+    expect(actionsSource).toContain('action-log-note')
+    expect(actionsSource).toContain('action-create-task')
   })
 })
 
@@ -505,34 +503,36 @@ describe('Preservation 3.7 — WebhookSyncPanel manual Refresh icon triggers imm
 
 describe('Preservation 3.8 — Queue action invalidations trigger immediate refetch', () => {
   /**
-   * Property: When a queue action (Log Call, Log Note, Create Task) is performed,
-   * the system must immediately invalidate and refetch the relevant queue query.
-   *
-   * PASSES on both unfixed and fixed code.
+   * Property: Create Task must invalidate the queue query after success.
+   * Log Call / Log Note navigate to the canonical LogActivityModal deep link.
    */
 
-  it('property: TodaysActionQueue Log Call action must invalidate queue-todays-action', () => {
-    const source = readSource('TodaysActionQueue.tsx')
+  it('property: Log Call action navigates to lead detail with ?log=call', () => {
+    const actionsSource = readSource('queueRowActions.tsx')
+    const navSource = readSource('../utils/queueLogNavigation.ts')
 
-    // The Log Call action must call invalidateQueries for the queue key
-    // Both the action label and the invalidation must be present
-    expect(source).toContain('Log Call')
-    expect(source).toContain('invalidateQueries')
-    expect(source).toContain("'queue-todays-action'")
+    expect(actionsSource).toContain('Log Call')
+    expect(actionsSource).toContain('buildLeadLogUrl')
+    expect(actionsSource).toContain("'call'")
+    expect(navSource).toContain('?log=')
   })
 
-  it('property: TodaysActionQueue Log Note action must invalidate queue-todays-action', () => {
-    const source = readSource('TodaysActionQueue.tsx')
+  it('property: Log Note action navigates to lead detail with ?log=note', () => {
+    const actionsSource = readSource('queueRowActions.tsx')
 
-    expect(source).toContain('Log Note')
-    expect(source).toContain('invalidateQueries')
+    expect(actionsSource).toContain('Log Note')
+    expect(actionsSource).toContain('buildLeadLogUrl')
+    expect(actionsSource).toContain("'note'")
   })
 
-  it('property: TodaysActionQueue Create Task action must invalidate queue-todays-action', () => {
-    const source = readSource('TodaysActionQueue.tsx')
+  it('property: Create Task action must invalidate queue-todays-action', () => {
+    const queueSource = readSource('TodaysActionQueue.tsx')
+    const actionsSource = readSource('queueRowActions.tsx')
 
-    expect(source).toContain('Create Task')
-    expect(source).toContain('invalidateQueries')
+    expect(actionsSource).toContain('Create Task')
+    expect(actionsSource).toContain('invalidateQueries')
+    expect(queueSource).toContain("queryKey: 'queue-todays-action'")
+    expect(queueSource).toContain('createCreateTaskRowAction')
   })
 })
 
