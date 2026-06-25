@@ -8,6 +8,7 @@ Covers:
 import json
 import pytest
 from datetime import date, datetime, timedelta, timezone
+from unittest.mock import patch
 
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry
@@ -123,6 +124,16 @@ class TestGetCommandCenter:
             assert 'entries' in data['timeline']
             assert 'total' in data['timeline']
 
+    @patch('app.services.hubspot_deal_sync_service.HubSpotDealSyncService.auto_sync_lead_if_stale')
+    def test_auto_syncs_stale_hubspot_on_load(self, mock_auto_sync, client, app):
+        """Opening command center triggers background HubSpot sync when data is stale."""
+        with app.app_context():
+            lead = _make_lead(app, '6 Auto Sync St')
+            mock_auto_sync.return_value = True
+            response = client.get(f'/api/leads/{lead.id}/command-center')
+            assert response.status_code == 200
+            mock_auto_sync.assert_called_once_with(lead.id)
+
 
 # ---------------------------------------------------------------------------
 # 34.2 — PATCH /api/leads/<id>/status
@@ -204,6 +215,104 @@ class TestUpdateStatus:
                 content_type='application/json',
             )
             assert response.status_code == 404
+
+    # ------------------------------------------------------------------
+    # Requirement 2.5 — reason in timeline summary
+    # ------------------------------------------------------------------
+
+    def test_status_change_with_reason_includes_reason_in_summary(self, client, app):
+        """PATCH with reason: summary includes reason text (Req 2.5)."""
+        with app.app_context():
+            lead = _make_lead(app, '43 Reason St', lead_status='mailing_no_contact_made')
+            client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({'status': 'negotiating_remote', 'reason': 'Called today, owner interested.'}),
+                content_type='application/json',
+            )
+            entry = LeadTimelineEntry.query.filter_by(
+                lead_id=lead.id, event_type='status_changed'
+            ).first()
+            assert entry is not None
+            assert entry.summary == (
+                "Status changed from 'mailing_no_contact_made' to 'negotiating_remote'. "
+                "Called today, owner interested."
+            )
+
+    def test_status_change_without_reason_uses_existing_summary_format(self, client, app):
+        """PATCH without reason: summary uses existing format (Req 2.5)."""
+        with app.app_context():
+            lead = _make_lead(app, '44 Reason St', lead_status='mailing_no_contact_made')
+            client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({'status': 'deprioritize'}),
+                content_type='application/json',
+            )
+            entry = LeadTimelineEntry.query.filter_by(
+                lead_id=lead.id, event_type='status_changed'
+            ).first()
+            assert entry is not None
+            assert entry.summary == "Status changed from 'mailing_no_contact_made' to 'deprioritize'."
+
+    def test_status_change_empty_reason_uses_existing_summary_format(self, client, app):
+        """PATCH with empty reason string: summary uses existing format (Req 2.5)."""
+        with app.app_context():
+            lead = _make_lead(app, '45 Reason St', lead_status='mailing_no_contact_made')
+            client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({'status': 'deprioritize', 'reason': ''}),
+                content_type='application/json',
+            )
+            entry = LeadTimelineEntry.query.filter_by(
+                lead_id=lead.id, event_type='status_changed'
+            ).first()
+            assert entry is not None
+            assert entry.summary == "Status changed from 'mailing_no_contact_made' to 'deprioritize'."
+
+    # ------------------------------------------------------------------
+    # Requirement 2.6 — reason stored in event_metadata
+    # ------------------------------------------------------------------
+
+    def test_status_change_with_reason_stores_reason_in_metadata(self, client, app):
+        """PATCH with reason: event_metadata['reason'] holds the reason string (Req 2.6)."""
+        with app.app_context():
+            lead = _make_lead(app, '46 Meta St', lead_status='mailing_no_contact_made')
+            client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({'status': 'negotiating_remote', 'reason': 'Owner called back.'}),
+                content_type='application/json',
+            )
+            entry = LeadTimelineEntry.query.filter_by(
+                lead_id=lead.id, event_type='status_changed'
+            ).first()
+            assert entry is not None
+            assert entry.event_metadata['reason'] == 'Owner called back.'
+
+    def test_status_change_without_reason_stores_none_in_metadata(self, client, app):
+        """PATCH without reason: event_metadata['reason'] is None (Req 2.6)."""
+        with app.app_context():
+            lead = _make_lead(app, '47 Meta St', lead_status='mailing_no_contact_made')
+            client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({'status': 'deprioritize'}),
+                content_type='application/json',
+            )
+            entry = LeadTimelineEntry.query.filter_by(
+                lead_id=lead.id, event_type='status_changed'
+            ).first()
+            assert entry is not None
+            assert entry.event_metadata['reason'] is None
+
+    def test_reason_over_500_chars_rejected(self, client, app):
+        """PATCH with reason > 500 chars returns 400 (Req 2.4)."""
+        with app.app_context():
+            lead = _make_lead(app, '48 Meta St', lead_status='mailing_no_contact_made')
+            long_reason = 'x' * 501
+            response = client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({'status': 'deprioritize', 'reason': long_reason}),
+                content_type='application/json',
+            )
+            assert response.status_code == 400
 
 
 # ---------------------------------------------------------------------------

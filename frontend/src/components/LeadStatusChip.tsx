@@ -60,7 +60,11 @@ interface LeadStatusChipProps {
 }
 
 export function LeadStatusChip({ status, size = 'small' }: LeadStatusChipProps) {
-  const label = LEAD_STATUS_LABELS[status as LeadStatus] ?? status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  // Use Object.hasOwn to guard against prototype-poisoning keys like "__proto__"
+  // that would return the object prototype ({}) rather than undefined via bracket access.
+  const label = Object.hasOwn(LEAD_STATUS_LABELS, status)
+    ? LEAD_STATUS_LABELS[status as LeadStatus]
+    : status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
   const bgcolor = getLeadStatusColor(status)
 
   return (

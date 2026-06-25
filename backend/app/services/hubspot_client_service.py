@@ -17,13 +17,18 @@ logger = logging.getLogger(__name__)
 
 
 class HubSpotClientService:
-    """Read-only HubSpot API client.
+    """HubSpot API client supporting both read and write operations.
 
     Decrypts the Fernet-encrypted token stored in ``HubSpotConfig`` and
     provides paginated iterators for all four importable object types
-    (deals, contacts, companies, engagements).  Every outbound request is
-    a GET; any attempt to call a mutating method raises
-    ``HubSpotReadOnlyViolation``.
+    (deals, contacts, companies, engagements) as well as write methods
+    for completing tasks.
+
+    Read methods use ``_get`` (HTTP GET only). Write methods use ``_patch``
+    (HTTP PATCH) which mutates HubSpot state — callers should ensure the
+    Private App token has the required write scopes before calling them.
+    ``complete_task`` marks a HubSpot task as COMPLETED and requires the
+    ``crm.objects.tasks.write`` scope.
     """
 
     BASE_URL = "https://api.hubapi.com"
@@ -217,6 +222,133 @@ class HubSpotClientService:
         resp.raise_for_status()
         return resp.json()
 
+    def _post(self, path: str, body: dict) -> dict:
+        """Execute a POST request against the HubSpot API.
+
+        Used for batch read endpoints (e.g. v4 associations batch/read) which
+        require a POST body rather than query parameters.  Raises the same
+        error hierarchy as ``_get``.
+        """
+        url = f"{self.BASE_URL}{path}"
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "application/json",
+        }
+        try:
+            resp = requests.post(url, headers=headers, json=body, timeout=self.TIMEOUT)
+        except requests.exceptions.Timeout as exc:
+            raise ExternalServiceError(
+                f"HubSpot API request timed out after {self.TIMEOUT}s: {path}",
+                payload={"error_type": "hubspot_timeout", "path": path},
+            ) from exc
+        except requests.exceptions.RequestException as exc:
+            raise ExternalServiceError(
+                f"HubSpot API request failed: {exc}",
+                payload={"error_type": "hubspot_request_error", "path": path},
+            ) from exc
+
+        if resp.status_code in (401, 403):
+            raise HubSpotAuthenticationError(
+                f"HubSpot authentication failed (HTTP {resp.status_code})"
+            )
+        if resp.status_code == 429:
+            retry_after_raw = resp.headers.get("Retry-After")
+            retry_after = None
+            if retry_after_raw is not None:
+                try:
+                    retry_after = int(retry_after_raw)
+                except ValueError:
+                    retry_after = None
+            raise HubSpotRateLimitError(
+                "HubSpot API rate limit exceeded",
+                retry_after=retry_after,
+            )
+        if resp.status_code >= 500:
+            raise ExternalServiceError(
+                f"HubSpot API returned server error (HTTP {resp.status_code}): {path}",
+                payload={
+                    "error_type": "hubspot_server_error",
+                    "path": path,
+                    "status_code": resp.status_code,
+                },
+            )
+        resp.raise_for_status()
+        if resp.status_code == 204 or not resp.content:
+            return {}
+        return resp.json()
+
+    def _patch(self, path: str, body: dict) -> dict:
+        """Execute a PATCH request against the HubSpot API.
+
+        Used for write operations (e.g. marking a task completed).
+        Raises the same error hierarchy as ``_get``.
+        """
+        url = f"{self.BASE_URL}{path}"
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "application/json",
+        }
+        try:
+            resp = requests.patch(url, headers=headers, json=body, timeout=self.TIMEOUT)
+        except requests.exceptions.Timeout as exc:
+            raise ExternalServiceError(
+                f"HubSpot API request timed out after {self.TIMEOUT}s: {path}",
+                payload={"error_type": "hubspot_timeout", "path": path},
+            ) from exc
+        except requests.exceptions.RequestException as exc:
+            raise ExternalServiceError(
+                f"HubSpot API request failed: {exc}",
+                payload={"error_type": "hubspot_request_error", "path": path},
+            ) from exc
+
+        if resp.status_code in (401, 403):
+            raise HubSpotAuthenticationError(
+                f"HubSpot authentication failed (HTTP {resp.status_code})"
+            )
+        if resp.status_code == 429:
+            retry_after_raw = resp.headers.get("Retry-After")
+            retry_after = None
+            if retry_after_raw is not None:
+                try:
+                    retry_after = int(retry_after_raw)
+                except ValueError:
+                    retry_after = None
+            raise HubSpotRateLimitError(
+                "HubSpot API rate limit exceeded",
+                retry_after=retry_after,
+            )
+        if resp.status_code >= 500:
+            raise ExternalServiceError(
+                f"HubSpot API returned server error (HTTP {resp.status_code}): {path}",
+                payload={
+                    "error_type": "hubspot_server_error",
+                    "path": path,
+                    "status_code": resp.status_code,
+                },
+            )
+        resp.raise_for_status()
+        # 204 No Content is valid for some PATCH endpoints
+        if resp.status_code == 204 or not resp.content:
+            return {}
+        return resp.json()
+
+    def complete_task(self, hubspot_task_id: str) -> dict:
+        """Mark a HubSpot task as COMPLETED via the CRM v3 Tasks API.
+
+        Args:
+            hubspot_task_id: The HubSpot-assigned task ID (e.g. '57292993650').
+
+        Returns:
+            The updated task properties dict from HubSpot, or {} on 204.
+
+        Raises:
+            HubSpotAuthenticationError, HubSpotRateLimitError, ExternalServiceError.
+        """
+        path = f"/crm/v3/objects/tasks/{hubspot_task_id}"
+        body = {"properties": {"hs_task_status": "COMPLETED"}}
+        logger.info("HubSpotClientService.complete_task: marking task %s COMPLETED", hubspot_task_id)
+        return self._patch(path, body)
+
     # ------------------------------------------------------------------ #
     # Paginated object iterators                                           #
     # ------------------------------------------------------------------ #
@@ -229,6 +361,7 @@ class HubSpotClientService:
         "dealname", "pipeline", "dealstage", "closedate", "amount",
         "county_assessor_pin", "pin", "address", "hs_object_id",
         "createdate", "hs_lastmodifieddate",
+        "deal_source", "description",
     ]
     _CONTACT_PROPERTIES = [
         "firstname", "lastname", "email", "phone", "mobilephone",
@@ -272,9 +405,12 @@ class HubSpotClientService:
             "properties": properties,
         }
 
-        # Request contact associations for deals so we can link deal → owner contact
+        # Request contact associations for deals so we can link deal → owner contact.
+        # Request deal associations for contacts so we can link contact → property.
         if object_type == "deals":
             params["associations"] = "contacts"
+        elif object_type == "contacts":
+            params["associations"] = "deals"
 
         while True:
             response = self._get(path, params=params)
@@ -365,6 +501,111 @@ class HubSpotClientService:
             if not response.get("hasMore", False):
                 break
             params["offset"] = response.get("offset")
+
+    # ------------------------------------------------------------------ #
+    # Deal → contact association batch fetch (v4 API)                     #
+    # ------------------------------------------------------------------ #
+
+    # HubSpot's v4 associations batch/read endpoint accepts at most 100
+    # deal IDs per request.
+    _ASSOC_BATCH_SIZE = 100
+
+    def fetch_deal_contact_associations(self, deal_ids: list[str], allow_partial: bool = True) -> dict[str, list[str]]:
+        """Fetch contact associations for a list of deal IDs via the v4 batch API.
+
+        The CRM v3 list endpoint (``GET /crm/v3/objects/deals?associations=contacts``)
+        silently returns an empty ``associations`` block for most deals.  The v4
+        associations batch/read endpoint is the only reliable way to retrieve
+        deal → contact links.
+
+        Args:
+            deal_ids:      List of HubSpot deal ID strings.
+            allow_partial: Forwarded to ``_fetch_associations_batch``.  Use
+                ``False`` for single-deal webhook calls so API failures are
+                not silently swallowed.
+
+        Returns:
+            Dict mapping each deal_id → list of associated contact_id strings.
+
+        Raises:
+            HubSpotAuthenticationError, HubSpotRateLimitError, ExternalServiceError.
+        """
+        return self._fetch_associations_batch("deals", "contacts", deal_ids, allow_partial=allow_partial)
+
+    def fetch_contact_deal_associations(self, contact_ids: list[str], allow_partial: bool = True) -> dict[str, list[str]]:
+        """Fetch deal associations for a list of contact IDs via the v4 batch API.
+
+        Mirror of :meth:`fetch_deal_contact_associations` for the contact → deal
+        direction.  Used to populate ``raw_payload["associations"]["deals"]``
+        after a contacts import, which the v3 list endpoint also leaves empty.
+
+        Args:
+            contact_ids:   List of HubSpot contact ID strings.
+            allow_partial: Forwarded to ``_fetch_associations_batch``.
+
+        Returns:
+            Dict mapping each contact_id → list of associated deal_id strings.
+
+        Raises:
+            HubSpotAuthenticationError, HubSpotRateLimitError, ExternalServiceError.
+        """
+        return self._fetch_associations_batch("contacts", "deals", contact_ids, allow_partial=allow_partial)
+
+    def _fetch_associations_batch(
+        self, from_type: str, to_type: str, object_ids: list[str],
+        allow_partial: bool = True,
+    ) -> dict[str, list[str]]:
+        """Generic v4 associations batch/read for any from_type → to_type pair.
+
+        Args:
+            from_type:     Source object type slug (e.g. ``"deals"``, ``"contacts"``).
+            to_type:       Target object type slug (e.g. ``"contacts"``, ``"deals"``).
+            object_ids:    List of source object ID strings.
+            allow_partial: When ``True`` (default) an ``ExternalServiceError`` on any
+                single batch is logged as a warning and the loop continues, returning
+                whatever partial results were gathered.  When ``False`` the exception
+                is re-raised immediately so single-batch callers (e.g. webhook refresh)
+                get a hard failure rather than a silent empty result.
+
+        Returns:
+            Dict mapping each source object ID → list of target object ID strings.
+        """
+        path = f"/crm/v4/associations/{from_type}/{to_type}/batch/read"
+        result: dict[str, list[str]] = {}
+
+        for i in range(0, len(object_ids), self._ASSOC_BATCH_SIZE):
+            batch = object_ids[i : i + self._ASSOC_BATCH_SIZE]
+            body = {"inputs": [{"id": oid} for oid in batch]}
+            try:
+                response = self._post(path, body)
+            except ExternalServiceError as exc:
+                if not allow_partial:
+                    raise
+                logger.warning(
+                    "_fetch_associations_batch: %s→%s batch %d-%d failed: %s",
+                    from_type, to_type, i, i + len(batch), exc,
+                )
+                continue
+
+            for item in response.get("results", []):
+                from_id = str(item.get("from", {}).get("id", ""))
+                if not from_id:
+                    continue
+                to_entries = item.get("to", [])
+                to_ids = [
+                    str(t.get("toObjectId", ""))
+                    for t in to_entries
+                    if t.get("toObjectId")
+                ]
+                result[from_id] = to_ids
+
+            for error in response.get("errors", []):
+                logger.warning(
+                    "_fetch_associations_batch: %s→%s inline error: %s",
+                    from_type, to_type, error,
+                )
+
+        return result
 
     # ------------------------------------------------------------------ #
     # Connection test                                                      #

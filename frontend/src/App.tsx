@@ -42,6 +42,7 @@ import {
   Accordion,
   AccordionSummary,
   AccordionDetails,
+  Link as MuiLink,
 } from '@mui/material'
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
@@ -66,13 +67,13 @@ import TodayIcon from '@mui/icons-material/Today'
 import ViewKanbanIcon from '@mui/icons-material/ViewKanban'
 import ExpandLess from '@mui/icons-material/ExpandLess'
 import ExpandMore from '@mui/icons-material/ExpandMore'
+import StorageIcon from '@mui/icons-material/Storage'
 import { usePipelineStatus } from './context/PipelineStatusContext'
 import Avatar from '@mui/material/Avatar'
 import { WorkflowStep, PropertyFacts, PropertyType, ConstructionType, InteriorCondition } from './types'
 import { analysisService, queueService } from './services/api'
 import { PropertyFactsForm } from './components/PropertyFactsForm'
 import { PropertyListPage } from './components/PropertyListPage'
-import { PropertyDetailPage } from './components/PropertyDetailPage'
 import { ImportWizard } from './components/ImportWizard'
 import { ImportHistoryTable } from './components/ImportHistoryTable'
 import { MarketingListManager } from './components/MarketingListManager'
@@ -92,11 +93,14 @@ import { NoNextActionQueue } from './components/NoNextActionQueue'
 import { NeedsReviewQueue } from './components/NeedsReviewQueue'
 import { DoNotContactQueue } from './components/DoNotContactQueue'
 import { MissingPropertyMatchQueue } from './components/MissingPropertyMatchQueue'
-import { LeadCommandCenter } from './components/LeadCommandCenter'
+import { UnifiedLeadCommandCenter } from '@/components/UnifiedLeadCommandCenter'
 import { AdminPanel } from './components/AdminPanel'
 import AdminUserDetail from './components/AdminUserDetail'
+import GlobalSearchBar from '@/components/GlobalSearchBar'
+import SearchResultsPage from '@/pages/SearchResultsPage'
 import { DealKanbanPage } from './pages/DealKanbanPage'
 import { PipelineConfigAdminPage } from './pages/PipelineConfigAdminPage'
+import DataSourcesPanel from '@/components/DataSourcesPanel'
 import type { QueueCounts } from './types'
 
 const DRAWER_WIDTH = 240
@@ -141,6 +145,7 @@ const NAV_SECTIONS = [
           { label: 'HubSpot Import', path: '/import/hubspot', icon: <HubIcon />, badgeKey: null },
           { label: 'Review Queue', path: '/import/hubspot/review-queue', icon: <RateReviewIcon />, badgeKey: null },
           { label: 'Marketing', path: '/marketing', icon: <CampaignIcon />, badgeKey: null },
+          { label: 'Data Sources', path: '/leads/data-sources', icon: <StorageIcon />, badgeKey: null },
         ],
       },
       {
@@ -164,63 +169,45 @@ const NAV_SECTIONS = [
 // Page wrapper components that handle route params / navigation
 // ---------------------------------------------------------------------------
 
-/** Wraps PropertyDetailPage to extract leadId from URL params. */
-function LeadDetailRoute() {
-  const { leadId } = useParams<{ leadId: string }>()
-  const navigate = useNavigate()
+/** Wraps PropertyListPage — no lead selection prop needed; row clicks navigate via useNavigate inside the component. */
+function LeadListRoute() {
+  return <PropertyListPage />
+}
 
-  const id = Number(leadId)
-  if (!leadId || Number.isNaN(id)) {
-    return (
-      <Box sx={{ p: 4 }}>
-        <Typography color="error">Invalid property ID.</Typography>
-        <Button component={Link} to="/properties" sx={{ mt: 1 }}>
-          Back to Properties
-        </Button>
-      </Box>
-    )
-  }
+// ---------------------------------------------------------------------------
+// Unified Lead Command Center route wrapper — Tasks 10.1 + 10.2
+// ---------------------------------------------------------------------------
 
+/** Shows "Invalid lead ID" error state for non-positive-integer :id params. */
+function InvalidLeadIdError() {
   return (
-    <PropertyDetailPage
-      leadId={id}
-      onBack={() => navigate('/properties')}
-      onAnalysisStarted={() => {
-        // Could navigate to analysis view in the future
-      }}
-    />
+    <Box sx={{ p: 3 }} data-testid="invalid-id-error">
+      <Alert severity="error" sx={{ mb: 2 }}>Invalid lead ID</Alert>
+      <MuiLink component={Link} to="/properties">Back to Properties</MuiLink>
+    </Box>
   )
 }
 
-/** Wraps PropertyListPage to navigate on property selection. */
-function LeadListRoute() {
-  const navigate = useNavigate()
-  return <PropertyListPage onLeadSelect={(id) => navigate(`/properties/${id}`)} />
-}
-
-/** Redirects /leads/:leadId → /properties/:leadId */
-function LeadDetailRedirect() {
-  const { leadId } = useParams<{ leadId: string }>()
-  return <Navigate to={`/properties/${leadId}`} replace />
-}
-
-/** Wraps LeadCommandCenter to extract :id from URL params. */
-function LeadCommandCenterRoute() {
+/** Canonical route wrapper for /leads/:id — validates param, renders UnifiedLeadCommandCenter. */
+function UnifiedLeadCommandCenterRoute() {
   const { id } = useParams<{ id: string }>()
   const numericId = Number(id)
-
-  if (!id || Number.isNaN(numericId)) {
-    return (
-      <Box sx={{ p: 4 }}>
-        <Typography color="error">Invalid lead ID.</Typography>
-        <Button component={Link} to="/" sx={{ mt: 1 }}>
-          Back to Queue
-        </Button>
-      </Box>
-    )
+  if (!id || !Number.isInteger(numericId) || numericId <= 0) {
+    return <InvalidLeadIdError />
   }
+  return <UnifiedLeadCommandCenter leadId={numericId} />
+}
 
-  return <LeadCommandCenter leadId={numericId} />
+/** Redirects /properties/:leadId → /leads/:leadId (history replace). */
+function LegacyPropertyDetailRedirect() {
+  const { leadId } = useParams<{ leadId: string }>()
+  return <Navigate to={'/leads/' + leadId} replace />
+}
+
+/** Redirects /leads/:id/command-center → /leads/:id (history replace). */
+function LegacyCommandCenterRedirect() {
+  const { id } = useParams<{ id: string }>()
+  return <Navigate to={'/leads/' + id} replace />
 }
 
 /** Wraps ImportWizard + ImportHistoryTable together. */
@@ -1455,9 +1442,11 @@ function App() {
               <MenuIcon />
             </IconButton>
           )}
-          <Typography variant="h6" component="h1" noWrap sx={{ flexGrow: 1 }}>
+          <Typography variant="h6" component="h1" noWrap sx={{ flexGrow: 0, mr: 2 }}>
             Real Estate Analysis Platform
           </Typography>
+          <GlobalSearchBar />
+          <Box sx={{ flexGrow: 1 }} />
           {pipelineStatus?.pipeline_running && (
             <Tooltip title="HubSpot pipeline processing…">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mr: 1 }}>
@@ -1590,20 +1579,24 @@ function App() {
           <Route path="/queues/needs-review" element={<NeedsReviewQueue />} />
           <Route path="/queues/do-not-contact" element={<DoNotContactQueue />} />
           <Route path="/queues/missing-property-match" element={<MissingPropertyMatchQueue />} />
-          {/* Lead Command Center */}
-          <Route path="/leads/:id/command-center" element={<LeadCommandCenterRoute />} />
+          {/* Lead Command Center — now redirects to canonical /leads/:id */}
+          <Route path="/leads/:id/command-center" element={<LegacyCommandCenterRedirect />} />
+
+          {/* Canonical unified lead page */}
+          <Route path="/leads/:id" element={<UnifiedLeadCommandCenterRoute />} />
           {/* Unified analysis landing page */}
           <Route path="/analysis" element={<AnalysisLandingPage />} />
           {/* ARV workflow — session ID in URL, state fetched from backend */}
           <Route path="/analysis/arv/:sessionId" element={<AnalysisErrorBoundary><AnalysisRoute /></AnalysisErrorBoundary>} />
           {/* Legacy ARV workflow — still accessible directly */}
           <Route path="/analysis/arv" element={<AnalysisRoute />} />
-          {/* Properties routes (canonical) */}
+          {/* Properties routes — /properties/:leadId now redirects to canonical /leads/:id */}
+          <Route path="/search" element={<SearchResultsPage />} />
           <Route path="/properties" element={<LeadListRoute />} />
-          <Route path="/properties/:leadId" element={<LeadDetailRoute />} />
-          {/* Legacy /leads routes — redirect to /properties */}
+          <Route path="/properties/:leadId" element={<LegacyPropertyDetailRedirect />} />
+          {/* Legacy /leads routes — redirect to /properties or handled by canonical /leads/:id above */}
           <Route path="/leads" element={<Navigate to="/properties" replace />} />
-          <Route path="/leads/:leadId" element={<LeadDetailRedirect />} />
+          <Route path="/leads/data-sources" element={<DataSourcesPanel />} />
           <Route path="/import" element={<ImportRoute />} />
           <Route path="/import/callback" element={<OAuthCallback />} />
           <Route path="/marketing" element={<MarketingListManager />} />
@@ -1617,6 +1610,7 @@ function App() {
           {/* HubSpot CRM routes (Tasks 25.2) */}
           <Route path="/import/hubspot" element={<HubSpotImportArea />} />
           <Route path="/import/hubspot/review-queue" element={<ReviewQueue />} />
+          {/* Data Sources Panel — also accessible at canonical /leads/data-sources (defined above in legacy /leads block) */}
           {/* Admin routes — guarded by is_admin claim */}
           <Route path="/admin" element={user?.is_admin ? <AdminPanel /> : <Navigate to="/" replace />} />
           <Route path="/admin/users/:userId" element={user?.is_admin ? <AdminUserDetail /> : <Navigate to="/" replace />} />

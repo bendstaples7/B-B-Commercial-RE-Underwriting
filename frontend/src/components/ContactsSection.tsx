@@ -6,18 +6,23 @@ import {
   Chip,
   List,
   ListItem,
+  ListItemButton,
   Divider,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogActions,
+  Drawer,
+  IconButton,
   Snackbar,
   Alert,
   CircularProgress,
 } from '@mui/material'
 import PersonAddIcon from '@mui/icons-material/PersonAdd'
+import CloseIcon from '@mui/icons-material/Close'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { contactService } from '@/services/api'
+import { formatPhoneNumber, phoneTelHref } from '@/utils/phone'
 import type { PropertyContact, ContactRole } from '@/types'
 import { ContactFormModal } from './ContactFormModal'
 
@@ -51,6 +56,10 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
   // ── Modal state ──────────────────────────────────────────────────────────
   const [formOpen, setFormOpen] = useState(false)
   const [editingContact, setEditingContact] = useState<PropertyContact | undefined>(undefined)
+
+  // ── Contact detail drawer state ───────────────────────────────────────────
+  const [detailContact, setDetailContact] = useState<PropertyContact | null>(null)
+  const [detailOpen, setDetailOpen] = useState(false)
 
   // ── Confirmation dialog state ─────────────────────────────────────────────
   const [removeDialogOpen, setRemoveDialogOpen] = useState(false)
@@ -192,55 +201,62 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
                 {index > 0 && <Divider component="li" />}
                 <ListItem
                   disablePadding
-                  sx={{ py: 1.5, flexDirection: 'column', alignItems: 'flex-start' }}
+                  sx={{ flexDirection: 'column', alignItems: 'stretch' }}
                 >
-                  {/* Name + badges row */}
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 0.5 }}>
-                    <Typography variant="subtitle1" fontWeight="bold">
-                      {fullName}
-                    </Typography>
-                    <Chip
-                      label={formatRole(role)}
-                      size="small"
-                      variant="outlined"
-                      color="default"
-                    />
-                    {isPrimary && (
+                  {/* Tappable row — opens detail drawer */}
+                  <ListItemButton
+                    onClick={() => { setDetailContact(contact); setDetailOpen(true) }}
+                    sx={{ py: 1.5, flexDirection: 'column', alignItems: 'flex-start' }}
+                    aria-label={`View details for ${fullName}`}
+                  >
+                    {/* Name + badges row */}
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 0.5 }}>
+                      <Typography variant="subtitle1" fontWeight="bold">
+                        {fullName}
+                      </Typography>
                       <Chip
-                        label="Primary"
+                        label={formatRole(role)}
                         size="small"
-                        color="primary"
-                        aria-label="Primary contact"
+                        variant="outlined"
+                        color="default"
                       />
+                      {isPrimary && (
+                        <Chip
+                          label="Primary"
+                          size="small"
+                          color="primary"
+                          aria-label="Primary contact"
+                        />
+                      )}
+                    </Box>
+
+                    {/* Phone numbers */}
+                    {contact.phones && contact.phones.length > 0 && (
+                      <Box sx={{ mb: 0.25 }}>
+                        {contact.phones.map((phone) => (
+                          <Typography key={phone.id} variant="body2" color="text.secondary">
+                            📞 {phone.value}
+                            {phone.label && phone.label !== 'other' ? ` (${phone.label})` : ''}
+                          </Typography>
+                        ))}
+                      </Box>
                     )}
-                  </Box>
 
-                  {/* Phone numbers */}
-                  {contact.phones && contact.phones.length > 0 && (
-                    <Box sx={{ mb: 0.25 }}>
-                      {contact.phones.map((phone) => (
-                        <Typography key={phone.id} variant="body2" color="text.secondary">
-                          📞 {phone.value}
-                          {phone.label && phone.label !== 'other' ? ` (${phone.label})` : ''}
-                        </Typography>
-                      ))}
-                    </Box>
-                  )}
-
-                  {/* Email addresses */}
-                  {contact.emails && contact.emails.length > 0 && (
-                    <Box sx={{ mb: 0.5 }}>
-                      {contact.emails.map((email) => (
-                        <Typography key={email.id} variant="body2" color="text.secondary">
-                          ✉️ {email.value}
-                          {email.label && email.label !== 'other' ? ` (${email.label})` : ''}
-                        </Typography>
-                      ))}
-                    </Box>
-                  )}
+                    {/* Email addresses */}
+                    {contact.emails && contact.emails.length > 0 && (
+                      <Box sx={{ mb: 0.5 }}>
+                        {contact.emails.map((email) => (
+                          <Typography key={email.id} variant="body2" color="text.secondary">
+                            ✉️ {email.value}
+                            {email.label && email.label !== 'other' ? ` (${email.label})` : ''}
+                          </Typography>
+                        ))}
+                      </Box>
+                    )}
+                  </ListItemButton>
 
                   {/* Action buttons */}
-                  <Box sx={{ display: 'flex', gap: 1, mt: 0.5, flexWrap: 'wrap' }}>
+                  <Box sx={{ display: 'flex', gap: 1, px: 2, pb: 1.5, flexWrap: 'wrap' }}>
                     {!isPrimary && (
                       <Button
                         size="small"
@@ -277,6 +293,112 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
           })}
         </List>
       )}
+
+      {/* Contact detail drawer */}
+      <Drawer
+        anchor="right"
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        PaperProps={{ sx: { width: { xs: '100%', sm: 360 }, p: 3 } }}
+      >
+        {detailContact && (() => {
+          const fullName = [detailContact.first_name, detailContact.last_name].filter(Boolean).join(' ') || '(No name)'
+          return (
+            <>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                <Typography variant="h6">{fullName}</Typography>
+                <IconButton onClick={() => setDetailOpen(false)} aria-label="Close contact detail">
+                  <CloseIcon />
+                </IconButton>
+              </Box>
+
+              <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
+                <Chip label={formatRole(detailContact.property_contact_role)} size="small" variant="outlined" />
+                {detailContact.is_primary && <Chip label="Primary" size="small" color="primary" />}
+              </Box>
+
+              {detailContact.phones && detailContact.phones.length > 0 && (
+                <Box sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>Phone</Typography>
+                  {detailContact.phones.map((p) => (
+                    <Typography key={p.id} variant="body1" sx={{ mb: 0.5 }}>
+                      📞 <a href={phoneTelHref(p.value)} style={{ textDecoration: 'none', color: 'inherit' }}>{formatPhoneNumber(p.value)}</a>
+                      {p.label && p.label !== 'other' && (
+                        <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>({p.label})</Typography>
+                      )}
+                    </Typography>
+                  ))}
+                </Box>
+              )}
+
+              {detailContact.emails && detailContact.emails.length > 0 && (
+                <Box sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>Email</Typography>
+                  {detailContact.emails.map((e) => (
+                    <Typography key={e.id} variant="body1" sx={{ mb: 0.5 }}>
+                      ✉️ <a href={`mailto:${e.value}`} style={{ textDecoration: 'none', color: 'inherit' }}>{e.value}</a>
+                      {e.label && e.label !== 'other' && (
+                        <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>({e.label})</Typography>
+                      )}
+                    </Typography>
+                  ))}
+                </Box>
+              )}
+
+              {/* Show message if no contact info at all */}
+              {(!detailContact.phones || detailContact.phones.length === 0) &&
+               (!detailContact.emails || detailContact.emails.length === 0) &&
+               !detailContact.notes && !detailContact.role_description && (
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                  No contact details on file. Use Edit to add a phone number or email.
+                </Typography>
+              )}
+
+              {detailContact.notes && (
+                <Box sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>Notes</Typography>
+                  <Typography variant="body2">{detailContact.notes}</Typography>
+                </Box>
+              )}
+
+              {detailContact.role_description && (
+                <Box sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" color="text.secondary" gutterBottom>Role Description</Typography>
+                  <Typography variant="body2">{detailContact.role_description}</Typography>
+                </Box>
+              )}
+
+              <Box sx={{ display: 'flex', gap: 1, mt: 2, flexWrap: 'wrap' }}>
+                <Button
+                  variant="contained"
+                  size="small"
+                  onClick={() => { setDetailOpen(false); handleOpenEdit(detailContact) }}
+                >
+                  Edit
+                </Button>
+                {!detailContact.is_primary && (
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    onClick={() => { setPrimaryMutation.mutate(detailContact); setDetailOpen(false) }}
+                    disabled={setPrimaryMutation.isPending}
+                  >
+                    Set as Primary
+                  </Button>
+                )}
+                <Button
+                  variant="outlined"
+                  color="error"
+                  size="small"
+                  onClick={() => { setDetailOpen(false); handleRemoveClick(detailContact) }}
+                >
+                  Remove
+                </Button>
+              </Box>
+            </>
+          )
+        })()}
+      </Drawer>
 
       {/* Remove confirmation dialog */}
       <Dialog

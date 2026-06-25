@@ -178,7 +178,12 @@ class TestProperty19NoOverwriteProtectedFields:
         self, app, street, score, source, conflicting_pin
     ) -> None:
         """After an address-matched (MEDIUM confidence) deal import, the Lead's
-        protected fields must remain unchanged because the match is still pending.
+        protected fields must remain unchanged regardless of match status.
+
+        When exactly one lead matches the address, the match is auto-confirmed
+        (no ambiguity → no human review needed). When multiple leads match, the
+        match stays pending for human review. In either case, protected fields
+        on the lead must not be overwritten.
 
         # Feature: hubspot-crm-migration, Property 19: No overwrite of protected fields without confirmation
         **Validates: Requirements 22.1, 22.2, 22.3**
@@ -212,9 +217,10 @@ class TestProperty19NoOverwriteProtectedFields:
             match = svc.match_deal(deal)
             db.session.flush()
 
-            # Match should be MEDIUM confidence and pending
+            # Match should be MEDIUM confidence.
+            # With exactly one lead in the fixture, auto-confirm fires deterministically.
             assert match.confidence == "MEDIUM"
-            assert match.status == "pending"
+            assert match.status == "confirmed"
 
             # Protected fields must be unchanged
             refreshed_lead = Lead.query.get(lead_id)
@@ -231,6 +237,44 @@ class TestProperty19NoOverwriteProtectedFields:
                 f"source was overwritten: "
                 f"'{original_source}' → '{refreshed_lead.source}'"
             )
+
+            db.session.rollback()
+
+    def test_address_match_disambiguates_when_multiple_leads_share_address(self, app) -> None:
+        """When multiple leads share the same normalised address the matcher
+        picks the best candidate (HubSpot match / stage / contact data) instead
+        of leaving the deal pending and creating a placeholder.
+
+        # Feature: hubspot-crm-migration, Property 19
+        **Validates: Requirements 22.1, 22.2**
+        """
+        with app.app_context():
+            shared_street = "555 Ambiguous St"
+            lead_a = Lead(property_street=shared_street, lead_score=40.0, source="manual")
+            lead_b = Lead(property_street=shared_street, lead_score=60.0, source="manual")
+            db.session.add_all([lead_a, lead_b])
+            db.session.flush()
+
+            deal = _make_deal(
+                hubspot_id="ambiguous-addr-deal",
+                pin="XXXXXXXXXXX",  # won't match either lead's PIN
+                address=shared_street,
+            )
+            db.session.add(deal)
+            db.session.flush()
+
+            svc = HubSpotMatcherService()
+            match = svc.match_deal(deal)
+            db.session.flush()
+
+            assert match.confidence == "MEDIUM"
+            assert match.status == "confirmed", (
+                f"Expected 'confirmed' after disambiguation, got '{match.status}'"
+            )
+            assert match.internal_record_id == lead_a.id, (
+                "Lower id wins when stage/HubSpot/contact data are tied"
+            )
+            assert lead_b.review_required is True
 
             db.session.rollback()
 

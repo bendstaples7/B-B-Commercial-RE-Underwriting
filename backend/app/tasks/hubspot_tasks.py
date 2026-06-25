@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import tempfile
+import time
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,67 @@ WARM_SIGNAL_TYPES = frozenset({'PRIOR_WARM_CONVERSATION', 'APPOINTMENT_OCCURRED'
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
+
+def _fetch_deal_contact_associations_with_retry(
+    client, deal_id: str, *, max_attempts: int = 3, base_delay: float = 1.0,
+) -> list:
+    """Fetch one deal's contact associations via the v4 batch API with bounded
+    retry + exponential backoff on *transient* HubSpot failures.
+
+    HubSpot rate limits (429) and server/timeout errors surface as
+    ``HubSpotRateLimitError`` / ``ExternalServiceError`` from the client. Those
+    are retried up to ``max_attempts`` times, honouring a server-provided
+    ``Retry-After`` when present. A non-transient error, or a final exhausted
+    retry, is logged and reported as an empty list so a flaky association fetch
+    degrades gracefully instead of aborting enrichment — consistent with the
+    surrounding best-effort error handling.
+
+    Returns the list of associated contact-id strings (possibly empty).
+    """
+    from app.exceptions import ExternalServiceError, HubSpotRateLimitError
+
+    transient = (HubSpotRateLimitError, ExternalServiceError)
+    for attempt in range(1, max_attempts + 1):
+        try:
+            # allow_partial=False so a transient failure on this single-deal
+            # batch is RAISED into the backoff loop below instead of being
+            # swallowed by the client and returned as an empty/partial result —
+            # otherwise the retry never actually retries.
+            assoc_map = client.fetch_deal_contact_associations(
+                [deal_id], allow_partial=False
+            )
+            return assoc_map.get(deal_id, [])
+        except transient as exc:
+            if attempt >= max_attempts:
+                logger.warning(
+                    "v4 deal->contact association fetch for deal %s failed after "
+                    "%d attempts: %s", deal_id, attempt, exc,
+                )
+                return []
+            payload = getattr(exc, 'payload', None) or {}
+            retry_after = payload.get('retry_after')
+            # Honour an explicit Retry-After even when it is 0 — `if retry_after`
+            # would treat a legitimate zero-second delay as "missing" and fall
+            # back to exponential backoff.
+            delay = (
+                float(retry_after) if retry_after is not None
+                else base_delay * (2 ** (attempt - 1))
+            )
+            logger.warning(
+                "v4 deal->contact association fetch for deal %s failed "
+                "(attempt %d/%d), retrying in %.1fs: %s",
+                deal_id, attempt, max_attempts, delay, exc,
+            )
+            time.sleep(delay)
+        except Exception as exc:
+            # Non-transient (auth / programming) error — don't hammer the API.
+            logger.warning(
+                "v4 deal->contact association fetch for deal %s failed "
+                "(non-retryable): %s", deal_id, exc,
+            )
+            return []
+    return []
+
 
 def _mark_run_failed(db, run, message: str) -> None:
     """Mark an ImportRun as failed with an error message."""
@@ -257,10 +319,22 @@ def _run_import_generic(
 # ---------------------------------------------------------------------------
 
 def run_import_hubspot_deals(run_id: int, self_task=None) -> None:
-    """Paginate and UPSERT all HubSpot deals into hubspot_deals.
+    """Paginate and UPSERT all HubSpot deals into hubspot_deals, then
+    backfill contact associations via the v4 batch API.
+
+    The CRM v3 list endpoint silently returns an empty ``associations`` block
+    for all deals, so we run a separate v4 batch read after the import to
+    populate ``raw_payload["associations"]["contacts"]`` for every deal.
 
     Requirements: 7.6, 7.7, 7.8, 8.1, 8.6, 20.2, 20.3
     """
+    from dotenv import load_dotenv
+    load_dotenv()
+    from app import create_app
+
+    app = create_app()
+
+    # Step 1 — standard paginated import (stores deals without associations)
     _run_import_generic(
         run_id=run_id,
         object_type='deals',
@@ -269,22 +343,302 @@ def run_import_hubspot_deals(run_id: int, self_task=None) -> None:
         self_task=self_task,
     )
 
+    # Step 2 — backfill contact associations via v4 batch API
+    with app.app_context():
+        from app import db
+        from app.models import HubSpotDeal, HubSpotConfig, HubSpotImportRun
+        from app.services.hubspot_client_service import HubSpotClientService
+
+        config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
+        if config is None:
+            logger.warning(
+                "run_import_hubspot_deals: skipping association backfill — no HubSpotConfig"
+            )
+            return
+
+        try:
+            _backfill_deal_contact_associations(app, db, HubSpotClientService(config))
+            _check_association_health(db, 'deals', run_id)
+        except Exception as exc:
+            logger.error(
+                "run_import_hubspot_deals: association backfill failed for run_id=%d: %s",
+                run_id, exc, exc_info=True,
+            )
+            run = HubSpotImportRun.query.get(run_id)
+            if run:
+                run.status = 'partial'
+                run.error_message = f"Association backfill failed: {exc}"
+                db.session.commit()
+            raise
+
+
+def _backfill_deal_contact_associations(app, db, client) -> None:
+    """Fetch contact associations for all deals via the v4 batch API and
+    merge them into each deal's ``raw_payload["associations"]["contacts"]``.
+
+    Safe to call multiple times — existing contact IDs in the payload are
+    preserved; new ones from HubSpot are merged in.
+
+    Processes deals in batches of 100 (the v4 API limit).
+    """
+    from app.models import HubSpotDeal
+    from app.services.hubspot_client_service import HubSpotClientService
+
+    all_deals = HubSpotDeal.query.all()
+    deal_ids = [d.hubspot_id for d in all_deals]
+    id_to_deal = {d.hubspot_id: d for d in all_deals}
+
+    if not deal_ids:
+        logger.info("_backfill_deal_contact_associations: no deals to process")
+        return
+
+    logger.info(
+        "_backfill_deal_contact_associations: fetching associations for %d deals",
+        len(deal_ids),
+    )
+
+    try:
+        assoc_map = client.fetch_deal_contact_associations(deal_ids)
+    except Exception as exc:
+        logger.error(
+            "_backfill_deal_contact_associations: failed to fetch associations: %s", exc
+        )
+        raise
+
+    updated = 0
+    for deal_id, contact_ids in assoc_map.items():
+        deal = id_to_deal.get(deal_id)
+        if deal is None:
+            continue
+        if not contact_ids:
+            continue
+
+        # Merge into raw_payload["associations"]["contacts"]["results"]
+        # Preserve any existing entries; add new ones.
+        payload = dict(deal.raw_payload or {})
+        assoc = dict(payload.get("associations", {}))
+        contacts_block = dict(assoc.get("contacts", {}))
+        existing_results = list(contacts_block.get("results", []))
+        existing_ids = {str(r.get("id", "")) for r in existing_results}
+
+        new_results = list(existing_results)
+        for cid in contact_ids:
+            if cid not in existing_ids:
+                new_results.append({"id": cid, "type": "deal_to_contact"})
+                existing_ids.add(cid)
+
+        if len(new_results) == len(existing_results):
+            # Nothing new — skip the write
+            continue
+
+        contacts_block["results"] = new_results
+        assoc["contacts"] = contacts_block
+        payload["associations"] = assoc
+        deal.raw_payload = payload
+        db.session.add(deal)
+        updated += 1
+
+        # Commit in batches of 100 to avoid a huge single transaction
+        if updated % 100 == 0:
+            db.session.commit()
+            logger.debug(
+                "_backfill_deal_contact_associations: committed %d updates so far", updated
+            )
+
+    db.session.commit()
+    logger.info(
+        "_backfill_deal_contact_associations: complete — %d deals updated with contact associations",
+        updated,
+    )
+
 
 # ---------------------------------------------------------------------------
 # Task 2: import_hubspot_contacts
 # ---------------------------------------------------------------------------
 
+def _check_association_health(db, object_type: str, run_id: int) -> None:
+    """After a backfill, check what fraction of records still have empty associations.
+
+    If >90% of records have no associations populated, the import run is marked
+    ``partial`` with an explanatory warning so operators can see the gap in the
+    import run history rather than a misleading ``success``.
+
+    Args:
+        object_type: ``'deals'`` or ``'contacts'`` — used to select the model and
+            the association key to inspect.
+        run_id:      The ``HubSpotImportRun.id`` to update if the check fails.
+    """
+    import app.models as _models
+    from app.models import HubSpotImportRun
+
+    model_name = 'HubSpotDeal' if object_type == 'deals' else 'HubSpotContact'
+    assoc_key = 'contacts' if object_type == 'deals' else 'deals'
+    model_class = getattr(_models, model_name)
+
+    total = model_class.query.filter_by(import_run_id=run_id).count()
+    if total == 0:
+        return
+
+    # Count records where associations.<assoc_key>.results is a non-empty array.
+    # We do this in Python rather than SQL to avoid JSON operator dialect differences.
+    all_records = model_class.query.filter_by(import_run_id=run_id).all()
+    populated = 0
+    for record in all_records:
+        assoc = (record.raw_payload or {}).get('associations', {})
+        block = assoc.get(assoc_key, {})
+        if isinstance(block, dict) and block.get('results'):
+            populated += 1
+
+    empty_pct = (total - populated) / total * 100
+    logger.info(
+        "_check_association_health: %s — %d/%d records have %s associations populated "
+        "(%.1f%% empty)",
+        object_type, populated, total, assoc_key, empty_pct,
+    )
+
+    if empty_pct > 90:
+        run = HubSpotImportRun.query.get(run_id)
+        if run and run.status == 'success':
+            warning = (
+                f"Association backfill: {populated}/{total} {object_type} records have "
+                f"{assoc_key} associations populated after v4 batch fetch "
+                f"({empty_pct:.0f}% still empty). "
+                f"The HubSpot v4 associations API may be returning incomplete data."
+            )
+            run.status = 'partial'
+            run.error_message = warning
+            db.session.commit()
+            logger.warning(
+                "_check_association_health: marked run_id=%d as partial — %s",
+                run_id, warning,
+            )
+
+
 def run_import_hubspot_contacts(run_id: int, self_task=None) -> None:
-    """Paginate and UPSERT all HubSpot contacts into hubspot_contacts.
+    """Paginate and UPSERT all HubSpot contacts into hubspot_contacts, then
+    backfill deal associations via the v4 batch API.
+
+    The CRM v3 list endpoint silently returns an empty ``associations`` block
+    for all contacts, so we run a separate v4 batch read after the import to
+    populate ``raw_payload["associations"]["deals"]`` for every contact.
 
     Requirements: 7.6, 7.7, 7.8, 8.2, 8.6, 20.2, 20.3
     """
+    from dotenv import load_dotenv
+    load_dotenv()
+    from app import create_app
+
+    app = create_app()
+
+    # Step 1 — standard paginated import (stores contacts without associations)
     _run_import_generic(
         run_id=run_id,
         object_type='contacts',
         model_class_name='HubSpotContact',
         fetch_method_name='fetch_all_contacts',
         self_task=self_task,
+    )
+
+    # Step 2 — backfill deal associations via v4 batch API
+    with app.app_context():
+        from app import db
+        from app.models import HubSpotConfig, HubSpotImportRun
+        from app.services.hubspot_client_service import HubSpotClientService
+
+        config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
+        if config is None:
+            logger.warning(
+                "run_import_hubspot_contacts: skipping association backfill — no HubSpotConfig"
+            )
+            return
+
+        try:
+            _backfill_contact_deal_associations(app, db, HubSpotClientService(config))
+            _check_association_health(db, 'contacts', run_id)
+        except Exception as exc:
+            logger.error(
+                "run_import_hubspot_contacts: association backfill failed for run_id=%d: %s",
+                run_id, exc, exc_info=True,
+            )
+            run = HubSpotImportRun.query.get(run_id)
+            if run:
+                run.status = 'partial'
+                run.error_message = f"Association backfill failed: {exc}"
+                db.session.commit()
+            raise
+
+
+def _backfill_contact_deal_associations(app, db, client) -> None:
+    """Fetch deal associations for all contacts via the v4 batch API and
+    merge them into each contact's ``raw_payload["associations"]["deals"]``.
+
+    Mirror of :func:`_backfill_deal_contact_associations` for the contact→deal
+    direction.  Safe to call multiple times — existing deal IDs in the payload
+    are preserved; new ones from HubSpot are merged in.
+    """
+    from app.models import HubSpotContact
+
+    all_contacts = HubSpotContact.query.all()
+    contact_ids = [c.hubspot_id for c in all_contacts]
+    id_to_contact = {c.hubspot_id: c for c in all_contacts}
+
+    if not contact_ids:
+        logger.info("_backfill_contact_deal_associations: no contacts to process")
+        return
+
+    logger.info(
+        "_backfill_contact_deal_associations: fetching associations for %d contacts",
+        len(contact_ids),
+    )
+
+    try:
+        assoc_map = client.fetch_contact_deal_associations(contact_ids)
+    except Exception as exc:
+        logger.error(
+            "_backfill_contact_deal_associations: failed to fetch associations: %s", exc
+        )
+        raise
+
+    updated = 0
+    for contact_id, deal_ids in assoc_map.items():
+        contact = id_to_contact.get(contact_id)
+        if contact is None:
+            continue
+        if not deal_ids:
+            continue
+
+        payload = dict(contact.raw_payload or {})
+        assoc = dict(payload.get("associations", {}))
+        deals_block = dict(assoc.get("deals", {}))
+        existing_results = list(deals_block.get("results", []))
+        existing_ids = {str(r.get("id", "")) for r in existing_results}
+
+        new_results = list(existing_results)
+        for did in deal_ids:
+            if did not in existing_ids:
+                new_results.append({"id": did, "type": "contact_to_deal"})
+                existing_ids.add(did)
+
+        if len(new_results) == len(existing_results):
+            continue
+
+        deals_block["results"] = new_results
+        assoc["deals"] = deals_block
+        payload["associations"] = assoc
+        contact.raw_payload = payload
+        db.session.add(contact)
+        updated += 1
+
+        if updated % 100 == 0:
+            db.session.commit()
+            logger.debug(
+                "_backfill_contact_deal_associations: committed %d updates so far", updated
+            )
+
+    db.session.commit()
+    logger.info(
+        "_backfill_contact_deal_associations: complete — %d contacts updated with deal associations",
+        updated,
     )
 
 
@@ -369,30 +723,80 @@ def run_hubspot_matching(run_id: int = None) -> None:
     app = create_app()
     with app.app_context():
         from app import db
-        from app.models import HubSpotDeal, HubSpotContact, HubSpotCompany, HubSpotMatch
+        from app.models import HubSpotDeal, HubSpotContact, HubSpotCompany, HubSpotMatch, Lead
         from app.services.hubspot_matcher_service import HubSpotMatcherService
 
         matcher = HubSpotMatcherService()
 
-        # Collect hubspot_ids that already have a CONFIRMED or PENDING (non-UNMATCHED) match record.
-        # UNMATCHED records are re-evaluated on each run so that deals that previously
-        # had no address data can be matched after a re-import with proper properties.
+        # --- Heal dangling confirmed matches (Bug 4) -----------------------
+        # ``internal_record_id`` is a plain Integer with no FK/cascade, so
+        # deleting a Lead silently orphans any HubSpotMatch that pointed at it.
+        # Such a match stays status='confirmed' referencing a now-missing lead,
+        # which means: (a) the skip-set below excludes it from re-matching, and
+        # (b) run_enrich_leads_from_hubspot's ``Lead.query.get`` returns None and
+        # bails — so a surviving duplicate lead (same address) is never linked to
+        # the deal/owner/activities. This happened with 2553 N Drake / Gilberto
+        # Olivares after the originally-matched lead was deleted.
+        #
+        # Reset every confirmed lead-match whose referenced lead no longer
+        # exists back to 'pending'/internal_record_id=NULL. Because this runs
+        # BEFORE the skip-sets are built, the healed rows fall through to the
+        # normal match_deal/match_contact calls below and get re-pointed to the
+        # surviving lead in this same run. Only matches whose lead is actually
+        # missing are touched — confirmed matches with a live lead, and all
+        # rejected matches, are left exactly as-is.
+        dangling_candidates = (
+            HubSpotMatch.query
+            .filter_by(status='confirmed', internal_record_type='lead')
+            .filter(HubSpotMatch.internal_record_id.isnot(None))
+            .all()
+        )
+        healed = 0
+        referenced_lead_ids = {m.internal_record_id for m in dangling_candidates}
+        if referenced_lead_ids:
+            # Single batched existence check — never N per-row queries.
+            existing_lead_ids = {
+                row[0]
+                for row in db.session.query(Lead.id)
+                .filter(Lead.id.in_(referenced_lead_ids))
+                .all()
+            }
+            for m in dangling_candidates:
+                if m.internal_record_id not in existing_lead_ids:
+                    m.status = 'pending'
+                    m.internal_record_id = None
+                    healed += 1
+            if healed:
+                db.session.commit()
+        logger.info(
+            "run_hubspot_matching: healed %d dangling confirmed matches "
+            "(referenced lead deleted)",
+            healed,
+        )
+
+        # Collect hubspot_ids that already have a CONFIRMED or REJECTED match record.
+        # CONFIRMED = already processed and accepted; REJECTED = reviewer decided no match.
+        # Both are skipped so _upsert_match() cannot overwrite a reviewer's decision.
+        # UNMATCHED and PENDING records are re-evaluated on each run:
+        # - UNMATCHED: may now have address data after a re-import
+        # - PENDING: single-match address deals are now auto-confirmed, so
+        #   re-running match_deal will upgrade them to confirmed
         matched_deals = {
             m.hubspot_id
             for m in HubSpotMatch.query.filter_by(hubspot_record_type='deal')
-            .filter(HubSpotMatch.confidence != 'UNMATCHED')
+            .filter(HubSpotMatch.status.in_(['confirmed', 'rejected']))
             .all()
         }
         matched_contacts = {
             m.hubspot_id
             for m in HubSpotMatch.query.filter_by(hubspot_record_type='contact')
-            .filter(HubSpotMatch.confidence != 'UNMATCHED')
+            .filter(HubSpotMatch.status.in_(['confirmed', 'rejected']))
             .all()
         }
         matched_companies = {
             m.hubspot_id
             for m in HubSpotMatch.query.filter_by(hubspot_record_type='company')
-            .filter(HubSpotMatch.confidence != 'UNMATCHED')
+            .filter(HubSpotMatch.status.in_(['confirmed', 'rejected']))
             .all()
         }
 
@@ -467,8 +871,8 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
 
     This is a source-agnostic enrichment pass: for every lead that has a
     confirmed deal or contact match (regardless of how the lead was originally
-    imported — Driving for Dollars, Google Sheets, DuPage GIS, etc.), we pull
-    live contact and deal data from the stored HubSpot payloads and write any
+    imported — Driving for Dollars, Google Sheets, DuPage GIS, etc.), each
+    confirmed deal is **re-fetched live from HubSpot** before enriching the lead.
     missing fields onto the lead.
 
     Safe to run repeatedly — existing non-null lead fields are never overwritten
@@ -494,12 +898,16 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         # Fetch portal stage label map once — used to translate stage IDs to
         # display labels (e.g. 'closedlost' → 'Negotiating Remote')
         stage_label_map = {}
+        _client = None
+        _sync = None
         try:
             from app.models.hubspot_config import HubSpotConfig
             from app.services.hubspot_client_service import HubSpotClientService
+            from app.services.hubspot_deal_sync_service import HubSpotDealSyncService
             _config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
             if _config:
                 _client = HubSpotClientService(_config)
+                _sync = HubSpotDealSyncService(_client)
                 stage_label_map = _client.fetch_pipeline_stage_labels("deals")
                 logger.info(
                     "run_enrich_leads_from_hubspot: loaded %d stage labels",
@@ -512,6 +920,7 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
 
         deal_enriched = 0
         deal_errors = 0
+        deal_refreshed = 0
         contact_enriched = 0
         contact_errors = 0
         action_recomputed = 0
@@ -527,10 +936,18 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         for match in confirmed_deal_matches:
             try:
                 lead = Lead.query.get(match.internal_record_id)
-                deal = HubSpotDeal.query.filter_by(
-                    hubspot_id=match.hubspot_id
-                ).first()
-                if lead is None or deal is None:
+                if lead is None:
+                    continue
+                deal = None
+                if _sync is not None:
+                    deal = _sync.refresh_deal_from_api(match.hubspot_id)
+                    if deal:
+                        deal_refreshed += 1
+                else:
+                    deal = HubSpotDeal.query.filter_by(
+                        hubspot_id=match.hubspot_id
+                    ).first()
+                if deal is None:
                     continue
                 enriched = matcher.enrich_lead_from_deal(lead, deal, stage_label_map)
                 if enriched:
@@ -583,7 +1000,9 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         # --- Also match contacts via deal associations ----------------------
         # For each confirmed deal match, check if the HubSpot deal has
         # associated contact IDs in its raw payload and try to enrich the
-        # lead from those contacts.
+        # lead from those contacts.  Also updates the HubSpotMatch record for
+        # each associated contact so its internal_record_id points to the
+        # property instead of being NULL.
         for match in confirmed_deal_matches:
             try:
                 lead = Lead.query.get(match.internal_record_id)
@@ -599,6 +1018,19 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                     if isinstance(assoc.get("contacts"), dict)
                     else []
                 )
+                if not contact_ids:
+                    logger.warning(
+                        "run_enrich_leads_from_hubspot: deal %s has empty contacts block — "
+                        "retrying v4 associations fetch", deal.hubspot_id,
+                    )
+                    if _client:
+                        # Bounded retry/backoff: a transient v4 failure (rate
+                        # limit / 5xx / timeout) is retried before giving up,
+                        # rather than a single best-effort attempt.
+                        raw_ids = _fetch_deal_contact_associations_with_retry(
+                            _client, deal.hubspot_id
+                        )
+                        contact_ids = [{"id": cid} for cid in raw_ids]
                 for assoc_entry in contact_ids:
                     cid = str(assoc_entry.get("id", ""))
                     if not cid:
@@ -616,10 +1048,97 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                             "run_enrich_leads_from_hubspot: lead_id=%d associated contact %s enriched fields=%s",
                             lead.id, cid, enriched,
                         )
+                    # Update the HubSpotMatch for this contact so its
+                    # internal_record_id points to the property.  This fixes
+                    # the case where match_contact() ran before the deal was
+                    # matched and left internal_record_id = NULL.
+                    # Only update still-pending rows — never flip rejected matches.
+                    contact_match = HubSpotMatch.query.filter_by(
+                        hubspot_record_type='contact',
+                        hubspot_id=cid,
+                        status='pending',
+                    ).filter(HubSpotMatch.internal_record_id.is_(None)).first()
+                    if contact_match:
+                        contact_match.internal_record_type = 'lead'
+                        contact_match.internal_record_id = lead.id
+                        contact_match.status = 'confirmed'
+                        db.session.commit()
+                        logger.debug(
+                            "run_enrich_leads_from_hubspot: updated contact match %s -> lead_id=%d",
+                            cid, lead.id,
+                        )
             except Exception as exc:
                 logger.warning(
                     "run_enrich_leads_from_hubspot: deal assoc enrich lead_id=%s error: %s",
                     match.internal_record_id, exc,
+                )
+                db.session.rollback()
+
+        # --- Also resolve contacts whose match has internal_record_id=NULL --
+        # When contacts were imported before their associated deals were
+        # matched, their HubSpotMatch ends up with internal_record_id=NULL.
+        # Now that deals are confirmed, use each contact's deal associations
+        # (fetched during import via associations=deals) to find the property.
+        unresolved_contact_matches = (
+            HubSpotMatch.query
+            .filter_by(hubspot_record_type='contact')
+            .filter(HubSpotMatch.status.in_(['confirmed', 'pending']))
+            .filter(HubSpotMatch.internal_record_id.is_(None))
+            .all()
+        )
+        for contact_match in unresolved_contact_matches:
+            try:
+                hs_contact = HubSpotContact.query.filter_by(
+                    hubspot_id=contact_match.hubspot_id
+                ).first()
+                if hs_contact is None:
+                    continue
+                # Look for deal associations in the contact's raw payload
+                assoc = (hs_contact.raw_payload or {}).get("associations", {})
+                deal_results = (
+                    assoc.get("deals", {}).get("results", [])
+                    if isinstance(assoc.get("deals"), dict)
+                    else []
+                )
+                for deal_entry in deal_results:
+                    did = str(deal_entry.get("id", ""))
+                    if not did:
+                        continue
+                    # Find the confirmed deal match for this deal ID
+                    deal_match = HubSpotMatch.query.filter_by(
+                        hubspot_record_type='deal',
+                        hubspot_id=did,
+                        status='confirmed',
+                    ).filter(HubSpotMatch.internal_record_id.isnot(None)).first()
+                    if deal_match is None:
+                        continue
+                    lead = Lead.query.get(deal_match.internal_record_id)
+                    if lead is None:
+                        continue
+                    # Enrich the lead and link the contact
+                    enriched = matcher.enrich_lead_from_contact(lead, hs_contact)
+                    if enriched:
+                        db.session.commit()
+                        contact_enriched += 1
+                    # Update the contact's match record. Promote it to
+                    # 'confirmed' (not just back-filling internal_record_id) so
+                    # the downstream _resolve_associations() — which only links
+                    # engagements for confirmed matches — includes this contact.
+                    # A resolved-but-still-pending match would otherwise be
+                    # skipped, leaving its activities orphaned.
+                    contact_match.internal_record_type = 'lead'
+                    contact_match.internal_record_id = lead.id
+                    contact_match.status = 'confirmed'
+                    db.session.commit()
+                    logger.debug(
+                        "run_enrich_leads_from_hubspot: resolved unlinked contact %s -> lead_id=%d via deal %s",
+                        contact_match.hubspot_id, lead.id, did,
+                    )
+                    break  # one deal association is enough to anchor the contact
+            except Exception as exc:
+                logger.warning(
+                    "run_enrich_leads_from_hubspot: unresolved contact %s error: %s",
+                    contact_match.hubspot_id, exc,
                 )
                 db.session.rollback()
 
@@ -641,6 +1160,7 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                 db.session.rollback()
 
         summary = {
+            'deal_refreshed': deal_refreshed,
             'deal_enriched': deal_enriched,
             'deal_errors': deal_errors,
             'contact_enriched': contact_enriched,
@@ -649,6 +1169,38 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         }
         logger.info("run_enrich_leads_from_hubspot: complete — %s", summary)
         return summary
+
+
+# ---------------------------------------------------------------------------
+# Task 5b: sync_hubspot_tasks_for_confirmed_leads
+# ---------------------------------------------------------------------------
+
+def run_sync_hubspot_tasks_for_confirmed_leads(limit: int = 200) -> dict:
+    """Live-sync HubSpot CRM tasks for all leads with confirmed deal matches."""
+    from dotenv import load_dotenv
+    load_dotenv()
+    from app import create_app
+
+    app = create_app()
+    with app.app_context():
+        from app.services.hubspot_deal_sync_service import HubSpotDealSyncService
+        return HubSpotDealSyncService().sync_all_confirmed_lead_tasks(limit=limit)
+
+
+# ---------------------------------------------------------------------------
+# Task 5c: refresh_confirmed_hubspot_deals
+# ---------------------------------------------------------------------------
+
+def run_refresh_confirmed_hubspot_deals(limit: int = 200) -> dict:
+    """Re-fetch confirmed deals from HubSpot API and enrich linked leads."""
+    from dotenv import load_dotenv
+    load_dotenv()
+    from app import create_app
+
+    app = create_app()
+    with app.app_context():
+        from app.services.hubspot_deal_sync_service import HubSpotDealSyncService
+        return HubSpotDealSyncService().refresh_all_confirmed_deals(limit=limit)
 
 
 # ---------------------------------------------------------------------------
@@ -697,8 +1249,27 @@ def run_convert_hubspot_activities(run_id: int = None) -> None:
         for engagement in HubSpotEngagement.query.all():
             eid = engagement.hubspot_id
 
-            # Skip if already converted to an Interaction or Task
-            if eid in existing_interaction_ids or eid in existing_task_ids:
+            # Reconcile existing HubSpot tasks from updated engagement payloads
+            if eid in existing_task_ids:
+                if (engagement.engagement_type or '').upper() == 'TASK':
+                    try:
+                        if converter.reconcile_task_from_engagement(engagement):
+                            converted += 1
+                        else:
+                            skipped += 1
+                    except Exception as exc:
+                        logger.warning(
+                            "run_convert_hubspot_activities: reconcile error hubspot_id=%s: %s",
+                            eid, exc,
+                        )
+                        errors += 1
+                        db.session.rollback()
+                else:
+                    skipped += 1
+                continue
+
+            # Skip if already converted to an Interaction
+            if eid in existing_interaction_ids:
                 skipped += 1
                 continue
 
@@ -722,6 +1293,229 @@ def run_convert_hubspot_activities(run_id: int = None) -> None:
         logger.info(
             "run_convert_hubspot_activities: complete — converted=%d skipped=%d errors=%d",
             converted, skipped, errors,
+        )
+
+        # --- Re-resolve previously orphaned interactions -------------------
+        # After run_enrich_leads_from_hubspot confirms pending matches, revisit
+        # all orphaned HubSpot-imported Interactions and link them if a confirmed
+        # match now exists for their associated deal/contact.
+        from app.models import Interaction, InteractionAssociation
+
+        orphaned = (
+            Interaction.query
+            .filter_by(is_orphaned=True, source='hubspot_import')
+            .all()
+        )
+        re_linked = 0
+        re_link_errors = 0
+        for interaction in orphaned:
+            try:
+                new_assocs = converter._resolve_associations_by_engagement_id(
+                    interaction.hubspot_engagement_id
+                )
+                if not new_assocs:
+                    continue
+                for assoc in new_assocs:
+                    existing = InteractionAssociation.query.filter_by(
+                        interaction_id=interaction.id,
+                        target_type=assoc['target_type'],
+                        target_id=assoc['target_id'],
+                    ).first()
+                    if existing is None:
+                        db.session.add(InteractionAssociation(
+                            interaction_id=interaction.id,
+                            target_type=assoc['target_type'],
+                            target_id=assoc['target_id'],
+                        ))
+                interaction.is_orphaned = False
+                db.session.commit()
+                re_linked += 1
+                logger.debug(
+                    "run_convert_hubspot_activities: re-linked orphaned interaction id=%s",
+                    interaction.id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "run_convert_hubspot_activities: re-link error for interaction id=%s: %s",
+                    interaction.id, exc,
+                )
+                re_link_errors += 1
+                db.session.rollback()
+
+        logger.info(
+            "run_convert_hubspot_activities: orphan re-resolution — re_linked=%d errors=%d",
+            re_linked, re_link_errors,
+        )
+
+        # --- Re-point associations stranded on a deleted lead (Bug 5) ------
+        # InteractionAssociation.target_id and TaskAssociation.target_id are
+        # plain Integers with no FK/cascade to ``leads``, so deleting a
+        # duplicate lead silently leaves any hubspot-imported activity/task
+        # association pointing at the now-missing lead — with
+        # Interaction.is_orphaned=False. The orphan pass above only revisits
+        # is_orphaned=True rows, and the converter is idempotent, so these
+        # historical rows stay stranded on the dead lead and never surface on
+        # the surviving lead. Bug 4 healing has already re-pointed the deal/
+        # contact match to the surviving lead, so re-resolving the engagement
+        # now yields the correct current lead. (2553 N Drake: lead 916 -> 3415.)
+        #
+        # Only associations whose target lead is ACTUALLY missing are touched;
+        # associations pointing at a live lead are left exactly as-is. Scope is
+        # limited to hubspot-imported interactions (source='hubspot_import' with
+        # a non-null hubspot_engagement_id) and hubspot-imported tasks (non-null
+        # hubspot_task_id) — manually-created records are never touched. The
+        # pass is idempotent: once re-pointed, nothing references the dead lead,
+        # so a second run is a no-op.
+        from app.models import Lead, Task, TaskAssociation
+
+        stranded_interaction_assocs = (
+            db.session.query(InteractionAssociation, Interaction)
+            .join(Interaction, InteractionAssociation.interaction_id == Interaction.id)
+            .filter(
+                InteractionAssociation.target_type == 'lead',
+                Interaction.source == 'hubspot_import',
+                Interaction.hubspot_engagement_id.isnot(None),
+            )
+            .all()
+        )
+        stranded_task_assocs = (
+            db.session.query(TaskAssociation, Task)
+            .join(Task, TaskAssociation.task_id == Task.id)
+            .filter(
+                TaskAssociation.target_type == 'lead',
+                Task.hubspot_task_id.isnot(None),
+            )
+            .all()
+        )
+
+        # Single batched existence check across BOTH passes — never N per-row
+        # queries. Collect distinct lead target_ids, run one Lead.id.in_(...)
+        # query, and derive the set of ids whose lead no longer exists.
+        candidate_lead_ids = (
+            {assoc.target_id for assoc, _ in stranded_interaction_assocs}
+            | {assoc.target_id for assoc, _ in stranded_task_assocs}
+        )
+
+        re_pointed = 0
+        re_point_errors = 0
+        if candidate_lead_ids:
+            existing_lead_ids = {
+                row[0]
+                for row in db.session.query(Lead.id)
+                .filter(Lead.id.in_(candidate_lead_ids))
+                .all()
+            }
+            missing_lead_ids = candidate_lead_ids - existing_lead_ids
+
+            if missing_lead_ids:
+                # Dedupe to affected interactions/tasks BEFORE mutating anything
+                # (so the second pass's captured ids aren't disturbed by commits).
+                affected_interactions = {}
+                for assoc, interaction in stranded_interaction_assocs:
+                    if assoc.target_id in missing_lead_ids:
+                        affected_interactions[interaction.id] = interaction
+
+                affected_tasks = {}
+                for assoc, task in stranded_task_assocs:
+                    if assoc.target_id in missing_lead_ids:
+                        affected_tasks[task.id] = task
+
+                # 1. INTERACTIONS — re-point each affected interaction once.
+                for interaction in affected_interactions.values():
+                    try:
+                        resolved = converter._resolve_associations_by_engagement_id(
+                            interaction.hubspot_engagement_id
+                        )
+                        if resolved:
+                            # Replace the dangling lead association(s): delete the
+                            # row(s) pointing at a missing lead, then add the
+                            # resolved targets (deduped against existing rows).
+                            for row in InteractionAssociation.query.filter_by(
+                                interaction_id=interaction.id, target_type='lead'
+                            ).all():
+                                if row.target_id in missing_lead_ids:
+                                    db.session.delete(row)
+                            db.session.flush()
+                            for a in resolved:
+                                exists = InteractionAssociation.query.filter_by(
+                                    interaction_id=interaction.id,
+                                    target_type=a['target_type'],
+                                    target_id=a['target_id'],
+                                ).first()
+                                if exists is None:
+                                    db.session.add(InteractionAssociation(
+                                        interaction_id=interaction.id,
+                                        target_type=a['target_type'],
+                                        target_id=a['target_id'],
+                                    ))
+                            interaction.is_orphaned = False
+                            db.session.commit()
+                            re_pointed += 1
+                            logger.debug(
+                                "run_convert_hubspot_activities: re-pointed stranded "
+                                "interaction id=%s off deleted lead", interaction.id,
+                            )
+                        else:
+                            # Engagement gone or no confirmed match — keep the data
+                            # but flag for the orphan pass to revisit on a later run.
+                            interaction.is_orphaned = True
+                            db.session.commit()
+                    except Exception as exc:
+                        logger.warning(
+                            "run_convert_hubspot_activities: stranded re-point error "
+                            "for interaction id=%s: %s", interaction.id, exc,
+                        )
+                        re_point_errors += 1
+                        db.session.rollback()
+
+                # 2. TASKS — re-point each affected task once. The Task's
+                #    hubspot_task_id IS the engagement id. Keep only
+                #    ('lead','organization') targets (mirrors convert_task).
+                for task in affected_tasks.values():
+                    try:
+                        resolved = [
+                            a for a in converter._resolve_associations_by_engagement_id(
+                                task.hubspot_task_id
+                            )
+                            if a.get('target_type') in ('lead', 'organization')
+                        ]
+                        if resolved:
+                            for row in TaskAssociation.query.filter_by(
+                                task_id=task.id, target_type='lead'
+                            ).all():
+                                if row.target_id in missing_lead_ids:
+                                    db.session.delete(row)
+                            db.session.flush()
+                            for a in resolved:
+                                exists = TaskAssociation.query.filter_by(
+                                    task_id=task.id,
+                                    target_type=a['target_type'],
+                                    target_id=a['target_id'],
+                                ).first()
+                                if exists is None:
+                                    db.session.add(TaskAssociation(
+                                        task_id=task.id,
+                                        target_type=a['target_type'],
+                                        target_id=a['target_id'],
+                                    ))
+                            db.session.commit()
+                            re_pointed += 1
+                            logger.debug(
+                                "run_convert_hubspot_activities: re-pointed stranded "
+                                "task id=%s off deleted lead", task.id,
+                            )
+                    except Exception as exc:
+                        logger.warning(
+                            "run_convert_hubspot_activities: stranded re-point error "
+                            "for task id=%s: %s", task.id, exc,
+                        )
+                        re_point_errors += 1
+                        db.session.rollback()
+
+        logger.info(
+            "run_convert_hubspot_activities: stranded-lead re-point — "
+            "re_pointed=%d errors=%d",
+            re_pointed, re_point_errors,
         )
 
 
@@ -996,3 +1790,44 @@ def run_generate_backup_export() -> str:
             len(deals), len(contacts), len(companies), len(engagements), output_path,
         )
         return output_path
+
+
+# ---------------------------------------------------------------------------
+# Task 10: nightly_association_sync
+# ---------------------------------------------------------------------------
+
+def run_nightly_association_sync() -> dict:
+    """Re-fetch deal↔contact associations for all records via the v4 batch API.
+
+    Intended to run nightly via Celery Beat as a catch-all for any associations
+    that were missed by the import backfill or webhook handler.  Significantly
+    faster than a full import — only the v4 associations endpoint is called,
+    not the full CRM list endpoints.
+
+    Returns a summary dict with counts.
+    """
+    from dotenv import load_dotenv
+    load_dotenv()
+    from app import create_app
+
+    app = create_app()
+    with app.app_context():
+        from app import db
+        from app.models import HubSpotConfig
+        from app.services.hubspot_client_service import HubSpotClientService
+
+        config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
+        if config is None:
+            logger.warning("run_nightly_association_sync: no HubSpotConfig — skipping")
+            return {"skipped": True, "reason": "no_config"}
+
+        client = HubSpotClientService(config)
+
+        # Re-sync deal → contact associations
+        _backfill_deal_contact_associations(app, db, client)
+
+        # Re-sync contact → deal associations
+        _backfill_contact_deal_associations(app, db, client)
+
+        logger.info("run_nightly_association_sync: complete")
+        return {"status": "complete"}

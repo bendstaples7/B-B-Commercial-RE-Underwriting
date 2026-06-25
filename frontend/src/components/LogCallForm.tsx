@@ -3,7 +3,7 @@
  *
  * Requirements: 9.2, 9.3, 9.4, 22.1
  */
-import { useState } from 'react'
+import { forwardRef, useImperativeHandle, useRef, useState } from 'react'
 import {
   Alert,
   Box,
@@ -45,6 +45,10 @@ export interface LogCallFormProps {
   onCancel?: () => void
 }
 
+export interface LogCallFormHandle {
+  focus: () => void
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -54,7 +58,12 @@ export interface LogCallFormProps {
  * and optional notes textarea (max 2,000 chars). Shows validation errors for
  * missing outcome or invalid duration. Preserves form data on server error.
  */
-export function LogCallForm({ leadId, onSaved, onCancel }: LogCallFormProps) {
+export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(function LogCallForm(
+  { leadId, onSaved, onCancel },
+  ref,
+) {
+  const formRef = useRef<HTMLDivElement>(null)
+  const outcomeInputRef = useRef<HTMLInputElement>(null)
   const [outcome, setOutcome] = useState<LogCallPayload['outcome'] | ''>('')
   const [duration, setDuration] = useState('')
   const [notes, setNotes] = useState('')
@@ -64,6 +73,12 @@ export function LogCallForm({ leadId, onSaved, onCancel }: LogCallFormProps) {
   const [notesError, setNotesError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+
+  useImperativeHandle(ref, () => ({
+    focus: () => {
+      outcomeInputRef.current?.focus()
+    },
+  }))
 
   // ---------------------------------------------------------------------------
   // Validation
@@ -155,6 +170,7 @@ export function LogCallForm({ leadId, onSaved, onCancel }: LogCallFormProps) {
 
   return (
     <Box
+      ref={formRef}
       component="form"
       onSubmit={handleSubmit}
       data-testid="log-call-form"
@@ -179,11 +195,12 @@ export function LogCallForm({ leadId, onSaved, onCancel }: LogCallFormProps) {
       >
         <InputLabel id="call-outcome-label">Outcome *</InputLabel>
         <Select
+          inputRef={outcomeInputRef}
           labelId="call-outcome-label"
           label="Outcome *"
           value={outcome}
           onChange={(e) => handleOutcomeChange(e.target.value)}
-          SelectDisplayProps={{ 'data-testid': 'call-outcome-select' } as any}
+          SelectDisplayProps={{ 'data-testid': 'call-outcome-select' } as React.HTMLAttributes<HTMLDivElement>}
         >
           {OUTCOME_OPTIONS.map((opt) => (
             <MenuItem key={opt.value} value={opt.value}>
@@ -274,6 +291,6 @@ export function LogCallForm({ leadId, onSaved, onCancel }: LogCallFormProps) {
       </Stack>
     </Box>
   )
-}
+})
 
 export default LogCallForm

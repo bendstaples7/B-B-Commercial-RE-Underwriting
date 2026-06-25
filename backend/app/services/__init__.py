@@ -42,6 +42,9 @@ from .admin_service import AdminService
 # Deduplication engine (platform-wide, all ingestion sources)
 from .deduplication_engine import DeduplicationEngine, DeduplicationResult
 
+# Data Sources Panel — aggregated source health and coverage status
+from .data_source_status_service import DataSourceStatusService
+
 __all__ = [
     'AuthService',
     'RankedComparableDTO',
@@ -86,4 +89,6 @@ __all__ = [
     # Deduplication
     'DeduplicationEngine',
     'DeduplicationResult',
+    # Data Sources Panel
+    'DataSourceStatusService',
 ]

@@ -54,23 +54,93 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Validate deploy.yml YAML syntax
-        # Catches broken YAML in deploy.yml before it reaches main.
-        # A malformed deploy.yml causes GitHub to silently ignore workflow_dispatch
-        # and skip automatic deploys — this check prevents that from happening.
-        # Runs as a separate job so it always executes regardless of frontend failures.
         run: |
           pip install pyyaml -q
           python3 -c "import yaml; yaml.safe_load(open('.github/workflows/deploy.yml')); print('deploy.yml YAML valid')"
 
-  vps-smoke-test:
-    name: VPS smoke test — backup connectivity
+  deploy-contract:
+    name: Deploy contract — sudoers and script sync
     runs-on: ubuntu-latest
-    # Only run on pushes to main (PRs don't have VPS secrets)
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    permissions:
-      contents: none
 
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate deploy/sudoers contract
+        run: python scripts/validate_deploy_contract.py
+
+  vps-readiness:
+    name: VPS readiness — deploy infra PRs
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect deploy infra changes
+        id: changes
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          if git diff --name-only "${BASE}" HEAD | grep -qE \
+            '^(scripts/deploy|scripts/run-vps-readiness|scripts/ci-ensure|scripts/deploy-async-stack|scripts/vps-setup/|\.github/workflows/deploy\.yml)'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip — no deploy infra changes
+        if: steps.changes.outputs.changed != 'true'
+        run: echo "No deploy infra files changed — skipping VPS readiness."
+
+      - name: Set up SSH key
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+      - name: Add VPS to known hosts
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_HOST_KEY }}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Verify VPS readiness (no auto-migrate on PRs)
+        if: steps.changes.outputs.changed == 'true'
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          SSH_KEY_PATH: ~/.ssh/id_deploy
+        run: |
+          chmod +x scripts/run-vps-readiness-check.sh scripts/deploy-async-stack-checks.sh
+          scp -i ~/.ssh/id_deploy scripts/run-vps-readiness-check.sh \
+            scripts/deploy-async-stack-checks.sh \
+            "$VPS_USER@$VPS_HOST:/home/deploy/"
+          ssh -i ~/.ssh/id_deploy -o ConnectTimeout=10 "$VPS_USER@$VPS_HOST" \
+            "bash /home/deploy/run-vps-readiness-check.sh" \
+          || {
+            echo "ERROR: Production VPS is not ready for this deploy-infra change."
+            echo "Run on VPS as root: sudo bash /home/deploy/app/scripts/vps-setup/migrate-async-stack.sh"
+            echo "Or merge after VPS_ROOT_SSH_KEY auto-migrate is configured for deploy workflow."
+            exit 1
+          }
+
+  vps-smoke-test:
+    name: VPS smoke test — backup and readiness
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Set up SSH key
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
@@ -86,10 +156,6 @@ jobs:
           chmod 600 ~/.ssh/known_hosts
 
       - name: Run backup.sh --check on VPS
-        # Verifies that backup.sh can connect to PostgreSQL on the VPS.
-        # Catches DB connectivity issues (wrong PGUSER, missing .pgpass, etc.)
-        # before they block a deploy. Runs after every push to main so regressions
-        # are caught immediately rather than at deploy time.
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -100,10 +166,20 @@ jobs:
             "/home/deploy/backup.sh --check" \
           || {
             echo "ERROR: backup.sh --check failed on VPS."
-            echo "This means the backup system cannot connect to PostgreSQL."
-            echo "Check /home/deploy/logs/backup.log on the VPS for details."
             exit 1
           }
+
+      - name: Run VPS readiness check
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_ROOT_SSH_KEY: ${{ secrets.VPS_ROOT_SSH_KEY }}
+          SSH_KEY_PATH: ~/.ssh/id_deploy
+        run: |
+          chmod +x scripts/ci-ensure-vps-readiness.sh scripts/run-vps-readiness-check.sh
+          VPS_USER="$VPS_USER" VPS_HOST="$VPS_HOST" SSH_KEY_PATH="$SSH_KEY_PATH" \
+            VPS_ROOT_SSH_KEY="$VPS_ROOT_SSH_KEY" \
+            bash scripts/ci-ensure-vps-readiness.sh
 
   backend:
     name: Backend — pytest
@@ -177,6 +253,9 @@ jobs:
         # interferes with the migration chain validation.
         run: PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE migration_test_db;"
 
+      - name: Create dedup migration gate test database
+        run: PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE migration_dedup_test_db;"
+
       - name: Validate migration chain (head + root count gate)
         # Runs before any schema change — fails fast if head_count != 1 or root_count != 1.
         # Reports the detected counts and each offending revision identifier so the
@@ -214,6 +293,22 @@ jobs:
         working-directory: backend
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migration_test_db
+          FLASK_ENV: testing
+          SECRET_KEY: ci-test-secret-key
+          JWT_SECRET_KEY: ci-test-jwt-secret
+          FLASK_APP: app
+          REDIS_URL: redis://localhost:6379/0
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          KIRO_MIGRATION: "1"
+
+      - name: Dedup migration gate regression (f9 blocked without merge)
+        # Production deploy failed when f9 ran against legacy duplicate clusters.
+        # CI fresh-DB upgrades never hit this — seed dupes at f8, assert f9 fails,
+        # merge, then assert f9 succeeds.
+        run: python scripts/ci_test_dedup_migration_gate.py
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migration_dedup_test_db
           FLASK_ENV: testing
           SECRET_KEY: ci-test-secret-key
           JWT_SECRET_KEY: ci-test-jwt-secret

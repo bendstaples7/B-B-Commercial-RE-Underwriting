@@ -96,8 +96,8 @@ describe('RecommendedActionPanel', () => {
         />
       )
 
-      expect(screen.getByTestId('ra-action-btn-log_call')).toBeInTheDocument()
-      expect(screen.getByTestId('ra-action-btn-log_note')).toBeInTheDocument()
+      expect(screen.getByTestId('ra-universal-btn-log_call')).toBeInTheDocument()
+      expect(screen.getByTestId('ra-universal-btn-log_note')).toBeInTheDocument()
       expect(screen.getByTestId('ra-action-btn-create_task')).toBeInTheDocument()
     })
 
@@ -295,7 +295,7 @@ describe('RecommendedActionPanel', () => {
       expect(screen.queryByTestId('dnc-badge')).not.toBeInTheDocument()
     })
 
-    it('disables outreach buttons (log_call, log_note) when leadStatus is do_not_contact', () => {
+    it('disables outreach buttons (log_call, log_email) when leadStatus is do_not_contact', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('follow_up_now')}
@@ -305,8 +305,9 @@ describe('RecommendedActionPanel', () => {
         />
       )
 
-      expect(screen.getByTestId('ra-action-btn-log_call')).toBeDisabled()
-      expect(screen.getByTestId('ra-action-btn-log_note')).toBeDisabled()
+      expect(screen.getByTestId('ra-universal-btn-log_call')).toBeDisabled()
+      expect(screen.getByTestId('ra-universal-btn-log_email')).toBeDisabled()
+      expect(screen.getByTestId('ra-universal-btn-log_note')).not.toBeDisabled()
     })
 
     it('does NOT disable non-outreach buttons when leadStatus is do_not_contact', () => {
@@ -346,9 +347,10 @@ describe('RecommendedActionPanel', () => {
         />
       )
 
-      expect(screen.getByTestId('ra-action-btn-log_call')).toBeDisabled()
+      expect(screen.getByTestId('ra-universal-btn-log_call')).toBeDisabled()
       expect(screen.getByTestId('ra-action-btn-add_to_mail_batch')).toBeDisabled()
-      expect(screen.getByTestId('ra-action-btn-log_note')).toBeDisabled()
+      expect(screen.getByTestId('ra-universal-btn-log_email')).toBeDisabled()
+      expect(screen.getByTestId('ra-universal-btn-log_note')).not.toBeDisabled()
       // create_task is not outreach — should be enabled
       expect(screen.getByTestId('ra-action-btn-create_task')).not.toBeDisabled()
     })

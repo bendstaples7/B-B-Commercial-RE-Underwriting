@@ -16,6 +16,47 @@ from app.models.import_job import ImportJob, FieldMapping, OAuthToken
 
 logger = logging.getLogger(__name__)
 
+
+def _split_owner_name(first: Optional[str], last: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Normalize owner name fields to ensure first and last are separate.
+
+    Handles the common import pattern where a full name ("John Smith") is
+    placed entirely in the first_name column with last_name left empty.
+
+    Rules:
+    - If last is already populated, return as-is (no change needed).
+    - If first contains a space and last is absent, split on the last space:
+        "John Smith"      → first="John",       last="Smith"
+        "Mary Ann Jones"  → first="Mary Ann",   last="Jones"
+        "Manuel Medellin" → first="Manuel",     last="Medellin"
+    - If first has no space and last is absent, move first to last (surname only).
+    - Comma-separated "Last, First" format is also handled:
+        "Smith, John"     → first="John",       last="Smith"
+    """
+    if not first:
+        return first, last
+    first = first.strip()
+    if not first:
+        return None, last
+
+    # If last is already populated, nothing to do
+    if last and last.strip():
+        return first, last.strip()
+
+    # Comma format: "Smith, John A" → last="Smith", first="John A"
+    if ',' in first:
+        parts = [p.strip() for p in first.split(',', 1)]
+        return (parts[1] if parts[1] else None), (parts[0] if parts[0] else None)
+
+    # Space-separated: split on last space
+    if ' ' in first:
+        idx = first.rfind(' ')
+        return first[:idx].strip() or None, first[idx:].strip() or None
+
+    # Single token with no last — leave as-is (could be a first name only)
+    return first, last
+
+
 # ---------------------------------------------------------------------------
 # Data classes used as lightweight return types
 # ---------------------------------------------------------------------------
@@ -579,7 +620,30 @@ class GoogleSheetsImporter:
             else:
                 cleaned[field_name] = False
 
+        # Normalize owner name fields — split full name in first_name into first + last
+        # when last_name is absent (common import pattern from HubSpot/spreadsheet exports)
+        self._normalize_name_fields(cleaned)
+
         return ValidationResult(valid=True, cleaned_data=cleaned, errors=warnings)
+        """Split owner_first_name into first + last when owner_last_name is absent.
+
+        Mutates cleaned in-place. Also applies the same logic for owner_2 names.
+        """
+        # Primary owner
+        first, last = _split_owner_name(
+            cleaned.get('owner_first_name'),
+            cleaned.get('owner_last_name'),
+        )
+        cleaned['owner_first_name'] = first
+        cleaned['owner_last_name'] = last
+
+        # Second owner
+        first2, last2 = _split_owner_name(
+            cleaned.get('owner_2_first_name'),
+            cleaned.get('owner_2_last_name'),
+        )
+        cleaned['owner_2_first_name'] = first2
+        cleaned['owner_2_last_name'] = last2
 
     @staticmethod
     def _parse_date(value: str) -> Optional[date]:
@@ -592,6 +656,145 @@ class GoogleSheetsImporter:
         return None
 
     # ------------------------------------------------------------------
+    # Deduplication helpers
+    # ------------------------------------------------------------------
+
+    # Unit designators that appear after a street number+name and indicate
+    # a specific unit within a multi-unit building.
+    _UNIT_PATTERNS = (
+        r'\s+(apt|apartment|unit|ste|suite|#|fl|floor|no\.?)\s*\S+$',
+        r'\s+\d+[a-z]?$',   # trailing bare number or number+letter, e.g. "2553 N Drake Ave 1"
+    )
+
+    @classmethod
+    def _strip_unit(cls, street: Optional[str]) -> Optional[str]:
+        """Return the street address with any trailing unit designator removed.
+
+        Examples
+        --------
+        "2553 N Drake Ave 1"          → "2553 N Drake Ave"
+        "470 N Kenilworth Ave # 30"   → "470 N Kenilworth Ave"
+        "1501 Jefferson Ave # 101"    → "1501 Jefferson Ave"
+        "2553 N Drake Ave"            → "2553 N Drake Ave"  (unchanged)
+        """
+        import re
+        if not street:
+            return street
+        s = street.strip()
+        for pattern in cls._UNIT_PATTERNS:
+            s = re.sub(pattern, '', s, flags=re.IGNORECASE).strip()
+        return s or street.strip()
+
+    @classmethod
+    def _find_duplicate(
+        cls,
+        validated_data: dict,
+        owner_user_id: Optional[str] = None,
+    ) -> Optional[Lead]:
+        """Look for an existing Lead that represents the same property+owner.
+
+        Dedup priority (checked in order):
+        1. ``county_assessor_pin`` — unambiguous parcel identifier.
+        2. Exact ``property_street`` match (current behaviour).
+        2b. Normalized ``property_street`` for same owner (e.g. Schiller vs Schiller St).
+        3. Same owner name + same *base* street (strip unit suffix from both
+           sides) — catches "2553 N Drake Ave" vs "2553 N Drake Ave 1".
+
+        The ``owner_user_id`` scope is applied when provided, so two
+        different users importing the same address create separate records.
+        """
+        from sqlalchemy import func as sa_func
+        from app.services.lead_dedup_service import find_lead_by_identity
+
+        # 1. PIN + owner/street identity (PIN, exact street, normalized street)
+        pin = validated_data.get("county_assessor_pin")
+        street = validated_data.get("property_street")
+        first = validated_data.get("owner_first_name")
+        last = validated_data.get("owner_last_name")
+
+        hit = find_lead_by_identity(
+            owner_user_id=owner_user_id,
+            owner_first_name=first,
+            owner_last_name=last,
+            property_street=street,
+            county_assessor_pin=pin,
+        )
+        if hit:
+            return hit
+
+        # 2. Exact street match (legacy path when owner names missing)
+        if street:
+            q = Lead.query.filter(Lead.property_street == street)
+            if owner_user_id:
+                q = q.filter(Lead.owner_user_id == owner_user_id)
+            hit = q.first()
+            if hit:
+                return hit
+
+        # 2b. Normalized street match (e.g. "Schiller" vs "Schiller St")
+        if street and first and last:
+            from app.services.lead_merge_utils import streets_match_normalized
+
+            q = (
+                Lead.query
+                .filter(Lead.owner_first_name.ilike(first))
+                .filter(Lead.owner_last_name.ilike(last))
+                .filter(Lead.property_street.isnot(None))
+            )
+            if owner_user_id:
+                q = q.filter(Lead.owner_user_id == owner_user_id)
+            for candidate in q:
+                if streets_match_normalized(street, candidate.property_street):
+                    return candidate
+
+        # 3. Same owner + same base street (unit-stripped), bidirectional.
+        #
+        # Covers both import orders:
+        #   a) Incoming has unit suffix → strip it, look for bare or unit records
+        #   b) Incoming is bare → look for existing unit-address records for same owner
+        #
+        # The DB-side match is constrained to known unit suffix patterns via a
+        # regex (rather than a broad ILIKE prefix) to avoid false merges on
+        # streets that share a common prefix (e.g. "123 Main St" vs "123 Main Street").
+        base_street = cls._strip_unit(street)
+        first = validated_data.get("owner_first_name")
+        last = validated_data.get("owner_last_name")
+        if base_street and first and last:
+            incoming_has_unit = base_street.lower() != (street or '').strip().lower()
+            incoming_is_bare = not incoming_has_unit
+
+            # Run if incoming has a unit suffix (original case) OR incoming is bare
+            # and could match an existing unit-address record (reverse case).
+            if incoming_has_unit or incoming_is_bare:
+                import re as _re
+                # Only match DB records whose street is either the exact base
+                # or the base followed by a recognised unit designator pattern.
+                # This prevents "123 Oak St" from matching "123 Oak Street # 1".
+                unit_pattern = (
+                    r'(?i)^'
+                    + _re.escape(base_street)
+                    + r'(\s+(apt|apartment|unit|ste|suite|#|fl|floor|no\.?)\s*\S+|\s+\d+[a-z]?)$'
+                )
+                q = (
+                    Lead.query
+                    .filter(Lead.owner_first_name.ilike(first))
+                    .filter(Lead.owner_last_name.ilike(last))
+                    .filter(
+                        db.or_(
+                            Lead.property_street == base_street,
+                            Lead.property_street.op('~*')(unit_pattern),
+                        )
+                    )
+                )
+                if owner_user_id:
+                    q = q.filter(Lead.owner_user_id == owner_user_id)
+                hit = q.first()
+                if hit:
+                    return hit
+
+        return None
+
+    # ------------------------------------------------------------------
     # Upsert
     # ------------------------------------------------------------------
 
@@ -600,8 +803,17 @@ class GoogleSheetsImporter:
         validated_data: dict,
         import_job_id: Optional[int] = None,
         data_source: str = "google_sheets",
+        owner_user_id: Optional[str] = None,
     ) -> Lead:
-        """Insert a new Lead or update an existing one based on property_street.
+        """Insert a new Lead or update an existing one.
+
+        Deduplication is performed in priority order:
+        1. ``county_assessor_pin`` — parcel identifier, most authoritative.
+        2. Exact ``property_street`` match.
+        2b. Normalized ``property_street`` for same owner (abbreviation variants).
+        3. Same owner name + same base street (unit suffix stripped) —
+           prevents phantom duplicates when a bare building address is
+           imported alongside a specific unit address for the same owner.
 
         When updating, changed fields are recorded in the audit trail.
 
@@ -613,16 +825,15 @@ class GoogleSheetsImporter:
             The current ImportJob id (used for metadata and audit trail).
         data_source : str
             Identifier written to ``Lead.data_source``.
+        owner_user_id : str, optional
+            Scopes the duplicate search to a specific user's leads.
 
         Returns
         -------
         Lead
             The created or updated Lead instance.
         """
-        property_street = validated_data.get("property_street")
-        existing = None
-        if property_street:
-            existing = Lead.query.filter_by(property_street=property_street).first()
+        existing = self._find_duplicate(validated_data, owner_user_id=owner_user_id)
 
         if existing:
             # Update existing lead and record audit trail
@@ -635,12 +846,37 @@ class GoogleSheetsImporter:
             return existing
         else:
             # Create new lead
+            from sqlalchemy.exc import IntegrityError
+            from app.services.lead_dedup_service import find_lead_by_identity
+
             lead = Lead(
                 data_source=data_source,
                 last_import_job_id=import_job_id,
             )
+            if owner_user_id:
+                lead.owner_user_id = owner_user_id
             self._set_lead_fields(lead, validated_data)
             db.session.add(lead)
+            try:
+                with db.session.begin_nested():
+                    db.session.flush()
+            except IntegrityError:
+                existing = find_lead_by_identity(
+                    owner_user_id=owner_user_id,
+                    owner_first_name=validated_data.get("owner_first_name"),
+                    owner_last_name=validated_data.get("owner_last_name"),
+                    property_street=validated_data.get("property_street"),
+                    county_assessor_pin=validated_data.get("county_assessor_pin"),
+                )
+                if not existing:
+                    raise
+                changed_by = f"import_job:{import_job_id}" if import_job_id else "manual"
+                self._update_lead_fields(existing, validated_data, changed_by)
+                existing.data_source = data_source
+                if import_job_id:
+                    existing.last_import_job_id = import_job_id
+                existing.updated_at = datetime.utcnow()
+                return existing
             return lead
 
     # ------------------------------------------------------------------
@@ -691,12 +927,52 @@ class GoogleSheetsImporter:
                 db.session.add(audit)
                 setattr(lead, field_name, new_value)
 
+        # Infer property_type from units when the sheet didn't supply it
+        # and the lead still has no property_type after the update.
+        if not lead.property_type and lead.units:
+            inferred = self._infer_property_type_from_units(lead.units)
+            if inferred:
+                # Read the actual current value before overwriting it so the
+                # audit trail is accurate (old_value=None only if it was truly
+                # NULL, not if a prior field in this loop already set it).
+                current_property_type = lead.property_type  # still falsy here
+                audit = LeadAuditTrail(
+                    lead_id=lead.id,
+                    field_name='property_type',
+                    old_value=str(current_property_type) if current_property_type else None,
+                    new_value=inferred,
+                    changed_by=changed_by,
+                )
+                db.session.add(audit)
+                lead.property_type = inferred
+
+    @staticmethod
+    def _infer_property_type_from_units(units: Optional[int]) -> Optional[str]:
+        """Return a property_type string inferred from unit count.
+
+        Used to back-fill property_type when it is absent from the import
+        but units is known.  Returns None when units is None or zero.
+
+        Mapping:
+            1 unit  → 'single_family'
+            2 units → 'duplex'
+            3 units → 'triplex'
+            4 units → 'fourplex'
+            5+      → 'multi_family'
+        """
+        if units is None or units < 1:
+            return None
+        return {1: 'single_family', 2: 'duplex', 3: 'triplex', 4: 'fourplex'}.get(units, 'multi_family')
+
     @staticmethod
     def _set_lead_fields(lead: Lead, data: dict) -> None:
         """Set fields on a brand-new Lead from validated data."""
         for key, value in data.items():
             if hasattr(lead, key):
                 setattr(lead, key, value)
+        # Infer property_type from units when the sheet didn't supply it
+        if not lead.property_type and lead.units:
+            lead.property_type = GoogleSheetsImporter._infer_property_type_from_units(lead.units)
 
     # ------------------------------------------------------------------
     # Import orchestration
@@ -777,6 +1053,7 @@ class GoogleSheetsImporter:
                                 result.cleaned_data,
                                 import_job_id=job_id,
                                 data_source="google_sheets",
+                                owner_user_id=job.user_id,
                             )
                         rows_imported += 1
                     except Exception as row_exc:
@@ -804,6 +1081,89 @@ class GoogleSheetsImporter:
                 "ImportJob %s completed: %d imported, %d skipped out of %d",
                 job_id, rows_imported, rows_skipped, job.total_rows,
             )
+
+            # ------------------------------------------------------------------
+            # Fix A: GIS enrichment for Sheets-imported leads
+            #
+            # Google Sheets imports land with has_property_match=False because
+            # upsert_lead() never calls the GIS connector.  Run enrichment now
+            # on every lead touched by this job that still lacks a confirmed
+            # parcel match.  Connector is selected per-lead based on county/city
+            # so both DuPage and Cook County leads are handled correctly.
+            # ------------------------------------------------------------------
+            try:
+                from app.services.gis.routing import connector_for_lead
+                from app.services.deduplication_engine import DeduplicationEngine
+                from app.services.gis.base import GISConnectorRegistry
+                from app.services.lead_ingestion_service import LeadIngestionService
+
+                ingestion_svc = LeadIngestionService(
+                    dedup_engine=DeduplicationEngine(),
+                    gis_registry=GISConnectorRegistry,
+                )
+                # Query leads that were created/updated by this job and
+                # still need a parcel match resolved.
+                unmatched = (
+                    Lead.query
+                    .filter(
+                        Lead.last_import_job_id == job_id,
+                        Lead.has_property_match == False,  # noqa: E712
+                        Lead.property_street != None,       # noqa: E711
+                        Lead.property_street != '',
+                    )
+                    .all()
+                )
+                gis_matched = 0
+                gis_errors = 0
+                gis_no_connector = 0
+                matched_lead_ids = []
+                for lead in unmatched:
+                    connector = connector_for_lead(lead)
+                    if not connector:
+                        gis_no_connector += 1
+                        continue
+                    outcome = ingestion_svc._enrich_with_gis(lead, connector, job_id)
+                    if outcome.get('error'):
+                        gis_errors += 1
+                    elif outcome.get('match_found'):
+                        gis_matched += 1
+                        matched_lead_ids.append(lead.id)
+                if unmatched:
+                    db.session.commit()
+                    logger.info(
+                        "ImportJob %s GIS enrichment: %d/%d matched, %d errors, "
+                        "%d no-connector",
+                        job_id, gis_matched, len(unmatched), gis_errors,
+                        gis_no_connector,
+                    )
+                    # Bug 8: GIS enrichment just changed scoring inputs
+                    # (has_property_match / county_assessor_pin) for the matched
+                    # leads. Refresh lead_score + recommended_action now so they
+                    # reflect the enrichment instead of going stale until the
+                    # nightly bulk rescore. refresh_lead_scoring is per-lead and
+                    # error-isolated (never raises into this best-effort block).
+                    if matched_lead_ids:
+                        from app.services.lead_refresh import refresh_lead_scoring
+                        for matched_lead_id in matched_lead_ids:
+                            refresh_lead_scoring(matched_lead_id)
+                        logger.info(
+                            "ImportJob %s GIS enrichment: refreshed scoring for %d lead(s)",
+                            job_id, len(matched_lead_ids),
+                        )
+            except Exception as gis_exc:
+                # GIS enrichment is best-effort — never fail a completed import.
+                # The import data was already committed above, so roll back only
+                # the (uncommitted) GIS sub-step. A failed enrichment or its
+                # commit leaves the session in a "needs rollback" state; without
+                # this the next caller to reuse the session hits a poisoned
+                # transaction. This cannot undo the already-committed import
+                # rows, and the post-commit refresh_lead_scoring loop commits
+                # per-lead internally, so it is unaffected.
+                db.session.rollback()
+                logger.error(
+                    "ImportJob %s: post-import GIS enrichment failed: %s",
+                    job_id, gis_exc,
+                )
 
             return ImportResult(
                 job_id=job_id,

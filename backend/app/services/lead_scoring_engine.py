@@ -393,8 +393,17 @@ class LeadScoringEngine:
         pipeline_stage_bonus = self._pipeline_stage_bonus(lead)
         total += pipeline_stage_bonus
 
-        # Apply signal adjustments when signals are provided
+        # Apply signal adjustments when signals are provided.
+        #
+        # Signals represent boolean STATES, not counters: a given signal_type
+        # contributes its SIGNAL_ADJUSTMENTS value AT MOST ONCE, even when
+        # multiple rows of the same type are present (e.g. the same
+        # PRIOR_WARM_CONVERSATION re-extracted across several sync runs). We
+        # therefore collect the set of recognised signal_types present and add
+        # each type's adjustment exactly once. DISTINCT signal_types still each
+        # apply (dedup is WITHIN a type, never across types).
         if signals:
+            present_signal_types = set()
             for signal in signals:
                 # Accept both HubSpotSignal model instances and plain strings
                 if isinstance(signal, str):
@@ -403,7 +412,10 @@ class LeadScoringEngine:
                     signal_type = getattr(signal, "signal_type", None)
 
                 if signal_type and signal_type in self.SIGNAL_ADJUSTMENTS:
-                    total += self.SIGNAL_ADJUSTMENTS[signal_type]
+                    present_signal_types.add(signal_type)
+
+            for signal_type in present_signal_types:
+                total += self.SIGNAL_ADJUSTMENTS[signal_type]
 
         # Suppression flag: cap score at 10.0 before final clamp
         if getattr(lead, "suppression_flag", False):
@@ -695,8 +707,12 @@ class LeadScoringEngine:
 
         Stage bonuses (additive on top of the base weighted score):
           skip_trace / awaiting_skip_trace : -5  (contact info not yet acquired)
-          mailing_no_contact_made          :  0  (baseline — no adjustment)
-          mailing_contacted_no_interest    : +5  (at least spoke to them)
+          mailing_no_contact_made          :   0  (baseline — no adjustment)
+          mailing_contacted_no_interest    : -10  (explicit "no interest" — minor
+                                                   penalty so a disinterested lead
+                                                   ranks slightly BELOW an
+                                                   uncontacted one, instead of being
+                                                   rewarded for having been reached)
           mailing_contacted_interested     : +15 (active interest expressed)
           negotiating_remote               : +25 (in active negotiation)
           in_person_appointment            : +30 (high-commitment stage)
@@ -709,7 +725,7 @@ class LeadScoringEngine:
             'skip_trace': -5.0,
             'awaiting_skip_trace': -5.0,
             'mailing_no_contact_made': 0.0,
-            'mailing_contacted_no_interest': 5.0,
+            'mailing_contacted_no_interest': -10.0,
             'mailing_contacted_interested': 15.0,
             'negotiating_remote': 25.0,
             'in_person_appointment': 30.0,

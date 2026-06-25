@@ -187,6 +187,8 @@ def _serialize_property_summary(lead):
         'address_2': lead.address_2,
         'returned_addresses': lead.returned_addresses,
         'source': lead.source,
+        'deal_source': getattr(lead, 'deal_source', None),
+        'deal_description': getattr(lead, 'deal_description', None),
         'date_identified': lead.date_identified.isoformat() if lead.date_identified else None,
         'needs_skip_trace': lead.needs_skip_trace,
         'skip_tracer': lead.skip_tracer,
@@ -254,6 +256,8 @@ def _serialize_property_detail(lead):
         'most_recent_sale': lead.most_recent_sale,
         # Research tracking
         'source': lead.source,
+        'deal_source': getattr(lead, 'deal_source', None),
+        'deal_description': getattr(lead, 'deal_description', None),
         'date_identified': lead.date_identified.isoformat() if lead.date_identified else None,
         'notes': lead.notes,
         'needs_skip_trace': lead.needs_skip_trace,
@@ -315,6 +319,37 @@ def _serialize_property_detail(lead):
         }
     else:
         data['analysis_session'] = None
+
+    # Contacts — all contacts linked to this property from the relational
+    # contacts system, ordered primary-first then by id.  The legacy flat
+    # owner_first_name / owner_last_name columns on the lead record are from
+    # the original import and are NOT kept in sync by HubSpot enrichment, so
+    # the contacts list here is the authoritative source for who to reach out
+    # to.  Embedding them in the detail response avoids a second round-trip.
+    linked_pcs = (
+        lead.property_contacts
+        .order_by(PropertyContact.is_primary.desc(), PropertyContact.id.asc())
+        .all()
+    )
+    data['contacts'] = [
+        {
+            'id': pc.contact.id,
+            'first_name': pc.contact.first_name,
+            'last_name': pc.contact.last_name,
+            'role': pc.role,
+            'is_primary': pc.is_primary,
+            'phones': [
+                {'id': p.id, 'value': p.value, 'label': p.label}
+                for p in pc.contact.phones
+            ],
+            'emails': [
+                {'id': e.id, 'value': e.value, 'label': e.label}
+                for e in pc.contact.emails
+            ],
+        }
+        for pc in linked_pcs
+        if pc.contact
+    ]
 
     return data
 

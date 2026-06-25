@@ -50,6 +50,21 @@ _KNOWN_REVISIONS = frozenset({
     'a2b3c4d5e6f7', 'b3c4d5e6f7a1',
     # PR #36 kanban + pipeline revisions
     '5f9bc65a48ea', 'z0a9b8c7d6e5', 'z1b2c3d4e5f6', 'z9a8b7c6d5e4',
+    # Global search bar — pg_trgm + GIN trigram indexes
+    'a3b4c5d6e7f8',
+    # Backfill property_type from units + clear stale analyze_property actions
+    'b4c5d6e7f8a9',
+    # Update lead_crm_flags view: include GIS has_property_match in computed flag
+    'c5d6e7f8a9b0',
+    # HubSpot signal dedup uniqueness index (lead_id, signal_type, source_engagement_id)
+    'd6e7f8a9b0c1',
+    # Ranked fuzzy search — leads.search_document generated column + GIN trgm
+    'e7f8a9b0c1d2',
+    # Lead dedup — normalized_street column + unique owner+street/PIN indexes
+    'f8a9b0c1d2e3',
+    'f9a0b1c2d3e4',
+    # Lead deal context — deal_source + deal_description from HubSpot / manual
+    'g1h2i3j4k5l6',
 })
 
 

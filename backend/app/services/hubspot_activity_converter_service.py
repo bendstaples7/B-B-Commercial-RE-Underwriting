@@ -1,5 +1,7 @@
 """HubSpotActivityConverterService — converts raw HubSpot engagements to internal records."""
+import html as html_lib
 import logging
+import re
 from datetime import datetime, timezone
 
 from app import db
@@ -10,6 +12,25 @@ from app.models.task_association import TaskAssociation
 from app.models.hubspot_match import HubSpotMatch
 
 logger = logging.getLogger(__name__)
+
+_HTML_TAG_RE = re.compile(r'<[^>]+>')
+
+
+def _strip_html_tags(raw_html):
+    """Strip HTML tags from a string and return collapsed plain text.
+
+    Block-level closers and <br> are turned into spaces so adjacent words don't
+    run together, remaining tags are removed, HTML entities are unescaped, and
+    runs of whitespace are collapsed. Returns '' for falsy input.
+    """
+    if not raw_html:
+        return ''
+    text = re.sub(r'(?i)<\s*br\s*/?>', ' ', raw_html)
+    text = re.sub(r'(?i)</\s*(p|div|li|tr|h[1-6])\s*>', ' ', text)
+    text = _HTML_TAG_RE.sub('', text)
+    text = html_lib.unescape(text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
 
 class HubSpotActivityConverterService:
@@ -41,6 +62,8 @@ class HubSpotActivityConverterService:
             return self.convert_call(engagement)
         elif etype == 'TASK':
             return self.convert_task(engagement)
+        elif etype == 'EMAIL':
+            return self.convert_email(engagement)
         else:
             logger.warning(
                 "Unrecognized HubSpot engagement type '%s' for hubspot_id=%s — skipping.",
@@ -159,26 +182,89 @@ class HubSpotActivityConverterService:
 
         return interaction
 
-    def convert_task(self, engagement):
+    def convert_email(self, engagement):
         """
-        Convert a HubSpot TASK engagement to an internal Task.
+        Convert a HubSpot EMAIL engagement to an internal Interaction(type='email').
 
-        Idempotent: returns None if hubspot_task_id already exists.
-        Status mapping: 'COMPLETED' → 'completed', all others → 'open'.
-        Title from metadata.subject, body from metadata.body,
-        due_date from metadata.taskDate (milliseconds).
+        Idempotent: returns None if hubspot_engagement_id already exists.
+        Body is sourced from metadata.text (plaintext), falling back to
+        metadata.html with tags stripped — HubSpot EMAIL engagements do not use
+        metadata.body. occurred_at is sourced from engagement.createdAt (milliseconds).
         """
-        if self._task_exists(engagement.hubspot_id):
+        if self._interaction_exists(engagement.hubspot_id):
             logger.debug(
-                "Task for hubspot_task_id=%s already exists — skipping.",
+                "Interaction for hubspot_engagement_id=%s already exists — skipping.",
                 engagement.hubspot_id,
             )
             return None
 
         metadata = engagement.raw_payload.get('metadata', {})
+        body = self._extract_email_body(metadata)
+        occurred_at = self._parse_ms_timestamp(
+            engagement.raw_payload.get('engagement', {}).get('createdAt')
+        )
+
+        associations = self._resolve_associations(engagement)
+        is_orphaned = len(associations) == 0
+
+        interaction = Interaction(
+            interaction_type='email',
+            body=body,
+            occurred_at=occurred_at,
+            source='hubspot_import',
+            hubspot_engagement_id=engagement.hubspot_id,
+            raw_payload=engagement.raw_payload,
+            is_orphaned=is_orphaned,
+        )
+        db.session.add(interaction)
+        db.session.flush()
+
+        for assoc in associations:
+            db.session.add(InteractionAssociation(
+                interaction_id=interaction.id,
+                target_type=assoc['target_type'],
+                target_id=assoc['target_id'],
+            ))
+
+        db.session.commit()
+        logger.info(
+            "Created Interaction(id=%s, type=email) from HubSpot engagement %s (orphaned=%s).",
+            interaction.id,
+            engagement.hubspot_id,
+            is_orphaned,
+        )
+        self._extract_signals_for_interaction(interaction, associations)
+        return interaction
+
+    def convert_task(self, engagement):
+        """
+        Convert a HubSpot TASK engagement to an internal Task.
+
+        Idempotent on create: if hubspot_task_id already exists, reconciles status
+        from the latest engagement payload instead of creating a duplicate.
+        Status mapping: 'COMPLETED' → 'completed', all others → 'open'.
+        """
+        if self._task_exists(engagement.hubspot_id):
+            updated = self.reconcile_task_from_engagement(engagement)
+            if updated:
+                return Task.query.filter_by(
+                    hubspot_task_id=str(engagement.hubspot_id)
+                ).first()
+            logger.debug(
+                "Task for hubspot_task_id=%s already exists — reconcile unchanged.",
+                engagement.hubspot_id,
+            )
+            return None
+
+        metadata = engagement.raw_payload.get('metadata', {})
+        engagement_obj = engagement.raw_payload.get('engagement', {})
         title = metadata.get('subject') or '(No Subject)'
         body = metadata.get('body') or None
-        due_date = self._parse_ms_timestamp(metadata.get('taskDate'))
+        # Due date lives in engagement.timestamp (milliseconds), not metadata.taskDate.
+        # Only parse when a value is actually present; leave NULL when both are absent
+        # so tasks with no due date don't get stamped with the import time.
+        _ts_value = engagement_obj.get('timestamp') or metadata.get('taskDate')
+        due_date = self._parse_ms_timestamp(_ts_value) if _ts_value is not None else None
         hs_status = (metadata.get('status') or '').upper()
         status = 'completed' if hs_status == 'COMPLETED' else 'open'
 
@@ -214,8 +300,178 @@ class HubSpotActivityConverterService:
         )
         return task
 
+    def reconcile_task_from_engagement(self, engagement) -> bool:
+        """Update an existing imported Task from the latest HubSpot engagement payload.
+
+        Returns True when task.status (or completion_timestamp) changed.
+        """
+        task = Task.query.filter_by(hubspot_task_id=str(engagement.hubspot_id)).first()
+        if task is None:
+            return False
+
+        new_status = self._map_hubspot_task_status(engagement)
+        old_status = task.status
+        changed = old_status != new_status
+
+        task.raw_payload = engagement.raw_payload
+        task.status = new_status
+        if new_status == 'completed':
+            if task.completion_timestamp is None:
+                task.completion_timestamp = datetime.utcnow()
+                changed = True
+        elif task.completion_timestamp is not None:
+            task.completion_timestamp = None
+            changed = True
+
+        db.session.commit()
+
+        if changed:
+            logger.info(
+                "Reconciled Task(id=%s) hubspot_task_id=%s status %s → %s",
+                task.id,
+                engagement.hubspot_id,
+                old_status,
+                new_status,
+            )
+            self._recompute_action_for_task(task)
+
+        return changed
+
+    def sync_task_from_crm_v3(self, record: dict, *, lead_id: int) -> str:
+        """Sync a live HubSpot CRM v3 task onto a local Task row.
+
+        Returns 'created', 'updated', or 'unchanged'.
+        """
+        hs_id = str(record.get('id', ''))
+        if not hs_id:
+            return 'unchanged'
+
+        props = record.get('properties') or {}
+        new_status = self._map_crm_v3_task_status(props)
+        title = props.get('hs_task_subject') or '(No Subject)'
+        body = props.get('hs_task_body') or None
+        due_date = self._parse_hubspot_due_date(props.get('hs_timestamp'))
+        raw_payload = {'properties': props, 'id': hs_id}
+
+        from app.models.task_association import TaskAssociation
+
+        task = Task.query.filter_by(hubspot_task_id=hs_id).first()
+        if task is None:
+            task = Task(
+                title=title,
+                body=body,
+                due_date=due_date,
+                status=new_status,
+                source='hubspot_import',
+                hubspot_task_id=hs_id,
+                raw_payload=raw_payload,
+            )
+            db.session.add(task)
+            db.session.flush()
+            db.session.add(TaskAssociation(
+                task_id=task.id,
+                target_type='lead',
+                target_id=lead_id,
+            ))
+            if new_status == 'completed':
+                task.completion_timestamp = datetime.utcnow()
+            db.session.commit()
+            logger.info(
+                'Created Task(id=%s) from live HubSpot CRM task %s (status=%s).',
+                task.id, hs_id, new_status,
+            )
+            return 'created'
+
+        old_status = task.status
+
+        association_added = False
+        if TaskAssociation.query.filter_by(
+            task_id=task.id,
+            target_type='lead',
+            target_id=lead_id,
+        ).first() is None:
+            db.session.add(TaskAssociation(
+                task_id=task.id,
+                target_type='lead',
+                target_id=lead_id,
+            ))
+            association_added = True
+
+        changed = (
+            association_added
+            or task.status != new_status
+            or task.title != title
+            or task.body != body
+            or task.due_date != due_date
+        )
+        task.title = title
+        task.body = body
+        task.due_date = due_date
+        task.raw_payload = raw_payload
+        task.status = new_status
+        if new_status == 'completed':
+            if task.completion_timestamp is None:
+                task.completion_timestamp = datetime.utcnow()
+                changed = True
+        elif task.completion_timestamp is not None:
+            task.completion_timestamp = None
+            changed = True
+
+        if not changed:
+            return 'unchanged'
+
+        db.session.commit()
+        logger.info(
+            'Synced Task(id=%s) hubspot_task_id=%s status %s → %s',
+            task.id, hs_id, old_status, new_status,
+        )
+        self._recompute_action_for_task(task)
+        return 'updated'
+
     # ------------------------------------------------------------------ #
     # Private helpers                                                      #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _map_crm_v3_task_status(props: dict) -> str:
+        hs_status = (props.get('hs_task_status') or '').upper()
+        return 'completed' if hs_status == 'COMPLETED' else 'open'
+
+    @staticmethod
+    def _map_hubspot_task_status(engagement) -> str:
+        """Map HubSpot task status fields to internal task status."""
+        metadata = engagement.raw_payload.get('metadata', {}) or {}
+        hs_status = (metadata.get('status') or '').upper()
+        if not hs_status:
+            props = engagement.raw_payload.get('properties', {}) or {}
+            hs_status = (props.get('hs_task_status') or '').upper()
+        return 'completed' if hs_status == 'COMPLETED' else 'open'
+
+    def _recompute_action_for_task(self, task) -> None:
+        """Recompute recommended_action for leads linked to this task."""
+        from app.models.task_association import TaskAssociation
+        from app.services.action_engine_service import ActionEngineService
+
+        lead_ids = [
+            row.target_id
+            for row in TaskAssociation.query.filter_by(
+                task_id=task.id,
+                target_type='lead',
+            ).all()
+        ]
+        for lead_id in lead_ids:
+            try:
+                ActionEngineService.recompute_and_persist(lead_id)
+            except Exception as exc:
+                db.session.rollback()
+                logger.warning(
+                    "recompute_and_persist failed for lead_id=%s after task reconcile: %s",
+                    lead_id,
+                    exc,
+                )
+
+    # ------------------------------------------------------------------ #
+    # Private helpers (continued)                                          #
     # ------------------------------------------------------------------ #
 
     def _resolve_associations(self, engagement):
@@ -260,6 +516,20 @@ class HubSpotActivityConverterService:
 
         return results
 
+    def _resolve_associations_by_engagement_id(self, hubspot_engagement_id):
+        """Look up the HubSpotEngagement by ID and resolve its associations.
+
+        Used by the orphan re-resolution pass in run_convert_hubspot_activities.
+        Returns [] if the engagement no longer exists in the database.
+        """
+        from app.models.hubspot_engagement import HubSpotEngagement
+        engagement = HubSpotEngagement.query.filter_by(
+            hubspot_id=str(hubspot_engagement_id)
+        ).first()
+        if engagement is None:
+            return []
+        return self._resolve_associations(engagement)
+
     @staticmethod
     def _extract_note_body(raw_payload):
         """Extract body text from a NOTE engagement payload."""
@@ -270,6 +540,28 @@ class HubSpotActivityConverterService:
         # Fallback to bodyPreview on the engagement object
         engagement_obj = raw_payload.get('engagement', {})
         preview = engagement_obj.get('bodyPreview')
+        if preview:
+            return preview
+        return ''
+
+    @staticmethod
+    def _extract_email_body(metadata):
+        """Extract body text from an EMAIL engagement's metadata.
+
+        HubSpot EMAIL engagements store content in metadata.text (plaintext) and
+        metadata.html — NOT metadata.body (which NOTE/CALL use). Order of
+        preference: plaintext 'text'; then 'html' with tags stripped to plain
+        text; then 'bodyPreview' (older/partial payloads expose only this);
+        final fallback to ''.
+        """
+        metadata = metadata or {}
+        text = metadata.get('text')
+        if text:
+            return text
+        html = metadata.get('html')
+        if html:
+            return _strip_html_tags(html)
+        preview = metadata.get('bodyPreview')
         if preview:
             return preview
         return ''
@@ -291,6 +583,25 @@ class HubSpotActivityConverterService:
         if preview:
             return preview
         return ''
+
+    @staticmethod
+    def _parse_hubspot_due_date(value):
+        """Parse HubSpot task due date from ms epoch or ISO-8601 string."""
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return HubSpotActivityConverterService._parse_ms_timestamp(value)
+        text = str(value).strip()
+        if text.isdigit():
+            return HubSpotActivityConverterService._parse_ms_timestamp(text)
+        try:
+            dt = datetime.fromisoformat(text.replace('Z', '+00:00'))
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt
+        except (ValueError, TypeError, OSError):
+            logger.warning('Could not parse HubSpot due date value: %r', value)
+            return None
 
     @staticmethod
     def _parse_ms_timestamp(ms_value):

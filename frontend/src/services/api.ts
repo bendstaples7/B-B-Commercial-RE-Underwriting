@@ -11,6 +11,8 @@ import type {
   PropertyScoreResponse,
   RecalculateRequest,
   RecalculateResponse,
+  SearchResponse,
+  SearchParams,
 } from '@/types'
 import {
   HubSpotConfigSchema,
@@ -1470,8 +1472,8 @@ export const commandCenterService = {
     api.get(`/leads/${leadId}/command-center`).then(r => r.data),
   getRecommendedAction: (leadId: number): Promise<{ recommended_action: CRMRecommendedAction | null }> =>
     api.get(`/leads/${leadId}/recommended-action`).then(r => r.data),
-  updateStatus: (leadId: number, status: LeadStatus): Promise<unknown> =>
-    api.patch(`/leads/${leadId}/status`, { status }).then(r => r.data),
+  updateStatus: (leadId: number, status: LeadStatus, reason?: string): Promise<unknown> =>
+    api.patch(`/leads/${leadId}/status`, { status, reason: reason || undefined }).then(r => r.data),
   doNotContact: (leadId: number): Promise<unknown> =>
     api.post(`/leads/${leadId}/do-not-contact`).then(r => r.data),
   park: (leadId: number, reactivationDate?: string): Promise<unknown> =>
@@ -1482,6 +1484,15 @@ export const commandCenterService = {
     api.post(`/leads/${leadId}/suppress`).then(r => r.data),
   getTimeline: (leadId: number, page = 1): Promise<{ entries: LeadTimelineEntry[]; total: number; page: number; per_page: number }> =>
     api.get(`/leads/${leadId}/timeline`, { params: { page } }).then(r => r.data),
+  syncHubSpot: (leadId: number): Promise<{
+    lead_id: number;
+    synced: boolean;
+    lead_status?: string;
+    hubspot_deal_stage?: string;
+    last_hubspot_sync_at?: string | null;
+    hubspot_sync_stale?: boolean;
+  }> =>
+    api.post(`/leads/${leadId}/hubspot-sync`).then(r => r.data),
 }
 
 export const leadTaskService = {
@@ -1605,5 +1616,31 @@ export const leadKanbanService = {
   /** PATCH /api/kanban/leads/:id/move — move a lead to a different lead_status column */
   moveKanbanLead: async (leadId: number, targetAction: string): Promise<void> => {
     await api.patch(`/kanban/leads/${leadId}/move`, { target_action: targetAction })
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Search Service
+// ---------------------------------------------------------------------------
+
+export const searchService = {
+  search: async ({ q, page = 1, per_page = 25, signal }: SearchParams): Promise<SearchResponse> => {
+    const response = await api.get<SearchResponse>('/search', {
+      params: { q, page, per_page },
+      signal,
+    })
+    return response.data
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Data Sources Panel API Service
+// ---------------------------------------------------------------------------
+import type { DataSourceStatus } from '@/types'
+
+export const dataSourcesService = {
+  getStatus: async (): Promise<DataSourceStatus> => {
+    const response = await api.get<DataSourceStatus>('/data-sources/status')
+    return response.data
   },
 }

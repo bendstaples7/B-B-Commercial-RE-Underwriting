@@ -38,7 +38,14 @@ interface ActionButton {
   action: string
   /** Whether this button is an outreach action (disabled for DNC leads) */
   isOutreach?: boolean
+  title?: string
 }
+
+const UNIVERSAL_ACTIONS: ActionButton[] = [
+  { label: 'Log Call', action: 'log_call', isOutreach: true },
+  { label: 'Log Note', action: 'log_note' },
+  { label: 'Log Email', action: 'log_email', isOutreach: true },
+]
 
 const ACTION_BUTTONS: Record<CRMRecommendedAction, ActionButton[]> = {
   enrich_data: [
@@ -71,10 +78,7 @@ const ACTION_BUTTONS: Record<CRMRecommendedAction, ActionButton[]> = {
   create_task: [
     { label: 'Create Task', action: 'create_task' },
   ],
-  nurture: [
-    { label: 'Park Lead', action: 'park' },
-    { label: 'Log Note', action: 'log_note' },
-  ],
+  nurture: [],
   suppress: [
     { label: 'Suppress Lead', action: 'suppress' },
   ],
@@ -134,7 +138,46 @@ export function RecommendedActionPanel({
     }
   }
 
-  // No RA assigned
+  const renderActionButton = (btn: ActionButton, testIdPrefix = 'ra-action-btn') => {
+    const isDisabled = isDNC && btn.isOutreach === true
+    const isLoading = pendingAction === btn.action
+    const title = btn.title ?? (btn.action === 'park'
+      ? 'Hide this lead from active queues until a future re-activation date'
+      : undefined)
+
+    return (
+      <Button
+        key={btn.action}
+        variant="outlined"
+        size="small"
+        disabled={isDisabled || pendingAction !== null}
+        onClick={() => handleAction(btn.action)}
+        title={title}
+        startIcon={
+          isLoading ? (
+            <CircularProgress size={14} color="inherit" />
+          ) : undefined
+        }
+        data-testid={`${testIdPrefix}-${btn.action}`}
+        aria-label={btn.label}
+      >
+        {isLoading ? 'Working…' : btn.label}
+      </Button>
+    )
+  }
+
+  const renderUniversalActions = (raButtons: ActionButton[] = []) => (
+    <Box sx={{ mb: raButtons.length > 0 ? 2 : 0, mt: 2 }}>
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        Quick actions
+      </Typography>
+      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap data-testid="ra-universal-actions">
+        {UNIVERSAL_ACTIONS.map((btn) => renderActionButton(btn, 'ra-universal-btn'))}
+      </Stack>
+    </Box>
+  )
+
+  // No RA assigned — still show universal quick actions
   if (!recommendedAction || !recommendedAction.value) {
     return (
       <Box
@@ -154,13 +197,17 @@ export function RecommendedActionPanel({
         <Typography variant="body2" color="text.secondary">
           No recommended action at this time.
         </Typography>
+        {renderUniversalActions()}
       </Box>
     )
   }
 
   const { value, label, explanation } = recommendedAction
   const displayLabel = label ?? humanizeValue(value)
-  const buttons = ACTION_BUTTONS[value] ?? []
+  const hideRaHeading = value === 'nurture'
+  const raButtons = (ACTION_BUTTONS[value] ?? []).filter(
+    (btn) => !UNIVERSAL_ACTIONS.some((u) => u.action === btn.action),
+  )
   const hasOpenTasks = openTasks.length > 0
   const showCreateTaskCTA = value === 'create_task' && !hasOpenTasks && typeof onCreateTask === 'function'
 
@@ -181,18 +228,19 @@ export function RecommendedActionPanel({
         />
       )}
 
-      {/* RA label */}
-      <Typography
-        variant="subtitle1"
-        fontWeight="bold"
-        gutterBottom
-        data-testid="ra-label"
-      >
-        {displayLabel}
-      </Typography>
+      {/* RA label — hidden for nurture (no system suggestion, just quick actions) */}
+      {!hideRaHeading && (
+        <Typography
+          variant="subtitle1"
+          fontWeight="bold"
+          gutterBottom
+          data-testid="ra-label"
+        >
+          {displayLabel}
+        </Typography>
+      )}
 
-      {/* RA explanation (≤ 280 chars per spec) */}
-      {explanation && (
+      {!hideRaHeading && explanation && (
         <Typography
           variant="body2"
           color="text.secondary"
@@ -230,33 +278,13 @@ export function RecommendedActionPanel({
         </Box>
       )}
 
-      {/* Action buttons (1–5 based on RA type) */}
-      {buttons.length > 0 && (
-        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-          {buttons.map((btn) => {
-            const isDisabled =
-              isDNC && btn.isOutreach === true
-            const isLoading = pendingAction === btn.action
+      {/* Universal quick actions — always available unless DNC blocks outreach */}
+      {renderUniversalActions(raButtons)}
 
-            return (
-              <Button
-                key={btn.action}
-                variant="outlined"
-                size="small"
-                disabled={isDisabled || pendingAction !== null}
-                onClick={() => handleAction(btn.action)}
-                startIcon={
-                  isLoading ? (
-                    <CircularProgress size={14} color="inherit" />
-                  ) : undefined
-                }
-                data-testid={`ra-action-btn-${btn.action}`}
-                aria-label={btn.label}
-              >
-                {isLoading ? 'Working…' : btn.label}
-              </Button>
-            )
-          })}
+      {/* RA-specific action buttons */}
+      {raButtons.length > 0 && (
+        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          {raButtons.map((btn) => renderActionButton(btn))}
         </Stack>
       )}
     </Box>

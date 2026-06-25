@@ -4,7 +4,11 @@
 # Runs on the VPS during CI/CD deployment.
 # Called by .github/workflows/deploy.yml via SSH.
 #
-# Usage: bash /home/deploy/app/scripts/deploy.sh <TARGET_SHA>
+# Usage: bash /home/deploy/deploy.sh <TARGET_SHA>
+#
+# When this script adds new sudo commands, existing VPSes require a one-time
+# root run before the next deploy:
+#   sudo bash /home/deploy/app/scripts/vps-setup/migrate-async-stack.sh
 # =============================================================================
 
 set -euo pipefail
@@ -31,6 +35,7 @@ rollback() {
     echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Auto-rollback: $TARGET_SHA -> $PREVIOUS_SHA (deploy failed)" >> "$ROLLBACK_LOG"
     ROLLBACK_FAILED=0
     git checkout -- . 2>/dev/null || { echo "ROLLBACK WARNING: git checkout -- . failed"; ROLLBACK_FAILED=1; }
+    git clean -fd 2>/dev/null || { echo "ROLLBACK WARNING: git clean -fd failed"; ROLLBACK_FAILED=1; }
     git checkout "$PREVIOUS_SHA" 2>/dev/null || { echo "ROLLBACK WARNING: git checkout $PREVIOUS_SHA failed"; ROLLBACK_FAILED=1; }
     pip install --user -r backend/requirements.txt -q 2>/dev/null || { echo "ROLLBACK WARNING: pip install failed"; ROLLBACK_FAILED=1; }
     # Restore the previous frontend/dist backup to avoid a version mismatch:
@@ -43,7 +48,9 @@ rollback() {
         echo "ROLLBACK WARNING: no frontend-dist-backup found — frontend may be at $TARGET_SHA while backend rolls back to $PREVIOUS_SHA"
         ROLLBACK_FAILED=1
     fi
-    sudo systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
+    sudo -n systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
+    sudo -n systemctl restart celery 2>/dev/null || true
+    sudo -n systemctl restart celery-beat 2>/dev/null || true
     if [ "$ROLLBACK_FAILED" -eq 0 ]; then
         echo "Rollback to $PREVIOUS_SHA complete."
         echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Rollback successful: now at $PREVIOUS_SHA" >> "$ROLLBACK_LOG"
@@ -74,13 +81,40 @@ if [ "$FREE_KB" -lt 1048576 ]; then
 fi
 echo "    disk space: ${FREE_KB}KB free (OK)"
 
-# Check available memory (require at least 300MB free to avoid OOM during deploy)
-FREE_MEM_KB=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
-if [ "$FREE_MEM_KB" -lt 307200 ]; then
-    echo "FAILED: Less than 300MB memory available (${FREE_MEM_KB}KB free). VPS may be under memory pressure."
+# Check memory headroom before deploy.
+# Frontend is pre-built on CI; pip/migrations still need headroom on this 2GB VPS.
+# Require a hard RAM floor (OOM guard) plus total RAM+swap for deploy steps.
+# After a heavy or interrupted deploy, RAM may be temporarily low — poll before failing.
+MIN_RAM_KB=153600       # 150MB — never deploy with critically low real memory
+MIN_HEADROOM_KB=307200    # 300MB RAM+swap combined
+MEMORY_WAIT_ATTEMPTS=10   # 10 × 30s = 5 minutes max wait
+MEMORY_WAIT_SECS=30
+memory_ok=0
+for attempt in $(seq 1 "$MEMORY_WAIT_ATTEMPTS"); do
+    FREE_MEM_KB=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
+    SWAP_FREE_KB=$(awk '/SwapFree/ {print $2}' /proc/meminfo)
+    HEADROOM_KB=$((FREE_MEM_KB + SWAP_FREE_KB))
+    if [ "$FREE_MEM_KB" -ge "$MIN_RAM_KB" ] && [ "$HEADROOM_KB" -ge "$MIN_HEADROOM_KB" ]; then
+        memory_ok=1
+        echo "    memory: ${FREE_MEM_KB}KB RAM + ${SWAP_FREE_KB}KB swap available (OK)"
+        break
+    fi
+    echo "    memory attempt ${attempt}/${MEMORY_WAIT_ATTEMPTS}: ${FREE_MEM_KB}KB RAM + ${SWAP_FREE_KB}KB swap — waiting ${MEMORY_WAIT_SECS}s..."
+    if [ "$attempt" -lt "$MEMORY_WAIT_ATTEMPTS" ]; then
+        sleep "$MEMORY_WAIT_SECS"
+    fi
+done
+if [ "$memory_ok" -eq 0 ]; then
+    FREE_MEM_KB=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
+    SWAP_FREE_KB=$(awk '/SwapFree/ {print $2}' /proc/meminfo)
+    HEADROOM_KB=$((FREE_MEM_KB + SWAP_FREE_KB))
+    if [ "$FREE_MEM_KB" -lt "$MIN_RAM_KB" ]; then
+        echo "FAILED: Less than 150MB RAM available (${FREE_MEM_KB}KB MemAvailable) after ${MEMORY_WAIT_ATTEMPTS} attempts."
+        exit 1
+    fi
+    echo "FAILED: Less than 300MB memory+swap headroom (${FREE_MEM_KB}KB RAM + ${SWAP_FREE_KB}KB swap) after ${MEMORY_WAIT_ATTEMPTS} attempts."
     exit 1
 fi
-echo "    memory: ${FREE_MEM_KB}KB available (OK)"
 
 # ── Pre-deploy backup (blocks deploy on failure) ──────────────────────────────
 echo "==> (0) Pre-deploy backup"
@@ -104,6 +138,8 @@ fi
 # ── Deploy steps ─────────────────────────────────────────────────────────────
 echo "==> (1) Discard local changes and checkout SHA: $TARGET_SHA"
 git checkout -- . || { echo "FAILED: git reset local changes"; exit 1; }
+# Remove untracked files that would block checkout (e.g. one-off scripts copied to the VPS).
+git clean -fd || { echo "FAILED: git clean untracked files"; exit 1; }
 # Retry git fetch up to 3 times with 5s delay — guards against transient network failures
 GIT_FETCH_ATTEMPTS=0
 until git fetch origin main; do
@@ -161,13 +197,118 @@ FLASK_ENV=production flask db check 2>/dev/null || {
     echo "WARNING: flask db check returned non-zero — proceeding with upgrade anyway"
     echo "    (flask db check may not be available in all Flask-Migrate versions)"
 }
+
+echo "==> (4a) Pre-migration dedup cleanup"
+# Migration f9a0b1c2d3e4 requires zero owner+street duplicate clusters.
+# Production legacy data must be merged before the unique index is created.
+F9_PENDING_RC=0
+python3.11 scripts/preflight_dedup_migration.py --f9-pending || F9_PENDING_RC=$?
+if [ "$F9_PENDING_RC" -gt 1 ]; then
+    echo "FAILED: preflight_dedup_migration.py --f9-pending exited $F9_PENDING_RC"
+    exit 1
+fi
+if [ "$F9_PENDING_RC" -eq 0 ]; then
+    echo "    f9 dedup index migration pending — running preflight"
+    python3.11 scripts/preflight_dedup_migration.py --report || true
+    if ! python3.11 scripts/preflight_dedup_migration.py --verify; then
+        echo "    Duplicate clusters detected — running merge_duplicate_leads --mode dedup"
+        python3.11 scripts/merge_duplicate_leads.py --mode dedup || {
+            echo "FAILED: dedup merge"
+            exit 1
+        }
+        python3.11 scripts/preflight_dedup_migration.py --verify || {
+            echo "FAILED: duplicate clusters remain after dedup merge"
+            python3.11 scripts/preflight_dedup_migration.py --report
+            exit 1
+        }
+    else
+        echo "    No duplicate clusters — merge not required"
+    fi
+else
+    echo "    f9 dedup migration already applied — skipping dedup cleanup"
+fi
+
 FLASK_ENV=production flask db upgrade head || { echo "FAILED: flask db upgrade"; exit 1; }
 cd ..
 echo "    Migrations applied"
 
 echo "==> (5) Reload Gunicorn (zero-downtime)"
-sudo systemctl reload gunicorn || { echo "FAILED: systemctl reload gunicorn"; exit 1; }
+if ! sudo -n systemctl reload gunicorn; then
+    if ! sudo -n -l /bin/systemctl reload gunicorn >/dev/null 2>&1; then
+        echo "FAILED: passwordless sudo for 'systemctl reload gunicorn' is missing"
+        echo "Run on VPS as root: sudo bash ${APP_DIR}/scripts/vps-setup/migrate-async-stack.sh"
+        exit 1
+    fi
+    echo "FAILED: systemctl reload gunicorn failed (service error, not sudo)"
+    sudo -n systemctl status gunicorn --no-pager -n 20 2>/dev/null || true
+    exit 1
+fi
 echo "    Gunicorn reloaded"
+
+echo "==> (6) Wait for Gunicorn to be healthy on localhost"
+# Poll localhost directly (bypasses nginx) so the CI health check step can
+# start immediately rather than sleeping an arbitrary number of seconds.
+# Worst case: 20 attempts × (--max-time 10 + sleep 3) = ~260s total.
+# flask db upgrade + app factory init typically completes in <20s on this VPS.
+GUNICORN_READY=0
+for i in $(seq 1 20); do
+    HC_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+        --connect-timeout 3 \
+        --max-time 10 \
+        http://localhost:5000/api/health 2>/dev/null || echo "000")
+    echo "    localhost health check attempt $i: HTTP $HC_STATUS"
+    if [ "$HC_STATUS" = "200" ]; then
+        echo "    Gunicorn is healthy on localhost."
+        GUNICORN_READY=1
+        break
+    fi
+    sleep 3
+done
+if [ "$GUNICORN_READY" = "0" ]; then
+    echo "FAILED: Gunicorn did not become healthy on localhost after ~260s"
+    exit 1
+fi
+
+echo "==> (7) Ensure async stack is provisioned and healthy"
+CHECKS_SCRIPT="${APP_DIR}/scripts/deploy-async-stack-checks.sh"
+if [[ ! -f "${CHECKS_SCRIPT}" ]] && [[ -f /home/deploy/deploy-async-stack-checks.sh ]]; then
+    CHECKS_SCRIPT=/home/deploy/deploy-async-stack-checks.sh
+fi
+# shellcheck source=deploy-async-stack-checks.sh
+source "${CHECKS_SCRIPT}"
+assert_gunicorn_sudo_ready || exit 1
+assert_async_stack_sudo_ready || exit 1
+
+if ! systemctl list-unit-files celery.service &>/dev/null 2>&1; then
+    echo "    celery.service not found — provisioning async stack"
+    sudo -n /usr/local/sbin/bootstrap-async-stack \
+        || {
+            echo "FAILED: async stack bootstrap"
+            echo "Run on VPS as root: sudo bash ${APP_DIR}/scripts/vps-setup/migrate-async-stack.sh"
+            exit 1
+        }
+fi
+sudo -n systemctl restart celery || { echo "FAILED: celery restart"; exit 1; }
+echo "    celery restarted"
+if systemctl list-unit-files celery-beat.service &>/dev/null 2>&1; then
+    sudo -n systemctl restart celery-beat || { echo "FAILED: celery-beat restart"; exit 1; }
+    echo "    celery-beat restarted"
+fi
+verify_async_stack_services || exit 1
+echo "    async stack verified"
+
+echo "==> (8) Post-deploy HubSpot sync dispatch (non-blocking)"
+cd backend
+set -a
+# shellcheck source=/dev/null
+source .env
+set +a
+FLASK_ENV=production python3.11 scripts/post_deploy_sync.py || {
+    echo "FAILED: post_deploy_sync.py — could not dispatch HubSpot sync"
+    exit 1
+}
+cd ..
+echo "    Post-deploy HubSpot sync dispatched (runs via Celery or subprocess)"
 
 echo "==> Deploy complete: $TARGET_SHA"
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Deploy successful: $PREVIOUS_SHA -> $TARGET_SHA" >> "$ROLLBACK_LOG"

@@ -28,6 +28,7 @@ from typing import Optional
 import requests
 
 from .base import GISConnector, GISConnectorRegistry, GISParcel
+from .utils import escape_like as _escape_like
 
 logger = logging.getLogger(__name__)
 
@@ -174,8 +175,40 @@ class DuPageGISConnector(GISConnector):
         return parcel
 
     def lookup_by_address(self, address: str) -> Optional[GISParcel]:
-        """Look up a parcel by property address (PROPADDRL1 LIKE match)."""
-        safe = address.replace("'", "''").replace("%", r"\%").replace("_", r"\_").upper()
+        """Look up a parcel by property address (PROPADDRL1 LIKE match).
+
+        Strips unit-number suffixes before querying — DuPage stores addresses
+        without unit numbers (e.g. '107 MAIN ST' not '107 MAIN ST APT 2').
+        """
+        import re
+        # Normalise to uppercase and strip explicit unit suffixes (APT/UNIT/...).
+        street_part = address.split(',')[0].strip().upper()
+        street_part = re.sub(
+            r'\s+(APT|UNIT|STE|SUITE|#|FL|FLOOR|FRNT|FRONT|REAR|BSMT|BS)\s*\S*$',
+            '', street_part
+        )
+        # Strip a *bare* trailing unit number ONLY when it directly follows a
+        # recognised street-type suffix (e.g. "107 MAIN ST 2" -> "107 MAIN ST").
+        # The previous "strip any trailing number" rule was too broad: it also
+        # removed legitimate content such as route/highway numbers
+        # ("200 ROUTE 59") and numbered streets ("300 5TH"). Requiring a
+        # preceding suffix keeps those intact while still dropping true unit
+        # numbers that DuPage's dataset does not store.
+        street_part = re.sub(
+            r'\b(ST|STREET|AVE|AVENUE|BLVD|BOULEVARD|CIR|CIRCLE|CT|COURT|'
+            r'DR|DRIVE|LN|LANE|PL|PLACE|RD|ROAD|TER|TERRACE|WAY|PKWY|PARKWAY|'
+            r'CRES|CRESCENT|SQ|SQUARE|TRL|TRAIL)\s+\d+[A-Z]?$',
+            r'\1',
+            street_part,
+        )
+        street_part = street_part.strip()
+        # Guard against an empty normalised address: an empty LIKE pattern
+        # ('%%') would match every parcel. Report no match instead of querying.
+        if not street_part:
+            return None
+        # Escape LIKE wildcards (and the escape char) via the shared helper,
+        # then double single quotes; the surrounding %...% are our wildcards.
+        safe = _escape_like(street_part).replace("'", "''")
         where_clause = f"UPPER(PROPADDRL1) LIKE '%{safe}%' ESCAPE '\\'"
         return self._query_endpoint(where_clause)
 

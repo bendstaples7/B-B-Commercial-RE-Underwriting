@@ -101,7 +101,28 @@ celery.conf.update(
             'task': 'hubspot_webhook.purge_logs',
             'schedule': crontab(hour=3, minute=0),  # daily at 3 AM UTC
         },
+        # Nightly association re-sync — re-fetches all deal↔contact associations
+        # via the v4 batch API as a catch-all for any links missed by the import
+        # backfill or the real-time webhook handler.  Runs at 4 AM UTC, after
+        # the signal extraction (2 AM) and rescore (2 AM) jobs.
+        'hubspot-nightly-association-sync': {
+            'task': 'hubspot.nightly_association_sync',
+            'schedule': crontab(hour=4, minute=0),
+            'options': {'expires': 7200},
+        },
+        # Nightly action engine recompute — bulk-recomputes recommended_action
+        # for every lead as a catch-all for any stale values that slipped through
+        # the per-sync recompute calls (webhook errors, new logic, manual DB edits).
+        # Runs at 4:30 AM UTC, after the association sync (4 AM), so any
+        # association-driven enrichment changes are already committed before scoring.
+        'action-engine-nightly-recompute': {
+            'task': 'action_engine.bulk_recompute_all_leads',
+            'schedule': crontab(hour=4, minute=30),
+            'options': {'expires': 7200},
+        },
         # Scheduled engagement sync — imports new HubSpot notes/calls/tasks hourly.
+        # Legacy engagement payloads can be stale for task status; the post-import
+        # pipeline also runs live CRM v3 task sync for confirmed deal leads.
         # Engagements cannot be delivered via webhook (HubSpot legacy app limitation),
         # so this scheduled job is the mechanism for near-real-time engagement updates.
         # Interval is configurable via HUBSPOT_ENGAGEMENT_SYNC_INTERVAL_MINUTES (default: 60).
@@ -109,6 +130,12 @@ celery.conf.update(
             'task': 'hubspot.scheduled_engagement_sync',
             'schedule': int(os.environ.get('HUBSPOT_ENGAGEMENT_SYNC_INTERVAL_MINUTES', 60)) * 60,
             'options': {'expires': 3300},  # expire if not consumed within 55 min
+        },
+        # Refresh confirmed deal payloads from HubSpot API (stage changes, etc.)
+        'hubspot-refresh-confirmed-deals': {
+            'task': 'hubspot.refresh_confirmed_deals',
+            'schedule': int(os.environ.get('HUBSPOT_DEAL_REFRESH_INTERVAL_SECONDS', 2 * 3600)),
+            'options': {'expires': 3600},
         },
         # Weekly enrichment: pull DuPage acquisition dates from Illinois MyDec PTAX-203 API
         # (data.illinois.gov, updated weekly by IDOR). Runs Sunday 3:30 AM UTC, 30 minutes
@@ -124,6 +151,21 @@ celery.conf.update(
         'dupage-absentee-lead-pull': {
             'task': 'dupage.pull_absentee_leads',
             'schedule': crontab(hour=3, minute=0, day_of_week='sunday'),
+        },
+        # Fix C: GIS backfill — sweep all leads with property_street but has_property_match=False.
+        # Catches any lead created by an import path that skipped inline GIS enrichment
+        # (Google Sheets, manual CSV, HubSpot, etc.).  Runs every 6 hours; processes up
+        # to 200 leads per run to keep the job short and avoid DB lock contention.
+        'gis-backfill-property-matches': {
+            'task': 'gis.backfill_property_matches',
+            'schedule': 6 * 3600,  # every 6 hours
+            'options': {'expires': 3600},
+        },
+        # Nightly duplicate sentinel — auto-merge clear owner+street duplicates,
+        # flag ambiguous clusters for review. Runs after other nightly jobs.
+        'lead-dedup-nightly-sentinel': {
+            'task': 'leads.run_duplicate_sentinel',
+            'schedule': crontab(hour=5, minute=0),
             'options': {'expires': 7200},
         },
     },
@@ -390,14 +432,29 @@ def bulk_rescore_task(user_id: str, lead_ids: list[int] | None = None) -> int:
         return engine.bulk_rescore(user_id, lead_ids)
 
 
+@celery.task(name='leads.run_duplicate_sentinel')
+def run_duplicate_sentinel_task(dry_run: bool = False, max_merges: int = 100) -> dict:
+    """Nightly/post-import scan for duplicate leads."""
+    from app.tasks.lead_dedup_tasks import run_lead_duplicate_sentinel
+    return run_lead_duplicate_sentinel(dry_run=dry_run, max_merges=max_merges)
+
+
 @celery.task(name='import.process')
 def import_task(job_id: int, lead_category: str = 'residential') -> dict:
     from app import create_app
     from app.services.google_sheets_importer import GoogleSheetsImporter
+    from app.tasks.lead_dedup_tasks import run_lead_duplicate_sentinel
     app = create_app()
     with app.app_context():
         importer_service = GoogleSheetsImporter()
         result = importer_service.process_import(job_id, lead_category=lead_category)
+        try:
+            run_lead_duplicate_sentinel(dry_run=False, max_merges=50)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Post-import duplicate sentinel failed for job %s: %s", job_id, exc,
+            )
         return {
             'job_id': result.job_id,
             'status': result.status,
@@ -850,6 +907,13 @@ def enrich_leads_from_hubspot(run_id: int = None) -> dict:
     return _run(run_id)
 
 
+@celery.task(name='hubspot.refresh_confirmed_deals')
+def refresh_confirmed_hubspot_deals(limit: int = 200) -> dict:
+    """Re-fetch confirmed deals from HubSpot and sync linked lead stages."""
+    from app.tasks.hubspot_tasks import run_refresh_confirmed_hubspot_deals as _run
+    return _run(limit=limit)
+
+
 @celery.task(name='hubspot.convert_activities')
 def convert_hubspot_activities(run_id: int = None) -> None:
     """Convert all unconverted HubSpot engagements to Interactions/Tasks."""
@@ -931,6 +995,38 @@ def purge_old_webhook_logs():
     return run_purge_old_webhook_logs()
 
 
+@celery.task(name='hubspot_webhook.handle_association', bind=True, max_retries=3)
+def handle_association_event(
+    self,
+    from_object_type: str,
+    from_object_id: str,
+    to_object_type: str,
+    to_object_id: str,
+    log_id: int,
+):
+    """Handle a HubSpot association.created webhook event.
+
+    Merges the new association into the stored raw_payload for the deal and
+    immediately enriches the matched lead with the linked contact's data so
+    the contact shows up in the platform without waiting for the next import.
+    """
+    from app.tasks.hubspot_webhook_tasks import run_handle_association_event
+    run_handle_association_event(
+        from_object_type, from_object_id, to_object_type, to_object_id, log_id
+    )
+
+
+@celery.task(name='hubspot.nightly_association_sync')
+def nightly_association_sync():
+    """Re-fetch all deal↔contact associations nightly as a catch-all sync.
+
+    Runs after the nightly rescore so any new associations in HubSpot are
+    reflected in the platform within 24 hours at most.
+    """
+    from app.tasks.hubspot_tasks import run_nightly_association_sync
+    return run_nightly_association_sync()
+
+
 # ---------------------------------------------------------------------------
 # Action Engine Tasks
 #
@@ -1006,63 +1102,18 @@ def scheduled_engagement_sync() -> None:
 
 @celery.task(name='hubspot.post_import_pipeline')
 def run_post_import_pipeline(run_ids: list = None) -> None:
-    """Run the full post-import pipeline: matching → convert activities → extract signals → rescore.
-
-    Queued automatically after every HubSpot import trigger.  Polls until all
-    import runs in the batch are finished (success/partial/failed), then runs
-    matching → convert → signals → rescore sequentially.
-    """
+    """Run the full post-import pipeline via the shared pipeline runner."""
     import logging
-    import time
     logger = logging.getLogger(__name__)
     logger.info("Starting post-import pipeline (triggered by run_ids=%s)", run_ids)
 
     from dotenv import load_dotenv
     load_dotenv()
     from app import create_app
+    from app.services.hubspot_pipeline_runner import run_pipeline_after_imports
+
     app = create_app()
-
-    # Wait for all import runs in this batch to reach a terminal state
-    if run_ids:
-        max_wait_seconds = 3600  # 1 hour max
-        poll_interval = 15
-        elapsed = 0
-        with app.app_context():
-            from app.models import HubSpotImportRun
-            while elapsed < max_wait_seconds:
-                runs = HubSpotImportRun.query.filter(HubSpotImportRun.id.in_(run_ids)).all()
-                terminal = {'success', 'partial', 'failed'}
-                if all(r.status in terminal for r in runs):
-                    logger.info("All import runs complete — proceeding with pipeline")
-                    break
-                logger.info("Waiting for import runs to complete (%ds elapsed)...", elapsed)
-                time.sleep(poll_interval)
-                elapsed += poll_interval
-            else:
-                logger.warning("Post-import pipeline timed out waiting for runs %s", run_ids)
-
-    from app.tasks.hubspot_tasks import (
-        run_hubspot_matching,
-        run_enrich_leads_from_hubspot,
-        run_convert_hubspot_activities,
-        run_extract_hubspot_signals,
-        run_rescore_leads_after_import,
-    )
-
-    run_hubspot_matching()
-    logger.info("Post-import pipeline: matching complete")
-
-    run_enrich_leads_from_hubspot()
-    logger.info("Post-import pipeline: lead enrichment from HubSpot complete")
-
-    run_convert_hubspot_activities()
-    logger.info("Post-import pipeline: activity conversion complete")
-
-    run_extract_hubspot_signals()
-    logger.info("Post-import pipeline: signal extraction complete")
-
-    run_rescore_leads_after_import()
-    logger.info("Post-import pipeline: lead rescoring complete")
+    run_pipeline_after_imports(app, run_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -1143,6 +1194,7 @@ REQUIRED_TASKS = {
     'hubspot.import_engagements',
     'hubspot.run_matching',
     'hubspot.enrich_leads',
+    'hubspot.refresh_confirmed_deals',
     'hubspot.convert_activities',
     'hubspot.extract_signals',
     'hubspot.rescore_leads',
@@ -1159,6 +1211,8 @@ REQUIRED_TASKS = {
     'hubspot_webhook.extract_signals',
     'hubspot_webhook.rescore_lead',
     'hubspot_webhook.purge_logs',
+    'hubspot_webhook.handle_association',
+    'hubspot.nightly_association_sync',
     'process_csv_ingestion',
     'dupage.enrich_acquisition_dates',
     'dupage.pull_absentee_leads',
@@ -1392,4 +1446,199 @@ def pull_dupage_absentee_leads_task(self):
 
     except Exception as exc:
         logger.error("DuPage absentee lead pull failed: %s", exc)
+        raise
+
+# ---------------------------------------------------------------------------
+# Fix C: GIS backfill — sweep all leads missing a confirmed parcel match
+#
+# Any lead with a property_street but has_property_match=False gets a GIS
+# lookup attempt.  This is the permanent safety net that catches leads from
+# any import path (Sheets, CSV, HubSpot, manual entry) that didn't run GIS
+# enrichment inline.  Runs every 6 hours so new imports are cleaned up
+# without waiting for the weekly DuPage pull.
+# ---------------------------------------------------------------------------
+
+@celery.task(bind=True, name='gis.backfill_property_matches')
+def backfill_property_matches_task(self):
+    """Periodic task: GIS-enrich all leads where has_property_match=False
+    and property_street is populated.
+
+    This is the safety-net that ensures no lead stays perpetually unmatched
+    because its import path (Google Sheets, manual CSV, etc.) skipped the
+    GIS enrichment step.
+
+    Run schedule: every 6 hours.
+    """
+    import logging
+    _logger = logging.getLogger('celery.gis.backfill_property_matches')
+
+    try:
+        from app import create_app
+        app = create_app()
+
+        with app.app_context():
+            from app import db
+            from app.models.lead import Property
+            from app.services.gis.base import GISConnectorRegistry
+            import app.services.gis.dupage_gis_connector  # noqa: F401 — triggers self-registration
+            import app.services.gis.cook_county_gis_connector  # noqa: F401
+            from app.services.deduplication_engine import DeduplicationEngine
+            from app.services.lead_ingestion_service import LeadIngestionService
+
+            ingestion_svc = LeadIngestionService(
+                dedup_engine=DeduplicationEngine(),
+                gis_registry=GISConnectorRegistry,
+            )
+
+            from app.services.gis.routing import connector_for_lead
+
+            # Sweep leads where:
+            # - property_street is populated (something to look up)
+            # - has_property_match is still False
+            #
+            # Forward progress: page through the unmatched set with a strictly
+            # increasing id cursor (id > last_id) instead of re-selecting the
+            # same first N rows every run. Leads that don't resolve (no
+            # connector / no parcel / error) keep has_property_match=False, so
+            # without a cursor the task would reprocess the same first batch
+            # forever and never reach the rest. The cursor guarantees each lead
+            # is touched at most once per run and that the sweep terminates.
+            BATCH_SIZE = 200
+            # Cap on the number of *network* GIS lookups per invocation. The id
+            # cursor already guarantees termination; this just bounds a single
+            # run's external-API load. Cheap no-connector skips don't count
+            # against it, so out-of-state leads can't starve the lookup budget.
+            MAX_GIS_LOOKUPS_PER_RUN = 1000
+
+            matched = 0
+            no_match = 0
+            errors = 0
+            no_connector = 0
+            gis_lookups = 0
+            processed = 0
+            last_id = 0
+            capped = False
+            failed_pages = 0     # pages whose commit failed and were rolled back
+            rolled_back = 0      # leads whose persisted result was discarded
+
+            while not capped:
+                batch = (
+                    db.session.query(Property)
+                    .filter(
+                        Property.has_property_match == False,   # noqa: E712
+                        Property.property_street != None,        # noqa: E711
+                        Property.property_street != '',
+                        Property.id > last_id,                   # cursor — forward progress
+                    )
+                    .order_by(Property.id)
+                    .limit(BATCH_SIZE)
+                    .all()
+                )
+                if not batch:
+                    break  # swept the whole unmatched set — terminate
+
+                # Per-page tallies of the outcomes we optimistically counted as
+                # successful. They are only promoted into the run totals once the
+                # page commit succeeds; if the commit is rolled back they are
+                # backed out so a flushed-but-not-committed page can't be reported
+                # as matched/updated (which would hide the data loss).
+                page_first_id = batch[0].id if batch else last_id
+                page_matched = 0
+                page_no_match = 0
+
+                for lead in batch:
+                    last_id = lead.id          # advance cursor past every lead we touch
+                    processed += 1
+                    # Per-lead isolation: one bad lead is logged and skipped,
+                    # never aborting the whole sweep.
+                    try:
+                        lead_connector = connector_for_lead(lead)
+                        if not lead_connector:
+                            no_connector += 1
+                            continue
+                        outcome = ingestion_svc._enrich_with_gis(
+                            lead, lead_connector, import_job_id=0
+                        )
+                        gis_lookups += 1
+                        if outcome.get('error'):
+                            errors += 1
+                        elif outcome.get('match_found'):
+                            matched += 1
+                            page_matched += 1
+                        else:
+                            no_match += 1
+                            page_no_match += 1
+                    except Exception as lead_exc:
+                        errors += 1
+                        _logger.warning(
+                            "gis.backfill_property_matches: skipping lead id=%s "
+                            "after unexpected error: %s",
+                            getattr(lead, 'id', '?'), lead_exc,
+                        )
+
+                    if gis_lookups >= MAX_GIS_LOOKUPS_PER_RUN:
+                        capped = True
+                        break
+
+                # Persist this page's matches before moving on so a later
+                # failure can't discard progress already made.
+                try:
+                    db.session.commit()
+                except Exception as commit_exc:
+                    db.session.rollback()
+                    # The rollback discarded every write this page made, so the
+                    # leads we just counted as matched/no-match were NOT actually
+                    # persisted. Back them out of the totals and reclassify the
+                    # page as failed — otherwise the task reports rolled-back
+                    # leads as successfully matched/updated and hides the loss.
+                    page_lost = page_matched + page_no_match
+                    matched -= page_matched
+                    no_match -= page_no_match
+                    errors += page_lost
+                    rolled_back += page_lost
+                    failed_pages += 1
+                    _logger.error(
+                        "gis.backfill_property_matches: page commit FAILED for "
+                        "leads id %s..%s — rolled back %d lead result(s) "
+                        "(%d matched, %d no-match) now counted as errors: %s",
+                        page_first_id, last_id, page_lost, page_matched,
+                        page_no_match, commit_exc,
+                    )
+
+            if processed == 0:
+                _logger.info("gis.backfill_property_matches: nothing to do")
+            if capped:
+                _logger.warning(
+                    "gis.backfill_property_matches: hit per-run GIS lookup cap of "
+                    "%d; remaining unmatched leads will be swept on the next run",
+                    MAX_GIS_LOOKUPS_PER_RUN,
+                )
+            if failed_pages:
+                _logger.error(
+                    "gis.backfill_property_matches: %d page(s) failed to commit "
+                    "and were rolled back, discarding %d lead result(s); these are "
+                    "reported as errors and will be retried on the next run",
+                    failed_pages, rolled_back,
+                )
+            _logger.info(
+                "gis.backfill_property_matches: %d matched, %d no-match, %d errors, "
+                "%d no-connector (processed=%d, capped=%s, failed_pages=%d, "
+                "rolled_back=%d)",
+                matched, no_match, errors, no_connector, processed, capped,
+                failed_pages, rolled_back,
+            )
+            return {
+                'status': 'completed' if failed_pages == 0 else 'partial',
+                'matched': matched,
+                'no_match': no_match,
+                'errors': errors,
+                'no_connector': no_connector,
+                'processed': processed,
+                'capped': capped,
+                'failed_pages': failed_pages,
+                'rolled_back': rolled_back,
+            }
+
+    except Exception as exc:
+        _logger.error("gis.backfill_property_matches failed: %s", exc)
         raise

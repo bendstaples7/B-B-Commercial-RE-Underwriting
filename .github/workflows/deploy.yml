@@ -65,6 +65,14 @@ jobs:
           mkdir -p ~/.ssh
           echo "$VPS_SSH_KEY" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
+          cat >> ~/.ssh/config <<'EOF'
+          Host *
+            IdentityFile ~/.ssh/id_deploy
+            ServerAliveInterval 30
+            ServerAliveCountMax 20
+            TCPKeepAlive yes
+          EOF
+          chmod 600 ~/.ssh/config
 
       # ── Step 3: Add VPS to known hosts ────────────────────────────────────
       - name: Add VPS to known hosts
@@ -85,53 +93,31 @@ jobs:
             "echo 'SSH connection verified'" \
           || { echo "ERROR: Cannot connect to VPS at $VPS_HOST as $VPS_USER"; exit 1; }
 
-      # ── Step 4b: Verify VPS readiness — required files exist ─────────────
-      - name: Verify VPS readiness
-        env:
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: |
-          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST bash << 'READINESS'
-          MISSING=""
-          [ -d /home/deploy/app ]              || MISSING="$MISSING /home/deploy/app (app directory)"
-          [ -f /home/deploy/app/backend/.env ] || MISSING="$MISSING /home/deploy/app/backend/.env"
-          [ -d /home/deploy/app/frontend ]     || MISSING="$MISSING /home/deploy/app/frontend"
-          # Verify the app directory is an initialized git repository
-          git -C /home/deploy/app rev-parse --git-dir > /dev/null 2>&1 \
-            || MISSING="$MISSING /home/deploy/app/.git (not a git repo — run vps-setup clone step)"
-          # Verify backup.conf exists — backup.sh will fail without it.
-          # Note: the Deploy step will auto-create a stub if missing, so this
-          # is a warning rather than a hard failure.
-          if [ ! -f /home/deploy/backup.conf ]; then
-            echo "NOTE: /home/deploy/backup.conf not found — Deploy step will create a stub automatically."
-          fi
-          if [ -n "$MISSING" ]; then
-            echo "ERROR: Required VPS files/directories missing:$MISSING"
-            echo "The VPS may not be fully provisioned. Run the vps-setup scripts first."
-            exit 1
-          fi
-          # deploy.sh is copied by this workflow — warn if absent (first deploy after provisioning)
-          if [ ! -f /home/deploy/deploy.sh ]; then
-            echo "NOTE: /home/deploy/deploy.sh not yet present — will be copied in the Deploy step."
-          fi
-          echo "VPS readiness check passed."
-          READINESS
-
-      # ── Step 5: Checkout repo, build frontend on runner, deploy ──────────
-      - name: Checkout repo (to get deploy script and build frontend)
+      # ── Step 4b: Checkout repo (needed for readiness scripts + deploy) ───
+      - name: Checkout repo
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           ref: ${{ inputs.target_sha || github.event.workflow_run.head_sha || 'main' }}
           persist-credentials: false
 
-      # Resolve the actual commit SHA after checkout so TARGET_SHA is always a
-      # full commit hash — never a branch name like 'main'. This matters for the
-      # post-deploy SHA verification step which compares against the deployed app's
-      # reported SHA.
       - name: Resolve target SHA
         id: resolve_sha
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      # ── Step 4c: VPS readiness (+ optional root auto-migrate) ───────────
+      - name: Ensure VPS readiness
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_ROOT_SSH_KEY: ${{ secrets.VPS_ROOT_SSH_KEY }}
+          SSH_KEY_PATH: ~/.ssh/id_deploy
+        run: |
+          chmod +x scripts/ci-ensure-vps-readiness.sh scripts/run-vps-readiness-check.sh
+          VPS_USER="$VPS_USER" VPS_HOST="$VPS_HOST" SSH_KEY_PATH="$SSH_KEY_PATH" \
+            VPS_ROOT_SSH_KEY="$VPS_ROOT_SSH_KEY" \
+            bash scripts/ci-ensure-vps-readiness.sh
+
+      # ── Step 5: Build frontend on runner ────────────────────────────────
       - name: Build frontend on runner (avoids OOM on 2GB VPS)
         run: |
           cd frontend
@@ -147,8 +133,10 @@ jobs:
           TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          # Copy deploy script
+          # Copy deploy script and shared checks
           scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
+          scp -i ~/.ssh/id_deploy scripts/deploy-async-stack-checks.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy-async-stack-checks.sh
+          scp -i ~/.ssh/id_deploy scripts/run-vps-readiness-check.sh $VPS_USER@$VPS_HOST:/home/deploy/run-vps-readiness-check.sh
           # Copy backup scripts and library (idempotent — safe to overwrite on every deploy)
           scp -i ~/.ssh/id_deploy scripts/backup.sh $VPS_USER@$VPS_HOST:/home/deploy/backup.sh
           scp -i ~/.ssh/id_deploy scripts/restore.sh $VPS_USER@$VPS_HOST:/home/deploy/restore.sh
@@ -178,9 +166,35 @@ jobs:
             || { echo "ERROR: backup.sh --check failed — PostgreSQL connectivity issue. Check /home/deploy/logs/backup.log on VPS."; exit 1; }
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "rm -rf /home/deploy/frontend-dist"
           scp -i ~/.ssh/id_deploy -r frontend/dist $VPS_USER@$VPS_HOST:/home/deploy/frontend-dist
-          # Run deploy script
-          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
+          # Run deploy script (keepalive in ~/.ssh/config; explicit opts on long session)
+          ssh -i ~/.ssh/id_deploy \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            -o TCPKeepAlive=yes \
+            $VPS_USER@$VPS_HOST \
             "chmod +x /home/deploy/deploy.sh && bash /home/deploy/deploy.sh '$TARGET_SHA'"
+
+      - name: Deploy failure diagnostics
+        if: failure()
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "=== Deploy failed — collecting VPS migration diagnostics ==="
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST bash -s <<'REMOTE'
+          set +e
+          cd /home/deploy/app/backend || cd /home/deploy/app/backend 2>/dev/null
+          if [ -f .env ]; then
+            set -a
+            # shellcheck source=/dev/null
+            source .env
+            set +a
+          fi
+          echo "--- Alembic revision ---"
+          FLASK_ENV=production flask db current 2>&1 || true
+          echo "--- Dedup preflight ---"
+          python3.11 scripts/preflight_dedup_migration.py --json 2>&1 || true
+          REMOTE
 
       # ── Step 6: Post-deploy health check + SHA verification ──────────────
       - name: Post-deploy health check
@@ -188,26 +202,44 @@ jobs:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
           TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
         run: |
-          echo "Waiting for Gunicorn to finish graceful reload..."
-          sleep 5
           BASE_URL="https://${VPS_SUBDOMAIN}.duckdns.org"
 
-          # Health check
-          for i in $(seq 1 10); do
+          # Health check — poll from t=0 with no upfront sleep.
+          # deploy.sh already verifies Gunicorn is healthy on localhost before
+          # returning, so by the time we reach this step the server is up.
+          # This loop is the public-facing (nginx) confirmation: 20 attempts,
+          # worst case (20 × (--max-time 20 + sleep 5)) = ~500s total, which
+          # is ample headroom for any nginx proxy lag or transient network blip.
+          #
+          # --connect-timeout 5  → fail fast when the port isn't open yet
+          #                        (expected early in reload, retry quickly)
+          # --max-time 20        → fail if connected but server hangs >20s
+          #                        (this is the signal of a real problem)
+          # Together these let curl distinguish "not ready yet" from "stuck".
+          #
+          # IMPORTANT: the `|| echo "000"` guard is required. GitHub Actions
+          # runs each `run:` block under `set -e`. Without the guard, a non-zero
+          # curl exit (e.g. exit 7 = connection refused, exit 28 = timeout) would
+          # terminate the step immediately before the retry loop could continue.
+          echo "Polling ${BASE_URL}/api/health (max 20 attempts, ~500s worst case)..."
+          HEALTH_PASSED=0
+          for i in $(seq 1 20); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              --max-time 10 \
-              "${BASE_URL}/api/health")
+              --connect-timeout 5 \
+              --max-time 20 \
+              "${BASE_URL}/api/health" 2>/dev/null || echo "000")
             echo "Attempt $i: HTTP $STATUS"
             if [ "$STATUS" = "200" ]; then
               echo "Health check passed."
+              HEALTH_PASSED=1
               break
             fi
-            if [ "$i" = "10" ]; then
-              echo "Health check failed after 10 attempts."
-              exit 1
-            fi
-            sleep 3
+            sleep 5
           done
+          if [ "$HEALTH_PASSED" = "0" ]; then
+            echo "Health check failed after 20 attempts."
+            exit 1
+          fi
 
           # SHA verification — confirm the deployed code matches the triggering commit
           DEPLOYED_SHA=$(curl -s --max-time 10 "${BASE_URL}/api/version" | python3 -c "import sys,json; print(json.load(sys.stdin).get('sha','unknown'))" 2>/dev/null || echo "unknown")
@@ -301,3 +333,48 @@ jobs:
             exit 1
           fi
           echo "Ownership smoke test passed — queues are non-empty for $SMOKE_TEST_EMAIL."
+
+      # ── Step 8: Post-deploy search smoke test ─────────────────────────────
+      # Verifies that GET /api/search returns HTTP 200 after deploy.
+      # Catches the class of regression where a SQL syntax error in the ILIKE
+      # query path causes every search to 500 (e.g. duplicate ELSE in CASE).
+      # Skipped if smoke test credentials are not configured.
+      - name: Post-deploy search smoke test
+        env:
+          VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+          SMOKE_TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
+          SMOKE_TEST_PASSWORD: ${{ secrets.SMOKE_TEST_PASSWORD }}
+        run: |
+          BASE_URL="https://${VPS_SUBDOMAIN}.duckdns.org"
+
+          if [ -z "$SMOKE_TEST_EMAIL" ] || [ -z "$SMOKE_TEST_PASSWORD" ]; then
+            echo "SMOKE_TEST_EMAIL or SMOKE_TEST_PASSWORD not set — skipping search smoke test."
+            exit 0
+          fi
+
+          echo "Logging in for search smoke test..."
+          LOGIN_PAYLOAD=$(python3 -c "import json, os; print(json.dumps({'email': os.environ['SMOKE_TEST_EMAIL'], 'password': os.environ['SMOKE_TEST_PASSWORD']}))")
+          LOGIN_RESPONSE=$(curl -s --max-time 15 \
+            -X POST "${BASE_URL}/api/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "$LOGIN_PAYLOAD")
+
+          TOKEN=$(echo "$LOGIN_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))" 2>/dev/null || echo "")
+          if [ -z "$TOKEN" ]; then
+            echo "ERROR: Could not obtain auth token for search smoke test. Response: $LOGIN_RESPONSE"
+            exit 1
+          fi
+
+          echo "Running search smoke test (GET /api/search?q=test)..."
+          SEARCH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 \
+            "${BASE_URL}/api/search?q=test" \
+            -H "Authorization: Bearer $TOKEN")
+
+          echo "Search endpoint HTTP status: $SEARCH_STATUS"
+          if [ "$SEARCH_STATUS" != "200" ]; then
+            echo "ERROR: Search endpoint returned $SEARCH_STATUS — expected 200."
+            echo "This indicates a SQL syntax error or unhandled exception in /api/search."
+            echo "Check the Flask logs on the VPS for the full traceback."
+            exit 1
+          fi
+          echo "Search smoke test passed."

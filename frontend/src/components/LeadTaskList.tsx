@@ -4,7 +4,7 @@
  *
  * Requirements: 3.2, 3.3, 3.6, 4.3, 7.5, 7.6
  */
-import { useState } from 'react'
+import { forwardRef, useImperativeHandle, useState } from 'react'
 import {
   Alert,
   Box,
@@ -63,6 +63,10 @@ function isDueDateOverdue(dueDate: string | null): boolean {
 // Props
 // ---------------------------------------------------------------------------
 
+export interface LeadTaskListHandle {
+  openCreateForm: () => void
+}
+
 export interface LeadTaskListProps {
   leadId: number
   tasks: LeadTask[]
@@ -70,6 +74,16 @@ export interface LeadTaskListProps {
   onTaskCreated: (task: LeadTask) => void
   onTaskCompleted?: (taskId: number | string) => void
   onHubSpotTaskDone?: (taskId: number) => void
+  /** Called immediately when the user submits the form, before the API call
+   *  completes. Receives a temporary placeholder task (id = 0, status = 'open').
+   *  Use this to add an optimistic entry to the task list.
+   */
+  onOptimisticTaskCreate?: (optimisticTask: LeadTask) => void
+  /** Called when the create API call fails, to roll back the optimistic
+   *  placeholder added via `onOptimisticTaskCreate`. Receives the same
+   *  placeholder task (id = 0) so the parent can remove it from the list.
+   */
+  onOptimisticTaskRevert?: (optimisticTask: LeadTask) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -81,14 +95,19 @@ export interface LeadTaskListProps {
  * an inline task creation form, and a "Create Task" CTA when RA is
  * `create_task` and no open tasks exist.
  */
-export function LeadTaskList({
-  leadId,
-  tasks,
-  recommendedAction,
-  onTaskCreated,
-  onTaskCompleted,
-  onHubSpotTaskDone,
-}: LeadTaskListProps) {
+export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(function LeadTaskList(
+  {
+    leadId,
+    tasks,
+    recommendedAction,
+    onTaskCreated,
+    onTaskCompleted,
+    onHubSpotTaskDone,
+    onOptimisticTaskCreate,
+    onOptimisticTaskRevert,
+  },
+  ref,
+) {
   const [formOpen, setFormOpen] = useState(false)
   const [title, setTitle] = useState('')
   const [dueDate, setDueDate] = useState('')
@@ -112,6 +131,10 @@ export function LeadTaskList({
     setTitleError(null)
     setSubmitError(null)
   }
+
+  useImperativeHandle(ref, () => ({
+    openCreateForm: handleOpenForm,
+  }))
 
   const handleCloseForm = () => {
     setFormOpen(false)
@@ -139,6 +162,23 @@ export function LeadTaskList({
     setSubmitError(null)
     setSubmitting(true)
 
+    // Fire optimistic callback before the API call so the parent can render
+    // a placeholder task immediately (property 12: optimistic task creation).
+    const optimisticTask: LeadTask = {
+      id: 0,
+      lead_id: leadId,
+      task_type: 'custom',
+      title: title.trim(),
+      status: 'open',
+      due_date: dueDate || null,
+      created_at: new Date().toISOString(),
+      completed_at: null,
+      created_by: 'user',
+    }
+    if (onOptimisticTaskCreate) {
+      onOptimisticTaskCreate(optimisticTask)
+    }
+
     try {
       const newTask = await leadTaskService.createTask(leadId, {
         title: title.trim(),
@@ -148,7 +188,12 @@ export function LeadTaskList({
       onTaskCreated(newTask)
       handleCloseForm()
     } catch (err) {
-      // Preserve form data on failure — do NOT close the form
+      // Roll back the optimistic placeholder (if one was added) so a failed
+      // create doesn't leave a stale task in the list. Preserve form data on
+      // failure — do NOT close the form — so the user can retry.
+      if (onOptimisticTaskCreate) {
+        onOptimisticTaskRevert?.(optimisticTask)
+      }
       setSubmitError(
         err instanceof Error ? err.message : 'Failed to create task. Please try again.'
       )
@@ -225,7 +270,7 @@ export function LeadTaskList({
                         <CheckCircleOutlineIcon fontSize="small" />
                       </IconButton>
                     ) : isHubSpot ? (
-                      <Tooltip title="Mark as done locally — does not update HubSpot">
+                      <Tooltip title="Attempts to mark as done in HubSpot; will mark locally if HubSpot update fails">
                         <span>
                           <IconButton
                             edge="end"
@@ -276,17 +321,25 @@ export function LeadTaskList({
                       </Stack>
                     }
                     secondary={
-                      task.due_date ? (
-                        <Typography
-                          component="span"
-                          variant="caption"
-                          color={overdue ? 'error' : 'text.secondary'}
-                          data-testid={`task-due-date-${task.id}`}
-                        >
-                          {formatDueDate(task.due_date)}
-                          {overdue && ' (overdue)'}
-                        </Typography>
-                      ) : null
+                      <>
+                        {task.due_date && (
+                          <Typography
+                            component="span"
+                            variant="caption"
+                            color={overdue ? 'error' : 'text.secondary'}
+                            data-testid={`task-due-date-${task.id}`}
+                            sx={{ display: 'block' }}
+                          >
+                            {formatDueDate(task.due_date)}
+                            {overdue && ' (overdue)'}
+                          </Typography>
+                        )}
+                        {task.source === 'hubspot' && (
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+                            HubSpot task — complete in HubSpot to close
+                          </Typography>
+                        )}
+                      </>
                     }
                   />
                 </ListItem>
@@ -385,6 +438,6 @@ export function LeadTaskList({
       )}
     </Box>
   )
-}
+})
 
 export default LeadTaskList

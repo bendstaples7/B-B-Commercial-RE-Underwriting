@@ -35,6 +35,11 @@ vi.mock('@/services/api', () => ({
     markMatchAsNewRecord: vi.fn(),
     triggerBackupExport: vi.fn(),
     downloadBackupExport: vi.fn(),
+    getPipelineStatus: vi.fn(),
+    getWebhookLog: vi.fn(),
+    getWebhookLogSummary: vi.fn(),
+    retryWebhookEvent: vi.fn(),
+    saveClientSecret: vi.fn(),
   },
 }))
 
@@ -138,6 +143,29 @@ beforeEach(() => {
     total: 0,
     page: 1,
     per_page: 1,
+  })
+  // Pipeline status — non-critical, always return idle so the context query
+  // resolves immediately and doesn't trigger unguarded state updates in tests.
+  vi.mocked(hubSpotService.getPipelineStatus).mockResolvedValue({
+    pipeline_running: false,
+    matches: { total: 0, high: 0, medium: 0, unmatched: 0 },
+    interactions: 0,
+    tasks: 0,
+    signals: 0,
+  })
+  // Webhook panel calls — return empty data so sub-component queries settle cleanly
+  vi.mocked(hubSpotService.getWebhookLog).mockResolvedValue({
+    logs: [],
+    total: 0,
+    page: 1,
+    pages: 1,
+    per_page: 20,
+  })
+  vi.mocked(hubSpotService.getWebhookLogSummary).mockResolvedValue({
+    processed_count: 0,
+    failed_count: 0,
+    deduplicated_count: 0,
+    last_synced_at: null,
   })
 })
 

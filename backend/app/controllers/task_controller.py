@@ -75,6 +75,41 @@ def _serialize_task(task):
     return data
 
 
+def _collect_task_lead_ids(task):
+    """Collect the set of lead ids a task touches.
+
+    A Task may reference a lead via its direct ``lead_id`` FK and/or via
+    ``TaskAssociation`` rows with ``target_type='lead'``. Association loading is
+    best-effort: a failure to enumerate associations is logged and ignored so a
+    transient association-load error never blocks the caller.
+    """
+    lead_ids = set()
+    direct = getattr(task, 'lead_id', None)
+    if direct is not None:
+        lead_ids.add(direct)
+    try:
+        for assoc in task.associations.all():
+            if assoc.target_type == 'lead' and assoc.target_id is not None:
+                lead_ids.add(assoc.target_id)
+    except Exception:  # pragma: no cover — association load is best-effort
+        logger.debug("Could not enumerate task associations for refresh", exc_info=True)
+    return lead_ids
+
+
+def _refresh_associated_leads(task):
+    """Refresh lead_score + recommended_action for every lead this task touches.
+
+    A Task may be linked to a lead via its direct ``lead_id`` FK and/or via
+    ``TaskAssociation`` rows with ``target_type='lead'``. Open-task count feeds
+    the action engine, so creating/updating/completing a task must refresh the
+    affected lead(s). Uses the error-isolated ``refresh_lead_scoring`` helper.
+    """
+    from app.services.lead_refresh import refresh_lead_scoring
+
+    for lead_id in _collect_task_lead_ids(task):
+        refresh_lead_scoring(lead_id)
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -171,6 +206,7 @@ def create_task():
     data['associations'] = associations
 
     task = _service.create(data)
+    _refresh_associated_leads(task)
     return jsonify(_serialize_task(task)), 201
 
 
@@ -202,14 +238,30 @@ def update_task(task_id):
     # Use partial=True so only provided fields are validated/updated
     data = _task_schema.load(body, partial=True)
     task = _service.update(task_id, data)
+    _refresh_associated_leads(task)
     return jsonify(_serialize_task(task)), 200
 
 
 @task_bp.route('/<int:task_id>', methods=['DELETE'])
 @handle_errors
 def delete_task(task_id):
-    """Delete a task and its associations."""
+    """Delete a task and its associations.
+
+    Bug 8: capture the lead(s) this task touches BEFORE deletion (the delete
+    removes the task's associations), then refresh their scoring afterwards so
+    lead_score + recommended_action don't go stale — open-task count feeds the
+    action engine, so removing a task can change the recommended action.
+    """
+    task = _service.get(task_id)
+
+    affected_lead_ids = _collect_task_lead_ids(task)
+
     _service.delete(task_id)
+
+    from app.services.lead_refresh import refresh_lead_scoring
+    for lead_id in affected_lead_ids:
+        refresh_lead_scoring(lead_id)
+
     return jsonify({'message': f'Task {task_id} deleted successfully.'}), 200
 
 
@@ -222,4 +274,5 @@ def complete_task(task_id):
     SHALL record the completion timestamp.
     """
     task = _service.complete(task_id)
+    _refresh_associated_leads(task)
     return jsonify(_serialize_task(task)), 200

@@ -22,6 +22,7 @@ import {
   MenuItem,
   Select,
   Stack,
+  TextField,
   Typography,
   Paper,
   IconButton,
@@ -37,13 +38,15 @@ import EmailIcon from '@mui/icons-material/Email'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import type { LeadStatus, LeadTask, LeadTimelineEntry } from '@/types'
+import { deriveQueueContext } from '@/utils/deriveQueueContext'
+import { formatPhoneNumber, phoneCopyText, phoneTelHref } from '@/utils/phone'
 import { commandCenterService, leadTaskService } from '@/services/api'
 import { RecommendedActionPanel } from './RecommendedActionPanel'
 import { LeadTaskList } from './LeadTaskList'
 import { LeadTimeline } from './LeadTimeline'
 import { LogNoteForm } from './LogNoteForm'
 import { LogCallForm } from './LogCallForm'
-import { LeadStatusChip, LEAD_STATUS_LABELS } from './LeadStatusChip'
+import { LEAD_STATUS_LABELS } from './LeadStatusChip'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -87,16 +90,17 @@ function SidebarRow({ label, value }: { label: string; value: React.ReactNode })
 
 function CopyablePhone({ phone }: { phone: string }) {
   const [copied, setCopied] = useState(false)
+  const displayPhone = formatPhoneNumber(phone)
   const handleCopy = () => {
-    navigator.clipboard.writeText(phone)
+    navigator.clipboard.writeText(phoneCopyText(phone))
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
       <PhoneIcon sx={{ fontSize: 13, color: 'text.secondary' }} />
-      <Link href={`tel:${phone}`} variant="caption" underline="hover">
-        {phone}
+      <Link href={phoneTelHref(phone)} variant="caption" underline="hover">
+        {displayPhone}
       </Link>
       <Tooltip title={copied ? 'Copied!' : 'Copy'}>
         <IconButton size="small" onClick={handleCopy} sx={{ p: 0.25 }}>
@@ -135,46 +139,6 @@ function CopyableEmail({ email }: { email: string }) {
 // the lead's data fields — no extra API call needed.
 // ---------------------------------------------------------------------------
 
-interface QueueContext {
-  label: string
-  path: string
-  reason: string
-  color: 'error' | 'warning' | 'info' | 'success' | 'default'
-}
-
-function deriveQueueContext(data: any): QueueContext[] {
-  const queues: QueueContext[] = []
-
-  if (data.lead_status === 'do_not_contact') {
-    queues.push({ label: 'Do Not Contact', path: '/queues/do-not-contact', reason: 'This lead is marked Do Not Contact.', color: 'error' })
-  }
-  if (data.review_required) {
-    queues.push({ label: 'Needs Review', path: '/queues/needs-review', reason: data.review_reason || 'This lead has been flagged for review.', color: 'warning' })
-  }
-  if (data.follow_up_overdue) {
-    queues.push({ label: 'Follow-Up Overdue', path: '/queues/follow-up-overdue', reason: 'A follow-up task is overdue.', color: 'error' })
-  }
-  // Today's Action: overdue HubSpot task (most common case)
-  if (data.has_overdue_hubspot_task) {
-    const taskDesc = data.overdue_task_title
-      ? `"${data.overdue_task_title}" was due ${data.overdue_task_due ? new Date(data.overdue_task_due).toLocaleDateString() : 'in the past'} and is still open.`
-      : 'A HubSpot task is overdue.'
-    queues.push({ label: "Today's Action", path: '/', reason: taskDesc, color: 'warning' })
-  } else if (data.is_warm && !data.follow_up_overdue) {
-    queues.push({ label: "Today's Action", path: '/', reason: 'This lead has prior warm engagement — reach out now.', color: 'warning' })
-  } else if (data.recommended_action?.value === 'follow_up_now' && !data.follow_up_overdue && !data.is_warm) {
-    queues.push({ label: "Today's Action", path: '/', reason: data.recommended_action.explanation || 'Follow up now.', color: 'warning' })
-  }
-  if (!data.has_property_match) {
-    queues.push({ label: 'Missing Property Match', path: '/queues/missing-property-match', reason: 'No confirmed property match exists for this lead.', color: 'info' })
-  }
-  if (data.recommended_action?.value === 'create_task' && !['suppressed', 'do_not_contact', 'deprioritize', 'deal_won', 'deal_lost'].includes(data.lead_status)) {
-    queues.push({ label: 'No Next Action', path: '/queues/no-next-action', reason: 'No open tasks or next action defined.', color: 'default' })
-  }
-
-  return queues
-}
-
 export interface LeadCommandCenterProps {
   leadId: number
 }
@@ -188,6 +152,8 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
   const navigate = useNavigate()
   const [statusChanging, setStatusChanging] = useState(false)
   const [statusError, setStatusError] = useState<string | null>(null)
+  const [pendingStatus, setPendingStatus] = useState<LeadStatus | null>(null)
+  const [statusReason, setStatusReason] = useState('')
   const [timelineEntries, setTimelineEntries] = useState<LeadTimelineEntry[]>([])
   const [timelineTotal, setTimelineTotal] = useState(0)
   const [tasks, setTasks] = useState<LeadTask[]>([])
@@ -207,19 +173,34 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
     }
   }, [data])
 
-  const handleStatusChange = async (newStatus: LeadStatus) => {
+  const handleStatusChange = (newStatus: LeadStatus) => {
     if (!data || newStatus === data.lead_status) return
-    setStatusChanging(true)
-    setStatusError(null)
+    setStatusError(null)  // clear any prior error when user picks a new status
+    setPendingStatus(newStatus)
+    setStatusReason('')
+  }
+
+  const handleStatusConfirm = async () => {
+    if (!pendingStatus) return
     try {
-      await commandCenterService.updateStatus(leadId, newStatus)
-      await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+      setStatusChanging(true)
+      await commandCenterService.updateStatus(leadId, pendingStatus, statusReason.trim() || undefined)
+      setStatusError(null)  // clear error on success before resetting pending state
+      queryClient.invalidateQueries({ queryKey: ['lead', leadId] })
+      queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+      setPendingStatus(null)
+      setStatusReason('')
     } catch (err) {
-      setStatusError(err instanceof Error ? err.message : 'Failed to update status.')
-      await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+      // Keep pendingStatus and statusReason so user can retry or cancel
+      setStatusError('Failed to update status')
     } finally {
       setStatusChanging(false)
     }
+  }
+
+  const handleStatusCancel = () => {
+    setPendingStatus(null)
+    setStatusReason('')
   }
 
   const handleLoadMore = async (page: number) => {
@@ -350,7 +331,7 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
                   label="Status"
                   value={data.lead_status}
                   onChange={(e) => handleStatusChange(e.target.value as LeadStatus)}
-                  disabled={statusChanging}
+                  disabled={pendingStatus !== null || statusChanging}
                   inputProps={{ 'data-testid': 'status-badge-select' }}
                 >
                   {ALL_LEAD_STATUSES.map((s) => (
@@ -391,24 +372,38 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
             )}
           </Box>
 
-          {/* Lead status chip — primary pipeline stage display */}
-          {data.lead_status && (
-            <Box sx={{ mt: 1 }}>
-              <LeadStatusChip status={data.lead_status} />
+          {pendingStatus && (
+            <Box sx={{ mt: 1.5, p: 1.5, border: 1, borderColor: 'primary.200', borderRadius: 1, bgcolor: 'primary.50' }}>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                Changing status to <strong>{LEAD_STATUS_LABELS[pendingStatus]}</strong>
+              </Typography>
+              <TextField
+                size="small"
+                fullWidth
+                multiline
+                maxRows={3}
+                label="What happened? (optional)"
+                value={statusReason}
+                onChange={(e) => setStatusReason(e.target.value)}
+                inputProps={{ maxLength: 500 }}
+                sx={{ mb: 1 }}
+              />
+              <Stack direction="row" spacing={1}>
+                <Button
+                  size="small"
+                  variant="contained"
+                  onClick={handleStatusConfirm}
+                  disabled={statusChanging}
+                >
+                  {statusChanging ? <CircularProgress size={16} /> : 'Confirm'}
+                </Button>
+                <Button size="small" variant="outlined" onClick={handleStatusCancel} disabled={statusChanging}>
+                  Cancel
+                </Button>
+              </Stack>
             </Box>
           )}
 
-          {/* Notes / lead status summary — shown prominently if present */}
-          {data.notes && (
-            <Box sx={{ mt: 1.5, p: 1.5, bgcolor: 'warning.50', border: 1, borderColor: 'warning.200', borderRadius: 1 }}>
-              <Typography variant="caption" color="warning.dark" display="block" sx={{ mb: 0.25, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                Status Note
-              </Typography>
-              <Typography variant="body2" color="text.primary">
-                {data.notes}
-              </Typography>
-            </Box>
-          )}
         </Box>
 
         {/* Recommended Action */}
@@ -432,6 +427,23 @@ export function LeadCommandCenter({ leadId }: LeadCommandCenterProps) {
             onHubSpotTaskDone={() => queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })}
           />
         </Box>
+
+        {data.notes && data.notes.trim() !== '' && (
+          <Box sx={{ mt: 2, p: 1.5, border: 1, borderColor: 'divider', borderRadius: 1 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, display: 'block', mb: 0.5 }}>
+              Lead Notes
+            </Typography>
+            {(data as any).notes_status_conflict && (
+              <Alert severity="warning" sx={{ mb: 1, py: 0.5 }} icon={false}>
+                <Typography variant="caption">
+                  These notes suggest contact was made — but status is still{' '}
+                  <strong>Mailing, No Contact Made</strong>. Update the status above.
+                </Typography>
+              </Alert>
+            )}
+            <Typography variant="body2">{data.notes}</Typography>
+          </Box>
+        )}
 
         <Divider sx={{ mb: 3 }} />
 

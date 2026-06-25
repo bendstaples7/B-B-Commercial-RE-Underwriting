@@ -368,3 +368,67 @@ class TestOwnerNameParsing:
         connector = DuPageGISConnector()
         parcel = connector.lookup_by_address("123 Main St")
         assert parcel.county_assessor_pin == "0912101018"
+
+
+# ---------------------------------------------------------------------------
+# Address normalization guards (PR review item 6)
+#   (a) empty normalised address must not run a match-everything LIKE
+#   (b) trailing-number stripping must not remove legitimate address content
+# ---------------------------------------------------------------------------
+
+def _where_from_call(mock_get):
+    call_kwargs = mock_get.call_args
+    params = call_kwargs[1]["params"] if "params" in call_kwargs[1] else call_kwargs[0][1]
+    return params["where"]
+
+
+class TestAddressNormalizationGuards:
+    """lookup_by_address normalization guards."""
+
+    @patch("requests.get")
+    def test_empty_address_returns_none_without_query(self, mock_get):
+        """An empty address must short-circuit to None and never query —
+        an empty LIKE pattern ('%%') would otherwise match every parcel."""
+        connector = DuPageGISConnector()
+        result = connector.lookup_by_address("")
+        assert result is None
+        mock_get.assert_not_called()
+
+    @patch("requests.get")
+    def test_whitespace_only_address_returns_none_without_query(self, mock_get):
+        """An address that normalises to empty also short-circuits to None."""
+        connector = DuPageGISConnector()
+        result = connector.lookup_by_address("   ,  ")
+        assert result is None
+        mock_get.assert_not_called()
+
+    @patch("requests.get")
+    def test_trailing_unit_number_after_suffix_is_stripped(self, mock_get):
+        """A bare trailing unit number following a street suffix is stripped
+        (DuPage stores addresses without unit numbers)."""
+        mock_get.return_value = _make_mock_response(_SAMPLE_RESPONSE)
+        connector = DuPageGISConnector()
+        connector.lookup_by_address("107 Main St 2")
+        where = _where_from_call(mock_get)
+        assert "107 MAIN ST" in where
+        # The bare trailing unit number must be gone.
+        assert "MAIN ST 2" not in where
+
+    @patch("requests.get")
+    def test_route_number_is_preserved(self, mock_get):
+        """A trailing number that is part of the street name (route/highway)
+        must NOT be stripped — that was the over-broad behaviour."""
+        mock_get.return_value = _make_mock_response(_SAMPLE_RESPONSE)
+        connector = DuPageGISConnector()
+        connector.lookup_by_address("200 Route 59")
+        where = _where_from_call(mock_get)
+        assert "200 ROUTE 59" in where
+
+    @patch("requests.get")
+    def test_plain_address_without_unit_is_unchanged(self, mock_get):
+        """A normal address with no unit number is queried verbatim."""
+        mock_get.return_value = _make_mock_response(_SAMPLE_RESPONSE)
+        connector = DuPageGISConnector()
+        connector.lookup_by_address("123 Main St")
+        where = _where_from_call(mock_get)
+        assert "123 MAIN ST" in where

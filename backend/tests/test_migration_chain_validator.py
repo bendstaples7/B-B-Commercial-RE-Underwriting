@@ -112,11 +112,11 @@ class TestRealChainValidator:
         )
 
     def test_real_chain_head_is_squash_marker(self):
-        """The single head must be the z1b2c3d4e5f6 squash/marker revision."""
+        """The single head must be the latest lead/search/dedup migration revision."""
         from app.migration_utils import assert_single_head_and_root
         result = assert_single_head_and_root()
-        assert result["head_revisions"] == ["z1b2c3d4e5f6"], (
-            f"Expected head revision 'z1b2c3d4e5f6', got {result['head_revisions']}"
+        assert result["head_revisions"] == ["g1h2i3j4k5l6"], (
+            f"Expected head revision 'g1h2i3j4k5l6', got {result['head_revisions']}"
         )
 
     def test_real_chain_result_has_required_keys(self):
@@ -265,8 +265,8 @@ class TestCheckMigrationChainScript:
         assert "000000000000" in output, (
             f"Expected root '000000000000' in script output, got: {output!r}"
         )
-        assert "z1b2c3d4e5f6" in output, (
-            f"Expected head 'z1b2c3d4e5f6' in script output, got: {output!r}"
+        assert "g1h2i3j4k5l6" in output, (
+            f"Expected head 'g1h2i3j4k5l6' in script output, got: {output!r}"
         )
 
 

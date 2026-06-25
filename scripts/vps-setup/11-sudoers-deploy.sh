@@ -14,10 +14,11 @@
 #   - 09-gunicorn-service.sh has been run (gunicorn.service exists)
 #
 # What this script does:
-#   1. Writes /etc/sudoers.d/deploy with the single passwordless rule
-#   2. Sets permissions to 440 (required by sudo for sudoers.d files)
-#   3. Validates the file with `visudo -c -f` (syntax check)
-#   4. Verifies the rule works by running the command as the deploy user
+#   1. Installs a root-owned bootstrap script at /usr/local/sbin/bootstrap-async-stack
+#   2. Writes /etc/sudoers.d/deploy with the single passwordless rule
+#   3. Sets permissions to 440 (required by sudo for sudoers.d files)
+#   4. Validates the file with `visudo -c -f` (syntax check)
+#   5. Verifies the rule works by running the command as the deploy user
 #
 # This script is IDEMPOTENT — safe to run multiple times.
 #   - Writing the sudoers file overwrites any previous version
@@ -41,8 +42,12 @@ die()   { error "$*"; exit 1; }
 # ── Configuration ─────────────────────────────────────────────────────────────
 SUDOERS_FILE="/etc/sudoers.d/deploy"
 DEPLOY_USER="deploy"
-# Exact rule required by the spec (Requirements 6.3, 8.1)
-SUDOERS_RULE="deploy ALL=(ALL) NOPASSWD: /bin/systemctl reload gunicorn"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BOOTSTRAP_SRC="${SCRIPT_DIR}/bootstrap-async-stack.sh"
+BOOTSTRAP_INSTALL="/usr/local/sbin/bootstrap-async-stack"
+# Exact rules required for zero-downtime deploys and async stack management.
+# is-active uses --quiet to match deploy.sh verification commands.
+SUDOERS_RULE="deploy ALL=(ALL) NOPASSWD: /bin/systemctl reload gunicorn, /bin/systemctl restart celery, /bin/systemctl restart celery-beat, /bin/systemctl is-active --quiet redis-server, /bin/systemctl is-active --quiet celery, /bin/systemctl is-active --quiet celery-beat, /usr/local/sbin/bootstrap-async-stack"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # ── Verify running as root ────────────────────────────────────────────────────
@@ -71,6 +76,38 @@ echo "  Sudoers file: ${SUDOERS_FILE}"
 echo "  Rule:         ${SUDOERS_RULE}"
 echo "============================================================"
 echo ""
+
+# =============================================================================
+# Step 0: Install root-owned bootstrap script (not deploy-writable)
+# =============================================================================
+info "Step 0: Installing ${BOOTSTRAP_INSTALL} from ${BOOTSTRAP_SRC}..."
+
+if [[ ! -f "${BOOTSTRAP_SRC}" ]]; then
+    die "Bootstrap source not found: ${BOOTSTRAP_SRC}"
+fi
+
+APP_DIR="${APP_DIR:-/home/deploy/app}"
+BOOTSTRAP_REL="scripts/vps-setup/bootstrap-async-stack.sh"
+if [[ -d "${APP_DIR}/.git" ]]; then
+    if ! (cd "${APP_DIR}" && git diff --quiet HEAD -- "${BOOTSTRAP_REL}"); then
+        die "Refusing to install bootstrap: ${BOOTSTRAP_SRC} has local modifications relative to git HEAD"
+    fi
+fi
+
+BOOTSTRAP_OWNER=$(stat -c '%U' "${BOOTSTRAP_SRC}")
+BOOTSTRAP_MODE=$(stat -c '%a' "${BOOTSTRAP_SRC}")
+if [[ "${BOOTSTRAP_OWNER}" == "${DEPLOY_USER}" ]] && [[ -f "${BOOTSTRAP_INSTALL}" ]]; then
+    if ! cmp -s "${BOOTSTRAP_SRC}" "${BOOTSTRAP_INSTALL}"; then
+        die "Refusing to overwrite ${BOOTSTRAP_INSTALL}: deploy-owned source differs from installed copy — update manually as root"
+    fi
+fi
+# Reject if group (020) or other (002) write bits are set in the octal mode.
+if (( 8#${BOOTSTRAP_MODE} & 8#022 )); then
+    die "Refusing to install bootstrap: ${BOOTSTRAP_SRC} is group/world-writable (mode ${BOOTSTRAP_MODE})"
+fi
+
+install -m 755 -o root -g root "${BOOTSTRAP_SRC}" "${BOOTSTRAP_INSTALL}"
+info "  ✓ ${BOOTSTRAP_INSTALL} installed (root:root, 755)."
 
 # =============================================================================
 # Step 1: Write /etc/sudoers.d/deploy
@@ -137,11 +174,52 @@ SUDO_LIST=$(sudo -u "${DEPLOY_USER}" sudo -n -l 2>&1 || true)
 if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl reload gunicorn"; then
     info "  ✓ Rule confirmed: deploy can run 'sudo /bin/systemctl reload gunicorn' without a password."
 else
-    error "  Could not confirm the rule via 'sudo -n -l'."
+    error "  Could not confirm gunicorn reload rule via 'sudo -n -l'."
     error "  sudo -l output:"
     echo "${SUDO_LIST}" | sed 's/^/    /'
-    die "Sudo rule verification failed. The rule in ${SUDOERS_FILE} was not recognised by sudo.
-  Check for syntax issues or conflicting rules in /etc/sudoers or /etc/sudoers.d/."
+    die "Sudo rule verification failed."
+fi
+
+if echo "${SUDO_LIST}" | grep -qE '/bin/systemctl restart celery([^-]|$)'; then
+    info "  ✓ Rule confirmed: deploy can restart celery without a password."
+else
+    error "  Missing passwordless sudo for: /bin/systemctl restart celery"
+    die "Celery restart sudo rule required by deploy.sh."
+fi
+
+if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl restart celery-beat"; then
+    info "  ✓ Rule confirmed: deploy can restart celery-beat without a password."
+else
+    error "  Missing passwordless sudo for: /bin/systemctl restart celery-beat"
+    die "Celery-beat restart sudo rule required by deploy.sh."
+fi
+
+if echo "${SUDO_LIST}" | grep -qF "/usr/local/sbin/bootstrap-async-stack"; then
+    info "  ✓ Rule confirmed: deploy can run bootstrap-async-stack without a password."
+else
+    error "  Missing passwordless sudo for ${BOOTSTRAP_INSTALL}"
+    die "Bootstrap sudo rule required by deploy.sh for first-time async stack provisioning."
+fi
+
+if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl is-active --quiet redis-server"; then
+    info "  ✓ Rule confirmed: deploy can verify redis-server is active."
+else
+    error "  Missing passwordless sudo for: /bin/systemctl is-active --quiet redis-server"
+    die "Redis is-active sudo rule required by deploy.sh."
+fi
+
+if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl is-active --quiet celery"; then
+    info "  ✓ Rule confirmed: deploy can verify celery is active."
+else
+    error "  Missing passwordless sudo for: /bin/systemctl is-active --quiet celery"
+    die "Celery is-active sudo rule required by deploy.sh."
+fi
+
+if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl is-active --quiet celery-beat"; then
+    info "  ✓ Rule confirmed: deploy can verify celery-beat is active."
+else
+    error "  Missing passwordless sudo for: /bin/systemctl is-active --quiet celery-beat"
+    die "Celery-beat is-active sudo rule required by deploy.sh."
 fi
 
 # =============================================================================

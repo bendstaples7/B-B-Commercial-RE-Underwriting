@@ -1,0 +1,25 @@
+Review bots and CI commonly flag the following — verify before `gh pr create`:
+
+Backend / API
+- [ ] New/changed endpoints require auth (JWT or internal guard) — no accidental public sync routes
+- [ ] GET/read handlers do not trigger HubSpot sync or other side effects unconditionally
+- [ ] Alembic migrations fail loud on duplicates / invalid data (no silent skip)
+- [ ] Migrations applied locally: `cd backend && flask db upgrade`
+- [ ] Enum/model drift: `python scripts/check_enum_drift.py` (after upgrade)
+
+HubSpot / search (when touched)
+- [ ] HubSpot sync tested on a known lead (e.g. lead 11129)
+- [ ] Search relevance spot-checked for a real name query
+
+Frontend (when touched)
+- [ ] `npm test -- --run` for changed components
+- [ ] Typecheck: `npx tsc --noEmit`
+
+Deploy / infra (when touched)
+- [ ] No `scripts/deploy.sh` changes unless this is an explicit deploy PR
+- [ ] Data-dependent migrations wire cleanup into `deploy.sh` or document a manual VPS step
+- [ ] VPS readiness checklist in PR template completed
+
+Dev environment
+- [ ] Only one backend on :5000 and one frontend on :3000 (stray processes cause “works in UI” drift)
+- [ ] Background tasks: use `python dev.py` (not bare `run.py`) so Celery is running

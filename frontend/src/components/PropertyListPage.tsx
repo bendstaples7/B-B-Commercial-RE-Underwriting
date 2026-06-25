@@ -18,6 +18,7 @@ import {
 } from '@mui/material'
 import FilterListIcon from '@mui/icons-material/FilterList'
 import ClearIcon from '@mui/icons-material/Clear'
+import { useNavigate } from 'react-router-dom'
 import { AgGridReact } from 'ag-grid-react'
 import { AllCommunityModule, ModuleRegistry, ColDef } from 'ag-grid-community'
 import type {
@@ -48,9 +49,7 @@ import { ScoreLegend } from '@/components/ScoreLegend'
 ModuleRegistry.registerModules([AllCommunityModule])
 
 /** Props accepted by PropertyListPage. */
-export interface PropertyListPageProps {
-  onLeadSelect?: (leadId: number) => void
-}
+export interface PropertyListPageProps {}
 
 const PROPERTY_TYPE_OPTIONS = [
   { value: '', label: 'All' },
@@ -214,8 +213,9 @@ const COLUMN_DEFS: ColDef<LeadRow>[] = [
   { field: 'created_at', headerName: 'Added', width: 110, sortable: true },
 ]
 
-export const PropertyListPage: React.FC<PropertyListPageProps> = ({ onLeadSelect }) => {
+export const PropertyListPage: React.FC<PropertyListPageProps> = () => {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [leads, setLeads] = useState<PropertySummary[]>([])
   const [totalLeads, setTotalLeads] = useState(0)
   const [totalPages, setTotalPages] = useState(0)
@@ -569,7 +569,9 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = ({ onLeadSelect
                 defaultColDef={defaultColDef}
                 loading={loading}
                 rowSelection="single"
-                onRowClicked={(e) => { if (e.data) onLeadSelect?.(e.data.id) }}
+                onRowClicked={(e) => {
+                  if (e.data?.id) navigate('/leads/' + e.data.id)
+                }}
                 onSortChanged={handleSortChanged}
                 suppressMovableColumns={false}
                 animateRows={true}
@@ -586,8 +588,7 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = ({ onLeadSelect
       )}
 
       {/* Tab 1: Condo Analysis — shelved until data is complete */}
-      {activeTab === 1 && (
-        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+      {activeTab === 1 && (        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           <Box sx={{ display: 'flex', gap: 2, mb: 2, alignItems: 'center' }}>
             <Button
               variant="contained"
@@ -617,6 +618,7 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = ({ onLeadSelect
           />
         </Box>
       )}
+
     </Box>
   )
 }

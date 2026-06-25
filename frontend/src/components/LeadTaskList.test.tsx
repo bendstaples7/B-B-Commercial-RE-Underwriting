@@ -571,6 +571,69 @@ describe('LeadTaskList', () => {
   })
 
   // -------------------------------------------------------------------------
+  // Optimistic rollback on failed create
+  // -------------------------------------------------------------------------
+
+  describe('optimistic rollback on failed create', () => {
+    it('adds an optimistic placeholder then rolls it back when createTask fails', async () => {
+      mockCreateTask.mockRejectedValue(new Error('Server error'))
+      const onOptimisticTaskCreate = vi.fn()
+      const onOptimisticTaskRevert = vi.fn()
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[]}
+          onTaskCreated={vi.fn()}
+          onOptimisticTaskCreate={onOptimisticTaskCreate}
+          onOptimisticTaskRevert={onOptimisticTaskRevert}
+        />
+      )
+
+      await user.click(screen.getByTestId('open-task-form-btn'))
+      await user.type(screen.getByTestId('task-title-input'), 'My Task')
+      await user.click(screen.getByTestId('save-task-btn'))
+
+      await waitFor(() => {
+        expect(onOptimisticTaskRevert).toHaveBeenCalledTimes(1)
+      })
+      // The optimistic placeholder was added before the API call...
+      expect(onOptimisticTaskCreate).toHaveBeenCalledTimes(1)
+      // ...and the same placeholder (id=0) is passed back for rollback.
+      const created = onOptimisticTaskCreate.mock.calls[0][0]
+      const reverted = onOptimisticTaskRevert.mock.calls[0][0]
+      expect(created.id).toBe(0)
+      expect(reverted.id).toBe(0)
+    })
+
+    it('does NOT roll back the optimistic placeholder on a successful create', async () => {
+      const newTask = makeTask(99, { title: 'New Task' })
+      mockCreateTask.mockResolvedValue(newTask)
+      const onOptimisticTaskCreate = vi.fn()
+      const onOptimisticTaskRevert = vi.fn()
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[]}
+          onTaskCreated={vi.fn()}
+          onOptimisticTaskCreate={onOptimisticTaskCreate}
+          onOptimisticTaskRevert={onOptimisticTaskRevert}
+        />
+      )
+
+      await user.click(screen.getByTestId('open-task-form-btn'))
+      await user.type(screen.getByTestId('task-title-input'), 'New Task')
+      await user.click(screen.getByTestId('save-task-btn'))
+
+      await waitFor(() => {
+        expect(onOptimisticTaskCreate).toHaveBeenCalledTimes(1)
+      })
+      expect(onOptimisticTaskRevert).not.toHaveBeenCalled()
+    })
+  })
+
+  // -------------------------------------------------------------------------
   // create_task CTA
   // -------------------------------------------------------------------------
 
@@ -640,6 +703,89 @@ describe('LeadTaskList', () => {
 
       await user.click(screen.getByTestId('create-task-cta-button'))
       expect(screen.getByTestId('task-creation-form')).toBeInTheDocument()
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // HubSpot task label (Requirement 3.3)
+  // -------------------------------------------------------------------------
+
+  describe('HubSpot task label', () => {
+    it('shows "HubSpot task — complete in HubSpot to close" label for hubspot tasks', () => {
+      const tasks = [makeTask(1, { source: 'hubspot', title: 'Follow up on deal' })]
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={tasks}
+          onTaskCreated={vi.fn()}
+        />
+      )
+
+      expect(
+        screen.getByText('HubSpot task — complete in HubSpot to close')
+      ).toBeInTheDocument()
+    })
+
+    it('does NOT show the HubSpot label for native tasks', () => {
+      const tasks = [makeTask(1, { source: 'native', title: 'Native task' })]
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={tasks}
+          onTaskCreated={vi.fn()}
+        />
+      )
+
+      expect(
+        screen.queryByText('HubSpot task — complete in HubSpot to close')
+      ).not.toBeInTheDocument()
+    })
+
+    it('does NOT show the HubSpot label when source is undefined', () => {
+      const tasks = [makeTask(1, { title: 'No source task' })]
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={tasks}
+          onTaskCreated={vi.fn()}
+        />
+      )
+
+      expect(
+        screen.queryByText('HubSpot task — complete in HubSpot to close')
+      ).not.toBeInTheDocument()
+    })
+
+    it('shows HubSpot label alongside due date when both exist', () => {
+      const tasks = [makeTask(1, { source: 'hubspot', title: 'HS Task', due_date: '2025-06-15' })]
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={tasks}
+          onTaskCreated={vi.fn()}
+        />
+      )
+
+      expect(screen.getByText('HubSpot task — complete in HubSpot to close')).toBeInTheDocument()
+      expect(screen.getByTestId('task-due-date-1')).toBeInTheDocument()
+    })
+
+    it('shows HubSpot label even when task has no due date', () => {
+      const tasks = [makeTask(1, { source: 'hubspot', title: 'HS No Date', due_date: null })]
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={tasks}
+          onTaskCreated={vi.fn()}
+        />
+      )
+
+      expect(screen.getByText('HubSpot task — complete in HubSpot to close')).toBeInTheDocument()
     })
   })
 

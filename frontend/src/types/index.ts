@@ -315,6 +315,8 @@ export interface Property {
   analysis_session_id: number | null
   // Research tracking
   source: string | null
+  deal_source: string | null
+  deal_description: string | null
   date_identified: string | null
   notes: string | null
   needs_skip_trace: boolean | null
@@ -415,10 +417,28 @@ export interface PropertySummary {
 /** @deprecated Use `PropertySummary` instead */
 export type LeadSummary = PropertySummary
 
+/** Minimal contact summary embedded inside PropertyDetail.
+ *  Comes from the relational contacts system (property_contacts join table).
+ *  This is the authoritative source — the legacy owner_first_name / owner_last_name
+ *  flat columns on the property record are from the original import and are not
+ *  updated by HubSpot enrichment. */
+export interface PropertyContactSummary {
+  id: number
+  first_name: string | null
+  last_name: string | null
+  role: ContactRole
+  is_primary: boolean
+  phones: Array<{ id: number; value: string; label: PhoneLabel }>
+  emails: Array<{ id: number; value: string; label: EmailLabel }>
+}
+
 export interface PropertyDetail extends Property {
   enrichment_records: EnrichmentRecord[]
   marketing_lists: PropertyMarketingListMembership[]
   analysis_session: PropertyAnalysisSession | null
+  /** All contacts linked to this property, primary contact first.
+   *  Prefer these over the legacy owner_first_name / owner_last_name fields. */
+  contacts: PropertyContactSummary[]
 }
 
 /** @deprecated Use `PropertyDetail` instead */
@@ -1770,7 +1790,15 @@ export interface CommandCenterPayload {
   has_property_match: boolean;
   analysis_session_id: number | null;
   hubspot_deal_stage?: string | null;
+  hubspot_deal_name?: string | null;
+  deal_source?: string | null;
+  deal_description?: string | null;
+  source?: string | null;
+  data_source?: string | null;
   last_hubspot_sync_at?: string | null;
+  hubspot_has_confirmed_deal?: boolean;
+  hubspot_sync_stale?: boolean;
+  hubspot_deal_last_updated_at?: string | null;
   last_contact_date?: string | null;
   date_added_to_hubspot?: string | null;
   recommended_action: RecommendedActionMeta;
@@ -1977,4 +2005,114 @@ export interface LeadKanbanColumn {
 export interface LeadKanbanResponse {
   columns: LeadKanbanColumn[]
   total_counts: Record<string, number>
+}
+
+// ---------------------------------------------------------------------------
+// Global Search Types
+// ---------------------------------------------------------------------------
+
+export interface SearchMatchContext {
+  type: 'phone' | 'email' | 'name' | 'address'
+  value: string
+}
+
+export interface SearchResultItem {
+  id: number
+  type: 'lead' | 'session'
+  label: string
+  nav_path: string
+  lead_score?: number | null
+  lead_status?: string | null
+  relevance_score?: number | null
+  created_at?: string | null
+  status?: string | null
+  match_context?: SearchMatchContext | null
+}
+
+export interface SearchResponse {
+  q: string
+  page: number
+  per_page: number
+  leads: SearchResultItem[]
+  leads_total: number
+  sessions: SearchResultItem[]
+  sessions_total: number
+}
+
+export interface SearchParams {
+  q: string
+  page?: number
+  per_page?: number
+  signal?: AbortSignal
+}
+
+// -----------------------------------------------------------------------
+// Data Sources Panel Types
+// -----------------------------------------------------------------------
+
+export type SocrataDatasetStatusValue = 'fresh' | 'stale' | 'empty' | 'never_synced'
+export type RefreshType = 'periodic' | 'on_demand' | 'static'
+
+export interface SocrataDatasetStatus {
+  name: string
+  source_type: 'socrata'
+  refresh_type: 'periodic'
+  is_active: boolean
+  status: SocrataDatasetStatusValue
+  last_refreshed_at: string | null   // ISO-8601 UTC
+  row_count: number
+  days_since_sync: number | null     // always >= 0 when non-null
+  last_error: string | null
+}
+
+export interface EnrichmentSourceStatus {
+  name: string
+  source_type: 'enrichment'
+  refresh_type: 'on_demand'
+  is_active: boolean
+  last_refreshed_at: string | null
+  success_count: number
+  failed_count: number
+  pending_count: number
+  not_run_count: number
+  total_leads_count: number
+}
+
+export interface ImportSourceStatus {
+  name: string
+  source_type: 'import'
+  refresh_type: 'static'
+  is_active: boolean
+  last_refreshed_at: string | null
+  rows_imported: number | null
+  import_status: string | null
+}
+
+export interface HubSpotSourceStatus {
+  name: string
+  source_type: 'hubspot'
+  refresh_type: 'on_demand'
+  is_active: boolean
+  connected: boolean
+}
+
+export interface GISConnectorStatus {
+  name: string
+  market: string
+  counties: string[]
+  source_type: 'gis'
+  refresh_type: 'automatic'
+  is_active: boolean
+  matched_count: number
+  unmatched_count: number
+  total_count: number
+  api_url: string
+}
+
+export interface DataSourceStatus {
+  socrata_datasets: SocrataDatasetStatus[]
+  enrichment_sources: EnrichmentSourceStatus[]
+  import_source: ImportSourceStatus
+  hubspot_source: HubSpotSourceStatus
+  gis_connectors: GISConnectorStatus[]
 }
