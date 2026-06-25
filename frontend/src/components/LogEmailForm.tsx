@@ -11,14 +11,22 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import type { LeadTimelineEntry } from '@/types'
+import type { LeadTimelineEntry, PropertyContact } from '@/types'
 import { callLogService } from '@/services/api'
+import {
+  ContactMethodFields,
+  EMPTY_CONTACT_METHOD,
+  type ContactMethodValue,
+  contactMethodToEmailPayload,
+} from '@/components/ContactMethodFields'
 
 const MAX_SUBJECT_LENGTH = 200
 const MAX_BODY_LENGTH = 5000
 
 export interface LogEmailFormProps {
   leadId: number
+  contacts?: PropertyContact[]
+  contactsLoading?: boolean
   onSaved: (entry: LeadTimelineEntry) => void
   onCancel?: () => void
 }
@@ -36,13 +44,44 @@ function formatEmailNote(subject: string, body: string): string {
   return `[Email]\n\n${trimmedBody}`
 }
 
+function resolveContactName(
+  contacts: PropertyContact[],
+  contactId: number | null,
+): string | null {
+  if (contactId == null) return null
+  const contact = contacts.find((c) => c.id === contactId)
+  if (!contact) return null
+  const name = [contact.first_name, contact.last_name].filter(Boolean).join(' ')
+  return name || null
+}
+
+function buildEmailMetadataFallback(
+  formattedBody: string,
+  subject: string,
+  contactMethod: ContactMethodValue,
+  contacts: PropertyContact[],
+): Record<string, unknown> {
+  const payload = contactMethodToEmailPayload(contactMethod)
+  const trimmedSubject = subject.trim()
+  const metadata: Record<string, unknown> = { body: formattedBody }
+  if (trimmedSubject) metadata.subject = trimmedSubject
+  if (payload.contact_id != null) metadata.contact_id = payload.contact_id
+  if (payload.contact_email_id != null) metadata.contact_email_id = payload.contact_email_id
+  if (payload.email_address) metadata.email_address = payload.email_address
+  if (payload.email_label) metadata.email_label = payload.email_label
+  const contactName = resolveContactName(contacts, contactMethod.contactId)
+  if (contactName) metadata.contact_name = contactName
+  return metadata
+}
+
 export const LogEmailForm = forwardRef<LogEmailFormHandle, LogEmailFormProps>(function LogEmailForm(
-  { leadId, onSaved, onCancel },
+  { leadId, contacts = [], contactsLoading = false, onSaved, onCancel },
   ref,
 ) {
   const formRef = useRef<HTMLDivElement>(null)
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
+  const [contactMethod, setContactMethod] = useState<ContactMethodValue>(EMPTY_CONTACT_METHOD)
   const [bodyError, setBodyError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -77,12 +116,28 @@ export const LogEmailForm = forwardRef<LogEmailFormHandle, LogEmailFormProps>(fu
     setSubmitting(true)
 
     try {
+      const formattedBody = formatEmailNote(subject, body)
       const entry = await callLogService.logNote(leadId, {
-        body: formatEmailNote(subject, body),
+        body: formattedBody,
+        subject: subject.trim() || null,
+        ...contactMethodToEmailPayload(contactMethod),
       })
-      onSaved(entry)
+      const metadataFallback = buildEmailMetadataFallback(
+        formattedBody,
+        subject,
+        contactMethod,
+        contacts,
+      )
+      onSaved({
+        ...entry,
+        summary: entry.summary ?? formattedBody.slice(0, 500),
+        event_type: entry.event_type ?? 'email_logged',
+        source: entry.source ?? 'manual',
+        metadata: entry.metadata ?? metadataFallback,
+      })
       setSubject('')
       setBody('')
+      setContactMethod(EMPTY_CONTACT_METHOD)
     } catch (err) {
       setSubmitError(
         err instanceof Error ? err.message : 'Failed to save email. Please try again.',
@@ -111,6 +166,14 @@ export const LogEmailForm = forwardRef<LogEmailFormHandle, LogEmailFormProps>(fu
           {submitError}
         </Alert>
       )}
+
+      <ContactMethodFields
+        mode="email"
+        contacts={contacts}
+        contactsLoading={contactsLoading}
+        value={contactMethod}
+        onChange={setContactMethod}
+      />
 
       <TextField
         label="Subject (optional)"

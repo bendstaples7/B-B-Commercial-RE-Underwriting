@@ -65,6 +65,8 @@ _KNOWN_REVISIONS = frozenset({
     'f9a0b1c2d3e4',
     # Lead deal context — deal_source + deal_description from HubSpot / manual
     'g1h2i3j4k5l6',
+    # email_logged timeline event type — outbound email activity logs
+    'h2i3j4k5l6m7',
 })
 
 

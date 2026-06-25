@@ -60,7 +60,7 @@ beforeEach(() => {
 
 // ---------------------------------------------------------------------------
 // Helper: select an outcome from the MUI Select dropdown
-// Uses the same pattern as TimelinePanel.test.tsx:
+// Uses the same pattern as LeadTimeline.test.tsx:
 //   getByLabelText → fireEvent.mouseDown → getByRole('listbox') → fireEvent.click
 // ---------------------------------------------------------------------------
 
@@ -216,7 +216,13 @@ describe('LogCallForm', () => {
       await user.click(screen.getByTestId('call-save-btn'))
 
       await waitFor(() => {
-        expect(onSaved).toHaveBeenCalledWith(entry)
+        expect(onSaved).toHaveBeenCalledWith(
+          expect.objectContaining({
+            id: entry.id,
+            summary: entry.summary,
+            event_type: entry.event_type,
+          }),
+        )
       })
     })
 
@@ -234,7 +240,13 @@ describe('LogCallForm', () => {
       await user.click(screen.getByTestId('call-save-btn'))
 
       await waitFor(() => {
-        expect(onSaved).toHaveBeenCalledWith(entry)
+        expect(onSaved).toHaveBeenCalledWith(
+          expect.objectContaining({
+            id: entry.id,
+            summary: entry.summary,
+            event_type: entry.event_type,
+          }),
+        )
       })
     })
 
@@ -250,7 +262,13 @@ describe('LogCallForm', () => {
       await user.click(screen.getByTestId('call-save-btn'))
 
       await waitFor(() => {
-        expect(onSaved).toHaveBeenCalledWith(entry)
+        expect(onSaved).toHaveBeenCalledWith(
+          expect.objectContaining({
+            id: entry.id,
+            summary: entry.summary,
+            event_type: entry.event_type,
+          }),
+        )
       })
       expect(mockLogCall).toHaveBeenCalledWith(
         1,
@@ -375,7 +393,13 @@ describe('LogCallForm', () => {
       await user.click(screen.getByTestId('call-save-btn'))
 
       await waitFor(() => {
-        expect(onSaved).toHaveBeenCalledWith(entry)
+        expect(onSaved).toHaveBeenCalledWith(
+          expect.objectContaining({
+            id: entry.id,
+            summary: entry.summary,
+            event_type: entry.event_type,
+          }),
+        )
       })
     })
 

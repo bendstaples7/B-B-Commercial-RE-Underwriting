@@ -1161,10 +1161,16 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           const activityPanel = container.querySelector('[data-testid="activity-panel"]')
           expect(activityPanel).not.toBeNull()
 
-          // Click the mocked LogNoteForm button to trigger onSaved (prepends new entry)
-          const addNoteBtn = container.querySelector('[data-testid="mock-log-note-btn"]')
-          expect(addNoteBtn).not.toBeNull()
-          fireEvent.click(addNoteBtn!)
+          // Open the log note modal via RA quick action, then click the mocked LogNoteForm button
+          const openNoteBtn = container.querySelector('[data-testid="ra-universal-btn-log_note"]')
+          expect(openNoteBtn).not.toBeNull()
+          fireEvent.click(openNoteBtn!)
+
+          await waitFor(() => {
+            expect(screen.getByTestId('mock-log-note-btn')).toBeInTheDocument()
+          })
+
+          fireEvent.click(screen.getByTestId('mock-log-note-btn'))
 
           // Wait for React state update to flush
           await new Promise(r => setTimeout(r, 50))

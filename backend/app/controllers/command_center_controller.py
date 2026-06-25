@@ -19,6 +19,7 @@ from app.schemas import (
     LeadTaskCreateSchema, LeadTaskUpdateSchema, LeadTaskSnoozeSchema,
     LogNoteSchema, LogCallSchema, LeadStatusUpdateSchema,
     ParkLeadSchema, DoNotContactSchema, ReactivateLeadSchema,
+    LeadTimelineEntrySchema,
 )
 from app.services.lead_task_service import LeadTaskService
 from app.services.lead_timeline_service import LeadTimelineService
@@ -112,6 +113,13 @@ def _resolve_actor(user_id_or_label: str | None, _cache: dict | None = None) -> 
     if _cache is not None:
         _cache[user_id_or_label] = resolved
     return resolved
+
+
+def _serialize_timeline_entry(entry: LeadTimelineEntry) -> dict:
+    """Serialize a timeline entry for API responses with resolved actor display name."""
+    data = LeadTimelineEntrySchema().dump(entry)
+    data['actor'] = _resolve_actor(entry.actor)
+    return data
 
 
 def _resolve_actors_batch(user_ids: list[str]) -> dict[str, str]:
@@ -947,6 +955,7 @@ def get_timeline(lead_id: int):
 
 
 @command_center_bp.route('/<int:lead_id>/notes', methods=['POST'])
+@require_auth
 @handle_errors
 def log_note(lead_id: int):
     """
@@ -955,16 +964,22 @@ def log_note(lead_id: int):
     Log a free-text note on a lead.
     """
     data = LogNoteSchema().load(request.get_json() or {})
-    actor = data.get('actor') or getattr(g, 'user_id', 'anonymous')
-    entry = _call_log_service.log_note(lead_id, data['body'], actor=actor)
-    return jsonify({
-        'id': entry.id,
-        'event_type': entry.event_type,
-        'occurred_at': entry.occurred_at.isoformat(),
-    }), 201
+    actor = g.user_id
+    entry = _call_log_service.log_note(
+        lead_id,
+        data['body'],
+        actor=actor,
+        contact_id=data.get('contact_id'),
+        contact_email_id=data.get('contact_email_id'),
+        email_address=data.get('email_address'),
+        email_label=data.get('email_label'),
+        subject=data.get('subject'),
+    )
+    return jsonify(_serialize_timeline_entry(entry)), 201
 
 
 @command_center_bp.route('/<int:lead_id>/calls', methods=['POST'])
+@require_auth
 @handle_errors
 def log_call(lead_id: int):
     """
@@ -973,19 +988,19 @@ def log_call(lead_id: int):
     Log a call on a lead with outcome, optional duration, and optional notes.
     """
     data = LogCallSchema().load(request.get_json() or {})
-    actor = data.get('actor') or getattr(g, 'user_id', 'anonymous')
+    actor = g.user_id
     entry = _call_log_service.log_call(
         lead_id,
         data['outcome'],
         data.get('duration_minutes'),
         data.get('notes'),
         actor=actor,
+        contact_id=data.get('contact_id'),
+        contact_phone_id=data.get('contact_phone_id'),
+        phone_number=data.get('phone_number'),
+        phone_label=data.get('phone_label'),
     )
-    return jsonify({
-        'id': entry.id,
-        'event_type': entry.event_type,
-        'occurred_at': entry.occurred_at.isoformat(),
-    }), 201
+    return jsonify(_serialize_timeline_entry(entry)), 201
 
 
 @command_center_bp.route('/<int:lead_id>/do-not-contact', methods=['POST'])

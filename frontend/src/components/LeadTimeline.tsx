@@ -12,6 +12,7 @@ import {
   CircularProgress,
   Collapse,
   Divider,
+  IconButton,
   List,
   ListItem,
   ListItemAvatar,
@@ -23,6 +24,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import HistoryIcon from '@mui/icons-material/History'
 import type { LeadTimelineEntry } from '@/types'
+import { formatPhoneNumber } from '@/utils/phone'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -31,6 +33,195 @@ import type { LeadTimelineEntry } from '@/types'
 // Number of characters before the summary is considered "long" and gets a
 // collapse toggle.
 const SUMMARY_COLLAPSE_THRESHOLD = 120
+
+/**
+ * Derive display text for a timeline entry, falling back to metadata when summary is empty.
+ */
+function getEntryDisplayText(entry: LeadTimelineEntry): string {
+  if (entry.summary?.trim()) return entry.summary
+  const metadata = entry.metadata
+  if (!metadata) return ''
+  const body = metadata.body
+  if (typeof body === 'string' && body.trim()) return body
+  const notes = metadata.notes
+  if (typeof notes === 'string' && notes.trim()) return notes
+  return ''
+}
+
+function getContactContextLine(entry: LeadTimelineEntry): string | null {
+  const metadata = entry.metadata
+  if (!metadata) return null
+
+  const contactName = typeof metadata.contact_name === 'string' ? metadata.contact_name : null
+
+  if (entry.event_type === 'call_logged') {
+    const phone = typeof metadata.phone_number === 'string' ? metadata.phone_number : null
+    const phoneLabel = typeof metadata.phone_label === 'string' ? metadata.phone_label : null
+    if (!contactName && !phone) return null
+    const parts: string[] = []
+    if (contactName) parts.push(contactName)
+    if (phone) {
+      const formatted = formatPhoneNumber(phone)
+      parts.push(phoneLabel ? `${formatted} (${phoneLabel})` : formatted)
+    }
+    return `With: ${parts.join(' · ')}`
+  }
+
+  if (isEmailEntry(entry)) {
+    const email = typeof metadata.email_address === 'string' ? metadata.email_address : null
+    const emailLabel = typeof metadata.email_label === 'string' ? metadata.email_label : null
+    if (!contactName && !email) return null
+    const parts: string[] = []
+    if (contactName) parts.push(contactName)
+    if (email) {
+      parts.push(emailLabel ? `${email} (${emailLabel})` : email)
+    }
+    return `To: ${parts.join(' · ')}`
+  }
+
+  return null
+}
+
+/**
+ * Human-readable label for a call outcome value.
+ */
+function humanizeOutcome(outcome: string): string {
+  return outcome.replace(/_/g, ' ')
+}
+
+/**
+ * Parse subject from a formatted email note body ([Email] Subject).
+ */
+function parseEmailSubjectFromBody(body: string): string | null {
+  if (!body.startsWith('[Email]')) return null
+  const firstLine = body.split('\n', 1)[0]
+  const subject = firstLine.replace(/^\[Email\]\s*/, '').trim()
+  return subject || null
+}
+
+/**
+ * Extract the message body from a formatted email note string.
+ */
+function extractEmailMessageBody(body: string): string {
+  if (!body.startsWith('[Email]')) return body
+  const parts = body.split('\n')
+  if (parts.length <= 1) return ''
+  const afterHeader = parts.slice(1).join('\n').trim()
+  // Drop leading blank line between subject header and message body
+  return afterHeader.replace(/^\n+/, '').trim()
+}
+
+/**
+ * Full note/email body from metadata when available.
+ */
+function getFullNoteBody(entry: LeadTimelineEntry): string {
+  const body = entry.metadata?.body
+  if (typeof body === 'string' && body.trim()) return body
+  return entry.summary?.trim() ?? ''
+}
+
+function isEmailEntry(entry: LeadTimelineEntry): boolean {
+  if (entry.event_type === 'email_logged') return true
+  const metadata = entry.metadata
+  if (!metadata) return false
+  if (typeof metadata.email_address === 'string' && metadata.email_address.trim()) return true
+  const body = metadata.body
+  return typeof body === 'string' && body.startsWith('[Email]')
+}
+
+function buildEmailDetailRows(metadata: Record<string, unknown>): TimelineDetailRow[] {
+  const rows: TimelineDetailRow[] = []
+  if (metadata.contact_name) {
+    rows.push({ label: 'Contact', value: String(metadata.contact_name) })
+  }
+  if (metadata.email_address) {
+    const emailLabel = metadata.email_label ? ` (${metadata.email_label})` : ''
+    rows.push({ label: 'Email', value: `${metadata.email_address}${emailLabel}` })
+  }
+  const body = typeof metadata.body === 'string' ? metadata.body : ''
+  const subject =
+    (typeof metadata.subject === 'string' && metadata.subject.trim())
+      ? metadata.subject
+      : (body ? parseEmailSubjectFromBody(body) : null)
+  if (subject) {
+    rows.push({ label: 'Subject', value: subject })
+  }
+  const message = body ? extractEmailMessageBody(body) : ''
+  if (message) {
+    rows.push({ label: 'Message', value: message })
+  }
+  return rows
+}
+
+export interface TimelineDetailRow {
+  label: string
+  value: string
+}
+
+/**
+ * Build structured detail rows for the expanded timeline accordion.
+ */
+export function buildTimelineDetailRows(entry: LeadTimelineEntry): TimelineDetailRow[] {
+  const metadata = entry.metadata ?? {}
+  const rows: TimelineDetailRow[] = []
+
+  if (entry.event_type === 'call_logged') {
+    if (metadata.outcome) {
+      rows.push({ label: 'Outcome', value: humanizeOutcome(String(metadata.outcome)) })
+    }
+    if (metadata.duration_minutes != null && metadata.duration_minutes !== '') {
+      rows.push({ label: 'Duration', value: `${metadata.duration_minutes} minutes` })
+    }
+    if (metadata.contact_name) {
+      rows.push({ label: 'Contact', value: String(metadata.contact_name) })
+    }
+    if (metadata.phone_number) {
+      const phoneLabel = metadata.phone_label ? ` (${metadata.phone_label})` : ''
+      rows.push({
+        label: 'Phone',
+        value: `${formatPhoneNumber(String(metadata.phone_number))}${phoneLabel}`,
+      })
+    }
+    if (typeof metadata.notes === 'string' && metadata.notes.trim()) {
+      rows.push({ label: 'Notes', value: metadata.notes })
+    }
+    if (rows.length === 0) {
+      const displayText = getEntryDisplayText(entry)
+      if (displayText) rows.push({ label: 'Details', value: displayText })
+    }
+    return rows
+  }
+
+  if (isEmailEntry(entry)) {
+    return buildEmailDetailRows(metadata)
+  }
+
+  if (entry.event_type === 'note_added') {
+    const body = getFullNoteBody(entry)
+    if (body && body.length > SUMMARY_COLLAPSE_THRESHOLD) {
+      rows.push({ label: 'Note', value: body })
+    }
+    return rows
+  }
+
+  const displayText = getEntryDisplayText(entry)
+  if (displayText) {
+    rows.push({ label: 'Details', value: displayText })
+  }
+
+  return rows
+}
+
+export function entryHasExpandableDetails(entry: LeadTimelineEntry): boolean {
+  if (buildTimelineDetailRows(entry).length > 0) return true
+  return getEntryDisplayText(entry).length > SUMMARY_COLLAPSE_THRESHOLD
+}
+
+function getPreviewText(entry: LeadTimelineEntry): string {
+  const fullText = getEntryDisplayText(entry)
+  if (fullText.length <= SUMMARY_COLLAPSE_THRESHOLD) return fullText
+  return fullText.slice(0, SUMMARY_COLLAPSE_THRESHOLD).trimEnd() + '…'
+}
 
 /**
  * Format an ISO timestamp in the browser's local timezone.
@@ -52,6 +243,16 @@ function formatLocalTimestamp(iso: string): string {
   } catch {
     return '—'
   }
+}
+
+/**
+ * Human-readable label for a timeline entry type.
+ */
+export function getTimelineEventLabel(entry: LeadTimelineEntry): string {
+  if (entry.event_type === 'email_logged' || isEmailEntry(entry)) return 'Email Logged'
+  if (entry.event_type === 'call_logged') return 'Call Logged'
+  if (entry.event_type === 'note_added') return 'Note Added'
+  return formatEventType(entry.event_type)
 }
 
 /**
@@ -94,23 +295,43 @@ function HubSpotChip() {
 
 interface TimelineEntryRowProps {
   entry: LeadTimelineEntry
+  highlighted?: boolean
 }
 
-function TimelineEntryRow({ entry }: TimelineEntryRowProps) {
+function TimelineEntryRow({ entry, highlighted = false }: TimelineEntryRowProps) {
   const isHubSpot = entry.source === 'hubspot' || entry.source === 'hubspot_import'
-  const isLong = (entry.summary?.length ?? 0) > SUMMARY_COLLAPSE_THRESHOLD
-  const [expanded, setExpanded] = useState(false)
+  const summaryText = getEntryDisplayText(entry)
+  const contactContextLine = getContactContextLine(entry)
+  const hasExpandableDetails = entryHasExpandableDetails(entry)
+  const detailRows = buildTimelineDetailRows(entry)
+  const [detailsExpanded, setDetailsExpanded] = useState(false)
 
-  const summaryText = entry.summary ?? ''
-  const displaySummary = isLong && !expanded
-    ? summaryText.slice(0, SUMMARY_COLLAPSE_THRESHOLD).trimEnd() + '…'
-    : summaryText
+  const previewText = hasExpandableDetails ? getPreviewText(entry) : summaryText
+
+  const handleToggleDetails = (event: React.MouseEvent | React.KeyboardEvent) => {
+    event.stopPropagation()
+    if (hasExpandableDetails) {
+      setDetailsExpanded((v) => !v)
+    }
+  }
 
   return (
     <ListItem
       alignItems="flex-start"
       data-testid={`timeline-entry-${entry.id}`}
-      sx={{ px: 0 }}
+      sx={{
+        px: 0,
+        borderRadius: 1,
+        transition: 'background-color 0.3s ease',
+        ...(highlighted && {
+          bgcolor: 'success.light',
+          animation: 'timelineHighlightFade 2s ease-out forwards',
+          '@keyframes timelineHighlightFade': {
+            '0%': { bgcolor: 'success.light' },
+            '100%': { bgcolor: 'transparent' },
+          },
+        }),
+      }}
     >
       <ListItemAvatar sx={{ minWidth: 40 }}>
         {isHubSpot ? (
@@ -131,7 +352,7 @@ function TimelineEntryRow({ entry }: TimelineEntryRowProps) {
         primary={
           <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap">
             <Typography variant="body2" fontWeight="medium" data-testid={`entry-event-type-${entry.id}`}>
-              {formatEventType(entry.event_type)}
+              {getTimelineEventLabel(entry)}
             </Typography>
             <Typography variant="caption" color="text.secondary" data-testid={`entry-timestamp-${entry.id}`}>
               {formatLocalTimestamp(entry.occurred_at)}
@@ -148,29 +369,89 @@ function TimelineEntryRow({ entry }: TimelineEntryRowProps) {
                 sx={{ fontSize: '0.65rem', height: 18, color: 'text.secondary', borderColor: 'divider', ml: 1 }}
               />
             )}
+            {hasExpandableDetails && (
+              <IconButton
+                size="small"
+                onClick={handleToggleDetails}
+                aria-expanded={detailsExpanded}
+                aria-label={detailsExpanded ? 'Hide details' : 'Show details'}
+                data-testid={`entry-details-toggle-${entry.id}`}
+                sx={{ ml: 'auto', color: 'text.secondary' }}
+              >
+                {detailsExpanded ? (
+                  <ExpandLessIcon fontSize="small" />
+                ) : (
+                  <ExpandMoreIcon fontSize="small" />
+                )}
+              </IconButton>
+            )}
           </Stack>
         }
         secondary={
-          <Box>
-            <Collapse in={expanded} collapsedSize={isLong ? 'auto' : undefined}>
+          <Box component="span" display="block">
+            {contactContextLine && !detailsExpanded && (
               <Typography
-                variant="body2"
+                variant="caption"
                 color="text.secondary"
-                sx={{ mt: 0.25, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-                data-testid={`entry-summary-${entry.id}`}
+                display="block"
+                sx={{ mt: 0.25 }}
+                data-testid={`entry-contact-context-${entry.id}`}
               >
-                {displaySummary}
+                {contactContextLine}
               </Typography>
-            </Collapse>
-            {isLong && (
-              <Button
-                size="small"
-                onClick={() => setExpanded((v) => !v)}
-                startIcon={expanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
-                sx={{ mt: 0.25, p: 0, minWidth: 0, fontSize: '0.72rem', color: 'text.secondary', textTransform: 'none' }}
-              >
-                {expanded ? 'Show less' : 'Show more'}
-              </Button>
+            )}
+            {hasExpandableDetails ? (
+              <>
+                {!detailsExpanded && previewText && (
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ mt: 0.25, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                    data-testid={`entry-summary-${entry.id}`}
+                  >
+                    {previewText}
+                  </Typography>
+                )}
+                <Collapse in={detailsExpanded}>
+                  <Box
+                    sx={{ mt: 0.5, pl: 0.5, borderLeft: 2, borderColor: 'divider' }}
+                    data-testid={`entry-details-${entry.id}`}
+                  >
+                    {detailRows.map((row) => (
+                      <Box key={row.label} sx={{ mb: 1.25, '&:last-child': { mb: 0 } }}>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          fontWeight="medium"
+                          display="block"
+                          data-testid={`entry-detail-label-${entry.id}-${row.label.toLowerCase().replace(/\s+/g, '-')}`}
+                        >
+                          {row.label}
+                        </Typography>
+                        <Typography
+                          variant="body2"
+                          color="text.secondary"
+                          sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                          data-testid={`entry-detail-value-${entry.id}-${row.label.toLowerCase().replace(/\s+/g, '-')}`}
+                        >
+                          {row.value}
+                        </Typography>
+                      </Box>
+                    ))}
+                  </Box>
+                </Collapse>
+              </>
+            ) : (
+              summaryText && (
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ mt: 0.25, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                  data-testid={`entry-summary-${entry.id}`}
+                >
+                  {summaryText}
+                </Typography>
+              )
             )}
           </Box>
         }
@@ -188,6 +469,7 @@ export interface LeadTimelineProps {
   initialEntries: LeadTimelineEntry[]
   initialTotal: number
   onLoadMore?: (page: number) => Promise<{ entries: LeadTimelineEntry[]; total: number }>
+  highlightEntryId?: number | null
 }
 
 // ---------------------------------------------------------------------------
@@ -204,6 +486,7 @@ export function LeadTimeline({
   initialEntries,
   initialTotal,
   onLoadMore,
+  highlightEntryId = null,
 }: LeadTimelineProps) {
   const [entries, setEntries] = useState<LeadTimelineEntry[]>(initialEntries)
   const [total, setTotal] = useState(initialTotal)
@@ -269,7 +552,10 @@ export function LeadTimeline({
           {entries.map((entry, index) => (
             <Box key={entry.id}>
               {index > 0 && <Divider component="li" />}
-              <TimelineEntryRow entry={entry} />
+              <TimelineEntryRow
+                entry={entry}
+                highlighted={highlightEntryId != null && entry.id === highlightEntryId}
+              />
             </Box>
           ))}
         </List>

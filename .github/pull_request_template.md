@@ -1,13 +1,15 @@
-## Deploy / VPS checklist
+## Summary
 
-If this PR changes any of the following, confirm before merge:
+<!-- 1-3 bullet points: what changed and why -->
 
-- `scripts/deploy.sh`, `scripts/deploy-async-stack-checks.sh`, `scripts/run-vps-readiness-check.sh`
-- `scripts/vps-setup/` (sudoers, bootstrap, migrate, Redis, Celery)
-- `.github/workflows/deploy.yml` or `.github/workflows/ci.yml` deploy jobs
+## Test plan
 
-Checklist:
+- [ ] <!-- how you verified -->
 
-- [ ] `deploy-contract` CI job passes (sudoers stay in sync with deploy scripts)
-- [ ] If deploy infra changed: `vps-readiness` CI passed **or** `migrate-async-stack.sh` was run on the VPS as root
-- [ ] If new sudo commands were added: `11-sudoers-deploy.sh` updated and documented in `DEPLOYMENT.md`
+## Consolidation checklist
+
+- [ ] Searched for existing implementation; extended canonical source ([docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md))
+- [ ] No parallel routes, services, or components introduced
+- [ ] If this replaces something: legacy code deleted (not left alongside redirect)
+- [ ] No new per-file copies of shared infra (`handle_errors`, `formatDate`, etc.)
+- [ ] `python scripts/check_duplication.py` passes (once wired into pre-pr-check)

@@ -1,0 +1,21 @@
+---
+description: Extract shared helpers instead of copying; follow domain API module pattern
+globs: frontend/src/**/*.{tsx,ts},backend/app/**/*.py
+alwaysApply: false
+---
+
+# Extend In Place
+
+## Frontend
+
+- Put shared formatters in `frontend/src/utils/` — do not copy `formatDate`, `humanize`, or color switches into components.
+- New API clients: create a domain module (see `condoFilterApi.ts`, `leadApi.ts`) — do not grow `api.ts`.
+- New queue UI: extend existing queue components or build a config-driven `QueuePage` — no seventh copy of `useQuery` + `QueueTable`.
+- Shared dialogs (e.g. suppress confirmation) get one component, not copy-paste across queues.
+
+## Backend
+
+- Import shared `handle_errors` from `app/controllers/decorators.py` — do not copy the decorator into new controllers.
+- Put shared text/validation helpers in `app/services/helpers/` — do not duplicate `_strip_invisible`, outcome constants, etc.
+- Serialization: use Marshmallow schemas in `schemas.py` — do not hand-build dicts that mirror existing schemas.
+- Scripts in `backend/scripts/`: import service-layer functions — do not re-declare field lists or merge logic inline.

@@ -148,6 +148,25 @@ def test_note_body_exactly_5000_chars_succeeds(app):
         assert entry.event_type == 'note_added'
 
 
+def test_log_email_creates_email_logged_timeline_entry(app):
+    """log_note with email context creates an email_logged timeline entry."""
+    with app.app_context():
+        lead = _make_lead(app, '8b Call St')
+        svc = CallLogService()
+
+        with patch(_AE_PATCH):
+            entry = svc.log_note(
+                lead.id,
+                body='[Email] Follow up\n\nChecking in.',
+                subject='Follow up',
+                email_address='jane@example.com',
+            )
+
+        assert entry.event_type == 'email_logged'
+        assert entry.event_metadata['subject'] == 'Follow up'
+        assert entry.event_metadata['email_address'] == 'jane@example.com'
+
+
 def test_note_empty_body_raises_validation_error(app):
     """Logging a note with empty body raises LeadTaskValidationError."""
     with app.app_context():
@@ -175,4 +194,59 @@ def test_log_call_creates_timeline_entry(app):
 
         assert entry.event_type == 'call_logged'
         assert entry.event_metadata['outcome'] == 'answered'
+
+
+def test_note_with_contact_only_stays_note_added(app):
+    """A note linked to a contact without email fields is not classified as email."""
+    from app import db
+    from app.models.contact import Contact
+    from app.models.property_contact import PropertyContact
+
+    with app.app_context():
+        lead = _make_lead(app, '10 Call St')
+        contact = Contact(first_name='Jane', last_name='Doe', role='owner')
+        db.session.add(contact)
+        db.session.flush()
+        db.session.add(PropertyContact(
+            property_id=lead.id, contact_id=contact.id, role='owner', is_primary=True,
+        ))
+        db.session.commit()
+
+        svc = CallLogService()
+        with patch(_AE_PATCH):
+            entry = svc.log_note(lead.id, body='Spoke with owner about timing.', contact_id=contact.id)
+
+        assert entry.event_type == 'note_added'
+
+
+def test_log_call_rejects_phone_id_from_other_contact(app):
+    """contact_phone_id must belong to the linked contact on the lead."""
+    from app import db
+    from app.models.contact import Contact
+    from app.models.property_contact import PropertyContact
+    from app.models.contact_phone import ContactPhone
+
+    with app.app_context():
+        lead = _make_lead(app, '11 Call St')
+        contact_a = Contact(first_name='Jane', last_name='Doe', role='owner')
+        contact_b = Contact(first_name='John', last_name='Smith', role='owner')
+        db.session.add_all([contact_a, contact_b])
+        db.session.flush()
+        db.session.add(PropertyContact(
+            property_id=lead.id, contact_id=contact_a.id, role='owner', is_primary=True,
+        ))
+        phone_b = ContactPhone(contact_id=contact_b.id, value='5559999999', label='mobile')
+        db.session.add(phone_b)
+        db.session.commit()
+
+        svc = CallLogService()
+        with pytest.raises(LeadTaskValidationError):
+            svc.log_call(
+                lead.id,
+                outcome='answered',
+                duration_minutes=1,
+                notes=None,
+                contact_id=contact_a.id,
+                contact_phone_id=phone_b.id,
+            )
 
