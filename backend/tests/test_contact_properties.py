@@ -159,10 +159,23 @@ _VALID_SUFFIXES = [
 ]
 
 
+_VIEW_SUFFIX_TO_QUEUE = {
+    "views/previously-warm": "/api/queues/previously-warm",
+    "views/needs-review": "/api/queues/needs-review",
+    "views/follow-up-overdue": "/api/queues/follow-up-overdue",
+    "views/no-next-action": "/api/queues/no-next-action",
+    "views/do-not-contact": "/api/queues/do-not-contact",
+    "views/missing-property-match": "/api/queues/missing-property-match",
+}
+
+
 @given(suffix=st.sampled_from(_VALID_SUFFIXES))
 @settings(max_examples=50, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_legacy_redirect_preserves_path_suffix(app, client, suffix):
-    """Property 1: GET /api/leads/<suffix> returns HTTP 301 with Location → /api/properties/<suffix>.
+    """Property 1: GET /api/leads/<suffix> returns HTTP 301 to the canonical target.
+
+    Non-view paths redirect to /api/properties/<suffix>. Deprecated view paths
+    redirect directly to /api/queues/* (canonical queue API).
 
     Validates: Requirements 1.2
     """
@@ -174,7 +187,7 @@ def test_legacy_redirect_preserves_path_suffix(app, client, suffix):
         f"Expected 301 for path {path!r}, got {response.status_code}"
     )
     location = response.headers.get("Location", "")
-    expected_fragment = f"/api/properties/{suffix}"
+    expected_fragment = _VIEW_SUFFIX_TO_QUEUE.get(suffix, f"/api/properties/{suffix}")
     assert expected_fragment in location, (
         f"Expected Location to contain {expected_fragment!r}, got {location!r}"
     )

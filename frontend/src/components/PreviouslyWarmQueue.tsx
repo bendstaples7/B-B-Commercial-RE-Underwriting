@@ -1,41 +1,26 @@
 /**
  * PreviouslyWarmQueue — Previously Warm queue view.
- *
- * Shows leads that had HubSpot engagement but no recent platform contact.
- * Extra columns: last HubSpot activity type (hubspot_deal_stage) and last sync date.
- * Row actions: Log Call, Log Note, Create Task, Suppress (with confirmation).
- *
- * Requirements: 6.4, 18.1
  */
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Box,
-  Button,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
-  Typography,
-} from '@mui/material'
-import PhoneIcon from '@mui/icons-material/Phone'
-import NoteIcon from '@mui/icons-material/Note'
-import AddTaskIcon from '@mui/icons-material/AddTask'
+import { Box, Typography } from '@mui/material'
 import BlockIcon from '@mui/icons-material/Block'
+import { useNavigate } from 'react-router-dom'
 import { QueueTable } from './QueueTable'
 import type { RowAction, ExtraColumn } from './QueueTable'
-import {
-  queueService,
-  callLogService,
-  leadTaskService,
-  commandCenterService,
-} from '@/services/api'
+import { queueService, commandCenterService } from '@/services/api'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 import type { QueueRow } from '@/types'
+import {
+  createCreateTaskRowAction,
+  createLogCallRowAction,
+  createLogNoteRowAction,
+} from './queueRowActions'
+import { SuppressLeadDialog } from './SuppressLeadDialog'
 
 export function PreviouslyWarmQueue() {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [suppressTarget, setSuppressTarget] = useState<QueueRow | null>(null)
   const [page, setPage] = useState(1)
 
@@ -78,38 +63,13 @@ export function PreviouslyWarmQueue() {
   ]
 
   const rowActions: RowAction[] = [
-    {
-      label: 'Log Call',
-      icon: <PhoneIcon fontSize="small" />,
-      testId: 'action-log-call',
-      onClick: async (row: QueueRow) => {
-        await callLogService.logCall(row.id, { outcome: 'answered' })
-        queryClient.invalidateQueries({ queryKey: ['queue-previously-warm'] })
-        setPage(1)
-      },
-    },
-    {
-      label: 'Log Note',
-      icon: <NoteIcon fontSize="small" />,
-      testId: 'action-log-note',
-      onClick: async (row: QueueRow) => {
-        const body = window.prompt('Enter note:')
-        if (!body || !body.trim()) return
-        await callLogService.logNote(row.id, { body: body.trim() })
-        queryClient.invalidateQueries({ queryKey: ['queue-previously-warm'] })
-        setPage(1)
-      },
-    },
-    {
-      label: 'Create Task',
-      icon: <AddTaskIcon fontSize="small" />,
-      testId: 'action-create-task',
-      onClick: async (row: QueueRow) => {
-        await leadTaskService.createTask(row.id, { title: 'Follow up', task_type: 'call_owner_today' })
-        queryClient.invalidateQueries({ queryKey: ['queue-previously-warm'] })
-        setPage(1)
-      },
-    },
+    createLogCallRowAction({ navigate }),
+    createLogNoteRowAction({ navigate }),
+    createCreateTaskRowAction({
+      queryClient,
+      queryKey: 'queue-previously-warm',
+      onAfterAction: () => setPage(1),
+    }),
     {
       label: 'Suppress',
       icon: <BlockIcon fontSize="small" />,
@@ -137,30 +97,11 @@ export function PreviouslyWarmQueue() {
         {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
       />
 
-      {/* Suppress confirmation dialog */}
-      <Dialog
+      <SuppressLeadDialog
         open={suppressTarget !== null}
         onClose={() => setSuppressTarget(null)}
-        data-testid="suppress-confirm-dialog"
-      >
-        <DialogTitle>Suppress Lead?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            This will suppress the lead and remove it from active queues. Are you sure?
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setSuppressTarget(null)}>Cancel</Button>
-          <Button
-            onClick={handleSuppressConfirm}
-            color="error"
-            variant="contained"
-            data-testid="suppress-confirm-btn"
-          >
-            Suppress
-          </Button>
-        </DialogActions>
-      </Dialog>
+        onConfirm={handleSuppressConfirm}
+      />
     </Box>
   )
 }

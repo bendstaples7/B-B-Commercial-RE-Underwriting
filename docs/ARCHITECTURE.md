@@ -27,7 +27,7 @@ Update this doc when ownership changes.
 | Recommended action (live) | [`ActionEngineService`](../backend/app/services/action_engine_service.py) → `leads.recommended_action` | New RA enums on other models without mapping |
 | Lead timeline (read/write) | [`command_center_controller.py`](../backend/app/controllers/command_center_controller.py) + [`CallLogService`](../backend/app/services/call_log_service.py) → `LeadTimelineEntry` | Duplicate `GET /api/leads/:id/timeline` handlers |
 | Interaction timeline (CRM) | `GET /api/leads/:id/interaction-timeline` in [`interaction_controller.py`](../backend/app/controllers/interaction_controller.py) | Overlapping URL with command-center timeline |
-| Work queues (API) | [`queue_service.py`](../backend/app/services/queue_service.py) at `/api/queues/*` | New `/api/properties/views/*` endpoints |
+| Work queues (API) | [`queue_service.py`](../backend/app/services/queue_service.py) at `/api/queues/*` | `/api/properties/views/*` (301 → queues; legacy only) |
 | Lead list/detail API | [`property_controller.py`](../backend/app/controllers/property_controller.py) at `/api/properties/*` | Logic in stub [`lead_controller.py`](../backend/app/controllers/lead_controller.py) |
 | Controller error handling | Shared decorator in `app/controllers/decorators.py` (target) | Per-file `handle_errors` copies |
 | Unified score + action refresh | [`refresh_lead_scoring()`](../backend/app/services/lead_refresh.py) | Ad-hoc score-only or action-only refresh at mutation sites |

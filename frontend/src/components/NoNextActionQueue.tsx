@@ -1,31 +1,17 @@
 /**
  * NoNextActionQueue — No Next Action queue view.
- *
- * Shows leads with no recommended action and no open tasks.
- * Extra columns: days since last activity (computed from last_contact_date).
- * Row actions: Log Note, Suppress (with confirmation).
- *
- * Requirements: 6.6, 18.1
  */
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Box,
-  Button,
-  Chip,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
-  Typography,
-} from '@mui/material'
-import NoteIcon from '@mui/icons-material/Note'
+import { Box, Chip, Typography } from '@mui/material'
 import BlockIcon from '@mui/icons-material/Block'
+import { useNavigate } from 'react-router-dom'
 import { QueueTable } from './QueueTable'
 import type { RowAction, ExtraColumn } from './QueueTable'
-import { queueService, callLogService, commandCenterService } from '@/services/api'
+import { queueService, commandCenterService } from '@/services/api'
 import type { QueueRow } from '@/types'
+import { createLogNoteRowAction } from './queueRowActions'
+import { SuppressLeadDialog } from './SuppressLeadDialog'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 
 function computeDaysSinceActivity(lastContactDate: string | null): number | null {
@@ -39,6 +25,7 @@ function computeDaysSinceActivity(lastContactDate: string | null): number | null
 export function NoNextActionQueue() {
   const [page, setPage] = useState(1)
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [suppressTarget, setSuppressTarget] = useState<QueueRow | null>(null)
   const [suppressError, setSuppressError] = useState<string | null>(null)
 
@@ -89,18 +76,7 @@ export function NoNextActionQueue() {
   ]
 
   const rowActions: RowAction[] = [
-    {
-      label: 'Log Note',
-      icon: <NoteIcon fontSize="small" />,
-      testId: 'action-log-note',
-      onClick: async (row: QueueRow) => {
-        const body = window.prompt('Enter note:')
-        if (!body || !body.trim()) return
-        await callLogService.logNote(row.id, { body: body.trim() })
-        queryClient.invalidateQueries({ queryKey: ['queue-no-next-action'] })
-        setPage(1)
-      },
-    },
+    createLogNoteRowAction({ navigate }),
     {
       label: 'Suppress',
       icon: <BlockIcon fontSize="small" />,
@@ -128,35 +104,15 @@ export function NoNextActionQueue() {
         {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
       />
 
-      {/* Suppress confirmation dialog */}
-      <Dialog
+      <SuppressLeadDialog
         open={suppressTarget !== null}
-        onClose={() => { setSuppressTarget(null); setSuppressError(null) }}
-        data-testid="suppress-confirm-dialog"
-      >
-        <DialogTitle>Suppress Lead?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            This will suppress the lead and remove it from active queues. Are you sure?
-          </DialogContentText>
-          {suppressError && (
-            <DialogContentText color="error" sx={{ mt: 1 }} data-testid="suppress-error">
-              {suppressError}
-            </DialogContentText>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => { setSuppressTarget(null); setSuppressError(null) }}>Cancel</Button>
-          <Button
-            onClick={handleSuppressConfirm}
-            color="error"
-            variant="contained"
-            data-testid="suppress-confirm-btn"
-          >
-            Suppress
-          </Button>
-        </DialogActions>
-      </Dialog>
+        error={suppressError}
+        onClose={() => {
+          setSuppressTarget(null)
+          setSuppressError(null)
+        }}
+        onConfirm={handleSuppressConfirm}
+      />
     </Box>
   )
 }

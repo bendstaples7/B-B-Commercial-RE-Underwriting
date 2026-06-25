@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, it, expect, vi } from 'vitest'
 import { LeadStatusSelector } from './LeadStatusSelector'
-import { ALL_LEAD_STATUSES } from './UnifiedLeadCommandCenter'
+import { ALL_LEAD_STATUSES } from '@/constants/leadStatuses'
 
 vi.mock('@/services/api', () => ({
   commandCenterService: {

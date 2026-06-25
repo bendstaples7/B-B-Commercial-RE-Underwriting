@@ -26,6 +26,8 @@ import {
 } from '@mui/material'
 import { Fragment } from 'react'
 import type { PropertyScoreRecord, RecommendedAction } from '@/types'
+import { SCORING_ACTION_LABELS } from '@/constants/scoringRecommendedActions'
+import { humanize } from '@/utils/formatters'
 import { LeadScoreBadge } from './LeadScoreBadge'
 
 export interface ScoreHistoryTimelineProps {
@@ -36,28 +38,9 @@ export interface ScoreHistoryTimelineProps {
 }
 
 /** Human-readable labels for the constrained set of recommended actions. */
-const ACTION_LABELS: Record<RecommendedAction, string> = {
-  review_now: 'Review Now',
-  enrich_data: 'Enrich Data',
-  mail_ready: 'Mail Ready',
-  call_ready: 'Call Ready',
-  valuation_needed: 'Valuation Needed',
-  suppress: 'Suppress',
-  nurture: 'Nurture',
-  needs_manual_review: 'Needs Manual Review',
-}
-
-function humanize(snake: string): string {
-  if (!snake) return ''
-  return snake
-    .split('_')
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-    .join(' ')
-}
 
 function actionLabel(action: RecommendedAction): string {
-  return ACTION_LABELS[action] ?? humanize(action)
+  return SCORING_ACTION_LABELS[action] ?? humanize(action)
 }
 
 /**

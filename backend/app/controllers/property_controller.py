@@ -663,256 +663,52 @@ def _scoped_lead_query():
 
 
 # ---------------------------------------------------------------------------
-# Property View Endpoints (HubSpot CRM Migration — Phase 6)
+# Property View Endpoints — deprecated; redirect to canonical queue API (301)
 # ---------------------------------------------------------------------------
+
+def _redirect_view_to_queue(queue_endpoint: str):
+    """Legacy /api/properties/views/* → /api/queues/* with query string preserved."""
+    base = url_for(queue_endpoint)
+    query = request.query_string.decode()
+    if query:
+        return redirect(f'{base}?{query}', 301)
+    return redirect(base, 301)
+
 
 @properties_bp.route('/views/previously-warm', methods=['GET'])
 @limiter.limit("30 per minute")
-@handle_errors
 def view_previously_warm():
-    """Properties that have a PRIOR_WARM_CONVERSATION or APPOINTMENT_OCCURRED signal."""
-    from app.models import HubSpotSignal
-
-    page, per_page = _parse_pagination(request.args)
-
-    query = (
-        _scoped_lead_query()
-        .join(HubSpotSignal, HubSpotSignal.lead_id == Lead.id)
-        .filter(HubSpotSignal.signal_type.in_(['PRIOR_WARM_CONVERSATION', 'APPOINTMENT_OCCURRED']))
-        .distinct(Lead.id)
-        .order_by(Lead.id, Lead.lead_score.desc())
-    )
-
-    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
-
-    return jsonify({
-        'leads': [_serialize_property_summary(lead) for lead in pagination.items],
-        'total': pagination.total,
-        'page': pagination.page,
-        'per_page': pagination.per_page,
-        'pages': pagination.pages,
-    }), 200
+    return _redirect_view_to_queue('queue.get_previously_warm')
 
 
 @properties_bp.route('/views/needs-review', methods=['GET'])
 @limiter.limit("30 per minute")
-@handle_errors
 def view_needs_review():
-    """HubSpot-imported properties with UNMATCHED confidence or needs_review status."""
-    from app.models import HubSpotMatch
-
-    page, per_page = _parse_pagination(request.args)
-
-    unmatched_lead_ids = (
-        db.session.query(HubSpotMatch.internal_record_id)
-        .filter(
-            HubSpotMatch.internal_record_type == 'lead',
-            HubSpotMatch.confidence == 'UNMATCHED',
-            HubSpotMatch.internal_record_id.isnot(None),
-        )
-        .subquery()
-    )
-
-    hubspot_no_confirmed_ids = (
-        db.session.query(Lead.id)
-        .outerjoin(
-            HubSpotMatch,
-            (HubSpotMatch.internal_record_id == Lead.id) &
-            (HubSpotMatch.internal_record_type == 'lead') &
-            (HubSpotMatch.status == 'confirmed'),
-        )
-        .filter(
-            Lead.source == 'hubspot_import',
-            HubSpotMatch.id.is_(None),
-        )
-        .subquery()
-    )
-
-    query = (
-        _scoped_lead_query()
-        .filter(
-            or_(
-                Lead.id.in_(unmatched_lead_ids),
-                Lead.id.in_(hubspot_no_confirmed_ids),
-            )
-        )
-        .order_by(Lead.created_at.desc())
-    )
-
-    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
-
-    return jsonify({
-        'leads': [_serialize_property_summary(lead) for lead in pagination.items],
-        'total': pagination.total,
-        'page': pagination.page,
-        'per_page': pagination.per_page,
-        'pages': pagination.pages,
-    }), 200
+    return _redirect_view_to_queue('queue.get_needs_review')
 
 
 @properties_bp.route('/views/follow-up-overdue', methods=['GET'])
 @limiter.limit("30 per minute")
-@handle_errors
 def view_follow_up_overdue():
-    """Properties that have at least one open overdue Task.
-
-    A task is considered overdue if:
-      - status = 'overdue'  (explicitly marked), OR
-      - status = 'open' AND due_date < NOW()  (past due but not yet marked)
-
-    The second condition handles tasks imported from HubSpot that were never
-    individually fetched (which is when mark_overdue_if_needed() runs lazily).
-    """
-    from app.models import Task, TaskAssociation
-    from datetime import datetime as _dt
-
-    page, per_page = _parse_pagination(request.args)
-    now = _dt.utcnow()
-
-    query = (
-        _scoped_lead_query()
-        .join(TaskAssociation, (TaskAssociation.target_id == Lead.id) & (TaskAssociation.target_type == 'lead'))
-        .join(Task, Task.id == TaskAssociation.task_id)
-        .filter(
-            db.or_(
-                Task.status == 'overdue',
-                db.and_(
-                    Task.status == 'open',
-                    Task.due_date.isnot(None),
-                    Task.due_date < now,
-                )
-            )
-        )
-        .distinct(Lead.id)
-        .order_by(Lead.id, Lead.lead_score.desc())
-    )
-
-    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
-
-    return jsonify({
-        'leads': [_serialize_property_summary(lead) for lead in pagination.items],
-        'total': pagination.total,
-        'page': pagination.page,
-        'per_page': pagination.per_page,
-        'pages': pagination.pages,
-    }), 200
+    return _redirect_view_to_queue('queue.get_follow_up_overdue')
 
 
 @properties_bp.route('/views/no-next-action', methods=['GET'])
 @limiter.limit("30 per minute")
-@handle_errors
 def view_no_next_action():
-    """Properties with PRIOR_INTERACTION_EXISTS signal, no open Task, and no future Interaction."""
-    from datetime import datetime as dt
-    from app.models import HubSpotSignal, Task, TaskAssociation, Interaction, InteractionAssociation
-
-    page, per_page = _parse_pagination(request.args)
-    now = dt.utcnow()
-
-    prior_interaction_ids = (
-        db.session.query(HubSpotSignal.lead_id)
-        .filter(HubSpotSignal.signal_type == 'PRIOR_INTERACTION_EXISTS')
-        .subquery()
-    )
-
-    has_open_task_ids = (
-        db.session.query(TaskAssociation.target_id)
-        .join(Task, Task.id == TaskAssociation.task_id)
-        .filter(
-            TaskAssociation.target_type == 'lead',
-            Task.status.in_(['open', 'overdue']),
-        )
-        .subquery()
-    )
-
-    has_future_interaction_ids = (
-        db.session.query(InteractionAssociation.target_id)
-        .join(Interaction, Interaction.id == InteractionAssociation.interaction_id)
-        .filter(
-            InteractionAssociation.target_type == 'lead',
-            Interaction.occurred_at > now,
-        )
-        .subquery()
-    )
-
-    query = (
-        _scoped_lead_query()
-        .filter(Lead.id.in_(prior_interaction_ids))
-        .filter(Lead.id.notin_(has_open_task_ids))
-        .filter(Lead.id.notin_(has_future_interaction_ids))
-        .order_by(Lead.lead_score.desc())
-    )
-
-    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
-
-    return jsonify({
-        'leads': [_serialize_property_summary(lead) for lead in pagination.items],
-        'total': pagination.total,
-        'page': pagination.page,
-        'per_page': pagination.per_page,
-        'pages': pagination.pages,
-    }), 200
+    return _redirect_view_to_queue('queue.get_no_next_action')
 
 
 @properties_bp.route('/views/do-not-contact', methods=['GET'])
 @limiter.limit("30 per minute")
-@handle_errors
 def view_do_not_contact():
-    """Properties where suppression_flag=True."""
-    page, per_page = _parse_pagination(request.args)
-
-    query = (
-        _scoped_lead_query()
-        .filter(Lead.suppression_flag == True)  # noqa: E712
-        .order_by(Lead.updated_at.desc())
-    )
-
-    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
-
-    return jsonify({
-        'leads': [_serialize_property_summary(lead) for lead in pagination.items],
-        'total': pagination.total,
-        'page': pagination.page,
-        'per_page': pagination.per_page,
-        'pages': pagination.pages,
-    }), 200
+    return _redirect_view_to_queue('queue.get_do_not_contact')
 
 
 @properties_bp.route('/views/missing-property-match', methods=['GET'])
 @limiter.limit("30 per minute")
-@handle_errors
 def view_missing_property_match():
-    """HubSpot placeholder properties with no confirmed match."""
-    from app.models import HubSpotMatch
-
-    page, per_page = _parse_pagination(request.args)
-
-    confirmed_match_ids = (
-        db.session.query(HubSpotMatch.internal_record_id)
-        .filter(
-            HubSpotMatch.internal_record_type == 'lead',
-            HubSpotMatch.status == 'confirmed',
-            HubSpotMatch.internal_record_id.isnot(None),
-        )
-        .subquery()
-    )
-
-    query = (
-        _scoped_lead_query()
-        .filter(Lead.source == 'hubspot_import')
-        .filter(Lead.id.notin_(confirmed_match_ids))
-        .order_by(Lead.created_at.desc())
-    )
-
-    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
-
-    return jsonify({
-        'leads': [_serialize_property_summary(lead) for lead in pagination.items],
-        'total': pagination.total,
-        'page': pagination.page,
-        'per_page': pagination.per_page,
-        'pages': pagination.pages,
-    }), 200
+    return _redirect_view_to_queue('queue.get_missing_property_match')
 
 
 @properties_bp.route('/scoring/weights', methods=['GET'])
@@ -1006,32 +802,32 @@ def legacy_analyze_property(lead_id):
 
 @leads_legacy_bp.route('/views/previously-warm', methods=['GET'])
 def legacy_view_previously_warm():
-    return redirect(url_for('properties.view_previously_warm', **request.args), 301)
+    return _redirect_view_to_queue('queue.get_previously_warm')
 
 
 @leads_legacy_bp.route('/views/needs-review', methods=['GET'])
 def legacy_view_needs_review():
-    return redirect(url_for('properties.view_needs_review', **request.args), 301)
+    return _redirect_view_to_queue('queue.get_needs_review')
 
 
 @leads_legacy_bp.route('/views/follow-up-overdue', methods=['GET'])
 def legacy_view_follow_up_overdue():
-    return redirect(url_for('properties.view_follow_up_overdue', **request.args), 301)
+    return _redirect_view_to_queue('queue.get_follow_up_overdue')
 
 
 @leads_legacy_bp.route('/views/no-next-action', methods=['GET'])
 def legacy_view_no_next_action():
-    return redirect(url_for('properties.view_no_next_action', **request.args), 301)
+    return _redirect_view_to_queue('queue.get_no_next_action')
 
 
 @leads_legacy_bp.route('/views/do-not-contact', methods=['GET'])
 def legacy_view_do_not_contact():
-    return redirect(url_for('properties.view_do_not_contact', **request.args), 301)
+    return _redirect_view_to_queue('queue.get_do_not_contact')
 
 
 @leads_legacy_bp.route('/views/missing-property-match', methods=['GET'])
 def legacy_view_missing_property_match():
-    return redirect(url_for('properties.view_missing_property_match', **request.args), 301)
+    return _redirect_view_to_queue('queue.get_missing_property_match')
 
 
 @leads_legacy_bp.route('/scoring/weights', methods=['GET'])

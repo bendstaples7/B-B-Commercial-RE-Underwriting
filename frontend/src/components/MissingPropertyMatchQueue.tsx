@@ -1,24 +1,9 @@
 /**
  * MissingPropertyMatchQueue — Missing Property Match queue view.
- *
- * Shows leads with no property match. Extra columns: address as entered
- * (property_street). Row actions: Research PIN (creates research_missing_pin
- * task), Suppress (with confirmation).
- *
- * Requirements: 6.9, 18.1
  */
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Box,
-  Button,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
-  Typography,
-} from '@mui/material'
+import { Box, Typography } from '@mui/material'
 import SearchIcon from '@mui/icons-material/Search'
 import BlockIcon from '@mui/icons-material/Block'
 import { QueueTable } from './QueueTable'
@@ -29,6 +14,7 @@ import {
   commandCenterService,
 } from '@/services/api'
 import type { QueueRow } from '@/types'
+import { SuppressLeadDialog } from './SuppressLeadDialog'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 
 export function MissingPropertyMatchQueue() {
@@ -107,30 +93,11 @@ export function MissingPropertyMatchQueue() {
         {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
       />
 
-      {/* Suppress confirmation dialog */}
-      <Dialog
+      <SuppressLeadDialog
         open={suppressTarget !== null}
         onClose={() => setSuppressTarget(null)}
-        data-testid="suppress-confirm-dialog"
-      >
-        <DialogTitle>Suppress Lead?</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            This will suppress the lead and remove it from active queues. Are you sure?
-          </DialogContentText>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setSuppressTarget(null)}>Cancel</Button>
-          <Button
-            onClick={handleSuppressConfirm}
-            color="error"
-            variant="contained"
-            data-testid="suppress-confirm-btn"
-          >
-            Suppress
-          </Button>
-        </DialogActions>
-      </Dialog>
+        onConfirm={handleSuppressConfirm}
+      />
     </Box>
   )
 }

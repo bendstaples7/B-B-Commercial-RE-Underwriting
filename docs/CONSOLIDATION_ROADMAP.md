@@ -1,6 +1,6 @@
 # Consolidation Roadmap
 
-Follow-up work from the [architecture audit](ARCHITECTURE.md). Each item is a **separate PR** — do not batch unrelated refactors.
+Follow-up work from the [architecture audit](ARCHITECTURE.md). Prefer **one focused PR per item** — batch only when items are tightly coupled (see PR 2–4 note below).
 
 ## PR 1 — This branch (merge first)
 
@@ -16,33 +16,18 @@ Follow-up work from the [architecture audit](ARCHITECTURE.md). Each item is a **
 - [x] Stop `DeterministicScoringEngine` writing `leads.lead_score`
 - [x] Activity logging UX: `LogActivityModal`, contact method fields, ULCC wiring
 
-## PR 2 — Unify queue activity logging
+## PR 2–4 — Queues, ULCC extraction, retire property views (combined in PR #68)
 
-**Theme:** One logging UX everywhere (fixes “multiple log call buttons” in queues).
+**Theme:** One logging UX in queues; slimmer ULCC; canonical queue API only. Shipped as one PR because queue logging, ULCC extraction, and view retirement were coordinated in a single user-facing migration.
 
-- [ ] Shared `useQueueActions` or navigate to `/leads/:id?log=note|call|email`
-- [ ] Remove `window.prompt` and empty-note `callLogService` calls from queue row actions
-- [ ] Deduplicate `TodaysActionQueue` vs `HomePage` embedded copy
-- [ ] Extract `SuppressLeadDialog` (shared by 3+ queues)
-
-**Test plan:** Each queue’s row actions open modal or deep-link; no silent empty API logs.
-
-## PR 3 — ULCC structure + micro-utils
-
-**Theme:** Readability without behavior change.
-
-- [ ] Extract tab panels to `frontend/src/components/lead-detail/`
-- [ ] Extract `PropertySidebar` + sidebar helpers
-- [ ] `utils/formatters.ts` — `formatDate`, `humanize`, shared `ACTION_LABELS`
-- [ ] Move `ALL_LEAD_STATUSES` next to `LEAD_STATUS_LABELS` (single source)
-
-## PR 4 — Retire property views API
-
-**Theme:** One queue backend.
-
-- [ ] Deprecate `/api/properties/views/*` (301 or remove after client audit)
-- [ ] Align queue filter semantics (`is_warm` vs HubSpot signals, etc.) in `queue_service.py`
-- [ ] Document canonical queue definitions in ARCHITECTURE.md
+- [x] Navigate queue row actions to `/leads/:id?log=note|call|email`; ULCC opens `LogActivityModal`
+- [x] Remove `window.prompt` and direct `callLogService` calls from queue row actions
+- [x] Deduplicate `TodaysActionQueue` vs `HomePage` embedded copy
+- [x] Extract `SuppressLeadDialog` (shared by 3 queues)
+- [x] Extract `LeadDetailTabPanel` + `PropertySidebar` to `frontend/src/components/lead-detail/`
+- [x] `utils/formatters.ts` + `constants/scoringRecommendedActions.ts`
+- [x] `ALL_LEAD_STATUSES` derived from `LEAD_STATUS_LABELS`
+- [x] `/api/properties/views/*` → 301 redirect to `/api/queues/*`
 
 ## PR 5 — Split `api.ts`
 

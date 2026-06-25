@@ -1,21 +1,15 @@
 /**
  * FollowUpOverdueQueue — Follow-Up Overdue queue view.
- *
- * Shows leads with overdue follow-ups. Extra columns: days overdue (computed
- * from last_contact_date) and follow_up_overdue flag.
- * Row actions: Log Call, Log Note.
- *
- * Requirements: 6.5, 18.1
  */
 import { useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { Box, Chip, Typography } from '@mui/material'
-import PhoneIcon from '@mui/icons-material/Phone'
-import NoteIcon from '@mui/icons-material/Note'
+import { useNavigate } from 'react-router-dom'
 import { QueueTable } from './QueueTable'
 import type { RowAction, ExtraColumn } from './QueueTable'
-import { queueService, callLogService } from '@/services/api'
+import { queueService } from '@/services/api'
 import type { QueueRow } from '@/types'
+import { createLogCallRowAction, createLogNoteRowAction } from './queueRowActions'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 
 function computeDaysOverdue(lastContactDate: string | null): number | null {
@@ -28,7 +22,7 @@ function computeDaysOverdue(lastContactDate: string | null): number | null {
 
 export function FollowUpOverdueQueue() {
   const [page, setPage] = useState(1)
-  const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
   const { data } = useQuery({
     queryKey: ['queue-follow-up-overdue', page],
@@ -73,28 +67,8 @@ export function FollowUpOverdueQueue() {
   ]
 
   const rowActions: RowAction[] = [
-    {
-      label: 'Log Call',
-      icon: <PhoneIcon fontSize="small" />,
-      testId: 'action-log-call',
-      onClick: async (row: QueueRow) => {
-        await callLogService.logCall(row.id, { outcome: 'answered' })
-        queryClient.invalidateQueries({ queryKey: ['queue-follow-up-overdue'] })
-        setPage(1)
-      },
-    },
-    {
-      label: 'Log Note',
-      icon: <NoteIcon fontSize="small" />,
-      testId: 'action-log-note',
-      onClick: async (row: QueueRow) => {
-        const body = window.prompt('Enter note:')
-        if (!body || !body.trim()) return
-        await callLogService.logNote(row.id, { body: body.trim() })
-        queryClient.invalidateQueries({ queryKey: ['queue-follow-up-overdue'] })
-        setPage(1)
-      },
-    },
+    createLogCallRowAction({ navigate }),
+    createLogNoteRowAction({ navigate }),
   ]
 
   return (
