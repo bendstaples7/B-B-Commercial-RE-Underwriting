@@ -9,7 +9,7 @@ interaction_bp : Blueprint
     Prefix ``/api/interactions`` — CRUD for Interaction records.
 timeline_bp : Blueprint
     No prefix — timeline endpoints at their canonical paths:
-    ``/api/leads/<lead_id>/timeline`` and
+    ``/api/leads/<lead_id>/interaction-timeline`` and
     ``/api/organizations/<org_id>/timeline``.
 
 Requirements: 2.1, 2.2, 2.3, 4.1, 4.4
@@ -250,10 +250,13 @@ def delete_interaction(interaction_id):
 # ---------------------------------------------------------------------------
 
 
-@timeline_bp.route('/api/leads/<int:lead_id>/timeline', methods=['GET'])
+@timeline_bp.route('/api/leads/<int:lead_id>/interaction-timeline', methods=['GET'])
 @handle_errors
-def get_lead_timeline(lead_id):
-    """Return the unified timeline for a lead.
+def get_lead_interaction_timeline(lead_id):
+    """Return the CRM interaction timeline for a lead (Interactions + Tasks).
+
+    Namespaced separately from command-center ``GET /api/leads/<id>/timeline``
+    which serves paginated ``LeadTimelineEntry`` records.
 
     Query parameters
     ----------------

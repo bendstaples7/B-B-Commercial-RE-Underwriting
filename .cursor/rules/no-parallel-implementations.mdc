@@ -1,0 +1,25 @@
+---
+description: Prevent parallel components, services, and routes — extend canonical sources
+alwaysApply: true
+---
+
+# No Parallel Implementations
+
+Read [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) before creating new files.
+
+## Before creating anything new
+
+1. Search the codebase for an existing component, service, route, or enum that covers the same domain.
+2. **Extend the canonical file** or extract a shared helper — do not add `FooV2`, `NewFoo`, or `UnifiedFoo` alongside `Foo`.
+3. If the user asks to "replace" something, delete the replaced implementation in the **same PR**.
+
+## Hard rules
+
+- **One writer per DB column** — e.g. only `LeadScoringEngine` / `refresh_lead_scoring` may set `leads.lead_score`.
+- **One route per URL** — do not register the same path on two blueprints; namespace conflicts (see interaction vs command-center timeline).
+- **No queue quick-log bypass** — activity logging goes through `LogActivityModal` + forms, not raw `callLogService` or `window.prompt`.
+- **No legacy detail pages** — lead detail is `UnifiedLeadCommandCenter` only.
+
+## When a redirect/stub is needed
+
+Redirects are allowed for bookmarks, but the replaced component must be deleted — not kept "for tests."

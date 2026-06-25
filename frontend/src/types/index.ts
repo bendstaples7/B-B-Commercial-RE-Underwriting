@@ -1662,6 +1662,7 @@ export type LeadTaskStatus = 'open' | 'completed' | 'cancelled' | 'overdue';
 
 export type TimelineEventType =
   | 'note_added'
+  | 'email_logged'
   | 'call_logged'
   | 'task_created'
   | 'task_completed'
@@ -1816,10 +1817,19 @@ export interface LogCallPayload {
   outcome: 'answered' | 'voicemail' | 'no_answer' | 'busy' | 'wrong_number';
   duration_minutes?: number | null;
   notes?: string | null;
+  contact_id?: number | null;
+  contact_phone_id?: number | null;
+  phone_number?: string | null;
+  phone_label?: string | null;
 }
 
 export interface LogNotePayload {
   body: string;
+  contact_id?: number | null;
+  contact_email_id?: number | null;
+  email_address?: string | null;
+  email_label?: string | null;
+  subject?: string | null;
 }
 
 export interface BulkActionResult {

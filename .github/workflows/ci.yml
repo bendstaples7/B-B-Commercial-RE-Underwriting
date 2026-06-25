@@ -68,6 +68,16 @@ jobs:
       - name: Validate deploy/sudoers contract
         run: python scripts/validate_deploy_contract.py
 
+  duplication-check:
+    name: Structural duplication guard
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for parallel implementations and incomplete migrations
+        run: python scripts/check_duplication.py
+
   vps-readiness:
     name: VPS readiness — deploy infra PRs
     runs-on: ubuntu-latest

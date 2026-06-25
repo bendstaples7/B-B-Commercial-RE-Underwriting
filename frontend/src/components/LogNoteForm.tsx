@@ -98,7 +98,14 @@ export const LogNoteForm = forwardRef<LogNoteFormHandle, LogNoteFormProps>(funct
 
     try {
       const entry = await callLogService.logNote(leadId, { body })
-      onSaved(entry)
+      onSaved({
+        ...entry,
+        summary: entry.summary ?? body.slice(0, 500),
+        event_type: entry.event_type ?? 'note_added',
+        source: entry.source ?? 'manual',
+        metadata: entry.metadata ?? { body },
+      })
+      setBody('')
     } catch (err) {
       // Preserve form data on server error — do NOT clear body
       setSubmitError(

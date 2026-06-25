@@ -18,14 +18,50 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
-import type { LeadTimelineEntry, LogCallPayload } from '@/types'
+import type { LeadTimelineEntry, LogCallPayload, PropertyContact } from '@/types'
 import { callLogService } from '@/services/api'
+import {
+  ContactMethodFields,
+  EMPTY_CONTACT_METHOD,
+  type ContactMethodValue,
+  contactMethodToCallPayload,
+} from '@/components/ContactMethodFields'
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 const MAX_NOTES_LENGTH = 2000
+
+function resolveContactName(
+  contacts: PropertyContact[],
+  contactId: number | null,
+): string | null {
+  if (contactId == null) return null
+  const contact = contacts.find((c) => c.id === contactId)
+  if (!contact) return null
+  const name = [contact.first_name, contact.last_name].filter(Boolean).join(' ')
+  return name || null
+}
+
+function buildCallMetadataFallback(
+  payload: LogCallPayload,
+  contactMethod: ContactMethodValue,
+  contacts: PropertyContact[],
+): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {
+    outcome: payload.outcome,
+  }
+  if (payload.duration_minutes != null) metadata.duration_minutes = payload.duration_minutes
+  if (payload.notes) metadata.notes = payload.notes
+  if (payload.contact_id != null) metadata.contact_id = payload.contact_id
+  if (payload.contact_phone_id != null) metadata.contact_phone_id = payload.contact_phone_id
+  if (payload.phone_number) metadata.phone_number = payload.phone_number
+  if (payload.phone_label) metadata.phone_label = payload.phone_label
+  const contactName = resolveContactName(contacts, contactMethod.contactId)
+  if (contactName) metadata.contact_name = contactName
+  return metadata
+}
 
 const OUTCOME_OPTIONS: { value: LogCallPayload['outcome']; label: string }[] = [
   { value: 'answered', label: 'Answered' },
@@ -41,6 +77,8 @@ const OUTCOME_OPTIONS: { value: LogCallPayload['outcome']; label: string }[] = [
 
 export interface LogCallFormProps {
   leadId: number
+  contacts?: PropertyContact[]
+  contactsLoading?: boolean
   onSaved: (entry: LeadTimelineEntry) => void
   onCancel?: () => void
 }
@@ -59,7 +97,7 @@ export interface LogCallFormHandle {
  * missing outcome or invalid duration. Preserves form data on server error.
  */
 export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(function LogCallForm(
-  { leadId, onSaved, onCancel },
+  { leadId, contacts = [], contactsLoading = false, onSaved, onCancel },
   ref,
 ) {
   const formRef = useRef<HTMLDivElement>(null)
@@ -67,6 +105,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
   const [outcome, setOutcome] = useState<LogCallPayload['outcome'] | ''>('')
   const [duration, setDuration] = useState('')
   const [notes, setNotes] = useState('')
+  const [contactMethod, setContactMethod] = useState<ContactMethodValue>(EMPTY_CONTACT_METHOD)
 
   const [outcomeError, setOutcomeError] = useState<string | null>(null)
   const [durationError, setDurationError] = useState<string | null>(null)
@@ -147,11 +186,31 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
       outcome: outcome as LogCallPayload['outcome'],
       duration_minutes: duration !== '' ? Number(duration) : null,
       notes: notes.trim() || null,
+      ...contactMethodToCallPayload(contactMethod),
     }
 
     try {
       const entry = await callLogService.logCall(leadId, payload)
-      onSaved(entry)
+      const summaryParts = [`Call logged: ${payload.outcome}`]
+      if (payload.duration_minutes) {
+        summaryParts.push(`${payload.duration_minutes} min`)
+      }
+      if (payload.notes) {
+        summaryParts.push(payload.notes.slice(0, 200))
+      }
+      const summary = summaryParts.join('. ').slice(0, 500)
+      const metadataFallback = buildCallMetadataFallback(payload, contactMethod, contacts)
+      onSaved({
+        ...entry,
+        summary: entry.summary ?? summary,
+        event_type: entry.event_type ?? 'call_logged',
+        source: entry.source ?? 'manual',
+        metadata: entry.metadata ?? metadataFallback,
+      })
+      setOutcome('')
+      setDuration('')
+      setNotes('')
+      setContactMethod(EMPTY_CONTACT_METHOD)
     } catch (err) {
       // Preserve form data on server error — do NOT clear fields
       setSubmitError(
@@ -186,6 +245,14 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
           {submitError}
         </Alert>
       )}
+
+      <ContactMethodFields
+        mode="phone"
+        contacts={contacts}
+        contactsLoading={contactsLoading}
+        value={contactMethod}
+        onChange={setContactMethod}
+      />
 
       {/* Outcome dropdown */}
       <FormControl

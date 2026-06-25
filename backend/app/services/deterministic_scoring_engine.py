@@ -800,8 +800,8 @@ class DeterministicScoringEngine:
 
         db.session.add(lead_score)
 
-        # Keep leads.lead_score in sync so list views sort correctly
-        lead.lead_score = total_score
+        # Live sort column (leads.lead_score) is owned by LeadScoringEngine via
+        # refresh_lead_scoring — this engine writes history to lead_scores only.
 
         db.session.commit()
 

@@ -16,6 +16,7 @@ import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom'
 import userEvent from '@testing-library/user-event'
 import { UnifiedLeadCommandCenter } from './UnifiedLeadCommandCenter'
 import type { CommandCenterPayload, PropertyDetail } from '@/types'
+import { callLogService } from '@/services/api'
 
 // ---------------------------------------------------------------------------
 // Mock all services used by UnifiedLeadCommandCenter and its children
@@ -385,8 +386,6 @@ describe('UnifiedLeadCommandCenter — ?tab=timeline scrolls ActivityPanel into 
   })
 
   it('invokes scrollIntoView on the ActivityPanel when ?tab=timeline is present', async () => {
-    // jsdom does not implement scrollIntoView — mock it with vi.fn() and restore
-    // it after the test so other suites are unaffected.
     const scrollIntoViewMock = vi.fn()
     const original = Element.prototype.scrollIntoView
     Element.prototype.scrollIntoView = scrollIntoViewMock as typeof Element.prototype.scrollIntoView
@@ -406,6 +405,74 @@ describe('UnifiedLeadCommandCenter — ?tab=timeline scrolls ActivityPanel into 
     } finally {
       Element.prototype.scrollIntoView = original
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 2c. Activity logging modals
+// ---------------------------------------------------------------------------
+
+const mockLogNote = callLogService.logNote as ReturnType<typeof vi.fn>
+
+describe('UnifiedLeadCommandCenter — activity logging modals', () => {
+  beforeEach(() => {
+    mockLogNote.mockReset()
+  })
+
+  it('opens the log note modal when RA Log Note is clicked without scrolling', async () => {
+    const scrollIntoViewMock = vi.fn()
+    const original = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = scrollIntoViewMock as typeof Element.prototype.scrollIntoView
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+
+    try {
+      renderComponent()
+      await waitFor(() => {
+        expect(screen.getByTestId('ra-universal-btn-log_note')).toBeInTheDocument()
+      })
+
+      await user.click(screen.getByTestId('ra-universal-btn-log_note'))
+
+      expect(screen.getByTestId('log-activity-modal-note')).toBeInTheDocument()
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
+    } finally {
+      Element.prototype.scrollIntoView = original
+    }
+  })
+
+  it('shows success snackbar and timeline entry text after saving a note', async () => {
+    mockLogNote.mockResolvedValue({
+      id: 42,
+      lead_id: 1,
+      event_type: 'note_added',
+      occurred_at: '2024-06-01T12:00:00Z',
+      source: 'manual',
+      actor: 'user',
+      summary: 'Followed up with owner',
+      metadata: { body: 'Followed up with owner' },
+      hubspot_activity_id: null,
+      is_deleted: false,
+      created_at: '2024-06-01T12:00:00Z',
+    })
+
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    renderComponent()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('ra-universal-btn-log_note')).toBeInTheDocument()
+    })
+
+    expect(screen.queryByTestId('activity-log-actions')).not.toBeInTheDocument()
+
+    await user.click(screen.getByTestId('ra-universal-btn-log_note'))
+    await user.type(screen.getByTestId('note-body-input'), 'Followed up with owner')
+    await user.click(screen.getByTestId('note-save-btn'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('activity-success-alert')).toHaveTextContent('Note saved.')
+    })
+    expect(screen.getByTestId('entry-summary-42')).toHaveTextContent('Followed up with owner')
+    expect(screen.queryByTestId('log-activity-modal-note')).not.toBeInTheDocument()
   })
 })
 

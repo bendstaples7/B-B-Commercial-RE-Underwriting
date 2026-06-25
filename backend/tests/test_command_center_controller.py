@@ -6,18 +6,43 @@ Covers:
   34.4 — HubSpot sync → timeline entries with correct source and deduplication
 """
 import json
+import uuid
 import pytest
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
 
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry
+from app.models.user import User
+from app.services.auth_service import AuthService
 from app.services.hubspot_timeline_import_service import HubSpotTimelineImportService
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_AUTH_HEADERS = {'X-User-Id': 'test-user'}
+
+
+def _bearer_headers(token: str) -> dict:
+    return {'Authorization': f'Bearer {token}'}
+
+
+def _make_log_user(display_name: str = 'Activity Logger') -> User:
+    email = f'logger-{uuid.uuid4().hex[:8]}@test.com'
+    user = User(
+        user_id=str(uuid.uuid4()),
+        email=email,
+        email_lower=email.lower(),
+        password_hash='$2b$12$fakehashfakehashfakehashfakehashfakehashfakehash',
+        display_name=display_name,
+        is_active=True,
+        password_set=True,
+    )
+    db.session.add(user)
+    db.session.commit()
+    return user
 
 def _make_lead(app, street, **kwargs):
     """Create a Lead with sensible defaults."""
@@ -54,6 +79,44 @@ def _make_task(app, lead_id, status='open', due_date=None, task_type='custom', t
     db.session.add(task)
     db.session.commit()
     return task
+
+
+def _make_contact_with_phone(app, lead_id, first_name='Jane', last_name='Doe'):
+    from app.models.contact import Contact
+    from app.models.property_contact import PropertyContact
+    from app.models.contact_phone import ContactPhone
+    contact = Contact(first_name=first_name, last_name=last_name, role='owner')
+    db.session.add(contact)
+    db.session.flush()
+    link = PropertyContact(
+        property_id=lead_id,
+        contact_id=contact.id,
+        role='owner',
+        is_primary=True,
+    )
+    phone = ContactPhone(contact_id=contact.id, value='5551234567', label='mobile')
+    db.session.add_all([link, phone])
+    db.session.commit()
+    return contact, phone
+
+
+def _make_contact_with_email(app, lead_id, first_name='Jane', last_name='Doe'):
+    from app.models.contact import Contact
+    from app.models.property_contact import PropertyContact
+    from app.models.contact_email import ContactEmail
+    contact = Contact(first_name=first_name, last_name=last_name, role='owner')
+    db.session.add(contact)
+    db.session.flush()
+    link = PropertyContact(
+        property_id=lead_id,
+        contact_id=contact.id,
+        role='owner',
+        is_primary=True,
+    )
+    email = ContactEmail(contact_id=contact.id, value='jane@work.com', label='work')
+    db.session.add_all([link, email])
+    db.session.commit()
+    return contact, email
 
 
 def _hubspot_activity(activity_id, activity_type='NOTE', body='Test note', days_ago=5):
@@ -148,6 +211,7 @@ class TestUpdateStatus:
                 f'/api/leads/{lead.id}/status',
                 data=json.dumps({'status': 'deprioritize'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 200
 
@@ -159,6 +223,7 @@ class TestUpdateStatus:
                 f'/api/leads/{lead.id}/status',
                 data=json.dumps({'status': 'deprioritize'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             db.session.refresh(lead)
             assert lead.lead_status == 'deprioritize'
@@ -171,6 +236,7 @@ class TestUpdateStatus:
                 f'/api/leads/{lead.id}/status',
                 data=json.dumps({'status': 'negotiating_remote'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             entry = LeadTimelineEntry.query.filter_by(
                 lead_id=lead.id, event_type='status_changed'
@@ -189,6 +255,7 @@ class TestUpdateStatus:
                 f'/api/leads/{lead.id}/status',
                 data=json.dumps({'status': 'do_not_contact'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             db.session.refresh(lead)
             assert lead.recommended_action is None
@@ -202,6 +269,7 @@ class TestUpdateStatus:
                 f'/api/leads/{lead.id}/status',
                 data=json.dumps({'status': 'do_not_contact'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             db.session.refresh(task)
             assert task.status == 'cancelled'
@@ -213,6 +281,7 @@ class TestUpdateStatus:
                 '/api/leads/99999/status',
                 data=json.dumps({'status': 'negotiating_remote'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 404
 
@@ -228,6 +297,7 @@ class TestUpdateStatus:
                 f'/api/leads/{lead.id}/status',
                 data=json.dumps({'status': 'negotiating_remote', 'reason': 'Called today, owner interested.'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             entry = LeadTimelineEntry.query.filter_by(
                 lead_id=lead.id, event_type='status_changed'
@@ -246,6 +316,7 @@ class TestUpdateStatus:
                 f'/api/leads/{lead.id}/status',
                 data=json.dumps({'status': 'deprioritize'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             entry = LeadTimelineEntry.query.filter_by(
                 lead_id=lead.id, event_type='status_changed'
@@ -261,6 +332,7 @@ class TestUpdateStatus:
                 f'/api/leads/{lead.id}/status',
                 data=json.dumps({'status': 'deprioritize', 'reason': ''}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             entry = LeadTimelineEntry.query.filter_by(
                 lead_id=lead.id, event_type='status_changed'
@@ -280,6 +352,7 @@ class TestUpdateStatus:
                 f'/api/leads/{lead.id}/status',
                 data=json.dumps({'status': 'negotiating_remote', 'reason': 'Owner called back.'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             entry = LeadTimelineEntry.query.filter_by(
                 lead_id=lead.id, event_type='status_changed'
@@ -295,6 +368,7 @@ class TestUpdateStatus:
                 f'/api/leads/{lead.id}/status',
                 data=json.dumps({'status': 'deprioritize'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             entry = LeadTimelineEntry.query.filter_by(
                 lead_id=lead.id, event_type='status_changed'
@@ -311,6 +385,7 @@ class TestUpdateStatus:
                 f'/api/leads/{lead.id}/status',
                 data=json.dumps({'status': 'deprioritize', 'reason': long_reason}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 400
 
@@ -328,6 +403,7 @@ class TestCreateTask:
                 f'/api/leads/{lead.id}/tasks',
                 data=json.dumps({'title': 'Call owner', 'task_type': 'custom'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 201
 
@@ -339,6 +415,7 @@ class TestCreateTask:
                 f'/api/leads/{lead.id}/tasks',
                 data=json.dumps({'title': 'Send mail', 'task_type': 'custom'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             task = LeadTask.query.filter_by(lead_id=lead.id, title='Send mail').first()
             assert task is not None
@@ -352,6 +429,7 @@ class TestCreateTask:
                 f'/api/leads/{lead.id}/tasks',
                 data=json.dumps({'title': 'Research PIN', 'task_type': 'custom'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             data = json.loads(response.data)
             assert 'id' in data
@@ -365,6 +443,7 @@ class TestCreateTask:
                 f'/api/leads/{lead.id}/tasks',
                 data=json.dumps({'title': '', 'task_type': 'custom'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 400
 
@@ -423,8 +502,28 @@ class TestLogNote:
                 f'/api/leads/{lead.id}/notes',
                 data=json.dumps({'body': 'Owner called back.'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 201
+            data = response.get_json()
+            assert data['summary'] == 'Owner called back.'
+            assert data['event_type'] == 'note_added'
+
+    def test_log_note_response_includes_full_entry(self, client, app):
+        """POST /api/leads/<id>/notes returns summary and metadata for timeline display."""
+        with app.app_context():
+            lead = _make_lead(app, '19b Note St')
+            response = client.post(
+                f'/api/leads/{lead.id}/notes',
+                data=json.dumps({'body': 'Left voicemail.'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            data = response.get_json()
+            assert data['summary'] == 'Left voicemail.'
+            assert data['metadata'] == {'body': 'Left voicemail.'}
+            assert data['id'] is not None
+            assert data['occurred_at'] is not None
 
     def test_log_note_creates_timeline_entry(self, client, app):
         """POST /api/leads/<id>/notes creates a note_added timeline entry."""
@@ -434,6 +533,7 @@ class TestLogNote:
                 f'/api/leads/{lead.id}/notes',
                 data=json.dumps({'body': 'Left voicemail.'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             entry = LeadTimelineEntry.query.filter_by(
                 lead_id=lead.id, event_type='note_added'
@@ -448,6 +548,50 @@ class TestLogNote:
                 f'/api/leads/{lead.id}/notes',
                 data=json.dumps({'body': ''}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 400
+
+    def test_log_note_with_contact_metadata(self, client, app):
+        """POST /api/leads/<id>/notes stores email contact context in metadata."""
+        with app.app_context():
+            lead = _make_lead(app, '21b Note St')
+            contact, email = _make_contact_with_email(app, lead.id)
+            response = client.post(
+                f'/api/leads/{lead.id}/notes',
+                data=json.dumps({
+                    'body': '[Email] Follow up\n\nChecking in on the offer.',
+                    'subject': 'Follow up',
+                    'contact_id': contact.id,
+                    'contact_email_id': email.id,
+                    'email_address': 'jane@work.com',
+                    'email_label': 'work',
+                }),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 201
+            data = response.get_json()
+            assert 'Jane Doe' in data['summary']
+            assert 'jane@work.com' in data['summary']
+            assert data['metadata']['contact_name'] == 'Jane Doe'
+            assert data['metadata']['email_address'] == 'jane@work.com'
+            assert data['event_type'] == 'email_logged'
+
+    def test_log_note_rejects_unlinked_contact(self, client, app):
+        """POST /api/leads/<id>/notes rejects contact_id not linked to the lead."""
+        with app.app_context():
+            lead = _make_lead(app, '21c Note St')
+            other_lead = _make_lead(app, '21d Note St')
+            contact, _email = _make_contact_with_email(app, other_lead.id)
+            response = client.post(
+                f'/api/leads/{lead.id}/notes',
+                data=json.dumps({
+                    'body': 'Test note',
+                    'contact_id': contact.id,
+                }),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 400
 
@@ -465,8 +609,55 @@ class TestLogCall:
                 f'/api/leads/{lead.id}/calls',
                 data=json.dumps({'outcome': 'answered', 'duration_minutes': 5}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 201
+            data = response.get_json()
+            assert data['event_type'] == 'call_logged'
+            assert 'Call logged: answered' in data['summary']
+            assert data['metadata']['outcome'] == 'answered'
+
+    def test_log_call_response_includes_summary(self, client, app):
+        """POST /api/leads/<id>/calls returns summary for timeline display."""
+        with app.app_context():
+            lead = _make_lead(app, '22b Call St')
+            response = client.post(
+                f'/api/leads/{lead.id}/calls',
+                data=json.dumps({
+                    'outcome': 'voicemail',
+                    'notes': 'Left a message about the offer.',
+                }),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            data = response.get_json()
+            assert 'voicemail' in data['summary']
+            assert 'Left a message' in data['summary']
+
+    def test_log_call_with_contact_metadata(self, client, app):
+        """POST /api/leads/<id>/calls stores contact and phone in metadata and summary."""
+        with app.app_context():
+            lead = _make_lead(app, '22c Call St')
+            contact, phone = _make_contact_with_phone(app, lead.id)
+            response = client.post(
+                f'/api/leads/{lead.id}/calls',
+                data=json.dumps({
+                    'outcome': 'answered',
+                    'duration_minutes': 3,
+                    'contact_id': contact.id,
+                    'contact_phone_id': phone.id,
+                    'phone_number': '5551234567',
+                    'phone_label': 'mobile',
+                }),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 201
+            data = response.get_json()
+            assert 'Jane Doe' in data['summary']
+            assert '5551234567' in data['summary'] or '(555)' in data['summary']
+            assert data['metadata']['contact_name'] == 'Jane Doe'
+            assert data['metadata']['phone_number'] == '5551234567'
 
     def test_log_call_creates_timeline_entry(self, client, app):
         """POST /api/leads/<id>/calls creates a call_logged timeline entry."""
@@ -476,6 +667,7 @@ class TestLogCall:
                 f'/api/leads/{lead.id}/calls',
                 data=json.dumps({'outcome': 'voicemail'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             entry = LeadTimelineEntry.query.filter_by(
                 lead_id=lead.id, event_type='call_logged'
@@ -490,8 +682,65 @@ class TestLogCall:
                 f'/api/leads/{lead.id}/calls',
                 data=json.dumps({'outcome': 'invalid_outcome_xyz'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 400
+
+
+class TestLogActivityAuth:
+    def test_log_note_without_auth_returns_401(self, client, app):
+        """POST /api/leads/<id>/notes requires authentication."""
+        with app.app_context():
+            lead = _make_lead(app, '21e Note St')
+            response = client.post(
+                f'/api/leads/{lead.id}/notes',
+                data=json.dumps({'body': 'Unauthorized note'}),
+                content_type='application/json',
+            )
+            assert response.status_code == 401
+
+    def test_log_call_without_auth_returns_401(self, client, app):
+        """POST /api/leads/<id>/calls requires authentication."""
+        with app.app_context():
+            lead = _make_lead(app, '24b Call St')
+            response = client.post(
+                f'/api/leads/{lead.id}/calls',
+                data=json.dumps({'outcome': 'answered'}),
+                content_type='application/json',
+            )
+            assert response.status_code == 401
+
+    def test_log_note_actor_resolved_from_bearer_token(self, client, app):
+        """Authenticated note log stores actor as the user's display name."""
+        with app.app_context():
+            lead = _make_lead(app, '21f Note St')
+            user = _make_log_user('Jane Logger')
+            token = AuthService().issue_token(user)
+            response = client.post(
+                f'/api/leads/{lead.id}/notes',
+                data=json.dumps({'body': 'Logged by Jane'}),
+                content_type='application/json',
+                headers=_bearer_headers(token),
+            )
+            assert response.status_code == 201
+            data = response.get_json()
+            assert data['actor'] == 'Jane Logger'
+
+    def test_log_call_actor_resolved_from_bearer_token(self, client, app):
+        """Authenticated call log stores actor as the user's display name."""
+        with app.app_context():
+            lead = _make_lead(app, '24c Call St')
+            user = _make_log_user('Call Logger')
+            token = AuthService().issue_token(user)
+            response = client.post(
+                f'/api/leads/{lead.id}/calls',
+                data=json.dumps({'outcome': 'answered'}),
+                content_type='application/json',
+                headers=_bearer_headers(token),
+            )
+            assert response.status_code == 201
+            data = response.get_json()
+            assert data['actor'] == 'Call Logger'
 
 
 # ---------------------------------------------------------------------------
@@ -507,6 +756,7 @@ class TestDoNotContact:
                 f'/api/leads/{lead.id}/do-not-contact',
                 data=json.dumps({}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 200
 
@@ -518,6 +768,7 @@ class TestDoNotContact:
                 f'/api/leads/{lead.id}/do-not-contact',
                 data=json.dumps({}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             db.session.refresh(lead)
             assert lead.lead_status == 'do_not_contact'
@@ -532,6 +783,7 @@ class TestDoNotContact:
                 f'/api/leads/{lead.id}/do-not-contact',
                 data=json.dumps({}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             db.session.refresh(lead)
             assert lead.recommended_action is None
@@ -546,6 +798,7 @@ class TestDoNotContact:
                 f'/api/leads/{lead.id}/do-not-contact',
                 data=json.dumps({}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             db.session.refresh(task1)
             db.session.refresh(task2)
@@ -560,6 +813,7 @@ class TestDoNotContact:
                 f'/api/leads/{lead.id}/calls',
                 data=json.dumps({'outcome': 'answered'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 403
 
@@ -571,6 +825,7 @@ class TestDoNotContact:
                 f'/api/leads/{lead.id}/notes',
                 data=json.dumps({'body': 'Test note'}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 403
 
@@ -588,6 +843,7 @@ class TestParkLead:
                 f'/api/leads/{lead.id}/park',
                 data=json.dumps({}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 200
 
@@ -599,6 +855,7 @@ class TestParkLead:
                 f'/api/leads/{lead.id}/park',
                 data=json.dumps({}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             db.session.refresh(lead)
             assert lead.lead_status == 'deprioritize'
@@ -612,6 +869,7 @@ class TestParkLead:
                 f'/api/leads/{lead.id}/park',
                 data=json.dumps({'reactivation_date': future_date}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 200
 
@@ -624,6 +882,7 @@ class TestParkLead:
                 f'/api/leads/{lead.id}/park',
                 data=json.dumps({'reactivation_date': past_date}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 400
 
@@ -636,6 +895,7 @@ class TestParkLead:
                 f'/api/leads/{lead.id}/park',
                 data=json.dumps({'reactivation_date': far_date}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 400
 

@@ -174,7 +174,13 @@ describe('LogNoteForm', () => {
       await user.click(screen.getByTestId('note-save-btn'))
 
       await waitFor(() => {
-        expect(onSaved).toHaveBeenCalledWith(entry)
+        expect(onSaved).toHaveBeenCalledWith(
+          expect.objectContaining({
+            id: entry.id,
+            summary: entry.summary,
+            event_type: entry.event_type,
+          }),
+        )
       })
     })
   })
@@ -260,7 +266,47 @@ describe('LogNoteForm', () => {
       await user.click(screen.getByTestId('note-save-btn'))
 
       await waitFor(() => {
-        expect(onSaved).toHaveBeenCalledWith(entry)
+        expect(onSaved).toHaveBeenCalledWith(
+          expect.objectContaining({
+            id: entry.id,
+            summary: entry.summary,
+            event_type: entry.event_type,
+          }),
+        )
+      })
+    })
+
+    it('clears the body field after a successful save', async () => {
+      const entry = makeTimelineEntry()
+      mockLogNote.mockResolvedValue(entry)
+
+      render(<LogNoteForm leadId={1} onSaved={vi.fn()} />)
+
+      await user.type(screen.getByTestId('note-body-input'), 'My note')
+      await user.click(screen.getByTestId('note-save-btn'))
+
+      await waitFor(() => {
+        expect(screen.getByTestId('note-body-input')).toHaveValue('')
+      })
+    })
+
+    it('merges summary when API response omits it', async () => {
+      mockLogNote.mockResolvedValue({
+        id: 99,
+        event_type: 'note_added',
+        occurred_at: '2024-01-01T00:00:00Z',
+      })
+      const onSaved = vi.fn()
+
+      render(<LogNoteForm leadId={1} onSaved={onSaved} />)
+
+      await user.type(screen.getByTestId('note-body-input'), 'Sparse API note')
+      await user.click(screen.getByTestId('note-save-btn'))
+
+      await waitFor(() => {
+        expect(onSaved).toHaveBeenCalledWith(
+          expect.objectContaining({ summary: 'Sparse API note' }),
+        )
       })
     })
 

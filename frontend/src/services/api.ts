@@ -19,7 +19,6 @@ import {
   HubSpotImportRunSchema,
   HubSpotImportRunListSchema,
   HubSpotMatchListSchema,
-  LeadListSchema,
   PipelineStatusSchema,
 } from '@/services/schemas'
 
@@ -937,9 +936,7 @@ import type {
   PropertyOrganizationLink,
   OwnerOrganizationLink,
   Interaction,
-  TimelineEntry,
   CRMTask,
-  PropertySummary,
   WebhookLogSummary,
   WebhookLogListResponse,
 } from '@/types'
@@ -1275,106 +1272,6 @@ export const crmTaskService = {
   completeTask: async (id: number): Promise<CRMTask> => {
     const response = await api.post<CRMTask>(`/tasks/${id}/complete`)
     return response.data
-  },
-}
-
-export const timelineService = {
-  /** GET /api/leads/{leadId}/timeline — get timeline entries for a lead */
-  getLeadTimeline: async (
-    leadId: number,
-    filters?: {
-      entry_type?: string
-      subtype?: string
-      date_from?: string
-      date_to?: string
-    }
-  ): Promise<TimelineEntry[]> => {
-    const response = await api.get<{ timeline: TimelineEntry[]; lead_id: number }>(`/leads/${leadId}/timeline`, {
-      params: filters,
-    })
-    return response.data.timeline
-  },
-
-  /** GET /api/organizations/{orgId}/timeline — get timeline entries for an org */
-  getOrganizationTimeline: async (
-    orgId: number,
-    filters?: {
-      entry_type?: string
-      subtype?: string
-      date_from?: string
-      date_to?: string
-    }
-  ): Promise<TimelineEntry[]> => {
-    const response = await api.get<{ timeline: TimelineEntry[]; organization_id: number }>(`/organizations/${orgId}/timeline`, {
-      params: filters,
-    })
-    return response.data.timeline
-  },
-}
-
-// ---------------------------------------------------------------------------
-// Task 20.4 — Lead view API methods
-// ---------------------------------------------------------------------------
-
-export const leadViewService = {
-  /** GET /api/properties/views/previously-warm — leads with warm conversation signals */
-  getPreviouslyWarmLeads: async (): Promise<PropertySummary[]> => {
-    const response = await api.get('/properties/views/previously-warm')
-    const result = LeadListSchema.safeParse(response.data)
-    if (!result.success) {
-      console.error('[Schema] /properties/views/previously-warm parse errors:', result.error.issues)
-    }
-    return (result.success ? result.data : response.data).leads as PropertySummary[]
-  },
-
-  /** GET /api/properties/views/needs-review — HubSpot-imported leads needing review */
-  getNeedsReviewLeads: async (): Promise<PropertySummary[]> => {
-    const response = await api.get('/properties/views/needs-review')
-    const result = LeadListSchema.safeParse(response.data)
-    if (!result.success) {
-      console.error('[Schema] /properties/views/needs-review parse errors:', result.error.issues)
-    }
-    return (result.success ? result.data : response.data).leads as PropertySummary[]
-  },
-
-  /** GET /api/properties/views/follow-up-overdue — leads with overdue open tasks */
-  getFollowUpOverdueLeads: async (): Promise<PropertySummary[]> => {
-    const response = await api.get('/properties/views/follow-up-overdue')
-    const result = LeadListSchema.safeParse(response.data)
-    if (!result.success) {
-      console.error('[Schema] /properties/views/follow-up-overdue parse errors:', result.error.issues)
-    }
-    return (result.success ? result.data : response.data).leads as PropertySummary[]
-  },
-
-  /** GET /api/properties/views/no-next-action — leads with no open task or future interaction */
-  getNoNextActionLeads: async (): Promise<PropertySummary[]> => {
-    const response = await api.get('/properties/views/no-next-action')
-    const result = LeadListSchema.safeParse(response.data)
-    if (!result.success) {
-      console.error('[Schema] /properties/views/no-next-action parse errors:', result.error.issues)
-    }
-    return (result.success ? result.data : response.data).leads as PropertySummary[]
-  },
-
-  /** GET /api/properties/views/do-not-contact — suppressed leads */
-  getDoNotContactLeads: async (): Promise<PropertySummary[]> => {
-    const response = await api.get('/properties/views/do-not-contact')
-    const result = LeadListSchema.safeParse(response.data)
-    if (!result.success) {
-      console.error('[Schema] /properties/views/do-not-contact parse errors:', result.error.issues)
-    }
-    return (result.success ? result.data : response.data).leads as PropertySummary[]
-  },
-
-  /** GET /api/properties/views/missing-property-match — HubSpot placeholder leads with no confirmed match */
-  getMissingPropertyMatchLeads: async (): Promise<PropertySummary[]> => {
-    const response = await api.get('/properties/views/missing-property-match')
-    const result = LeadListSchema.safeParse(response.data)
-    if (!result.success) {
-      console.error('[Schema] /properties/views/missing-property-match parse errors:', result.error.issues)
-    }
-    return (result.success ? result.data : response.data).leads as PropertySummary[]
   },
 }
 

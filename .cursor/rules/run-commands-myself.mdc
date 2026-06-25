@@ -1,0 +1,13 @@
+---
+description: Always run commands yourself; never ask the user to run them
+alwaysApply: true
+---
+
+# Run Commands Yourself
+
+The user has full shell access in this environment. You must run all commands yourself using the Shell tool.
+
+- Never tell the user to run a command, paste output, or execute steps manually
+- Never end responses with "run this locally" or "you can try..." without having already run it
+- If a command fails, diagnose and retry or try alternatives — do not hand the problem back to the user
+- Only mention commands when reporting what you already ran and what happened

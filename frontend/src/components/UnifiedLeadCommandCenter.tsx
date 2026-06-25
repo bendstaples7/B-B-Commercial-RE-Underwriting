@@ -34,6 +34,7 @@ import {
   Divider,
   Link,
   Tooltip,
+  Snackbar,
 } from '@mui/material'
 import { Link as RouterLink, useNavigate, useSearchParams, useLocation } from 'react-router-dom'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
@@ -52,10 +53,8 @@ import { LeadScoreBadge } from '@/components/LeadScoreBadge'
 import type { ScoreTier } from '@/components/LeadScoreBadge'
 import { LeadStatusSelector } from '@/components/LeadStatusSelector'
 import { LeadTaskList, type LeadTaskListHandle } from '@/components/LeadTaskList'
-import { LogEmailForm, type LogEmailFormHandle } from '@/components/LogEmailForm'
-import { LogNoteForm, type LogNoteFormHandle } from '@/components/LogNoteForm'
-import { LogCallForm, type LogCallFormHandle } from '@/components/LogCallForm'
 import { LeadTimeline } from '@/components/LeadTimeline'
+import { LogActivityModal, type ActivityLogType } from '@/components/LogActivityModal'
 import { ScoreBreakdownCard } from '@/components/ScoreBreakdownCard'
 import { ScoreBreakdownDialog } from '@/components/ScoreBreakdownDialog'
 import { ScoreHistoryTimeline } from '@/components/ScoreHistoryTimeline'
@@ -345,23 +344,37 @@ interface ActivityPanelProps {
   leadId: number
   initialEntries: LeadTimelineEntry[]
   initialTotal: number
+  highlightEntryId: number | null
 }
 
 export interface ActivityPanelHandle {
   scrollIntoView: () => void
-  focusLogCall: () => void
-  focusLogNote: () => void
-  focusLogEmail: () => void
+  prependEntry: (entry: LeadTimelineEntry) => void
+}
+
+const ACTIVITY_SUCCESS_MESSAGES: Record<ActivityLogType, string> = {
+  note: 'Note saved.',
+  call: 'Call logged.',
+  email: 'Email logged.',
 }
 
 const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
-  function ActivityPanel({ leadId, initialEntries, initialTotal }, ref) {
+  function ActivityPanel(
+    { leadId, initialEntries, initialTotal, highlightEntryId },
+    ref,
+  ) {
     const panelRef = useRef<HTMLDivElement>(null)
-    const logCallRef = useRef<LogCallFormHandle>(null)
-    const logNoteRef = useRef<LogNoteFormHandle>(null)
-    const logEmailRef = useRef<LogEmailFormHandle>(null)
     const [timelineEntries, setTimelineEntries] = useState<LeadTimelineEntry[]>(initialEntries)
     const [timelineTotal, setTimelineTotal] = useState(initialTotal)
+
+    React.useEffect(() => {
+      setTimelineEntries((prev) => {
+        const serverIds = new Set(initialEntries.map((e) => e.id))
+        const optimisticOnly = prev.filter((e) => !serverIds.has(e.id))
+        return [...optimisticOnly, ...initialEntries]
+      })
+      setTimelineTotal(initialTotal)
+    }, [initialEntries, initialTotal])
 
     React.useImperativeHandle(ref, () => ({
       scrollIntoView: () => {
@@ -370,28 +383,11 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
           el.scrollIntoView({ behavior: 'smooth', block: 'start' })
         }
       },
-      focusLogCall: () => {
-        logCallRef.current?.focus()
-      },
-      focusLogNote: () => {
-        logNoteRef.current?.focus()
-      },
-      focusLogEmail: () => {
-        logEmailRef.current?.focus()
+      prependEntry: (entry: LeadTimelineEntry) => {
+        setTimelineEntries(prev => [entry, ...prev])
+        setTimelineTotal(prev => prev + 1)
       },
     }))
-
-    const handleNotesSaved = (entry: LeadTimelineEntry) => {
-      // Optimistic prepend — entry already created by LogNoteForm before calling onSaved
-      setTimelineEntries(prev => [entry, ...prev])
-      setTimelineTotal(prev => prev + 1)
-    }
-
-    const handleCallSaved = (entry: LeadTimelineEntry) => {
-      // Optimistic prepend — entry already created by LogCallForm before calling onSaved
-      setTimelineEntries(prev => [entry, ...prev])
-      setTimelineTotal(prev => prev + 1)
-    }
 
     const handleLoadMore = async (page: number): Promise<{ entries: LeadTimelineEntry[]; total: number }> => {
       const result = await commandCenterService.getTimeline(leadId, page)
@@ -400,23 +396,15 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
 
     return (
       <Box ref={panelRef} sx={{ mb: 2, overflow: 'auto' }} data-testid="activity-panel">
-        <Box sx={{ mb: 3 }} data-testid="log-email-section">
-          <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>Log Email</Typography>
-          <LogEmailForm ref={logEmailRef} leadId={leadId} onSaved={handleNotesSaved} />
-        </Box>
-        <Box sx={{ mb: 3 }} data-testid="log-note-section">
-          <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>Log Note</Typography>
-          <LogNoteForm ref={logNoteRef} leadId={leadId} onSaved={handleNotesSaved} />
-        </Box>
-        <Box sx={{ mb: 3 }} data-testid="log-call-section">
-          <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>Log Call</Typography>
-          <LogCallForm ref={logCallRef} leadId={leadId} onSaved={handleCallSaved} />
-        </Box>
+        <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>
+          Activity History
+        </Typography>
         <LeadTimeline
           leadId={leadId}
           initialEntries={timelineEntries}
           initialTotal={timelineTotal}
           onLoadMore={handleLoadMore}
+          highlightEntryId={highlightEntryId}
         />
       </Box>
     )
@@ -1239,24 +1227,36 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const activityRef = useRef<ActivityPanelHandle>(null)
   const tasksPanelRef = useRef<TasksPanelHandle>(null)
   const showLead = !commandCenterLoading && !leadLoading && !commandCenterError
+  const [activityModal, setActivityModal] = useState<ActivityLogType | null>(null)
+  const [highlightEntryId, setHighlightEntryId] = useState<number | null>(null)
+  const [activitySnackbar, setActivitySnackbar] = useState<{ open: boolean; message: string }>({
+    open: false,
+    message: '',
+  })
 
   const handleStatusChanged = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
   }, [queryClient, leadId])
 
+  const handleActivitySaved = useCallback((entry: LeadTimelineEntry, type: ActivityLogType) => {
+    activityRef.current?.prependEntry(entry)
+    setHighlightEntryId(entry.id)
+    setActivitySnackbar({ open: true, message: ACTIVITY_SUCCESS_MESSAGES[type] })
+    setActivityModal(null)
+    queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+    window.setTimeout(() => setHighlightEntryId(null), 2000)
+  }, [queryClient, leadId])
+
   const handleRaAction = useCallback(async (action: string) => {
     switch (action) {
       case 'log_call':
-        activityRef.current?.scrollIntoView()
-        window.setTimeout(() => activityRef.current?.focusLogCall(), 300)
+        setActivityModal('call')
         return
       case 'log_note':
-        activityRef.current?.scrollIntoView()
-        window.setTimeout(() => activityRef.current?.focusLogNote(), 300)
+        setActivityModal('note')
         return
       case 'log_email':
-        activityRef.current?.scrollIntoView()
-        window.setTimeout(() => activityRef.current?.focusLogEmail(), 300)
+        setActivityModal('email')
         return
       case 'create_task':
         tasksPanelRef.current?.scrollIntoView()
@@ -1354,6 +1354,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             leadId={leadId}
             initialEntries={commandCenterData!.timeline.entries}
             initialTotal={commandCenterData!.timeline.total}
+            highlightEntryId={highlightEntryId}
           />
 
           {/* TabPanel — fourth in ActivityColumn (Req 9.1–9.6) */}
@@ -1369,6 +1370,30 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         {/* Property sidebar — sticky, hidden below lg breakpoint (Req 11.1–11.5) */}
         <PropertySidebar commandCenterData={commandCenterData!} />
       </Box>
+
+      <LogActivityModal
+        open={activityModal != null}
+        activityType={activityModal}
+        leadId={leadId}
+        onClose={() => setActivityModal(null)}
+        onSaved={handleActivitySaved}
+      />
+
+      <Snackbar
+        open={activitySnackbar.open}
+        autoHideDuration={4000}
+        onClose={() => setActivitySnackbar((s) => ({ ...s, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        data-testid="activity-success-snackbar"
+      >
+        <Alert
+          severity="success"
+          onClose={() => setActivitySnackbar((s) => ({ ...s, open: false }))}
+          data-testid="activity-success-alert"
+        >
+          {activitySnackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   )
 }

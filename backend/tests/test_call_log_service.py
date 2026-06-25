@@ -148,6 +148,25 @@ def test_note_body_exactly_5000_chars_succeeds(app):
         assert entry.event_type == 'note_added'
 
 
+def test_log_email_creates_email_logged_timeline_entry(app):
+    """log_note with email context creates an email_logged timeline entry."""
+    with app.app_context():
+        lead = _make_lead(app, '8b Call St')
+        svc = CallLogService()
+
+        with patch(_AE_PATCH):
+            entry = svc.log_note(
+                lead.id,
+                body='[Email] Follow up\n\nChecking in.',
+                subject='Follow up',
+                email_address='jane@example.com',
+            )
+
+        assert entry.event_type == 'email_logged'
+        assert entry.event_metadata['subject'] == 'Follow up'
+        assert entry.event_metadata['email_address'] == 'jane@example.com'
+
+
 def test_note_empty_body_raises_validation_error(app):
     """Logging a note with empty body raises LeadTaskValidationError."""
     with app.app_context():

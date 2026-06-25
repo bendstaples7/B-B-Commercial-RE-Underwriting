@@ -1,0 +1,35 @@
+---
+description: Migrations must be atomic — redirect, delete legacy, update tests together
+alwaysApply: true
+---
+
+# Finish Migration in Same PR
+
+## Atomic migrations
+
+When changing canonical routes or replacing a component/service:
+
+1. Add the new canonical implementation (or confirm it exists)
+2. Update all entry points to use it
+3. Add redirects for legacy URLs if needed
+4. **Delete** replaced files, stubs, and dead tests
+5. Update `docs/ARCHITECTURE.md` if ownership changed
+
+Do not ship "redirect only" PRs that leave legacy components in the tree.
+
+## Stubs and re-exports
+
+Files like `LeadDetailPage.tsx` or `lead_controller.py` re-exports are **temporary** (max one release). If you add one, note the removal date in the PR.
+
+## Spec tasks
+
+When checking off tasks in `.kiro/specs/*/tasks.md` that say "remove file" or "retire legacy", file deletion is required for the task to be done.
+
+## PR checklist
+
+Before finishing, confirm:
+
+- [ ] Searched for existing implementation (see ARCHITECTURE.md)
+- [ ] No parallel routes/services/components introduced
+- [ ] Legacy deleted if this replaces something
+- [ ] `python scripts/check_duplication.py` passes

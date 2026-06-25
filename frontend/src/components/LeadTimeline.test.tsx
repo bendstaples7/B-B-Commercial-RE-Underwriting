@@ -13,7 +13,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
-import { LeadTimeline } from './LeadTimeline'
+import { LeadTimeline, buildTimelineDetailRows, getTimelineEventLabel } from './LeadTimeline'
 import type { LeadTimelineEntry } from '@/types'
 
 // ---------------------------------------------------------------------------
@@ -100,6 +100,96 @@ describe('LeadTimeline', () => {
       expect(screen.getByTestId('entry-timestamp-1')).toBeInTheDocument()
       expect(screen.getByTestId('entry-actor-1')).toHaveTextContent('Alice')
       expect(screen.getByTestId('entry-summary-1')).toHaveTextContent('Left a note about the property')
+    })
+
+    it('renders summary from metadata.body when summary is empty', () => {
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(1, {
+              summary: '',
+              metadata: { body: 'Note body from metadata' },
+            }),
+          ]}
+          initialTotal={1}
+        />,
+      )
+
+      expect(screen.getByTestId('entry-summary-1')).toHaveTextContent('Note body from metadata')
+    })
+
+    it('renders contact context for a call with contact and phone metadata', () => {
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(1, {
+              event_type: 'call_logged',
+              summary: 'Call with Jane Doe ((555) 123-4567, mobile): answered',
+              metadata: {
+                outcome: 'answered',
+                contact_name: 'Jane Doe',
+                phone_number: '5551234567',
+                phone_label: 'mobile',
+              },
+            }),
+          ]}
+          initialTotal={1}
+        />,
+      )
+
+      expect(screen.getByTestId('entry-contact-context-1')).toHaveTextContent(
+        'With: Jane Doe · (555) 123-4567 (mobile)',
+      )
+    })
+
+    it('renders contact context for an email note with metadata', () => {
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(1, {
+              event_type: 'note_added',
+              summary: 'Email to Jane Doe (jane@work.com, work): Follow up',
+              metadata: {
+                body: '[Email] Follow up\n\nBody text',
+                contact_name: 'Jane Doe',
+                email_address: 'jane@work.com',
+                email_label: 'work',
+              },
+            }),
+          ]}
+          initialTotal={1}
+        />,
+      )
+
+      expect(screen.getByTestId('entry-contact-context-1')).toHaveTextContent(
+        'To: Jane Doe · jane@work.com (work)',
+      )
+    })
+
+    it('renders Email Logged label for email_logged entries', () => {
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(1, {
+              event_type: 'email_logged',
+              summary: 'Email to Jane: Follow up',
+              metadata: {
+                body: '[Email] Follow up\n\nHello',
+                subject: 'Follow up',
+                contact_name: 'Jane Doe',
+                email_address: 'jane@work.com',
+              },
+            }),
+          ]}
+          initialTotal={1}
+        />,
+      )
+
+      expect(screen.getByTestId('entry-event-type-1')).toHaveTextContent('Email Logged')
     })
 
     it('renders multiple entries', () => {
@@ -430,6 +520,182 @@ describe('LeadTimeline', () => {
 
       // No input fields for HubSpot entries
       expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Expandable entry details
+  // -------------------------------------------------------------------------
+
+  describe('expandable entry details', () => {
+    it('expands a call entry to show full metadata on click', async () => {
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(1, {
+              event_type: 'call_logged',
+              summary: 'Call with Jane Doe ((555) 123-4567, mobile): answered',
+              metadata: {
+                outcome: 'answered',
+                duration_minutes: 12,
+                contact_name: 'Jane Doe',
+                phone_number: '5551234567',
+                phone_label: 'mobile',
+                notes: 'Discussed pricing and next steps.',
+              },
+            }),
+          ]}
+          initialTotal={1}
+        />,
+      )
+
+      expect(screen.queryByTestId('entry-details-1')).not.toBeVisible()
+
+      await user.click(screen.getByTestId('timeline-entry-1'))
+
+      expect(screen.getByTestId('entry-details-1')).toBeVisible()
+      expect(screen.getByTestId('entry-detail-value-1-outcome')).toHaveTextContent('answered')
+      expect(screen.getByTestId('entry-detail-value-1-duration')).toHaveTextContent('12 minutes')
+      expect(screen.getByTestId('entry-detail-value-1-contact')).toHaveTextContent('Jane Doe')
+      expect(screen.getByTestId('entry-detail-value-1-phone')).toHaveTextContent('(555) 123-4567 (mobile)')
+      expect(screen.getByTestId('entry-detail-value-1-notes')).toHaveTextContent(
+        'Discussed pricing and next steps.',
+      )
+    })
+
+    it('expands an email entry to show subject and full message body', async () => {
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(1, {
+              event_type: 'note_added',
+              summary: 'Email to Jane Doe (jane@work.com, work): Follow up',
+              metadata: {
+                body: '[Email] Follow up\n\nFull email body with all the details.',
+                subject: 'Follow up',
+                contact_name: 'Jane Doe',
+                email_address: 'jane@work.com',
+                email_label: 'work',
+              },
+            }),
+          ]}
+          initialTotal={1}
+        />,
+      )
+
+      await user.click(screen.getByTestId('timeline-entry-1'))
+
+      expect(screen.getByTestId('entry-event-type-1')).toHaveTextContent('Email Logged')
+      expect(screen.getByTestId('entry-detail-value-1-subject')).toHaveTextContent('Follow up')
+      expect(screen.getByTestId('entry-detail-value-1-message')).toHaveTextContent(
+        'Full email body with all the details.',
+      )
+      expect(screen.getByTestId('entry-detail-value-1-email')).toHaveTextContent(
+        'jane@work.com (work)',
+      )
+    })
+
+    it('expands a note entry to show the full note body from metadata', async () => {
+      const longNote = 'A'.repeat(200)
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(1, {
+              summary: longNote.slice(0, 80),
+              metadata: { body: longNote },
+            }),
+          ]}
+          initialTotal={1}
+        />,
+      )
+
+      await user.click(screen.getByTestId('timeline-entry-1'))
+
+      expect(screen.getByTestId('entry-detail-value-1-note')).toHaveTextContent(longNote)
+    })
+
+    it('collapses details when the entry is clicked again', async () => {
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(1, {
+              event_type: 'call_logged',
+              summary: 'Call logged',
+              metadata: { outcome: 'no_answer', notes: 'Left voicemail' },
+            }),
+          ]}
+          initialTotal={1}
+        />,
+      )
+
+      await user.click(screen.getByTestId('timeline-entry-1'))
+      expect(screen.getByTestId('entry-details-1')).toBeVisible()
+
+      await user.click(screen.getByTestId('timeline-entry-1'))
+      await waitFor(() => {
+        expect(screen.getByTestId('entry-detail-value-1-outcome')).not.toBeVisible()
+      })
+      expect(screen.getByTestId('entry-summary-1')).toBeVisible()
+    })
+  })
+
+  describe('buildTimelineDetailRows', () => {
+    it('builds structured rows for call metadata', () => {
+      const rows = buildTimelineDetailRows(
+        makeEntry(1, {
+          event_type: 'call_logged',
+          metadata: {
+            outcome: 'left_voicemail',
+            duration_minutes: 3,
+            contact_name: 'Bob',
+            phone_number: '5559876543',
+            notes: 'Will try again tomorrow',
+          },
+        }),
+      )
+
+      expect(rows).toEqual([
+        { label: 'Outcome', value: 'left voicemail' },
+        { label: 'Duration', value: '3 minutes' },
+        { label: 'Contact', value: 'Bob' },
+        { label: 'Phone', value: '(555) 987-6543' },
+        { label: 'Notes', value: 'Will try again tomorrow' },
+      ])
+    })
+
+    it('parses email subject from body when metadata.subject is missing', () => {
+      const rows = buildTimelineDetailRows(
+        makeEntry(1, {
+          event_type: 'email_logged',
+          metadata: {
+            body: '[Email] Parsed subject\n\nMessage text',
+            email_address: 'a@b.com',
+          },
+        }),
+      )
+
+      expect(rows.find((r) => r.label === 'Subject')?.value).toBe('Parsed subject')
+      expect(rows.find((r) => r.label === 'Message')?.value).toBe('Message text')
+    })
+  })
+
+  describe('getTimelineEventLabel', () => {
+    it('returns Email Logged for email_logged and legacy email notes', () => {
+      expect(
+        getTimelineEventLabel(makeEntry(1, { event_type: 'email_logged' })),
+      ).toBe('Email Logged')
+      expect(
+        getTimelineEventLabel(
+          makeEntry(1, {
+            event_type: 'note_added',
+            metadata: { body: '[Email] Hi\n\nBody' },
+          }),
+        ),
+      ).toBe('Email Logged')
     })
   })
 })
