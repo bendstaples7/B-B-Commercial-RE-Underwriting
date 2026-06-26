@@ -716,7 +716,12 @@ def view_missing_property_match():
 @handle_errors
 def get_scoring_weights():
     """Get current scoring weights for a user."""
-    user_id = request.args.get('user_id', 'default')
+    user_id = get_current_user_id()
+    if not user_id or user_id == 'anonymous':
+        return jsonify({
+            'error': 'Validation error',
+            'message': 'user_id is required (send X-User-Id header)',
+        }), 400
     weights = scoring_engine.get_weights(user_id)
     return jsonify(_serialize_scoring_weights(weights)), 200
 
@@ -745,6 +750,7 @@ def update_scoring_weights():
         'data_completeness_weight',
         'owner_situation_weight',
         'location_desirability_weight',
+        'data_enrichment_weight',
     ]
     for field in required_weight_fields:
         if field not in data:
@@ -766,6 +772,7 @@ def update_scoring_weights():
         data_completeness_weight=float(data['data_completeness_weight']),
         owner_situation_weight=float(data['owner_situation_weight']),
         location_desirability_weight=float(data['location_desirability_weight']),
+        data_enrichment_weight=float(data['data_enrichment_weight']),
     )
 
     rescored = scoring_engine.bulk_rescore(user_id=user_id)

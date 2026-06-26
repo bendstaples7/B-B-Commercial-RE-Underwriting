@@ -89,3 +89,4 @@ token.json
 
 # Local developer sync config (contains VPS credentials — never commit)
 scripts/sync-local-db.conf
+\n# Virtual environments\n.venv/\nbackend/.venv/\n

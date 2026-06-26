@@ -1,0 +1,9 @@
+{
+  "lead_count": 75366,
+  "user_count": 3,
+  "ben_lead_count": 6751,
+  "ben_user_id": "e5bc61c7-4db1-4307-a7b6-0a6b5a3d84c9",
+  "ben_user_email": "ben.d.staples.7@gmail.com",
+  "user_ids": [{"id" : 1, "user_id" : "158d015c-c030-4ca9-87fa-e229eb574ff7", "email" : "admin@admin.com", "display_name" : "Ben Staples"}, {"id" : 3, "user_id" : "d5f4f0ce-4d5b-48e5-bdcb-6b4679f66879", "email" : "userx@test.com", "display_name" : "UserX"}, {"id" : 2, "user_id" : "e5bc61c7-4db1-4307-a7b6-0a6b5a3d84c9", "email" : "ben.d.staples.7@gmail.com", "display_name" : "Ben"}],
+  "checked_at": "2026-06-26T16:02:47Z"
+}
