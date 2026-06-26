@@ -495,6 +495,10 @@ class TestSplitPhoneField:
     def test_seven_digit_local_number_falls_back_to_whole_value(self):
         assert split_phone_field("558-1863") == ["558-1863"]
 
+    def test_contiguous_13_digit_value_falls_back_to_whole_value(self):
+        # Must not steal the first 10 digits via _PHONE_RE; preserve the full value.
+        assert split_phone_field("1234567890123") == ["1234567890123"]
+
     def test_multi_number_blob_is_split_into_individual_numbers(self):
         result = split_phone_field(PROD_MULTINUMBER_BLOB)
         assert result == [

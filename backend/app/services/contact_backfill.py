@@ -56,11 +56,13 @@ _SYNTHETIC_MIN_INTERNAL_CAPS = 3
 _MAX_PHONE_LEN = 50
 _MAX_EMAIL_LEN = 255
 
-# Matches a US-style 10-digit phone (optional +1 country code) with common
-# separators, anywhere inside a larger string -- used to recover individual
-# numbers from multi-number free-text fields such as
-# "1) (773) 558-1863  2) (510) 685-0838 ...".
-_PHONE_RE = re.compile(r"(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}")
+# Matches a standalone US-style 10-digit phone (optional +1 country code) with
+# common separators. Lookaround ensures we don't extract a 10-digit substring
+# from inside a longer contiguous digit string (e.g. an 11-15 digit international
+# number), so those fall through to the whole-value fallback instead.
+_PHONE_RE = re.compile(
+    r"(?<!\d)(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}(?!\d)"
+)
 
 
 def looks_synthetic_name(first_name, last_name) -> bool:
