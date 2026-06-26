@@ -276,12 +276,14 @@ class HubSpotDealSyncService:
             row[0]
             for row in (
                 db.session.query(HubSpotMatch.internal_record_id)
+                .join(Lead, Lead.id == HubSpotMatch.internal_record_id)
                 .filter_by(
                     hubspot_record_type='deal',
                     status='confirmed',
                     internal_record_type='lead',
                 )
                 .filter(HubSpotMatch.internal_record_id.isnot(None))
+                .order_by(Lead.last_hubspot_sync_at.asc().nullsfirst())
                 .distinct()
                 .limit(limit)
                 .all()
@@ -304,6 +306,120 @@ class HubSpotDealSyncService:
                 db.session.rollback()
 
         logger.info('sync_all_confirmed_lead_tasks complete: %s', stats)
+        return stats
+
+    def sweep_stale_open_hubspot_tasks(
+        self,
+        *,
+        dry_run: bool = True,
+        limit: int = 500,
+    ) -> dict[str, int]:
+        """Find HubSpot-imported tasks still open locally but completed in HubSpot.
+
+        In dry-run mode, only reports candidates (engagement metadata COMPLETED,
+        or live CRM v3 COMPLETED when not dry-run). In apply mode, reconciles via
+        live CRM v3 sync so authoritative status wins.
+        """
+        from app.models.hubspot_engagement import HubSpotEngagement
+        from app.models.task import Task
+        from app.models.task_association import TaskAssociation
+        from app.services.hubspot_activity_converter_service import HubSpotActivityConverterService
+
+        stats = {
+            'scanned': 0,
+            'stale_found': 0,
+            'fixed': 0,
+            'errors': 0,
+            'skipped_no_lead': 0,
+        }
+
+        tasks = (
+            Task.query
+            .filter(
+                Task.source == 'hubspot_import',
+                Task.status.in_(('open', 'overdue')),
+                Task.hubspot_task_id.isnot(None),
+            )
+            .order_by(Task.updated_at.asc())
+            .limit(limit)
+            .all()
+        )
+
+        converter = HubSpotActivityConverterService()
+        client = None if dry_run else self._get_client()
+
+        for task in tasks:
+            stats['scanned'] += 1
+            hs_id = str(task.hubspot_task_id)
+
+            engagement = HubSpotEngagement.query.filter_by(hubspot_id=hs_id).first()
+            eng_status = ''
+            if engagement and (engagement.raw_payload or {}).get('metadata'):
+                eng_status = (
+                    (engagement.raw_payload.get('metadata') or {}).get('status') or ''
+                ).upper()
+
+            is_stale = eng_status == 'COMPLETED'
+            record = None
+
+            if not is_stale and not dry_run and client is not None:
+                try:
+                    record = client._get(
+                        f'/crm/v3/objects/tasks/{hs_id}',
+                        {'properties': TASK_API_PROPERTIES},
+                    )
+                    hs_live = (
+                        (record.get('properties') or {}).get('hs_task_status') or ''
+                    ).upper()
+                    is_stale = hs_live == 'COMPLETED'
+                except Exception as exc:
+                    stats['errors'] += 1
+                    logger.warning(
+                        'sweep_stale_open_hubspot_tasks: CRM fetch failed task=%s: %s',
+                        hs_id, exc,
+                    )
+                    continue
+
+            if not is_stale:
+                continue
+
+            stats['stale_found'] += 1
+            if dry_run:
+                logger.info(
+                    'stale task (dry-run): Task(id=%s) hubspot_task_id=%s local=%s',
+                    task.id, hs_id, task.status,
+                )
+                continue
+
+            lead_id = task.lead_id
+            if lead_id is None:
+                assoc = TaskAssociation.query.filter_by(
+                    task_id=task.id,
+                    target_type='lead',
+                ).first()
+                lead_id = assoc.target_id if assoc else None
+            if lead_id is None:
+                stats['skipped_no_lead'] += 1
+                continue
+
+            try:
+                if record is None:
+                    record = client._get(
+                        f'/crm/v3/objects/tasks/{hs_id}',
+                        {'properties': TASK_API_PROPERTIES},
+                    )
+                outcome = converter.sync_task_from_crm_v3(record, lead_id=lead_id)
+                if outcome in ('created', 'updated'):
+                    stats['fixed'] += 1
+            except Exception as exc:
+                stats['errors'] += 1
+                logger.warning(
+                    'sweep_stale_open_hubspot_tasks: fix failed task=%s: %s',
+                    hs_id, exc,
+                )
+                db.session.rollback()
+
+        logger.info('sweep_stale_open_hubspot_tasks complete: %s', stats)
         return stats
 
     def refresh_all_confirmed_deals(self, *, limit: int = 200) -> dict[str, int]:

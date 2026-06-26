@@ -280,6 +280,8 @@ def test_recompute_and_persist_appends_timeline_when_ra_changes(app):
         ).all()
         assert len(entries) == 1
         assert entries[0].event_metadata['new_action'] == 'follow_up_now'
+        assert entries[0].event_metadata['winning_rule'] == 'follow_up_overdue'
+        assert 'signals' in entries[0].event_metadata
 
 
 def test_recompute_and_persist_no_timeline_when_ra_unchanged(app):

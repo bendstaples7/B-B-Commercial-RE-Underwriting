@@ -311,6 +311,17 @@ class HubSpotActivityConverterService:
 
         new_status = self._map_hubspot_task_status(engagement)
         old_status = task.status
+        # Legacy engagement payloads can lag behind HubSpot; never downgrade a
+        # locally completed task back to open based on stale engagement data.
+        if old_status == 'completed' and new_status != 'completed':
+            logger.warning(
+                "Skipping stale engagement reconcile for Task(id=%s) hubspot_task_id=%s: "
+                "would downgrade completed → %s",
+                task.id,
+                engagement.hubspot_id,
+                new_status,
+            )
+            return False
         changed = old_status != new_status
 
         task.raw_payload = engagement.raw_payload

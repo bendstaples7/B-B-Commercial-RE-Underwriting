@@ -122,7 +122,8 @@ celery.conf.update(
         },
         # Scheduled engagement sync — imports new HubSpot notes/calls/tasks hourly.
         # Legacy engagement payloads can be stale for task status; the post-import
-        # pipeline also runs live CRM v3 task sync for confirmed deal leads.
+        # pipeline converts engagements first, then runs live CRM v3 task sync so
+        # authoritative HubSpot status wins each run.
         # Engagements cannot be delivered via webhook (HubSpot legacy app limitation),
         # so this scheduled job is the mechanism for near-real-time engagement updates.
         # Interval is configurable via HUBSPOT_ENGAGEMENT_SYNC_INTERVAL_MINUTES (default: 60).

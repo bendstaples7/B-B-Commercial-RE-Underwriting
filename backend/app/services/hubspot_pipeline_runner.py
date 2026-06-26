@@ -52,11 +52,13 @@ def run_post_import_pipeline_sync() -> None:
     run_enrich_leads_from_hubspot()
     logger.info("Post-import pipeline: lead enrichment complete")
 
-    run_sync_hubspot_tasks_for_confirmed_leads()
-    logger.info("Post-import pipeline: HubSpot task sync complete")
-
+    # Legacy engagement payloads can be stale for task status — convert first,
+    # then live CRM v3 sync so authoritative HubSpot status wins each run.
     run_convert_hubspot_activities()
     logger.info("Post-import pipeline: activity conversion complete")
+
+    run_sync_hubspot_tasks_for_confirmed_leads()
+    logger.info("Post-import pipeline: HubSpot task sync complete")
 
     run_extract_hubspot_signals()
     logger.info("Post-import pipeline: signal extraction complete")
