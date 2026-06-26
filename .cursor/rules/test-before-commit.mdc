@@ -1,0 +1,29 @@
+---
+description: Don't commit/push until the user has tested locally and approved
+alwaysApply: true
+---
+
+# Test Before Commit
+
+The pre-commit hook runs the full backend test suite plus a frontend build, which
+takes several minutes. Do **not** pay that cost until the user has verified the
+change works. Committing prematurely wastes the user's time.
+
+## Workflow
+
+1. Implement the change and get it running locally (apply migrations, restart
+   servers, etc. as needed).
+2. **Stop before committing.** Tell the user it's ready to test and say exactly
+   what to check and where (which page/lead/flow in the browser, which command).
+3. **Wait for the user to explicitly confirm** it works before doing anything
+   that triggers the pre-commit hook.
+4. Only after their OK: `git add` / `git commit` / `git push` / open the PR.
+
+## Hard rules
+
+- Never run `git commit` (or `git push`, or `gh pr create`) until the user has
+  said the change is good — even if the task implies "open a PR".
+- This is separate from branch protection: still no direct commits/merges to
+  `main` (see no-direct-main-merge).
+- If the user explicitly says "commit now" / "go ahead and commit", that counts
+  as approval — proceed without making them test first.
