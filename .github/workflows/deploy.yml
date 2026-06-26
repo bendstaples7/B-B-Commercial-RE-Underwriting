@@ -169,6 +169,9 @@ jobs:
           scp -i ~/.ssh/id_deploy scripts/inject-db-creds.py $VPS_USER@$VPS_HOST:/tmp/inject-db-creds.py
           DB_URL_B64=$(printf '%s' "$DATABASE_URL" | base64 -w0)
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "DATABASE_URL=\$(echo '$DB_URL_B64' | base64 -d) python3 /tmp/inject-db-creds.py && rm /tmp/inject-db-creds.py"
+          # rclone is required before B2 setup when REMOTE_METHOD is set.
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
+            "command -v rclone >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y rclone)"
           # Optional: configure Backblaze B2 rclone remote and enable cloud backup when secrets are set.
           B2_APP_KEY_B64=$(printf '%s' "$B2_APPLICATION_KEY" | base64 -w0)
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
@@ -179,9 +182,6 @@ jobs:
             || { echo "ERROR: inject-remote-backup.py failed."; exit 1; }
           # Install backup cron entries (idempotent; preserves non-backup crontab lines).
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "bash /home/deploy/install-backup-cron.sh"
-          # rclone is required for B2 off-site backup when REMOTE_METHOD is set.
-          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
-            "command -v rclone >/dev/null || sudo apt-get install -y rclone"
           # Pre-flight: verify backup.sh can connect to PostgreSQL before running the full deploy.
           # This catches DB connectivity issues (wrong user, missing .pgpass, etc.) before the deploy starts.
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "/home/deploy/backup.sh --check" \

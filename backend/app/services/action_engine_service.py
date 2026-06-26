@@ -130,9 +130,19 @@ def _resolve_crm_flags(lead):
                 flags.has_email_computed,
                 flags.has_property_match_computed,
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(
+            "action_engine: CRM flags view unavailable for lead_id=%s, using lead columns: %s",
+            lead.id, exc,
+        )
     return lead.has_phone, lead.has_email, lead.has_property_match
+
+
+def _timeline_signals(signals: dict) -> dict:
+    """Signals for timeline metadata — omit raw address fields."""
+    safe = dict(signals)
+    safe.pop('property_street', None)
+    return safe
 
 
 def evaluate_recommended_action(lead) -> tuple[str | None, str, dict]:
@@ -263,7 +273,7 @@ class ActionEngineService:
                     'winning_rule': winning_rule,
                     'lead_score': lead.lead_score,
                     'is_warm': lead.is_warm,
-                    'signals': signals,
+                    'signals': _timeline_signals(signals),
                 },
             )
             db.session.add(entry)

@@ -87,3 +87,33 @@ def test_run_checks_skips_remote_when_not_configured(tmp_path: Path, monkeypatch
     )
     errors = hc.run_checks(conf)
     assert errors == []
+
+
+def test_recent_cloud_transfer_ok_accepts_python_true(tmp_path: Path):
+    manifest = tmp_path / "backup_manifest.log"
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    manifest.write_text(
+        json.dumps(
+            {
+                "filename": "cloud.dump",
+                "timestamp": now,
+                "integrity": "valid",
+                "remote_transferred": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert hc.recent_cloud_transfer_ok(manifest) is True
+
+
+def test_last_valid_manifest_entry_skips_invalid_timestamp(tmp_path: Path):
+    manifest = tmp_path / "backup_manifest.log"
+    entries = [
+        {"filename": "bad.dump", "integrity": "valid", "timestamp": "not-a-date"},
+        {"filename": "good.dump", "integrity": "valid", "timestamp": "2026-06-03T00:00:00Z"},
+    ]
+    manifest.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
+    last = hc.last_valid_manifest_entry(manifest)
+    assert last is not None
+    assert last["filename"] == "good.dump"

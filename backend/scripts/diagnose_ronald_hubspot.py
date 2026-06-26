@@ -58,14 +58,15 @@ if leads:
             print('  recent webhooks:', [dict(w) for w in wh])
 
 cur.execute("""
-    SELECT id, hubspot_id, dealname,
+    SELECT id, hubspot_id,
+           raw_payload->'properties'->>'dealname' AS dealname,
            raw_payload->'properties'->>'dealstage' AS dealstage_prop,
            last_updated_at
     FROM hubspot_deals
     WHERE hubspot_id = '52218559108'
        OR raw_payload->'properties'->>'dealname' ILIKE '%Jutkins%'
        OR raw_payload->'properties'->>'dealname' ILIKE '%Schiller%'
-    ORDER BY updated_at DESC LIMIT 5
+    ORDER BY last_updated_at DESC LIMIT 5
 """)
 print('\n=== DEALS BY NAME ===')
 for d in cur.fetchall():

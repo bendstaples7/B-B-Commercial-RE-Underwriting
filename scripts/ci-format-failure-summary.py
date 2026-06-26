@@ -6,9 +6,13 @@ import argparse
 import json
 import re
 import sys
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
+
+try:
+    from defusedxml.ElementTree import ParseError, parse as xml_parse
+except ImportError:
+    from xml.etree.ElementTree import ParseError, parse as xml_parse
 
 
 PERF_CLASS_NAMES = {
@@ -59,8 +63,8 @@ def _is_likely_flake(test_name: str, message: str, file_path: str) -> bool:
 def _parse_junit(path: Path, job: str) -> list[FailedTest]:
     failures: list[FailedTest] = []
     try:
-        root = ET.parse(path).getroot()
-    except ET.ParseError as exc:
+        root = xml_parse(path).getroot()
+    except ParseError as exc:
         failures.append(
             FailedTest(
                 job=job,

@@ -6,6 +6,8 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from sqlalchemy import func
+
 from app import db
 from app.models.hubspot_config import HubSpotConfig
 from app.models.hubspot_deal import HubSpotDeal
@@ -283,8 +285,8 @@ class HubSpotDealSyncService:
                     internal_record_type='lead',
                 )
                 .filter(HubSpotMatch.internal_record_id.isnot(None))
-                .order_by(Lead.last_hubspot_sync_at.asc().nullsfirst())
-                .distinct()
+                .group_by(HubSpotMatch.internal_record_id)
+                .order_by(func.min(Lead.last_hubspot_sync_at).asc().nullsfirst())
                 .limit(limit)
                 .all()
             )

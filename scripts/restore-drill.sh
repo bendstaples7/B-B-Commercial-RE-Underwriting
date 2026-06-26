@@ -11,6 +11,9 @@ CONF_FILE="/home/deploy/backup.conf"
 # shellcheck source=/home/deploy/backup.conf
 source "$CONF_FILE"
 
+RCLONE_REMOTE="${RCLONE_REMOTE:-b2}"
+RCLONE_BUCKET="${RCLONE_BUCKET:-}"
+
 MANIFEST="$BACKUP_DIR/backup_manifest.log"
 WORKDIR="$(mktemp -d /tmp/restore-drill.XXXXXX)"
 trap 'rm -rf "$WORKDIR"' EXIT

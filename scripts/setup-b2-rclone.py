@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+import shutil
 
 
 def main() -> None:
@@ -27,6 +28,11 @@ def main() -> None:
         print("NOTE: B2_KEY_ID / B2_APPLICATION_KEY not set — skipping rclone B2 setup")
         raise SystemExit(0)
 
+    rclone_bin = shutil.which("rclone")
+    if not rclone_bin:
+        print("ERROR: rclone not installed — install rclone before B2 setup", file=sys.stderr)
+        raise SystemExit(1)
+
     config_dir = Path.home() / ".config" / "rclone"
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "rclone.conf"
@@ -34,14 +40,14 @@ def main() -> None:
     # Remove stale remote so credentials can be refreshed on redeploy.
     if config_path.is_file():
         subprocess.run(
-            ["rclone", "config", "delete", remote],
+            [rclone_bin, "config", "delete", remote],
             check=False,
             capture_output=True,
         )
 
     result = subprocess.run(
         [
-            "rclone",
+            rclone_bin,
             "config",
             "create",
             remote,

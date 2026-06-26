@@ -19,10 +19,10 @@ def _load_backup_lib():
             parent = str(candidate.parent)
             if parent not in sys.path:
                 sys.path.insert(0, parent)
-            break
-    from backup_lib import is_backup_stale  # noqa: WPS433
+            from backup_lib import is_backup_stale
 
-    return is_backup_stale
+            return is_backup_stale
+    raise ImportError("backup_lib.py not found")
 
 
 def parse_backup_conf(path: Path) -> dict[str, str]:
@@ -65,6 +65,19 @@ def parse_manifest_timestamp(ts: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def _entry_if_valid(entry: dict) -> dict | None:
+    if entry.get("integrity") != "valid":
+        return None
+    ts = entry.get("timestamp")
+    if not ts:
+        return None
+    try:
+        parse_manifest_timestamp(ts)
+    except (ValueError, TypeError):
+        return None
+    return entry
+
+
 def last_valid_manifest_entry(manifest_path: Path) -> dict | None:
     if not manifest_path.is_file():
         return None
@@ -76,8 +89,9 @@ def last_valid_manifest_entry(manifest_path: Path) -> dict | None:
             entry = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if entry.get("integrity") == "valid":
-            valid.append(entry)
+        parsed = _entry_if_valid(entry)
+        if parsed is not None:
+            valid.append(parsed)
     return valid[-1] if valid else None
 
 
@@ -95,11 +109,17 @@ def recent_cloud_transfer_ok(manifest_path: Path, window_hours: int = 24) -> boo
             continue
         if entry.get("integrity") != "valid":
             continue
+        ts = entry.get("timestamp")
+        if not ts:
+            continue
+        try:
+            parsed_ts = parse_manifest_timestamp(ts)
+        except (ValueError, TypeError):
+            continue
         transferred = entry.get("remote_transferred")
         if transferred is not True and transferred != "true":
             continue
-        ts = parse_manifest_timestamp(entry["timestamp"])
-        elapsed_hours = (now - ts).total_seconds() / 3600
+        elapsed_hours = (now - parsed_ts).total_seconds() / 3600
         if elapsed_hours <= window_hours:
             return True
     return False

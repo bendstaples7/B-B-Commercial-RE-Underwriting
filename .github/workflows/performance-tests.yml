@@ -8,6 +8,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   backend-performance:
     name: Backend — performance tests (non-blocking)
@@ -102,6 +105,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RERUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/ci-rerun-job.yml
         run: |
+          pip install defusedxml
           if [ -f ci-artifacts/backend-performance/pytest-performance-results.xml ]; then
             mv ci-artifacts/backend-performance/pytest-performance-results.xml \
               ci-artifacts/backend-performance/results.xml
@@ -112,11 +116,19 @@ jobs:
             --run-url "$RUN_URL" \
             --rerun-workflow-url "$RERUN_URL" \
             --output /tmp/perf-summary.md
+          { echo '<!-- ci-performance-summary -->'; cat /tmp/perf-summary.md; } > /tmp/perf-summary-final.md
+          mv /tmp/perf-summary-final.md /tmp/perf-summary.md
+
+      - name: Find performance summary comment
+        id: find_perf_comment
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body-includes: "<!-- ci-performance-summary -->"
 
       - name: Post or update PR comment
         uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
+          comment-id: ${{ steps.find_perf_comment.outputs.comment-id }}
           body-path: /tmp/perf-summary.md
-          edit-mode: replace
-          comment-tag: ci-performance-summary

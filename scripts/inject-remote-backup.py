@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import sys
 from pathlib import Path
 
 CONF = Path("/home/deploy/backup.conf")

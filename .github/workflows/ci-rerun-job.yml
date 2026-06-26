@@ -13,6 +13,9 @@ on:
           - frontend
           - backend-performance
 
+permissions:
+  contents: read
+
 jobs:
   backend:
     if: inputs.job == 'backend'
