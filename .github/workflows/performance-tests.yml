@@ -1,0 +1,134 @@
+name: Performance tests
+
+# Non-blocking timing/SLA tests — failures are informational and do not block merge.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-performance:
+    name: Backend — performance tests (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+        working-directory: backend
+
+      - name: Run performance tests
+        run: pytest -m performance --junitxml=pytest-performance-results.xml -o addopts=
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+          FLASK_ENV: testing
+          SECRET_KEY: ci-test-secret-key
+          JWT_SECRET_KEY: ci-test-jwt-secret
+
+      - name: Upload performance JUnit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-performance-junit
+          path: backend/pytest-performance-results.xml
+          if-no-files-found: ignore
+
+  performance-summary:
+    name: Performance CI summary comment
+    runs-on: ubuntu-latest
+    if: always() && github.event_name == 'pull_request'
+    needs: [backend-performance]
+    permissions:
+      pull-requests: write
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download performance JUnit
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-performance-junit
+          path: ci-artifacts/backend-performance
+        continue-on-error: true
+
+      - name: Build jobs JSON
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { data: runJobs } = await github.rest.actions.listJobsForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+              per_page: 100,
+            });
+            const jobs = runJobs.jobs.map(j => ({
+              name: j.name,
+              conclusion: j.conclusion || 'unknown',
+              url: j.html_url,
+            }));
+            fs.writeFileSync('/tmp/jobs.json', JSON.stringify(jobs));
+
+      - name: Generate summary markdown
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RERUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/ci-rerun-job.yml
+        run: |
+          pip install defusedxml
+          if [ -f ci-artifacts/backend-performance/pytest-performance-results.xml ]; then
+            mv ci-artifacts/backend-performance/pytest-performance-results.xml \
+              ci-artifacts/backend-performance/results.xml
+          fi
+          python scripts/ci-format-failure-summary.py \
+            --jobs-json /tmp/jobs.json \
+            --artifact-dir ci-artifacts \
+            --run-url "$RUN_URL" \
+            --rerun-workflow-url "$RERUN_URL" \
+            --output /tmp/perf-summary.md
+          { echo '<!-- ci-performance-summary -->'; cat /tmp/perf-summary.md; } > /tmp/perf-summary-final.md
+          mv /tmp/perf-summary-final.md /tmp/perf-summary.md
+
+      - name: Find performance summary comment
+        id: find_perf_comment
+        uses: peter-evans/find-comment@v3
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body-includes: "<!-- ci-performance-summary -->"
+
+      - name: Post or update PR comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-id: ${{ steps.find_perf_comment.outputs.comment-id }}
+          body-path: /tmp/perf-summary.md

@@ -87,6 +87,139 @@ def _count_open_tasks(lead_id: int) -> int:
     return native + hs_total
 
 
+def _has_overdue_hubspot_task(lead_id: int) -> bool:
+    """Return True when the lead has an overdue HubSpot-imported task."""
+    from sqlalchemy import text as _hs_text
+    from datetime import datetime as _dt
+
+    try:
+        row = db.session.execute(_hs_text("""
+            SELECT 1 FROM tasks t
+            JOIN task_associations ta ON ta.task_id = t.id
+            WHERE ta.target_type = 'lead' AND ta.target_id = :lid
+              AND t.status IN ('open', 'overdue')
+              AND (t.due_date <= :now OR (t.due_date IS NULL AND t.status = 'overdue'))
+              AND t.source = 'hubspot_import'
+            LIMIT 1
+        """), {'lid': lead_id, 'now': _dt.utcnow()}).fetchone()
+        if not row:
+            row = db.session.execute(_hs_text("""
+                SELECT 1 FROM tasks
+                WHERE lead_id = :lid
+                  AND status IN ('open', 'overdue')
+                  AND (due_date <= :now OR (due_date IS NULL AND status = 'overdue'))
+                  AND source = 'hubspot_import'
+                LIMIT 1
+            """), {'lid': lead_id, 'now': _dt.utcnow()}).fetchone()
+        return row is not None
+    except Exception as exc:
+        logger.warning(
+            "action_engine: overdue HubSpot task query failed for lead_id=%s: %s",
+            lead_id, exc,
+        )
+        return False
+
+
+def _resolve_crm_flags(lead):
+    """Return (has_phone, has_email, has_property_match) for the lead."""
+    try:
+        flags = LeadCRMFlagsView.query.filter_by(lead_id=lead.id).first()
+        if flags:
+            return (
+                flags.has_phone_computed,
+                flags.has_email_computed,
+                flags.has_property_match_computed,
+            )
+    except Exception as exc:
+        logger.warning(
+            "action_engine: CRM flags view unavailable for lead_id=%s, using lead columns: %s",
+            lead.id, exc,
+        )
+    return lead.has_phone, lead.has_email, lead.has_property_match
+
+
+def _timeline_signals(signals: dict) -> dict:
+    """Signals for timeline metadata — omit raw address fields."""
+    safe = dict(signals)
+    safe.pop('property_street', None)
+    return safe
+
+
+def evaluate_recommended_action(lead) -> tuple[str | None, str, dict]:
+    """
+    Evaluate the action engine and return (action, winning_rule, signals).
+
+    winning_rule is a stable identifier for the rule that fired (used in
+    timeline metadata and API responses).
+    """
+    # Priority 1
+    if lead.lead_status == 'do_not_contact':
+        return None, 'do_not_contact', {'lead_status': 'do_not_contact'}
+    # Priority 2
+    if lead.lead_status in ('suppressed', 'deprioritize', 'deal_won', 'deal_lost'):
+        return None, 'terminal_status', {'lead_status': lead.lead_status}
+    # Priority 2.5
+    if lead.lead_status in ('skip_trace', 'awaiting_skip_trace'):
+        return (
+            'add_contact_info',
+            'skip_trace_status',
+            {'lead_status': lead.lead_status, 'requires_skip_trace': True},
+        )
+    # Priority 3
+    has_phone, has_email, has_property_match = _resolve_crm_flags(lead)
+    if not has_phone and not has_email:
+        return (
+            'add_contact_info',
+            'no_contact_info',
+            {'has_phone': False, 'has_email': False},
+        )
+    # Priority 4
+    if not has_property_match and lead.property_street:
+        return (
+            'resolve_match',
+            'no_property_match_with_address',
+            {'has_property_match': False, 'property_street': lead.property_street},
+        )
+    if not has_property_match and not lead.property_street:
+        return (
+            'enrich_data',
+            'no_property_match_no_address',
+            {'has_property_match': False, 'property_street': lead.property_street},
+        )
+    # Priority 5
+    has_overdue_hs_task = _has_overdue_hubspot_task(lead.id)
+    if lead.follow_up_overdue or has_overdue_hs_task:
+        signals = {
+            'follow_up_overdue': bool(lead.follow_up_overdue),
+            'has_overdue_hs_task': has_overdue_hs_task,
+        }
+        return 'follow_up_now', 'follow_up_overdue', signals
+    # Priority 6
+    if lead.is_warm:
+        return 'follow_up_now', 'is_warm', {'is_warm': True}
+    # Priority 7
+    open_tasks = _count_open_tasks(lead.id)
+    if lead.lead_score >= 70 and open_tasks == 0:
+        return (
+            'ready_for_outreach',
+            'high_score_no_tasks',
+            {'lead_score': lead.lead_score, 'open_task_count': open_tasks},
+        )
+    # Priority 8
+    if open_tasks == 0:
+        return (
+            'create_task',
+            'no_tasks_create_one',
+            {'lead_status': lead.lead_status, 'open_task_count': open_tasks},
+        )
+    # Priority 9
+    return (
+        'nurture',
+        'has_open_tasks',
+        {'open_task_count': open_tasks, 'lead_score': lead.lead_score},
+    )
+
+
 class ActionEngineService:
     """Deterministic rule engine that assigns Recommended_Action to leads."""
 
@@ -97,83 +230,14 @@ class ActionEngineService:
         Returns the first matching Recommended_Action, or None for
         suppressed/do_not_contact leads.
         """
-        # Priority 1
-        if lead.lead_status == 'do_not_contact':
-            return None
-        # Priority 2 — statuses that suppress all outreach actions
-        if lead.lead_status in ('suppressed', 'deprioritize', 'deal_won', 'deal_lost'):
-            return None
-        # Priority 2.5 — skip trace statuses always need contact info first, regardless of
-        # what has_phone/has_email says.  Being in skip_trace/awaiting_skip_trace means the
-        # existing contact info is insufficient and a skip trace is required before outreach.
-        if lead.lead_status in ('skip_trace', 'awaiting_skip_trace'):
-            return 'add_contact_info'
-        # Priority 3 — resolve has_phone/has_email/has_property_match from view, fall back to stored columns
-        try:
-            flags = LeadCRMFlagsView.query.filter_by(lead_id=lead.id).first()
-            has_phone = flags.has_phone_computed if flags else lead.has_phone
-            has_email = flags.has_email_computed if flags else lead.has_email
-            has_property_match = flags.has_property_match_computed if flags else lead.has_property_match
-        except Exception:
-            has_phone = lead.has_phone
-            has_email = lead.has_email
-            has_property_match = lead.has_property_match
-        if not has_phone and not has_email:
-            return 'add_contact_info'
-        # Priority 4
-        if not has_property_match and lead.property_street:
-            return 'resolve_match'
-        if not has_property_match and not lead.property_street:
-            return 'enrich_data'  # no address at all — need more data before outreach
-        # Priority 5 — follow-up overdue (native task OR overdue HubSpot task)
-        # Note: skip_trace/awaiting_skip_trace leads are intercepted at Priority 2.5
-        # and never reach here, so no guard is needed.
-        has_overdue_hs_task = False
-        try:
-            from sqlalchemy import text as _hs_text
-            from datetime import datetime as _dt
-            row = db.session.execute(_hs_text("""
-                SELECT 1 FROM tasks t
-                JOIN task_associations ta ON ta.task_id = t.id
-                WHERE ta.target_type = 'lead' AND ta.target_id = :lid
-                  AND t.status IN ('open', 'overdue')
-                  AND (t.due_date <= :now OR (t.due_date IS NULL AND t.status = 'overdue'))
-                  AND t.source = 'hubspot_import'
-                LIMIT 1
-            """), {'lid': lead.id, 'now': _dt.utcnow()}).fetchone()
-            if not row:
-                row = db.session.execute(_hs_text("""
-                    SELECT 1 FROM tasks
-                    WHERE lead_id = :lid
-                      AND status IN ('open', 'overdue')
-                      AND (due_date <= :now OR (due_date IS NULL AND status = 'overdue'))
-                      AND source = 'hubspot_import'
-                    LIMIT 1
-                """), {'lid': lead.id, 'now': _dt.utcnow()}).fetchone()
-            has_overdue_hs_task = row is not None
-        except Exception as exc:
-            logger.warning(
-                "action_engine: overdue HubSpot task query failed for lead_id=%s: %s",
-                lead.id, exc,
-            )
-            # Leave has_overdue_hs_task=False — don't raise so the rest of the
-            # engine can still produce a meaningful action for this lead.
-        if lead.follow_up_overdue or has_overdue_hs_task:
-            return 'follow_up_now'
-        # Priority 6 — warm lead
-        if lead.is_warm:
-            return 'follow_up_now'
-        # Priority 7 — high score lead with no open tasks → ready for outreach
-        if lead.lead_score >= 70:
-            open_tasks = _count_open_tasks(lead.id)
-            if open_tasks == 0:
-                return 'ready_for_outreach'
-        # Priority 8 — has contact info, property matched, no tasks → create a task
-        open_tasks = _count_open_tasks(lead.id)
-        if open_tasks == 0:
-            return 'create_task'
-        # Priority 9 (default)
-        return 'nurture'
+        action, _winning_rule, _signals = evaluate_recommended_action(lead)
+        return action
+
+    @staticmethod
+    def get_winning_rule_signals(lead) -> dict:
+        """Return signal fields for the winning rule on this lead's current RA."""
+        _action, _winning_rule, signals = evaluate_recommended_action(lead)
+        return signals
 
     @staticmethod
     def recompute_and_persist(lead_id: int):
@@ -189,7 +253,7 @@ class ActionEngineService:
             raise ValueError(f"Lead {lead_id} not found")
 
         previous_action = lead.recommended_action
-        new_action = ActionEngineService.compute_recommended_action(lead)
+        new_action, winning_rule, signals = evaluate_recommended_action(lead)
 
         if new_action != previous_action:
             lead.recommended_action = new_action
@@ -206,6 +270,10 @@ class ActionEngineService:
                 event_metadata={
                     'previous_action': previous_action,
                     'new_action': new_action,
+                    'winning_rule': winning_rule,
+                    'lead_score': lead.lead_score,
+                    'is_warm': lead.is_warm,
+                    'signals': _timeline_signals(signals),
                 },
             )
             db.session.add(entry)

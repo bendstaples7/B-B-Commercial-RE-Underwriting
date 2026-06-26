@@ -132,6 +132,9 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          B2_BUCKET_NAME: ${{ secrets.B2_BUCKET_NAME }}
         run: |
           # Copy deploy script and shared checks
           scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
@@ -144,10 +147,16 @@ jobs:
           scp -i ~/.ssh/id_deploy scripts/wal-archive.sh $VPS_USER@$VPS_HOST:/home/deploy/wal-archive.sh
           scp -i ~/.ssh/id_deploy scripts/pg-basebackup.sh $VPS_USER@$VPS_HOST:/home/deploy/pg-basebackup.sh
           scp -i ~/.ssh/id_deploy scripts/daily-summary.sh $VPS_USER@$VPS_HOST:/home/deploy/daily-summary.sh
+          scp -i ~/.ssh/id_deploy scripts/install-backup-cron.sh $VPS_USER@$VPS_HOST:/home/deploy/install-backup-cron.sh
+          scp -i ~/.ssh/id_deploy scripts/verify-backup-health.sh $VPS_USER@$VPS_HOST:/home/deploy/verify-backup-health.sh
+          scp -i ~/.ssh/id_deploy scripts/backup_health_check.py $VPS_USER@$VPS_HOST:/home/deploy/backup_health_check.py
+          scp -i ~/.ssh/id_deploy scripts/setup-b2-rclone.py $VPS_USER@$VPS_HOST:/home/deploy/setup-b2-rclone.py
+          scp -i ~/.ssh/id_deploy scripts/inject-remote-backup.py $VPS_USER@$VPS_HOST:/home/deploy/inject-remote-backup.py
+          scp -i ~/.ssh/id_deploy scripts/restore-drill.sh $VPS_USER@$VPS_HOST:/home/deploy/restore-drill.sh
           scp -i ~/.ssh/id_deploy backup_lib.py $VPS_USER@$VPS_HOST:/home/deploy/backup_lib.py
           # Set correct permissions on backup scripts
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
-            "chmod 750 /home/deploy/backup.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh && chmod 755 /home/deploy/wal-archive.sh && chmod 644 /home/deploy/backup_lib.py"
+            "chmod 750 /home/deploy/backup.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh /home/deploy/install-backup-cron.sh /home/deploy/verify-backup-health.sh /home/deploy/restore-drill.sh && chmod 755 /home/deploy/wal-archive.sh && chmod 644 /home/deploy/backup_lib.py /home/deploy/backup_health_check.py /home/deploy/setup-b2-rclone.py /home/deploy/inject-remote-backup.py"
           # Create a stub backup.conf if none exists so backup.sh can run without blocking the deploy.
           # The stub has empty remote/alert credentials — backup will skip remote transfer and alerting
           # but will still run pg_dump and write a local manifest entry.
@@ -160,6 +169,19 @@ jobs:
           scp -i ~/.ssh/id_deploy scripts/inject-db-creds.py $VPS_USER@$VPS_HOST:/tmp/inject-db-creds.py
           DB_URL_B64=$(printf '%s' "$DATABASE_URL" | base64 -w0)
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "DATABASE_URL=\$(echo '$DB_URL_B64' | base64 -d) python3 /tmp/inject-db-creds.py && rm /tmp/inject-db-creds.py"
+          # rclone is required before B2 setup when REMOTE_METHOD is set.
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
+            "command -v rclone >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y rclone)"
+          # Optional: configure Backblaze B2 rclone remote and enable cloud backup when secrets are set.
+          B2_APP_KEY_B64=$(printf '%s' "$B2_APPLICATION_KEY" | base64 -w0)
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
+            "B2_KEY_ID='$B2_KEY_ID' B2_APPLICATION_KEY=\$(echo '$B2_APP_KEY_B64' | base64 -d) python3 /home/deploy/setup-b2-rclone.py" \
+            || { echo "ERROR: setup-b2-rclone.py failed."; exit 1; }
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
+            "B2_BUCKET_NAME='$B2_BUCKET_NAME' python3 /home/deploy/inject-remote-backup.py" \
+            || { echo "ERROR: inject-remote-backup.py failed."; exit 1; }
+          # Install backup cron entries (idempotent; preserves non-backup crontab lines).
+          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "bash /home/deploy/install-backup-cron.sh"
           # Pre-flight: verify backup.sh can connect to PostgreSQL before running the full deploy.
           # This catches DB connectivity issues (wrong user, missing .pgpass, etc.) before the deploy starts.
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "/home/deploy/backup.sh --check" \

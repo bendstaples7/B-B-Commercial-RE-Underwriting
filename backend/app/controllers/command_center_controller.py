@@ -234,62 +234,9 @@ def handle_errors(f):
 # ---------------------------------------------------------------------------
 
 def _get_winning_rule_signals(lead) -> dict:
-    """
-    Return the signal fields relevant to the winning rule that produced the
-    lead's current recommended_action.
-
-    Mirrors the 11-priority rule chain in ActionEngineService so the caller
-    can see exactly which signals caused the current RA to be assigned.
-    """
-    ra = lead.recommended_action
-
-    # Priority 1 — DNC
-    if lead.lead_status == 'do_not_contact':
-        return {'lead_status': 'do_not_contact'}
-
-    # Priority 2 — suppressed / deprioritize / terminal (RA is None for these)
-    if lead.lead_status in ('suppressed', 'deprioritize', 'deal_won', 'deal_lost'):
-        return {'lead_status': lead.lead_status}
-
-    # Priority 2.5 — skip trace statuses always need contact info
-    if lead.lead_status in ('skip_trace', 'awaiting_skip_trace'):
-        return {'lead_status': lead.lead_status, 'requires_skip_trace': True}
-
-    # Priority 3 — no contact info
-    if not lead.has_phone and not lead.has_email:
-        return {'has_phone': False, 'has_email': False}
-
-    # Priority 4 — no property match
-    if not lead.has_property_match:
-        return {
-            'has_property_match': False,
-            'property_street': lead.property_street,
-        }
-
-    # Priority 5 — follow-up overdue
-    if lead.follow_up_overdue:
-        return {'follow_up_overdue': True}
-
-    # Priority 6 — warm lead
-    if lead.is_warm:
-        return {'is_warm': True}
-
-    # Priority 7 — ready for outreach (high score + no open tasks)
-    if lead.lead_score >= 70:
-        open_tasks = LeadTask.query.filter_by(lead_id=lead.id, status='open').count()
-        if open_tasks == 0:
-            return {
-                'lead_score': lead.lead_score,
-            }
-
-    # Priority 8 — has contact info, property matched, no tasks
-    open_tasks = LeadTask.query.filter_by(lead_id=lead.id, status='open').count()
-    if open_tasks == 0:
-        return {'lead_status': lead.lead_status}
-
-    # Priority 10 — active pipeline lead with no open tasks → create_task
-    if lead.lead_status not in ('do_not_contact', 'suppressed', 'deprioritize', 'deal_won', 'deal_lost'):
-        return {'lead_status': lead.lead_status}
+    """Return signals for the winning rule — delegated to ActionEngineService."""
+    from app.services.action_engine_service import ActionEngineService
+    return ActionEngineService.get_winning_rule_signals(lead)
 
 
 # ---------------------------------------------------------------------------

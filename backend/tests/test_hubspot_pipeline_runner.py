@@ -131,7 +131,7 @@ class TestRunPostImportPipelineSync:
              patch('app.tasks.hubspot_tasks.run_rescore_leads_after_import', _track('rescore')):
             run_post_import_pipeline_sync()
 
-        assert calls == ['matching', 'enrich', 'sync_tasks', 'convert', 'signals', 'rescore']
+        assert calls == ['matching', 'enrich', 'convert', 'sync_tasks', 'signals', 'rescore']
 
 
 class TestPipelineLock:
