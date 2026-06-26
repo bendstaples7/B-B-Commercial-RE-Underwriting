@@ -18,9 +18,11 @@ import os
 import pathlib
 import urllib.request
 import urllib.error
+import urllib.parse
 import socketserver
 
 FRONTEND_DIR = pathlib.Path(__file__).parent / "dist"
+FRONTEND_ROOT = FRONTEND_DIR.resolve()
 BACKEND_URL = "http://localhost:5000"
 
 
@@ -106,11 +108,17 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
     def _serve_static_or_spa(self):
         """Serve static file or fall back to index.html for SPA routing."""
         # Strip query strings
-        path = urllib.parse.urlparse(self.path).path
+        path = urllib.parse.unquote(urllib.parse.urlparse(self.path).path)
 
         # Try exact file match
-        file_path = FRONTEND_DIR / path.lstrip("/")
-        if file_path.exists() and file_path.is_file():
+        try:
+            file_path = (FRONTEND_ROOT / path.lstrip("/")).resolve()
+            file_path.relative_to(FRONTEND_ROOT)
+        except ValueError:
+            self.send_error(404, "Not found")
+            return
+
+        if file_path.is_file():
             self._serve_file(file_path)
             return
 

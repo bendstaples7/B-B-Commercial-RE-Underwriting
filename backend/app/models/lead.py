@@ -77,6 +77,10 @@ class Property(db.Model):
     tax_bill_2021 = db.Column(db.Float, nullable=True)
     most_recent_sale = db.Column(db.String(255), nullable=True)
 
+    # Enrichment — assessed value and recent sale price (from assessor data sources)
+    assessed_value = db.Column(db.Float, nullable=True)
+    most_recent_sale_price = db.Column(db.Float, nullable=True)
+
     # Second owner
     owner_2_first_name = db.Column(db.String(128), nullable=True)
     owner_2_last_name = db.Column(db.String(128), nullable=True)

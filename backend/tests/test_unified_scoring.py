@@ -16,10 +16,10 @@ import pytest
 
 from app.services.deterministic_scoring_engine import (
     DeterministicScoringEngine,
-    SIGNAL_ADJUSTMENTS,
     ACTIVE_OUTREACH_THRESHOLD,
     DEFAULT_SCORING_WEIGHTS,
 )
+from app.services.lead_scoring_engine import LeadScoringEngine
 from app.services.plugins.cook_county_assessor import CookCountyAssessorPlugin
 
 
@@ -106,18 +106,18 @@ class TestSignalAdjustments:
     """Verify SIGNAL_ADJUSTMENTS from LeadScoringEngine is present in merged engine."""
 
     def test_signal_adjustments_defined(self):
-        assert isinstance(SIGNAL_ADJUSTMENTS, dict)
-        assert SIGNAL_ADJUSTMENTS["PRIOR_WARM_CONVERSATION"] == +15.0
-        assert SIGNAL_ADJUSTMENTS["APPOINTMENT_OCCURRED"] == +20.0
-        assert SIGNAL_ADJUSTMENTS["OFFER_PREVIOUSLY_SENT"] == +10.0
-        assert SIGNAL_ADJUSTMENTS["SELLER_SAID_MAYBE_LATER"] == -5.0
-        assert SIGNAL_ADJUSTMENTS["SELLER_NOT_INTERESTED"] == -40.0
-        assert SIGNAL_ADJUSTMENTS["DO_NOT_CONTACT"] == -50.0
-        assert SIGNAL_ADJUSTMENTS["WRONG_NUMBER"] == -30.0
+        assert isinstance(LeadScoringEngine.SIGNAL_ADJUSTMENTS, dict)
+        assert LeadScoringEngine.SIGNAL_ADJUSTMENTS["PRIOR_WARM_CONVERSATION"] == +15.0
+        assert LeadScoringEngine.SIGNAL_ADJUSTMENTS["APPOINTMENT_OCCURRED"] == +20.0
+        assert LeadScoringEngine.SIGNAL_ADJUSTMENTS["OFFER_PREVIOUSLY_SENT"] == +10.0
+        assert LeadScoringEngine.SIGNAL_ADJUSTMENTS["SELLER_SAID_MAYBE_LATER"] == -5.0
+        assert LeadScoringEngine.SIGNAL_ADJUSTMENTS["SELLER_NOT_INTERESTED"] == -40.0
+        assert LeadScoringEngine.SIGNAL_ADJUSTMENTS["DO_NOT_CONTACT"] == -50.0
+        assert LeadScoringEngine.SIGNAL_ADJUSTMENTS["WRONG_NUMBER"] == -30.0
 
     def test_signal_adjustments_exported(self):
-        from app.services import SIGNAL_ADJUSTMENTS as adjustments
-        assert adjustments["PRIOR_WARM_CONVERSATION"] == +15.0
+        from app.services.lead_scoring_engine import LeadScoringEngine as _LSE
+        assert _LSE.SIGNAL_ADJUSTMENTS["PRIOR_WARM_CONVERSATION"] == +15.0
 
 
 # ---------------------------------------------------------------------------

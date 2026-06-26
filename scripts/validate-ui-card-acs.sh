@@ -37,11 +37,12 @@ missing_json="$(echo "${board_json}" | jq -c '
     def nav_patterns: ["navigation","route","sidebar","menu","how to reach","navigate","path","link","url","goto","go to","accessible at","rendered at"];
 
     [cards[] | select(
-        any(ui_keywords[]; (.title // "") | test("(?i)\\b" + . + "\\b"))
-    ) | select(
-        [((.acceptance_criteria // .criteria // .ac // []) | if type == "string" then [.] else . end)[] | ascii_downcase] as $acs
-        | all(nav_patterns[]; ($acs | join(" ")) | test($pat; "i") | not)
-    ) | .title // .name // "untitled"]
+                . as $card | any(ui_keywords[]; ($card.title // $card.name // "") | test("\\b" + . + "\\b"; "i"))
+            ) | select(
+            [((.acceptance_criteria // .criteria // .ac // []) | if type == "string" then [.] else . end)[] | ascii_downcase] as $acs
+            | ($acs | join(" ")) as $ac_text
+            | any(nav_patterns[]; . as $pat | $ac_text | test($pat; "i")) | not
+        ) | .title // .name // "untitled"]
 ' 2>/dev/null || echo "[]")"
 
 missing_count="$(echo "${missing_json}" | jq 'length')"
