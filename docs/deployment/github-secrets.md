@@ -128,6 +128,30 @@ FLASK_ENV=production DATABASE_URL="${DATABASE_URL}" flask db upgrade head
 
 ---
 
+### `B2_KEY_ID`, `B2_APPLICATION_KEY`, `B2_BUCKET_NAME` (optional)
+
+**What they are:** Backblaze B2 credentials for off-site database backup uploads.
+When all three are set, the deploy workflow configures `rclone` on the VPS and
+enables `REMOTE_METHOD=rclone` in `/home/deploy/backup.conf`.
+
+**How to obtain:**
+
+1. Sign up at [backblaze.com/b2](https://www.backblaze.com/b2-cloud-storage.html)
+2. Create a **private** bucket (e.g. `bbanalyzer-db-backups`)
+3. Under **Application Keys**, create a key scoped to that bucket (read + write)
+4. Set GitHub secrets:
+   - `B2_KEY_ID` — the key ID (`004…`)
+   - `B2_APPLICATION_KEY` — the secret key
+   - `B2_BUCKET_NAME` — bucket name only (not a path)
+
+**Cost:** At current production dump size (~57 MB), steady-state cloud storage is
+~5 GB with 30-day retention — **$0/month** on B2’s permanent 10 GB free tier.
+
+**Used in workflow:** Deploy step runs `setup-b2-rclone.py` and
+`inject-remote-backup.py` after copying backup scripts to the VPS.
+
+---
+
 ### `VPS_HOST_KEY`
 
 **What it is:** The VPS SSH host public key line for `known_hosts`, preventing
@@ -167,6 +191,9 @@ restrict to the VPS IP in `sshd_config` if possible.
 | `VPS_USER` | Deploy | `${{ secrets.VPS_USER }}` |
 | `VPS_HOST` | Deploy | `${{ secrets.VPS_HOST }}` |
 | `DATABASE_URL` | Deploy | `${{ secrets.DATABASE_URL }}` |
+| `B2_KEY_ID` | Deploy (optional) | `${{ secrets.B2_KEY_ID }}` |
+| `B2_APPLICATION_KEY` | Deploy (optional) | `${{ secrets.B2_APPLICATION_KEY }}` |
+| `B2_BUCKET_NAME` | Deploy (optional) | `${{ secrets.B2_BUCKET_NAME }}` |
 | `VPS_SUBDOMAIN` | Post-deploy health check | `${{ secrets.VPS_SUBDOMAIN }}` |
 | `VPS_ROOT_SSH_KEY` | Optional auto-migrate | `${{ secrets.VPS_ROOT_SSH_KEY }}` |
 

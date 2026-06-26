@@ -81,6 +81,31 @@ def test_reconcile_completes_existing_open_task(app, lead):
         assert refreshed.completion_timestamp is not None
 
 
+def test_reconcile_skips_completed_to_open_downgrade(app, lead):
+    """Stale engagement payload must not re-open a locally completed task."""
+    with app.app_context():
+        engagement = _task_engagement('hs-reconcile-1', 'NOT_STARTED')
+        db.session.add(engagement)
+        db.session.commit()
+
+        task = Task(
+            title='Follow up',
+            status='completed',
+            source='hubspot_import',
+            hubspot_task_id='hs-reconcile-1',
+            raw_payload={'metadata': {'status': 'COMPLETED'}},
+            completion_timestamp=datetime.utcnow(),
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        svc = HubSpotActivityConverterService()
+        assert svc.reconcile_task_from_engagement(engagement) is False
+
+        refreshed = Task.query.filter_by(hubspot_task_id='hs-reconcile-1').first()
+        assert refreshed.status == 'completed'
+
+
 def test_convert_task_reconciles_when_already_exists(app, lead):
     """convert_task on existing hubspot_task_id reconciles instead of skipping."""
     with app.app_context():

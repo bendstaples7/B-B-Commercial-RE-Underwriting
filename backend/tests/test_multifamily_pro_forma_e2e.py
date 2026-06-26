@@ -416,6 +416,7 @@ class TestProFormaE2E:
 # Requirements: 11.3
 # ---------------------------------------------------------------------------
 
+@pytest.mark.performance
 class TestDashboardPerformance:
     """Dashboard must return in < 1500 ms with a warm cache (Req 11.3).
 
@@ -455,6 +456,7 @@ class TestDashboardPerformance:
 # Requirements: 12.4
 # ---------------------------------------------------------------------------
 
+@pytest.mark.performance
 class TestExcelExportPerformance:
     """Excel export must complete in < 5 s for a 200-unit deal (Req 12.4)."""
 
@@ -490,6 +492,7 @@ class TestExcelExportPerformance:
 # Requirements: 15.4
 # ---------------------------------------------------------------------------
 
+@pytest.mark.performance
 class TestWritePathTiming:
     """
     A write to a cacheable input must return in < 50 ms for a 200-unit deal

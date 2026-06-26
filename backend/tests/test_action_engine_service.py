@@ -279,7 +279,17 @@ def test_recompute_and_persist_appends_timeline_when_ra_changes(app):
             event_type='recommended_action_changed',
         ).all()
         assert len(entries) == 1
-        assert entries[0].event_metadata['new_action'] == 'follow_up_now'
+        meta = entries[0].event_metadata
+        assert meta['previous_action'] is None
+        assert meta['new_action'] == 'follow_up_now'
+        assert meta['winning_rule'] == 'follow_up_overdue'
+        assert meta['lead_score'] == 50.0
+        assert meta['is_warm'] is False
+        assert meta['signals'] == {
+            'follow_up_overdue': True,
+            'has_overdue_hs_task': False,
+        }
+        assert 'property_street' not in meta['signals']
 
 
 def test_recompute_and_persist_no_timeline_when_ra_unchanged(app):

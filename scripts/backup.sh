@@ -294,9 +294,9 @@ else
     # Update manifest entry with final remote transfer status
     # Append a corrected entry (the restore script uses the last matching entry via lookup_manifest_entry)
     if [[ "$REMOTE_TRANSFERRED" == "true" ]]; then
-        REMOTE_TRANSFERRED_BOOL="true"
+        REMOTE_TRANSFERRED_PYTHON="True"
     else
-        REMOTE_TRANSFERRED_BOOL="false"
+        REMOTE_TRANSFERRED_PYTHON="False"
     fi
 
     python3 -c "
@@ -308,7 +308,7 @@ print(json.dumps({
     'sha256': '$SHA256',
     'integrity': '$INTEGRITY',
     'type': '$BACKUP_TYPE',
-    'remote_transferred': $REMOTE_TRANSFERRED_BOOL,
+    'remote_transferred': $REMOTE_TRANSFERRED_PYTHON,
     'remote_path': '$REMOTE_PATH'
 }))
 " | python3 /home/deploy/backup_lib.py serialize-manifest >> "$BACKUP_DIR/backup_manifest.log"

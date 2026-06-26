@@ -1,0 +1,26 @@
+---
+description: Use named examples for diagnosis; ship fixes that scale across the codebase
+alwaysApply: true
+---
+
+# Fix the Class, Not the Case
+
+When the user names a specific lead, user, row, or prod incident, treat it as a **repro case** — not the scope of the fix.
+
+## Default assumption
+
+1. **Diagnose on the example** — timeline, logs, one-off read-only scripts are fine.
+2. **Fix in canonical code** — services, pipelines, shared helpers, migrations, reusable admin scripts.
+3. **Verify on the example** — confirm the named case is healed, then spot-check 2–3 similar rows.
+4. **Test the behavior** — regression tests for the rule/pipeline, not assertions on one hard-coded ID.
+
+## Avoid
+
+- Lead-specific SQL updates, hard-coded IDs in production paths, or "run this once for Gilberto" as the only deliverable
+- Diagnostic scripts that mutate data without a reusable `--dry-run` / `--apply` shared code path
+- Closing an investigation with only an explanation and no systemic fix when one is clearly possible
+
+## When a one-off is OK
+
+- User explicitly asks for a single-row hotfix or data patch
+- No shared code path exists yet and the incident is blocking — still follow up with the scalable fix in the same or next PR
