@@ -48,6 +48,22 @@ EMAIL_COLUMNS = [f"email_{i}" for i in range(1, 6)]
 _SYNTHETIC_MIN_LEN = 15
 _SYNTHETIC_MIN_INTERNAL_CAPS = 3
 
+# A single contact method must fit its column: contact_phones.value is
+# VARCHAR(50) and contact_emails.value is VARCHAR(255). Legacy flat
+# phone_N / email_N fields occasionally hold a free-text dump of several values,
+# so they are parsed into individual entries and anything that still won't fit
+# is dropped (and counted) rather than allowed to abort the migration.
+_MAX_PHONE_LEN = 50
+_MAX_EMAIL_LEN = 255
+
+# Matches a standalone US-style 10-digit phone (optional +1 country code) with
+# common separators. Lookaround ensures we don't extract a 10-digit substring
+# from inside a longer contiguous digit string (e.g. an 11-15 digit international
+# number), so those fall through to the whole-value fallback instead.
+_PHONE_RE = re.compile(
+    r"(?<!\d)(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}(?!\d)"
+)
+
 
 def looks_synthetic_name(first_name, last_name) -> bool:
     """Conservatively flag obviously machine-generated ("junk") contact names.
@@ -90,6 +106,60 @@ def phone_digits(value) -> str:
     safe to import from migration code.
     """
     return re.sub(r"\D", "", value or "")
+
+
+def split_phone_field(raw) -> list:
+    """Parse a legacy flat ``phone_N`` value into individual phone strings.
+
+    Most fields hold a single number, but some are a free-text dump of several
+    (e.g. ``"1) (773) 558-1863  2) (510) 685-0838 ..."``). Each US-style number
+    is extracted so it can become its own ``ContactPhone``; when no pattern
+    matches the whole trimmed value is used as a fallback (covers 7-digit and
+    international numbers). Fragments without a plausible phone (7-15 digits) or
+    longer than ``contact_phones.value`` allows are dropped, and the result is
+    de-duped by digits. This keeps the backfill from ever inserting a value that
+    would overflow the column.
+    """
+    if not raw:
+        return []
+    candidates = _PHONE_RE.findall(raw) or [raw.strip()]
+    out: list = []
+    seen: set = set()
+    for candidate in (c.strip() for c in candidates):
+        digits = phone_digits(candidate)
+        if not (7 <= len(digits) <= 15):
+            continue
+        if len(candidate) > _MAX_PHONE_LEN:
+            continue
+        if digits in seen:
+            continue
+        seen.add(digits)
+        out.append(candidate)
+    return out
+
+
+def split_email_field(raw) -> list:
+    """Parse a legacy flat ``email_N`` value into individual email strings.
+
+    Splits on whitespace / commas / semicolons so a field holding several
+    addresses yields one entry each. Tokens without an ``@`` or longer than
+    ``contact_emails.value`` allows are dropped; the result is de-duped by
+    lowercased value.
+    """
+    if not raw:
+        return []
+    out: list = []
+    seen: set = set()
+    for token in re.split(r"[\s,;]+", raw.strip()):
+        token = token.strip().strip("<>")
+        if "@" not in token or len(token) > _MAX_EMAIL_LEN:
+            continue
+        key = token.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(token)
+    return out
 
 
 def contact_methods(connection, contact_id):
@@ -222,7 +292,9 @@ def backfill_contacts_from_flat_fields(
 
     Returns:
         A stats dict: ``leads_processed``, ``leads_skipped``,
-        ``contacts_created``, ``phones_added``, ``emails_added``.
+        ``contacts_created``, ``phones_added``, ``emails_added``,
+        ``phones_skipped_malformed``, ``emails_skipped_malformed`` (non-empty
+        flat fields that yielded no storable value).
     """
     # contacts.created_at / updated_at are naive (db.DateTime); keep naive UTC
     # while avoiding the deprecated datetime.utcnow().
@@ -233,6 +305,8 @@ def backfill_contacts_from_flat_fields(
         "contacts_created": 0,
         "phones_added": 0,
         "emails_added": 0,
+        "phones_skipped_malformed": 0,
+        "emails_skipped_malformed": 0,
     }
 
     select_cols = ", ".join(
@@ -268,8 +342,40 @@ def backfill_contacts_from_flat_fields(
         owner_first = row["owner_first_name"]
         owner_last = row["owner_last_name"]
 
-        flat_phones = [row[c].strip() for c in PHONE_COLUMNS if row[c] and row[c].strip()]
-        flat_emails = [row[c].strip() for c in EMAIL_COLUMNS if row[c] and row[c].strip()]
+        flat_phones: list = []
+        for col in PHONE_COLUMNS:
+            raw_phone = row[col]
+            if not raw_phone or not raw_phone.strip():
+                continue
+            parsed = split_phone_field(raw_phone)
+            if not parsed:
+                # Non-empty but unusable (e.g. a blob whose digits don't form a
+                # plausible phone). Count + log length only (avoid logging PII).
+                stats["phones_skipped_malformed"] += 1
+                logger.warning(
+                    "lead %s %s: no usable phone extracted from flat field "
+                    "(len=%d); skipped",
+                    lead_id, col, len(raw_phone.strip()),
+                )
+                continue
+            flat_phones.extend(parsed)
+
+        flat_emails: list = []
+        for col in EMAIL_COLUMNS:
+            raw_email = row[col]
+            if not raw_email or not raw_email.strip():
+                continue
+            parsed = split_email_field(raw_email)
+            if not parsed:
+                stats["emails_skipped_malformed"] += 1
+                logger.warning(
+                    "lead %s %s: no usable email extracted from flat field "
+                    "(len=%d); skipped",
+                    lead_id, col, len(raw_email.strip()),
+                )
+                continue
+            flat_emails.extend(parsed)
+
         if not flat_phones and not flat_emails:
             continue
 
@@ -375,6 +481,11 @@ def backfill_contacts_from_flat_fields(
             )
 
         for phone in flat_phones:
+            if len(phone) > _MAX_PHONE_LEN:
+                # Defensive: split_phone_field already enforces this, so this
+                # guards any future/other caller from overflowing the column.
+                stats["phones_skipped_malformed"] += 1
+                continue
             digits = phone_digits(phone)
             if not digits or digits in existing_phone_digits:
                 continue
@@ -390,6 +501,10 @@ def backfill_contacts_from_flat_fields(
                 )
 
         for email in flat_emails:
+            if len(email) > _MAX_EMAIL_LEN:
+                # Defensive: split_email_field already enforces this.
+                stats["emails_skipped_malformed"] += 1
+                continue
             key = email.lower()
             if key in existing_emails_lower:
                 continue
@@ -406,12 +521,15 @@ def backfill_contacts_from_flat_fields(
 
     logger.info(
         "contact backfill %s: leads_processed=%d contacts_created=%d "
-        "phones_added=%d emails_added=%d leads_skipped=%d",
+        "phones_added=%d emails_added=%d leads_skipped=%d "
+        "phones_skipped_malformed=%d emails_skipped_malformed=%d",
         "(dry-run)" if dry_run else "(applied)",
         stats["leads_processed"],
         stats["contacts_created"],
         stats["phones_added"],
         stats["emails_added"],
         stats["leads_skipped"],
+        stats["phones_skipped_malformed"],
+        stats["emails_skipped_malformed"],
     )
     return stats

@@ -1471,7 +1471,7 @@ class ContactPhoneSchema(Schema):
     """
     id = fields.Int(dump_only=True)
     contact_id = fields.Int(dump_only=True)
-    value = fields.Str(required=True)
+    value = fields.Str(required=True, validate=validate.Length(min=1, max=50))
     label = fields.Str(required=True, validate=validate.OneOf(VALID_PHONE_LABELS))
 
 
@@ -1483,7 +1483,7 @@ class ContactEmailSchema(Schema):
     """
     id = fields.Int(dump_only=True)
     contact_id = fields.Int(dump_only=True)
-    value = fields.Str(required=True)
+    value = fields.Str(required=True, validate=validate.Length(min=1, max=255))
     label = fields.Str(required=True, validate=validate.OneOf(VALID_EMAIL_LABELS))
 
 
