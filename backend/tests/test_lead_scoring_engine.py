@@ -89,6 +89,9 @@ def _make_lead(suppression_flag=False, **kwargs):
         "county_assessor_pin", "owner_2_first_name", "phone_4",
         "email_3", "socials", "updated_at",
         "mailer_history", "follow_up_date", "timeline",
+        "assessed_value", "date_skip_traced",
+        "phone_5", "phone_6", "phone_7",
+        "email_4", "email_5",
     ]
     for attr in _zero_attrs:
         setattr(lead, attr, None)

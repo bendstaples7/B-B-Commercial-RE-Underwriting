@@ -415,7 +415,7 @@ class TestGetScoringWeights:
         )
         assert resp.status_code == 200
         data = json.loads(resp.data)
-        assert data['user_id'] == 'new_user'
+        assert data['user_id'] == 'test-user'
         assert data['property_characteristics_weight'] == 0.25
         assert data['data_completeness_weight'] == 0.15
         assert data['owner_situation_weight'] == 0.25
@@ -437,7 +437,7 @@ class TestGetScoringWeights:
 
         resp = client.get(
             '/api/properties/scoring/weights?user_id=existing_user',
-            headers=_AUTH_HEADERS,
+            headers={'X-User-Id': 'existing_user'},
         )
         data = json.loads(resp.data)
         assert data['property_characteristics_weight'] == 0.40

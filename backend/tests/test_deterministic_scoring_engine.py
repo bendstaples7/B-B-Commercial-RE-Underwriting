@@ -63,6 +63,13 @@ def _make_lead(**kwargs):
         "date_skip_traced": None,
         "phone_1": None,
         "email_1": None,
+        "phone_5": None,
+        "phone_6": None,
+        "phone_7": None,
+        "email_4": None,
+        "email_5": None,
+        "assessed_value": None,
+        "date_skip_traced": None,
         # Data enrichment scoring attributes
         "socials": None,
         "year_built": None,
