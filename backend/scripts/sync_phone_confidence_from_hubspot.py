@@ -12,6 +12,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -65,11 +66,36 @@ def _collect_contact_lead_pairs():
     return sorted(pairs)
 
 
+def _refresh_with_retry(contact_sync, hubspot_id: str, *, max_attempts: int = 8):
+    """Refresh a contact from HubSpot, backing off on 429 rate limits."""
+    from app.exceptions import HubSpotRateLimitError
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return contact_sync.refresh_contact_from_api(hubspot_id)
+        except HubSpotRateLimitError as exc:
+            wait = (exc.payload or {}).get('retry_after') or min(10 * attempt, 60)
+            if attempt == max_attempts:
+                raise
+            logger.warning(
+                'Rate limited on contact %s (attempt %d/%d) — sleeping %ds',
+                hubspot_id, attempt, max_attempts, wait,
+            )
+            time.sleep(wait)
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Sync HubSpot phone confidence to contact_phones')
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--dry-run', action='store_true', help='Report only; no API or DB writes')
     group.add_argument('--apply', action='store_true', help='Refresh contacts and update confidence')
+    parser.add_argument(
+        '--delay',
+        type=float,
+        default=0.2,
+        help='Seconds to sleep between API refreshes (default: 0.2)',
+    )
     args = parser.parse_args()
 
     from app import create_app, db
@@ -104,7 +130,9 @@ def main() -> int:
 
             contact = HubSpotContact.query.filter_by(hubspot_id=hubspot_id).first()
             if args.apply and contact_sync is not None:
-                contact = contact_sync.refresh_contact_from_api(hubspot_id)
+                contact = _refresh_with_retry(contact_sync, hubspot_id)
+                if args.delay > 0:
+                    time.sleep(args.delay)
             if contact is None:
                 logger.warning('HubSpot contact %s not found — skip lead %s', hubspot_id, lead_id)
                 continue
