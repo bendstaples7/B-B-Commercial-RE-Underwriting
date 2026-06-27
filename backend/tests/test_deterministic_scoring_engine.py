@@ -63,6 +63,10 @@ def _make_lead(**kwargs):
         "date_skip_traced": None,
         "phone_1": None,
         "email_1": None,
+        "has_email": None,
+
+        "has_phone": None,
+
         "phone_5": None,
         "phone_6": None,
         "phone_7": None,

@@ -48,6 +48,8 @@ def _make_lead(suppression_flag=False, **kwargs):
         "source", "notes", "units_allowed", "zoning",
         "county_assessor_pin", "owner_2_first_name", "phone_4",
         "email_3", "socials", "updated_at",
+        "has_email",
+        "has_phone",
         "mailer_history", "follow_up_date", "timeline",
         "assessed_value", "date_skip_traced",
         "phone_5", "phone_6", "phone_7",

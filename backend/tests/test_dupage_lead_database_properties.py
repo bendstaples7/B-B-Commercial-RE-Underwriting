@@ -1018,13 +1018,21 @@ def _make_scoring_lead(**kwargs):
         "date_skip_traced": None,
         "phone_1": None,
         "email_1": None,
+        "date_skip_traced": None,
+        "assessed_value": None,
+        "socials": None,
+        "year_built": None,
+        "lot_size": None,
+        "mailer_history": None,
+        "has_phone": None,
+        "has_email": None,
+        "follow_up_date": None,
+        "timeline": None,
         "phone_5": None,
         "phone_6": None,
         "phone_7": None,
         "email_4": None,
         "email_5": None,
-        "assessed_value": None,
-        "date_skip_traced": None,
     }
     defaults.update(kwargs)
     for k, v in defaults.items():
