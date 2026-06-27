@@ -47,9 +47,10 @@ def app_ctx():
 
 def _make_weights(
     prop=0.25,
-    completeness=0.25,
+    completeness=0.20,
     owner=0.25,
-    location=0.25,
+    location=0.10,
+    enrichment=0.20,
 ):
     """Return a mock ScoringWeights object."""
     w = MagicMock()
@@ -57,6 +58,7 @@ def _make_weights(
     w.data_completeness_weight = completeness
     w.owner_situation_weight = owner
     w.location_desirability_weight = location
+    w.data_enrichment_weight = enrichment
     return w
 
 

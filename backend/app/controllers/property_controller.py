@@ -363,6 +363,7 @@ def _serialize_scoring_weights(weights):
         'data_completeness_weight': weights.data_completeness_weight,
         'owner_situation_weight': weights.owner_situation_weight,
         'location_desirability_weight': weights.location_desirability_weight,
+        'data_enrichment_weight': weights.data_enrichment_weight,
         'created_at': weights.created_at.isoformat() if weights.created_at else None,
         'updated_at': weights.updated_at.isoformat() if weights.updated_at else None,
     }
