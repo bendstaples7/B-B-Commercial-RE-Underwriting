@@ -63,6 +63,14 @@ def _make_lead(**kwargs):
         "date_skip_traced": None,
         "phone_1": None,
         "email_1": None,
+        # Data enrichment scoring attributes
+        "socials": None,
+        "year_built": None,
+        "lot_size": None,
+        "mailer_history": None,
+        "follow_up_date": None,
+        "updated_at": None,
+        "timeline": None,
     }
     _defaults.update(kwargs)
     for k, v in _defaults.items():
