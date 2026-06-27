@@ -115,6 +115,47 @@ ALLOWED_ACTIONS = {
     "valuation_needed", "suppress", "nurture", "needs_manual_review",
 }
 
+# ---------------------------------------------------------------------------
+# Attribute registry for scoring — used by test fixtures to validate mocks
+# ---------------------------------------------------------------------------
+
+SCORING_ATTRIBUTES = frozenset({
+    # enrichment dims
+    'assessed_value', 'date_skip_traced', 'socials', 'year_built', 'lot_size',
+    'mailer_history', 'has_phone', 'has_email', 'follow_up_date', 'timeline',
+    'phone_5', 'phone_6', 'phone_7', 'email_4', 'email_5',
+    # existing dims
+    'property_type', 'bedrooms', 'bathrooms', 'square_footage', 'property_city',
+    'property_zip', 'units', 'mailing_address', 'mailing_city', 'mailing_state',
+    'mailing_zip', 'property_street', 'acquisition_date', 'notes',
+    'manual_priority', 'source_type', 'tax_distress_data', 'do_not_contact',
+    'county_assessor_pin', 'owner_first_name', 'owner_last_name', 'source',
+    'data_source', 'updated_at', 'id', 'lead_category', 'unanswered_call_count',
+    'last_contact_date', 'lead_status',
+})
+
+
+def get_scoring_attributes() -> frozenset:
+    """Return the set of all lead attributes accessed by scoring methods."""
+    return SCORING_ATTRIBUTES
+
+
+# ---------------------------------------------------------------------------
+# Safe attribute access — rejects MagicMock-like objects at the boundary
+# ---------------------------------------------------------------------------
+
+def _safe_attr(obj, name: str, default=None):
+    """Get attribute, returning default for sentinel/mock objects.
+
+    Detects MagicMock-like objects: they're truthy, not None, but not
+    useful primitive types.  Return *default* instead so scoring methods
+    never inflate scores due to mock auto-creation.
+    """
+    val = getattr(obj, name, default)
+    if val is not None and not isinstance(val, (int, float, str, bool, date, datetime, dict, list, tuple, set)):
+        return default
+    return val
+
 
 class DeterministicScoringEngine:
     """Deterministic, explainable lead scoring engine.
@@ -122,6 +163,9 @@ class DeterministicScoringEngine:
     Computes separate scores for residential and commercial leads using
     point-based rules. Stores full score breakdowns in LeadScore records.
     """
+
+    # Attribute registry — all lead attributes accessed by scoring methods
+    SCORING_ATTRIBUTES = SCORING_ATTRIBUTES
 
     _SALE_DATE_FORMATS = (
         '%m/%d/%Y',
@@ -431,22 +475,22 @@ class DeterministicScoringEngine:
         segments = 0
 
         # 1. Skip-trace performed
-        if getattr(lead, "date_skip_traced", None) is not None:
+        if _safe_attr(lead, "date_skip_traced") is not None:
             segments += 1
 
         # 2. Any phone number present
         phone_fields = ["phone_1", "phone_2", "phone_3", "phone_4",
                         "phone_5", "phone_6", "phone_7"]
-        if any(getattr(lead, f, None) for f in phone_fields):
+        if any(_safe_attr(lead, f) for f in phone_fields):
             segments += 1
 
         # 3. Any email present
         email_fields = ["email_1", "email_2", "email_3", "email_4", "email_5"]
-        if any(getattr(lead, f, None) for f in email_fields):
+        if any(_safe_attr(lead, f) for f in email_fields):
             segments += 1
 
         # 4. Social media handle present
-        if getattr(lead, "socials", None):
+        if _safe_attr(lead, "socials"):
             segments += 1
 
         return (segments / 4.0) * max_points
@@ -463,7 +507,7 @@ class DeterministicScoringEngine:
         score = 0.0
 
         # Year-built component
-        yb = getattr(lead, "year_built", None)
+        yb = _safe_attr(lead, "year_built")
         if yb is not None:
             if yb < 1960:
                 score += max_points * 0.40
@@ -473,12 +517,12 @@ class DeterministicScoringEngine:
                 score += max_points * 0.15
 
         # Lot size component
-        ls = getattr(lead, "lot_size", None)
+        ls = _safe_attr(lead, "lot_size")
         if ls is not None and ls > 0:
             score += max_points * 0.30
 
         # Square footage component
-        sf = getattr(lead, "square_footage", None)
+        sf = _safe_attr(lead, "square_footage")
         if sf is not None and sf > 0:
             score += max_points * 0.30
 
@@ -496,7 +540,7 @@ class DeterministicScoringEngine:
         - Under 2 years → 15%
         - Missing or future date → 0
         """
-        acquisition = getattr(lead, "acquisition_date", None)
+        acquisition = _safe_attr(lead, "acquisition_date")
         if acquisition is None:
             return 0.0
 
@@ -530,27 +574,26 @@ class DeterministicScoringEngine:
         score = 0.0
 
         # Mailer history component
-        mh = getattr(lead, "mailer_history", None)
+        mh = _safe_attr(lead, "mailer_history")
         if mh is not None and (isinstance(mh, list) and len(mh) > 0):
             score += max_points * 0.30
 
         # has_phone flag
-        if getattr(lead, "has_phone", False):
+        if _safe_attr(lead, "has_phone", False):
             score += max_points * 0.25
 
         # has_email flag
-        if getattr(lead, "has_email", False):
+        if _safe_attr(lead, "has_email", False):
             score += max_points * 0.25
 
         # follow_up_date set
-        if getattr(lead, "follow_up_date", None) is not None:
+        if _safe_attr(lead, "follow_up_date") is not None:
             score += max_points * 0.20
 
         return min(score, max_points)
 
     # ------------------------------------------------------------------
     # Commercial Scoring
-    # ------------------------------------------------------------------
 
     def calculate_commercial_score(self, lead: Lead) -> dict:
         """Calculate the commercial motivation score for a lead.

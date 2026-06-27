@@ -81,6 +81,11 @@ def _make_lead(**kwargs):
         "follow_up_date": None,
         "updated_at": None,
         "timeline": None,
+        "bedrooms": None,
+        "bathrooms": None,
+        "last_contact_date": None,
+        "lead_status": None,
+        "unanswered_call_count": None,
     }
     _defaults.update(kwargs)
     for k, v in _defaults.items():

@@ -990,6 +990,8 @@ def _make_scoring_lead(**kwargs):
     Sets all attributes the DeterministicScoringEngine reads, then
     overrides with any caller-supplied keyword arguments.
     """
+    from app.services.deterministic_scoring_engine import SCORING_ATTRIBUTES
+
     lead = MagicMock()
     defaults = {
         "id": 1,
@@ -1033,8 +1035,25 @@ def _make_scoring_lead(**kwargs):
         "phone_7": None,
         "email_4": None,
         "email_5": None,
+        "bedrooms": None,
+        "bathrooms": None,
+        "updated_at": None,
+        "lead_status": None,
+        "last_contact_date": None,
+        "unanswered_call_count": None,
     }
     defaults.update(kwargs)
+
+    # Validate that all scoring attributes are covered by defaults
+    registered = SCORING_ATTRIBUTES
+    covered = set(defaults.keys())
+    missing = registered - covered
+    if missing:
+        import warnings
+        warnings.warn(
+            f"SCORING_ATTRIBUTES missing from _make_scoring_lead defaults: {missing}"
+        )
+
     for k, v in defaults.items():
         setattr(lead, k, v)
     return lead

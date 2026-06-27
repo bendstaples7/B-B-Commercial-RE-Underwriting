@@ -6,7 +6,7 @@ and location desirability.  Weights are stored per-user in the
 ``scoring_weights`` table and must sum to 1.0.
 """
 import logging
-from datetime import datetime, date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional, List, Union
 
 from app import db
@@ -80,6 +80,47 @@ ENGAGEMENT_MODIFIERS = {
 ENGAGEMENT_LOOKBACK_DAYS = 90
 RECENT_CONTACT_DAYS = 14
 
+# ---------------------------------------------------------------------------
+# Attribute registry for scoring — used by test fixtures to validate mocks
+# ---------------------------------------------------------------------------
+
+SCORING_ATTRIBUTES = frozenset({
+    # enrichment dims
+    'assessed_value', 'date_skip_traced', 'socials', 'year_built', 'lot_size',
+    'mailer_history', 'has_phone', 'has_email', 'follow_up_date', 'timeline',
+    'phone_5', 'phone_6', 'phone_7', 'email_4', 'email_5',
+    # existing dims
+    'property_type', 'bedrooms', 'bathrooms', 'square_footage', 'property_city',
+    'property_zip', 'units', 'mailing_address', 'mailing_city', 'mailing_state',
+    'mailing_zip', 'property_street', 'acquisition_date', 'notes',
+    'manual_priority', 'source_type', 'tax_distress_data', 'do_not_contact',
+    'county_assessor_pin', 'owner_first_name', 'owner_last_name', 'source',
+    'data_source', 'updated_at', 'id', 'lead_category', 'unanswered_call_count',
+    'last_contact_date', 'lead_status',
+})
+
+
+def get_scoring_attributes() -> frozenset:
+    """Return the set of all lead attributes accessed by scoring methods."""
+    return SCORING_ATTRIBUTES
+
+
+# ---------------------------------------------------------------------------
+# Safe attribute access  — rejects MagicMock-like objects at the boundary
+# ---------------------------------------------------------------------------
+
+def _safe_attr(obj, name: str, default=None):
+    """Get attribute, returning default for sentinel/mock objects.
+
+    Detects MagicMock-like objects: they're truthy, not None, but not
+    useful primitive types.  Return *default* instead so scoring methods
+    never inflate scores due to mock auto-creation.
+    """
+    val = getattr(obj, name, default)
+    if val is not None and not isinstance(val, (int, float, str, bool, date, datetime, dict, list, tuple, set)):
+        return default
+    return val
+
 
 class LeadScoringEngine:
     """Computes lead scores based on configurable weighted criteria.
@@ -93,6 +134,9 @@ class LeadScoringEngine:
     clamping.  If the lead has ``suppression_flag=True``, the score is
     additionally capped at 10.0 before the final [0, 100] clamp.
     """
+
+    # Attribute registry — all lead attributes accessed by scoring methods
+    SCORING_ATTRIBUTES = SCORING_ATTRIBUTES
 
     # Minimum score threshold for active outreach eligibility.
     ACTIVE_OUTREACH_THRESHOLD: float = 30.0
@@ -876,20 +920,20 @@ class LeadScoringEngine:
 
         # Any phone number exists
         for i in range(1, 8):
-            phone = getattr(lead, f"phone_{i}", None)
+            phone = _safe_attr(lead, f"phone_{i}")
             if phone:
                 score += 25.0
                 break
 
         # Any email exists
         for i in range(1, 6):
-            email = getattr(lead, f"email_{i}", None)
+            email = _safe_attr(lead, f"email_{i}")
             if email:
                 score += 25.0
                 break
 
         # Has been skip traced
-        if getattr(lead, "date_skip_traced", None):
+        if _safe_attr(lead, "date_skip_traced"):
             score += 25.0
 
         return min(score, 100.0)
@@ -956,7 +1000,7 @@ class LeadScoringEngine:
         float
             Sub-score between 0 and 100.
         """
-        acquisition_date = getattr(lead, "acquisition_date", None)
+        acquisition_date = _safe_attr(lead, "acquisition_date")
         if acquisition_date is None:
             return 0.0
 
@@ -1002,16 +1046,16 @@ class LeadScoringEngine:
         score = 0.0
 
         # Mailer history present (non-empty dict or list)
-        mailer_history = getattr(lead, "mailer_history", None)
+        mailer_history = _safe_attr(lead, "mailer_history")
         if mailer_history:
             score += 30.0
 
         # Follow-up date set
-        if getattr(lead, "follow_up_date", None):
+        if _safe_attr(lead, "follow_up_date"):
             score += 25.0
 
         # Contacted in last 30 days
-        updated_at = getattr(lead, "updated_at", None)
+        updated_at = _safe_attr(lead, "updated_at")
         if updated_at:
             if isinstance(updated_at, datetime):
                 age = datetime.utcnow() - updated_at
@@ -1021,7 +1065,7 @@ class LeadScoringEngine:
                 score += 25.0
 
         # Has responded to outreach (check timeline for positive interaction)
-        timeline = getattr(lead, "timeline", None)
+        timeline = _safe_attr(lead, "timeline")
         if timeline:
             positive_signals = [
                 "interested", "responded", "positive", "appointment",

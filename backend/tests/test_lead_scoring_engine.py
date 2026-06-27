@@ -92,6 +92,10 @@ def _make_lead(suppression_flag=False, **kwargs):
         "assessed_value", "date_skip_traced",
         "phone_5", "phone_6", "phone_7",
         "email_4", "email_5",
+        "units", "manual_priority", "source_type",
+        "tax_distress_data", "do_not_contact", "lead_category",
+        "data_source", "last_contact_date", "lead_status",
+        "unanswered_call_count", "id",
     ]
     for attr in _zero_attrs:
         setattr(lead, attr, None)
