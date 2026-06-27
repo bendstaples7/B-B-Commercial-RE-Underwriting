@@ -1568,6 +1568,22 @@ export interface ContactPhone {
   contact_id: number
   value: string
   label: PhoneLabel
+  notes?: string | null
+  confidence_score?: number | null
+  last_outcome?: string | null
+  last_called_at?: string | null
+  source?: string | null
+}
+
+export interface LeadPhone {
+  id?: number
+  value: string
+  label?: PhoneLabel | string
+  notes?: string | null
+  confidence_score?: number | null
+  last_outcome?: string | null
+  last_called_at?: string | null
+  source?: string | null
 }
 
 export interface ContactEmail {
@@ -1785,6 +1801,7 @@ export interface CommandCenterPayload {
   email_3?: string | null;
   email_4?: string | null;
   email_5?: string | null;
+  phones?: LeadPhone[];
   notes?: string | null;
   lead_score: number;
   lead_status: LeadStatus;

@@ -22,7 +22,9 @@ Update this doc when ownership changes.
 
 | Domain | Canonical | Do not add |
 |--------|-----------|------------|
-| Live `leads.lead_score` | [`LeadScoringEngine`](../backend/app/services/lead_scoring_engine.py) via [`refresh_lead_scoring`](../backend/app/services/lead_refresh.py) | Second writer to `leads.lead_score` |
+| Live `leads.lead_score` | [`LeadScoringEngine`](../backend/app/services/lead_scoring_engine.py) via [`refresh_lead_scoring`](../backend/app/services/lead_refresh.py) — includes engagement modifiers from native timeline entries (calls, notes, emails) | Second writer to `leads.lead_score` |
+| Per-phone confidence | [`PhoneConfidenceService`](../backend/app/services/phone_confidence_service.py) → `contact_phones.confidence_score` | Parallel phone tracking tables |
+| HubSpot contact refresh | [`HubSpotContactSyncService`](../backend/app/services/hubspot_contact_sync_service.py) | Ad-hoc contact API fetch outside enrich/backfill |
 | Score history / audit API | [`DeterministicScoringEngine`](../backend/app/services/deterministic_scoring_engine.py) → `lead_scores` table | Deterministic engine syncing live sort column |
 | Recommended action (live) | [`ActionEngineService`](../backend/app/services/action_engine_service.py) → `leads.recommended_action` | New RA enums on other models without mapping |
 | Lead timeline (read/write) | [`command_center_controller.py`](../backend/app/controllers/command_center_controller.py) + [`CallLogService`](../backend/app/services/call_log_service.py) → `LeadTimelineEntry` | Duplicate `GET /api/leads/:id/timeline` handlers |

@@ -23,6 +23,20 @@ export function formatDate(value: string | null): string {
   })
 }
 
+export function formatPhoneConfidence(
+  confidenceScore?: number | null,
+  notes?: string | null,
+): string {
+  const parts: string[] = []
+  if (confidenceScore != null) {
+    parts.push(`${confidenceScore}%`)
+  }
+  if (notes?.trim()) {
+    parts.push(notes.trim())
+  }
+  return parts.join(' · ')
+}
+
 export function statusColor(status: string): 'default' | 'primary' | 'success' | 'warning' {
   switch (status?.toLowerCase()) {
     case 'active':

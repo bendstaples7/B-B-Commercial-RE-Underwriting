@@ -22,6 +22,17 @@ class ContactPhone(db.Model):
         nullable=False,
         default='other'
     )
+    notes = db.Column(db.Text, nullable=True)
+    confidence_score = db.Column(db.SmallInteger, nullable=True)
+    last_outcome = db.Column(db.String(30), nullable=True)
+    last_called_at = db.Column(db.DateTime, nullable=True)
+    source = db.Column(
+        db.Enum(
+            'manual', 'hubspot_import', 'flat_backfill',
+            name='contact_phone_source_enum'
+        ),
+        nullable=True,
+    )
 
     def __repr__(self):
         return f'<ContactPhone {self.label}: {self.value}>'

@@ -12,6 +12,7 @@ import {
 } from '@mui/material'
 import type { PropertyContact } from '@/types'
 import { formatPhoneNumber } from '@/utils/phone'
+import { formatPhoneConfidence } from '@/utils/helpers'
 
 export const CONTACT_NONE = ''
 export const METHOD_NONE = ''
@@ -40,10 +41,12 @@ function formatContactLabel(contact: PropertyContact): string {
   return `${name} (${role}${primary})`
 }
 
-function formatPhoneLabel(value: string, label: string, contactName?: string): string {
+function formatPhoneLabel(value: string, label: string, contactName?: string, phone?: { confidence_score?: number | null; notes?: string | null }): string {
   const formatted = formatPhoneNumber(value)
   const prefix = contactName ? `${contactName}: ` : ''
-  return `${prefix}${formatted} (${label})`
+  const confidence = phone ? formatPhoneConfidence(phone.confidence_score, phone.notes) : ''
+  const confidenceSuffix = confidence ? ` · ${confidence}` : ''
+  return `${prefix}${formatted} (${label})${confidenceSuffix}`
 }
 
 function formatEmailLabel(value: string, label: string, contactName?: string): string {
@@ -57,6 +60,7 @@ export interface MethodOption {
   value: string
   recordId: number | null
   recordLabel: string | null
+  confidenceScore?: number
 }
 
 export function buildMethodOptions(
@@ -76,10 +80,16 @@ export function buildMethodOptions(
       for (const phone of contact.phones ?? []) {
         options.push({
           key: `phone:${phone.id}`,
-          label: formatPhoneLabel(phone.value, phone.label, selectedContactId == null ? contactName : undefined),
+          label: formatPhoneLabel(
+            phone.value,
+            phone.label,
+            selectedContactId == null ? contactName : undefined,
+            phone,
+          ),
           value: phone.value,
           recordId: phone.id,
           recordLabel: phone.label,
+          confidenceScore: phone.confidence_score ?? 50,
         })
       }
     } else {
@@ -93,6 +103,12 @@ export function buildMethodOptions(
         })
       }
     }
+  }
+
+  if (mode === 'phone') {
+    return options.sort(
+      (a, b) => (b.confidenceScore ?? 50) - (a.confidenceScore ?? 50),
+    )
   }
 
   return options
