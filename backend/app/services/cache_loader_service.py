@@ -247,6 +247,62 @@ class CacheLoaderService:
     # Private helpers (stubs — implemented in tasks 5.2–5.6)
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Self-documenting fixture builders
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def make_parcel_universe_row(**overrides) -> dict:
+        """Create a ParcelUniverse row dict with all required columns.
+
+        Every whitelist column is present (nullable ones default to ``None``).
+        Override any column by passing it as a keyword argument.
+
+        Example::
+
+            row = CacheLoaderService.make_parcel_universe_row(
+                pin='14083010190000', assessed_value='250000',
+            )
+        """
+        row = {col: None for col in CacheLoaderService.PARCEL_UNIVERSE_WHITELIST}
+        row['pin'] = '00000000000000'  # required default
+        row.update(overrides)
+        return row
+
+    @staticmethod
+    def make_parcel_sales_row(**overrides) -> dict:
+        """Create a ParcelSales row dict with all required columns.
+
+        Every whitelist column is present (nullable ones default to ``None``).
+        Override any column by passing it as a keyword argument.
+
+        Example::
+
+            row = CacheLoaderService.make_parcel_sales_row(
+                pin='14083010190000', sale_price='300000',
+            )
+        """
+        row = {col: None for col in CacheLoaderService.PARCEL_SALES_WHITELIST}
+        row['pin'] = '00000000000000'  # required default
+        row.update(overrides)
+        return row
+
+    @staticmethod
+    def make_improvement_chars_row(**overrides) -> dict:
+        """Create an ImprovementCharacteristics row dict with all required columns.
+
+        Every whitelist column is present (nullable ones default to ``None``).
+        Override any column by passing it as a keyword argument.
+        """
+        row = {col: None for col in CacheLoaderService.IMPROVEMENT_CHARS_WHITELIST}
+        row['pin'] = '00000000000000'  # required default
+        row.update(overrides)
+        return row
+
+    # ------------------------------------------------------------------
+    # Private helpers (stubs — implemented in tasks 5.2–5.6)
+    # ------------------------------------------------------------------
+
     def _socrata_get_with_retry(
         self,
         url: str,
