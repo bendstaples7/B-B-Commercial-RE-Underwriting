@@ -431,6 +431,7 @@ class TestGetScoringWeights:
                 data_completeness_weight=0.10,
                 owner_situation_weight=0.30,
                 location_desirability_weight=0.20,
+                data_enrichment_weight=0.20,
             )
             db.session.add(sw)
             db.session.commit()

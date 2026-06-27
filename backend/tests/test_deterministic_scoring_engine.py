@@ -69,7 +69,6 @@ def _make_lead(**kwargs):
         "email_4": None,
         "email_5": None,
         "assessed_value": None,
-        "date_skip_traced": None,
         # Data enrichment scoring attributes
         "socials": None,
         "year_built": None,
