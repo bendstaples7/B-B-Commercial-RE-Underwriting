@@ -28,10 +28,18 @@ BODY=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --title)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "ERROR: --title requires a value." >&2
+                exit 1
+            fi
             TITLE="$2"
             shift 2
             ;;
         --body)
+            if [[ $# -lt 2 || "$2" == --* ]]; then
+                echo "ERROR: --body requires a value." >&2
+                exit 1
+            fi
             BODY="$2"
             shift 2
             ;;
@@ -42,12 +50,6 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
-
-# If no --body given, try /tmp/pr-body.md
-if [[ -z "$BODY" && -f /tmp/pr-body.md ]]; then
-    BODY="$(cat /tmp/pr-body.md)"
-    echo ">>> Body loaded from /tmp/pr-body.md"
-fi
 
 # Validate required args
 if [[ -z "$TITLE" ]]; then
@@ -60,9 +62,10 @@ fi
 cd "$REPO_DIR"
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 echo ">>> Pushing branch: $CURRENT_BRANCH"
-git push origin HEAD 2>&1 || {
-    echo "WARNING: git push failed (non-fatal — continuing to create PR)"
-}
+if ! git push origin HEAD 2>&1; then
+    echo "ERROR: git push failed. Cannot create PR without pushing the branch." >&2
+    exit 1
+fi
 echo ""
 
 # ---------- 4. Create the PR ----------
