@@ -630,3 +630,7 @@ class HubSpotClientService:
                 "success": False,
                 "error": str(exc),
             }
+
+
+# Comma-separated property list for single-record HubSpot API fetches (webhooks, refresh).
+CONTACT_API_PROPERTIES = ','.join(HubSpotClientService._CONTACT_PROPERTIES)

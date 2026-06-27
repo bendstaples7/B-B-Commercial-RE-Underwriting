@@ -1,0 +1,21 @@
+---
+description: Run database migrations yourself — never ask the user to run them
+alwaysApply: true
+---
+
+# Run Migrations Yourself
+
+When a change includes an Alembic migration or requires an updated schema:
+
+1. **Run the migration yourself** before telling the user the work is ready to test.
+2. Use the project command: `cd backend && flask db upgrade head`
+3. If migration fails, diagnose and fix — do not hand the problem back to the user.
+
+## Never do
+
+- End responses with "run the migration locally" or "you'll need to run alembic upgrade"
+- Treat migration execution as optional verification the user must do
+
+## When migration isn't possible
+
+If the database is unreachable (no `.env`, no Postgres), say what you attempted and what blocked it — but still try first.

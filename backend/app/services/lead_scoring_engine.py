@@ -6,7 +6,7 @@ and location desirability.  Weights are stored per-user in the
 ``scoring_weights`` table and must sum to 1.0.
 """
 import logging
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Optional, List, Union
 
 from app import db
@@ -64,6 +64,20 @@ _CONTACT_COMPLETENESS_SLOTS = 3
 
 # Years of ownership that indicate a long-term holder (higher motivation)
 LONG_OWNERSHIP_YEARS = 10
+
+# Engagement modifier caps and values (native timeline activity)
+ENGAGEMENT_MODIFIER_CAP = 25.0
+ENGAGEMENT_MODIFIERS = {
+    "call_answered": +10.0,
+    "call_not_interested": -40.0,
+    "call_wrong_number": -30.0,
+    "email_logged": +5.0,
+    "note_motivation": +10.0,
+    "stale_outreach": -5.0,
+    "recent_contact": +5.0,
+}
+ENGAGEMENT_LOOKBACK_DAYS = 90
+RECENT_CONTACT_DAYS = 14
 
 
 class LeadScoringEngine:
@@ -393,6 +407,8 @@ class LeadScoringEngine:
         pipeline_stage_bonus = self._pipeline_stage_bonus(lead)
         total += pipeline_stage_bonus
 
+        total += self._score_engagement(lead)
+
         # Apply signal adjustments when signals are provided.
         #
         # Signals represent boolean STATES, not counters: a given signal_type
@@ -695,6 +711,65 @@ class LeadScoringEngine:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _score_engagement(self, lead: Lead) -> float:
+        """Apply additive modifiers from recent native timeline activity."""
+        lead_id = getattr(lead, 'id', None)
+        if not isinstance(lead_id, int):
+            return 0.0
+
+        from app.models.lead_timeline_entry import LeadTimelineEntry
+        from app.services.hubspot_signal_extractor_service import HubSpotSignalExtractorService
+
+        cutoff = datetime.utcnow() - timedelta(days=ENGAGEMENT_LOOKBACK_DAYS)
+        entries = (
+            LeadTimelineEntry.query
+            .filter(
+                LeadTimelineEntry.lead_id == lead_id,
+                LeadTimelineEntry.source == 'manual',
+                LeadTimelineEntry.is_deleted.is_(False),
+                LeadTimelineEntry.occurred_at >= cutoff,
+            )
+            .order_by(LeadTimelineEntry.occurred_at.desc())
+            .all()
+        )
+
+        applied: set[str] = set()
+        modifier = 0.0
+
+        for entry in entries:
+            meta = entry.event_metadata or {}
+            if entry.event_type == 'call_logged':
+                outcome = meta.get('outcome')
+                if outcome == 'answered' and 'call_answered' not in applied:
+                    applied.add('call_answered')
+                    modifier += ENGAGEMENT_MODIFIERS['call_answered']
+                elif outcome == 'not_interested' and 'call_not_interested' not in applied:
+                    applied.add('call_not_interested')
+                    modifier += ENGAGEMENT_MODIFIERS['call_not_interested']
+                elif outcome == 'wrong_number' and 'call_wrong_number' not in applied:
+                    applied.add('call_wrong_number')
+                    modifier += ENGAGEMENT_MODIFIERS['call_wrong_number']
+            elif entry.event_type == 'email_logged' and 'email_logged' not in applied:
+                applied.add('email_logged')
+                modifier += ENGAGEMENT_MODIFIERS['email_logged']
+            elif entry.event_type == 'note_added' and 'note_motivation' not in applied:
+                body = meta.get('body') or entry.summary or ''
+                if HubSpotSignalExtractorService.text_has_motivation_signal(body):
+                    applied.add('note_motivation')
+                    modifier += ENGAGEMENT_MODIFIERS['note_motivation']
+
+        if (lead.unanswered_call_count or 0) >= 3 and 'stale_outreach' not in applied:
+            applied.add('stale_outreach')
+            modifier += ENGAGEMENT_MODIFIERS['stale_outreach']
+
+        if lead.last_contact_date:
+            days_since = (date.today() - lead.last_contact_date).days
+            if days_since <= RECENT_CONTACT_DAYS and 'recent_contact' not in applied:
+                applied.add('recent_contact')
+                modifier += ENGAGEMENT_MODIFIERS['recent_contact']
+
+        return max(-ENGAGEMENT_MODIFIER_CAP, min(modifier, ENGAGEMENT_MODIFIER_CAP))
 
     @staticmethod
     def _pipeline_stage_bonus(lead: Lead) -> float:

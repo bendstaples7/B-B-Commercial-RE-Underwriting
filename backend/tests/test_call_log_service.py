@@ -8,9 +8,8 @@ from unittest.mock import patch
 from app.services.call_log_service import CallLogService
 from app.exceptions import DoNotContactViolationError, LeadTaskValidationError
 
-# ActionEngineService is lazily imported inside service functions, so we patch
-# the canonical location rather than the service module's namespace.
-_AE_PATCH = 'app.services.action_engine_service.ActionEngineService.recompute_and_persist'
+# refresh_lead_scoring is lazily imported inside service functions.
+_REFRESH_PATCH = 'app.services.lead_refresh.refresh_lead_scoring'
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +46,7 @@ def test_answered_outcome_updates_last_contact_date(app):
         lead = _make_lead(app, '1 Call St')
         svc = CallLogService()
 
-        with patch(_AE_PATCH):
+        with patch(_REFRESH_PATCH):
             svc.log_call(lead.id, outcome='answered', duration_minutes=5, notes=None)
 
         from app.models import Lead
@@ -65,7 +64,7 @@ def test_voicemail_increments_unanswered_call_count(app):
         lead = _make_lead(app, '2 Call St', unanswered_call_count=3)
         svc = CallLogService()
 
-        with patch(_AE_PATCH):
+        with patch(_REFRESH_PATCH):
             svc.log_call(lead.id, outcome='voicemail', duration_minutes=None, notes=None)
 
         from app.models import Lead
@@ -79,7 +78,7 @@ def test_no_answer_increments_unanswered_call_count(app):
         lead = _make_lead(app, '3 Call St', unanswered_call_count=0)
         svc = CallLogService()
 
-        with patch(_AE_PATCH):
+        with patch(_REFRESH_PATCH):
             svc.log_call(lead.id, outcome='no_answer', duration_minutes=None, notes=None)
 
         from app.models import Lead
@@ -88,21 +87,21 @@ def test_no_answer_increments_unanswered_call_count(app):
 
 
 # ---------------------------------------------------------------------------
-# wrong_number → sets has_phone=False
+# wrong_number → lowers phone confidence (not global has_phone=False)
 # ---------------------------------------------------------------------------
 
-def test_wrong_number_sets_has_phone_false(app):
-    """Logging a 'wrong_number' call sets has_phone=False."""
+def test_wrong_number_keeps_has_phone_when_no_contact_phone(app):
+    """Logging wrong_number without a linked contact phone leaves has_phone unchanged."""
     with app.app_context():
         lead = _make_lead(app, '4 Call St', has_phone=True)
         svc = CallLogService()
 
-        with patch(_AE_PATCH):
+        with patch(_REFRESH_PATCH):
             svc.log_call(lead.id, outcome='wrong_number', duration_minutes=None, notes=None)
 
         from app.models import Lead
         updated = Lead.query.get(lead.id)
-        assert updated.has_phone is False
+        assert updated.has_phone is True
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +140,7 @@ def test_note_body_exactly_5000_chars_succeeds(app):
         svc = CallLogService()
 
         body = 'x' * 5000
-        with patch(_AE_PATCH):
+        with patch(_REFRESH_PATCH):
             entry = svc.log_note(lead.id, body=body)
 
         assert entry is not None
@@ -154,7 +153,7 @@ def test_log_email_creates_email_logged_timeline_entry(app):
         lead = _make_lead(app, '8b Call St')
         svc = CallLogService()
 
-        with patch(_AE_PATCH):
+        with patch(_REFRESH_PATCH):
             entry = svc.log_note(
                 lead.id,
                 body='[Email] Follow up\n\nChecking in.',
@@ -189,7 +188,7 @@ def test_log_call_creates_timeline_entry(app):
         lead = _make_lead(app, '9 Call St')
         svc = CallLogService()
 
-        with patch(_AE_PATCH):
+        with patch(_REFRESH_PATCH):
             entry = svc.log_call(lead.id, outcome='answered', duration_minutes=3, notes='Good call')
 
         assert entry.event_type == 'call_logged'
@@ -213,7 +212,7 @@ def test_note_with_contact_only_stays_note_added(app):
         db.session.commit()
 
         svc = CallLogService()
-        with patch(_AE_PATCH):
+        with patch(_REFRESH_PATCH):
             entry = svc.log_note(lead.id, body='Spoke with owner about timing.', contact_id=contact.id)
 
         assert entry.event_type == 'note_added'

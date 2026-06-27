@@ -256,3 +256,11 @@ class TestRunProcessWebhookEventNormal:
 
             # Should not raise
             _process_webhook_event_inner(99999)
+
+
+def test_contact_fetch_includes_additional_phone_numbers():
+    from app.tasks.hubspot_webhook_tasks import _OBJECT_TYPE_CONFIG
+
+    props = _OBJECT_TYPE_CONFIG['contact']['params']['properties']
+    assert 'additional_phone_numbers' in props
+    assert 'hs_additional_emails' in props

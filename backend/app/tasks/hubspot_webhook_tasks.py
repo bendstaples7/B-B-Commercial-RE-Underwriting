@@ -271,6 +271,8 @@ def _process_webhook_event_inner(log_id: int, self_task=None) -> None:
 # ---------------------------------------------------------------------------
 
 # Object type → (model class name, API path template, extra_value_extractor)
+from app.services.hubspot_client_service import CONTACT_API_PROPERTIES
+
 _OBJECT_TYPE_CONFIG = {
     'deal': {
         'model': 'HubSpotDeal',
@@ -288,11 +290,7 @@ _OBJECT_TYPE_CONFIG = {
         'model': 'HubSpotContact',
         'path_template': '/crm/v3/objects/contacts/{object_id}',
         'params': {
-            'properties': (
-                'firstname,lastname,email,phone,mobilephone,'
-                'hs_object_id,createdate,hs_lastmodifieddate,'
-                'associatedcompanyid,hs_analytics_source,lifecyclestage,hs_lead_source'
-            )
+            'properties': CONTACT_API_PROPERTIES,
         },
         'extra_values': None,
     },

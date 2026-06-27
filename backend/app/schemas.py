@@ -1473,6 +1473,11 @@ class ContactPhoneSchema(Schema):
     contact_id = fields.Int(dump_only=True)
     value = fields.Str(required=True, validate=validate.Length(min=1, max=50))
     label = fields.Str(required=True, validate=validate.OneOf(VALID_PHONE_LABELS))
+    notes = fields.Str(allow_none=True, dump_only=True)
+    confidence_score = fields.Int(allow_none=True, dump_only=True)
+    last_outcome = fields.Str(allow_none=True, dump_only=True)
+    last_called_at = fields.DateTime(allow_none=True, dump_only=True)
+    source = fields.Str(allow_none=True, dump_only=True)
 
 
 class ContactEmailSchema(Schema):

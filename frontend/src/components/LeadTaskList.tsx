@@ -32,11 +32,34 @@ import { leadTaskService, callLogService } from '@/services/api'
 // Helpers
 // ---------------------------------------------------------------------------
 
+export type TaskDueStatus = 'overdue' | 'due_today' | 'upcoming' | 'no_due'
+
+const DUE_STATUS_SORT_ORDER: Record<TaskDueStatus, number> = {
+  overdue: 0,
+  due_today: 1,
+  upcoming: 2,
+  no_due: 3,
+}
+
+function getTaskDueStatus(dueDate: string | null): TaskDueStatus {
+  if (!dueDate) return 'no_due'
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const due = new Date(dueDate + 'T00:00:00')
+  if (due < today) return 'overdue'
+  if (due.getTime() === today.getTime()) return 'due_today'
+  return 'upcoming'
+}
+
 /**
- * Sort tasks by due_date ascending, nulls last.
+ * Sort tasks: overdue first, then due today, then upcoming by date asc, nulls last.
  */
 function sortTasks(tasks: LeadTask[]): LeadTask[] {
   return [...tasks].sort((a, b) => {
+    const statusA = getTaskDueStatus(a.due_date)
+    const statusB = getTaskDueStatus(b.due_date)
+    const orderDiff = DUE_STATUS_SORT_ORDER[statusA] - DUE_STATUS_SORT_ORDER[statusB]
+    if (orderDiff !== 0) return orderDiff
     if (a.due_date === null && b.due_date === null) return 0
     if (a.due_date === null) return 1
     if (b.due_date === null) return -1
@@ -49,14 +72,6 @@ function formatDueDate(dueDate: string | null): string {
   // dueDate is a date string like "2024-01-15"
   const [year, month, day] = dueDate.split('-')
   return `Due ${month}/${day}/${year}`
-}
-
-function isDueDateOverdue(dueDate: string | null): boolean {
-  if (!dueDate) return false
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const due = new Date(dueDate + 'T00:00:00')
-  return due < today
 }
 
 // ---------------------------------------------------------------------------
@@ -251,13 +266,20 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
       {sortedTasks.length > 0 && (
         <List dense disablePadding data-testid="task-list">
           {sortedTasks.map((task, index) => {
-            const overdue = isDueDateOverdue(task.due_date)
+            const dueStatus = getTaskDueStatus(task.due_date)
+            const overdue = dueStatus === 'overdue'
+            const dueToday = dueStatus === 'due_today'
             const isHubSpot = task.source === 'hubspot'
             return (
               <Box key={task.id}>
                 {index > 0 && <Divider component="li" />}
                 <ListItem
                   data-testid={`task-item-${task.id}`}
+                  sx={
+                    overdue
+                      ? { borderLeft: 3, borderColor: 'error.main', pl: 1.5, ml: 0 }
+                      : undefined
+                  }
                   secondaryAction={
                     !isHubSpot && onTaskCompleted ? (
                       <IconButton
@@ -302,8 +324,26 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
                 >
                   <ListItemText
                     primary={
-                      <Stack direction="row" alignItems="center" spacing={0.75}>
+                      <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap">
                         <span>{task.title}</span>
+                        {overdue && (
+                          <Chip
+                            label="Overdue"
+                            size="small"
+                            color="error"
+                            sx={{ height: 18, fontSize: '0.65rem' }}
+                            data-testid={`task-overdue-chip-${task.id}`}
+                          />
+                        )}
+                        {dueToday && (
+                          <Chip
+                            label="Due today"
+                            size="small"
+                            color="warning"
+                            sx={{ height: 18, fontSize: '0.65rem' }}
+                            data-testid={`task-due-today-chip-${task.id}`}
+                          />
+                        )}
                         {isHubSpot && (
                           <Chip
                             icon={<HubIcon sx={{ fontSize: '12px !important' }} />}
@@ -326,7 +366,9 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
                           <Typography
                             component="span"
                             variant="caption"
-                            color={overdue ? 'error' : 'text.secondary'}
+                            color={
+                              overdue ? 'error' : dueToday ? 'warning.main' : 'text.secondary'
+                            }
                             data-testid={`task-due-date-${task.id}`}
                             sx={{ display: 'block' }}
                           >
