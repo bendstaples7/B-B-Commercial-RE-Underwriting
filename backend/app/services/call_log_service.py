@@ -205,8 +205,6 @@ class CallLogService:
             lead.last_contact_date = date.today()
         elif outcome in ('voicemail', 'no_answer'):
             lead.unanswered_call_count = (lead.unanswered_call_count or 0) + 1
-        elif outcome == 'wrong_number':
-            lead.has_phone = False
 
         _CONTACTED_NO_INTEREST_OUTCOMES = {'not_interested'}
         if (outcome in _CONTACTED_NO_INTEREST_OUTCOMES
@@ -248,11 +246,26 @@ class CallLogService:
         db.session.commit()
 
         try:
-            from app.services.action_engine_service import ActionEngineService
-            ActionEngineService.recompute_and_persist(lead_id)
+            from app.services.phone_confidence_service import PhoneConfidenceService
+            PhoneConfidenceService.update_from_call(
+                lead_id,
+                outcome,
+                contact_phone_id=contact_phone_id,
+                phone_number=phone_number,
+            )
+            db.session.commit()
         except Exception as exc:
             logger.error(
-                "ActionEngineService.recompute_and_persist failed for lead %s: %s",
+                "PhoneConfidenceService.update_from_call failed for lead %s: %s",
+                lead_id, exc, exc_info=True,
+            )
+
+        try:
+            from app.services.lead_refresh import refresh_lead_scoring
+            refresh_lead_scoring(lead_id)
+        except Exception as exc:
+            logger.error(
+                "refresh_lead_scoring failed for lead %s after call log: %s",
                 lead_id, exc, exc_info=True,
             )
 
@@ -326,11 +339,11 @@ class CallLogService:
         db.session.commit()
 
         try:
-            from app.services.action_engine_service import ActionEngineService
-            ActionEngineService.recompute_and_persist(lead_id)
+            from app.services.lead_refresh import refresh_lead_scoring
+            refresh_lead_scoring(lead_id)
         except Exception as exc:
             logger.error(
-                "ActionEngineService.recompute_and_persist failed for lead %s: %s",
+                "refresh_lead_scoring failed for lead %s after note log: %s",
                 lead_id, exc, exc_info=True,
             )
 

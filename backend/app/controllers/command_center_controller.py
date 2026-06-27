@@ -311,10 +311,13 @@ def get_command_center(lead_id: int):
     timeline_entries, timeline_total = _lead_timeline_service.get_page(lead_id, page=1, per_page=25)
 
     # ------------------------------------------------------------------
-    # Collect phones: flat columns + relational contact_phones table
+    # Collect phones: relational contact_phones + flat columns (structured)
     # ------------------------------------------------------------------
     from app import db as _db
     from sqlalchemy import text as _text
+    from app.services.phone_confidence_service import PhoneConfidenceService
+
+    all_phones = PhoneConfidenceService.build_phones_payload(lead_id, lead)
 
     # ------------------------------------------------------------------
     # Fetch HubSpot tasks linked to this lead (via task_associations or
@@ -337,28 +340,6 @@ def get_command_center(lead_id: int):
           AND source = 'hubspot_import'
         ORDER BY due_date ASC NULLS LAST
     """), {'lead_id': lead_id}).fetchall()
-
-    flat_phones = [
-        p for p in [lead.phone_1, lead.phone_2, lead.phone_3,
-                    lead.phone_4, lead.phone_5, lead.phone_6, lead.phone_7]
-        if p and p.strip()
-    ]
-    relational_phones = [
-        row[0] for row in _db.session.execute(_text("""
-            SELECT cp.value FROM contact_phones cp
-            JOIN property_contacts pc ON pc.contact_id = cp.contact_id
-            WHERE pc.property_id = :lead_id
-        """), {'lead_id': lead_id}).fetchall()
-        if row[0]
-    ]
-    # Merge, deduplicate preserving order
-    seen_phones: set = set()
-    all_phones = []
-    for p in flat_phones + relational_phones:
-        normalized = p.strip()
-        if normalized and normalized not in seen_phones:
-            seen_phones.add(normalized)
-            all_phones.append(normalized)
 
     # ------------------------------------------------------------------
     # Collect emails: flat columns + relational contact_emails table

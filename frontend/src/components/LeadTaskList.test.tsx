@@ -819,4 +819,41 @@ describe('LeadTaskList', () => {
       expect(screen.queryByTestId('no-tasks-message')).not.toBeInTheDocument()
     })
   })
+
+  describe('due status styling', () => {
+    function isoDateOffset(days: number): string {
+      const d = new Date()
+      d.setHours(0, 0, 0, 0)
+      d.setDate(d.getDate() + days)
+      const y = d.getFullYear()
+      const m = String(d.getMonth() + 1).padStart(2, '0')
+      const day = String(d.getDate()).padStart(2, '0')
+      return `${y}-${m}-${day}`
+    }
+
+    it('shows Overdue chip and sorts overdue tasks first', () => {
+      const tasks = [
+        makeTask(1, { due_date: isoDateOffset(3), title: 'Future Task' }),
+        makeTask(2, { due_date: isoDateOffset(-2), title: 'Overdue Task' }),
+        makeTask(3, { due_date: isoDateOffset(0), title: 'Due Today Task' }),
+      ]
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={tasks}
+          onTaskCreated={vi.fn()}
+        />
+      )
+
+      expect(screen.getByTestId('task-overdue-chip-2')).toHaveTextContent('Overdue')
+      expect(screen.getByTestId('task-due-today-chip-3')).toHaveTextContent('Due today')
+
+      const taskList = screen.getByTestId('task-list')
+      const items = within(taskList).getAllByRole('listitem')
+      expect(items[0]).toHaveTextContent('Overdue Task')
+      expect(items[1]).toHaveTextContent('Due Today Task')
+      expect(items[2]).toHaveTextContent('Future Task')
+    })
+  })
 })

@@ -288,6 +288,20 @@ class HubSpotSignalExtractorService:
                 return keyword
         return None
 
+    @classmethod
+    def text_has_motivation_signal(cls, text: str) -> bool:
+        """Return True when *text* matches any non-overdue signal keyword."""
+        if not text or not str(text).strip():
+            return False
+        service = cls()
+        body_lower = str(text).lower()
+        for signal_type, keywords in service._dictionary.items():
+            if signal_type == 'FOLLOW_UP_OVERDUE':
+                continue
+            if cls._find_keyword(body_lower, keywords):
+                return True
+        return False
+
     # ------------------------------------------------------------------
     # Suppression application
     # ------------------------------------------------------------------

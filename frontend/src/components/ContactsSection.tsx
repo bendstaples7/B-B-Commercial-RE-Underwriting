@@ -23,6 +23,7 @@ import CloseIcon from '@mui/icons-material/Close'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { contactService } from '@/services/api'
 import { formatPhoneNumber, phoneTelHref } from '@/utils/phone'
+import { formatPhoneConfidence } from '@/utils/helpers'
 import type { PropertyContact, ContactRole } from '@/types'
 import { ContactFormModal } from './ContactFormModal'
 
@@ -235,8 +236,11 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
                       <Box sx={{ mb: 0.25 }}>
                         {contact.phones.map((phone) => (
                           <Typography key={phone.id} variant="body2" color="text.secondary">
-                            📞 {phone.value}
+                            📞 {formatPhoneNumber(phone.value)}
                             {phone.label && phone.label !== 'other' ? ` (${phone.label})` : ''}
+                            {formatPhoneConfidence(phone.confidence_score, phone.notes)
+                              ? ` · ${formatPhoneConfidence(phone.confidence_score, phone.notes)}`
+                              : ''}
                           </Typography>
                         ))}
                       </Box>
@@ -325,6 +329,11 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
                       📞 <a href={phoneTelHref(p.value)} style={{ textDecoration: 'none', color: 'inherit' }}>{formatPhoneNumber(p.value)}</a>
                       {p.label && p.label !== 'other' && (
                         <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>({p.label})</Typography>
+                      )}
+                      {formatPhoneConfidence(p.confidence_score, p.notes) && (
+                        <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>
+                          · {formatPhoneConfidence(p.confidence_score, p.notes)}
+                        </Typography>
                       )}
                     </Typography>
                   ))}

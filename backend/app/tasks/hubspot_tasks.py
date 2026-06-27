@@ -900,14 +900,17 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         stage_label_map = {}
         _client = None
         _sync = None
+        _contact_sync = None
         try:
             from app.models.hubspot_config import HubSpotConfig
             from app.services.hubspot_client_service import HubSpotClientService
             from app.services.hubspot_deal_sync_service import HubSpotDealSyncService
+            from app.services.hubspot_contact_sync_service import HubSpotContactSyncService
             _config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
             if _config:
                 _client = HubSpotClientService(_config)
                 _sync = HubSpotDealSyncService(_client)
+                _contact_sync = HubSpotContactSyncService(_client)
                 stage_label_map = _client.fetch_pipeline_stage_labels("deals")
                 logger.info(
                     "run_enrich_leads_from_hubspot: loaded %d stage labels",
@@ -923,6 +926,7 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         deal_refreshed = 0
         contact_enriched = 0
         contact_errors = 0
+        contact_refreshed = 0
         action_recomputed = 0
 
         # --- Enrich from confirmed deal matches ----------------------------
@@ -976,9 +980,15 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         for match in confirmed_contact_matches:
             try:
                 lead = Lead.query.get(match.internal_record_id)
-                contact = HubSpotContact.query.filter_by(
-                    hubspot_id=match.hubspot_id
-                ).first()
+                contact = None
+                if _contact_sync is not None:
+                    contact = _contact_sync.refresh_contact_from_api(match.hubspot_id)
+                    if contact:
+                        contact_refreshed += 1
+                else:
+                    contact = HubSpotContact.query.filter_by(
+                        hubspot_id=match.hubspot_id
+                    ).first()
                 if lead is None or contact is None:
                     continue
                 enriched = matcher.enrich_lead_from_contact(lead, contact)
@@ -1035,9 +1045,15 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                     cid = str(assoc_entry.get("id", ""))
                     if not cid:
                         continue
-                    assoc_contact = HubSpotContact.query.filter_by(
-                        hubspot_id=cid
-                    ).first()
+                    assoc_contact = None
+                    if _contact_sync is not None:
+                        assoc_contact = _contact_sync.refresh_contact_from_api(cid)
+                        if assoc_contact:
+                            contact_refreshed += 1
+                    else:
+                        assoc_contact = HubSpotContact.query.filter_by(
+                            hubspot_id=cid
+                        ).first()
                     if assoc_contact is None:
                         continue
                     enriched = matcher.enrich_lead_from_contact(lead, assoc_contact)

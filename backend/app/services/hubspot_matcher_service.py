@@ -318,37 +318,10 @@ class HubSpotMatcherService:
             updated_fields.append("owner_last_name")
 
         # --- Phones -----------------------------------------------------------
-        hs_phones = []
-        for key in ("phone", "mobilephone", "hs_phone_number"):
-            val = (props.get(key) or "").strip()
-            if val and val not in hs_phones:
-                hs_phones.append(val)
+        from app.services.phone_confidence_service import PhoneConfidenceService
 
-        # Parse additional_phone_numbers — multi-line, one per line, may have
-        # a leading index like "1) (630) 430-5720 CONFIRMED" or annotations.
-        # We extract the phone number and strip annotation text.
-        additional_raw = (props.get("additional_phone_numbers") or "").strip()
-        if additional_raw:
-            for line in additional_raw.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                # Strip leading index like "1) " or "2. "
-                line = re.sub(r'^\d+[).]\s*', '', line).strip()
-                # Extract phone number (digits, spaces, dashes, parens, plus)
-                # and strip trailing annotations like " CONFIRMED", " (disconnected)"
-                # Match up to 15 chars of phone pattern, stop before annotation words
-                phone_match = re.match(r'^(\+?[\d\s\(\)\-\.]{7,20}?)(?:\s+[A-Za-z(]|$)', line)
-                if not phone_match:
-                    # Fallback: just extract digit groups
-                    phone_match = re.match(r'^(\+?[\d\(\)\-\.\s]+)', line)
-                if phone_match:
-                    phone_val = phone_match.group(1).strip()
-                    if phone_val and phone_val not in hs_phones:
-                        # Only add if it has at least 7 digits
-                        digits = re.sub(r'\D', '', phone_val)
-                        if len(digits) >= 7:
-                            hs_phones.append(phone_val)
+        parsed_phones = PhoneConfidenceService.parse_phones_from_hubspot_props(props)
+        hs_phones = [phone_val for phone_val, _, _ in parsed_phones]
 
         phone_slots = ["phone_1", "phone_2", "phone_3", "phone_4",
                        "phone_5", "phone_6", "phone_7"]
@@ -474,6 +447,12 @@ class HubSpotMatcherService:
                     "enrich_lead_from_contact: linked Contact id=%d to lead id=%d (is_primary=%s)",
                     existing_contact.id, lead.id, new_pc.is_primary,
                 )
+
+        contact_id = PhoneConfidenceService.get_primary_contact_id(lead.id)
+        if contact_id is not None and parsed_phones:
+            PhoneConfidenceService.sync_phones_from_hubspot_contact(lead.id, contact)
+            if 'contact_phone_synced' not in updated_fields:
+                updated_fields.append('contact_phone_synced')
 
         logger.debug(
             "enrich_lead_from_contact: lead_id=%s enriched fields=%s",
