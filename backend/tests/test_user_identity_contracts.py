@@ -132,7 +132,8 @@ class TestLeadIdentityContract:
             "property_characteristics_weight": 0.25,
             "data_completeness_weight": 0.25,
             "owner_situation_weight": 0.25,
-            "location_desirability_weight": 0.25,
+            "location_desirability_weight": 0.20,
+            "data_enrichment_weight": 0.05,
             # NO user_id in body
         })
         assert status == 200, (

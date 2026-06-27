@@ -71,6 +71,10 @@ _KNOWN_REVISIONS = frozenset({
     'i3j4k5l6m7n8',
     # contact_phones confidence tracking columns
     'j4k5l6m7n8o9',
+    # Data Enrichment Scoring — violation_data, permit_data, etc.
+    '97321ab5e710',
+    # Merge of data-enrichment-scoring and contact-phone-confidence heads
+    'a4b5c6d7e8f9',
 })
 
 

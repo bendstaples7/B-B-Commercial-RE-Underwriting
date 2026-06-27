@@ -58,6 +58,11 @@ RESIDENTIAL_MAX_POINTS = {
     "existing_notes_motivation": 10,
     "manual_priority": 10,
     "source_type_distress": SOURCE_TYPE_DISTRESS_COMBINED_CAP,
+    # New data enrichment dimensions
+    "contactability": 20,
+    "property_equity": 25,
+    "ownership_duration": 15,
+    "engagement": 10,
 }
 
 # Commercial scoring dimension maximums
@@ -71,6 +76,11 @@ COMMERCIAL_MAX_POINTS = {
     "building_size_fit": 5,
     "existing_notes_motivation": 5,
     "manual_priority": 5,
+    # New data enrichment dimensions
+    "contactability": 20,
+    "property_equity": 25,
+    "ownership_duration": 15,
+    "engagement": 10,
 }
 
 # Data quality field-to-points mapping
@@ -210,12 +220,26 @@ class DeterministicScoringEngine:
         )
         details["source_type_distress"] = self._source_type_distress_score(lead)
 
+        # New data enrichment dimensions
+        details["contactability"] = self._contactability_score(
+            lead, max_points=float(RESIDENTIAL_MAX_POINTS["contactability"])
+        )
+        details["property_equity"] = self._property_equity_score(
+            lead, max_points=float(RESIDENTIAL_MAX_POINTS["property_equity"])
+        )
+        details["ownership_duration"] = self._ownership_duration_score(
+            lead, max_points=float(RESIDENTIAL_MAX_POINTS["ownership_duration"])
+        )
+        details["engagement"] = self._engagement_score(
+            lead, max_points=float(RESIDENTIAL_MAX_POINTS["engagement"])
+        )
+
         total_score = sum(details.values())
 
         return {
             "total_score": total_score,
             "score_details": details,
-            "score_version": "residential_v1_internal_data",
+            "score_version": "residential_v2_internal_data",
         }
 
     # ------------------------------------------------------------------
@@ -391,6 +415,140 @@ class DeterministicScoringEngine:
         return min(total, float(SOURCE_TYPE_DISTRESS_COMBINED_CAP))
 
     # ------------------------------------------------------------------
+    # Data Enrichment Scoring: New dimensions
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _contactability_score(lead: "Lead", max_points: float = 20.0) -> float:
+        """Score based on contact information completeness and skip-trace recency.
+
+        4 segments each worth 1/4 of max_points:
+        - Skip-trace performed (date_skip_traced is set)
+        - Has at least one phone number (phone_1 through phone_7)
+        - Has at least one email (email_1 through email_5)
+        - Has social media handle (socials is populated)
+        """
+        segments = 0
+
+        # 1. Skip-trace performed
+        if getattr(lead, "date_skip_traced", None) is not None:
+            segments += 1
+
+        # 2. Any phone number present
+        phone_fields = ["phone_1", "phone_2", "phone_3", "phone_4",
+                        "phone_5", "phone_6", "phone_7"]
+        if any(getattr(lead, f, None) for f in phone_fields):
+            segments += 1
+
+        # 3. Any email present
+        email_fields = ["email_1", "email_2", "email_3", "email_4", "email_5"]
+        if any(getattr(lead, f, None) for f in email_fields):
+            segments += 1
+
+        # 4. Social media handle present
+        if getattr(lead, "socials", None):
+            segments += 1
+
+        return (segments / 4.0) * max_points
+
+    @staticmethod
+    def _property_equity_score(lead: "Lead", max_points: float = 25.0) -> float:
+        """Score estimated property equity based on property characteristics.
+
+        Components (additive):
+        - Year built: pre-1960 → 40%, 1960-1990 → 30%, post-1990 → 15%
+        - Lot size present (≥ 1 sqft) → 30%
+        - Square footage present (≥ 1 sqft) → 30%
+        """
+        score = 0.0
+
+        # Year-built component
+        yb = getattr(lead, "year_built", None)
+        if yb is not None:
+            if yb < 1960:
+                score += max_points * 0.40
+            elif yb <= 1990:
+                score += max_points * 0.30
+            else:
+                score += max_points * 0.15
+
+        # Lot size component
+        ls = getattr(lead, "lot_size", None)
+        if ls is not None and ls > 0:
+            score += max_points * 0.30
+
+        # Square footage component
+        sf = getattr(lead, "square_footage", None)
+        if sf is not None and sf > 0:
+            score += max_points * 0.30
+
+        return min(score, max_points)
+
+    @staticmethod
+    def _ownership_duration_score(lead: "Lead", max_points: float = 15.0) -> float:
+        """Score based on how long the owner has held the property.
+
+        Longer ownership → higher score (more equity, higher motivation to sell).
+        - 20+ years → 100%
+        - 10-19 years → 80%
+        - 5-9 years → 55%
+        - 2-4 years → 35%
+        - Under 2 years → 15%
+        - Missing or future date → 0
+        """
+        acquisition = getattr(lead, "acquisition_date", None)
+        if acquisition is None:
+            return 0.0
+
+        today = date.today()
+        if acquisition > today:
+            return 0.0
+
+        years = (today - acquisition).days / 365.25
+
+        if years >= 20:
+            return max_points * 1.0
+        elif years >= 10:
+            return max_points * 0.80
+        elif years >= 5:
+            return max_points * 0.55
+        elif years >= 2:
+            return max_points * 0.35
+        else:
+            return max_points * 0.15
+
+    @staticmethod
+    def _engagement_score(lead: "Lead", max_points: float = 10.0) -> float:
+        """Score based on lead engagement signals.
+
+        Components (additive):
+        - Mailer history present (non-empty list) → 30%
+        - has_phone flag True → 25%
+        - has_email flag True → 25%
+        - follow_up_date set → 20%
+        """
+        score = 0.0
+
+        # Mailer history component
+        mh = getattr(lead, "mailer_history", None)
+        if mh is not None and (isinstance(mh, list) and len(mh) > 0):
+            score += max_points * 0.30
+
+        # has_phone flag
+        if getattr(lead, "has_phone", False):
+            score += max_points * 0.25
+
+        # has_email flag
+        if getattr(lead, "has_email", False):
+            score += max_points * 0.25
+
+        # follow_up_date set
+        if getattr(lead, "follow_up_date", None) is not None:
+            score += max_points * 0.20
+
+        return min(score, max_points)
+
+    # ------------------------------------------------------------------
     # Commercial Scoring
     # ------------------------------------------------------------------
 
@@ -418,12 +576,26 @@ class DeterministicScoringEngine:
             lead, max_points=COMMERCIAL_MAX_POINTS["manual_priority"]
         )
 
+        # New data enrichment dimensions
+        details["contactability"] = self._contactability_score(
+            lead, max_points=float(COMMERCIAL_MAX_POINTS["contactability"])
+        )
+        details["property_equity"] = self._property_equity_score(
+            lead, max_points=float(COMMERCIAL_MAX_POINTS["property_equity"])
+        )
+        details["ownership_duration"] = self._ownership_duration_score(
+            lead, max_points=float(COMMERCIAL_MAX_POINTS["ownership_duration"])
+        )
+        details["engagement"] = self._engagement_score(
+            lead, max_points=float(COMMERCIAL_MAX_POINTS["engagement"])
+        )
+
         total_score = sum(details.values())
 
         return {
             "total_score": total_score,
             "score_details": details,
-            "score_version": "commercial_v1_internal_data",
+            "score_version": "commercial_v2_internal_data",
         }
 
     # ------------------------------------------------------------------
