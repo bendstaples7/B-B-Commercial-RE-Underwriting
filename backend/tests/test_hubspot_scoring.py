@@ -18,13 +18,14 @@ from app.services.lead_scoring_engine import LeadScoringEngine
 # Shared helpers (mirrors test_lead_scoring_engine.py conventions)
 # ---------------------------------------------------------------------------
 
-def _make_weights(prop=0.25, completeness=0.25, owner=0.25, location=0.25):
+def _make_weights(prop=0.25, completeness=0.20, owner=0.25, location=0.10, enrichment=0.20):
     """Return a mock ScoringWeights object with the given weight values."""
     w = MagicMock()
     w.property_characteristics_weight = prop
     w.data_completeness_weight = completeness
     w.owner_situation_weight = owner
     w.location_desirability_weight = location
+    w.data_enrichment_weight = enrichment
     return w
 
 
@@ -46,11 +47,21 @@ def _make_lead(suppression_flag=False, **kwargs):
         "property_city", "property_state", "property_zip",
         "source", "notes", "units_allowed", "zoning",
         "county_assessor_pin", "owner_2_first_name", "phone_4",
-        "email_3", "socials",
+        "email_3", "socials", "updated_at",
+        "has_email",
+        "has_phone",
+        "mailer_history", "follow_up_date", "timeline",
+        "assessed_value", "date_skip_traced",
+        "phone_5", "phone_6", "phone_7",
+        "email_4", "email_5",
     ]
     for attr in _zero_attrs:
         setattr(lead, attr, None)
     lead.suppression_flag = suppression_flag
+    lead.lead_category = kwargs.get('lead_category', 'residential')
+    lead.lead_status = kwargs.get('lead_status', 'mailing_no_contact_made')
+    lead.id = None
+    lead.units = None
     for k, v in kwargs.items():
         setattr(lead, k, v)
     return lead
@@ -70,18 +81,18 @@ def _make_signal(signal_type: str):
 # Strategy: generate a weight tuple that sums to 1.0 (normalised)
 @st.composite
 def normalised_weights(draw):
-    """Draw four non-negative floats and normalise them to sum to 1.0."""
+    """Draw five non-negative floats and normalise them to sum to 1.0."""
     raw = draw(
         st.lists(
             st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
-            min_size=4,
-            max_size=4,
+            min_size=5,
+            max_size=5,
         )
     )
     total = sum(raw)
     # Avoid division by zero: if all weights are 0, use equal weights
     if total == 0.0:
-        return (0.25, 0.25, 0.25, 0.25)
+        return (0.20, 0.20, 0.20, 0.20, 0.20)
     normalised = tuple(v / total for v in raw)
     return normalised
 
@@ -136,8 +147,8 @@ class TestProperty11SuppressedLeadScoreBelowThreshold:
     def test_suppressed_lead_score_always_at_most_10(self, weights, signals):
         # Feature: hubspot-crm-migration, Property 11: Suppressed lead score is always below threshold
         engine = LeadScoringEngine()
-        prop_w, comp_w, owner_w, loc_w = weights
-        w = _make_weights(prop=prop_w, completeness=comp_w, owner=owner_w, location=loc_w)
+        prop_w, comp_w, owner_w, loc_w, enrich_w = weights
+        w = _make_weights(prop=prop_w, completeness=comp_w, owner=owner_w, location=loc_w, enrichment=enrich_w)
         lead = _make_lead(suppression_flag=True)
         signal_objs = [_make_signal(s) for s in signals]
         score = engine.compute_score(lead, w, signals=signal_objs)
@@ -153,8 +164,8 @@ class TestProperty11SuppressedLeadScoreBelowThreshold:
     def test_suppressed_lead_score_at_most_10_with_high_base(self, weights):
         # Feature: hubspot-crm-migration, Property 11: Suppressed lead score is always below threshold
         engine = LeadScoringEngine()
-        prop_w, comp_w, owner_w, loc_w = weights
-        w = _make_weights(prop=prop_w, completeness=comp_w, owner=owner_w, location=loc_w)
+        prop_w, comp_w, owner_w, loc_w, enrich_w = weights
+        w = _make_weights(prop=prop_w, completeness=comp_w, owner=owner_w, location=loc_w, enrichment=enrich_w)
         # Give the lead a high base score via a rich set of attributes
         lead = _make_lead(
             suppression_flag=True,
@@ -207,8 +218,8 @@ class TestProperty12SignalScoreAdjustmentsMonotone:
     ):
         # Feature: hubspot-crm-migration, Property 12: Signal score adjustments are monotone
         engine = LeadScoringEngine()
-        prop_w, comp_w, owner_w, loc_w = weights
-        w = _make_weights(prop=prop_w, completeness=comp_w, owner=owner_w, location=loc_w)
+        prop_w, comp_w, owner_w, loc_w, enrich_w = weights
+        w = _make_weights(prop=prop_w, completeness=comp_w, owner=owner_w, location=loc_w, enrichment=enrich_w)
         lead = _make_lead(suppression_flag=False)
 
         score_without = engine.compute_score(lead, w, signals=base_signals)
@@ -231,8 +242,8 @@ class TestProperty12SignalScoreAdjustmentsMonotone:
     ):
         # Feature: hubspot-crm-migration, Property 12: Signal score adjustments are monotone
         engine = LeadScoringEngine()
-        prop_w, comp_w, owner_w, loc_w = weights
-        w = _make_weights(prop=prop_w, completeness=comp_w, owner=owner_w, location=loc_w)
+        prop_w, comp_w, owner_w, loc_w, enrich_w = weights
+        w = _make_weights(prop=prop_w, completeness=comp_w, owner=owner_w, location=loc_w, enrichment=enrich_w)
         lead = _make_lead(suppression_flag=False)
 
         score_without = engine.compute_score(lead, w, signals=base_signals)
@@ -262,8 +273,8 @@ class TestProperty13ScoringWeightsSumToOne:
     @settings(max_examples=100)
     def test_normalised_weights_sum_to_one(self, weights):
         # Feature: hubspot-crm-migration, Property 13: Scoring weights always sum to 1.0
-        prop_w, comp_w, owner_w, loc_w = weights
-        total = prop_w + comp_w + owner_w + loc_w
+        prop_w, comp_w, owner_w, loc_w, enrich_w = weights
+        total = prop_w + comp_w + owner_w + loc_w + enrich_w
         assert abs(total - 1.0) <= 0.01, (
             f"Normalised weights {weights} sum to {total}, not within 0.01 of 1.0"
         )
@@ -273,13 +284,14 @@ class TestProperty13ScoringWeightsSumToOne:
         comp_w=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
         owner_w=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
         loc_w=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
+        enrich_w=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False),
     )
     @settings(max_examples=100)
     def test_manually_normalised_weights_sum_to_one(
-        self, prop_w, comp_w, owner_w, loc_w
+        self, prop_w, comp_w, owner_w, loc_w, enrich_w
     ):
         # Feature: hubspot-crm-migration, Property 13: Scoring weights always sum to 1.0
-        raw_total = prop_w + comp_w + owner_w + loc_w
+        raw_total = prop_w + comp_w + owner_w + loc_w + enrich_w
         # Skip degenerate case where all weights are 0
         assume(raw_total > 0.0)
 
@@ -288,10 +300,11 @@ class TestProperty13ScoringWeightsSumToOne:
         n_comp = comp_w / raw_total
         n_owner = owner_w / raw_total
         n_loc = loc_w / raw_total
+        n_enrich = enrich_w / raw_total
 
-        normalised_sum = n_prop + n_comp + n_owner + n_loc
+        normalised_sum = n_prop + n_comp + n_owner + n_loc + n_enrich
         assert abs(normalised_sum - 1.0) <= 0.01, (
-            f"Normalised weights ({n_prop}, {n_comp}, {n_owner}, {n_loc}) "
+            f"Normalised weights ({n_prop}, {n_comp}, {n_owner}, {n_loc}, {n_enrich}) "
             f"sum to {normalised_sum}, not within 0.01 of 1.0"
         )
 
@@ -302,8 +315,8 @@ class TestProperty13ScoringWeightsSumToOne:
         # Verify that compute_score runs without error for any normalised weights
         # and returns a value in [0.0, 100.0].
         engine = LeadScoringEngine()
-        prop_w, comp_w, owner_w, loc_w = weights
-        w = _make_weights(prop=prop_w, completeness=comp_w, owner=owner_w, location=loc_w)
+        prop_w, comp_w, owner_w, loc_w, enrich_w = weights
+        w = _make_weights(prop=prop_w, completeness=comp_w, owner=owner_w, location=loc_w, enrichment=enrich_w)
         lead = _make_lead(suppression_flag=False)
         score = engine.compute_score(lead, w)
         assert 0.0 <= score <= 100.0, (

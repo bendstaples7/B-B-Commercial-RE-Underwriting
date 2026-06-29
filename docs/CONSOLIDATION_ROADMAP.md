@@ -45,7 +45,8 @@ Follow-up work from the [architecture audit](ARCHITECTURE.md). Prefer **one focu
 
 **Backend domain (staged, higher risk):**
 
-- [ ] Decide canonical scoring engine long-term (A/B from audit); extract shared rule helpers
+- [x] Decide canonical scoring engine long-term — unified `LeadScoringEngine` (scoring + recommended action)
+- [x] Extract shared rule helpers → `scoring_rubric.py`, `enrichment_scoring.py`
 - [ ] `ActionEngineService.explain_recommended_action` — remove controller mirror
 - [ ] Shared `handle_errors` in `app/controllers/decorators.py`
 - [ ] Single activity store (Interaction model) with unified HubSpot import

@@ -65,6 +65,7 @@ import BlockIcon from '@mui/icons-material/Block'
 import LocationOffIcon from '@mui/icons-material/LocationOff'
 import TodayIcon from '@mui/icons-material/Today'
 import ViewKanbanIcon from '@mui/icons-material/ViewKanban'
+import SettingsIcon from '@mui/icons-material/Settings'
 import ExpandLess from '@mui/icons-material/ExpandLess'
 import ExpandMore from '@mui/icons-material/ExpandMore'
 import StorageIcon from '@mui/icons-material/Storage'
@@ -96,6 +97,7 @@ import { MissingPropertyMatchQueue } from './components/MissingPropertyMatchQueu
 import { UnifiedLeadCommandCenter } from '@/components/UnifiedLeadCommandCenter'
 import { AdminPanel } from './components/AdminPanel'
 import AdminUserDetail from './components/AdminUserDetail'
+import { ScoringWeightsEditor } from './components/ScoringWeightsEditor'
 import GlobalSearchBar from '@/components/GlobalSearchBar'
 import SearchResultsPage from '@/pages/SearchResultsPage'
 import { DealKanbanPage } from './pages/DealKanbanPage'
@@ -1510,6 +1512,16 @@ function App() {
                 Admin Panel
               </MenuItem>
             )}
+            {user && (
+              <MenuItem
+                onClick={() => { setAvatarOpen(false); navigate('/settings/scoring-weights') }}
+              >
+                <ListItemIcon sx={{ minWidth: 32 }}>
+                  <SettingsIcon fontSize="small" />
+                </ListItemIcon>
+                Settings
+              </MenuItem>
+            )}
             <MenuItem
               onClick={() => { setAvatarOpen(false); logout() }}
               sx={{ mt: 0.5 }}
@@ -1615,6 +1627,8 @@ function App() {
           <Route path="/admin" element={user?.is_admin ? <AdminPanel /> : <Navigate to="/" replace />} />
           <Route path="/admin/users/:userId" element={user?.is_admin ? <AdminUserDetail /> : <Navigate to="/" replace />} />
           <Route path="/admin/pipeline-stages" element={user?.is_admin ? <PipelineConfigAdminPage /> : <Navigate to="/" replace />} />
+          {/* Settings — scoring weights configuration */}
+          <Route path="/settings/scoring-weights" element={<ScoringWeightsEditor />} />
           {/* Kanban view */}
           <Route path="/kanban" element={<DealKanbanPage />} />
           {/* Old /leads/views/* — redirect to new /queues/* routes */}

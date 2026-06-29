@@ -470,8 +470,7 @@ class TestActionEngineIntegration:
             assert action == 'resolve_match'
 
     def test_lead_with_match_no_analysis_gets_analyze_property(self, app):
-        """A lead with property match but no analysis falls through to create_task
-        (analyze_property was removed — property analysis is optional)."""
+        """A lead with property match but no analysis gets analyze_property."""
         with app.app_context():
             lead = _make_lead(app, '3 Action Engine St',
                               lead_status='mailing_no_contact_made',
@@ -479,8 +478,7 @@ class TestActionEngineIntegration:
                               has_property_match=True,
                               analysis_complete=False)
             action = ActionEngineService.compute_recommended_action(lead)
-            # analyze_property is no longer a mandatory step — falls through to create_task
-            assert action == 'create_task'
+            assert action == 'analyze_property'
 
     def test_warm_lead_gets_follow_up_now(self, app):
         """A warm lead with complete data gets recommended_action=follow_up_now."""
@@ -496,12 +494,12 @@ class TestActionEngineIntegration:
             assert action == 'follow_up_now'
 
     def test_dnc_lead_gets_none(self, app):
-        """A do_not_contact lead gets recommended_action=None."""
+        """A do_not_contact lead gets recommended_action=do_not_contact."""
         with app.app_context():
             lead = _make_lead(app, '5 Action Engine St',
                               lead_status='do_not_contact')
             action = ActionEngineService.compute_recommended_action(lead)
-            assert action is None
+            assert action == 'do_not_contact'
 
 
 # ---------------------------------------------------------------------------

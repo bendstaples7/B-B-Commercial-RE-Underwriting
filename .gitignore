@@ -36,6 +36,7 @@ htmlcov/
 # Environment
 .env
 .env.local
+frontend/.env.development
 
 # Node
 node_modules/
@@ -89,3 +90,8 @@ token.json
 
 # Local developer sync config (contains VPS credentials — never commit)
 scripts/sync-local-db.conf
+# Virtual environments
+.venv/
+backend/.venv/
+
+# GitHub auth temp files (create-pr.sh may use /tmp/pr-body.md)

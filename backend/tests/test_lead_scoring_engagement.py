@@ -30,9 +30,10 @@ def app_ctx():
 def _make_weights():
     w = MagicMock()
     w.property_characteristics_weight = 0.25
-    w.data_completeness_weight = 0.25
+    w.data_completeness_weight = 0.20
     w.owner_situation_weight = 0.25
-    w.location_desirability_weight = 0.25
+    w.location_desirability_weight = 0.10
+    w.data_enrichment_weight = 0.20
     return w
 
 

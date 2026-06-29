@@ -47,9 +47,10 @@ def app_ctx():
 
 def _make_weights(
     prop=0.25,
-    completeness=0.25,
+    completeness=0.20,
     owner=0.25,
-    location=0.25,
+    location=0.10,
+    enrichment=0.20,
 ):
     """Return a mock ScoringWeights object."""
     w = MagicMock()
@@ -57,6 +58,7 @@ def _make_weights(
     w.data_completeness_weight = completeness
     w.owner_situation_weight = owner
     w.location_desirability_weight = location
+    w.data_enrichment_weight = enrichment
     return w
 
 
@@ -85,7 +87,15 @@ def _make_lead(suppression_flag=False, **kwargs):
         "property_city", "property_state", "property_zip",
         "source", "notes", "units_allowed", "zoning",
         "county_assessor_pin", "owner_2_first_name", "phone_4",
-        "email_3", "socials",
+        "email_3", "socials", "updated_at",
+        "mailer_history", "follow_up_date", "timeline",
+        "assessed_value", "date_skip_traced",
+        "phone_5", "phone_6", "phone_7",
+        "email_4", "email_5",
+        "units", "manual_priority", "source_type",
+        "tax_distress_data", "do_not_contact", "lead_category",
+        "data_source", "last_contact_date", "lead_status",
+        "unanswered_call_count", "id",
     ]
     for attr in _zero_attrs:
         setattr(lead, attr, None)

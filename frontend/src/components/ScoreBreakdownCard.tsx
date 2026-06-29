@@ -56,6 +56,13 @@ const ACTION_COLORS: Record<
   needs_manual_review: 'warning',
   nurture: 'default',
   suppress: 'error',
+  do_not_contact: 'error',
+  follow_up_now: 'info',
+  ready_for_outreach: 'success',
+  add_contact_info: 'warning',
+  create_task: 'info',
+  resolve_match: 'warning',
+  analyze_property: 'info',
 }
 
 function formatPoints(points: number): string {

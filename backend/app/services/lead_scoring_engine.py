@@ -1,20 +1,25 @@
-"""Lead Scoring Engine for computing lead quality scores.
+"""Unified Lead Scoring Engine.
 
-Computes a 0-100 score for each lead based on four configurable weighted
-criteria: property characteristics, data completeness, owner situation,
-and location desirability.  Weights are stored per-user in the
-``scoring_weights`` table and must sum to 1.0.
+Single canonical scorer: weighted rubric + modifiers + recommended action.
+Writes ``leads.lead_score``, ``leads.recommended_action``, and append-only
+``lead_scores`` history in one pipeline.
 """
+from __future__ import annotations
+
 import logging
-from datetime import datetime, date, timedelta
-from typing import Optional, List, Union
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
+from typing import Optional
 
 from app import db
+from app.models.hubspot_signal import HubSpotSignal
 from app.models.lead import Lead
+from app.models.lead_score import LeadScore
 from app.models.lead_scoring import ScoringWeights
-from app.models.property_contact import PropertyContact
-from app.models.contact_phone import ContactPhone
-from app.models.contact_email import ContactEmail
+from app.models.lead_task import LeadTask
+from app.models.lead_timeline_entry import LeadTimelineEntry
+from app.models.lead_crm_flags_view import LeadCRMFlagsView
+from app.services import scoring_rubric as rubric
 
 logger = logging.getLogger(__name__)
 
@@ -22,50 +27,17 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-# Default weights when no user-specific weights exist
 DEFAULT_WEIGHTS = {
-    "property_characteristics_weight": 0.30,
-    "data_completeness_weight": 0.20,
-    "owner_situation_weight": 0.30,
-    "location_desirability_weight": 0.20,
+    "property_characteristics_weight": 0.25,
+    "data_completeness_weight": 0.15,
+    "owner_situation_weight": 0.25,
+    "location_desirability_weight": 0.15,
+    "data_enrichment_weight": 0.20,
 }
 
-# Weight sum tolerance for floating-point comparison
 WEIGHT_SUM_TOLERANCE = 0.01
-
-# Batch size for bulk rescoring
 BULK_RESCORE_BATCH_SIZE = 500
 
-# Property types considered desirable for scoring
-DESIRABLE_PROPERTY_TYPES = {
-    "single_family", "single family", "sfr",
-    "multi_family", "multi family", "multifamily",
-    "duplex", "triplex", "fourplex",
-}
-
-# Lead fields tracked for data completeness scoring (non-contact fields only).
-# Contact-related completeness (linked contacts, phones, emails) is checked
-# dynamically via the PropertyContact / ContactPhone / ContactEmail tables.
-COMPLETENESS_FIELDS = [
-    "property_street", "property_city", "property_state", "property_zip",
-    "property_type", "bedrooms", "bathrooms",
-    "square_footage", "lot_size", "year_built",
-    "ownership_type", "acquisition_date",
-    "mailing_address", "mailing_city", "mailing_state", "mailing_zip",
-    "source", "notes", "units_allowed", "zoning", "county_assessor_pin",
-    "socials",
-]
-
-# Number of contact-related "slots" counted toward completeness:
-#   1 = has at least one linked Contact
-#   1 = has at least one ContactPhone
-#   1 = has at least one ContactEmail
-_CONTACT_COMPLETENESS_SLOTS = 3
-
-# Years of ownership that indicate a long-term holder (higher motivation)
-LONG_OWNERSHIP_YEARS = 10
-
-# Engagement modifier caps and values (native timeline activity)
 ENGAGEMENT_MODIFIER_CAP = 25.0
 ENGAGEMENT_MODIFIERS = {
     "call_answered": +10.0,
@@ -79,25 +51,114 @@ ENGAGEMENT_MODIFIERS = {
 ENGAGEMENT_LOOKBACK_DAYS = 90
 RECENT_CONTACT_DAYS = 14
 
+SCORING_ATTRIBUTES = rubric.SCORING_ATTRIBUTES
+
+
+def get_scoring_attributes() -> frozenset:
+    return SCORING_ATTRIBUTES
+
+
+@dataclass
+class ScoringResult:
+    total_score: float
+    score_tier: str
+    data_quality_score: float
+    recommended_action: str | None
+    winning_rule: str
+    action_signals: dict
+    score_details: dict
+    top_signals: list
+    missing_data: list
+    score_version: str
+    base_score: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Action-engine helpers (task counts, CRM flags)
+# ---------------------------------------------------------------------------
+
+def _count_open_tasks(lead_id: int) -> int:
+    from sqlalchemy import text as _text
+    native = LeadTask.query.filter_by(lead_id=lead_id, status='open').count()
+    hs = db.session.execute(_text("""
+        SELECT COUNT(*) FROM tasks t
+        JOIN task_associations ta ON ta.task_id = t.id
+        WHERE ta.target_type = 'lead' AND ta.target_id = :lid
+          AND t.status IN ('open', 'overdue')
+          AND t.source = 'hubspot_import'
+        UNION ALL
+        SELECT COUNT(*) FROM tasks
+        WHERE lead_id = :lid
+          AND status IN ('open', 'overdue')
+          AND source = 'hubspot_import'
+    """), {'lid': lead_id}).fetchall()
+    hs_counts = [r[0] for r in hs]
+    hs_total = max(hs_counts) if hs_counts else 0
+    return native + hs_total
+
+
+def _has_overdue_hubspot_task(lead_id: int) -> bool:
+    from sqlalchemy import text as _hs_text
+    try:
+        row = db.session.execute(_hs_text("""
+            SELECT 1 FROM tasks t
+            JOIN task_associations ta ON ta.task_id = t.id
+            WHERE ta.target_type = 'lead' AND ta.target_id = :lid
+              AND t.status IN ('open', 'overdue')
+              AND (t.due_date <= :now OR (t.due_date IS NULL AND t.status = 'overdue'))
+              AND t.source = 'hubspot_import'
+            LIMIT 1
+        """), {'lid': lead_id, 'now': datetime.utcnow()}).fetchone()
+        if not row:
+            row = db.session.execute(_hs_text("""
+                SELECT 1 FROM tasks
+                WHERE lead_id = :lid
+                  AND status IN ('open', 'overdue')
+                  AND (t.due_date <= :now OR (t.due_date IS NULL AND t.status = 'overdue'))
+                  AND source = 'hubspot_import'
+                LIMIT 1
+            """), {'lid': lead_id, 'now': datetime.utcnow()}).fetchone()
+        return row is not None
+    except Exception as exc:
+        logger.warning("overdue HubSpot task query failed for lead_id=%s: %s", lead_id, exc)
+        return False
+
+
+def _resolve_crm_flags(lead: Lead) -> tuple[bool, bool, bool]:
+    if not isinstance(getattr(lead, 'id', None), int):
+        return (
+            bool(getattr(lead, 'has_phone', False)),
+            bool(getattr(lead, 'has_email', False)),
+            bool(getattr(lead, 'has_property_match', False)),
+        )
+    try:
+        flags = LeadCRMFlagsView.query.filter_by(lead_id=lead.id).first()
+        if flags:
+            return (
+                flags.has_phone_computed,
+                flags.has_email_computed,
+                flags.has_property_match_computed,
+            )
+    except Exception as exc:
+        logger.warning(
+            "CRM flags view unavailable for lead_id=%s, using lead columns: %s",
+            lead.id, exc,
+        )
+    return lead.has_phone, lead.has_email, lead.has_property_match
+
+
+def _timeline_signals(signals: dict) -> dict:
+    safe = dict(signals)
+    safe.pop('property_street', None)
+    return safe
+
 
 class LeadScoringEngine:
-    """Computes lead scores based on configurable weighted criteria.
+    """Unified scoring + recommended-action engine."""
 
-    Each sub-score is calculated on a 0-100 scale, then combined using
-    user-configurable weights that must sum to 1.0.  The final score
-    is clamped to [0, 100].
-
-    When HubSpot signals are provided to ``compute_score``, the signal
-    adjustments below are applied to the base weighted score before
-    clamping.  If the lead has ``suppression_flag=True``, the score is
-    additionally capped at 10.0 before the final [0, 100] clamp.
-    """
-
-    # Minimum score threshold for active outreach eligibility.
+    SCORING_ATTRIBUTES = SCORING_ATTRIBUTES
     ACTIVE_OUTREACH_THRESHOLD: float = 30.0
 
-    # Score adjustments applied per HubSpot signal type.
-    # Keys match the ``signal_type`` values on ``HubSpotSignal``.
     SIGNAL_ADJUSTMENTS: dict = {
         "PRIOR_WARM_CONVERSATION": +15.0,
         "APPOINTMENT_OCCURRED": +20.0,
@@ -109,424 +170,330 @@ class LeadScoringEngine:
     }
 
     # ------------------------------------------------------------------
-    # Sub-score: Property Characteristics (0-100)
+    # Core unified compute
     # ------------------------------------------------------------------
 
-    def score_property_characteristics(self, lead: Lead) -> float:
-        """Score based on property type, size, and condition indicators.
+    def compute(
+        self,
+        lead: Lead,
+        weights: ScoringWeights,
+        signals: Optional[list] = None,
+    ) -> ScoringResult:
+        category = getattr(lead, "lead_category", "residential") or "residential"
+        if category == "commercial":
+            rubric_result = rubric.calculate_commercial_score(lead)
+        else:
+            rubric_result = rubric.calculate_residential_score(lead)
 
-        Heuristics (each contributes points up to 100 total):
-        - Desirable property type: +25
-        - Has bedrooms info: +10, 2-4 beds sweet spot: +10
-        - Has bathrooms info: +10
-        - Has square footage: +10, 800-3000 sqft sweet spot: +10
-        - Has lot size: +10
-        - Has year built: +5, built after 1950: +10
+        score_details = dict(rubric_result["score_details"])
+        score_version = rubric_result["score_version"]
 
-        Parameters
-        ----------
-        lead : Lead
+        data_quality_score, missing_data = rubric.calculate_data_quality_score(lead)
+        buckets = rubric.bucket_scores(score_details, data_quality_score, category)
 
-        Returns
-        -------
-        float
-            Sub-score between 0 and 100.
-        """
-        score = 0.0
-
-        # Property type
-        if lead.property_type:
-            score += 15.0
-            if lead.property_type.strip().lower() in DESIRABLE_PROPERTY_TYPES:
-                score += 10.0
-
-        # Bedrooms
-        if lead.bedrooms is not None:
-            score += 10.0
-            if 2 <= lead.bedrooms <= 4:
-                score += 10.0
-
-        # Bathrooms
-        if lead.bathrooms is not None:
-            score += 10.0
-
-        # Square footage
-        if lead.square_footage is not None:
-            score += 10.0
-            if 800 <= lead.square_footage <= 3000:
-                score += 10.0
-
-        # Lot size
-        if lead.lot_size is not None:
-            score += 10.0
-
-        # Year built
-        if lead.year_built is not None:
-            score += 5.0
-            if lead.year_built >= 1950:
-                score += 10.0
-
-        return min(score, 100.0)
-
-    # ------------------------------------------------------------------
-    # Sub-score: Data Completeness (0-100)
-    # ------------------------------------------------------------------
-
-    def score_data_completeness(self, lead: Lead) -> float:
-        """Score based on the percentage of lead fields that are populated.
-
-        Non-contact fields are checked directly on the lead record.
-        Contact-related completeness is checked via the relational tables:
-          - Has at least one linked Contact (via PropertyContact): +1 slot
-          - Has at least one ContactPhone (via linked contacts): +1 slot
-          - Has at least one ContactEmail (via linked contacts): +1 slot
-
-        Parameters
-        ----------
-        lead : Lead
-
-        Returns
-        -------
-        float
-            Sub-score between 0 and 100.
-        """
-        total_slots = len(COMPLETENESS_FIELDS) + _CONTACT_COMPLETENESS_SLOTS
-        if total_slots == 0:
-            return 0.0
-
-        populated = 0
-
-        # --- Non-contact field checks ---
-        for field_name in COMPLETENESS_FIELDS:
-            value = getattr(lead, field_name, None)
-            if value is not None and value != "":
-                populated += 1
-
-        # --- Contact-based checks via relational tables ---
-        # Skip if lead has no real DB id (e.g. mock objects in unit tests)
-        if not isinstance(getattr(lead, 'id', None), int):
-            return (populated / total_slots) * 100.0
-
-        # Check for at least one linked contact
-        pc = PropertyContact.query.filter_by(property_id=lead.id).first()
-        if pc is not None:
-            populated += 1  # has at least one linked Contact
-
-            # Check for at least one ContactPhone across all linked contacts
-            has_phone = (
-                db.session.query(ContactPhone)
-                .join(PropertyContact, PropertyContact.contact_id == ContactPhone.contact_id)
-                .filter(PropertyContact.property_id == lead.id)
-                .first()
-            )
-            if has_phone is not None:
-                populated += 1
-
-            # Check for at least one ContactEmail across all linked contacts
-            has_email = (
-                db.session.query(ContactEmail)
-                .join(PropertyContact, PropertyContact.contact_id == ContactEmail.contact_id)
-                .filter(PropertyContact.property_id == lead.id)
-                .first()
-            )
-            if has_email is not None:
-                populated += 1
-
-        return (populated / total_slots) * 100.0
-
-    # ------------------------------------------------------------------
-    # Sub-score: Owner Situation (0-100)
-    # ------------------------------------------------------------------
-
-    def score_owner_situation(self, lead: Lead) -> float:
-        """Score based on owner indicators that suggest motivation to sell.
-
-        Heuristics:
-        - Has at least one linked Contact (via PropertyContact): +15
-        - Has ownership type: +10
-        - Has acquisition date: +15
-        - Long-term ownership (>= LONG_OWNERSHIP_YEARS): +25
-        - Absentee owner (mailing address differs from property address): +20
-        - Has contact info (at least one ContactPhone or ContactEmail): +15
-
-        Parameters
-        ----------
-        lead : Lead
-
-        Returns
-        -------
-        float
-            Sub-score between 0 and 100.
-        """
-        score = 0.0
-
-        # Check for linked contacts via PropertyContact
-        # Skip if lead has no real DB id (e.g. mock objects in unit tests)
-        if not isinstance(getattr(lead, 'id', None), int):
-            # Only score non-contact fields for mock leads
-            if lead.ownership_type:
-                score += 10.0
-            if lead.acquisition_date:
-                score += 15.0
-                years_owned = self._years_since(lead.acquisition_date)
-                if years_owned is not None and years_owned >= LONG_OWNERSHIP_YEARS:
-                    score += 25.0
-            if self._is_absentee_owner(lead):
-                score += 20.0
-            return min(score, 100.0)
-
-        pc = PropertyContact.query.filter_by(property_id=lead.id).first()
-        if pc is not None:
-            score += 15.0
-
-        # Ownership type present
-        if lead.ownership_type:
-            score += 10.0
-
-        # Acquisition date and long-term ownership
-        if lead.acquisition_date:
-            score += 15.0
-            years_owned = self._years_since(lead.acquisition_date)
-            if years_owned is not None and years_owned >= LONG_OWNERSHIP_YEARS:
-                score += 25.0
-
-        # Absentee owner indicator
-        if self._is_absentee_owner(lead):
-            score += 20.0
-
-        # Contact information available via relational tables
-        has_phone = (
-            db.session.query(ContactPhone)
-            .join(PropertyContact, PropertyContact.contact_id == ContactPhone.contact_id)
-            .filter(PropertyContact.property_id == lead.id)
-            .first()
+        base_score = (
+            buckets["property_characteristics"] * weights.property_characteristics_weight
+            + buckets["data_completeness"] * weights.data_completeness_weight
+            + buckets["owner_situation"] * weights.owner_situation_weight
+            + buckets["location_desirability"] * weights.location_desirability_weight
+            + buckets["data_enrichment"] * weights.data_enrichment_weight
         )
-        has_email = (
-            db.session.query(ContactEmail)
-            .join(PropertyContact, PropertyContact.contact_id == ContactEmail.contact_id)
-            .filter(PropertyContact.property_id == lead.id)
-            .first()
+
+        pipeline_bonus = self._pipeline_stage_bonus(lead)
+        engagement_mod = self._score_engagement(lead)
+        hubspot_mod = self._hubspot_signal_adjustment(signals)
+
+        score_details["pipeline_stage_bonus"] = pipeline_bonus
+        score_details["timeline_engagement"] = engagement_mod
+        score_details["hubspot_signals"] = hubspot_mod
+
+        total = base_score + pipeline_bonus + engagement_mod + hubspot_mod
+        if getattr(lead, "suppression_flag", False):
+            total = min(total, 10.0)
+        total = max(0.0, min(round(total, 2), 100.0))
+
+        score_tier = rubric.calculate_score_tier(total)
+        recommended_action, winning_rule, action_signals = self.evaluate_recommended_action(
+            lead, total, data_quality_score, score_tier,
         )
-        if has_phone is not None or has_email is not None:
-            score += 15.0
+        top_signals = rubric.extract_top_signals(score_details)
 
-        return min(score, 100.0)
-
-    # ------------------------------------------------------------------
-    # Sub-score: Location Desirability (0-100)
-    # ------------------------------------------------------------------
-
-    def score_location_desirability(self, lead: Lead) -> float:
-        """Score based on location data availability.
-
-        Since we don't have external geo-scoring data, this sub-score
-        rewards leads that have complete location information (which
-        enables future enrichment and analysis).
-
-        Heuristics:
-        - Has property address: +25
-        - Has mailing city: +20
-        - Has mailing state: +20
-        - Has mailing zip: +20
-        - Has mailing address: +15
-
-        Parameters
-        ----------
-        lead : Lead
-
-        Returns
-        -------
-        float
-            Sub-score between 0 and 100.
-        """
-        score = 0.0
-
-        if lead.property_street:
-            score += 25.0
-        if lead.mailing_city:
-            score += 20.0
-        if lead.mailing_state:
-            score += 20.0
-        if lead.mailing_zip:
-            score += 20.0
-        if lead.mailing_address:
-            score += 15.0
-
-        return min(score, 100.0)
-
-    # ------------------------------------------------------------------
-    # Composite score
-    # ------------------------------------------------------------------
+        return ScoringResult(
+            total_score=total,
+            score_tier=score_tier,
+            data_quality_score=data_quality_score,
+            recommended_action=recommended_action,
+            winning_rule=winning_rule,
+            action_signals=action_signals,
+            score_details=score_details,
+            top_signals=top_signals,
+            missing_data=missing_data,
+            score_version=score_version,
+            base_score=round(base_score, 2),
+        )
 
     def compute_score(
         self,
         lead: Lead,
         weights: ScoringWeights,
-        signals: Optional[List] = None,
+        signals: Optional[list] = None,
     ) -> float:
-        """Compute the overall lead score as a weighted sum of sub-scores.
+        """Backward-compatible: return only the 0–100 total score."""
+        return self.compute(lead, weights, signals=signals).total_score
 
-        Optionally applies HubSpot signal adjustments to the base score.
-        Each signal in *signals* may be either a ``HubSpotSignal`` model
-        instance (with a ``.signal_type`` attribute) or a plain string
-        signal-type name.  Unrecognised signal types are silently ignored.
+    @staticmethod
+    def evaluate_recommended_action(
+        lead: Lead,
+        total_score: float,
+        data_quality_score: float,
+        score_tier: str,
+    ) -> tuple[str | None, str, dict]:
+        """Unified priority tree: workflow blockers, then score-derived actions."""
+        if lead.lead_status == 'do_not_contact':
+            return 'do_not_contact', 'do_not_contact', {'lead_status': 'do_not_contact'}
 
-        After signal adjustments, if ``lead.suppression_flag`` is ``True``
-        the score is clamped to a maximum of 10.0.  The final score is
-        always clamped to [0.0, 100.0] and rounded to 2 decimal places.
+        if lead.lead_status in ('suppressed', 'deprioritize', 'deal_won', 'deal_lost'):
+            return 'suppress', 'terminal_status', {'lead_status': lead.lead_status}
 
-        Parameters
-        ----------
-        lead : Lead
-            The lead to score.
-        weights : ScoringWeights
-            User-configured scoring weights (must sum to 1.0).
-        signals : list or None
-            Optional list of ``HubSpotSignal`` instances or signal-type
-            strings to apply as score adjustments.
+        lead_category = getattr(lead, "lead_category", "residential")
+        if lead_category == "commercial":
+            condo_status = getattr(lead, "condo_risk_status", None)
+            if condo_status:
+                condo_lower = condo_status.strip().lower()
+                if condo_lower == "likely_condo":
+                    return 'suppress', 'likely_condo', {'condo_risk_status': condo_status}
+                if condo_lower == "needs_review":
+                    return 'needs_manual_review', 'condo_needs_review', {'condo_risk_status': condo_status}
 
-        Returns
-        -------
-        float
-            Final score clamped to [0.0, 100.0], rounded to 2 decimal places.
-        """
-        property_sub = self.score_property_characteristics(lead)
-        completeness_sub = self.score_data_completeness(lead)
-        owner_sub = self.score_owner_situation(lead)
-        location_sub = self.score_location_desirability(lead)
+        if getattr(lead, "do_not_contact", False) is True:
+            return 'suppress', 'do_not_contact_flag', {'do_not_contact': True}
 
-        total = (
-            property_sub * weights.property_characteristics_weight
-            + completeness_sub * weights.data_completeness_weight
-            + owner_sub * weights.owner_situation_weight
-            + location_sub * weights.location_desirability_weight
-        )
+        if lead.lead_status in ('skip_trace', 'awaiting_skip_trace'):
+            return (
+                'add_contact_info', 'skip_trace_status',
+                {'lead_status': lead.lead_status, 'requires_skip_trace': True},
+            )
 
-        # Apply pipeline stage bonus — leads farther along the pipeline are
-        # more valuable and should rank higher in outreach queues.
-        pipeline_stage_bonus = self._pipeline_stage_bonus(lead)
-        total += pipeline_stage_bonus
+        has_phone, has_email, has_property_match = _resolve_crm_flags(lead)
+        if not has_phone and not has_email:
+            return 'add_contact_info', 'no_contact_info', {'has_phone': False, 'has_email': False}
 
-        total += self._score_engagement(lead)
+        if not has_property_match and lead.property_street:
+            return (
+                'resolve_match', 'no_property_match_with_address',
+                {'has_property_match': False, 'property_street': lead.property_street},
+            )
+        if not has_property_match and not lead.property_street:
+            return (
+                'enrich_data', 'no_property_match_no_address',
+                {'has_property_match': False, 'property_street': lead.property_street},
+            )
 
-        # Apply signal adjustments when signals are provided.
-        #
-        # Signals represent boolean STATES, not counters: a given signal_type
-        # contributes its SIGNAL_ADJUSTMENTS value AT MOST ONCE, even when
-        # multiple rows of the same type are present (e.g. the same
-        # PRIOR_WARM_CONVERSATION re-extracted across several sync runs). We
-        # therefore collect the set of recognised signal_types present and add
-        # each type's adjustment exactly once. DISTINCT signal_types still each
-        # apply (dedup is WITHIN a type, never across types).
-        if signals:
-            present_signal_types = set()
-            for signal in signals:
-                # Accept both HubSpotSignal model instances and plain strings
-                if isinstance(signal, str):
-                    signal_type = signal
-                else:
-                    signal_type = getattr(signal, "signal_type", None)
+        if has_property_match and not getattr(lead, 'analysis_complete', False):
+            return 'analyze_property', 'no_analysis', {'analysis_complete': False}
 
-                if signal_type and signal_type in self.SIGNAL_ADJUSTMENTS:
-                    present_signal_types.add(signal_type)
+        lead_id = getattr(lead, 'id', None)
+        has_overdue_hs_task = _has_overdue_hubspot_task(lead_id) if isinstance(lead_id, int) else False
+        if lead.follow_up_overdue or has_overdue_hs_task:
+            return 'follow_up_now', 'follow_up_overdue', {
+                'follow_up_overdue': bool(lead.follow_up_overdue),
+                'has_overdue_hs_task': has_overdue_hs_task,
+            }
 
-            for signal_type in present_signal_types:
-                total += self.SIGNAL_ADJUSTMENTS[signal_type]
+        if lead.is_warm:
+            return 'follow_up_now', 'is_warm', {'is_warm': True}
 
-        # Suppression flag: cap score at 10.0 before final clamp
-        if getattr(lead, "suppression_flag", False):
-            total = min(total, 10.0)
+        open_tasks = _count_open_tasks(lead_id) if isinstance(lead_id, int) else 0
 
-        return max(0.0, min(round(total, 2), 100.0))
-
-    # ------------------------------------------------------------------
-    # Recommended action
-    # ------------------------------------------------------------------
-
-    def compute_recommended_action(
-        self,
-        signals: Optional[List],
-    ) -> Optional[str]:
-        """Determine the recommended action from a list of signals.
-
-        Signals are evaluated in priority order using the *most recently
-        extracted* signal (i.e. the last element in the list that matches
-        a priority tier).  Priority tiers, from highest to lowest:
-
-        1. DO_NOT_CONTACT → ``'DO_NOT_CONTACT'``
-        2. SELLER_NOT_INTERESTED → ``'DO_NOT_CONTACT'``
-        3. SELLER_SAID_MAYBE_LATER → ``'FOLLOW_UP_LATER'``
-        4. OFFER_PREVIOUSLY_SENT → ``'REVISIT_OFFER'``
-
-        If no signal in the list matches any of the above tiers, ``None``
-        is returned.
-
-        Parameters
-        ----------
-        signals : list or None
-            List of ``HubSpotSignal`` model instances (with a
-            ``.signal_type`` attribute) or plain signal-type strings.
-            The list is assumed to be ordered oldest-first so that the
-            last matching signal is the most recently extracted one.
-
-        Returns
-        -------
-        str or None
-            One of ``'DO_NOT_CONTACT'``, ``'FOLLOW_UP_LATER'``,
-            ``'REVISIT_OFFER'``, or ``None``.
-        """
-        if not signals:
-            return None
-
-        # Priority map: signal_type → (priority_rank, action)
-        # Lower rank number = higher priority.
-        PRIORITY_MAP = {
-            "DO_NOT_CONTACT": (1, "DO_NOT_CONTACT"),
-            "SELLER_NOT_INTERESTED": (1, "DO_NOT_CONTACT"),
-            "SELLER_SAID_MAYBE_LATER": (2, "FOLLOW_UP_LATER"),
-            "OFFER_PREVIOUSLY_SENT": (3, "REVISIT_OFFER"),
+        if score_tier == "A" and data_quality_score >= 70:
+            return 'mail_ready', 'tier_a_high_quality', {
+                'score_tier': score_tier, 'data_quality_score': data_quality_score,
+            }
+        if score_tier == "B" and data_quality_score >= 70:
+            return 'review_now', 'tier_b_high_quality', {
+                'score_tier': score_tier, 'data_quality_score': data_quality_score,
+            }
+        if total_score >= 70 and open_tasks == 0:
+            return 'ready_for_outreach', 'high_score_no_tasks', {
+                'lead_score': total_score, 'open_task_count': open_tasks,
+            }
+        if score_tier == "C":
+            return 'nurture', 'tier_c', {'score_tier': score_tier}
+        if score_tier == "D":
+            return 'enrich_data', 'tier_d', {'score_tier': score_tier}
+        if open_tasks == 0:
+            return 'create_task', 'no_tasks_create_one', {
+                'lead_status': lead.lead_status, 'open_task_count': open_tasks,
+            }
+        return 'nurture', 'has_open_tasks', {
+            'open_task_count': open_tasks, 'lead_score': total_score,
         }
 
-        best_rank: Optional[int] = None
-        best_action: Optional[str] = None
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
 
-        for signal in signals:
-            if isinstance(signal, str):
-                signal_type = signal
-            else:
-                signal_type = getattr(signal, "signal_type", None)
+    def persist(
+        self,
+        lead: Lead,
+        result: ScoringResult,
+        *,
+        write_history: bool = True,
+        commit: bool = True,
+    ) -> LeadScore | None:
+        """Update live lead fields; optionally append ``lead_scores`` history."""
+        previous_action = lead.recommended_action
+        lead.lead_score = result.total_score
+        lead.recommended_action = result.recommended_action
+        db.session.add(lead)
 
-            if signal_type and signal_type in PRIORITY_MAP:
-                rank, action = PRIORITY_MAP[signal_type]
-                # Use this signal if it has higher priority (lower rank)
-                # or equal priority (most recently seen wins for same rank).
-                if best_rank is None or rank <= best_rank:
-                    best_rank = rank
-                    best_action = action
+        lead_score: LeadScore | None = None
+        if write_history:
+            lead_score = LeadScore(
+                lead_id=lead.id,
+                score_version=result.score_version,
+                total_score=result.total_score,
+                score_tier=result.score_tier,
+                data_quality_score=result.data_quality_score,
+                recommended_action=result.recommended_action,
+                top_signals=result.top_signals,
+                score_details=result.score_details,
+                missing_data=result.missing_data,
+                created_at=datetime.utcnow(),
+            )
+            db.session.add(lead_score)
 
-        return best_action
+        if result.recommended_action != previous_action:
+            entry = LeadTimelineEntry(
+                lead_id=lead.id,
+                event_type='recommended_action_changed',
+                occurred_at=datetime.now(timezone.utc),
+                source='system',
+                actor='System',
+                summary=(
+                    f"Recommended action changed from '{previous_action}' "
+                    f"to '{result.recommended_action}'."
+                ),
+                event_metadata={
+                    'previous_action': previous_action,
+                    'new_action': result.recommended_action,
+                    'winning_rule': result.winning_rule,
+                    'lead_score': result.total_score,
+                    'is_warm': lead.is_warm,
+                    'signals': _timeline_signals(result.action_signals),
+                },
+            )
+            db.session.add(entry)
+
+        if commit:
+            db.session.commit()
+            logger.info(
+                "Scored lead %d: tier=%s score=%.1f quality=%.1f action=%s history=%s",
+                lead.id, result.score_tier, result.total_score,
+                result.data_quality_score, result.recommended_action, write_history,
+            )
+        return lead_score
+
+    def score_and_persist(self, lead_id: int) -> LeadScore | None:
+        lead = db.session.get(Lead, lead_id)
+        if lead is None:
+            return None
+        weights = self.get_weights(lead.owner_user_id or 'default')
+        signals = (
+            HubSpotSignal.query
+            .filter_by(lead_id=lead.id)
+            .order_by(HubSpotSignal.extracted_at.asc())
+            .all()
+        )
+        result = self.compute(lead, weights, signals=signals)
+        return self.persist(lead, result)
+
+    # ------------------------------------------------------------------
+    # Bulk / recalculate (formerly DeterministicScoringEngine)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def score_needs_refresh(lead: Lead, score: Optional[LeadScore]) -> bool:
+        if score is None:
+            return True
+        if lead.updated_at and score.created_at and score.created_at < lead.updated_at:
+            return True
+        details = score.score_details or {}
+        if lead.property_type and details.get('property_type_fit', 0) == 0:
+            return True
+        acquisition = rubric.effective_acquisition_date(lead)
+        if acquisition and acquisition <= date.today() and details.get('ownership_duration', 0) == 0:
+            return True
+        return False
+
+    def recalculate_lead_score(
+        self,
+        lead: Lead,
+        signals: Optional[list] = None,
+    ) -> LeadScore:
+        weights = self.get_weights(lead.owner_user_id or 'default')
+        if signals is None:
+            signals = (
+                HubSpotSignal.query
+                .filter_by(lead_id=lead.id)
+                .order_by(HubSpotSignal.extracted_at.asc())
+                .all()
+            )
+        result = self.compute(lead, weights, signals=signals)
+        row = self.persist(lead, result)
+        assert row is not None
+        return row
+
+    def recalculate_all_lead_scores(self) -> int:
+        scored = 0
+        offset = 0
+        while True:
+            leads = (
+                Lead.query.order_by(Lead.id)
+                .offset(offset).limit(BULK_RESCORE_BATCH_SIZE).all()
+            )
+            if not leads:
+                break
+            for lead in leads:
+                try:
+                    self.recalculate_lead_score(lead)
+                    scored += 1
+                except Exception as e:
+                    logger.error("Failed to score lead %d: %s", lead.id, e)
+                    db.session.rollback()
+            offset += BULK_RESCORE_BATCH_SIZE
+        return scored
+
+    def recalculate_by_source_type(self, source_type: str) -> int:
+        scored = 0
+        offset = 0
+        while True:
+            leads = (
+                Lead.query
+                .filter((Lead.source == source_type) | (Lead.data_source == source_type))
+                .order_by(Lead.id)
+                .offset(offset).limit(BULK_RESCORE_BATCH_SIZE).all()
+            )
+            if not leads:
+                break
+            for lead in leads:
+                try:
+                    self.recalculate_lead_score(lead)
+                    scored += 1
+                except Exception as e:
+                    logger.error("Failed to score lead %d: %s", lead.id, e)
+                    db.session.rollback()
+            offset += BULK_RESCORE_BATCH_SIZE
+        return scored
 
     # ------------------------------------------------------------------
     # Weight management
     # ------------------------------------------------------------------
 
     def get_weights(self, user_id: str) -> ScoringWeights:
-        """Retrieve scoring weights for a user, creating defaults if needed.
-
-        Parameters
-        ----------
-        user_id : str
-
-        Returns
-        -------
-        ScoringWeights
-        """
         weights = ScoringWeights.query.filter_by(user_id=user_id).first()
         if not weights:
-            weights = ScoringWeights(
-                user_id=user_id,
-                **DEFAULT_WEIGHTS,
-            )
+            weights = ScoringWeights(user_id=user_id, **DEFAULT_WEIGHTS)
             db.session.add(weights)
             db.session.commit()
         return weights
@@ -538,48 +505,18 @@ class LeadScoringEngine:
         data_completeness_weight: float,
         owner_situation_weight: float,
         location_desirability_weight: float,
+        data_enrichment_weight: float,
     ) -> ScoringWeights:
-        """Update scoring weights for a user.
-
-        Validates that the four weights sum to 1.0 (within tolerance).
-
-        Parameters
-        ----------
-        user_id : str
-        property_characteristics_weight : float
-        data_completeness_weight : float
-        owner_situation_weight : float
-        location_desirability_weight : float
-
-        Returns
-        -------
-        ScoringWeights
-            The updated weights record.
-
-        Raises
-        ------
-        ValueError
-            If the weights do not sum to 1.0 (within tolerance) or any
-            weight is negative.
-        """
         weight_values = [
-            property_characteristics_weight,
-            data_completeness_weight,
-            owner_situation_weight,
-            location_desirability_weight,
+            property_characteristics_weight, data_completeness_weight,
+            owner_situation_weight, location_desirability_weight, data_enrichment_weight,
         ]
-
-        # Validate non-negative
         for w in weight_values:
             if w < 0:
                 raise ValueError(f"Weights must be non-negative, got {w}")
-
-        # Validate sum
         weight_sum = sum(weight_values)
         if abs(weight_sum - 1.0) > WEIGHT_SUM_TOLERANCE:
-            raise ValueError(
-                f"Weights must sum to 1.0 (got {weight_sum:.4f})"
-            )
+            raise ValueError(f"Weights must sum to 1.0 (got {weight_sum:.4f})")
 
         weights = ScoringWeights.query.filter_by(user_id=user_id).first()
         if weights:
@@ -587,6 +524,7 @@ class LeadScoringEngine:
             weights.data_completeness_weight = data_completeness_weight
             weights.owner_situation_weight = owner_situation_weight
             weights.location_desirability_weight = location_desirability_weight
+            weights.data_enrichment_weight = data_enrichment_weight
             weights.updated_at = datetime.utcnow()
         else:
             weights = ScoringWeights(
@@ -595,9 +533,9 @@ class LeadScoringEngine:
                 data_completeness_weight=data_completeness_weight,
                 owner_situation_weight=owner_situation_weight,
                 location_desirability_weight=location_desirability_weight,
+                data_enrichment_weight=data_enrichment_weight,
             )
             db.session.add(weights)
-
         db.session.commit()
         return weights
 
@@ -606,119 +544,243 @@ class LeadScoringEngine:
     # ------------------------------------------------------------------
 
     def bulk_rescore(self, user_id: str, lead_ids: Optional[list[int]] = None) -> int:
-        """Rescore leads in batches, incorporating HubSpot signals.
-
-        For each lead, queries its associated ``HubSpotSignal`` records,
-        passes them to ``compute_score``, computes the recommended action
-        via ``compute_recommended_action``, and persists both
-        ``lead.lead_score`` and ``lead.recommended_action``.
-
-        This is the Celery task entry point.  If *lead_ids* is ``None``,
-        all leads are rescored.
-
-        Parameters
-        ----------
-        user_id : str
-            The user whose weights to use.
-        lead_ids : list[int] or None
-            Specific lead IDs to rescore, or ``None`` for all leads.
-
-        Returns
-        -------
-        int
-            Number of leads rescored.
-        """
-        # Lazy import to avoid circular imports at module load time.
-        from app.models.hubspot_signal import HubSpotSignal  # noqa: PLC0415
-
-        weights = self.get_weights(user_id)
+        """Refresh live scores without append-only history rows (batched commits)."""
         rescored = 0
+        pending_commits = 0
 
-        def _rescore_lead(lead: Lead) -> None:
+        def _flush_batch() -> None:
+            nonlocal pending_commits
+            if pending_commits:
+                db.session.commit()
+                pending_commits = 0
+
+        def _rescore_one(lead: Lead) -> None:
+            nonlocal rescored, pending_commits
+            weights = self.get_weights(lead.owner_user_id or user_id)
             signals = (
                 HubSpotSignal.query
                 .filter_by(lead_id=lead.id)
                 .order_by(HubSpotSignal.extracted_at.asc())
                 .all()
             )
-            # Only update lead_score here — recommended_action is managed
-            # exclusively by ActionEngineService to keep enum values consistent.
-            lead.lead_score = self.compute_score(lead, weights, signals=signals)
+            result = self.compute(lead, weights, signals=signals)
+            self.persist(lead, result, write_history=False, commit=False)
+            rescored += 1
+            pending_commits += 1
+            if pending_commits >= BULK_RESCORE_BATCH_SIZE:
+                _flush_batch()
 
-        if lead_ids is not None:
-            # Process specific leads in batches
-            for i in range(0, len(lead_ids), BULK_RESCORE_BATCH_SIZE):
-                batch_ids = lead_ids[i : i + BULK_RESCORE_BATCH_SIZE]
-                leads = Lead.query.filter(Lead.id.in_(batch_ids)).all()
-                for lead in leads:
-                    _rescore_lead(lead)
-                    rescored += 1
-                db.session.commit()
-                logger.info(
-                    "Rescored batch %d-%d (%d leads)",
-                    i, i + len(batch_ids), len(leads),
-                )
-        else:
-            # Process all leads in batches
-            offset = 0
-            while True:
-                leads = (
-                    Lead.query
-                    .order_by(Lead.id)
-                    .offset(offset)
-                    .limit(BULK_RESCORE_BATCH_SIZE)
-                    .all()
-                )
-                if not leads:
-                    break
-                for lead in leads:
-                    _rescore_lead(lead)
-                    rescored += 1
-                db.session.commit()
-                logger.info(
-                    "Rescored batch at offset %d (%d leads)",
-                    offset, len(leads),
-                )
-                offset += BULK_RESCORE_BATCH_SIZE
+        try:
+            if lead_ids is not None:
+                for i in range(0, len(lead_ids), BULK_RESCORE_BATCH_SIZE):
+                    batch_ids = lead_ids[i:i + BULK_RESCORE_BATCH_SIZE]
+                    for lead in Lead.query.filter(Lead.id.in_(batch_ids)).all():
+                        _rescore_one(lead)
+            else:
+                offset = 0
+                while True:
+                    leads = (
+                        Lead.query.order_by(Lead.id)
+                        .offset(offset).limit(BULK_RESCORE_BATCH_SIZE).all()
+                    )
+                    if not leads:
+                        break
+                    for lead in leads:
+                        _rescore_one(lead)
+                    offset += BULK_RESCORE_BATCH_SIZE
+            _flush_batch()
+        except Exception:
+            db.session.rollback()
+            raise
 
         logger.info("Bulk rescore complete: %d leads rescored", rescored)
         return rescored
 
+    def bulk_recompute_actions(self, lead_ids: list[int] | None = None) -> int:
+        """Re-score leads (score + action are unified)."""
+        if lead_ids is None:
+            return self.bulk_rescore('default')
+        return self.bulk_rescore('default', lead_ids=lead_ids)
+
+    @staticmethod
+    def recompute_and_persist(lead_id: int):
+        """Backward-compatible ActionEngine entry point."""
+        engine = LeadScoringEngine()
+        result = engine.score_and_persist(lead_id)
+        if result is None:
+            raise ValueError(f"Lead {lead_id} not found")
+        return db.session.get(Lead, lead_id)
+
+    @staticmethod
+    def bulk_recompute(lead_ids: list[int] | None = None) -> int:
+        return LeadScoringEngine().bulk_recompute_actions(lead_ids)
+
     # ------------------------------------------------------------------
-    # Score a single lead (convenience for create/update flows)
+    # Rubric delegates (backward-compatible with DeterministicScoringEngine tests)
     # ------------------------------------------------------------------
 
-    def score_lead(self, lead: Lead, user_id: str = "default") -> float:
-        """Compute and persist the score for a single lead.
+    @staticmethod
+    def parse_sale_date_string(value: Optional[str]) -> Optional[date]:
+        return rubric.parse_sale_date_string(value)
 
-        Intended to be called during lead creation or update.
+    @staticmethod
+    def effective_acquisition_date(lead: Lead) -> Optional[date]:
+        return rubric.effective_acquisition_date(lead)
 
-        Parameters
-        ----------
-        lead : Lead
-        user_id : str
+    def calculate_residential_score(self, lead: Lead) -> dict:
+        return rubric.calculate_residential_score(lead)
 
-        Returns
-        -------
-        float
-            The computed score.
-        """
-        weights = self.get_weights(user_id)
-        score = self.compute_score(lead, weights)
-        lead.lead_score = score
-        return score
+    def calculate_commercial_score(self, lead: Lead) -> dict:
+        return rubric.calculate_commercial_score(lead)
+
+    def calculate_data_quality_score(self, lead: Lead) -> tuple:
+        return rubric.calculate_data_quality_score(lead)
+
+    @staticmethod
+    def calculate_score_tier(total_score: float) -> str:
+        return rubric.calculate_score_tier(total_score)
+
+    @staticmethod
+    def get_recommended_action(
+        lead: Lead,
+        total_score: float,
+        data_quality_score: float,
+        score_tier: str,
+    ) -> str:
+        action, _rule, _signals = LeadScoringEngine.evaluate_recommended_action(
+            lead, total_score, data_quality_score, score_tier,
+        )
+        return action or 'enrich_data'
+
+    @staticmethod
+    def extract_top_signals(score_details: dict) -> list:
+        return rubric.extract_top_signals(score_details)
+
+    @staticmethod
+    def _normalize_for_tier(raw_total: float, category: str) -> float:
+        """Legacy helper — unified engine uses 0–100 scores directly."""
+        return min(100.0, max(0.0, raw_total))
+
+    # ------------------------------------------------------------------
+    # Legacy helpers (backward-compatible with pre-unification tests/API)
+    # ------------------------------------------------------------------
+
+    _LEGACY_BUCKET_DIMS = {
+        "property_characteristics": ["property_type_fit"],
+        "data_completeness": ["neighborhood_fit"],
+        "owner_situation": ["absentee_owner"],
+        "location_desirability": ["neighborhood_fit"],
+    }
+
+    _LEGACY_SIGNAL_ACTIONS = {
+        "DO_NOT_CONTACT": (1, "DO_NOT_CONTACT"),
+        "SELLER_NOT_INTERESTED": (1, "DO_NOT_CONTACT"),
+        "SELLER_SAID_MAYBE_LATER": (2, "FOLLOW_UP_LATER"),
+        "OFFER_PREVIOUSLY_SENT": (3, "REVISIT_OFFER"),
+    }
+
+    def apply_signal_adjustments(
+        self,
+        score: float,
+        signals: Optional[list] = None,
+        lead: Optional[Lead] = None,
+    ) -> float:
+        """Apply HubSpot signal deltas to a base score (legacy API)."""
+        adjusted = score + self._hubspot_signal_adjustment(signals)
+        if lead is not None and getattr(lead, "suppression_flag", False):
+            adjusted = min(adjusted, 10.0)
+        return round(max(0.0, min(adjusted, 100.0)), 2)
+
+    def apply_configurable_weights(
+        self,
+        base_score: float,
+        details: dict,
+        weights: Optional[dict] = None,
+    ) -> float:
+        """Re-weight rubric dimensions into bucket totals (legacy API)."""
+        if weights is None:
+            return base_score
+
+        norm_weights: dict[str, float] = {}
+        for key, value in weights.items():
+            bucket = key[:-7] if key.endswith("_weight") else key
+            norm_weights[bucket] = value
+
+        total = 0.0
+        for bucket, dim_keys in self._LEGACY_BUCKET_DIMS.items():
+            bucket_weight = norm_weights.get(bucket, 0.0)
+            dim_sum = sum(details.get(dim, 0.0) for dim in dim_keys)
+            total += dim_sum * bucket_weight
+        return round(total, 2)
+
+    def _compute_recommended_action_from_signals(
+        self,
+        signals: Optional[list],
+    ) -> str | None:
+        """Map HubSpot signal types to legacy action labels (pre-unification API)."""
+        if not signals:
+            return None
+
+        best_action: str | None = None
+        best_key: tuple[int, int] | None = None
+        for index, signal in enumerate(signals):
+            signal_type = (
+                signal if isinstance(signal, str)
+                else getattr(signal, "signal_type", None)
+            )
+            mapped = self._LEGACY_SIGNAL_ACTIONS.get(signal_type)
+            if mapped is None:
+                continue
+            rank, action = mapped
+            key = (rank, -index)
+            if best_key is None or key < best_key:
+                best_key = key
+                best_action = action
+        return best_action
+
+    # ------------------------------------------------------------------
+    # Static helpers for API / tests
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def compute_recommended_action(lead: Lead) -> str | None:
+        total = float(getattr(lead, 'lead_score', 0) or 0)
+        data_quality = float(getattr(lead, 'data_completeness_score', 0) or 0)
+        tier = rubric.calculate_score_tier(total)
+        action, _, _ = LeadScoringEngine.evaluate_recommended_action(
+            lead, total, data_quality, tier,
+        )
+        return action
+
+    @staticmethod
+    def get_winning_rule_signals(lead: Lead) -> dict:
+        total = float(getattr(lead, 'lead_score', 0) or 0)
+        data_quality = float(getattr(lead, 'data_completeness_score', 0) or 0)
+        tier = rubric.calculate_score_tier(total)
+        _, _, signals = LeadScoringEngine.evaluate_recommended_action(
+            lead, total, data_quality, tier,
+        )
+        return signals
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
+    def _hubspot_signal_adjustment(self, signals: Optional[list]) -> float:
+        if not signals:
+            return 0.0
+        present = set()
+        for signal in signals:
+            signal_type = signal if isinstance(signal, str) else getattr(signal, "signal_type", None)
+            if signal_type and signal_type in self.SIGNAL_ADJUSTMENTS:
+                present.add(signal_type)
+        return sum(self.SIGNAL_ADJUSTMENTS[t] for t in present)
+
     def _score_engagement(self, lead: Lead) -> float:
-        """Apply additive modifiers from recent native timeline activity."""
         lead_id = getattr(lead, 'id', None)
         if not isinstance(lead_id, int):
             return 0.0
 
-        from app.models.lead_timeline_entry import LeadTimelineEntry
         from app.services.hubspot_signal_extractor_service import HubSpotSignalExtractorService
 
         cutoff = datetime.utcnow() - timedelta(days=ENGAGEMENT_LOOKBACK_DAYS)
@@ -736,7 +798,6 @@ class LeadScoringEngine:
 
         applied: set[str] = set()
         modifier = 0.0
-
         for entry in entries:
             meta = entry.event_metadata or {}
             if entry.event_type == 'call_logged':
@@ -773,32 +834,8 @@ class LeadScoringEngine:
 
     @staticmethod
     def _pipeline_stage_bonus(lead: Lead) -> float:
-        """Return a score bonus based on how far along the pipeline the lead is.
-
-        Leads that have been contacted, are in active negotiation, or have had
-        an offer delivered are worth more attention and should rank higher.
-        Leads awaiting skip trace have insufficient contact info and are
-        slightly deprioritised relative to uncontacted leads.
-
-        Stage bonuses (additive on top of the base weighted score):
-          skip_trace / awaiting_skip_trace : -5  (contact info not yet acquired)
-          mailing_no_contact_made          :   0  (baseline — no adjustment)
-          mailing_contacted_no_interest    : -10  (explicit "no interest" — minor
-                                                   penalty so a disinterested lead
-                                                   ranks slightly BELOW an
-                                                   uncontacted one, instead of being
-                                                   rewarded for having been reached)
-          mailing_contacted_interested     : +15 (active interest expressed)
-          negotiating_remote               : +25 (in active negotiation)
-          in_person_appointment            : +30 (high-commitment stage)
-          offer_delivered                  : +35 (offer on the table)
-
-        All other statuses return 0 (suppressed/terminal leads are filtered
-        out before scoring runs, so they never hit this method in practice).
-        """
-        STAGE_BONUS: dict = {
-            'skip_trace': -5.0,
-            'awaiting_skip_trace': -5.0,
+        STAGE_BONUS = {
+            'skip_trace': -5.0, 'awaiting_skip_trace': -5.0,
             'mailing_no_contact_made': 0.0,
             'mailing_contacted_no_interest': -10.0,
             'mailing_contacted_interested': 15.0,
@@ -806,25 +843,32 @@ class LeadScoringEngine:
             'in_person_appointment': 30.0,
             'offer_delivered': 35.0,
         }
-        status = getattr(lead, 'lead_status', None)
-        return STAGE_BONUS.get(status, 0.0)
+        return STAGE_BONUS.get(getattr(lead, 'lead_status', None), 0.0)
 
-    @staticmethod
-    def _years_since(d: date) -> Optional[float]:
-        """Return the number of years between *d* and today, or None."""
-        if d is None:
-            return None
-        today = date.today()
-        delta = today - d
-        return delta.days / 365.25
 
-    @staticmethod
-    def _is_absentee_owner(lead: Lead) -> bool:
-        """Heuristic: owner is absentee if mailing address is present and
-        differs from the property address."""
-        if not lead.mailing_address or not lead.property_street:
-            return False
-        return (
-            lead.mailing_address.strip().lower()
-            != lead.property_street.strip().lower()
-        )
+# Deprecated alias — use LeadScoringEngine directly.
+ActionEngineService = LeadScoringEngine
+
+# Module-level helpers for scripts/tests
+def evaluate_recommended_action(lead: Lead) -> tuple[str | None, str, dict]:
+    """Backward-compatible wrapper returning (action, winning_rule, signals)."""
+    engine = LeadScoringEngine()
+    weights = engine.get_weights(lead.owner_user_id or 'default')
+    result = engine.compute(lead, weights)
+    return result.recommended_action, result.winning_rule, result.action_signals
+
+# Re-export rubric utilities used by tests
+parse_sale_date_string = rubric.parse_sale_date_string
+effective_acquisition_date = rubric.effective_acquisition_date
+calculate_score_tier = rubric.calculate_score_tier
+TIER_A_MIN = rubric.TIER_A_MIN
+TIER_B_MIN = rubric.TIER_B_MIN
+TIER_C_MIN = rubric.TIER_C_MIN
+RESIDENTIAL_MAX_POINTS = rubric.RESIDENTIAL_MAX_POINTS
+COMMERCIAL_MAX_POINTS = rubric.COMMERCIAL_MAX_POINTS
+ALLOWED_ACTIONS = {
+    "review_now", "enrich_data", "mail_ready", "call_ready",
+    "valuation_needed", "suppress", "nurture", "needs_manual_review",
+    "follow_up_now", "ready_for_outreach", "add_contact_info", "create_task",
+    "resolve_match", "analyze_property", "do_not_contact",
+}

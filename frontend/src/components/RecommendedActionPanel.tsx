@@ -48,6 +48,28 @@ const UNIVERSAL_ACTIONS: ActionButton[] = [
 ]
 
 const ACTION_BUTTONS: Record<CRMRecommendedAction, ActionButton[]> = {
+  review_now: [
+    { label: 'Research Property', action: 'research_property' },
+    { label: 'Log Note', action: 'log_note' },
+    { label: 'Create Task', action: 'create_task' },
+  ],
+  mail_ready: [
+    { label: 'Add to Mail Batch', action: 'add_to_mail_batch', isOutreach: true },
+    { label: 'Log Note', action: 'log_note' },
+  ],
+  call_ready: [
+    { label: 'Log Call', action: 'log_call', isOutreach: true },
+    { label: 'Create Task', action: 'create_task' },
+  ],
+  valuation_needed: [
+    { label: 'Run Analysis', action: 'run_analysis' },
+    { label: 'Research Property', action: 'research_property' },
+  ],
+  needs_manual_review: [
+    { label: 'Research Property', action: 'research_property' },
+    { label: 'Log Note', action: 'log_note' },
+    { label: 'Create Task', action: 'create_task' },
+  ],
   enrich_data: [
     { label: 'Run Skip Trace', action: 'skip_trace' },
     { label: 'Add Contact Info', action: 'add_contact_info' },

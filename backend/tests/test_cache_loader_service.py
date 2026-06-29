@@ -540,8 +540,8 @@ class TestUpsertParcelUniverse:
     def test_upserts_valid_rows(self, service, app):
         with app.app_context():
             rows = [
-                {"pin": "14083010190000", "lat": "41.8781", "lon": "-87.6298", "last_synced_at": None},
-                {"pin": "14083010200000", "lat": "41.8790", "lon": "-87.6300", "last_synced_at": None},
+                {"pin": "14083010190000", "lat": "41.8781", "lon": "-87.6298", "class": "2-11", "lot_size": 5000, "assessed_value": 250000, "last_synced_at": None},
+                {"pin": "14083010200000", "lat": "41.8790", "lon": "-87.6300", "class": "2-11", "lot_size": 6000, "assessed_value": 300000, "last_synced_at": None},
             ]
             count = service._upsert_parcel_universe(rows)
             assert count == 2
@@ -556,18 +556,18 @@ class TestUpsertParcelUniverse:
     def test_skips_rows_missing_pin(self, service, app):
         with app.app_context():
             rows = [
-                {"lat": "41.8781", "lon": "-87.6298", "last_synced_at": None},  # no pin
-                {"pin": "14083010200000", "lat": "41.8790", "lon": "-87.6300", "last_synced_at": None},
+                {"lat": "41.8781", "lon": "-87.6298", "class": "2-11", "lot_size": 5000, "assessed_value": 250000, "last_synced_at": None},  # no pin
+                {"pin": "14083010200000", "lat": "41.8790", "lon": "-87.6300", "class": "2-11", "lot_size": 6000, "assessed_value": 300000, "last_synced_at": None},
             ]
             count = service._upsert_parcel_universe(rows)
             assert count == 1
 
     def test_upsert_updates_existing_row(self, service, app):
         with app.app_context():
-            rows = [{"pin": "14083010190000", "lat": "41.8781", "lon": "-87.6298", "last_synced_at": None}]
+            rows = [{"pin": "14083010190000", "lat": "41.8781", "lon": "-87.6298", "class": "2-11", "lot_size": 5000, "assessed_value": 250000, "last_synced_at": None}]
             service._upsert_parcel_universe(rows)
 
-            updated_rows = [{"pin": "14083010190000", "lat": "41.9000", "lon": "-87.7000", "last_synced_at": None}]
+            updated_rows = [{"pin": "14083010190000", "lat": "41.9000", "lon": "-87.7000", "class": "2-11", "lot_size": 5000, "assessed_value": 250000, "last_synced_at": None}]
             count = service._upsert_parcel_universe(updated_rows)
             assert count == 1
 
@@ -577,9 +577,9 @@ class TestUpsertParcelUniverse:
     def test_returns_count_of_mapped_rows(self, service, app):
         with app.app_context():
             rows = [
-                {"pin": "11111111111111", "lat": "41.0", "lon": "-87.0", "last_synced_at": None},
-                {"lat": "41.0", "lon": "-87.0", "last_synced_at": None},  # skipped
-                {"pin": "22222222222222", "lat": "42.0", "lon": "-88.0", "last_synced_at": None},
+                {"pin": "11111111111111", "lat": "41.0", "lon": "-87.0", "class": "2-11", "lot_size": 5000, "assessed_value": 250000, "last_synced_at": None},
+                {"lat": "41.0", "lon": "-87.0", "class": "2-11", "lot_size": 5000, "assessed_value": 250000, "last_synced_at": None},  # skipped
+                {"pin": "22222222222222", "lat": "42.0", "lon": "-88.0", "class": "2-11", "lot_size": 6000, "assessed_value": 300000, "last_synced_at": None},
             ]
             count = service._upsert_parcel_universe(rows)
             assert count == 2
@@ -753,7 +753,7 @@ class TestFullLoad:
     """Tests for CacheLoaderService.full_load."""
 
     def _parcel_universe_row(self, pin):
-        return {"pin": pin, "lat": "41.8781", "lon": "-87.6298", "last_synced_at": None}
+        return {"pin": pin, "lat": "41.8781", "lon": "-87.6298", "class": "2-11", "lot_size": 5000, "assessed_value": 250000, "last_synced_at": None}
 
     def test_raises_value_error_for_invalid_dataset(self, service, app):
         with app.app_context():
@@ -866,7 +866,7 @@ class TestIncrementalRefresh:
     """Tests for CacheLoaderService.incremental_refresh."""
 
     def _parcel_universe_row(self, pin):
-        return {"pin": pin, "lat": "41.8781", "lon": "-87.6298", "last_synced_at": None}
+        return {"pin": pin, "lat": "41.8781", "lon": "-87.6298", "class": "2-11", "lot_size": 5000, "assessed_value": 250000, "last_synced_at": None}
 
     def test_raises_value_error_for_invalid_dataset(self, service, app):
         with app.app_context():
@@ -1147,8 +1147,8 @@ class TestFullLoadIntegration:
     def test_full_load_parcel_universe_end_to_end(self, mock_get, service, app):
         with app.app_context():
             page1 = [
-                {"pin": "11111111111111", "lat": "41.8", "lon": "-87.6", "last_synced_at": None},
-                {"pin": "22222222222222", "lat": "41.9", "lon": "-87.7", "last_synced_at": None},
+                {"pin": "11111111111111", "lat": "41.8", "lon": "-87.6", "class": "2-11", "lot_size": 5000, "assessed_value": 250000, "last_synced_at": None},
+                {"pin": "22222222222222", "lat": "41.9", "lon": "-87.7", "class": "2-11", "lot_size": 6000, "assessed_value": 300000, "last_synced_at": None},
             ]
             # Return full page then empty to stop pagination
             mock_get.side_effect = [page1, []]

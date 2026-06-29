@@ -1,6 +1,12 @@
 """Pytest configuration and fixtures."""
 import pytest
 import os
+
+# Set test env vars before any app/celery imports (celery_worker requires them).
+os.environ.setdefault('REDIS_URL', 'redis://localhost:6379/0')
+os.environ.setdefault('DATABASE_URL', 'sqlite:///:memory:')
+os.environ.setdefault('FLASK_ENV', 'testing')
+
 from unittest.mock import patch, MagicMock
 from hypothesis import settings, HealthCheck
 from app import create_app, db

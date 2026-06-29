@@ -52,6 +52,9 @@ class CacheLoaderService:
         'pin',
         'lat',
         'lon',
+        'class',
+        'lot_size',
+        'assessed_value',
         'last_synced_at',
     })
     PARCEL_UNIVERSE_NOT_NULL: frozenset[str] = frozenset({
@@ -239,6 +242,62 @@ class CacheLoaderService:
             results.append(result)
 
         return results
+
+    # ------------------------------------------------------------------
+    # Private helpers (stubs — implemented in tasks 5.2–5.6)
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Self-documenting fixture builders
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def make_parcel_universe_row(**overrides) -> dict:
+        """Create a ParcelUniverse row dict with all required columns.
+
+        Every whitelist column is present (nullable ones default to ``None``).
+        Override any column by passing it as a keyword argument.
+
+        Example::
+
+            row = CacheLoaderService.make_parcel_universe_row(
+                pin='14083010190000', assessed_value='250000',
+            )
+        """
+        row = {col: None for col in CacheLoaderService.PARCEL_UNIVERSE_WHITELIST}
+        row['pin'] = '00000000000000'  # required default
+        row.update(overrides)
+        return row
+
+    @staticmethod
+    def make_parcel_sales_row(**overrides) -> dict:
+        """Create a ParcelSales row dict with all required columns.
+
+        Every whitelist column is present (nullable ones default to ``None``).
+        Override any column by passing it as a keyword argument.
+
+        Example::
+
+            row = CacheLoaderService.make_parcel_sales_row(
+                pin='14083010190000', sale_price='300000',
+            )
+        """
+        row = {col: None for col in CacheLoaderService.PARCEL_SALES_WHITELIST}
+        row['pin'] = '00000000000000'  # required default
+        row.update(overrides)
+        return row
+
+    @staticmethod
+    def make_improvement_chars_row(**overrides) -> dict:
+        """Create an ImprovementCharacteristics row dict with all required columns.
+
+        Every whitelist column is present (nullable ones default to ``None``).
+        Override any column by passing it as a keyword argument.
+        """
+        row = {col: None for col in CacheLoaderService.IMPROVEMENT_CHARS_WHITELIST}
+        row['pin'] = '00000000000000'  # required default
+        row.update(overrides)
+        return row
 
     # ------------------------------------------------------------------
     # Private helpers (stubs — implemented in tasks 5.2–5.6)
@@ -433,6 +492,8 @@ class CacheLoaderService:
                 self.PARCEL_UNIVERSE_NOT_NULL,
             )
             if mapped is not None:
+                if 'class' in mapped:
+                    mapped['property_class'] = mapped.pop('class')
                 # Keep the last occurrence of each PIN — same as what the upsert converges to.
                 mapped_by_pin[mapped['pin']] = mapped
 
@@ -443,9 +504,11 @@ class CacheLoaderService:
 
         try:
             stmt = pg_insert(ParcelUniverseCache).values(mapped_rows)
+            update_col_names = [
+                key for key in mapped_rows[0].keys() if key != 'pin'
+            ]
             update_cols = {
-                col: stmt.excluded[col]
-                for col in ['lat', 'lon', 'last_synced_at']
+                col: stmt.excluded[col] for col in update_col_names
             }
             stmt = stmt.on_conflict_do_update(
                 index_elements=['pin'],

@@ -162,6 +162,12 @@ export const LeadSummarySchema = z.object({
   // so we accept string | array | object to avoid parse failures.
   // Also nullish because it is absent from list-endpoint responses.
   mailer_history: z.union([z.record(z.unknown()), z.array(z.unknown()), z.string()]).nullish(),
+  score_tier: z.enum(['A', 'B', 'C', 'D']).nullish(),
+  data_quality_score: z.number().nullish(),
+  recommended_action: z.string().nullish(),
+  top_signal: z.string().nullish(),
+  missing_data: z.array(z.string()).nullish(),
+  missing_data_count: z.number().nullish(),
 })
 
 export type LeadSummaryParsed = z.infer<typeof LeadSummarySchema>

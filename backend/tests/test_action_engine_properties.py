@@ -8,7 +8,25 @@ from hypothesis import given, settings, assume
 from hypothesis import strategies as st
 from unittest.mock import MagicMock, patch
 
-from app.services.action_engine_service import ActionEngineService, _count_open_tasks
+from app.services.action_engine_service import ActionEngineService
+
+
+@pytest.fixture(autouse=True)
+def _mock_action_engine_db(monkeypatch):
+    """Avoid Flask app context in property-based unit tests."""
+
+    def _flags(lead):
+        return (
+            bool(getattr(lead, 'has_phone', False)),
+            bool(getattr(lead, 'has_email', False)),
+            bool(getattr(lead, 'has_property_match', False)),
+        )
+
+    monkeypatch.setattr('app.services.lead_scoring_engine._resolve_crm_flags', _flags)
+    monkeypatch.setattr(
+        'app.services.lead_scoring_engine._has_overdue_hubspot_task',
+        lambda _lead_id: False,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +74,9 @@ def make_mock_lead(
     lead.lead_score = lead_score
     lead.data_completeness_score = data_completeness_score
     lead.property_street = property_street
+    lead.do_not_contact = False
+    lead.suppression_flag = False
+    lead.lead_category = 'residential'
     return lead
 
 
@@ -105,7 +126,7 @@ def test_property_1_active_lead_actionability_invariant(
         property_street=property_street,
     )
 
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=open_task_count):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=open_task_count):
         result = ActionEngineService.compute_recommended_action(lead)
 
     # Invariant: for active leads, RA must be non-null OR open tasks exist
@@ -160,7 +181,7 @@ def test_property_2_action_engine_determinism(
         property_street=property_street,
     )
 
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=open_task_count):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=open_task_count):
         result_1 = ActionEngineService.compute_recommended_action(lead)
         result_2 = ActionEngineService.compute_recommended_action(lead)
 
@@ -217,7 +238,7 @@ def test_property_3_action_engine_priority_ordering(
         property_street=property_street,
     )
 
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=open_task_count):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=open_task_count):
         result = ActionEngineService.compute_recommended_action(lead)
 
     # Priority 3 fires first: no phone AND no email → add_contact_info
@@ -251,8 +272,8 @@ def test_property_11_dnc_status_invariants(
 ):
     """
     Property 11: DNC Status Invariants
-    For any lead with lead_status='do_not_contact', recommended_action is null
-    regardless of all other signal values.
+    For any lead with lead_status='do_not_contact', recommended_action is
+    do_not_contact regardless of all other signal values.
 
     Validates: Requirements 2.1, 5.4, 14.2, 21.2, 21.3
     """
@@ -269,11 +290,11 @@ def test_property_11_dnc_status_invariants(
         data_completeness_score=data_completeness_score,
     )
 
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
 
-    assert result is None, (
-        f"DNC invariant violated: expected None for do_not_contact lead, got '{result}'"
+    assert result == 'do_not_contact', (
+        f"DNC invariant violated: expected do_not_contact for do_not_contact lead, got '{result}'"
     )
 
 
@@ -322,7 +343,7 @@ def test_property_16_action_engine_timeline_idempotency(
         data_completeness_score=data_completeness_score,
     )
 
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result_1 = ActionEngineService.compute_recommended_action(lead)
         result_2 = ActionEngineService.compute_recommended_action(lead)
 

@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
+from flask import has_app_context
+
 from app import db
 from app.models.enrichment import DataSource, EnrichmentRecord
 from app.models.lead import Lead, LeadAuditTrail
@@ -27,8 +29,11 @@ BULK_ENRICH_BATCH_SIZE = 100
 ENRICHABLE_FIELDS = [
     "property_type", "bedrooms", "bathrooms", "square_footage",
     "lot_size", "year_built", "ownership_type", "acquisition_date",
+    "assessed_value", "most_recent_sale_price",
     "phone_1", "phone_2", "phone_3", "email_1", "email_2",
     "mailing_address", "mailing_city", "mailing_state", "mailing_zip",
+    # Enrichment-specific JSON data fields
+    "violation_data", "permit_data", "tax_distress_data",
 ]
 
 
@@ -102,6 +107,7 @@ class DataSourceConnector:
 
     def __init__(self) -> None:
         self._plugins: dict[str, DataSourcePlugin] = {}
+        _register_default_plugins(self)
 
     # ------------------------------------------------------------------
     # Plugin management
@@ -133,28 +139,55 @@ class DataSourceConnector:
 
         self._plugins[plugin.name] = plugin
 
-        # Ensure a DataSource row exists in the database
-        ds = DataSource.query.filter_by(name=plugin.name).first()
+        if has_app_context():
+            self._ensure_data_source_row(plugin.name)
+            logger.info("Registered data source plugin '%s'", plugin.name)
+        else:
+            logger.info(
+                "Registered data source plugin '%s' in memory (DB sync deferred)",
+                plugin.name,
+            )
+
+    def _ensure_data_source_row(self, name: str) -> DataSource:
+        """Create the DataSource DB row for a plugin if it does not exist."""
+        ds = DataSource.query.filter_by(name=name).first()
         if not ds:
-            ds = DataSource(name=plugin.name, is_active=True)
+            ds = DataSource(name=name, is_active=True)
             db.session.add(ds)
             db.session.commit()
             logger.info("Registered new data source: %s (id=%d)", ds.name, ds.id)
-        else:
-            logger.info("Plugin '%s' attached to existing DataSource id=%d", plugin.name, ds.id)
+        return ds
+
+    def _register_plugin_in_memory(self, plugin: DataSourcePlugin) -> None:
+        """Attach a plugin to the in-memory registry without touching the DB."""
+        if not plugin.name:
+            raise ValueError("Plugin must have a non-empty 'name' attribute")
+        if plugin.name not in self._plugins:
+            self._plugins[plugin.name] = plugin
 
     def list_sources(self) -> list[DataSourceInfo]:
-        """Return a summary of all registered data sources.
+        """Return a summary of all registered in-memory plugins.
 
         Returns
         -------
         list[DataSourceInfo]
         """
-        sources = DataSource.query.order_by(DataSource.name).all()
-        return [
-            DataSourceInfo(id=s.id, name=s.name, is_active=s.is_active)
-            for s in sources
-        ]
+        infos: list[DataSourceInfo] = []
+        for name in sorted(self._plugins):
+            if has_app_context():
+                data_source = self._ensure_data_source_row(name)
+            else:
+                data_source = DataSource.query.filter_by(name=name).first()
+                if data_source is None:
+                    continue
+            infos.append(
+                DataSourceInfo(
+                    id=data_source.id,
+                    name=data_source.name,
+                    is_active=data_source.is_active,
+                )
+            )
+        return infos
 
     # ------------------------------------------------------------------
     # Single-lead enrichment
@@ -204,7 +237,7 @@ class DataSourceConnector:
         db.session.flush()  # get record.id for logging
 
         try:
-            result = plugin.lookup(lead.property_street, f"{lead.owner_first_name} {lead.owner_last_name}")
+            result = self._lookup_plugin(plugin, lead)
         except Exception as exc:
             record.status = "failed"
             record.error_reason = str(exc)
@@ -311,6 +344,21 @@ class DataSourceConnector:
     # Private helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _lookup_plugin(plugin: DataSourcePlugin, lead: Lead) -> Optional[EnrichmentData]:
+        """Resolve enrichment data, preferring county_assessor_pin when available."""
+        owner_name = (
+            f"{lead.owner_first_name or ''} {lead.owner_last_name or ''}"
+        ).strip()
+        pin = getattr(lead, "county_assessor_pin", None)
+        if pin and str(pin).strip():
+            lookup_by_pin = getattr(plugin, "lookup_by_pin", None)
+            if callable(lookup_by_pin):
+                return lookup_by_pin(str(pin).strip())
+
+        address = lead.property_street or ""
+        return plugin.lookup(address, owner_name)
+
     def _resolve_plugin(
         self, source_name: str
     ) -> tuple[DataSourcePlugin, DataSource]:
@@ -334,9 +382,12 @@ class DataSourceConnector:
         if plugin is None:
             raise ValueError(f"No plugin registered with name '{source_name}'")
 
-        data_source = DataSource.query.filter_by(name=source_name).first()
-        if data_source is None:
-            raise ValueError(f"DataSource '{source_name}' not found in database")
+        if has_app_context():
+            data_source = self._ensure_data_source_row(source_name)
+        else:
+            data_source = DataSource.query.filter_by(name=source_name).first()
+            if data_source is None:
+                raise ValueError(f"DataSource '{source_name}' not found in database")
 
         if not data_source.is_active:
             raise ValueError(f"DataSource '{source_name}' is inactive")
@@ -390,3 +441,30 @@ class DataSourceConnector:
                 setattr(lead, field_name, new_value)
 
         lead.updated_at = datetime.utcnow()
+
+
+# ---------------------------------------------------------------------------
+# Auto-registration: ensure all known plugins can be discovered and
+# registered by default when a DataSourceConnector is used.
+# ---------------------------------------------------------------------------
+
+# Lazy imports to avoid circular imports at module load time
+def _register_default_plugins(connector: "DataSourceConnector") -> None:
+    """Register all built-in data source plugins on *connector*.
+
+    This is called automatically by the app factory to ensure every
+    plugin is available without manual registration.
+    """
+    from app.services.plugins.cook_county_assessor import CookCountyAssessorPlugin
+    from app.services.plugins.cook_county_permits import CookCountyPermitsPlugin
+    from app.services.plugins.cook_county_tax_sales import CookCountyTaxSalesPlugin
+
+    for plugin_cls in (
+        CookCountyAssessorPlugin,
+        CookCountyPermitsPlugin,
+        CookCountyTaxSalesPlugin,
+    ):
+        try:
+            connector._register_plugin_in_memory(plugin_cls())
+        except ValueError:
+            pass

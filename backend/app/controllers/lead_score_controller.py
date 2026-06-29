@@ -1,7 +1,7 @@
 """Lead Score API endpoints.
 
 Provides endpoints for retrieving lead scores and triggering recalculation
-using the DeterministicScoringEngine.
+using the unified LeadScoringEngine.
 """
 import logging
 from functools import wraps
@@ -11,13 +11,13 @@ from flask import Blueprint, jsonify, request
 from app import db, limiter
 from app.models.lead import Lead
 from app.models.lead_score import LeadScore
-from app.services.deterministic_scoring_engine import DeterministicScoringEngine
+from app.services.lead_scoring_engine import LeadScoringEngine
 
 logger = logging.getLogger(__name__)
 
 lead_score_bp = Blueprint('lead_scores', __name__)
 
-scoring_engine = DeterministicScoringEngine()
+scoring_engine = LeadScoringEngine()
 
 
 # ---------------------------------------------------------------------------

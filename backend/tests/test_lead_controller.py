@@ -409,14 +409,18 @@ class TestGetScoringWeights:
 
     def test_get_weights_default(self, client, app):
         """Returns default weights when none exist for user."""
-        resp = client.get('/api/properties/scoring/weights?user_id=new_user')
+        resp = client.get(
+            '/api/properties/scoring/weights?user_id=new_user',
+            headers=_AUTH_HEADERS,
+        )
         assert resp.status_code == 200
         data = json.loads(resp.data)
-        assert data['user_id'] == 'new_user'
-        assert data['property_characteristics_weight'] == 0.30
-        assert data['data_completeness_weight'] == 0.20
-        assert data['owner_situation_weight'] == 0.30
-        assert data['location_desirability_weight'] == 0.20
+        assert data['user_id'] == 'test-user'
+        assert data['property_characteristics_weight'] == 0.25
+        assert data['data_completeness_weight'] == 0.15
+        assert data['owner_situation_weight'] == 0.25
+        assert data['location_desirability_weight'] == 0.15
+        assert data['data_enrichment_weight'] == 0.20
 
     def test_get_weights_existing(self, client, app):
         """Returns existing weights for user."""
@@ -427,11 +431,15 @@ class TestGetScoringWeights:
                 data_completeness_weight=0.10,
                 owner_situation_weight=0.30,
                 location_desirability_weight=0.20,
+                data_enrichment_weight=0.20,
             )
             db.session.add(sw)
             db.session.commit()
 
-        resp = client.get('/api/properties/scoring/weights?user_id=existing_user')
+        resp = client.get(
+            '/api/properties/scoring/weights?user_id=existing_user',
+            headers={'X-User-Id': 'existing_user'},
+        )
         data = json.loads(resp.data)
         assert data['property_characteristics_weight'] == 0.40
         assert data['data_completeness_weight'] == 0.10
@@ -449,9 +457,10 @@ class TestUpdateScoringWeights:
         payload = {
             'user_id': 'user1',
             'property_characteristics_weight': 0.25,
-            'data_completeness_weight': 0.25,
+            'data_completeness_weight': 0.20,
             'owner_situation_weight': 0.25,
-            'location_desirability_weight': 0.25,
+            'location_desirability_weight': 0.10,
+            'data_enrichment_weight': 0.20,
         }
         resp = client.put(
             '/api/properties/scoring/weights',
@@ -502,6 +511,7 @@ class TestUpdateScoringWeights:
             'data_completeness_weight': 0.25,
             'owner_situation_weight': 0.25,
             'location_desirability_weight': 0.25,
+            'data_enrichment_weight': 0.20,
         }
         # Explicitly bypass the default X-User-Id injection to test the unauthenticated path
         resp = client.put(
@@ -536,9 +546,10 @@ class TestUpdateScoringWeights:
         payload = {
             'user_id': 'user1',
             'property_characteristics_weight': 0.25,
-            'data_completeness_weight': 0.25,
+            'data_completeness_weight': 0.20,
             'owner_situation_weight': 0.25,
-            'location_desirability_weight': 0.25,
+            'location_desirability_weight': 0.10,
+            'data_enrichment_weight': 0.20,
         }
         resp = client.put(
             '/api/properties/scoring/weights',

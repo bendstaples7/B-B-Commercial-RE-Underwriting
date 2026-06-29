@@ -16,7 +16,8 @@ os.chdir(_backend_dir)
 # Option 1: Load .env so DATABASE_URL and all other vars are available
 # regardless of how the worker is launched.
 from dotenv import load_dotenv  # noqa: E402
-load_dotenv(os.path.join(_backend_dir, '.env'))
+from env_loader import load_project_env  # noqa: E402
+load_project_env()
 
 # Option 3: Assert critical env vars are present before registering tasks.
 # Fails loudly at startup rather than silently mid-task.

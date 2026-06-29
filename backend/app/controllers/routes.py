@@ -5,6 +5,8 @@ from functools import wraps
 from app.controllers import api_bp
 from app.controllers.workflow_controller import WorkflowController
 from app.models.analysis_session import WorkflowStep
+from app.models.user import User
+from app.models.lead import Lead
 from app.schemas import (
     StartAnalysisSchema,
     PropertyFactsSchema,
@@ -109,6 +111,9 @@ def health_check():
       3. Unclassified leads — are there leads with recommended_action IS NULL?
          (indicates the Action Engine backfill hasn't run)
       4. Queue counts — do the 7 queue counts return without error?
+      5. Lead visibility — can ben.d.staples.7@gmail.com see leads?
+         (fails if the user or assigned leads are missing)
+      6. Async stack — Redis reachable? Celery worker responding? (warn only)
     """
     import os
     from app import db
@@ -191,7 +196,40 @@ def health_check():
         degraded = True
 
     # ------------------------------------------------------------------
-    # Check 5: Async stack (Redis + Celery worker) — warn only
+    # Check 5: Lead visibility — optional env-gated user lead check
+    # ------------------------------------------------------------------
+    try:
+        lead_user_email = os.environ.get('HEALTH_CHECK_LEAD_USER_EMAIL', '').strip()
+        if not lead_user_email:
+            checks['lead_visibility'] = 'skipped (set HEALTH_CHECK_LEAD_USER_EMAIL to enable)'
+        else:
+            user = User.query.filter_by(email_lower=lead_user_email.lower()).first()
+            if user is None:
+                checks['lead_visibility'] = (
+                    f'WARN: user {lead_user_email} not found — '
+                    f'migration w2x3y4z5a6b7 may not have run'
+                )
+            else:
+                lead_count = Lead.query.filter(
+                    Lead.owner_user_id == user.user_id
+                ).count()
+                if lead_count == 0:
+                    checks['lead_visibility'] = (
+                        f'FAIL: {lead_count} leads for {lead_user_email} '
+                        f'(user_id={user.user_id}). Leads with owner_user_id IS NULL '
+                        f'are invisible to non-admin users.'
+                    )
+                    degraded = True
+                else:
+                    checks['lead_visibility'] = (
+                        f'ok ({lead_count} leads visible for {lead_user_email})'
+                    )
+    except Exception as e:
+        checks['lead_visibility'] = f'FAIL: {e}'
+        degraded = True
+
+    # ------------------------------------------------------------------
+    # Check 6: Async stack (Redis + Celery worker) — warn only
     # ------------------------------------------------------------------
     try:
         import redis as redis_lib

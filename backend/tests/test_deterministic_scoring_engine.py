@@ -63,6 +63,29 @@ def _make_lead(**kwargs):
         "date_skip_traced": None,
         "phone_1": None,
         "email_1": None,
+        "has_email": None,
+
+        "has_phone": None,
+
+        "phone_5": None,
+        "phone_6": None,
+        "phone_7": None,
+        "email_4": None,
+        "email_5": None,
+        "assessed_value": None,
+        # Data enrichment scoring attributes
+        "socials": None,
+        "year_built": None,
+        "lot_size": None,
+        "mailer_history": None,
+        "follow_up_date": None,
+        "updated_at": None,
+        "timeline": None,
+        "bedrooms": None,
+        "bathrooms": None,
+        "last_contact_date": None,
+        "lead_status": None,
+        "unanswered_call_count": None,
     }
     _defaults.update(kwargs)
     for k, v in _defaults.items():
@@ -200,7 +223,7 @@ class TestSourceTypeDistressTaxBonus:
 
     def test_malformed_tax_distress_data_logs_warning(self):
         lead = _make_lead(source_type="foreclosure", tax_distress_data="{bad}")
-        with patch("app.services.deterministic_scoring_engine.logger") as mock_logger:
+        with patch("app.services.scoring_rubric.logger") as mock_logger:
             self.engine._source_type_distress_score(lead)
             mock_logger.warning.assert_called_once()
 

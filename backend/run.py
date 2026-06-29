@@ -5,7 +5,7 @@ import glob
 import re
 
 from app import create_app, db
-from dotenv import load_dotenv
+from env_loader import load_project_env
 
 # Ensure we're running from the backend directory regardless of where
 # the script was invoked from. This makes `python backend/run.py` from
@@ -19,7 +19,7 @@ _changed_dir = os.getcwd() != backend_dir
 if _changed_dir:
     os.chdir(backend_dir)
 
-load_dotenv()
+load_project_env()
 
 
 def _check_migration_revision_uniqueness():

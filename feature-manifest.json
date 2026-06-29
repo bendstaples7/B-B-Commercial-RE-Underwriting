@@ -1,0 +1,16 @@
+{
+  "feature_name": "Example Feature Name",
+  "new_routes": [
+    "/example/:id/route"
+  ],
+  "navigation_entries": [
+    "sidebar > Example Section > Example Link"
+  ],
+  "how_user_reaches_feature": [
+    "1. Click 'Example' in the sidebar",
+    "2. Select an item from the list",
+    "3. The feature is displayed on the detail page"
+  ],
+  "created_at": "2026-06-26T00:00:00Z",
+  "validated": false
+}

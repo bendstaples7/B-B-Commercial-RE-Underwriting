@@ -9,10 +9,11 @@ class ScoringWeights(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.String(255), nullable=False, unique=True)
-    property_characteristics_weight = db.Column(db.Float, nullable=False, default=0.30)
-    data_completeness_weight = db.Column(db.Float, nullable=False, default=0.20)
-    owner_situation_weight = db.Column(db.Float, nullable=False, default=0.30)
-    location_desirability_weight = db.Column(db.Float, nullable=False, default=0.20)
+    property_characteristics_weight = db.Column(db.Float, nullable=False, default=0.25)
+    data_completeness_weight = db.Column(db.Float, nullable=False, default=0.15)
+    owner_situation_weight = db.Column(db.Float, nullable=False, default=0.25)
+    location_desirability_weight = db.Column(db.Float, nullable=False, default=0.15)
+    data_enrichment_weight = db.Column(db.Float, nullable=False, default=0.20)
     # Minimum number of comparable sales required before the user is warned
     # during the COMPARABLE_REVIEW step.  Defaults to 10 (production standard).
     # Users can lower this to proceed with fewer comparables when data is sparse.

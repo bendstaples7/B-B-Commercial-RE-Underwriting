@@ -24,7 +24,8 @@ from app.schemas import (
 from app.services.lead_task_service import LeadTaskService
 from app.services.lead_timeline_service import LeadTimelineService
 from app.services.call_log_service import CallLogService
-from app.services.action_engine_service import ActionEngineService, RECOMMENDED_ACTION_METADATA
+from app.services.recommended_action_metadata import RECOMMENDED_ACTION_METADATA
+from app.services.lead_scoring_engine import LeadScoringEngine
 
 logger = logging.getLogger(__name__)
 
@@ -234,9 +235,8 @@ def handle_errors(f):
 # ---------------------------------------------------------------------------
 
 def _get_winning_rule_signals(lead) -> dict:
-    """Return signals for the winning rule — delegated to ActionEngineService."""
-    from app.services.action_engine_service import ActionEngineService
-    return ActionEngineService.get_winning_rule_signals(lead)
+    """Return signals for the winning rule — delegated to LeadScoringEngine."""
+    return LeadScoringEngine.get_winning_rule_signals(lead)
 
 
 # ---------------------------------------------------------------------------
@@ -1252,10 +1252,10 @@ def mark_hubspot_task_done(lead_id: int, task_id: int):
 
     # Trigger RA recomputation — lead may leave Today's Action queue
     try:
-        ActionEngineService.recompute_and_persist(lead_id)
+        LeadScoringEngine.recompute_and_persist(lead_id)
     except Exception as exc:
         logger.exception(
-            "ActionEngineService.recompute_and_persist failed for lead %s after hubspot task done: %s",
+            "LeadScoringEngine.recompute_and_persist failed for lead %s after hubspot task done: %s",
             lead_id, exc,
         )
 

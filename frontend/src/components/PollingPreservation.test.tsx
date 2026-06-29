@@ -558,6 +558,9 @@ describe('Preservation 3.9 — Property list serializer preserves all visible co
     return fs.readFileSync(BACKEND_SUMMARY_FILE, 'utf-8')
   }
 
+  const SUMMARY_FN_REGEX =
+    /def _serialize_property_summary\([^)]*\):([\s\S]*?)(?=\ndef )/
+
   it('property: _serialize_property_summary must include all expected visible column keys', () => {
     /**
      * Parse the _serialize_property_summary function body and assert that all
@@ -568,9 +571,7 @@ describe('Preservation 3.9 — Property list serializer preserves all visible co
     const source = readBackendSource()
 
     // Extract the function body between _serialize_property_summary and the next def
-    const fnMatch = source.match(
-      /def _serialize_property_summary\(lead\):([\s\S]*?)(?=\ndef )/
-    )
+    const fnMatch = source.match(SUMMARY_FN_REGEX)
     expect(fnMatch).not.toBeNull()
     const fnBody = fnMatch![1]
 
@@ -606,9 +607,7 @@ describe('Preservation 3.9 — Property list serializer preserves all visible co
     const source = readBackendSource()
 
     // Extract only the _serialize_property_summary function body
-    const fnMatch = source.match(
-      /def _serialize_property_summary\(lead\):([\s\S]*?)(?=\ndef )/
-    )
+    const fnMatch = source.match(SUMMARY_FN_REGEX)
     expect(fnMatch).not.toBeNull()
     const fnBody = fnMatch![1]
 
