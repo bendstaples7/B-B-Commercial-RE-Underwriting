@@ -79,6 +79,8 @@ _KNOWN_REVISIONS = frozenset({
     'b1c2d3e4f5a6',
     # lead_scores.lead_id ON DELETE CASCADE
     'c2d3e4f5a6b7',
+    # leads.assessed_value for enrichment scoring
+    'd3e4f5a6b7c8',
 })
 
 
