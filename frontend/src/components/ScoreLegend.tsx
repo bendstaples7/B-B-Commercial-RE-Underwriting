@@ -138,13 +138,12 @@ export const ScoreLegend: React.FC<ScoreLegendProps> = ({
             </Typography>
           }
         >
-          Total motivation score, 0–100. A residential lead is rated on
-          property type fit, neighborhood, unit count, absentee ownership,
-          mailing quality, years owned, motivation notes, and manual
-          priority. A commercial lead is rated on property type fit, condo
-          clarity, building-sale possibility, neighborhood, owner
-          concentration, absentee ownership, building size, motivation notes,
-          and manual priority. Higher is better.
+          Total motivation score. Residential leads are rated on property type
+          fit, neighborhood, unit count, absentee ownership, mailing quality,
+          motivation notes, manual priority, and data enrichment dimensions
+          (contactability, property equity, ownership duration, engagement).
+          Commercial leads use a separate rubric with the same enrichment
+          dimensions. Higher is better.
         </LegendRow>
 
         <Divider />

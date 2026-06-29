@@ -225,7 +225,7 @@ class DeterministicScoringEngine:
         acquisition = DeterministicScoringEngine.effective_acquisition_date(lead)
         if acquisition:
             # Future acquisition dates legitimately score 0 — do not treat as stale.
-            if acquisition <= date.today() and details.get('years_owned', 0) == 0:
+            if acquisition <= date.today() and details.get('ownership_duration', 0) == 0:
                 return True
         return False
 
@@ -255,7 +255,8 @@ class DeterministicScoringEngine:
             details["absentee_owner"] = self._absentee_owner_score(lead)
 
         details["owner_mailing_quality"] = self._owner_mailing_quality(lead)
-        details["years_owned"] = self._years_owned_score(lead)
+        # ownership_duration supersedes years_owned (same signal — avoid double-count)
+        details["years_owned"] = 0.0
         details["existing_notes_motivation"] = self._notes_motivation_score(
             lead, max_points=RESIDENTIAL_MAX_POINTS["existing_notes_motivation"]
         )
@@ -464,133 +465,41 @@ class DeterministicScoringEngine:
 
     @staticmethod
     def _contactability_score(lead: "Lead", max_points: float = 20.0) -> float:
-        """Score based on contact information completeness and skip-trace recency.
-
-        4 segments each worth 1/4 of max_points:
-        - Skip-trace performed (date_skip_traced is set)
-        - Has at least one phone number (phone_1 through phone_7)
-        - Has at least one email (email_1 through email_5)
-        - Has social media handle (socials is populated)
-        """
-        segments = 0
-
-        # 1. Skip-trace performed
-        if _safe_attr(lead, "date_skip_traced") is not None:
-            segments += 1
-
-        # 2. Any phone number present
-        phone_fields = ["phone_1", "phone_2", "phone_3", "phone_4",
-                        "phone_5", "phone_6", "phone_7"]
-        if any(_safe_attr(lead, f) for f in phone_fields):
-            segments += 1
-
-        # 3. Any email present
-        email_fields = ["email_1", "email_2", "email_3", "email_4", "email_5"]
-        if any(_safe_attr(lead, f) for f in email_fields):
-            segments += 1
-
-        # 4. Social media handle present
-        if _safe_attr(lead, "socials"):
-            segments += 1
-
-        return (segments / 4.0) * max_points
+        from app.services.enrichment_scoring import contactability_score
+        return contactability_score(lead, max_points=max_points)
 
     @staticmethod
     def _property_equity_score(lead: "Lead", max_points: float = 25.0) -> float:
-        """Score estimated property equity based on property characteristics.
-
-        Components (additive):
-        - Year built: pre-1960 → 40%, 1960-1990 → 30%, post-1990 → 15%
-        - Lot size present (≥ 1 sqft) → 30%
-        - Square footage present (≥ 1 sqft) → 30%
-        """
-        score = 0.0
-
-        # Year-built component
-        yb = _safe_attr(lead, "year_built")
-        if yb is not None:
-            if yb < 1960:
-                score += max_points * 0.40
-            elif yb <= 1990:
-                score += max_points * 0.30
-            else:
-                score += max_points * 0.15
-
-        # Lot size component
-        ls = _safe_attr(lead, "lot_size")
-        if ls is not None and ls > 0:
-            score += max_points * 0.30
-
-        # Square footage component
-        sf = _safe_attr(lead, "square_footage")
-        if sf is not None and sf > 0:
-            score += max_points * 0.30
-
-        return min(score, max_points)
+        from app.services.enrichment_scoring import property_equity_score
+        return property_equity_score(lead, max_points=max_points)
 
     @staticmethod
     def _ownership_duration_score(lead: "Lead", max_points: float = 15.0) -> float:
-        """Score based on how long the owner has held the property.
-
-        Longer ownership → higher score (more equity, higher motivation to sell).
-        - 20+ years → 100%
-        - 10-19 years → 80%
-        - 5-9 years → 55%
-        - 2-4 years → 35%
-        - Under 2 years → 15%
-        - Missing or future date → 0
-        """
-        acquisition = _safe_attr(lead, "acquisition_date")
-        if acquisition is None:
-            return 0.0
-
-        today = date.today()
-        if acquisition > today:
-            return 0.0
-
-        years = (today - acquisition).days / 365.25
-
-        if years >= 20:
-            return max_points * 1.0
-        elif years >= 10:
-            return max_points * 0.80
-        elif years >= 5:
-            return max_points * 0.55
-        elif years >= 2:
-            return max_points * 0.35
-        else:
-            return max_points * 0.15
+        from app.services.enrichment_scoring import ownership_duration_score
+        return ownership_duration_score(lead, max_points=max_points)
 
     @staticmethod
     def _engagement_score(lead: "Lead", max_points: float = 10.0) -> float:
-        """Score based on lead engagement signals.
+        from app.services.enrichment_scoring import engagement_score
+        return engagement_score(lead, max_points=max_points)
 
-        Components (additive):
-        - Mailer history present (non-empty list) → 30%
-        - has_phone flag True → 25%
-        - has_email flag True → 25%
-        - follow_up_date set → 20%
-        """
-        score = 0.0
+    @staticmethod
+    def _theoretical_max_points(category: str) -> float:
+        """Maximum achievable raw points for tier normalization."""
+        if category == "commercial":
+            return float(sum(COMMERCIAL_MAX_POINTS.values()))
+        return float(
+            sum(RESIDENTIAL_MAX_POINTS.values())
+            - RESIDENTIAL_MAX_POINTS["years_owned"]
+        )
 
-        # Mailer history component
-        mh = _safe_attr(lead, "mailer_history")
-        if mh is not None and (isinstance(mh, list) and len(mh) > 0):
-            score += max_points * 0.30
-
-        # has_phone flag
-        if _safe_attr(lead, "has_phone", False):
-            score += max_points * 0.25
-
-        # has_email flag
-        if _safe_attr(lead, "has_email", False):
-            score += max_points * 0.25
-
-        # follow_up_date set
-        if _safe_attr(lead, "follow_up_date") is not None:
-            score += max_points * 0.20
-
-        return min(score, max_points)
+    @staticmethod
+    def _normalize_for_tier(raw_total: float, category: str) -> float:
+        """Map raw point total to a 0–100 scale for tier thresholds."""
+        theoretical_max = DeterministicScoringEngine._theoretical_max_points(category)
+        if theoretical_max <= 0:
+            return 0.0
+        return min(100.0, raw_total * 100.0 / theoretical_max)
 
     # ------------------------------------------------------------------
     # Commercial Scoring
@@ -988,12 +897,15 @@ class DeterministicScoringEngine:
         # Calculate data quality
         data_quality_score, missing_data = self.calculate_data_quality_score(lead)
 
+        # Tier thresholds assume a 0–100 scale; normalize raw point totals.
+        tier_score = self._normalize_for_tier(total_score, category)
+
         # Calculate tier
-        score_tier = self.calculate_score_tier(total_score)
+        score_tier = self.calculate_score_tier(tier_score)
 
         # Determine recommended action
         recommended_action = self.get_recommended_action(
-            lead, total_score, data_quality_score, score_tier
+            lead, tier_score, data_quality_score, score_tier
         )
 
         # Extract top signals

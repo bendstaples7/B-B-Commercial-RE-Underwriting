@@ -196,34 +196,34 @@ def health_check():
         degraded = True
 
     # ------------------------------------------------------------------
-    # Check 5: Lead visibility — can ben.d.staples.7 see leads?
+    # Check 5: Lead visibility — optional env-gated user lead check
     # ------------------------------------------------------------------
     try:
-        LEAD_USER_EMAIL = 'ben.d.staples.7@gmail.com'
-        user = User.query.filter_by(email_lower=LEAD_USER_EMAIL).first()
-        if user is None:
-            checks['lead_visibility'] = (
-                f'WARN: user {LEAD_USER_EMAIL} not found — '
-                f'migration w2x3y4z5a6b7 may not have run'
-            )
-            # Don't degrade for missing seed user (expected in CI/testing)
+        lead_user_email = os.environ.get('HEALTH_CHECK_LEAD_USER_EMAIL', '').strip()
+        if not lead_user_email:
+            checks['lead_visibility'] = 'skipped (set HEALTH_CHECK_LEAD_USER_EMAIL to enable)'
         else:
-            lead_count = Lead.query.filter(
-                Lead.owner_user_id == user.user_id
-            ).count()
-            if lead_count == 0:
+            user = User.query.filter_by(email_lower=lead_user_email.lower()).first()
+            if user is None:
                 checks['lead_visibility'] = (
-                    f'FAIL: {lead_count} leads for {LEAD_USER_EMAIL} '
-                    f'(user_id={user.user_id}). Leads with owner_user_id IS NULL '
-                    f'are invisible to non-admin users. Either no data dump has '
-                    f'been loaded or migration w2x3y4z5a6b7 did not reassign '
-                    f'unowned leads.'
+                    f'WARN: user {lead_user_email} not found — '
+                    f'migration w2x3y4z5a6b7 may not have run'
                 )
-                degraded = True
             else:
-                checks['lead_visibility'] = (
-                    f'ok ({lead_count} leads visible for {LEAD_USER_EMAIL})'
-                )
+                lead_count = Lead.query.filter(
+                    Lead.owner_user_id == user.user_id
+                ).count()
+                if lead_count == 0:
+                    checks['lead_visibility'] = (
+                        f'FAIL: {lead_count} leads for {lead_user_email} '
+                        f'(user_id={user.user_id}). Leads with owner_user_id IS NULL '
+                        f'are invisible to non-admin users.'
+                    )
+                    degraded = True
+                else:
+                    checks['lead_visibility'] = (
+                        f'ok ({lead_count} leads visible for {lead_user_email})'
+                    )
     except Exception as e:
         checks['lead_visibility'] = f'FAIL: {e}'
         degraded = True

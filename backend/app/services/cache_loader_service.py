@@ -492,6 +492,8 @@ class CacheLoaderService:
                 self.PARCEL_UNIVERSE_NOT_NULL,
             )
             if mapped is not None:
+                if 'class' in mapped:
+                    mapped['property_class'] = mapped.pop('class')
                 # Keep the last occurrence of each PIN — same as what the upsert converges to.
                 mapped_by_pin[mapped['pin']] = mapped
 
@@ -502,9 +504,11 @@ class CacheLoaderService:
 
         try:
             stmt = pg_insert(ParcelUniverseCache).values(mapped_rows)
+            update_col_names = [
+                key for key in mapped_rows[0].keys() if key != 'pin'
+            ]
             update_cols = {
-                col: stmt.excluded[col]
-                for col in ['lat', 'lon', 'class', 'lot_size', 'assessed_value', 'last_synced_at']
+                col: stmt.excluded[col] for col in update_col_names
             }
             stmt = stmt.on_conflict_do_update(
                 index_elements=['pin'],

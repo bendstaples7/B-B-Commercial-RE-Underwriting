@@ -14,6 +14,9 @@ class ParcelUniverseCache(db.Model):
     pin            = db.Column(db.String(14), primary_key=True)
     lat            = db.Column(db.Numeric(precision=10, scale=7), nullable=True)
     lon            = db.Column(db.Numeric(precision=10, scale=7), nullable=True)
+    property_class = db.Column(db.String(10), nullable=True)
+    lot_size       = db.Column(db.Integer, nullable=True)
+    assessed_value = db.Column(db.Float, nullable=True)
     last_synced_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
     __table_args__ = (

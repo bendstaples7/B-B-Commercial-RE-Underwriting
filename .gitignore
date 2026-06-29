@@ -36,6 +36,7 @@ htmlcov/
 # Environment
 .env
 .env.local
+frontend/.env.development
 
 # Node
 node_modules/

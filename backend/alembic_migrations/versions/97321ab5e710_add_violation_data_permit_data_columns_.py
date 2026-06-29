@@ -42,6 +42,27 @@ def upgrade():
         'ADD COLUMN IF NOT EXISTS data_enrichment_weight DOUBLE PRECISION '
         'NOT NULL DEFAULT 0.20'
     )
+    # Rebalance existing rows so the five weights sum to 1.0 (scale core weights to 0.80).
+    op.execute(
+        'UPDATE scoring_weights SET '
+        'property_characteristics_weight = property_characteristics_weight * 0.80, '
+        'data_completeness_weight = data_completeness_weight * 0.80, '
+        'owner_situation_weight = owner_situation_weight * 0.80, '
+        'location_desirability_weight = location_desirability_weight * 0.80 '
+        'WHERE data_enrichment_weight = 0.20'
+    )
+    # Extend parcel_universe_cache with assessor fields used by enrichment scoring
+    op.execute(
+        'ALTER TABLE parcel_universe_cache ADD COLUMN IF NOT EXISTS property_class VARCHAR(10)'
+    )
+    op.execute(
+        'ALTER TABLE parcel_universe_cache '
+        'ADD COLUMN IF NOT EXISTS lot_size INTEGER'
+    )
+    op.execute(
+        'ALTER TABLE parcel_universe_cache '
+        'ADD COLUMN IF NOT EXISTS assessed_value DOUBLE PRECISION'
+    )
 
 
 def downgrade():
@@ -56,4 +77,13 @@ def downgrade():
     )
     op.execute(
         'ALTER TABLE leads DROP COLUMN IF EXISTS most_recent_sale_price'
+    )
+    op.execute(
+        'ALTER TABLE parcel_universe_cache DROP COLUMN IF EXISTS assessed_value'
+    )
+    op.execute(
+        'ALTER TABLE parcel_universe_cache DROP COLUMN IF EXISTS lot_size'
+    )
+    op.execute(
+        'ALTER TABLE parcel_universe_cache DROP COLUMN IF EXISTS property_class'
     )

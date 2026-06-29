@@ -895,196 +895,24 @@ class LeadScoringEngine:
 
     @staticmethod
     def _contactability_score(lead: Lead) -> float:
-        """Score based on contactability of the lead (0-100).
-
-        Rewards leads for which contact information is available:
-        - Mailing address present: +25
-        - Any phone number (phone_1 through phone_7): +25
-        - Any email (email_1 through email_5): +25
-        - Has been skip traced (date_skip_traced is set): +25
-
-        Parameters
-        ----------
-        lead : Lead
-
-        Returns
-        -------
-        float
-            Sub-score between 0 and 100.
-        """
-        score = 0.0
-
-        # Mailing address exists
-        if lead.mailing_address:
-            score += 25.0
-
-        # Any phone number exists
-        for i in range(1, 8):
-            phone = _safe_attr(lead, f"phone_{i}")
-            if phone:
-                score += 25.0
-                break
-
-        # Any email exists
-        for i in range(1, 6):
-            email = _safe_attr(lead, f"email_{i}")
-            if email:
-                score += 25.0
-                break
-
-        # Has been skip traced
-        if _safe_attr(lead, "date_skip_traced"):
-            score += 25.0
-
-        return min(score, 100.0)
+        from app.services.enrichment_scoring import contactability_score, scale_subscore_to_100
+        raw = contactability_score(lead, max_points=20.0)
+        return scale_subscore_to_100(raw, 20.0)
 
     @staticmethod
     def _property_equity_score(lead: Lead) -> float:
-        """Score based on property equity indicators (0-100).
-
-        Rewards leads with known property value data:
-        - Has assessed_value: +20
-        - Has lot_size: +20
-        - Has square_footage: +20
-        - Value per sqft > $100: +20
-        - Value per sqft > $50 (but <= $100): +10
-
-        Parameters
-        ----------
-        lead : Lead
-
-        Returns
-        -------
-        float
-            Sub-score between 0 and 100.
-        """
-        score = 0.0
-
-        if lead.assessed_value is not None:
-            score += 20.0
-
-        if lead.lot_size is not None:
-            score += 20.0
-
-        if lead.square_footage is not None:
-            score += 20.0
-
-            # Value per square foot calculation
-            if lead.assessed_value is not None and lead.square_footage > 0:
-                value_per_sqft = lead.assessed_value / lead.square_footage
-                if value_per_sqft > 100:
-                    score += 20.0
-                elif value_per_sqft > 50:
-                    score += 10.0
-
-        return min(score, 100.0)
+        from app.services.enrichment_scoring import property_equity_score, scale_subscore_to_100
+        raw = property_equity_score(lead, max_points=25.0)
+        return scale_subscore_to_100(raw, 25.0)
 
     @staticmethod
     def _ownership_duration_score(lead: Lead) -> float:
-        """Score based on how long the lead has owned the property (0-100).
-
-        Longer ownership suggests higher equity and motivation to sell:
-        - 20+ years: 100
-        - 10-19 years: 80
-        - 5-9 years: 55
-        - 2-4 years: 35
-        - < 2 years: 15
-        - No acquisition_date or negative: 0
-
-        Parameters
-        ----------
-        lead : Lead
-
-        Returns
-        -------
-        float
-            Sub-score between 0 and 100.
-        """
-        acquisition_date = _safe_attr(lead, "acquisition_date")
-        if acquisition_date is None:
-            return 0.0
-
-        today = date.today()
-        delta = today - acquisition_date
-        if delta.days <= 0:
-            return 0.0
-
-        years = delta.days / 365.25
-
-        if years >= 20:
-            return 100.0
-        elif years >= 10:
-            return 80.0
-        elif years >= 5:
-            return 55.0
-        elif years >= 2:
-            return 35.0
-        else:
-            return 15.0
+        from app.services.enrichment_scoring import ownership_duration_score, scale_subscore_to_100
+        raw = ownership_duration_score(lead, max_points=15.0)
+        return scale_subscore_to_100(raw, 15.0)
 
     @staticmethod
     def _engagement_score(lead: Lead) -> float:
-        """Score based on engagement history of the lead (0-100).
-
-        Rewards leads with prior outreach activity:
-        - Has mailer_history (non-empty): +30
-        - Has follow_up_date set: +25
-        - Contacted in last 30 days (updated_at): +25
-        - Has responded to outreach (timeline positive signal): +20
-
-        Parameters
-        ----------
-        lead : Lead
-
-        Returns
-        -------
-        float
-            Sub-score between 0 and 100.
-        """
-        from datetime import timedelta
-
-        score = 0.0
-
-        # Mailer history present (non-empty dict or list)
-        mailer_history = _safe_attr(lead, "mailer_history")
-        if mailer_history:
-            score += 30.0
-
-        # Follow-up date set
-        if _safe_attr(lead, "follow_up_date"):
-            score += 25.0
-
-        # Contacted in last 30 days
-        updated_at = _safe_attr(lead, "updated_at")
-        if updated_at:
-            if isinstance(updated_at, datetime):
-                age = datetime.utcnow() - updated_at
-            else:
-                age = datetime.utcnow() - datetime.combine(updated_at, datetime.min.time())
-            if age.days <= 30:
-                score += 25.0
-
-        # Has responded to outreach (check timeline for positive interaction)
-        timeline = _safe_attr(lead, "timeline")
-        if timeline:
-            positive_signals = [
-                "interested", "responded", "positive", "appointment",
-                "offer", "negotiation", "callback",
-            ]
-            if isinstance(timeline, (list, tuple)):
-                for entry in timeline:
-                    if isinstance(entry, str):
-                        lower = entry.lower()
-                    elif isinstance(entry, dict):
-                        lower = str(entry.get("type", entry.get("note", ""))).lower()
-                    else:
-                        lower = str(entry).lower()
-                    if any(sig in lower for sig in positive_signals):
-                        score += 20.0
-                        break
-            elif isinstance(timeline, dict):
-                lower = str(timeline).lower()
-                if any(sig in lower for sig in positive_signals):
-                    score += 20.0
-
-        return min(score, 100.0)
+        from app.services.enrichment_scoring import engagement_score, scale_subscore_to_100
+        raw = engagement_score(lead, max_points=10.0)
+        return scale_subscore_to_100(raw, 10.0)

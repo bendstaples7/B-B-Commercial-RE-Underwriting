@@ -19,6 +19,7 @@ from app.services.deterministic_scoring_engine import (
 )
 from app.services.lead_scoring_engine import LeadScoringEngine, DEFAULT_WEIGHTS
 from app.services.plugins.cook_county_assessor import CookCountyAssessorPlugin
+from app.services.plugins.pin_utils import extract_pin, normalize_pin_for_socrata
 
 
 # ---------------------------------------------------------------------------
@@ -365,36 +366,31 @@ class TestCookCountyAssessorPlugin:
         assert callable(plugin.lookup_by_pin)
 
     def test_extract_pin_dashed_format(self):
-        plugin = CookCountyAssessorPlugin()
-        pin = plugin._extract_pin("14-28-400-008-0000")
+        pin = extract_pin("14-28-400-008-0000")
         assert pin == "14-28-400-008-0000"
 
     def test_extract_pin_condensed_format(self):
-        plugin = CookCountyAssessorPlugin()
-        pin = plugin._extract_pin("14284000080000")
+        pin = extract_pin("14284000080000")
         assert pin == "14284000080000"
 
-    def test_extract_pin_from_address_with_pin(self):
-        """PIN embedded in address string."""
-        plugin = CookCountyAssessorPlugin()
-        pin = plugin._extract_pin("123 Main St PIN 14-28-400-008-0000")
-        # Dashes are stripped, so the condensed 14-digit form is returned
-        assert pin == "14-28-400-008-0000" or pin == "14284000080000"
+    def test_extract_pin_from_address_with_condensed_pin(self):
+        pin = extract_pin("123 Main St 14284000080000")
+        assert pin == "14284000080000"
 
     def test_extract_pin_none_for_normal_address(self):
-        plugin = CookCountyAssessorPlugin()
-        pin = plugin._extract_pin("123 Main Street, Chicago, IL 60614")
+        pin = extract_pin("123 Main Street, Chicago, IL 60614")
         assert pin is None
 
     def test_extract_pin_empty_string(self):
-        plugin = CookCountyAssessorPlugin()
-        pin = plugin._extract_pin("")
+        pin = extract_pin("")
         assert pin is None
 
     def test_extract_pin_none_input(self):
-        plugin = CookCountyAssessorPlugin()
-        pin = plugin._extract_pin(None)
+        pin = extract_pin(None)
         assert pin is None
+
+    def test_normalize_pin_strips_dashes(self):
+        assert normalize_pin_for_socrata("14-28-400-008-0000") == "14284000080000"
 
     def test_plugin_returns_none_for_normal_address(self):
         """lookup() should return None for a regular address (no PIN)."""
@@ -458,11 +454,11 @@ class TestUnifiedScoringIntegration:
 
 class TestDefaultWeights:
     """Verify DEFAULT_WEIGHTS constant is accessible."""
-    pytestmark = pytest.mark.skip(reason="DEFAULT_WEIGHTS keys changed on feature branch - follow-up")
 
     def test_default_weights_defined(self):
-        assert DEFAULT_WEIGHTS["property_characteristics"] == 0.25
-        assert DEFAULT_WEIGHTS["data_completeness"] == 0.15
-        assert DEFAULT_WEIGHTS["owner_situation"] == 0.25
-        assert DEFAULT_WEIGHTS["location_desirability"] == 0.15
-        assert DEFAULT_WEIGHTS["data_enrichment"] == 0.20
+        assert DEFAULT_WEIGHTS["property_characteristics_weight"] == 0.25
+        assert DEFAULT_WEIGHTS["data_completeness_weight"] == 0.15
+        assert DEFAULT_WEIGHTS["owner_situation_weight"] == 0.25
+        assert DEFAULT_WEIGHTS["location_desirability_weight"] == 0.15
+        assert DEFAULT_WEIGHTS["data_enrichment_weight"] == 0.20
+        assert abs(sum(DEFAULT_WEIGHTS.values()) - 1.0) < 0.001

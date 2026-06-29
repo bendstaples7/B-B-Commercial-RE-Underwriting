@@ -168,8 +168,9 @@ def run_checks() -> bool:
     try:
         import sqlalchemy as sa
         from alembic.runtime.migration import MigrationContext
-        from dotenv import load_dotenv as _load_dotenv
-        _load_dotenv(os.path.join(BACKEND_DIR, ".env"))
+        sys.path.insert(0, BACKEND_DIR)
+        from env_loader import load_project_env
+        load_project_env()
 
         db_url = os.environ.get("DATABASE_URL", "postgresql://localhost/real_estate_analysis")
         engine = sa.create_engine(db_url)
