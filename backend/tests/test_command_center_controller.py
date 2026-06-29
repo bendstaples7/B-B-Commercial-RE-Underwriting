@@ -774,7 +774,7 @@ class TestDoNotContact:
             assert lead.lead_status == 'do_not_contact'
 
     def test_dnc_nulls_recommended_action(self, client, app):
-        """POST /api/leads/<id>/do-not-contact sets recommended_action to null."""
+        """POST /api/leads/<id>/do-not-contact sets recommended_action to do_not_contact."""
         with app.app_context():
             lead = _make_lead(app, '27 DNC St',
                               lead_status='mailing_no_contact_made',
@@ -786,7 +786,7 @@ class TestDoNotContact:
                 headers=_AUTH_HEADERS,
             )
             db.session.refresh(lead)
-            assert lead.recommended_action is None
+            assert lead.recommended_action == 'do_not_contact'
 
     def test_dnc_cancels_open_tasks(self, client, app):
         """POST /api/leads/<id>/do-not-contact cancels all open tasks."""
