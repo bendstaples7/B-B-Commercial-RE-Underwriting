@@ -1,5 +1,4 @@
 """Tests for GET /api/version deploy SHA resolution."""
-from pathlib import Path
 
 from app.controllers.routes import resolve_deploy_sha
 
