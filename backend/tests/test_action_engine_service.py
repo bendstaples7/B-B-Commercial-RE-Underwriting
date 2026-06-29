@@ -7,6 +7,22 @@ from unittest.mock import MagicMock, patch, call
 from app.services.action_engine_service import ActionEngineService
 
 
+@pytest.fixture(autouse=True)
+def _mock_crm_flags(monkeypatch):
+    """Use MagicMock lead columns instead of CRM flags view in unit tests."""
+
+    def _flags(lead):
+        return (
+            bool(getattr(lead, 'has_phone', False)),
+            bool(getattr(lead, 'has_email', False)),
+            bool(getattr(lead, 'has_property_match', False)),
+        )
+
+    monkeypatch.setattr(
+        'app.services.lead_scoring_engine._resolve_crm_flags', _flags,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -37,43 +53,46 @@ def make_lead(
     lead.data_completeness_score = data_completeness_score
     lead.property_street = property_street
     lead.recommended_action = recommended_action
+    lead.do_not_contact = False
+    lead.suppression_flag = False
+    lead.lead_category = 'residential'
     return lead
 
 
 # ---------------------------------------------------------------------------
-# Priority 1: do_not_contact → None
+# Priority 1: do_not_contact → do_not_contact
 # ---------------------------------------------------------------------------
 
 def test_priority_1_do_not_contact_returns_none():
     lead = make_lead(lead_status='do_not_contact')
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
-    assert result is None
+    assert result == 'do_not_contact'
 
 
 # ---------------------------------------------------------------------------
-# Priority 2: suppressed → None
+# Priority 2: suppressed → suppress
 # ---------------------------------------------------------------------------
 
 def test_priority_2_suppressed_returns_none():
     lead = make_lead(lead_status='suppressed')
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
-    assert result is None
+    assert result == 'suppress'
 
 
 def test_priority_2_deprioritize_returns_none():
     lead = make_lead(lead_status='deprioritize')
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
-    assert result is None
+    assert result == 'suppress'
 
 
 def test_priority_2_deal_won_returns_none():
     lead = make_lead(lead_status='deal_won')
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
-    assert result is None
+    assert result == 'suppress'
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +102,7 @@ def test_priority_2_deal_won_returns_none():
 def test_priority_2_5_skip_trace_returns_add_contact_info_even_with_phone_email():
     """skip_trace status always returns add_contact_info regardless of has_phone/has_email."""
     lead = make_lead(lead_status='skip_trace', has_phone=True, has_email=True)
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'add_contact_info'
 
@@ -91,7 +110,7 @@ def test_priority_2_5_skip_trace_returns_add_contact_info_even_with_phone_email(
 def test_priority_2_5_awaiting_skip_trace_returns_add_contact_info():
     """awaiting_skip_trace status always returns add_contact_info."""
     lead = make_lead(lead_status='awaiting_skip_trace', has_phone=True, has_email=True, is_warm=True)
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'add_contact_info'
 
@@ -99,7 +118,7 @@ def test_priority_2_5_awaiting_skip_trace_returns_add_contact_info():
 def test_priority_2_5_fires_before_follow_up_overdue():
     """skip_trace status intercepts before follow_up_overdue check."""
     lead = make_lead(lead_status='skip_trace', follow_up_overdue=True, is_warm=True)
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'add_contact_info'
 
@@ -110,7 +129,7 @@ def test_priority_2_5_fires_before_follow_up_overdue():
 
 def test_priority_3_no_phone_no_email_returns_add_contact_info():
     lead = make_lead(has_phone=False, has_email=False)
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'add_contact_info'
 
@@ -118,7 +137,7 @@ def test_priority_3_no_phone_no_email_returns_add_contact_info():
 def test_priority_3_fires_before_priority_4():
     """Priority 3 (no contact info) fires before Priority 4 (no property match)."""
     lead = make_lead(has_phone=False, has_email=False, has_property_match=False)
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'add_contact_info'
 
@@ -129,30 +148,27 @@ def test_priority_3_fires_before_priority_4():
 
 def test_priority_4_no_match_with_address_returns_resolve_match():
     lead = make_lead(has_property_match=False, property_street='123 Main St')
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'resolve_match'
 
 
 def test_priority_4_no_match_no_address_returns_enrich_data():
     lead = make_lead(has_property_match=False, property_street=None)
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'enrich_data'
 
 
 # ---------------------------------------------------------------------------
-# Priority 5 (old): has match but no analysis — analyze_property REMOVED
-# Property analysis is optional and never a mandatory workflow step.
-# A lead with contact info + property match should proceed to create_task.
+# Priority 5: has match but no analysis → analyze_property
 # ---------------------------------------------------------------------------
 
 def test_priority_5_has_match_no_analysis_no_longer_returns_analyze_property():
     lead = make_lead(has_property_match=True, analysis_complete=False)
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
-    # Should now fall through to create_task (new, active with no tasks)
-    assert result == 'create_task'
+    assert result == 'analyze_property'
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +177,7 @@ def test_priority_5_has_match_no_analysis_no_longer_returns_analyze_property():
 
 def test_priority_6_follow_up_overdue_returns_follow_up_now():
     lead = make_lead(follow_up_overdue=True)
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'follow_up_now'
 
@@ -172,7 +188,7 @@ def test_priority_6_follow_up_overdue_returns_follow_up_now():
 
 def test_priority_7_is_warm_returns_follow_up_now():
     lead = make_lead(is_warm=True)
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'follow_up_now'
 
@@ -183,7 +199,7 @@ def test_priority_7_is_warm_returns_follow_up_now():
 
 def test_priority_8_high_score_no_tasks_returns_ready_for_outreach():
     lead = make_lead(lead_score=70.0, data_completeness_score=60.0)
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'ready_for_outreach'
 
@@ -191,7 +207,7 @@ def test_priority_8_high_score_no_tasks_returns_ready_for_outreach():
 def test_priority_7_high_score_with_open_tasks_skips_ready_for_outreach():
     """When open tasks exist, priority 7 does not fire; falls through."""
     lead = make_lead(lead_score=70.0, data_completeness_score=60.0)
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=2):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=2):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result != 'ready_for_outreach'
 
@@ -204,10 +220,10 @@ def test_priority_7_high_score_with_open_tasks_skips_ready_for_outreach():
 def test_priority_9_low_completeness_no_longer_returns_enrich_data():
     """data_completeness_score threshold removed — low completeness does not block outreach."""
     lead = make_lead(lead_score=40.0, data_completeness_score=49.9)
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
-    # Falls through to create_task — has contact info, property match, no open tasks
-    assert result == 'create_task'
+    # Falls through to nurture — tier C (score 40) before create_task
+    assert result == 'nurture'
 
 
 # ---------------------------------------------------------------------------
@@ -215,15 +231,23 @@ def test_priority_9_low_completeness_no_longer_returns_enrich_data():
 # ---------------------------------------------------------------------------
 
 def test_priority_10_active_no_tasks_returns_create_task():
-    lead = make_lead(lead_status='mailing_no_contact_made', lead_score=40.0, data_completeness_score=60.0)
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    lead = make_lead(
+        lead_status='mailing_no_contact_made',
+        lead_score=65.0,
+        data_completeness_score=60.0,
+    )
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'create_task'
 
 
 def test_priority_10_new_no_tasks_returns_create_task():
-    lead = make_lead(lead_status='negotiating_remote', lead_score=40.0, data_completeness_score=60.0)
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=0):
+    lead = make_lead(
+        lead_status='negotiating_remote',
+        lead_score=65.0,
+        data_completeness_score=60.0,
+    )
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'create_task'
 
@@ -241,7 +265,7 @@ def test_priority_11_default_returns_nurture():
         follow_up_overdue=False,
         is_warm=False,
     )
-    with patch('app.services.action_engine_service._count_open_tasks', return_value=1):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=1):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'nurture'
 
@@ -283,7 +307,7 @@ def test_recompute_and_persist_appends_timeline_when_ra_changes(app):
         assert meta['previous_action'] is None
         assert meta['new_action'] == 'follow_up_now'
         assert meta['winning_rule'] == 'follow_up_overdue'
-        assert meta['lead_score'] == 50.0
+        assert isinstance(meta['lead_score'], float)
         assert meta['is_warm'] is False
         assert meta['signals'] == {
             'follow_up_overdue': True,

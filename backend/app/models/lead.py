@@ -134,11 +134,13 @@ class Property(db.Model):
         name='lead_status_enum'
     ), nullable=False, default='awaiting_skip_trace', server_default='awaiting_skip_trace', index=True)
 
-    # Action Engine output
+    # Action Engine output (unified recommended-action vocabulary)
     recommended_action = db.Column(db.Enum(
         'enrich_data', 'resolve_match', 'analyze_property', 'follow_up_now',
         'ready_for_outreach', 'add_contact_info', 'create_task', 'nurture',
         'suppress', 'do_not_contact',
+        'review_now', 'mail_ready', 'call_ready', 'valuation_needed',
+        'needs_manual_review',
         name='crm_recommended_action_enum'
     ), nullable=True, index=True)
 

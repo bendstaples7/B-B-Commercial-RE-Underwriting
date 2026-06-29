@@ -81,6 +81,13 @@ def _make_lead(**kwargs):
     return lead
 
 
+def _default_mock_weights():
+    weights = MagicMock()
+    for key, value in DEFAULT_WEIGHTS.items():
+        setattr(weights, key, value)
+    return weights
+
+
 # ---------------------------------------------------------------------------
 # ACTIVE_OUTREACH_THRESHOLD
 # ---------------------------------------------------------------------------
@@ -125,7 +132,6 @@ class TestSignalAdjustments:
 
 class TestApplySignalAdjustments:
     """Tests for LeadScoringEngine.apply_signal_adjustments."""
-    pytestmark = pytest.mark.skip(reason="apply_signal_adjustments not yet implemented on LeadScoringEngine - will be added in a follow-up")
 
     def setup_method(self):
         self.engine = LeadScoringEngine()
@@ -209,7 +215,6 @@ class TestApplySignalAdjustments:
 
 class TestConfigurableWeights:
     """Tests for LeadScoringEngine.apply_configurable_weights."""
-    pytestmark = pytest.mark.skip(reason="apply_configurable_weights not yet on LeadScoringEngine - follow-up")
 
     def setup_method(self):
         self.engine = LeadScoringEngine()
@@ -250,14 +255,15 @@ class TestConfigurableWeights:
 
 class TestRecalculateWithSignalsAndWeights:
     """Tests that recalculate_lead_score accepts signals and weights parameters."""
-    pytestmark = pytest.mark.skip(reason="recalculate_lead_score with signals not yet on LeadScoringEngine - follow-up")
 
     def setup_method(self):
         self.engine = LeadScoringEngine()
 
-    @patch("app.services.deterministic_scoring_engine.db.session.commit")
-    @patch("app.services.deterministic_scoring_engine.db.session.add")
-    def test_recalculate_with_signals(self, mock_add, mock_commit):
+    @patch.object(LeadScoringEngine, "_score_engagement", return_value=0.0)
+    @patch.object(LeadScoringEngine, "get_weights", return_value=_default_mock_weights())
+    @patch("app.services.lead_scoring_engine.db.session.commit")
+    @patch("app.services.lead_scoring_engine.db.session.add")
+    def test_recalculate_with_signals(self, mock_add, mock_commit, _mock_weights, _mock_engagement):
         """recalculate_lead_score should accept signals and apply adjustments."""
         lead = _make_lead(
             property_type="single_family",
@@ -277,9 +283,14 @@ class TestRecalculateWithSignalsAndWeights:
         # Should have the signal adjustment applied (+15)
         assert result.total_score >= 15.0
 
-    @patch("app.services.deterministic_scoring_engine.db.session.commit")
-    @patch("app.services.deterministic_scoring_engine.db.session.add")
-    def test_recalculate_without_signals(self, mock_add, mock_commit):
+    @patch.object(LeadScoringEngine, "_score_engagement", return_value=0.0)
+    @patch("app.services.lead_scoring_engine.HubSpotSignal")
+    @patch.object(LeadScoringEngine, "get_weights", return_value=_default_mock_weights())
+    @patch("app.services.lead_scoring_engine.db.session.commit")
+    @patch("app.services.lead_scoring_engine.db.session.add")
+    def test_recalculate_without_signals(
+        self, mock_add, mock_commit, _mock_weights, mock_hubspot_signal, _mock_engagement,
+    ):
         """recalculate_lead_score should work without optional parameters."""
         lead = _make_lead(
             property_type="single_family",
@@ -287,6 +298,7 @@ class TestRecalculateWithSignalsAndWeights:
             property_zip="78701",
         )
         lead.id = 1
+        mock_hubspot_signal.query.filter_by.return_value.order_by.return_value.all.return_value = []
 
         result = self.engine.recalculate_lead_score(lead)
         assert result.total_score >= 0.0
@@ -300,7 +312,6 @@ class TestRecalculateWithSignalsAndWeights:
 
 class TestRecommendedActionFromSignals:
     """Tests for _compute_recommended_action_from_signals (LeadScoringEngine compatibility)."""
-    pytestmark = pytest.mark.skip(reason="_compute_recommended_action_from_signals not yet on LeadScoringEngine - follow-up")
 
     def setup_method(self):
         self.engine = LeadScoringEngine()
@@ -410,14 +421,17 @@ class TestCookCountyAssessorPlugin:
 
 class TestUnifiedScoringIntegration:
     """End-to-end integration test combining all merged features."""
-    pytestmark = pytest.mark.skip(reason="integration test needs fully merged engine - follow-up")
 
     def setup_method(self):
         self.engine = LeadScoringEngine()
 
-    @patch("app.services.deterministic_scoring_engine.db.session.commit")
-    @patch("app.services.deterministic_scoring_engine.db.session.add")
-    def test_full_pipeline_with_signal_adjustment(self, mock_add, mock_commit):
+    @patch.object(LeadScoringEngine, "_score_engagement", return_value=0.0)
+    @patch.object(LeadScoringEngine, "get_weights", return_value=_default_mock_weights())
+    @patch("app.services.lead_scoring_engine.db.session.commit")
+    @patch("app.services.lead_scoring_engine.db.session.add")
+    def test_full_pipeline_with_signal_adjustment(
+        self, mock_add, mock_commit, _mock_weights, _mock_engagement,
+    ):
         """Score a lead, apply signals, verify tier/action are computed correctly."""
         lead = _make_lead(
             property_type="multi_family",

@@ -25,14 +25,12 @@ import type {
   PropertySummary,
   PropertyListFilters,
   PropertyListResponse,
-  PropertyScoreRecord,
-  PropertyScoreResponse,
   MarketingList,
   CondoFilterParams,
+  UnifiedRecommendedAction,
 } from '@/types'
 import { leadService } from '@/services/leadApi'
-import { leadScoreService } from '@/services/api'
-import { useQueries, useQueryClient } from '@tanstack/react-query'
+import { useQueryClient } from '@tanstack/react-query'
 import { CondoResultsTable } from '@/components/CondoResultsTable'
 import { CondoDetailView } from '@/components/CondoDetailView'
 import { condoFilterService } from '@/services/condoFilterApi'
@@ -70,17 +68,13 @@ const PER_PAGE = 20
  * has never been scored).
  */
 export interface LeadRow extends PropertySummary {
-  latest_score: PropertyScoreRecord | null
-  total_score: number | null
-  score_tier: PropertyScoreRecord['score_tier'] | null
-  data_quality_score: number | null
-  recommended_action: PropertyScoreRecord['recommended_action'] | null
   top_signal: string | null
+  missing_data: string[]
   missing_data_count: number | null
 }
 
 /** Human-readable labels for the recommended-action values. */
-const ACTION_LABELS: Record<NonNullable<LeadRow['recommended_action']>, string> = {
+const ACTION_LABELS: Record<UnifiedRecommendedAction, string> = {
   review_now: 'Review Now',
   enrich_data: 'Enrich Data',
   mail_ready: 'Mail Ready',
@@ -89,6 +83,13 @@ const ACTION_LABELS: Record<NonNullable<LeadRow['recommended_action']>, string> 
   suppress: 'Suppress',
   nurture: 'Nurture',
   needs_manual_review: 'Needs Manual Review',
+  follow_up_now: 'Follow Up Now',
+  ready_for_outreach: 'Ready for Outreach',
+  add_contact_info: 'Add Contact Info',
+  create_task: 'Create a Task',
+  resolve_match: 'Resolve Match',
+  analyze_property: 'Analyze Property',
+  do_not_contact: 'Do Not Contact',
 }
 
 /** Convert a snake_case dimension key to a human-readable label. */
@@ -122,7 +123,7 @@ const COLUMN_DEFS: ColDef<LeadRow>[] = [
     cellRenderer: TierCellRenderer,
   },
   {
-    field: 'total_score',
+    field: 'lead_score',
     headerName: 'Score',
     width: 85,
     sortable: true,
@@ -209,7 +210,6 @@ const COLUMN_DEFS: ColDef<LeadRow>[] = [
   { field: 'date_skip_traced', headerName: 'Date Skip Traced', width: 130 },
   { field: 'date_added_to_hubspot', headerName: 'Added to HubSpot', width: 130 },
   { field: 'up_next_to_mail', headerName: 'Up Next to Mail', width: 120 },
-  { field: 'lead_score', headerName: 'Score', width: 80, sortable: true },
   { field: 'created_at', headerName: 'Added', width: 110, sortable: true },
 ]
 
@@ -257,54 +257,16 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = () => {
   // Score filter state
   const [scoreFilters, setScoreFilters] = useState<ScoreFilters>(EMPTY_SCORE_FILTERS)
 
-  const scoreQueries = useQueries({
-    queries: leads.map((lead) => ({
-      queryKey: ['leadScore', lead.id] as const,
-      queryFn: async (): Promise<PropertyScoreResponse> => {
-        const response = await leadScoreService.getLeadScore(lead.id)
-        return response.data
-      },
-      staleTime: 60_000,
-      retry: false,
-      refetchOnWindowFocus: false,
-    })),
-  })
-
   const rows = useMemo<LeadRow[]>(() => {
-    return leads.map((lead, idx) => {
-      const query = scoreQueries[idx]
-      const latest: PropertyScoreRecord | null =
-        (query?.data?.latest as PropertyScoreRecord | null | undefined) ?? null
-
-      if (!latest) {
-        return {
-          ...lead,
-          latest_score: null,
-          total_score: null,
-          score_tier: null,
-          data_quality_score: null,
-          recommended_action: null,
-          top_signal: null,
-          missing_data_count: null,
-        }
-      }
-
-      const topSignalKey = latest.top_signals?.[0]?.dimension
-      return {
-        ...lead,
-        latest_score: latest,
-        total_score: latest.total_score,
-        score_tier: latest.score_tier,
-        data_quality_score: latest.data_quality_score,
-        recommended_action: latest.recommended_action,
-        top_signal: topSignalKey ? humanizeDimension(topSignalKey) : null,
-        missing_data_count: Array.isArray(latest.missing_data)
-          ? latest.missing_data.length
-          : 0,
-      }
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, scoreQueries.map((q) => q.data).join('|')])
+    return leads.map((lead) => ({
+      ...lead,
+      top_signal: lead.top_signal
+        ? humanizeDimension(lead.top_signal)
+        : null,
+      missing_data: lead.missing_data ?? [],
+      missing_data_count: lead.missing_data_count ?? (lead.missing_data?.length ?? null),
+    }))
+  }, [leads])
 
   const displayedRows = useMemo<LeadRow[]>(() => {
     const {
@@ -329,23 +291,18 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = () => {
     if (!anyFilterActive) return rows
 
     return rows.filter((row) => {
-      const score = row.latest_score
-      if (tiers.length > 0 && (!score || !tiers.includes(score.score_tier))) return false
-      if (actions.length > 0 && (!score || !actions.includes(score.recommended_action)))
-        return false
-      if (lowDataQuality && (!score || score.data_quality_score >= 70)) return false
-      if (missingPin && !(score?.missing_data?.includes('pin') ?? false)) return false
+      if (tiers.length > 0 && (!row.score_tier || !tiers.includes(row.score_tier))) return false
       if (
-        missingOwnerMailing &&
-        !(score?.missing_data?.includes('owner_mailing_address') ?? false)
+        actions.length > 0 &&
+        (!row.recommended_action || !actions.includes(row.recommended_action as UnifiedRecommendedAction))
       )
         return false
-      if (
-        condoNeedsReview &&
-        !(score?.recommended_action === 'needs_manual_review')
-      )
+      if (lowDataQuality && (row.data_quality_score == null || row.data_quality_score >= 70))
         return false
-      if (condoLikelyCondo && !(score?.recommended_action === 'suppress')) return false
+      if (missingPin && !row.missing_data.includes('pin')) return false
+      if (missingOwnerMailing && !row.missing_data.includes('owner_mailing_address')) return false
+      if (condoNeedsReview && row.recommended_action !== 'needs_manual_review') return false
+      if (condoLikelyCondo && row.recommended_action !== 'suppress') return false
       return true
     })
   }, [rows, scoreFilters])

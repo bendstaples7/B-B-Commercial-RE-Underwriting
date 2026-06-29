@@ -1,1013 +1,154 @@
-"""Deterministic Lead Scoring Engine.
+"""Backward-compatible DeterministicScoringEngine facade.
 
-Computes separate scores for residential and commercial leads using
-explicit point-based rules. No AI or machine learning is used.
-
-Each recalculation creates a new LeadScore record (append-only history).
-All scoring functions are pure (no DB access) except the recalculate_*
-orchestration methods.
+Logic lives in scoring_rubric.py and lead_scoring_engine.py. This module
+preserves the old API surface for tests and scripts.
 """
-import json
-import logging
-import re
-from datetime import date, datetime
+from __future__ import annotations
+
+from datetime import date
 from typing import Optional
 
 from app import db
 from app.models.lead import Lead
 from app.models.lead_score import LeadScore
+from app.services import scoring_rubric as rubric
+from app.services.enrichment_scoring import (
+    contactability_score,
+    engagement_score,
+    ownership_duration_score,
+    property_equity_score,
+)
+from app.services.lead_scoring_engine import LeadScoringEngine
 
-logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-BULK_BATCH_SIZE = 500
-
-# Motivation keywords that indicate seller willingness
-MOTIVATION_KEYWORDS = [
-    "motivated", "distressed", "vacant", "abandoned", "probate",
-    "divorce", "tax lien", "code violation", "fire damage",
-    "behind on payments", "pre-foreclosure", "foreclosure",
-    "estate", "inherited", "tired landlord", "out of state",
-    "needs work", "deferred maintenance", "boarded up",
-]
-
-# source_type values that earn the base distress score
-SOURCE_TYPE_DISTRESS_QUALIFYING = frozenset({"foreclosure", "tax_distress", "long_owned"})
-
-# Points awarded per distress scoring rule
-SOURCE_TYPE_DISTRESS_BASE_POINTS = 10
-SOURCE_TYPE_DISTRESS_TAX_BONUS = 5
-SOURCE_TYPE_DISTRESS_COMBINED_CAP = 15  # base + bonus cap
-
-# Tax distress language that must never appear in top_signals or recommended_action
-TAX_DISTRESS_FORBIDDEN_TERMS = frozenset({
-    "tax_delinquency", "tax_sale", "delinquent", "tax delinquency", "tax sale",
-})
-
-# Residential scoring dimension maximums
-RESIDENTIAL_MAX_POINTS = {
-    "property_type_fit": 20,
-    "neighborhood_fit": 15,
-    "unit_count_fit": 15,
-    "absentee_owner": 10,
-    "owner_mailing_quality": 10,
-    "years_owned": 10,
-    "existing_notes_motivation": 10,
-    "manual_priority": 10,
-    "source_type_distress": SOURCE_TYPE_DISTRESS_COMBINED_CAP,
-    # New data enrichment dimensions
-    "contactability": 20,
-    "property_equity": 25,
-    "ownership_duration": 15,
-    "engagement": 10,
-}
-
-# Commercial scoring dimension maximums
-COMMERCIAL_MAX_POINTS = {
-    "property_type_fit": 20,
-    "condo_clarity": 20,
-    "building_sale_possible": 15,
-    "neighborhood_fit": 10,
-    "owner_concentration": 10,
-    "absentee_owner": 10,
-    "building_size_fit": 5,
-    "existing_notes_motivation": 5,
-    "manual_priority": 5,
-    # New data enrichment dimensions
-    "contactability": 20,
-    "property_equity": 25,
-    "ownership_duration": 15,
-    "engagement": 10,
-}
-
-# Data quality field-to-points mapping
-DATA_QUALITY_FIELDS = {
-    "has_pin": 20,
-    "has_property_address": 15,
-    "has_normalized_address": 10,
-    "has_owner_name": 15,
-    "has_owner_mailing_address": 15,
-    "has_property_type_or_assessor_class": 10,
-    "has_estimated_unit_count_or_building_size": 10,
-    "has_source_reference": 5,
-}
-
-# Missing data fields to check (superset used for the missing_data array)
-MISSING_DATA_FIELDS = [
-    "pin", "property_address", "normalized_address", "owner_name",
-    "owner_mailing_address", "property_type", "assessor_class",
-    "estimated_units", "building_sqft", "years_owned", "neighborhood",
-    "condo_risk_status", "building_sale_possible", "violation_data",
-    "permit_data", "tax_data", "skip_trace_data",
-]
-
-# Tier thresholds
-TIER_A_MIN = 75
-TIER_B_MIN = 60
-TIER_C_MIN = 40
-
-# Allowed recommended actions
 ALLOWED_ACTIONS = {
     "review_now", "enrich_data", "mail_ready", "call_ready",
     "valuation_needed", "suppress", "nurture", "needs_manual_review",
+    "follow_up_now", "ready_for_outreach", "add_contact_info", "create_task",
+    "resolve_match", "analyze_property", "do_not_contact",
 }
-
-# ---------------------------------------------------------------------------
-# Attribute registry for scoring — used by test fixtures to validate mocks
-# ---------------------------------------------------------------------------
-
-SCORING_ATTRIBUTES = frozenset({
-    # enrichment dims
-    'assessed_value', 'date_skip_traced', 'socials', 'year_built', 'lot_size',
-    'mailer_history', 'has_phone', 'has_email', 'follow_up_date', 'timeline',
-    'phone_5', 'phone_6', 'phone_7', 'email_4', 'email_5',
-    # existing dims
-    'property_type', 'bedrooms', 'bathrooms', 'square_footage', 'property_city',
-    'property_zip', 'units', 'mailing_address', 'mailing_city', 'mailing_state',
-    'mailing_zip', 'property_street', 'acquisition_date', 'notes',
-    'manual_priority', 'source_type', 'tax_distress_data', 'do_not_contact',
-    'county_assessor_pin', 'owner_first_name', 'owner_last_name', 'source',
-    'data_source', 'updated_at', 'id', 'lead_category', 'unanswered_call_count',
-    'last_contact_date', 'lead_status',
-})
-
-
-def get_scoring_attributes() -> frozenset:
-    """Return the set of all lead attributes accessed by scoring methods."""
-    return SCORING_ATTRIBUTES
-
-
-# ---------------------------------------------------------------------------
-# Safe attribute access — rejects MagicMock-like objects at the boundary
-# ---------------------------------------------------------------------------
-
-def _safe_attr(obj, name: str, default=None):
-    """Get attribute, returning default for sentinel/mock objects.
-
-    Detects MagicMock-like objects: they're truthy, not None, but not
-    useful primitive types.  Return *default* instead so scoring methods
-    never inflate scores due to mock auto-creation.
-    """
-    val = getattr(obj, name, default)
-    if val is not None and not isinstance(val, (int, float, str, bool, date, datetime, dict, list, tuple, set)):
-        return default
-    return val
+TIER_A_MIN = rubric.TIER_A_MIN
+TIER_B_MIN = rubric.TIER_B_MIN
+TIER_C_MIN = rubric.TIER_C_MIN
+RESIDENTIAL_MAX_POINTS = rubric.RESIDENTIAL_MAX_POINTS
+COMMERCIAL_MAX_POINTS = rubric.COMMERCIAL_MAX_POINTS
+MOTIVATION_KEYWORDS = rubric.MOTIVATION_KEYWORDS
+SOURCE_TYPE_DISTRESS_QUALIFYING = rubric.SOURCE_TYPE_DISTRESS_QUALIFYING
+SOURCE_TYPE_DISTRESS_BASE_POINTS = rubric.SOURCE_TYPE_DISTRESS_BASE_POINTS
+SOURCE_TYPE_DISTRESS_TAX_BONUS = rubric.SOURCE_TYPE_DISTRESS_TAX_BONUS
+SOURCE_TYPE_DISTRESS_COMBINED_CAP = rubric.SOURCE_TYPE_DISTRESS_COMBINED_CAP
+DATA_QUALITY_FIELDS = rubric.DATA_QUALITY_FIELDS
+MISSING_DATA_FIELDS = rubric.MISSING_DATA_FIELDS
+TAX_DISTRESS_FORBIDDEN_TERMS = rubric.TAX_DISTRESS_FORBIDDEN_TERMS
+SCORING_ATTRIBUTES = rubric.SCORING_ATTRIBUTES
+parse_sale_date_string = rubric.parse_sale_date_string
+effective_acquisition_date = rubric.effective_acquisition_date
+calculate_score_tier = rubric.calculate_score_tier
+get_scoring_attributes = rubric.get_scoring_attributes
+calculate_residential_score = rubric.calculate_residential_score
+calculate_commercial_score = rubric.calculate_commercial_score
+calculate_data_quality_score = rubric.calculate_data_quality_score
+extract_top_signals = rubric.extract_top_signals
 
 
 class DeterministicScoringEngine:
-    """Deterministic, explainable lead scoring engine.
+    """Facade delegating to unified LeadScoringEngine + scoring_rubric."""
 
-    Computes separate scores for residential and commercial leads using
-    point-based rules. Stores full score breakdowns in LeadScore records.
-    """
-
-    # Attribute registry — all lead attributes accessed by scoring methods
     SCORING_ATTRIBUTES = SCORING_ATTRIBUTES
+    BULK_BATCH_SIZE = 500
 
-    _SALE_DATE_FORMATS = (
-        '%m/%d/%Y',
-        '%m/%d/%y',
-        '%Y-%m-%d',
-        '%m-%d-%Y',
-        '%m-%d-%y',
-        '%B %d, %Y',
-        '%b %d, %Y',
-        '%B %d %Y',
-        '%b %d %Y',
-    )
+    _unified = LeadScoringEngine()
 
-    @staticmethod
-    def parse_sale_date_string(value: Optional[str]) -> Optional[date]:
-        """Parse a human-entered sale date string (e.g. most_recent_sale)."""
-        if not value or not str(value).strip():
-            return None
-        text = str(value).strip()
-        for fmt in DeterministicScoringEngine._SALE_DATE_FORMATS:
-            try:
-                return datetime.strptime(text, fmt).date()
-            except ValueError:
-                continue
-        # Fallback: extract first M/D/YYYY or M-D-YYYY substring
-        match = re.search(r'(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})', text)
-        if match:
-            month, day, year = match.groups()
-            year_int = int(year)
-            if year_int < 100:
-                year_int += 1900 if year_int >= 50 else 2000
-            try:
-                return date(year_int, int(month), int(day))
-            except ValueError:
-                return None
-        return None
-
-    @staticmethod
-    def effective_acquisition_date(lead: Lead) -> Optional[date]:
-        """Acquisition date for scoring — uses acquisition_date or parses most_recent_sale."""
-        if lead.acquisition_date:
-            return lead.acquisition_date
-        return DeterministicScoringEngine.parse_sale_date_string(
-            getattr(lead, 'most_recent_sale', None),
-        )
+    parse_sale_date_string = staticmethod(parse_sale_date_string)
+    effective_acquisition_date = staticmethod(effective_acquisition_date)
+    calculate_score_tier = staticmethod(calculate_score_tier)
+    extract_top_signals = staticmethod(extract_top_signals)
 
     @staticmethod
     def score_needs_refresh(lead: Lead, score: Optional[LeadScore]) -> bool:
-        """True when stored score likely predates current lead property data."""
-        if score is None:
-            return True
-        if lead.updated_at and score.created_at and score.created_at < lead.updated_at:
-            return True
-        details = score.score_details or {}
-        if lead.property_type and details.get('property_type_fit', 0) == 0:
-            return True
-        acquisition = DeterministicScoringEngine.effective_acquisition_date(lead)
-        if acquisition:
-            # Future acquisition dates legitimately score 0 — do not treat as stale.
-            if acquisition <= date.today() and details.get('ownership_duration', 0) == 0:
-                return True
-        return False
-
-    # ------------------------------------------------------------------
-    # Residential Scoring
-    # ------------------------------------------------------------------
+        return LeadScoringEngine.score_needs_refresh(lead, score)
 
     def calculate_residential_score(self, lead: Lead) -> dict:
-        """Calculate the residential motivation score for a lead.
+        return rubric.calculate_residential_score(lead)
 
-        Returns
-        -------
-        dict
-            Keys: total_score (float), score_details (dict), score_version (str)
-        """
-        details = {}
+    def calculate_commercial_score(self, lead: Lead) -> dict:
+        return rubric.calculate_commercial_score(lead)
 
-        details["property_type_fit"] = self._residential_property_type_fit(lead)
-        details["neighborhood_fit"] = self._residential_neighborhood_fit(lead)
-        details["unit_count_fit"] = self._residential_unit_count_fit(lead)
-
-        # absentee_owner: short-circuit to full 10 when source_type == 'absentee_owner'
-        source_type = getattr(lead, "source_type", None)
-        if source_type == "absentee_owner":
-            details["absentee_owner"] = 10.0
-        else:
-            details["absentee_owner"] = self._absentee_owner_score(lead)
-
-        details["owner_mailing_quality"] = self._owner_mailing_quality(lead)
-        # ownership_duration supersedes years_owned (same signal — avoid double-count)
-        details["years_owned"] = 0.0
-        details["existing_notes_motivation"] = self._notes_motivation_score(
-            lead, max_points=RESIDENTIAL_MAX_POINTS["existing_notes_motivation"]
-        )
-        details["manual_priority"] = self._manual_priority_score(
-            lead, max_points=RESIDENTIAL_MAX_POINTS["manual_priority"]
-        )
-        details["source_type_distress"] = self._source_type_distress_score(lead)
-
-        # New data enrichment dimensions
-        details["contactability"] = self._contactability_score(
-            lead, max_points=float(RESIDENTIAL_MAX_POINTS["contactability"])
-        )
-        details["property_equity"] = self._property_equity_score(
-            lead, max_points=float(RESIDENTIAL_MAX_POINTS["property_equity"])
-        )
-        details["ownership_duration"] = self._ownership_duration_score(
-            lead, max_points=float(RESIDENTIAL_MAX_POINTS["ownership_duration"])
-        )
-        details["engagement"] = self._engagement_score(
-            lead, max_points=float(RESIDENTIAL_MAX_POINTS["engagement"])
-        )
-
-        total_score = sum(details.values())
-
-        return {
-            "total_score": total_score,
-            "score_details": details,
-            "score_version": "residential_v2_internal_data",
-        }
-
-    # ------------------------------------------------------------------
-    # Residential dimension helpers
-    # ------------------------------------------------------------------
+    def calculate_data_quality_score(self, lead: Lead) -> tuple:
+        return rubric.calculate_data_quality_score(lead)
 
     @staticmethod
-    def _residential_property_type_fit(lead: Lead) -> float:
-        """Multi-family/2-4 unit = 20, SFR = 10, other = 5, missing = 0."""
-        if lead.property_type and lead.property_type.strip():
-            pt = lead.property_type.strip().lower()
-            multi_family_types = {
-                "multi_family", "multi family", "multifamily", "multi-family",
-                "duplex", "triplex", "fourplex", "2-4 unit", "2 unit", "3 unit", "4 unit",
-            }
-            sfr_types = {"single_family", "single family", "sfr"}
+    def get_recommended_action(lead, total_score, data_quality_score, score_tier):
+        action, _, _ = LeadScoringEngine.evaluate_recommended_action(
+            lead, total_score, data_quality_score, score_tier,
+        )
+        return action or 'enrich_data'
 
-            if pt in multi_family_types:
-                return 20.0
-            elif pt in sfr_types:
-                return 10.0
-            else:
-                return 5.0
+    def recalculate_lead_score(self, lead: Lead) -> LeadScore:
+        return self._unified.recalculate_lead_score(lead)
 
-        # Infer from unit count when property_type is absent
-        units = lead.units
-        if units is not None:
-            if 2 <= units <= 4:
-                return 20.0
-            if units >= 5:
-                return 15.0
-            if units == 1:
-                return 10.0
-        return 0.0
+    def recalculate_all_lead_scores(self) -> int:
+        return self._unified.recalculate_all_lead_scores()
 
-    @staticmethod
-    def _residential_neighborhood_fit(lead: Lead) -> float:
-        """Based on property_city/zip matching target neighborhoods.
+    def recalculate_by_source_type(self, source_type: str) -> int:
+        return self._unified.recalculate_by_source_type(source_type)
 
-        Default: all locations get 8 points (configurable list not yet implemented).
-        """
-        if lead.property_city or lead.property_zip:
-            return 8.0
-        return 0.0
-
-    @staticmethod
-    def _residential_unit_count_fit(lead: Lead) -> float:
-        """2-4 units = 15, 5+ = 10, 1 unit = 5, missing = 0."""
-        units = lead.units
-        if units is None:
-            return 0.0
-        if 2 <= units <= 4:
-            return 15.0
-        elif units >= 5:
-            return 10.0
-        elif units == 1:
-            return 5.0
-        return 0.0
-
-    @staticmethod
-    def _absentee_owner_score(lead: Lead) -> float:
-        """10 points when mailing address differs from property address, else 0."""
-        if not lead.mailing_address or not lead.property_street:
-            return 0.0
-        if lead.mailing_address.strip().lower() != lead.property_street.strip().lower():
-            return 10.0
-        return 0.0
-
-    @staticmethod
-    def _owner_mailing_quality(lead: Lead) -> float:
-        """Full mailing address (street+city+state+zip) = 10, partial = 5, none = 0."""
-        has_street = bool(lead.mailing_address and lead.mailing_address.strip())
-        has_city = bool(lead.mailing_city and lead.mailing_city.strip())
-        has_state = bool(lead.mailing_state and lead.mailing_state.strip())
-        has_zip = bool(lead.mailing_zip and lead.mailing_zip.strip())
-
-        parts_present = sum([has_street, has_city, has_state, has_zip])
-
-        if parts_present == 4:
-            return 10.0
-        elif parts_present > 0:
-            return 5.0
-        return 0.0
+    # Rubric dimension helpers (tests call these on the engine instance)
+    _residential_property_type_fit = staticmethod(rubric.residential_property_type_fit)
+    _residential_neighborhood_fit = staticmethod(rubric.residential_neighborhood_fit)
+    _residential_unit_count_fit = staticmethod(rubric.residential_unit_count_fit)
+    _absentee_owner_score = staticmethod(rubric.absentee_owner_score)
+    _owner_mailing_quality = staticmethod(rubric.owner_mailing_quality)
+    _notes_motivation_score = staticmethod(rubric.notes_motivation_score)
+    _manual_priority_score = staticmethod(rubric.manual_priority_score)
+    _source_type_distress_score = staticmethod(rubric.source_type_distress_score)
+    _commercial_property_type_fit = staticmethod(rubric.commercial_property_type_fit)
+    _condo_clarity_score = staticmethod(rubric.condo_clarity_score)
+    _building_sale_possible_score = staticmethod(rubric.building_sale_possible_score)
+    _commercial_neighborhood_fit = staticmethod(rubric.commercial_neighborhood_fit)
+    _owner_concentration_score = staticmethod(rubric.owner_concentration_score)
+    _building_size_fit_score = staticmethod(rubric.building_size_fit_score)
+    _contactability_score = staticmethod(
+        lambda lead, max_points=20.0: contactability_score(lead, max_points=max_points)
+    )
+    _property_equity_score = staticmethod(
+        lambda lead, max_points=25.0: property_equity_score(lead, max_points=max_points)
+    )
+    _ownership_duration_score = staticmethod(
+        lambda lead, max_points=15.0: ownership_duration_score(lead, max_points=max_points)
+    )
+    _engagement_score = staticmethod(
+        lambda lead, max_points=10.0: engagement_score(lead, max_points=max_points)
+    )
 
     @staticmethod
     def _years_owned_score(lead: Lead) -> float:
-        """10+ years = 10, 5-9 years = 7, 2-4 years = 4, <2 years = 2, missing = 0.
-
-        Future acquisition dates (negative years owned) are treated as invalid
-        data and score 0 — a lead cannot have been owned for a negative
-        duration.
-        """
-        acquisition = DeterministicScoringEngine.effective_acquisition_date(lead)
+        acquisition = rubric.effective_acquisition_date(lead)
         if not acquisition:
             return 0.0
-
-        today = date.today()
-        delta = today - acquisition
-        years = delta.days / 365.25
-
+        years = (date.today() - acquisition).days / 365.25
         if years < 0:
             return 0.0
         if years >= 10:
             return 10.0
-        elif years >= 5:
+        if years >= 5:
             return 7.0
-        elif years >= 2:
+        if years >= 2:
             return 4.0
-        else:
-            return 2.0
-
-    @staticmethod
-    def _notes_motivation_score(lead: Lead, max_points: float) -> float:
-        """Contains motivation keywords = max_points, has notes but no keywords = 3, no notes = 0."""
-        if not lead.notes:
-            return 0.0
-
-        notes_lower = lead.notes.lower()
-        for keyword in MOTIVATION_KEYWORDS:
-            if keyword in notes_lower:
-                return max_points
-
-        # Has notes but no motivation keywords
-        return 3.0
-
-    @staticmethod
-    def _manual_priority_score(lead: Lead, max_points: float) -> float:
-        """Based on user-assigned priority value (future field, default 0)."""
-        priority = getattr(lead, "manual_priority", None)
-        if priority is None:
-            return 0.0
-        # Clamp to [0, max_points]
-        return max(0.0, min(float(priority), max_points))
-
-    @staticmethod
-    def _source_type_distress_score(lead: Lead) -> float:
-        """Award points based on source_type and tax_distress_data.
-
-        Scoring rules (residential leads only):
-        - 10 points when source_type in {foreclosure, tax_distress, long_owned}
-        - 5 additional points when tax_distress_data is non-null
-        - Combined cap of 15 points
-        - absentee_owner is handled separately via short-circuit in the caller
-        - Unknown source_type → 0 points; no exception
-        - Malformed tax_distress_data JSON → log warning; treat as null; no exception
-        """
-        source_type = getattr(lead, "source_type", None)
-        base_points = 0.0
-
-        if source_type in SOURCE_TYPE_DISTRESS_QUALIFYING:
-            base_points = float(SOURCE_TYPE_DISTRESS_BASE_POINTS)
-
-        # tax_distress_data bonus — 5 additional points when non-null
-        tax_distress_data = getattr(lead, "tax_distress_data", None)
-
-        # Handle malformed JSON stored as a string
-        if isinstance(tax_distress_data, str):
-            try:
-                tax_distress_data = json.loads(tax_distress_data)
-            except (json.JSONDecodeError, ValueError):
-                logger.warning(
-                    "lead %s: malformed tax_distress_data JSON — treating as null for scoring",
-                    getattr(lead, "id", "unknown"),
-                )
-                tax_distress_data = None
-
-        bonus = 0.0
-        if tax_distress_data is not None:
-            bonus = float(SOURCE_TYPE_DISTRESS_TAX_BONUS)
-
-        total = base_points + bonus
-        # Enforce combined cap
-        return min(total, float(SOURCE_TYPE_DISTRESS_COMBINED_CAP))
-
-    # ------------------------------------------------------------------
-    # Data Enrichment Scoring: New dimensions
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _contactability_score(lead: "Lead", max_points: float = 20.0) -> float:
-        from app.services.enrichment_scoring import contactability_score
-        return contactability_score(lead, max_points=max_points)
-
-    @staticmethod
-    def _property_equity_score(lead: "Lead", max_points: float = 25.0) -> float:
-        from app.services.enrichment_scoring import property_equity_score
-        return property_equity_score(lead, max_points=max_points)
-
-    @staticmethod
-    def _ownership_duration_score(lead: "Lead", max_points: float = 15.0) -> float:
-        from app.services.enrichment_scoring import ownership_duration_score
-        return ownership_duration_score(lead, max_points=max_points)
-
-    @staticmethod
-    def _engagement_score(lead: "Lead", max_points: float = 10.0) -> float:
-        from app.services.enrichment_scoring import engagement_score
-        return engagement_score(lead, max_points=max_points)
-
-    @staticmethod
-    def _theoretical_max_points(category: str) -> float:
-        """Maximum achievable raw points for tier normalization."""
-        if category == "commercial":
-            return float(sum(COMMERCIAL_MAX_POINTS.values()))
-        return float(
-            sum(RESIDENTIAL_MAX_POINTS.values())
-            - RESIDENTIAL_MAX_POINTS["years_owned"]
-        )
+        return 2.0
 
     @staticmethod
     def _normalize_for_tier(raw_total: float, category: str) -> float:
-        """Map raw point total to a 0–100 scale for tier thresholds."""
-        theoretical_max = DeterministicScoringEngine._theoretical_max_points(category)
+        if category == "commercial":
+            theoretical_max = float(sum(COMMERCIAL_MAX_POINTS.values()))
+        else:
+            theoretical_max = float(
+                sum(RESIDENTIAL_MAX_POINTS.values()) - RESIDENTIAL_MAX_POINTS["years_owned"]
+            )
         if theoretical_max <= 0:
             return 0.0
         return min(100.0, raw_total * 100.0 / theoretical_max)
 
-    # ------------------------------------------------------------------
-    # Commercial Scoring
-
-    def calculate_commercial_score(self, lead: Lead) -> dict:
-        """Calculate the commercial motivation score for a lead.
-
-        Returns
-        -------
-        dict
-            Keys: total_score (float), score_details (dict), score_version (str)
-        """
-        details = {}
-
-        details["property_type_fit"] = self._commercial_property_type_fit(lead)
-        details["condo_clarity"] = self._condo_clarity_score(lead)
-        details["building_sale_possible"] = self._building_sale_possible_score(lead)
-        details["neighborhood_fit"] = self._commercial_neighborhood_fit(lead)
-        details["owner_concentration"] = self._owner_concentration_score(lead)
-        details["absentee_owner"] = self._absentee_owner_score(lead)
-        details["building_size_fit"] = self._building_size_fit_score(lead)
-        details["existing_notes_motivation"] = self._notes_motivation_score(
-            lead, max_points=COMMERCIAL_MAX_POINTS["existing_notes_motivation"]
-        )
-        details["manual_priority"] = self._manual_priority_score(
-            lead, max_points=COMMERCIAL_MAX_POINTS["manual_priority"]
-        )
-
-        # New data enrichment dimensions
-        details["contactability"] = self._contactability_score(
-            lead, max_points=float(COMMERCIAL_MAX_POINTS["contactability"])
-        )
-        details["property_equity"] = self._property_equity_score(
-            lead, max_points=float(COMMERCIAL_MAX_POINTS["property_equity"])
-        )
-        details["ownership_duration"] = self._ownership_duration_score(
-            lead, max_points=float(COMMERCIAL_MAX_POINTS["ownership_duration"])
-        )
-        details["engagement"] = self._engagement_score(
-            lead, max_points=float(COMMERCIAL_MAX_POINTS["engagement"])
-        )
-
-        total_score = sum(details.values())
-
-        return {
-            "total_score": total_score,
-            "score_details": details,
-            "score_version": "commercial_v2_internal_data",
-        }
-
-    # ------------------------------------------------------------------
-    # Commercial dimension helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _commercial_property_type_fit(lead: Lead) -> float:
-        """Commercial/mixed-use = 20, multi-family 5+ units = 15, other = 5, missing = 0.
-
-        Multi-family properties only qualify for the 15-point tier when the
-        estimated unit count is 5 or greater; smaller multi-families fall
-        through to the 5-point "other" bucket to match the design doc.
-        """
-        if not lead.property_type:
-            return 0.0
-
-        pt = lead.property_type.strip().lower()
-        commercial_types = {
-            "commercial", "mixed-use", "mixed use", "retail",
-            "office", "industrial", "warehouse",
-        }
-        multi_family_types = {"multi_family", "multi family", "multifamily", "apartment"}
-
-        if pt in commercial_types:
-            return 20.0
-        elif pt in multi_family_types:
-            units = getattr(lead, "units", None)
-            try:
-                unit_count = int(units) if units is not None else 0
-            except (TypeError, ValueError):
-                unit_count = 0
-            if unit_count >= 5:
-                return 15.0
-            return 5.0
-        else:
-            return 5.0
-
-    @staticmethod
-    def _condo_clarity_score(lead: Lead) -> float:
-        """Score based on condo_risk_status field.
-
-        likely_not_condo = 20, unknown = 10, partial_condo_possible = 5,
-        needs_review = 2, likely_condo = 0.
-        """
-        status = getattr(lead, "condo_risk_status", None)
-        if not status:
-            return 10.0  # Unknown/missing treated as unknown
-
-        status_lower = status.strip().lower()
-        mapping = {
-            "likely_not_condo": 20.0,
-            "unknown": 10.0,
-            "partial_condo_possible": 5.0,
-            "needs_review": 2.0,
-            "likely_condo": 0.0,
-        }
-        return mapping.get(status_lower, 10.0)
-
-    @staticmethod
-    def _building_sale_possible_score(lead: Lead) -> float:
-        """yes = 15, maybe = 8, no = 0, unknown = 5."""
-        value = getattr(lead, "building_sale_possible", None)
-        if not value:
-            return 5.0  # Missing treated as unknown
-
-        value_lower = value.strip().lower()
-        mapping = {
-            "yes": 15.0,
-            "maybe": 8.0,
-            "no": 0.0,
-            "unknown": 5.0,
-        }
-        return mapping.get(value_lower, 5.0)
-
-    @staticmethod
-    def _commercial_neighborhood_fit(lead: Lead) -> float:
-        """Same logic as residential but max 10 points.
-
-        Default: all locations get 5 points (configurable list not yet implemented).
-        """
-        if lead.property_city or lead.property_zip:
-            return 5.0
-        return 0.0
-
-    @staticmethod
-    def _owner_concentration_score(lead: Lead) -> float:
-        """Based on number of distinct owners at same normalized address.
-
-        1 owner = 10, 2 = 7, 3-4 = 4, 5+ = 2.
-        ``owner_count`` values of 0 or less are treated as data-absent
-        (no analysis run yet) and fall through to the middle default rather
-        than being credited as the strongest concentration signal.
-
-        Uses the condo_analysis relationship if available.
-        """
-        condo_analysis = getattr(lead, "condo_analysis", None)
-        if condo_analysis and hasattr(condo_analysis, "owner_count"):
-            owner_count = condo_analysis.owner_count
-            if owner_count is not None and owner_count > 0:
-                if owner_count == 1:
-                    return 10.0
-                elif owner_count == 2:
-                    return 7.0
-                elif owner_count <= 4:
-                    return 4.0
-                else:
-                    return 2.0
-
-        # No analysis data available — default to middle score
-        return 5.0
-
-    @staticmethod
-    def _building_size_fit_score(lead: Lead) -> float:
-        """Has sqft data and >= 2000 sqft = 5, has sqft < 2000 = 3, missing = 0."""
-        sqft = lead.square_footage
-        if sqft is None:
-            return 0.0
-        if sqft >= 2000:
-            return 5.0
-        return 3.0
-
-    # ------------------------------------------------------------------
-    # Data Quality Scoring
-    # ------------------------------------------------------------------
-
-    def calculate_data_quality_score(self, lead: Lead) -> tuple:
-        """Calculate data quality score and identify missing fields.
-
-        Returns
-        -------
-        tuple
-            (data_quality_score: float, missing_fields: list[str])
-        """
-        score = 0.0
-
-        # has_pin (20 points)
-        if lead.county_assessor_pin and str(lead.county_assessor_pin).strip():
-            score += DATA_QUALITY_FIELDS["has_pin"]
-
-        # has_property_address (15 points)
-        if lead.property_street and lead.property_street.strip():
-            score += DATA_QUALITY_FIELDS["has_property_address"]
-
-        # has_normalized_address (10 points) — use property_street as proxy
-        if lead.property_street and lead.property_street.strip():
-            score += DATA_QUALITY_FIELDS["has_normalized_address"]
-
-        # has_owner_name (15 points)
-        if (lead.owner_first_name and lead.owner_first_name.strip()) or \
-           (lead.owner_last_name and lead.owner_last_name.strip()):
-            score += DATA_QUALITY_FIELDS["has_owner_name"]
-
-        # has_owner_mailing_address (15 points)
-        if lead.mailing_address and lead.mailing_address.strip():
-            score += DATA_QUALITY_FIELDS["has_owner_mailing_address"]
-
-        # has_property_type_or_assessor_class (10 points)
-        if lead.property_type and lead.property_type.strip():
-            score += DATA_QUALITY_FIELDS["has_property_type_or_assessor_class"]
-
-        # has_estimated_unit_count_or_building_size (10 points)
-        if lead.units is not None or lead.square_footage is not None:
-            score += DATA_QUALITY_FIELDS["has_estimated_unit_count_or_building_size"]
-
-        # has_source_reference (5 points)
-        if (lead.source and lead.source.strip()) or \
-           (lead.data_source and lead.data_source.strip()):
-            score += DATA_QUALITY_FIELDS["has_source_reference"]
-
-        # Identify missing data fields (broader check per Requirement 5)
-        missing_fields = self._identify_missing_data(lead)
-
-        return (score, missing_fields)
-
     @staticmethod
     def _identify_missing_data(lead: Lead) -> list:
-        """Identify all missing useful fields for the lead."""
-        missing = []
-
-        field_checks = {
-            "pin": lambda: lead.county_assessor_pin and str(lead.county_assessor_pin).strip(),
-            "property_address": lambda: lead.property_street and lead.property_street.strip(),
-            "normalized_address": lambda: lead.property_street and lead.property_street.strip(),
-            "owner_name": lambda: (
-                (lead.owner_first_name and lead.owner_first_name.strip()) or
-                (lead.owner_last_name and lead.owner_last_name.strip())
-            ),
-            "owner_mailing_address": lambda: lead.mailing_address and lead.mailing_address.strip(),
-            "property_type": lambda: lead.property_type and lead.property_type.strip(),
-            "assessor_class": lambda: lead.property_type and lead.property_type.strip(),
-            "estimated_units": lambda: lead.units is not None,
-            "building_sqft": lambda: lead.square_footage is not None,
-            "years_owned": lambda: DeterministicScoringEngine.effective_acquisition_date(lead) is not None,
-            "neighborhood": lambda: (
-                (lead.property_city and lead.property_city.strip()) or
-                (lead.property_zip and lead.property_zip.strip())
-            ),
-            "condo_risk_status": lambda: (
-                getattr(lead, "condo_risk_status", None) and
-                lead.condo_risk_status.strip()
-            ),
-            "building_sale_possible": lambda: (
-                getattr(lead, "building_sale_possible", None) and
-                lead.building_sale_possible.strip()
-            ),
-            "violation_data": lambda: False,  # Not yet available
-            "permit_data": lambda: False,  # Not yet available
-            "tax_data": lambda: False,  # Not yet available
-            "skip_trace_data": lambda: (
-                lead.date_skip_traced is not None or
-                bool(lead.phone_1) or bool(lead.email_1)
-            ),
-        }
-
-        for field_name in MISSING_DATA_FIELDS:
-            check_fn = field_checks.get(field_name)
-            if check_fn and not check_fn():
-                missing.append(field_name)
-
+        _, missing = rubric.calculate_data_quality_score(lead)
         return missing
-
-    # ------------------------------------------------------------------
-    # Tier Calculation
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def calculate_score_tier(total_score: float) -> str:
-        """Determine score tier from total score.
-
-        A: 75-100, B: 60-74, C: 40-59, D: 0-39
-        """
-        if total_score >= TIER_A_MIN:
-            return "A"
-        elif total_score >= TIER_B_MIN:
-            return "B"
-        elif total_score >= TIER_C_MIN:
-            return "C"
-        else:
-            return "D"
-
-    # ------------------------------------------------------------------
-    # Recommended Action
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def get_recommended_action(
-        lead: Lead,
-        total_score: float,
-        data_quality_score: float,
-        score_tier: str,
-    ) -> str:
-        """Determine recommended next action using the decision tree.
-
-        Priority order:
-        1. do_not_contact flag -> suppress
-        2. Commercial condo overrides (likely_condo -> suppress, needs_review -> needs_manual_review)
-        3. Tier-based logic with data quality consideration
-
-        Tax distress language is never included in the returned action string.
-        """
-        # 1. Do not contact override
-        if getattr(lead, "do_not_contact", False):
-            return "suppress"
-
-        # 2. Commercial condo overrides (evaluated before tier-based logic)
-        lead_category = getattr(lead, "lead_category", "residential")
-        if lead_category == "commercial":
-            condo_status = getattr(lead, "condo_risk_status", None)
-            if condo_status:
-                condo_lower = condo_status.strip().lower()
-                if condo_lower == "likely_condo":
-                    return "suppress"
-                elif condo_lower == "needs_review":
-                    return "needs_manual_review"
-
-        # 3. Tier-based logic
-        if score_tier == "A":
-            if data_quality_score >= 70:
-                return "mail_ready"
-            else:
-                return "enrich_data"
-        elif score_tier == "B":
-            if data_quality_score >= 70:
-                return "review_now"
-            else:
-                return "enrich_data"
-        elif score_tier == "C":
-            return "nurture"
-        else:  # D — low motivation score, but NOT hidden; guide user to enrich data
-            return "enrich_data"
-
-    # ------------------------------------------------------------------
-    # Top Signals Extraction
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def extract_top_signals(score_details: dict) -> list:
-        """Extract top contributing scoring dimensions.
-
-        Returns a list of dicts sorted by points descending, excluding
-        dimensions with zero points. Includes at least top 3 (or all
-        non-zero if fewer than 3).
-
-        Tax distress language is never included in dimension names or values.
-        The ``source_type_distress`` dimension itself is allowed (it's a neutral
-        name), but any signal whose dimension name or representation contains
-        forbidden tax distress terms is filtered out as a safety guard.
-        """
-        non_zero = []
-        for dim, pts in score_details.items():
-            if pts <= 0:
-                continue
-            # Guard: never include a signal whose name contains forbidden tax terms
-            dim_lower = dim.lower().replace("_", " ")
-            is_forbidden = any(term in dim_lower for term in TAX_DISTRESS_FORBIDDEN_TERMS)
-            if is_forbidden:
-                continue
-            non_zero.append({"dimension": dim, "points": pts})
-
-        # Sort by points descending
-        non_zero.sort(key=lambda x: x["points"], reverse=True)
-
-        return non_zero
-
-    # ------------------------------------------------------------------
-    # Orchestration Methods (DB-touching)
-    # ------------------------------------------------------------------
-
-    def recalculate_lead_score(self, lead: Lead) -> LeadScore:
-        """Compute all scores and persist a new LeadScore record.
-
-        Dispatches to residential or commercial scoring based on lead_category.
-        """
-        # Determine category and compute motivation score
-        category = getattr(lead, "lead_category", "residential") or "residential"
-
-        if category == "commercial":
-            score_result = self.calculate_commercial_score(lead)
-        else:
-            score_result = self.calculate_residential_score(lead)
-
-        total_score = score_result["total_score"]
-        score_details = score_result["score_details"]
-        score_version = score_result["score_version"]
-
-        # Calculate data quality
-        data_quality_score, missing_data = self.calculate_data_quality_score(lead)
-
-        # Tier thresholds assume a 0–100 scale; normalize raw point totals.
-        tier_score = self._normalize_for_tier(total_score, category)
-
-        # Calculate tier
-        score_tier = self.calculate_score_tier(tier_score)
-
-        # Determine recommended action
-        recommended_action = self.get_recommended_action(
-            lead, tier_score, data_quality_score, score_tier
-        )
-
-        # Extract top signals
-        top_signals = self.extract_top_signals(score_details)
-
-        # Persist new record
-        lead_score = LeadScore(
-            lead_id=lead.id,
-            score_version=score_version,
-            total_score=total_score,
-            score_tier=score_tier,
-            data_quality_score=data_quality_score,
-            recommended_action=recommended_action,
-            top_signals=top_signals,
-            score_details=score_details,
-            missing_data=missing_data,
-            created_at=datetime.utcnow(),
-        )
-
-        db.session.add(lead_score)
-
-        # Live sort column (leads.lead_score) is owned by LeadScoringEngine via
-        # refresh_lead_scoring — this engine writes history to lead_scores only.
-
-        db.session.commit()
-
-        logger.info(
-            "Scored lead %d: tier=%s score=%.1f quality=%.1f action=%s",
-            lead.id, score_tier, total_score, data_quality_score, recommended_action,
-        )
-
-        return lead_score
-
-    def recalculate_all_lead_scores(self) -> int:
-        """Recalculate scores for all leads. Returns count of scored leads."""
-        scored = 0
-        offset = 0
-
-        while True:
-            leads = (
-                Lead.query
-                .order_by(Lead.id)
-                .offset(offset)
-                .limit(BULK_BATCH_SIZE)
-                .all()
-            )
-            if not leads:
-                break
-
-            for lead in leads:
-                try:
-                    self.recalculate_lead_score(lead)
-                    scored += 1
-                except Exception as e:
-                    logger.error(
-                        "Failed to score lead %d: %s", lead.id, str(e)
-                    )
-                    db.session.rollback()
-
-            logger.info("Batch scored %d leads (offset %d)", len(leads), offset)
-            offset += BULK_BATCH_SIZE
-
-        logger.info("Bulk recalculation complete: %d leads scored", scored)
-        return scored
-
-    def recalculate_by_source_type(self, source_type: str) -> int:
-        """Recalculate scores for leads matching a source_type. Returns count."""
-        scored = 0
-        offset = 0
-
-        while True:
-            leads = (
-                Lead.query
-                .filter(
-                    (Lead.source == source_type) | (Lead.data_source == source_type)
-                )
-                .order_by(Lead.id)
-                .offset(offset)
-                .limit(BULK_BATCH_SIZE)
-                .all()
-            )
-            if not leads:
-                break
-
-            for lead in leads:
-                try:
-                    self.recalculate_lead_score(lead)
-                    scored += 1
-                except Exception as e:
-                    logger.error(
-                        "Failed to score lead %d: %s", lead.id, str(e)
-                    )
-                    db.session.rollback()
-
-            logger.info(
-                "Batch scored %d leads for source_type=%s (offset %d)",
-                len(leads), source_type, offset,
-            )
-            offset += BULK_BATCH_SIZE
-
-        logger.info(
-            "Source-type recalculation complete: %d leads scored for %s",
-            scored, source_type,
-        )
-        return scored

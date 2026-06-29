@@ -972,58 +972,24 @@ def run_extract_incremental_signals(engagement_id: str, lead_id: int) -> None:
 # ---------------------------------------------------------------------------
 
 def run_rescore_lead(lead_id: int) -> None:
-    """Run LeadScoringEngine and ActionEngineService for a single lead.
-
-    Rescores first (so the pipeline stage bonus is applied), then recomputes
-    recommended_action so any HubSpot signal changes are immediately reflected.
-
-    Both steps are independently non-fatal: a scoring failure does not prevent
-    the action recompute, and vice versa. A db.session.rollback() is issued
-    after each step so a partial dirty session from one step cannot be
-    accidentally committed by the next.
-
-    Requirements: 3, 5
-    """
+    """Score and persist a single lead after HubSpot signal extraction."""
     with _AppContextManager():
         from app import db
-        from app.models.lead import Lead
         from app.services import LeadScoringEngine
-        from app.services.action_engine_service import ActionEngineService
 
-        # Resolve user_id from the lead's owner — required by bulk_rescore for weights.
-        lead = db.session.get(Lead, lead_id)
-        user_id = (lead.owner_user_id if lead else None) or 'default'
-
-        # Step 1: rescore — non-fatal; rollback on failure so the session is
-        # clean before step 2.
         try:
-            engine = LeadScoringEngine()
-            rescored = engine.bulk_rescore(user_id=user_id, lead_ids=[lead_id])
+            result = LeadScoringEngine().score_and_persist(lead_id)
+            if result is None:
+                logger.warning("run_rescore_lead: lead_id=%d not found", lead_id)
+                return
             logger.info(
-                "run_rescore_lead: lead_id=%d rescored=%d",
-                lead_id, rescored,
+                "run_rescore_lead: lead_id=%d scored tier=%s action=%s",
+                lead_id, result.score_tier, result.recommended_action,
             )
         except Exception as exc:
             logger.error(
-                "run_rescore_lead: error rescoring lead_id=%d: %s",
+                "run_rescore_lead: error scoring lead_id=%d: %s",
                 lead_id, exc, exc_info=True,
-            )
-            db.session.rollback()
-
-        # Step 2: recompute recommended_action AFTER score so score-threshold
-        # rules (e.g. score >= 70 → ready_for_outreach) see the updated value.
-        # Runs regardless of whether step 1 succeeded or failed.
-        try:
-            ActionEngineService.recompute_and_persist(lead_id)
-            logger.info(
-                "run_rescore_lead: recommended_action recomputed for lead_id=%d",
-                lead_id,
-            )
-        except Exception as exc:
-            # Non-fatal — nightly beat task is the safety net.
-            logger.warning(
-                "run_rescore_lead: action recompute failed for lead_id=%d: %s",
-                lead_id, exc,
             )
             db.session.rollback()
 

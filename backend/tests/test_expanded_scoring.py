@@ -372,7 +372,7 @@ class TestResidentialScoreIncludesNewDimensions:
     def test_score_version_updated(self):
         lead = _make_lead()
         result = self.engine.calculate_residential_score(lead)
-        assert result["score_version"] == "residential_v2_internal_data"
+        assert result["score_version"] == "unified_v1_residential"
 
     def test_total_score_includes_new_dimensions(self):
         """A fully-loaded lead should have a higher total with new dimensions."""
@@ -436,4 +436,4 @@ class TestCommercialScoreIncludesNewDimensions:
     def test_score_version_updated(self):
         lead = _make_lead(lead_category="commercial", condo_analysis=None)
         result = self.engine.calculate_commercial_score(lead)
-        assert result["score_version"] == "commercial_v2_internal_data"
+        assert result["score_version"] == "unified_v1_commercial"

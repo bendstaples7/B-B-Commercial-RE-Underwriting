@@ -58,6 +58,10 @@ def _make_lead(suppression_flag=False, **kwargs):
     for attr in _zero_attrs:
         setattr(lead, attr, None)
     lead.suppression_flag = suppression_flag
+    lead.lead_category = kwargs.get('lead_category', 'residential')
+    lead.lead_status = kwargs.get('lead_status', 'mailing_no_contact_made')
+    lead.id = None
+    lead.units = None
     for k, v in kwargs.items():
         setattr(lead, k, v)
     return lead

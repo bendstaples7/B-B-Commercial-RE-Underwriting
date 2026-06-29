@@ -21,11 +21,14 @@ FORBIDDEN_PATHS = [
     "frontend/src/components/TimelinePanel.test.tsx",
 ]
 
-# Only these files may assign leads.lead_score (live sort column).
+# Only these files may assign leads.lead_score / leads.recommended_action.
 LEAD_SCORE_WRITER_ALLOWLIST = {
     "backend/app/services/lead_scoring_engine.py",
-    "backend/app/services/lead_refresh.py",
 }
+
+LEAD_RA_ASSIGN_RE = re.compile(
+    r"\blead\.recommended_action\s*(?:[-+*/]=|(?!=)=)"
+)
 
 # Baseline: handle_errors copies in controllers (should not grow without shared decorator).
 MAX_HANDLE_ERRORS_COPIES = 29
@@ -107,10 +110,17 @@ def check_lead_score_writers() -> list[str]:
         if rel in LEAD_SCORE_WRITER_ALLOWLIST:
             continue
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if LEAD_SCORE_ASSIGN_RE.search(line) and not line.strip().startswith("#"):
+            if line.strip().startswith("#"):
+                continue
+            if LEAD_SCORE_ASSIGN_RE.search(line):
                 errors.append(
                     f"Unauthorized lead.lead_score write in {rel}:{lineno} "
-                    f"(only LeadScoringEngine/refresh_lead_scoring may set live score)"
+                    f"(only LeadScoringEngine may set live score)"
+                )
+            if LEAD_RA_ASSIGN_RE.search(line):
+                errors.append(
+                    f"Unauthorized lead.recommended_action write in {rel}:{lineno} "
+                    f"(only LeadScoringEngine may set recommended action)"
                 )
     return errors
 

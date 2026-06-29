@@ -223,7 +223,7 @@ class TestSourceTypeDistressTaxBonus:
 
     def test_malformed_tax_distress_data_logs_warning(self):
         lead = _make_lead(source_type="foreclosure", tax_distress_data="{bad}")
-        with patch("app.services.deterministic_scoring_engine.logger") as mock_logger:
+        with patch("app.services.scoring_rubric.logger") as mock_logger:
             self.engine._source_type_distress_score(lead)
             mock_logger.warning.assert_called_once()
 

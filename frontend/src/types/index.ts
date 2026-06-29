@@ -412,6 +412,12 @@ export interface PropertySummary {
   date_added_to_hubspot: string | null
   up_next_to_mail: boolean | null
   mailer_history: Record<string, any> | any[] | string | null
+  score_tier?: 'A' | 'B' | 'C' | 'D' | null
+  data_quality_score?: number | null
+  recommended_action?: string | null
+  top_signal?: string | null
+  missing_data?: string[]
+  missing_data_count?: number | null
 }
 
 /** @deprecated Use `PropertySummary` instead */
@@ -1086,19 +1092,31 @@ export interface DealListResponse {
 // Property Scoring Types (formerly "Lead Scoring Types")
 // ---------------------------------------------------------------------------
 
-/** @deprecated Use `ScoringRecommendedAction` — renamed to avoid conflict with the CRM RecommendedAction type */
-export type ScoringRecommendedAction =
-  | 'review_now'
+/** Unified recommended action vocabulary (scoring + workflow). */
+export type UnifiedRecommendedAction =
   | 'enrich_data'
+  | 'resolve_match'
+  | 'analyze_property'
+  | 'follow_up_now'
+  | 'ready_for_outreach'
+  | 'add_contact_info'
+  | 'create_task'
+  | 'nurture'
+  | 'suppress'
+  | 'do_not_contact'
+  | 'review_now'
   | 'mail_ready'
   | 'call_ready'
   | 'valuation_needed'
-  | 'suppress'
-  | 'nurture'
   | 'needs_manual_review'
 
-/** @deprecated Use `ScoringRecommendedAction` instead */
-export type RecommendedAction = ScoringRecommendedAction
+/** @deprecated Use `UnifiedRecommendedAction` */
+export type ScoringRecommendedAction = UnifiedRecommendedAction
+
+/** @deprecated Use `UnifiedRecommendedAction` instead */
+export type RecommendedAction = UnifiedRecommendedAction
+
+export type CRMRecommendedAction = UnifiedRecommendedAction
 
 export interface ScoreSignal {
   dimension: string
@@ -1652,18 +1670,6 @@ export type LeadStatus =
   | 'deal_won'
   | 'deal_lost'
   | 'suppressed'
-  | 'do_not_contact';
-
-export type CRMRecommendedAction =
-  | 'enrich_data'
-  | 'resolve_match'
-  | 'analyze_property'
-  | 'follow_up_now'
-  | 'ready_for_outreach'
-  | 'add_contact_info'
-  | 'create_task'
-  | 'nurture'
-  | 'suppress'
   | 'do_not_contact';
 
 export type LeadTaskType =

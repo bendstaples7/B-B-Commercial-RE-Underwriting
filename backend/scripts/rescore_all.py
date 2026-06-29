@@ -1,10 +1,10 @@
-"""Bulk rescore all leads using the DeterministicScoringEngine.
+"""Bulk rescore all leads using the unified LeadScoringEngine.
 
 Run from backend/ directory:
     python scripts/rescore_all.py
 
-Scores every lead in the database and updates both lead_scores (history)
-and leads.lead_score (denormalized sort column).
+Scores every lead: updates leads.lead_score, leads.recommended_action,
+and appends lead_scores history rows.
 """
 import os
 import sys
@@ -42,12 +42,12 @@ from app import create_app
 app = create_app('development')
 
 with app.app_context():
-    from app.services.deterministic_scoring_engine import DeterministicScoringEngine
+    from app.services.lead_scoring_engine import LeadScoringEngine
     from app.models.lead import Lead
 
     total = Lead.query.count()
     logger.info("Scoring %d leads...", total)
 
-    engine = DeterministicScoringEngine()
+    engine = LeadScoringEngine()
     n = engine.recalculate_all_lead_scores()
     logger.info("Done: %d leads scored", n)

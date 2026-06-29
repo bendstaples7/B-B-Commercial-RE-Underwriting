@@ -20,6 +20,7 @@ from app.models import (
     AnalysisSession,
     Lead,
     LeadAuditTrail,
+    LeadScore,
     MarketingListMember,
     ScoringWeights,
     WorkflowStep,
@@ -29,6 +30,8 @@ from app.models.property_contact import PropertyContact
 from app.models.user import User
 from app.schemas import LeadListQuerySchema
 from app.services.lead_scoring_engine import LeadScoringEngine
+from app.services.scoring_rubric import calculate_score_tier
+from app.services import scoring_rubric as rubric
 
 logger = logging.getLogger(__name__)
 
@@ -140,9 +143,47 @@ def _parse_pagination(args):
     return page, per_page
 
 
-def _serialize_property_summary(lead):
+def _latest_scores_by_lead_id(lead_ids: list[int]) -> dict[int, LeadScore]:
+    """Batch-fetch the most recent LeadScore row per lead."""
+    if not lead_ids:
+        return {}
+    subq = (
+        db.session.query(
+            LeadScore.lead_id,
+            func.max(LeadScore.id).label('max_id'),
+        )
+        .filter(LeadScore.lead_id.in_(lead_ids))
+        .group_by(LeadScore.lead_id)
+        .subquery()
+    )
+    rows = (
+        db.session.query(LeadScore)
+        .join(subq, LeadScore.id == subq.c.max_id)
+        .all()
+    )
+    return {row.lead_id: row for row in rows}
+
+
+def _serialize_property_summary(lead, latest_score: LeadScore | None = None):
     """Serialize a Property (Lead) for list views — includes all spreadsheet fields."""
-    return {
+    score_tier = None
+    data_quality_score = None
+    top_signal = None
+    missing_data: list[str] = []
+    recommended_action = getattr(lead, 'recommended_action', None)
+    if latest_score is not None:
+        score_tier = latest_score.score_tier
+        data_quality_score = latest_score.data_quality_score
+        recommended_action = latest_score.recommended_action or recommended_action
+        missing_data = list(latest_score.missing_data or [])
+        signals = latest_score.top_signals or []
+        if signals:
+            top_signal = signals[0].get('dimension')
+    elif lead.lead_score:
+        score_tier = calculate_score_tier(lead.lead_score)
+        _, missing_data = rubric.calculate_data_quality_score(lead)
+
+    data = {
         'id': lead.id,
         'lead_category': lead.lead_category,
         'property_street': lead.property_street,
@@ -196,12 +237,19 @@ def _serialize_property_summary(lead):
         'date_added_to_hubspot': lead.date_added_to_hubspot.isoformat() if lead.date_added_to_hubspot else None,
         'up_next_to_mail': lead.up_next_to_mail,
         'lead_score': lead.lead_score,
+        'score_tier': score_tier,
+        'data_quality_score': data_quality_score,
+        'recommended_action': recommended_action,
+        'top_signal': top_signal,
+        'missing_data': missing_data,
+        'missing_data_count': len(missing_data),
         'data_source': lead.data_source,
         'source_type': lead.source_type,
         'owner_user_id': lead.owner_user_id,
         'created_at': lead.created_at.isoformat() if lead.created_at else None,
         'updated_at': lead.updated_at.isoformat() if lead.updated_at else None,
     }
+    return data
 
 
 def _serialize_property_detail(lead):
@@ -512,8 +560,14 @@ def list_properties():
     # --- Pagination ---
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
 
+    lead_ids = [lead.id for lead in pagination.items]
+    latest_scores = _latest_scores_by_lead_id(lead_ids)
+
     return jsonify({
-        'leads': [_serialize_property_summary(lead) for lead in pagination.items],
+        'leads': [
+            _serialize_property_summary(lead, latest_scores.get(lead.id))
+            for lead in pagination.items
+        ],
         'total': pagination.total,
         'page': pagination.page,
         'per_page': pagination.per_page,

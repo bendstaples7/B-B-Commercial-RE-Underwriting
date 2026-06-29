@@ -75,6 +75,8 @@ _KNOWN_REVISIONS = frozenset({
     '97321ab5e710',
     # Merge of data-enrichment-scoring and contact-phone-confidence heads
     'a4b5c6d7e8f9',
+    # Unified scoring — extend crm_recommended_action_enum
+    'b1c2d3e4f5a6',
 })
 
 
