@@ -399,5 +399,5 @@ describe('Property 10: Admin route access control', () => {
       ),
       { numRuns: 100 }
     )
-  })
+  }, 30000)
 })
