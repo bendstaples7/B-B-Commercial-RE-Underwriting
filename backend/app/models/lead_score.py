@@ -11,7 +11,12 @@ class LeadScore(db.Model):
     __tablename__ = 'lead_scores'
 
     id = db.Column(db.Integer, primary_key=True)
-    lead_id = db.Column(db.Integer, db.ForeignKey('leads.id'), nullable=False, index=True)
+    lead_id = db.Column(
+        db.Integer,
+        db.ForeignKey('leads.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
     property_id = db.Column(db.Integer, nullable=True)
     score_version = db.Column(db.String(50), nullable=False)
     total_score = db.Column(db.Float, nullable=False)
@@ -26,7 +31,12 @@ class LeadScore(db.Model):
     # Relationships
     lead = db.relationship(
         'Property',
-        backref=db.backref('score_records', lazy='dynamic', order_by='LeadScore.created_at.desc()')
+        backref=db.backref(
+            'score_records',
+            lazy='dynamic',
+            order_by='LeadScore.created_at.desc()',
+            cascade='all, delete-orphan',
+        ),
     )
 
     def __repr__(self):

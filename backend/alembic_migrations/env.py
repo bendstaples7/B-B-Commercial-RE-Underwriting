@@ -77,6 +77,8 @@ _KNOWN_REVISIONS = frozenset({
     'a4b5c6d7e8f9',
     # Unified scoring — extend crm_recommended_action_enum
     'b1c2d3e4f5a6',
+    # lead_scores.lead_id ON DELETE CASCADE
+    'c2d3e4f5a6b7',
 })
 
 
