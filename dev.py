@@ -84,6 +84,39 @@ def _start(label: str, cmd: list[str], cwd: str = None, env: dict = None) -> sub
 
 
 # ---------------------------------------------------------------------------
+# Production data gate — runs before pre-flight checks
+# ---------------------------------------------------------------------------
+
+def ensure_local_prod_data() -> bool:
+    """Auto-restore production DB dump when local leads are missing."""
+    root = os.path.dirname(__file__)
+    scripts = os.path.join(root, "scripts")
+
+    if sys.platform == "win32":
+        script = os.path.join(scripts, "ensure-local-prod-data.ps1")
+        if not os.path.isfile(script):
+            return True
+        cmd = [
+            "powershell", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-File", script,
+        ]
+    else:
+        script = os.path.join(scripts, "ensure-local-prod-data.sh")
+        if not os.path.isfile(script):
+            return True
+        cmd = ["bash", script]
+
+    print("\n  Checking local production data...")
+    print("  " + "-" * 50)
+    result = subprocess.run(cmd, cwd=root)
+    print("  " + "-" * 50)
+    if result.returncode != 0:
+        print("  Production data restore failed — cannot start dev environment.\n")
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Pre-flight checks (also called by `main` before starting Flask)
 # ---------------------------------------------------------------------------
 
@@ -201,6 +234,29 @@ def run_checks() -> bool:
         passed = False
 
     # ------------------------------------------------------------------
+    # Check 3b: Local database has production lead data
+    # ------------------------------------------------------------------
+    try:
+        import sqlalchemy as sa
+        sys.path.insert(0, BACKEND_DIR)
+        from env_loader import load_project_env
+        load_project_env()
+
+        db_url = os.environ.get("DATABASE_URL", "postgresql://localhost/real_estate_analysis")
+        engine = sa.create_engine(db_url)
+        with engine.connect() as conn:
+            lead_count = conn.execute(sa.text("SELECT count(*) FROM leads")).scalar() or 0
+
+        if lead_count < 1000:
+            print(f"  ✗ Local database has only {lead_count} leads (expected 1,000+)")
+            print("     Auto-restore did not populate lead data — check ensure-local-prod-data logs.")
+            passed = False
+        else:
+            print(f"  ✓ Local database has {lead_count:,} leads")
+    except Exception as e:
+        print(f"  ⚠️  Could not check lead count: {e}")
+
+    # ------------------------------------------------------------------
     # Check 4: Frontend node_modules installed
     # ------------------------------------------------------------------
     node_modules = os.path.join(frontend_dir, "node_modules")
@@ -283,8 +339,11 @@ def main():
     time.sleep(1)  # let Celery connect to Redis before Flask starts
 
     # ------------------------------------------------------------------
-    # 3. Pre-flight checks — refuse to start Flask if anything is wrong
+    # 3. Production data + pre-flight checks
     # ------------------------------------------------------------------
+    if not ensure_local_prod_data():
+        sys.exit(1)
+
     if not run_checks():
         sys.exit(1)
 
