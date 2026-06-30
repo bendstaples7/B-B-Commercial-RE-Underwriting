@@ -28,7 +28,7 @@ export function isOutreachRecommendedAction(
 
 export function outreachContactPlacement(
   openTasks: LeadTask[],
-  contact: OutreachContact | null | undefined,
+  _contact: OutreachContact | null | undefined,
   recommendedAction?: string | null,
 ): OutreachContactSurface {
   if (!isOutreachRecommendedAction(recommendedAction)) return 'none'
