@@ -144,6 +144,11 @@ class Property(db.Model):
         name='crm_recommended_action_enum'
     ), nullable=True, index=True)
 
+    recommended_contact_method = db.Column(db.Enum(
+        'phone', 'email', 'text', 'direct_mail',
+        name='recommended_contact_method_enum'
+    ), nullable=True, index=True)
+
     # Action Engine signals
     has_phone = db.Column(db.Boolean, nullable=False, default=False)
     has_email = db.Column(db.Boolean, nullable=False, default=False)

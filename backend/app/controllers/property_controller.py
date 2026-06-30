@@ -240,6 +240,7 @@ def _serialize_property_summary(lead, latest_score: LeadScore | None = None):
         'score_tier': score_tier,
         'data_quality_score': data_quality_score,
         'recommended_action': recommended_action,
+        'recommended_contact_method': getattr(lead, 'recommended_contact_method', None),
         'top_signal': top_signal,
         'missing_data': missing_data,
         'missing_data_count': len(missing_data),

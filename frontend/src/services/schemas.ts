@@ -165,6 +165,7 @@ export const LeadSummarySchema = z.object({
   score_tier: z.enum(['A', 'B', 'C', 'D']).nullish(),
   data_quality_score: z.number().nullish(),
   recommended_action: z.string().nullish(),
+  recommended_contact_method: z.enum(['phone', 'email', 'text', 'direct_mail']).nullish(),
   top_signal: z.string().nullish(),
   missing_data: z.array(z.string()).nullish(),
   missing_data_count: z.number().nullish(),

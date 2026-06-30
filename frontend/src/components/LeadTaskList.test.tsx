@@ -856,4 +856,39 @@ describe('LeadTaskList', () => {
       expect(items[2]).toHaveTextContent('Future Task')
     })
   })
+
+  describe('outreach contact on primary task', () => {
+    const phoneContact = {
+      channel: 'phone' as const,
+      label: 'Call',
+      value: '6302023839',
+      display: '(630) 202-3839',
+      href: 'tel:+16302023839',
+    }
+
+    it('shows contact inline on primary task only', () => {
+      const tasks = [
+        makeTask(1, {
+          title: 'Follow up with Gilberto Olivares',
+          due_date: '2026-06-30',
+          source: 'hubspot',
+        }),
+        makeTask(2, { title: 'Second task', due_date: '2026-07-01' }),
+      ]
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={tasks}
+          outreachContact={phoneContact}
+          showOutreachContactOnPrimaryTask
+          onTaskCreated={vi.fn()}
+        />
+      )
+
+      expect(screen.getByTestId('task-item-1')).toHaveTextContent('(630) 202-3839')
+      expect(screen.getByTestId('outreach-contact-inline')).toBeInTheDocument()
+      expect(screen.getByTestId('task-item-2')).not.toHaveTextContent('(630) 202-3839')
+    })
+  })
 })

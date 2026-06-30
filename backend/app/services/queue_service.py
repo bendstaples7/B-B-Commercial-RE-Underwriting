@@ -7,6 +7,8 @@ from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry
 from app.models.task import Task
 from app.models.task_association import TaskAssociation
+from app.services.recommended_action_metadata import get_recommended_action_display
+from app.services.outreach_method_service import resolve_outreach_contacts_for_leads
 
 # Statuses that represent active outreach pipeline (not terminal or suppressed)
 ACTIVE_PIPELINE_STATUSES = [
@@ -30,8 +32,16 @@ CONTACTED_STATUSES = [
 ]
 
 
-def _lead_to_queue_row(lead) -> dict:
+def _lead_to_queue_row(lead, outreach_contacts: dict[int, dict | None] | None = None) -> dict:
     """Convert a Lead model instance to a queue row dict."""
+    contact_method = lead.recommended_contact_method
+    ra_display = get_recommended_action_display(lead.recommended_action, contact_method)
+    lead_id = getattr(lead, 'id', None)
+    if outreach_contacts is not None and isinstance(lead_id, int):
+        outreach_contact = outreach_contacts.get(lead_id)
+    else:
+        from app.services.outreach_method_service import resolve_outreach_contact
+        outreach_contact = resolve_outreach_contact(lead, contact_method)
     return {
         'id': lead.id,
         'owner_first_name': lead.owner_first_name,
@@ -42,6 +52,9 @@ def _lead_to_queue_row(lead) -> dict:
         'lead_score': lead.lead_score,
         'lead_status': lead.lead_status,
         'recommended_action': lead.recommended_action,
+        'recommended_contact_method': contact_method,
+        'outreach_action_label': ra_display.get('label'),
+        'outreach_contact': outreach_contact,
         'has_property_match': lead.has_property_match,
         'last_contact_date': lead.last_contact_date.isoformat() if lead.last_contact_date else None,
         'last_hubspot_sync_at': lead.last_hubspot_sync_at.isoformat() if lead.last_hubspot_sync_at else None,
@@ -53,6 +66,12 @@ def _lead_to_queue_row(lead) -> dict:
         'unanswered_call_count': lead.unanswered_call_count,
         'is_warm': lead.is_warm,
     }
+
+
+def _leads_to_queue_rows(leads: list) -> list[dict]:
+    """Build queue rows with batched outreach contact resolution (avoids N+1)."""
+    contacts = resolve_outreach_contacts_for_leads(leads)
+    return [_lead_to_queue_row(lead, contacts) for lead in leads]
 
 
 def _hubspot_task_overdue_subquery(cutoff_date):
@@ -321,7 +340,7 @@ class QueueService:
         sort_col = getattr(Lead, sort_by, Lead.lead_score)
         query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
-        return [_lead_to_queue_row(lead) for lead in leads], total
+        return [_leads_to_queue_rows(leads), total]
 
     def get_previously_warm(
         self,
@@ -336,7 +355,7 @@ class QueueService:
         sort_col = getattr(Lead, sort_by, Lead.lead_score)
         query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
-        return [_lead_to_queue_row(lead) for lead in leads], total
+        return [_leads_to_queue_rows(leads), total]
 
     def get_follow_up_overdue(
         self,
@@ -373,7 +392,7 @@ class QueueService:
         sort_col = getattr(Lead, sort_by, Lead.last_contact_date)
         query = query.order_by(sort_col.asc() if sort_order == 'asc' else sort_col.desc())
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
-        return [_lead_to_queue_row(lead) for lead in leads], total
+        return [_leads_to_queue_rows(leads), total]
 
     def get_no_next_action(
         self,
@@ -421,7 +440,7 @@ class QueueService:
             sort_col.desc() if sort_order == 'desc' else sort_col.asc(),
         )
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
-        return [_lead_to_queue_row(lead) for lead in leads], total
+        return [_leads_to_queue_rows(leads), total]
 
     def get_needs_review(
         self,
@@ -436,7 +455,7 @@ class QueueService:
         sort_col = getattr(Lead, sort_by, Lead.review_triggered_at)
         query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
-        return [_lead_to_queue_row(lead) for lead in leads], total
+        return [_leads_to_queue_rows(leads), total]
 
     def get_do_not_contact(
         self,
@@ -451,7 +470,7 @@ class QueueService:
         sort_col = getattr(Lead, sort_by, Lead.lead_score)
         query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
-        return [_lead_to_queue_row(lead) for lead in leads], total
+        return [_leads_to_queue_rows(leads), total]
 
     def get_missing_property_match(
         self,
@@ -476,4 +495,4 @@ class QueueService:
         sort_col = getattr(Lead, sort_by, Lead.lead_score)
         query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
-        return [_lead_to_queue_row(lead) for lead in leads], total
+        return [_leads_to_queue_rows(leads), total]

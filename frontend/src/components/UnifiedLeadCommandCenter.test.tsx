@@ -586,4 +586,73 @@ describe('UnifiedLeadCommandCenter — sidebar responsive visibility', () => {
     const classes = sidebar.className.split(' ').filter(Boolean)
     expect(classes.length).toBeGreaterThan(1)
   })
+
+  describe('outreach contact placement', () => {
+    it('shows contact only on primary task when open tasks exist (no bordered callout)', async () => {
+      vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+        makeCommandCenterPayload({
+          recommended_action: {
+            value: 'call_ready',
+            recommended_contact_method: 'phone',
+            label: 'Call Now',
+            explanation: 'Ready for phone outreach.',
+            signals: {},
+          },
+          phones: [{ value: '(630) 202-3839', confidence_score: 80 }],
+          open_tasks: [
+            {
+              id: 'hs-99',
+              lead_id: 1,
+              task_type: 'custom',
+              title: 'Follow up with Gilberto Olivares',
+              status: 'open',
+              due_date: '2026-06-30',
+              created_at: '2026-01-01T00:00:00Z',
+              completed_at: null,
+              created_by: 'HubSpot',
+              source: 'hubspot',
+            },
+          ],
+        })
+      )
+
+      renderComponent()
+
+      await waitFor(() => {
+        expect(screen.getByTestId('tasks-panel')).toBeInTheDocument()
+      })
+
+      expect(screen.getAllByTestId('outreach-contact-inline')).toHaveLength(1)
+      expect(screen.queryByTestId('outreach-contact-callout')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('tasks-outreach-contact')).not.toBeInTheDocument()
+      expect(screen.getByTestId('recommended-action-panel')).not.toHaveTextContent('(630) 202-3839')
+      expect(screen.getByTestId('task-item-hs-99')).toHaveTextContent('(630) 202-3839')
+    })
+
+    it('shows contact inline in recommended action when no open tasks', async () => {
+      vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+        makeCommandCenterPayload({
+          recommended_action: {
+            value: 'call_ready',
+            recommended_contact_method: 'phone',
+            label: 'Call Now',
+            explanation: 'Ready for phone outreach.',
+            signals: {},
+          },
+          phones: [{ value: '(630) 202-3839', confidence_score: 80 }],
+          open_tasks: [],
+        })
+      )
+
+      renderComponent()
+
+      await waitFor(() => {
+        expect(screen.getByTestId('recommended-action-panel')).toBeInTheDocument()
+      })
+
+      expect(screen.getAllByTestId('outreach-contact-inline')).toHaveLength(1)
+      expect(screen.queryByTestId('outreach-contact-callout')).not.toBeInTheDocument()
+      expect(screen.getByTestId('recommended-action-panel')).toHaveTextContent('(630) 202-3839')
+    })
+  })
 })

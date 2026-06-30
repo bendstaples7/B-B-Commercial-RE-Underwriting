@@ -73,26 +73,7 @@ export interface LeadRow extends PropertySummary {
   missing_data_count: number | null
 }
 
-/** Human-readable labels for the recommended-action values. */
-const ACTION_LABELS: Record<UnifiedRecommendedAction, string> = {
-  review_now: 'Review Now',
-  enrich_data: 'Enrich Data',
-  mail_ready: 'Mail Ready',
-  call_ready: 'Call Ready',
-  valuation_needed: 'Valuation Needed',
-  suppress: 'Suppress',
-  nurture: 'Nurture',
-  needs_manual_review: 'Needs Manual Review',
-  follow_up_now: 'Follow Up Now',
-  ready_for_outreach: 'Ready for Outreach',
-  add_contact_info: 'Add Contact Info',
-  create_task: 'Create a Task',
-  resolve_match: 'Resolve Match',
-  analyze_property: 'Analyze Property',
-  do_not_contact: 'Do Not Contact',
-}
-
-/** Convert a snake_case dimension key to a human-readable label. */
+import { outreachDisplayLabel } from '@/constants/scoringRecommendedActions'
 function humanizeDimension(key: string): string {
   if (!key) return ''
   return key
@@ -142,8 +123,11 @@ const COLUMN_DEFS: ColDef<LeadRow>[] = [
     headerName: 'Recommended',
     width: 160,
     sortable: true,
-    valueFormatter: (p) =>
-      p.value == null ? '—' : ACTION_LABELS[p.value as keyof typeof ACTION_LABELS] ?? p.value,
+    valueFormatter: (p) => {
+      if (p.value == null) return '—'
+      const method = p.data?.recommended_contact_method
+      return outreachDisplayLabel(p.value as string, method)
+    },
   },
   {
     field: 'top_signal',

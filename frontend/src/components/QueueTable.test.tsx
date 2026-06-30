@@ -92,6 +92,38 @@ describe('QueueTable', () => {
   })
 
   // -------------------------------------------------------------------------
+  // Next Action column
+  // -------------------------------------------------------------------------
+
+  describe('next action column', () => {
+    it('shows outreach label and contact subline', () => {
+      render(
+        <QueueTable
+          rows={[
+            makeRow(1, {
+              recommended_action: 'follow_up_now',
+              recommended_contact_method: 'phone',
+              outreach_action_label: 'Call Now',
+              outreach_contact: {
+                channel: 'phone',
+                label: 'Call',
+                value: '5551234567',
+                display: '(555) 123-4567',
+                href: 'tel:+15551234567',
+              },
+            }),
+          ]}
+          total={1}
+        />
+      )
+
+      const cell = screen.getByTestId('row-action-1')
+      expect(cell).toHaveTextContent('Call Now')
+      expect(cell).toHaveTextContent('(555) 123-4567')
+    })
+  })
+
+  // -------------------------------------------------------------------------
   // Sortable columns
   // -------------------------------------------------------------------------
 

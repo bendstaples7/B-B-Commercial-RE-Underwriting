@@ -44,7 +44,16 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
   }
 
   const overdueCount = rows.filter((r) => r.follow_up_overdue).length
-  const followUpNowCount = rows.filter((r) => r.recommended_action === 'follow_up_now').length
+  const callCount = rows.filter(
+    (r) =>
+      r.recommended_contact_method === 'phone' ||
+      r.recommended_action === 'call_ready' ||
+      r.recommended_action === 'follow_up_now',
+  ).length
+  const mailCount = rows.filter(
+    (r) =>
+      r.recommended_contact_method === 'direct_mail' || r.recommended_action === 'mail_ready',
+  ).length
 
   const navigateOptions = { navigate }
   const taskOptions = {
@@ -74,7 +83,10 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
           Overdue: <strong>{overdueCount}</strong>
         </Typography>
         <Typography variant="body2" color="warning.main">
-          Follow Up Now: <strong>{followUpNowCount}</strong>
+          Calls: <strong>{callCount}</strong>
+        </Typography>
+        <Typography variant="body2" color="info.main">
+          Mail: <strong>{mailCount}</strong>
         </Typography>
       </Box>
 
