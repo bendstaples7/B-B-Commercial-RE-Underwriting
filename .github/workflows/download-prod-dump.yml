@@ -1,0 +1,87 @@
+# One-off / on-demand production database dump for local dev restore.
+#
+# Trigger: GitHub → Actions → "Download Prod Dump" → Run workflow
+# Download the "prod-dump" artifact, then restore locally:
+#   .\scripts\restore-prod-dump.ps1 -DumpFile .\prod_dump.dump
+#
+# Uses repository secrets (VPS_SSH_KEY, etc.) — you do not need the key on your PC.
+
+name: Download Prod Dump
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dump:
+    name: pg_dump from VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Validate secrets
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
+        run: |
+          MISSING=""
+          [ -z "$VPS_SSH_KEY" ]  && MISSING="$MISSING VPS_SSH_KEY"
+          [ -z "$VPS_USER" ]     && MISSING="$MISSING VPS_USER"
+          [ -z "$VPS_HOST" ]     && MISSING="$MISSING VPS_HOST"
+          [ -z "$VPS_HOST_KEY" ] && MISSING="$MISSING VPS_HOST_KEY"
+          if [ -n "$MISSING" ]; then
+            echo "ERROR: Missing secrets:$MISSING"
+            exit 1
+          fi
+          echo "All required secrets are set."
+
+      - name: Set up SSH key
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+      - name: Add VPS to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_HOST_KEY }}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Verify SSH connectivity
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          ssh -i ~/.ssh/id_deploy -o ConnectTimeout=15 \
+            "$VPS_USER@$VPS_HOST" "echo SSH_OK" \
+            || { echo "ERROR: Cannot connect to VPS"; exit 1; }
+
+      - name: Dump production database
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "Running pg_dump on VPS (app_user @ localhost)..."
+          ssh -i ~/.ssh/id_deploy \
+            -o ConnectTimeout=30 \
+            "$VPS_USER@$VPS_HOST" \
+            "pg_dump -U app_user -h localhost -Fc real_estate_analysis" \
+            > prod_dump.dump
+          BYTES=$(wc -c < prod_dump.dump | tr -d ' ')
+          echo "Dump size: $BYTES bytes"
+          if [ "$BYTES" -lt 10240 ]; then
+            echo "ERROR: Dump too small — pg_dump may have failed"
+            head -c 500 prod_dump.dump || true
+            exit 1
+          fi
+
+      - name: Upload dump artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449ec29963602116f3dec # v4
+        with:
+          name: prod-dump
+          path: prod_dump.dump
+          retention-days: 7
+          if-no-files-found: error
