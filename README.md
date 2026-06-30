@@ -99,6 +99,64 @@ CREATE DATABASE real_estate_analysis;
 flask db upgrade
 ```
 
+### Local dev with production data
+
+`flask db upgrade` creates tables only. **Lead data comes from a production database dump** — without it, login works but lists and queues show zero leads.
+
+**Symptoms of an empty local DB:**
+- Login succeeds but `/properties` and queues are empty
+- `/api/health` reports `lead_visibility: FAIL` (when `HEALTH_CHECK_LEAD_USER_EMAIL` is set)
+
+**Baseline expectations** (after restore): see [`backend/data-snapshot.json`](backend/data-snapshot.json) — e.g. ~75k total leads, ~6.7k for `ben.d.staples.7@gmail.com`.
+
+#### Windows — GitHub Actions (no SSH key on your PC)
+
+1. GitHub → **Actions** → **Download Prod Dump** → **Run workflow** (pick `main` or your branch).
+2. When it finishes, open the run → **Artifacts** → download **prod-dump** (contains `prod_dump.dump`).
+3. Restore locally:
+   ```powershell
+   .\scripts\restore-prod-dump.ps1 -DumpFile .\prod_dump.dump
+   ```
+
+The workflow uses repository secrets (`VPS_SSH_KEY`, etc.) — you never need to copy the deploy key to this machine.
+
+#### Windows — direct SSH sync (if you have the deploy key)
+
+1. Install the deploy SSH key (one-time) — set `VPS_SSH_KEY_PATH` in `.env`, or:
+   ```powershell
+   .\scripts\install-deploy-ssh-key.ps1 -KeyFile C:\path\to\bbanalyzer_deploy
+   ```
+
+2. Sync production → local PostgreSQL:
+   ```powershell
+   .\scripts\sync-from-prod.ps1
+   ```
+   This dumps from the VPS, recreates `real_estate_analysis` locally, restores, and runs `flask db upgrade`.
+
+#### macOS / Linux / Git Bash
+
+1. Copy a VPS backup to `~/prod_for_dev.dump`:
+   ```bash
+   scp deploy@5.161.200.46:/home/deploy/backups/pre_migration_<latest>.dump ~/prod_for_dev.dump
+   ```
+2. Auto-restore and migrate:
+   ```bash
+   bash scripts/pre-flight-data-check.sh
+   ```
+
+#### Verification scripts
+
+| Script | Purpose |
+|--------|---------|
+| [`scripts/pre-flight-data-check.sh`](scripts/pre-flight-data-check.sh) | Restore from `~/prod_for_dev.dump` if &lt; 1,000 leads |
+| [`scripts/restore-prod-dump.ps1`](scripts/restore-prod-dump.ps1) | Restore a dump downloaded from GitHub Actions |
+| [`scripts/sync-from-prod.ps1`](scripts/sync-from-prod.ps1) | Full Windows sync from live production (requires deploy SSH key) |
+| [`scripts/capture-data-snapshot.sh`](scripts/capture-data-snapshot.sh) | Capture lead counts to `backend/data-snapshot.json` |
+| [`scripts/verify-data-snapshot.sh`](scripts/verify-data-snapshot.sh) | Fail if counts drop below 90% of snapshot |
+| [`scripts/lead-visibility-check.sh`](scripts/lead-visibility-check.sh) | Confirm a user has non-zero owned leads |
+
+**Passwords after restore:** `pg_restore` brings production `users` rows. You may need your **production** password for `ben.d.staples.7@gmail.com`, not the dev placeholders in `.env` comments.
+
 ### Redis Setup
 
 Redis is started automatically by `python dev.py`. If you need to run it manually, ensure Redis is running on localhost:6379 or configure `REDIS_URL` in `.env`.
