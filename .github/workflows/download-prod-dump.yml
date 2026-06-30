@@ -79,7 +79,7 @@ jobs:
           fi
 
       - name: Upload dump artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449ec29963602116f3dec # v4
+        uses: actions/upload-artifact@v4
         with:
           name: prod-dump
           path: prod_dump.dump
