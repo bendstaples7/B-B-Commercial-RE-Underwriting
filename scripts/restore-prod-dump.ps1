@@ -1,4 +1,4 @@
-# restore-prod-dump.ps1
+﻿# restore-prod-dump.ps1
 # Restore a production pg_dump (custom format) into local PostgreSQL.
 #
 # Usage:
@@ -47,7 +47,7 @@ if (-not (Test-Path $DumpFile)) {
 
 $dumpBytes = (Get-Item $DumpFile).Length
 if ($dumpBytes -lt 10240) {
-    Die "Dump too small ($dumpBytes bytes) — file may be corrupt"
+    Die "Dump too small ($dumpBytes bytes) - file may be corrupt"
 }
 
 if (-not (Test-Path $PSQL))       { Die "psql not found at $PSQL" }
