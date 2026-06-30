@@ -37,6 +37,7 @@ rollback() {
     git checkout -- . 2>/dev/null || { echo "ROLLBACK WARNING: git checkout -- . failed"; ROLLBACK_FAILED=1; }
     git clean -fd 2>/dev/null || { echo "ROLLBACK WARNING: git clean -fd failed"; ROLLBACK_FAILED=1; }
     git checkout "$PREVIOUS_SHA" 2>/dev/null || { echo "ROLLBACK WARNING: git checkout $PREVIOUS_SHA failed"; ROLLBACK_FAILED=1; }
+    echo "$PREVIOUS_SHA" > "$APP_DIR/DEPLOY_SHA" 2>/dev/null || { echo "ROLLBACK WARNING: could not write DEPLOY_SHA"; ROLLBACK_FAILED=1; }
     pip install --user -r backend/requirements.txt -q 2>/dev/null || { echo "ROLLBACK WARNING: pip install failed"; ROLLBACK_FAILED=1; }
     # Restore the previous frontend/dist backup to avoid a version mismatch:
     # without this, backend would be at PREVIOUS_SHA but frontend/dist would
@@ -152,6 +153,7 @@ until git fetch origin main; do
     sleep 5
 done
 git checkout "$TARGET_SHA" || { echo "FAILED: git checkout $TARGET_SHA"; exit 1; }
+echo "$TARGET_SHA" > "$APP_DIR/DEPLOY_SHA" || { echo "FAILED: could not write DEPLOY_SHA"; exit 1; }
 echo "    Checked out $TARGET_SHA"
 
 echo "==> (2) Install Python dependencies"

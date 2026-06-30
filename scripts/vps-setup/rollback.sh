@@ -37,6 +37,7 @@ fi
 
 echo "==> (2) Checking out previous commit: $TARGET_COMMIT"
 git checkout -B main "$TARGET_COMMIT"
+echo "$TARGET_COMMIT" > "$APP_DIR/DEPLOY_SHA"
 
 echo "==> (3) Reinstalling Python dependencies"
 pip install --user -r backend/requirements.txt

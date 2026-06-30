@@ -79,6 +79,53 @@ def handle_errors(f):
     return decorated_function
 
 
+def resolve_deploy_sha(app_dir=None):
+    """Return the deployed git SHA for CI/CD verification.
+
+    Resolution order:
+      1. DEPLOY_SHA file (written by deploy.sh on the VPS)
+      2. Parse APP_DIR/.git/HEAD (no subprocess; works under systemd)
+      3. git rev-parse via absolute binary paths
+    """
+    import os
+    import subprocess
+    from pathlib import Path
+
+    app_path = Path(app_dir or os.environ.get('DEPLOY_APP_DIR', '/home/deploy/app'))
+
+    deploy_sha_file = app_path / 'DEPLOY_SHA'
+    if deploy_sha_file.is_file():
+        sha = deploy_sha_file.read_text(encoding='utf-8').strip()
+        if sha:
+            return sha
+
+    git_head = app_path / '.git' / 'HEAD'
+    if git_head.is_file():
+        head = git_head.read_text(encoding='utf-8').strip()
+        if head.startswith('ref: '):
+            ref_path = app_path / '.git' / head[5:]
+            if ref_path.is_file():
+                sha = ref_path.read_text(encoding='utf-8').strip()
+                if sha:
+                    return sha
+        elif len(head) >= 40:
+            return head[:40]
+
+    for git_bin in ('/usr/bin/git', '/usr/local/bin/git', 'git'):
+        try:
+            sha = subprocess.check_output(
+                [git_bin, 'rev-parse', 'HEAD'],
+                cwd=str(app_path),
+                stderr=subprocess.DEVNULL,
+            ).decode().strip()
+            if sha:
+                return sha
+        except Exception:
+            continue
+
+    return 'unknown'
+
+
 @api_bp.route('/version', methods=['GET'])
 def version():
     """Returns the currently deployed git SHA.
@@ -86,16 +133,7 @@ def version():
     Used by the CI/CD post-deploy smoke test to verify the correct
     version of the code is running after a deployment.
     """
-    import subprocess
-    try:
-        sha = subprocess.check_output(
-            ['git', 'rev-parse', 'HEAD'],
-            cwd='/home/deploy/app',
-            stderr=subprocess.DEVNULL
-        ).decode().strip()
-    except Exception:
-        sha = 'unknown'
-    return jsonify({'sha': sha}), 200
+    return jsonify({'sha': resolve_deploy_sha()}), 200
 
 
 @api_bp.route('/health', methods=['GET'])

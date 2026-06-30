@@ -1,10 +1,9 @@
-﻿# One-off / on-demand production database dump for local dev restore.
+﻿# Production database dump for local dev restore.
 #
-# Trigger: GitHub ΓåÆ Actions ΓåÆ "Download Prod Dump" ΓåÆ Run workflow
-# Download the "prod-dump" artifact, then restore locally:
-#   .\scripts\restore-prod-dump.ps1 -DumpFile .\prod_dump.dump
+# Triggered nightly and on-demand. Local dev pulls the artifact automatically
+# via scripts/ensure-local-prod-data.ps1 (called from python dev.py).
 #
-# Uses repository secrets (VPS_SSH_KEY, etc.) ΓÇö you do not need the key on your PC.
+# Uses repository secrets (VPS_SSH_KEY, etc.) — no deploy key on dev machines.
 
 name: Download Prod Dump
 
@@ -76,7 +75,7 @@ jobs:
           BYTES=$(wc -c < prod_dump.dump | tr -d ' ')
           echo "Dump size: $BYTES bytes"
           if [ "$BYTES" -lt 10240 ]; then
-            echo "ERROR: Dump too small ΓÇö pg_dump may have failed"
+            echo "ERROR: Dump too small - pg_dump may have failed"
             head -c 500 prod_dump.dump || true
             exit 1
           fi

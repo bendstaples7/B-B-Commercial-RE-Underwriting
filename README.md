@@ -111,28 +111,31 @@ flask db upgrade
 
 `flask db upgrade` creates tables only. Lead data is copied from production automatically when you run `python dev.py`.
 
+**Symptoms if auto-restore fails:** login works but lists are empty; `/api/health` may report `lead_visibility: FAIL`.
+
 | Component | Role |
 |-----------|------|
-| [`scripts/ensure-local-prod-data.ps1`](scripts/ensure-local-prod-data.ps1) | Windows — called by `dev.py`; uses cached dump, GitHub Actions artifact, or SSH |
+| [`scripts/ensure-local-prod-data.ps1`](scripts/ensure-local-prod-data.ps1) | Windows — called by `dev.py`; cached dump, GitHub Actions, or SSH |
 | [`scripts/ensure-local-prod-data.sh`](scripts/ensure-local-prod-data.sh) | macOS/Linux — same behavior |
-| [Download Prod Dump](.github/workflows/download-prod-dump.yml) | Nightly + on-demand `pg_dump` on GitHub Actions (uses repo secrets) |
-| [`scripts/restore-prod-dump.ps1`](scripts/restore-prod-dump.ps1) | Internal restore helper (you do not need to run this manually) |
+| [Download Prod Dump](.github/workflows/download-prod-dump.yml) | Nightly + on-demand `pg_dump` on GitHub Actions |
+| [`scripts/restore-prod-dump.ps1`](scripts/restore-prod-dump.ps1) | Internal restore helper (not run manually) |
+| [`scripts/sync-from-prod.ps1`](scripts/sync-from-prod.ps1) | SSH fallback when deploy key is configured |
+| [`scripts/pre-flight-data-check.sh`](scripts/pre-flight-data-check.sh) | macOS/Linux restore from `~/prod_for_dev.dump` |
 
 **Requirements (once per machine):**
-- PostgreSQL running on `localhost:5432` (see `DATABASE_URL` in `.env`)
-- `gh auth login` (GitHub CLI) — repo access for `bendstaples7/B-B-Commercial-RE-Underwriting`
+- PostgreSQL on `localhost:5432` (`DATABASE_URL` in `.env`)
+- `gh auth login` for `bendstaples7/B-B-Commercial-RE-Underwriting`
 
-**Optional — refresh data while logged out of the IDE:**
+**Optional — refresh while not running the IDE:**
 ```powershell
-# Windows Task Scheduler: daily at 3 AM + at logon
-.\scripts\ensure-local-prod-data.ps1 -Install
+.\scripts\ensure-local-prod-data.ps1 -Install   # Windows: 3 AM daily + logon
 ```
 ```bash
-# macOS/Linux cron: daily at 3 AM
-bash scripts/ensure-local-prod-data.sh --install
+bash scripts/ensure-local-prod-data.sh --install   # cron: 3 AM daily
 ```
 
-Baseline after restore: see [`backend/data-snapshot.json`](backend/data-snapshot.json) (~75k leads total).
+Baseline: [`backend/data-snapshot.json`](backend/data-snapshot.json) (~75k leads). After restore, use your **production** login password, not dev placeholders in `.env` comments.
+
 
 ### Redis Setup
 
