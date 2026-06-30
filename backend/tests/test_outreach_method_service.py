@@ -149,6 +149,7 @@ def test_resolve_outreach_contact_text_uses_phone():
     assert result is not None
     assert result['channel'] == 'text'
     assert result['label'] == 'Text'
+    assert result['href'] == 'sms:+15559876543'
 
 
 def test_resolve_outreach_contact_email():

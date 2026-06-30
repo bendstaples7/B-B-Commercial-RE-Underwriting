@@ -205,6 +205,17 @@ def _phone_tel_href(phone_number: str) -> str:
     return f'tel:{phone_number}'
 
 
+def _phone_sms_href(phone_number: str) -> str:
+    digits = re.sub(r'\D', '', phone_number)
+    if len(digits) == 10:
+        return f'sms:+1{digits}'
+    if len(digits) == 11 and digits.startswith('1'):
+        return f'sms:+{digits}'
+    if digits:
+        return f'sms:{digits}'
+    return f'sms:{phone_number}'
+
+
 def _first_flat_phone(lead: Lead) -> str | None:
     for slot in range(1, 8):
         raw = getattr(lead, f'phone_{slot}', None)
@@ -268,12 +279,13 @@ def _format_address_lines(
 def _phone_contact_dict(raw: str, channel: str) -> dict:
     display = _format_phone_display(raw) or raw
     digits = re.sub(r'\D', '', raw)
+    href = _phone_sms_href(raw) if channel == 'text' else _phone_tel_href(raw)
     return {
         'channel': channel,
         'label': CONTACT_METHOD_LABELS.get(channel, 'Call'),
         'value': digits or raw,
         'display': display,
-        'href': _phone_tel_href(raw),
+        'href': href,
     }
 
 
@@ -413,9 +425,6 @@ def resolve_outreach_contacts_for_leads(leads: list[Lead]) -> dict[int, dict | N
             resolved[lead_id] = _phone_contact_dict(raw, method) if raw else None
         elif method == 'email':
             email = email_by_lead.get(lead_id)
-            if not email:
-                flat = _collect_emails_for_lead(lead_id, lead)
-                email = flat[0] if flat else None
             resolved[lead_id] = _email_contact_dict(email) if email else None
         elif method == 'direct_mail':
             resolved[lead_id] = _resolve_mail_contact(lead)

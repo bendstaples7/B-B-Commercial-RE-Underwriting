@@ -104,7 +104,6 @@ def _count_open_tasks(lead_id: int) -> int:
         return native + hs_total
     except Exception as exc:
         logger.warning("open task count query failed for lead_id=%s: %s", lead_id, exc)
-        db.session.rollback()
         return 0
 
 
@@ -132,7 +131,6 @@ def _has_overdue_hubspot_task(lead_id: int) -> bool:
         return row is not None
     except Exception as exc:
         logger.warning("overdue HubSpot task query failed for lead_id=%s: %s", lead_id, exc)
-        db.session.rollback()
         return False
 
 

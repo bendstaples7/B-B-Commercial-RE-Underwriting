@@ -1,5 +1,5 @@
 import type { CommandCenterPayload, ContactMethod, OutreachContact } from '@/types'
-import { formatPhoneNumber, phoneCopyText, phoneTelHref } from '@/utils/phone'
+import { formatPhoneNumber, phoneCopyText, phoneSmsHref, phoneTelHref } from '@/utils/phone'
 
 const OUTREACH_ACTIONS_WITH_CONTACT = new Set([
   'follow_up_now',
@@ -57,7 +57,7 @@ function buildPhoneContact(raw: string, channel: 'phone' | 'text'): OutreachCont
     label: channel === 'text' ? 'Text' : 'Call',
     value: raw.replace(/\D/g, '') || raw,
     display,
-    href: phoneTelHref(raw),
+    href: channel === 'text' ? phoneSmsHref(raw) : phoneTelHref(raw),
   }
 }
 

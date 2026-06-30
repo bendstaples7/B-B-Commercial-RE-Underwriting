@@ -46,13 +46,13 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
   const overdueCount = rows.filter((r) => r.follow_up_overdue).length
   const callCount = rows.filter(
     (r) =>
-      r.recommended_contact_method === 'phone' ||
-      r.recommended_action === 'call_ready' ||
-      r.recommended_action === 'follow_up_now',
+      r.recommended_action === 'call_ready'
+      || (r.recommended_action === 'follow_up_now' && r.recommended_contact_method === 'phone'),
   ).length
   const mailCount = rows.filter(
     (r) =>
-      r.recommended_contact_method === 'direct_mail' || r.recommended_action === 'mail_ready',
+      r.recommended_action === 'mail_ready'
+      || (r.recommended_action === 'follow_up_now' && r.recommended_contact_method === 'direct_mail'),
   ).length
 
   const navigateOptions = { navigate }

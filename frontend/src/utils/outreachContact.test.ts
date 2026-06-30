@@ -87,4 +87,73 @@ describe('resolveOutreachContactFromCommandCenter', () => {
     const contact = resolveOutreachContactFromCommandCenter(data)
     expect(contact?.display).toBe('(630) 202-3839')
   })
+
+  it('falls back to email when method is email', () => {
+    const data = minimalCommandCenter({
+      recommended_action: {
+        value: 'follow_up_now',
+        recommended_contact_method: 'email',
+        label: 'Email Now',
+        explanation: '',
+        signals: {},
+      },
+      emails: ['owner@example.com'],
+    })
+    const contact = resolveOutreachContactFromCommandCenter(data)
+    expect(contact?.channel).toBe('email')
+    expect(contact?.href).toBe('mailto:owner@example.com')
+  })
+
+  it('falls back to mailing address when method is direct_mail', () => {
+    const data = minimalCommandCenter({
+      recommended_action: {
+        value: 'mail_ready',
+        recommended_contact_method: 'direct_mail',
+        label: 'Mail Now',
+        explanation: '',
+        signals: {},
+      },
+      mailing_address: '123 Mail St',
+      mailing_city: 'Chicago',
+      mailing_state: 'IL',
+      mailing_zip: '60601',
+    })
+    const contact = resolveOutreachContactFromCommandCenter(data)
+    expect(contact?.channel).toBe('direct_mail')
+    expect(contact?.lines).toContain('123 Mail St')
+  })
+
+  it('returns API outreach_contact without fallback for non-outreach actions', () => {
+    const apiContact: OutreachContact = {
+      channel: 'phone',
+      label: 'Call',
+      value: '5551234567',
+      display: '(555) 123-4567',
+    }
+    const data = minimalCommandCenter({
+      recommended_action: {
+        value: 'create_task',
+        recommended_contact_method: 'phone',
+        label: 'Create Task',
+        explanation: '',
+        signals: {},
+        outreach_contact: apiContact,
+      },
+      phones: [{ value: '(630) 202-3839', confidence_score: 80 }],
+    })
+    expect(resolveOutreachContactFromCommandCenter(data)).toEqual(apiContact)
+  })
+
+  it('returns null for non-outreach actions without API contact', () => {
+    const data = minimalCommandCenter({
+      recommended_action: {
+        value: 'create_task',
+        recommended_contact_method: 'phone',
+        label: 'Create Task',
+        explanation: '',
+        signals: {},
+      },
+    })
+    expect(resolveOutreachContactFromCommandCenter(data)).toBeNull()
+  })
 })

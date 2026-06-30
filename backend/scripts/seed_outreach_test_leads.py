@@ -1,7 +1,9 @@
 """Mark analysis_complete on eligible leads and rescore for outreach UI testing.
 
+Dry-run by default. Pass --apply to mutate the database.
+
 Run from backend/:
-    python scripts/seed_outreach_test_leads.py [--email USER_EMAIL] [--limit N]
+    python scripts/seed_outreach_test_leads.py --email USER@example.com [--limit N] --apply
 """
 from __future__ import annotations
 
@@ -25,18 +27,22 @@ from app import create_app
 from app.models.lead import Lead
 from app.models.user import User
 from app.services.lead_scoring_engine import LeadScoringEngine
-
-DEFAULT_EMAIL = "ben.d.staples.7@gmail.com"
+from app.services.outreach_method_service import OUTREACH_ACTIONS
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--email", default=DEFAULT_EMAIL)
+    parser.add_argument("--email", required=True, help="Owner email whose leads to seed")
     parser.add_argument(
         "--limit",
         type=int,
         default=0,
         help="Max leads to update (0 = all eligible)",
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Persist updates and rescore (default is dry-run preview only)",
     )
     args = parser.parse_args()
 
@@ -65,12 +71,23 @@ def main() -> None:
 
         lead_ids = [lead.id for lead in leads]
         needs_complete = [lead.id for lead in leads if not lead.analysis_complete]
+
+        logger.info(
+            "Preview: %d eligible leads for %s (%d need analysis_complete)",
+            len(lead_ids),
+            args.email,
+            len(needs_complete),
+        )
+
+        if not args.apply:
+            logger.info("Dry-run only — re-run with --apply to update and rescore")
+            return
+
         if needs_complete:
             logger.info(
-                "Setting analysis_complete=true on %d / %d leads for %s",
+                "Setting analysis_complete=true on %d / %d leads",
                 len(needs_complete),
                 len(lead_ids),
-                args.email,
             )
             Lead.query.filter(Lead.id.in_(needs_complete)).update(
                 {Lead.analysis_complete: True},
@@ -82,47 +99,30 @@ def main() -> None:
 
         engine = LeadScoringEngine()
         n = engine.bulk_rescore(user.user_id, lead_ids=lead_ids)
-        logger.info("Rescored %d leads", n)
+        logger.info("Rescored %d leads in this batch", n)
 
-        outreach_actions = (
-            "follow_up_now",
-            "ready_for_outreach",
-            "mail_ready",
-            "call_ready",
-            "review_now",
-            "nurture",
-        )
-        for action in outreach_actions:
-            count = (
-                Lead.query.filter_by(owner_user_id=user.user_id)
-                .filter(Lead.recommended_action == action)
-                .count()
-            )
+        batch_q = Lead.query.filter(Lead.id.in_(lead_ids))
+        for action in sorted(OUTREACH_ACTIONS):
+            count = batch_q.filter(Lead.recommended_action == action).count()
             if count:
                 logger.info("  %s: %d", action, count)
 
-        with_method = (
-            Lead.query.filter_by(owner_user_id=user.user_id)
-            .filter(Lead.recommended_contact_method.isnot(None))
-            .count()
-        )
-        logger.info("Leads with recommended_contact_method: %d", with_method)
+        with_method = batch_q.filter(Lead.recommended_contact_method.isnot(None)).count()
+        logger.info("Batch leads with recommended_contact_method: %d", with_method)
 
         sample = (
-            Lead.query.filter_by(owner_user_id=user.user_id)
-            .filter(Lead.recommended_contact_method.isnot(None))
+            batch_q.filter(Lead.recommended_contact_method.isnot(None))
             .order_by(Lead.id)
             .limit(5)
             .all()
         )
         for lead in sample:
             logger.info(
-                "  id=%s action=%s method=%s score=%s tier=%s warm=%s",
+                "  id=%s action=%s method=%s score=%s warm=%s",
                 lead.id,
                 lead.recommended_action,
                 lead.recommended_contact_method,
                 lead.lead_score,
-                getattr(lead, "score_tier", None),
                 lead.is_warm,
             )
 

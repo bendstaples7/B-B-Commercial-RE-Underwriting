@@ -16,7 +16,7 @@ import SmsIcon from '@mui/icons-material/Sms'
 import LocalPostOfficeIcon from '@mui/icons-material/LocalPostOffice'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import type { OutreachContact } from '@/types'
-import { formatPhoneNumber, phoneCopyText, phoneTelHref } from '@/utils/phone'
+import { formatPhoneNumber, phoneCopyText } from '@/utils/phone'
 
 export interface OutreachContactInlineProps {
   contact: OutreachContact | null | undefined
@@ -107,13 +107,9 @@ function renderLink(contact: OutreachContact, compact: boolean) {
   }
 
   if (contact.href && (contact.channel === 'phone' || contact.channel === 'text')) {
-    const href =
-      contact.channel === 'text'
-        ? phoneTelHref(contact.display || contact.value)
-        : contact.href
     return (
       <Link
-        href={href}
+        href={contact.href}
         variant={compact ? 'caption' : 'body2'}
         underline="hover"
         sx={{ fontWeight: compact ? 500 : 600, wordBreak: 'break-all' }}

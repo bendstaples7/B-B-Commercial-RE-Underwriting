@@ -68,9 +68,12 @@ export function createCreateTaskRowAction({
     icon: <AddTaskIcon fontSize="small" />,
     testId: 'action-create-task',
     onClick: async (row) => {
+      const isMail =
+        row.outreach_contact?.channel === 'direct_mail'
+        || row.recommended_contact_method === 'direct_mail'
       await leadTaskService.createTask(row.id, {
         title: outreachContactTaskTitle(row.outreach_contact),
-        task_type: 'call_owner_today',
+        task_type: isMail ? 'add_to_mail_batch' : 'call_owner_today',
       })
       invalidateQueueQueries(queryClient, queryKey, extraQueryKeys)
       onAfterAction?.()

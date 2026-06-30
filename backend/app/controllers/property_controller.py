@@ -171,10 +171,10 @@ def _serialize_property_summary(lead, latest_score: LeadScore | None = None):
     top_signal = None
     missing_data: list[str] = []
     recommended_action = getattr(lead, 'recommended_action', None)
+    recommended_contact_method = getattr(lead, 'recommended_contact_method', None)
     if latest_score is not None:
         score_tier = latest_score.score_tier
         data_quality_score = latest_score.data_quality_score
-        recommended_action = latest_score.recommended_action or recommended_action
         missing_data = list(latest_score.missing_data or [])
         signals = latest_score.top_signals or []
         if signals:
@@ -240,7 +240,7 @@ def _serialize_property_summary(lead, latest_score: LeadScore | None = None):
         'score_tier': score_tier,
         'data_quality_score': data_quality_score,
         'recommended_action': recommended_action,
-        'recommended_contact_method': getattr(lead, 'recommended_contact_method', None),
+        'recommended_contact_method': recommended_contact_method,
         'top_signal': top_signal,
         'missing_data': missing_data,
         'missing_data_count': len(missing_data),

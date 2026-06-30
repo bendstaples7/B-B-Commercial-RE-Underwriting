@@ -654,5 +654,50 @@ describe('UnifiedLeadCommandCenter — sidebar responsive visibility', () => {
       expect(screen.queryByTestId('outreach-contact-callout')).not.toBeInTheDocument()
       expect(screen.getByTestId('recommended-action-panel')).toHaveTextContent('(630) 202-3839')
     })
+
+    it('shows missing-contact hint on primary task when channel set but no contact', async () => {
+      vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+        makeCommandCenterPayload({
+          recommended_action: {
+            value: 'call_ready',
+            recommended_contact_method: 'phone',
+            label: 'Call Now',
+            explanation: 'Ready for phone outreach.',
+            signals: {},
+          },
+          phones: [],
+          open_tasks: [
+            {
+              id: 'hs-100',
+              lead_id: 1,
+              task_type: 'custom',
+              title: 'Follow up',
+              status: 'open',
+              due_date: '2026-06-30',
+              created_at: '2026-01-01T00:00:00Z',
+              completed_at: null,
+              created_by: 'HubSpot',
+              source: 'hubspot',
+            },
+          ],
+        })
+      )
+
+      renderComponent()
+
+      await waitFor(() => {
+        expect(screen.getByTestId('tasks-panel')).toBeInTheDocument()
+      })
+
+      expect(screen.getAllByTestId('outreach-contact-missing')).toHaveLength(1)
+      expect(screen.queryByTestId('outreach-contact-inline')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('outreach-contact-callout')).not.toBeInTheDocument()
+      expect(screen.getByTestId('recommended-action-panel')).not.toHaveTextContent(
+        'No phone number on file',
+      )
+      expect(screen.getByTestId('task-item-hs-100')).toHaveTextContent(
+        'No phone number on file',
+      )
+    })
   })
 })

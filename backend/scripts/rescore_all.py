@@ -3,8 +3,8 @@
 Run from backend/ directory:
     python scripts/rescore_all.py
 
-Scores every lead: updates leads.lead_score, leads.recommended_action,
-leads.recommended_contact_method, and appends lead_scores history rows.
+Updates live lead fields (lead_score, recommended_action, recommended_contact_method)
+via bulk_rescore; does not append lead_scores history rows.
 """
 import os
 import sys
