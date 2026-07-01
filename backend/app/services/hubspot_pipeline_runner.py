@@ -79,33 +79,35 @@ def run_post_import_pipeline_sync(force_full_rescore: bool = False) -> None:
 
     reset_pipeline_affected_leads()
 
-    run_hubspot_matching()
-    logger.info("Post-import pipeline: matching complete")
+    try:
+        run_hubspot_matching()
+        logger.info("Post-import pipeline: matching complete")
 
-    run_enrich_leads_from_hubspot()
-    logger.info("Post-import pipeline: lead enrichment complete")
+        run_enrich_leads_from_hubspot()
+        logger.info("Post-import pipeline: lead enrichment complete")
 
-    # Legacy engagement payloads can be stale for task status — convert first,
-    # then live CRM v3 sync so authoritative HubSpot status wins each run.
-    run_convert_hubspot_activities()
-    logger.info("Post-import pipeline: activity conversion complete")
+        # Legacy engagement payloads can be stale for task status — convert first,
+        # then live CRM v3 sync so authoritative HubSpot status wins each run.
+        run_convert_hubspot_activities()
+        logger.info("Post-import pipeline: activity conversion complete")
 
-    run_sync_hubspot_tasks_for_confirmed_leads()
-    logger.info("Post-import pipeline: HubSpot task sync complete")
+        run_sync_hubspot_tasks_for_confirmed_leads()
+        logger.info("Post-import pipeline: HubSpot task sync complete")
 
-    run_extract_hubspot_signals()
-    logger.info("Post-import pipeline: signal extraction complete")
+        run_extract_hubspot_signals()
+        logger.info("Post-import pipeline: signal extraction complete")
 
-    affected = get_pipeline_affected_leads()
-    rescored = run_rescore_leads_after_import(
-        lead_ids=affected,
-        force_full=force_full_rescore,
-    )
-    from app.services.deploy_sync_policy import record_pipeline_completed
+        affected = get_pipeline_affected_leads()
+        rescored = run_rescore_leads_after_import(
+            lead_ids=affected,
+            force_full=force_full_rescore,
+        )
+        from app.services.deploy_sync_policy import record_pipeline_completed
 
-    record_pipeline_completed(rescore_count=rescored)
-    logger.info("Post-import pipeline: rescore complete")
-    reset_pipeline_affected_leads()
+        record_pipeline_completed(rescore_count=rescored)
+        logger.info("Post-import pipeline: rescore complete")
+    finally:
+        reset_pipeline_affected_leads()
 
 
 def run_rescore_only_sync() -> None:

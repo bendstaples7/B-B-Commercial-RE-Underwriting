@@ -249,7 +249,7 @@ jobs:
           # Health check — poll from t=0 with no upfront sleep.
           # deploy.sh already verifies Gunicorn is healthy on localhost before
           # returning, so by the time we reach this step the server is up.
-          # This loop is the public-facing (nginx) confirmation: 15 attempts,
+          # This loop is the public-facing (nginx) confirmation: 18 attempts,
           # worst case (18 × (--max-time 12 + sleep 3)) = ~270s total.
           #
           # --connect-timeout 5  → fail fast when the port isn't open yet

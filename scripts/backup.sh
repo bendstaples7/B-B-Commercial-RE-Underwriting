@@ -354,8 +354,13 @@ else
     ALERT_BODY="Check $LOG_FILE."
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT: $ALERT_SUBJECT" >> "$LOG_FILE"
     if [[ "${ALERT_METHOD:-}" == "email" || "${ALERT_METHOD:-}" == "both" ]] && [[ -n "${ALERT_EMAIL:-}" ]]; then
-        echo "$ALERT_BODY" | msmtp --account="${MSMTP_ACCOUNT}" "${ALERT_EMAIL}" \
-            --subject="[Backup Alert] $ALERT_SUBJECT" 2>>"$LOG_FILE" \
+        {
+            printf 'Subject: [Backup Alert] %s\n' "$ALERT_SUBJECT"
+            printf 'To: %s\n' "${ALERT_EMAIL}"
+            printf 'Content-Type: text/plain; charset=UTF-8\n'
+            printf '\n'
+            printf '%s' "$ALERT_BODY"
+        } | msmtp --account="${MSMTP_ACCOUNT}" "${ALERT_EMAIL}" 2>>"$LOG_FILE" \
             || echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT DELIVERY FAILED (email): $?" >> "$LOG_FILE"
     fi
     if [[ "${ALERT_METHOD:-}" == "webhook" || "${ALERT_METHOD:-}" == "both" ]] && [[ -n "${WEBHOOK_URL:-}" ]]; then

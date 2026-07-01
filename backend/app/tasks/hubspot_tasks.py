@@ -1760,17 +1760,10 @@ def run_rescore_leads_after_import(
             record_scoring_code_hash,
             scoring_code_changed_since_last_run,
         )
-        from app.services.hubspot_pipeline_runner import (
-            get_pipeline_affected_leads,
-            reset_pipeline_affected_leads,
-        )
+        from app.services.hubspot_pipeline_runner import get_pipeline_affected_leads
 
         engine = LeadScoringEngine()
-        if lead_ids is None:
-            reset_pipeline_affected_leads()
-            affected = get_pipeline_affected_leads()
-        else:
-            affected = list(lead_ids)
+        affected = list(lead_ids) if lead_ids is not None else get_pipeline_affected_leads()
 
         if force_full:
             rescored = engine.bulk_rescore(user_id)
