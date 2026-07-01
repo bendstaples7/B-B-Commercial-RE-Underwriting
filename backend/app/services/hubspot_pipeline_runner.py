@@ -105,6 +105,7 @@ def run_post_import_pipeline_sync(force_full_rescore: bool = False) -> None:
 
     record_pipeline_completed(rescore_count=rescored)
     logger.info("Post-import pipeline: rescore complete")
+    reset_pipeline_affected_leads()
 
 
 def run_rescore_only_sync() -> None:
@@ -116,6 +117,7 @@ def run_rescore_only_sync() -> None:
     rescored = run_rescore_leads_after_import(force_full=True)
     record_pipeline_completed(rescore_count=rescored)
     logger.info("Rescore-only pipeline complete")
+    reset_pipeline_affected_leads()
 
 
 def _wait_for_import_runs(run_ids: list[int], max_wait: int = 3600, poll_interval: int = 15) -> None:

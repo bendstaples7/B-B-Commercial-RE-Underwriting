@@ -158,11 +158,12 @@ echo "    Checked out $TARGET_SHA"
 
 echo "==> (2) Install Python dependencies"
 REQ_HASH=$(sha256sum backend/requirements.txt | awk '{print $1}')
+REQ_HASH_UPDATED=0
 if [ -f /home/deploy/.requirements-hash ] && [ "$(cat /home/deploy/.requirements-hash)" = "$REQ_HASH" ]; then
     echo "    requirements unchanged — skipping pip install"
 else
     pip install --user -r backend/requirements.txt -q || { echo "FAILED: pip install"; exit 1; }
-    echo "$REQ_HASH" > /home/deploy/.requirements-hash
+    REQ_HASH_UPDATED=1
     echo "    Python dependencies installed"
 fi
 
@@ -317,6 +318,11 @@ FLASK_ENV=production python3.11 scripts/post_deploy_sync.py || {
 }
 cd ..
 echo "    Post-deploy HubSpot sync dispatched (runs via Celery or subprocess)"
+
+if [ "$REQ_HASH_UPDATED" = "1" ]; then
+    echo "$REQ_HASH" > /home/deploy/.requirements-hash
+    echo "    requirements hash updated after successful deploy"
+fi
 
 echo "==> Deploy complete: $TARGET_SHA"
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Deploy successful: $PREVIOUS_SHA -> $TARGET_SHA" >> "$ROLLBACK_LOG"

@@ -39,10 +39,10 @@ _RESCORE_ONLY_PATTERNS = (
     'backend/app/services/queue_service*',
     'backend/app/controllers/property_controller*',
     'backend/celery_worker.py',
-    'backend/migrations/versions/*score*',
-    'backend/migrations/versions/*scoring*',
-    'backend/migrations/versions/*outreach*',
-    'backend/migrations/versions/*recommended_contact*',
+    'backend/alembic_migrations/versions/*score*',
+    'backend/alembic_migrations/versions/*scoring*',
+    'backend/alembic_migrations/versions/*outreach*',
+    'backend/alembic_migrations/versions/*recommended_contact*',
 )
 
 DEPLOY_PIPELINE_COOLDOWN_HOURS = int(

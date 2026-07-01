@@ -39,6 +39,10 @@ class TestClassifyDeploySyncMode:
         paths = ['backend/celery_worker.py']
         assert classify_deploy_sync_mode(paths) == 'rescore_only'
 
+    def test_alembic_scoring_migration_rescore_only(self):
+        paths = ['backend/alembic_migrations/versions/e4f5a6b7c8d9_add_recommended_contact_method.py']
+        assert classify_deploy_sync_mode(paths) == 'rescore_only'
+
     def test_hubspot_paths_full_pipeline(self):
         paths = ['backend/app/services/hubspot_matcher_service.py']
         assert classify_deploy_sync_mode(paths) == 'full_pipeline'

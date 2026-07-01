@@ -261,15 +261,11 @@ except ValueError as e:
 " 2>>"$LOG_FILE" || DISPATCH_CHECK=$?
 
 if [[ "$DISPATCH_CHECK" -ne 0 ]]; then
-    if [[ "$PRE_DEPLOY_FAST" -eq 1 ]]; then
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARNING: Invalid REMOTE_METHOD='$REMOTE_METHOD' — skipping remote transfer (pre-deploy-fast)" >> "$LOG_FILE"
-    else
-        BACKUP_FAILED=1
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: Invalid REMOTE_METHOD='$REMOTE_METHOD' — skipping remote transfer" >> "$LOG_FILE"
-        send_alert \
-            "Remote transfer skipped — invalid REMOTE_METHOD [$BACKUP_TYPE] [$(date -u +%Y-%m-%dT%H:%M:%SZ)]" \
-            "REMOTE_METHOD is not a valid transfer method. Remote transfer was skipped. Backup type: $BACKUP_TYPE."
-    fi
+    BACKUP_FAILED=1
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: Invalid REMOTE_METHOD='$REMOTE_METHOD' — skipping remote transfer" >> "$LOG_FILE"
+    send_alert \
+        "Remote transfer skipped — invalid REMOTE_METHOD [$BACKUP_TYPE] [$(date -u +%Y-%m-%dT%H:%M:%SZ)]" \
+        "REMOTE_METHOD is not a valid transfer method. Remote transfer was skipped. Backup type: $BACKUP_TYPE."
 else
     # Generate remote path
     REMOTE_PATH="$(python3 /home/deploy/backup_lib.py generate-remote-path "$RCLONE_PATH_PREFIX" "$TIMESTAMP_ISO" "$FILENAME")"
