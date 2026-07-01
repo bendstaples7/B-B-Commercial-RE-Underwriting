@@ -1,40 +1,14 @@
 """Open Letter Connect configuration and catalog API."""
 from __future__ import annotations
 
-import logging
-from functools import wraps
-
 from flask import Blueprint, g, jsonify, request
-from marshmallow import ValidationError
 
 from app.api_utils import require_auth
-from app.exceptions import MailQueueError, RealEstateAnalysisException
+from app.controllers.mail_api_errors import handle_mail_api_errors as handle_errors
 from app.services.open_letter_config_service import OpenLetterConfigService
-
-logger = logging.getLogger(__name__)
-
 open_letter_bp = Blueprint('open_letter', __name__)
 
 _config_service = OpenLetterConfigService()
-
-
-def handle_errors(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        try:
-            return f(*args, **kwargs)
-        except ValidationError as e:
-            return jsonify({'error': 'Validation error', 'details': e.messages}), 400
-        except MailQueueError as e:
-            return jsonify({'error': 'Mail queue error', 'message': e.message}), e.status_code
-        except RealEstateAnalysisException as e:
-            return jsonify({'error': 'Application error', 'message': e.message, **e.payload}), e.status_code
-        except ValueError as e:
-            return jsonify({'error': 'Invalid request', 'message': str(e)}), 400
-        except Exception as e:
-            logger.error('Open Letter API error: %s', e, exc_info=True)
-            return jsonify({'error': 'Internal server error'}), 500
-    return decorated
 
 
 @open_letter_bp.route('/config', methods=['GET'])

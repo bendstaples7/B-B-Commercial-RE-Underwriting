@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import logging
-from functools import wraps
 
 from flask import Blueprint, g, jsonify, request
 
 from app.api_utils import require_auth
-from app.exceptions import MailQueueError, RealEstateAnalysisException
+from app.controllers.mail_api_errors import handle_mail_api_errors as handle_errors
 from app.models import MailQueueItem
 from app.services.mail_campaign_service import MailCampaignService
 from app.services.mail_queue_service import MailQueueService
@@ -19,21 +18,6 @@ mail_queue_bp = Blueprint('mail_queue', __name__)
 
 _queue_service = MailQueueService()
 _campaign_service = MailCampaignService()
-
-
-def handle_errors(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        try:
-            return f(*args, **kwargs)
-        except MailQueueError as e:
-            return jsonify({'error': 'Mail queue error', 'message': e.message}), e.status_code
-        except RealEstateAnalysisException as e:
-            return jsonify({'error': 'Application error', 'message': e.message, **e.payload}), e.status_code
-        except Exception as e:
-            logger.error('Mail queue API error: %s', e, exc_info=True)
-            return jsonify({'error': 'Internal server error'}), 500
-    return decorated
 
 
 def _serialize_queue_item(item: MailQueueItem, *, last_mailed_at: str | None = None) -> dict:

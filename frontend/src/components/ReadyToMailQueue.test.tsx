@@ -6,6 +6,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { ReadyToMailQueue } from './ReadyToMailQueue'
 import { queueService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
+import type { LeadStatus, QueuePage } from '@/types'
 
 vi.mock('@/services/api', () => ({
   queueService: {
@@ -25,7 +26,7 @@ vi.mock('./MailCampaignsPanel', () => ({
   MailCampaignsPanel: () => <div data-testid="mail-campaigns-panel">Recent sends</div>,
 }))
 
-const emptyCandidates = {
+const emptyCandidates: QueuePage = {
   rows: [{
     id: 20,
     owner_first_name: 'John',
@@ -34,7 +35,7 @@ const emptyCandidates = {
     property_city: 'Evanston',
     property_state: 'IL',
     lead_score: 72,
-    lead_status: 'mailing_no_contact_made',
+    lead_status: 'mailing_no_contact_made' as LeadStatus,
     recommended_action: 'mail_ready',
     has_property_match: true,
     last_contact_date: null,

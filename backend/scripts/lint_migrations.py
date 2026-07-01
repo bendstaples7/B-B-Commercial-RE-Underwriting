@@ -503,6 +503,10 @@ def lint_file(path: Path) -> list[tuple[int, str, str]]:
     _CREATE_TABLE_RE = re.compile(
         r"op\.create_table\s*\(\s*['\"](\w+)['\"]",
     )
+    _CREATE_TABLE_IF_NOT_EXISTS_RE = re.compile(
+        r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+(\w+)",
+        re.IGNORECASE,
+    )
     # Collect tables from ALL migration files in the same directory
     all_known_tables: set[str] = set(_INITIAL_SCHEMA_TABLES)
     versions_dir = path.parent
@@ -514,11 +518,15 @@ def lint_file(path: Path) -> list[tuple[int, str, str]]:
                 mig_text = mig_file.read_text(encoding='utf-8')
                 for m in _CREATE_TABLE_RE.finditer(mig_text):
                     all_known_tables.add(m.group(1).lower())
+                for m in _CREATE_TABLE_IF_NOT_EXISTS_RE.finditer(mig_text):
+                    all_known_tables.add(m.group(1).lower())
             except Exception:
                 pass
 
     # Also collect tables created in THIS file
     for m in _CREATE_TABLE_RE.finditer('\n'.join(lines)):
+        all_known_tables.add(m.group(1).lower())
+    for m in _CREATE_TABLE_IF_NOT_EXISTS_RE.finditer('\n'.join(lines)):
         all_known_tables.add(m.group(1).lower())
 
     # Skip this check for the initial schema file itself
