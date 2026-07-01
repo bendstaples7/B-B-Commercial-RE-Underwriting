@@ -1,6 +1,6 @@
 # Faster Deploy: Tiered Sync + Incremental Rescore
 
-**Status:** In progress — `feature/faster-deploy` branch.
+**Status:** Phases 1–4 merged in PR #84. Phase 5 (CI gate) in progress on `feature/faster-ci`.
 
 **Created:** 2026-06-30  
 **Context:** Local dev was blocked by empty DB (resolved via GitHub Actions prod dump + `dev.py` auto-restore in PR #82). Granular outreach scoring (`recommended_contact_method`) remains in progress on the feature branch.
@@ -160,6 +160,37 @@ Skipping full pipeline on code-only deploys is safe if these remain healthy. Log
 
 ---
 
+## Phase 5 — CI gate speed (follow-up to PR #84)
+
+**Problem:** Push-to-live wall clock is dominated by CI (~10 min), not VPS deploy (~1 min after #84). Backend pytest alone is ~9 min. Deploy workflow also rebuilds the frontend (~90s) even though CI already built and validated it.
+
+### 5a. Parallelize backend pytest
+
+- Add `pytest-xdist` to `backend/requirements.txt`
+- CI runs `pytest -n auto -m "not performance"` (performance tests stay in `performance-tests.yml`)
+- Local dev keeps single-process `pytest` by default
+
+**Expected savings:** ~3–5 min off CI critical path.
+
+### 5b. Reuse CI frontend dist in Deploy
+
+- CI `frontend` job uploads `frontend/dist` as artifact `frontend-dist`
+- Deploy workflow downloads artifact from triggering CI run (`workflow_run.id`)
+- `workflow_dispatch` manual deploys still build on the runner (fallback)
+
+**Expected savings:** ~60–90s per deploy workflow.
+
+### Deferred
+
+- **Path-filtered CI** — skip backend pytest on frontend-only changes (separate PR; branch-protection implications)
+
+**Checklist:**
+
+- [ ] **5a** — `pytest-xdist` + parallel CI pytest
+- [ ] **5b** — Frontend artifact upload/download between CI and Deploy
+
+---
+
 ## What we should NOT do
 
 - Remove pre-deploy local `pg_dump` without another restore point
@@ -174,6 +205,7 @@ Skipping full pipeline on code-only deploys is safe if these remain healthy. Log
 |------|------|
 | `scripts/deploy.sh` | VPS deploy orchestration (sync blockers) |
 | `scripts/backup.sh` | Pre-deploy pg_dump + B2 |
+| `.github/workflows/ci.yml` | PR checks + frontend dist artifact |
 | `.github/workflows/deploy.yml` | CI deploy + health checks |
 | `backend/scripts/post_deploy_sync.py` | Post-deploy dispatch |
 | `backend/app/services/hubspot_pipeline_runner.py` | Full pipeline definition |
