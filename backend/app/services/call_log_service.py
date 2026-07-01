@@ -162,6 +162,19 @@ def _build_email_summary(
     return body[:500]
 
 
+def _mail_attribution_eligible(lead_id: int, mail_campaign_id: int, actor_user_id: str) -> bool:
+    from app.models import MailCampaign, MailQueueItem
+
+    campaign = MailCampaign.query.get(mail_campaign_id)
+    if campaign is None or campaign.created_by != actor_user_id:
+        return False
+    return MailQueueItem.query.filter_by(
+        campaign_id=mail_campaign_id,
+        lead_id=lead_id,
+        status='sent',
+    ).first() is not None
+
+
 class CallLogService:
     """Handles logging calls and notes on leads."""
 
@@ -233,7 +246,11 @@ class CallLogService:
             metadata['phone_number'] = phone_number
         if phone_label:
             metadata['phone_label'] = phone_label
-        if mail_campaign_id is not None:
+        attributed_to_mail = (
+            mail_campaign_id is not None
+            and _mail_attribution_eligible(lead_id, mail_campaign_id, actor)
+        )
+        if attributed_to_mail:
             metadata['mail_campaign_id'] = mail_campaign_id
             metadata['attributed_to_mail'] = True
 
@@ -273,10 +290,10 @@ class CallLogService:
                 lead_id, exc, exc_info=True,
             )
 
-        if mail_campaign_id is not None:
+        if attributed_to_mail:
             try:
                 from app.services.mail_campaign_service import MailCampaignService
-                MailCampaignService().record_call_attribution(mail_campaign_id, lead_id)
+                MailCampaignService().record_call_attribution(mail_campaign_id, lead_id, actor)
             except Exception as exc:
                 logger.warning(
                     'Mail call attribution failed for lead %s campaign %s: %s',

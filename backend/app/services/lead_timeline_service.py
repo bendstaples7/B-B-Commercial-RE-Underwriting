@@ -19,6 +19,7 @@ class LeadTimelineService:
         occurred_at: datetime | None = None,
         source: str = 'manual',
         hubspot_activity_id: str | None = None,
+        commit: bool = True,
     ) -> LeadTimelineEntry:
         """Append a new entry to the lead's timeline."""
         entry = LeadTimelineEntry(
@@ -32,7 +33,8 @@ class LeadTimelineService:
             hubspot_activity_id=hubspot_activity_id,
         )
         db.session.add(entry)
-        db.session.commit()
+        if commit:
+            db.session.commit()
         return entry
 
     def get_page(

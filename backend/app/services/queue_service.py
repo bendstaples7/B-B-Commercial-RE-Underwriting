@@ -9,12 +9,7 @@ from app.models.task import Task
 from app.models.task_association import TaskAssociation
 from app.services.recommended_action_metadata import get_recommended_action_display
 from app.services.outreach_method_service import resolve_outreach_contacts_for_leads
-from app.services.scoring_rubric import (
-    RECENT_SALE_SUPPRESSION_DAYS,
-    format_last_sale_at,
-    is_recently_sold,
-    sql_not_recently_sold,
-)
+from app.services.scoring_rubric import format_last_sale_at, is_recently_sold
 
 # Statuses that represent active outreach pipeline (not terminal or suppressed)
 ACTIVE_PIPELINE_STATUSES = [
@@ -36,10 +31,6 @@ CONTACTED_STATUSES = [
     'in_person_appointment',
     'offer_delivered',
 ]
-
-
-def _db_is_postgresql() -> bool:
-    return db.session.get_bind().dialect.name == 'postgresql'
 
 
 def _lead_to_queue_row(
@@ -171,8 +162,6 @@ class QueueService:
     def count_mail_candidates(self, mail_user_id: str) -> int:
         """Leads recommended for mail that are not already queued by this user."""
         query = self._mail_candidates_query(mail_user_id)
-        if _db_is_postgresql():
-            return query.count()
         return sum(1 for lead in query.all() if not is_recently_sold(lead))
 
     # ------------------------------------------------------------------
@@ -531,21 +520,13 @@ class QueueService:
             )
         )
         q = (
-            self._base_query()
+            Lead.query.filter(Lead.owner_user_id == mail_user_id)
             .filter(
                 Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
                 Lead.recommended_action == 'mail_ready',
                 ~already_queued,
             )
         )
-        if _db_is_postgresql():
-            q = q.filter(sql_not_recently_sold())
-        else:
-            recent_sale_cutoff = date.today() - timedelta(days=RECENT_SALE_SUPPRESSION_DAYS)
-            q = q.filter(or_(
-                Lead.acquisition_date.is_(None),
-                Lead.acquisition_date <= recent_sale_cutoff,
-            ))
         return q
 
     def get_mail_candidates(
@@ -562,20 +543,11 @@ class QueueService:
         query = self._mail_candidates_query(mail_user_id)
         sort_col = getattr(Lead, sort_by, Lead.lead_score)
         order = sort_col.desc() if sort_order == 'desc' else sort_col.asc()
-        if _db_is_postgresql():
-            total = query.count()
-            leads = (
-                query.order_by(order)
-                .offset((page - 1) * per_page)
-                .limit(per_page)
-                .all()
-            )
-        else:
-            ordered = query.order_by(order).all()
-            eligible = [lead for lead in ordered if not is_recently_sold(lead)]
-            total = len(eligible)
-            start = (page - 1) * per_page
-            leads = eligible[start:start + per_page]
+        ordered = query.order_by(order).all()
+        eligible = [lead for lead in ordered if not is_recently_sold(lead)]
+        total = len(eligible)
+        start = (page - 1) * per_page
+        leads = eligible[start:start + per_page]
         contacts = resolve_outreach_contacts_for_leads(leads)
         last_mailed = get_last_mailed_at_by_lead_ids([lead.id for lead in leads])
         return [

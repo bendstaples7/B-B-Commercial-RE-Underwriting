@@ -171,15 +171,19 @@ export const OpenLetterSetupPanel: React.FC = () => {
     mutationFn: () =>
       openLetterService.saveConfig({
         ...(apiTokenInput ? { api_token: apiTokenInput } : {}),
-        use_demo_api: false,
+        use_demo_api: config?.use_demo_api ?? false,
         batch_minimum: batchMinimum,
         allow_send_below_minimum: allowBelow,
         default_product_id: productId === '' ? null : productId,
         default_template_id: templateId === '' ? null : templateId,
         default_template_name: templateName || null,
-        return_address: returnAddress.name || returnAddress.address1
-          ? returnAddress
-          : null,
+        return_address:
+          returnAddress.address1.trim()
+          && returnAddress.city.trim()
+          && returnAddress.state.trim()
+          && returnAddress.zip.trim()
+            ? returnAddress
+            : null,
       }),
     onSuccess: () => {
       setApiTokenInput('')

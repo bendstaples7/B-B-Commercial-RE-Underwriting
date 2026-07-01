@@ -21,9 +21,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env'))
 
+from app.services.lead_dedup_service import COPYABLE_FIELDS  # noqa: E402
 from app.services.lead_merge_utils import (  # noqa: E402
     cluster_leads_by_normalized_street,
     dedup_street_key,
+    merge_mailer_history,
     owner_group_key,
     pick_merge_winner,
 )
@@ -67,22 +69,6 @@ FK_TABLES = [
     ('property_organization_links', 'property_id'),
     ('owner_organization_links',    'owner_id'),
     ('tasks',                       'lead_id'),
-]
-
-# Fields we copy from loser -> winner only when winner is NULL
-COPYABLE_FIELDS = [
-    'phone_1', 'phone_2', 'phone_3', 'phone_4', 'phone_5', 'phone_6', 'phone_7',
-    'email_1', 'email_2', 'email_3', 'email_4', 'email_5',
-    'mailing_address', 'mailing_city', 'mailing_state', 'mailing_zip',
-    'notes', 'source', 'date_identified',
-    'needs_skip_trace', 'skip_tracer', 'date_skip_traced',
-    'date_added_to_hubspot', 'county_assessor_pin',
-    'ownership_type', 'acquisition_date',
-    'bedrooms', 'bathrooms', 'square_footage', 'lot_size', 'year_built',
-    'units', 'units_allowed', 'zoning',
-    'most_recent_sale', 'owner_2_first_name', 'owner_2_last_name',
-    'address_2', 'returned_addresses', 'up_next_to_mail', 'mailer_history',
-    'lead_score', 'lead_category', 'property_type',
 ]
 
 
@@ -181,11 +167,12 @@ def _merge_loser_into_winner(cur, winner: dict, loser: dict) -> None:
             if field in winner_row and field in loser_row:
                 w_val = winner_row[field]
                 l_val = loser_row[field]
-                if (w_val is None or w_val == '') and l_val not in (None, ''):
-                    if field == 'mailer_history':
-                        updates[field] = Json(l_val)
-                    else:
-                        updates[field] = l_val
+                if field == 'mailer_history':
+                    merged = merge_mailer_history(w_val, l_val)
+                    if merged is not None and merged != w_val:
+                        updates[field] = Json(merged)
+                elif (w_val is None or w_val == '') and l_val not in (None, ''):
+                    updates[field] = l_val
 
         if updates:
             set_clause = ', '.join(f'"{k}" = %s' for k in updates)
@@ -263,9 +250,14 @@ def _find_pin_merge_groups(rows: list[dict]) -> list[list[dict]]:
         if not pin:
             continue
         pin_digits = normalize_pin_for_socrata(pin)
-        if not pin_digits:
+        if not pin_digits or len(pin_digits) != 14:
             continue
-        key = (row.get('owner_user_id'), pin_digits)
+        key = (
+            row.get('owner_user_id'),
+            (row.get('owner_first_name') or '').strip().lower(),
+            (row.get('owner_last_name') or '').strip().lower(),
+            pin_digits,
+        )
         buckets[key].append(dict(row))
     return [members for members in buckets.values() if len(members) >= 2]
 

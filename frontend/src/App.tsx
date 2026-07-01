@@ -205,6 +205,11 @@ function DirectMailRoute() {
   return <MarketingHub />
 }
 
+function MarketingRedirect({ to }: { to: string }) {
+  const location = useLocation()
+  return <Navigate to={`${to}${location.search}`} replace />
+}
+
 /** Wraps PropertyListPage — no lead selection prop needed; row clicks navigate via useNavigate inside the component. */
 function LeadListRoute() {
   return <PropertyListPage />
@@ -1646,10 +1651,10 @@ function App() {
           <Route path="/import" element={<ImportRoute />} />
           <Route path="/import/callback" element={<OAuthCallback />} />
           <Route path="/properties/outreach-lists" element={<MarketingListManager />} />
-          <Route path="/marketing" element={<Navigate to="/marketing/direct-mail" replace />} />
+          <Route path="/marketing" element={<MarketingRedirect to="/marketing/direct-mail" />} />
           <Route path="/marketing/direct-mail" element={<DirectMailRoute />} />
-          <Route path="/marketing/open-letter" element={<Navigate to="/marketing/direct-mail" replace />} />
-          <Route path="/import/open-letter" element={<Navigate to="/marketing/direct-mail" replace />} />
+          <Route path="/marketing/open-letter" element={<MarketingRedirect to="/marketing/direct-mail" />} />
+          <Route path="/import/open-letter" element={<MarketingRedirect to="/marketing/direct-mail" />} />
           {/* Multifamily routes (Req 14.1) */}
           <Route path="/multifamily/deals" element={<DealListPage />} />
           <Route path="/multifamily/deals/:dealId" element={<DealDetailPage />} />

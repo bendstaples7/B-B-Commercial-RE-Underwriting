@@ -16,22 +16,9 @@ import {
 } from '@mui/material'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { formatLastMailedDate } from '@/utils/formatLastMailedDate'
+import { mailCampaignStatusColor } from '@/utils/mailCampaignStatusColor'
 import openLetterService, { type MailCampaign } from '@/services/openLetterApi'
-
-function statusColor(status: string): 'default' | 'success' | 'error' | 'warning' | 'info' {
-  switch (status) {
-    case 'mailed':
-    case 'submitted':
-      return 'success'
-    case 'failed':
-      return 'error'
-    case 'pending':
-    case 'processing':
-      return 'info'
-    default:
-      return 'default'
-  }
-}
 
 function formatPct(rate: number | null | undefined): string {
   if (rate == null) return '—'
@@ -46,18 +33,14 @@ function CampaignRow({ campaign }: { campaign: MailCampaign }) {
 
   return (
     <TableRow>
-      <TableCell>
-        {campaign.submitted_at
-          ? new Date(campaign.submitted_at).toLocaleDateString()
-          : new Date(campaign.created_at || '').toLocaleDateString()}
-      </TableCell>
+      <TableCell>{formatLastMailedDate(campaign.submitted_at || campaign.created_at)}</TableCell>
       <TableCell>{campaign.template_name || campaign.template_id || '—'}</TableCell>
       <TableCell>{campaign.lead_count}</TableCell>
       <TableCell>
         {campaign.cost != null ? `$${campaign.cost.toFixed(2)}` : '—'}
       </TableCell>
       <TableCell>
-        <Chip label={campaign.status} size="small" color={statusColor(campaign.status)} />
+        <Chip label={campaign.status} size="small" color={mailCampaignStatusColor(campaign.status)} />
       </TableCell>
       <TableCell>{formatPct(campaign.scan_rate)}</TableCell>
       <TableCell>{formatPct(deliveryRate)}</TableCell>
@@ -75,12 +58,12 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
 
   const handleRefresh = async () => {
     const campaigns = data?.campaigns ?? []
-    await Promise.all(
+    await Promise.allSettled(
       campaigns
         .filter((c) => c.olc_order_id)
         .map((c) => openLetterService.getCampaign(c.id, true)),
     )
-    queryClient.invalidateQueries({ queryKey: ['mail-campaigns'] })
+    await queryClient.invalidateQueries({ queryKey: ['mail-campaigns'] })
   }
 
   if (isLoading) {

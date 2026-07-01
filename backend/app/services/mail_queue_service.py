@@ -112,14 +112,16 @@ class MailQueueService:
 
             item = MailQueueItem(lead_id=lead_id, user_id=user_id, status='queued')
             db.session.add(item)
+            db.session.flush()
             lead.up_next_to_mail = True
             self._timeline.append(
                 lead_id=lead_id,
                 event_type='mail_queued',
                 actor=user_id,
                 summary='Added to mail queue',
-                metadata={'queue_item_id': None},
+                metadata={'queue_item_id': item.id},
                 source='system',
+                commit=False,
             )
             added += 1
             results.append({'lead_id': lead_id, 'status': 'queued'})
@@ -139,7 +141,7 @@ class MailQueueService:
         item.status = 'removed'
         item.updated_at = datetime.utcnow()
         lead = Lead.query.get(item.lead_id)
-        if lead and not self._queued_query(user_id).filter_by(lead_id=lead.id).count():
+        if lead and not MailQueueItem.query.filter_by(lead_id=lead.id, status='queued').count():
             lead.up_next_to_mail = False
         db.session.commit()
         return item

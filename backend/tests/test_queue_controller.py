@@ -511,5 +511,7 @@ class TestMailCandidatesQueue:
             response = client.get('/api/queues/counts', headers=_AUTH_HEADERS)
             data = json.loads(response.data)
             assert data['ready_to_mail'] >= 1
-            assert data['mail_candidates'] >= 0
+            candidates = client.get('/api/queues/mail-candidates', headers=_AUTH_HEADERS)
+            candidate_rows = json.loads(candidates.data)['rows']
+            assert lead.id not in [row['id'] for row in candidate_rows]
 

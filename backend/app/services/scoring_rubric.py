@@ -175,7 +175,7 @@ def format_last_sale_at(lead: Lead) -> str | None:
 
 def effective_acquisition_date_sql():
     """SQL expression matching effective_acquisition_date() on PostgreSQL."""
-    from sqlalchemy import Date, Integer, case, cast
+    from sqlalchemy import Date, Integer, and_, case, cast
     from sqlalchemy.sql import func
 
     mrs = Lead.most_recent_sale
@@ -187,7 +187,8 @@ def effective_acquisition_date_sql():
         (year_raw < 100, case((year_raw >= 50, year_raw + 1900), else_=year_raw + 2000)),
         else_=year_raw,
     )
-    us_date = func.make_date(year, month, day)
+    valid_us = and_(month >= 1, month <= 12, day >= 1, day <= 31)
+    us_date = case((valid_us, func.make_date(year, month, day)), else_=None)
 
     dash_parts = func.regexp_match(mrs, r'(\d{1,2})-(\d{1,2})-(\d{2,4})')
     dash_month = cast(dash_parts[1], Integer)
@@ -197,7 +198,8 @@ def effective_acquisition_date_sql():
         (dash_year_raw < 100, case((dash_year_raw >= 50, dash_year_raw + 1900), else_=dash_year_raw + 2000)),
         else_=dash_year_raw,
     )
-    dash_date = func.make_date(dash_year, dash_month, dash_day)
+    valid_dash = and_(dash_month >= 1, dash_month <= 12, dash_day >= 1, dash_day <= 31)
+    dash_date = case((valid_dash, func.make_date(dash_year, dash_month, dash_day)), else_=None)
 
     parsed = case(
         (mrs.op('~')(r'^\d{4}-\d{2}-\d{2}'), cast(func.substring(mrs, 1, 10), Date)),

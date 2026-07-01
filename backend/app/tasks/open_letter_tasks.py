@@ -31,3 +31,4 @@ def sync_mail_campaign_analytics(campaign_id: int) -> None:
             MailCampaignService().sync_campaign_analytics(campaign_id)
         except Exception:
             logger.exception('sync_mail_campaign_analytics failed for campaign_id=%s', campaign_id)
+            raise

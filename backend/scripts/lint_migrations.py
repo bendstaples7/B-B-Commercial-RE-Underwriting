@@ -209,6 +209,74 @@ def _is_legacy_revision(path: Path, text: str) -> bool:
     return revision_id in _LEGACY_REVISION_IDS
 
 
+def _extract_down_revisions(text: str) -> list[str | None]:
+    """Return parent revision id(s); [None] for a root migration."""
+    m = re.search(r'^down_revision\s*=\s*(.+)$', text, re.MULTILINE)
+    if not m:
+        return []
+    value = m.group(1).strip()
+    if value == 'None':
+        return [None]
+    if value.startswith('('):
+        parents = re.findall(r"['\"]([^'\"]+)['\"]", value)
+        return parents or [None]
+    mm = re.match(r"['\"]([^'\"]+)['\"]", value)
+    return [mm.group(1)] if mm else []
+
+
+def _tables_created_in_text(text: str) -> set[str]:
+    tables: set[str] = set()
+    for m in re.finditer(r"op\.create_table\s*\(\s*['\"](\w+)['\"]", text):
+        tables.add(m.group(1).lower())
+    for m in re.finditer(
+        r'CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+(\w+)',
+        text,
+        re.IGNORECASE,
+    ):
+        tables.add(m.group(1).lower())
+    return tables
+
+
+def _load_migration_graph(versions_dir: Path) -> tuple[dict[str, list[str | None]], dict[str, set[str]]]:
+    parents: dict[str, list[str | None]] = {}
+    tables_by_rev: dict[str, set[str]] = {}
+    for mig_file in versions_dir.glob('*.py'):
+        if mig_file.name == '__init__.py':
+            continue
+        try:
+            mig_text = mig_file.read_text(encoding='utf-8')
+        except Exception:
+            continue
+        rev = _extract_revision_id(mig_text)
+        if not rev:
+            continue
+        parents[rev] = _extract_down_revisions(mig_text)
+        tables_by_rev[rev] = _tables_created_in_text(mig_text)
+    return parents, tables_by_rev
+
+
+def _ancestor_tables_for_revision(
+    revision: str | None,
+    parents: dict[str, list[str | None]],
+    tables_by_rev: dict[str, set[str]],
+) -> set[str]:
+    known: set[str] = set(_INITIAL_SCHEMA_TABLES)
+    if not revision:
+        return known
+    stack = list(parents.get(revision, []))
+    visited: set[str] = set()
+    while stack:
+        rev = stack.pop()
+        if rev is None:
+            continue
+        if rev in visited:
+            continue
+        visited.add(rev)
+        known |= tables_by_rev.get(rev, set())
+        stack.extend(parents.get(rev, []))
+    return known
+
+
 def _check_enum_guard(text: str, lines: list[str]) -> list[tuple[int, str, str]]:
     """
     Req 8.2: Flag CREATE TYPE statements that are not wrapped in a
@@ -504,30 +572,15 @@ def lint_file(path: Path) -> list[tuple[int, str, str]]:
         r"op\.create_table\s*\(\s*['\"](\w+)['\"]",
     )
     _CREATE_TABLE_IF_NOT_EXISTS_RE = re.compile(
-        r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+(\w+)",
+        r'CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+(\w+)',
         re.IGNORECASE,
     )
-    # Collect tables from ALL migration files in the same directory
-    all_known_tables: set[str] = set(_INITIAL_SCHEMA_TABLES)
     versions_dir = path.parent
-    if versions_dir.is_dir():
-        for mig_file in versions_dir.glob('*.py'):
-            if mig_file.name == '__init__.py':
-                continue
-            try:
-                mig_text = mig_file.read_text(encoding='utf-8')
-                for m in _CREATE_TABLE_RE.finditer(mig_text):
-                    all_known_tables.add(m.group(1).lower())
-                for m in _CREATE_TABLE_IF_NOT_EXISTS_RE.finditer(mig_text):
-                    all_known_tables.add(m.group(1).lower())
-            except Exception:
-                pass
-
-    # Also collect tables created in THIS file
-    for m in _CREATE_TABLE_RE.finditer('\n'.join(lines)):
-        all_known_tables.add(m.group(1).lower())
-    for m in _CREATE_TABLE_IF_NOT_EXISTS_RE.finditer('\n'.join(lines)):
-        all_known_tables.add(m.group(1).lower())
+    parents_map, tables_by_rev = (
+        _load_migration_graph(versions_dir) if versions_dir.is_dir() else ({}, {})
+    )
+    file_revision = _extract_revision_id(text)
+    tables_so_far = _ancestor_tables_for_revision(file_revision, parents_map, tables_by_rev)
 
     # Skip this check for the initial schema file itself
     _ALTER_TABLE_RE = re.compile(
@@ -540,10 +593,14 @@ def lint_file(path: Path) -> list[tuple[int, str, str]]:
         for i, line in enumerate(lines, start=1):
             if line.lstrip().startswith('#'):
                 continue
+            for m in _CREATE_TABLE_RE.finditer(line):
+                tables_so_far.add(m.group(1).lower())
+            for m in _CREATE_TABLE_IF_NOT_EXISTS_RE.finditer(line):
+                tables_so_far.add(m.group(1).lower())
             m = _ALTER_TABLE_RE.search(line)
             if m:
                 tname = m.group(1) or m.group(2)
-                if tname and tname.lower() not in all_known_tables:
+                if tname and tname.lower() not in tables_so_far:
                     issues.append((
                         i, 'ERROR',
                         f"ALTER TABLE '{tname}' references a table not created by "

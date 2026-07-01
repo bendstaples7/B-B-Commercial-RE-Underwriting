@@ -48,6 +48,7 @@ export function ReadyToMailQueue() {
       queryClient.invalidateQueries({ queryKey: ['queue-mail-candidates'] })
       queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
       setSelectedIds([])
+      setCandidatesPage(1)
     },
   })
 

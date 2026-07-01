@@ -98,7 +98,7 @@ class OpenLetterConfigService:
                 user_id=user_id,
                 encrypted_api_token=OpenLetterClientService.encrypt_token(env_token),
                 use_demo_api=_env_bool(ENV_USE_DEMO, False),
-                batch_minimum=_env_int(ENV_BATCH_MINIMUM, 50) or 50,
+                batch_minimum=max(1, _env_int(ENV_BATCH_MINIMUM, 50) or 50),
                 allow_send_below_minimum=_env_bool(ENV_ALLOW_BELOW_MINIMUM, False),
                 default_product_id=_env_int(ENV_PRODUCT_ID),
                 default_template_id=_env_int(ENV_TEMPLATE_ID),
@@ -166,7 +166,7 @@ class OpenLetterConfigService:
         if return_address is not None:
             config.return_address = return_address
         if estimated_cost_per_piece is not None:
-            config.estimated_cost_per_piece = Decimal(str(estimated_cost_per_piece))
+            config.estimated_cost_per_piece = max(Decimal('0'), Decimal(str(estimated_cost_per_piece)))
 
         config.updated_at = datetime.utcnow()
         db.session.commit()

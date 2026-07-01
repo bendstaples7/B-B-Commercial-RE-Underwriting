@@ -948,7 +948,17 @@ def generate_backup_export() -> str:
 # Open Letter Connect — direct mail campaigns
 # ---------------------------------------------------------------------------
 
-@celery.task(name='open_letter.submit_campaign', bind=True, max_retries=2)
+from app.exceptions import ExternalServiceError, MailQueueError
+
+@celery.task(
+    name='open_letter.submit_campaign',
+    bind=True,
+    max_retries=2,
+    autoretry_for=(ExternalServiceError, ConnectionError, TimeoutError),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    dont_autoretry_for=(MailQueueError,),
+)
 def submit_open_letter_campaign(self, campaign_id: int) -> None:
     """Submit a mail campaign to Open Letter Connect."""
     from app.tasks.open_letter_tasks import submit_mail_campaign

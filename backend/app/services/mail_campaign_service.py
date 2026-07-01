@@ -94,6 +94,8 @@ class MailCampaignService:
             db.session.commit()
             return campaign
 
+        campaign.lead_count = len(contacts)
+
         payload = {
             'contacts': contacts,
             'productId': campaign.product_id,
@@ -195,7 +197,7 @@ class MailCampaignService:
 
         mailed = (campaign.delivery_stats or {}).get('Mailed', 0)
         delivered = (campaign.delivery_stats or {}).get('Delivered', 0)
-        if delivered and mailed:
+        if mailed or delivered:
             campaign.status = 'mailed'
 
         db.session.commit()
@@ -241,9 +243,9 @@ class MailCampaignService:
             .all()
         )
 
-    def record_call_attribution(self, campaign_id: int, lead_id: int) -> None:
+    def record_call_attribution(self, campaign_id: int, lead_id: int, user_id: str) -> None:
         campaign = MailCampaign.query.get(campaign_id)
-        if campaign is None:
+        if campaign is None or campaign.created_by != user_id:
             return
         sent = MailQueueItem.query.filter_by(
             campaign_id=campaign_id, lead_id=lead_id, status='sent',

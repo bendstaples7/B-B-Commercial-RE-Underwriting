@@ -13,6 +13,7 @@ from app.models.hubspot_match import HubSpotMatch
 from app.models.lead import Lead, LeadAuditTrail
 from app.services.lead_merge_utils import (
     dedup_street_key,
+    merge_mailer_history,
     pick_merge_winner,
     streets_match_normalized,
     winner_sort_key,
@@ -92,12 +93,13 @@ def find_lead_by_identity(
     pin = (county_assessor_pin or '').strip()
     if pin:
         pin_digits = normalize_pin_for_socrata(pin)
-        q = Lead.query.filter(_pin_digits_sql() == pin_digits)
-        if owner_user_id:
-            q = q.filter(Lead.owner_user_id == owner_user_id)
-        hit = q.first()
-        if hit:
-            return hit
+        if pin_digits:
+            q = Lead.query.filter(_pin_digits_sql() == pin_digits)
+            if owner_user_id:
+                q = q.filter(Lead.owner_user_id == owner_user_id)
+            hit = q.first()
+            if hit:
+                return hit
 
     street_key = dedup_street_key(property_street)
     first = (owner_first_name or '').strip()
@@ -207,6 +209,11 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
     _repoint_hubspot_matches(winner_id, loser_id)
 
     for field in COPYABLE_FIELDS:
+        if field == 'mailer_history':
+            merged = merge_mailer_history(winner.mailer_history, loser.mailer_history)
+            if merged is not None:
+                winner.mailer_history = merged
+            continue
         w_val = getattr(winner, field, None)
         l_val = getattr(loser, field, None)
         if (w_val is None or w_val == '') and l_val not in (None, ''):

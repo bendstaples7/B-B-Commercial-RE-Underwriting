@@ -118,6 +118,25 @@ def pick_merge_winner(
     return max(records, key=lambda r: winner_sort_key(r, confirmed_hubspot_lead_ids))
 
 
+def merge_mailer_history(winner_val: Any, loser_val: Any) -> Any:
+    """Union mailer_history from duplicate leads without dropping loser events."""
+
+    def _to_entries(value: Any) -> list[Any]:
+        if value is None or value == '':
+            return []
+        if isinstance(value, list):
+            return list(value)
+        return [value]
+
+    winner_entries = _to_entries(winner_val)
+    loser_entries = _to_entries(loser_val)
+    if not loser_entries:
+        return winner_val if winner_entries else None
+    if not winner_entries:
+        return loser_val
+    return winner_entries + loser_entries
+
+
 def owner_names_from_deal_props(props: dict) -> tuple[str, str]:
     """Extract owner first/last from HubSpot deal properties when present."""
     first = (

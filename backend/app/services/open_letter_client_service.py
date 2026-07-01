@@ -100,9 +100,15 @@ class OpenLetterClientService:
             )
         if resp.status_code == 429:
             retry_after = resp.headers.get('Retry-After')
+            retry_seconds = None
+            if retry_after:
+                try:
+                    retry_seconds = int(retry_after)
+                except ValueError:
+                    retry_seconds = None
             raise OpenLetterRateLimitError(
                 'Open Letter rate limit exceeded',
-                payload={'retry_after': int(retry_after) if retry_after else None},
+                retry_after=retry_seconds,
             )
         if resp.status_code >= 500:
             raise ExternalServiceError(

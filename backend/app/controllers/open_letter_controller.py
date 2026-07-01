@@ -5,6 +5,7 @@ from flask import Blueprint, g, jsonify, request
 
 from app.api_utils import require_auth
 from app.controllers.mail_api_errors import handle_mail_api_errors as handle_errors
+from app.controllers.request_parsing import parse_positive_int
 from app.services.open_letter_config_service import OpenLetterConfigService
 open_letter_bp = Blueprint('open_letter', __name__)
 
@@ -24,7 +25,7 @@ def get_config():
 @handle_errors
 def save_config():
     user_id = g.user_id
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     config = _config_service.save_config(
         user_id,
         api_token=data.get('api_token'),
@@ -63,8 +64,13 @@ def list_products():
 @handle_errors
 def list_templates():
     client = _config_service.get_client(g.user_id)
-    page = max(0, int(request.args.get('page', 0)))
-    page_size = int(request.args.get('page_size', 50))
+    try:
+        page = parse_positive_int(request.args.get('page'), default=0, minimum=0, field_name='page')
+        page_size = parse_positive_int(
+            request.args.get('page_size'), default=50, maximum=100, field_name='page_size',
+        )
+    except ValueError as exc:
+        return jsonify({'error': 'Invalid request', 'message': str(exc)}), 400
     product_types = request.args.get('product_types') or None
     result = client.list_templates(
         page=page, page_size=page_size, product_types=product_types,

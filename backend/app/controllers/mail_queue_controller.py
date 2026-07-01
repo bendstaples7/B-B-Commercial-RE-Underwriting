@@ -7,6 +7,7 @@ from flask import Blueprint, g, jsonify, request
 
 from app.api_utils import require_auth
 from app.controllers.mail_api_errors import handle_mail_api_errors as handle_errors
+from app.controllers.request_parsing import parse_bool, parse_positive_int
 from app.models import MailQueueItem
 from app.services.mail_campaign_service import MailCampaignService
 from app.services.mail_queue_service import MailQueueService
@@ -72,11 +73,15 @@ def get_queue():
 @require_auth
 @handle_errors
 def enqueue():
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     lead_ids = data.get('lead_ids') or []
     if not isinstance(lead_ids, list):
         return jsonify({'error': 'lead_ids must be a list'}), 400
-    result = _queue_service.enqueue_leads([int(x) for x in lead_ids], g.user_id)
+    try:
+        parsed_ids = [int(x) for x in lead_ids]
+    except (TypeError, ValueError):
+        return jsonify({'error': 'lead_ids must contain integers'}), 400
+    result = _queue_service.enqueue_leads(parsed_ids, g.user_id)
     summary = _queue_service.get_summary(g.user_id)
     return jsonify({**result, **summary}), 201
 
@@ -94,8 +99,8 @@ def remove_item(item_id: int):
 @require_auth
 @handle_errors
 def send_batch():
-    data = request.get_json() or {}
-    force = bool(data.get('force'))
+    data = request.get_json(silent=True) or {}
+    force = parse_bool(data.get('force'))
     campaign = _campaign_service.create_and_dispatch_send(g.user_id, force=force)
     return jsonify(_campaign_service.serialize_campaign(campaign)), 202
 
@@ -104,8 +109,13 @@ def send_batch():
 @require_auth
 @handle_errors
 def list_campaigns():
-    page = int(request.args.get('page', 1))
-    per_page = int(request.args.get('per_page', 25))
+    try:
+        page = parse_positive_int(request.args.get('page'), default=1, field_name='page')
+        per_page = parse_positive_int(
+            request.args.get('per_page'), default=25, maximum=100, field_name='per_page',
+        )
+    except ValueError as exc:
+        return jsonify({'error': 'Invalid request', 'message': str(exc)}), 400
     campaigns, total = _campaign_service.list_campaigns(g.user_id, page=page, per_page=per_page)
     return jsonify({
         'campaigns': [_campaign_service.serialize_campaign(c) for c in campaigns],
@@ -133,7 +143,10 @@ def get_campaign(campaign_id: int):
 @require_auth
 @handle_errors
 def campaigns_for_lead(lead_id: int):
-    days = int(request.args.get('days', 90))
+    try:
+        days = parse_positive_int(request.args.get('days'), default=90, field_name='days')
+    except ValueError as exc:
+        return jsonify({'error': 'Invalid request', 'message': str(exc)}), 400
     campaigns = _campaign_service.get_recent_for_lead(lead_id, g.user_id, days=days)
     return jsonify({
         'campaigns': [_campaign_service.serialize_campaign(c) for c in campaigns],

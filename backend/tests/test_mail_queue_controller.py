@@ -78,6 +78,15 @@ class TestGetMailQueue:
 
 
 class TestEnqueueMailQueue:
+    def test_enqueue_rejects_invalid_lead_ids(self, client, app):
+        with app.app_context():
+            response = client.post(
+                '/api/mail-queue/',
+                headers=_AUTH_HEADERS,
+                json={'lead_ids': ['abc']},
+            )
+            assert response.status_code == 400
+
     def test_enqueue_rejects_other_users_lead(self, client, app):
         with app.app_context():
             lead = _make_lead(app, '9 Other Owner St', owner_user_id='other-user')

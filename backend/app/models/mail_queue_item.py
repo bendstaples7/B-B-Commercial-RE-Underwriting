@@ -1,6 +1,8 @@
 """Mail queue item — lead waiting to be included in the next OLC batch."""
 from datetime import datetime
 
+from sqlalchemy import text
+
 from app import db
 
 
@@ -36,6 +38,13 @@ class MailQueueItem(db.Model):
 
     __table_args__ = (
         db.Index('ix_mail_queue_lead_status', 'lead_id', 'status'),
+        db.Index(
+            'uq_mail_queue_user_lead_queued',
+            'user_id',
+            'lead_id',
+            unique=True,
+            postgresql_where=text("status = 'queued'"),
+        ),
     )
 
     def __repr__(self):

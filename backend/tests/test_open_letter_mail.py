@@ -1,6 +1,4 @@
 """Tests for Open Letter mail queue and contact mapping."""
-import os
-
 import pytest
 from cryptography.fernet import Fernet
 
@@ -61,6 +59,21 @@ class TestOpenLetterContactMapper:
         )
         assert validate_lead_mail_address(lead) is not None
 
+    def test_does_not_mix_partial_mailing_with_property(self):
+        lead = _make_lead(
+            mailing_address='123 Main St',
+            mailing_city=None,
+            mailing_state=None,
+            mailing_zip=None,
+            property_street='456 Oak Ave',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+        )
+        contact = lead_to_olc_contact(lead)
+        assert contact['address1'] == '456 Oak Ave'
+        assert contact['city'] == 'Chicago'
+
 
 class TestOpenLetterPerUserConfig:
     def _seed_users(self, db):
@@ -111,13 +124,13 @@ class TestOpenLetterPerUserConfig:
 
 
 class TestMailQueueSummary:
-    def test_can_send_when_at_minimum(self, app, fernet_key):
+    def test_can_send_when_at_minimum(self, app, fernet_key, monkeypatch):
         from app import db
         from app.models.mail_queue_item import MailQueueItem
         from app.services.open_letter_client_service import OpenLetterClientService
 
         with app.app_context():
-            os.environ['HUBSPOT_ENCRYPTION_KEY'] = fernet_key
+            monkeypatch.setenv('HUBSPOT_ENCRYPTION_KEY', fernet_key)
             token = OpenLetterClientService.encrypt_token('test-token')
             config = OpenLetterConfig(
                 user_id=BEN_USER_ID,
@@ -133,13 +146,13 @@ class TestMailQueueSummary:
             assert summary['queued_count'] == 2
             assert summary['can_send'] is True
 
-    def test_cannot_send_below_minimum(self, app, fernet_key):
+    def test_cannot_send_below_minimum(self, app, fernet_key, monkeypatch):
         from app import db
         from app.models.mail_queue_item import MailQueueItem
         from app.services.open_letter_client_service import OpenLetterClientService
 
         with app.app_context():
-            os.environ['HUBSPOT_ENCRYPTION_KEY'] = fernet_key
+            monkeypatch.setenv('HUBSPOT_ENCRYPTION_KEY', fernet_key)
             config = OpenLetterConfig(
                 user_id=BEN_USER_ID,
                 encrypted_api_token=OpenLetterClientService.encrypt_token('test-token'),

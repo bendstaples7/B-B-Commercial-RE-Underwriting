@@ -35,7 +35,7 @@ export function getOlcCostTier(product: OlcProduct): OlcCostTier {
   if (postage === 'forever' || type.includes('real penned')) {
     return 'premium'
   }
-  if (delivery === 'Standard Class') {
+  if (delivery === 'Standard Class' || delivery.toLowerCase() === 'standard class') {
     return 'budget'
   }
   return 'standard'

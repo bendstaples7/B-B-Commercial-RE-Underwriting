@@ -22,6 +22,10 @@ def validate_lead_mail_address(lead: Lead) -> str | None:
     return None
 
 
+def _complete_address(street: str, city: str, state: str, zip_code: str) -> bool:
+    return bool(street and city and state and zip_code)
+
+
 def lead_to_olc_contact(lead: Lead, *, user_id: str | None = None) -> dict[str, Any]:
     """Build an OLC contact dict from a lead."""
     mailing_street = _clean(getattr(lead, 'mailing_address', None))
@@ -34,10 +38,19 @@ def lead_to_olc_contact(lead: Lead, *, user_id: str | None = None) -> dict[str, 
     property_state = _clean(getattr(lead, 'property_state', None))
     property_zip = _clean(getattr(lead, 'property_zip', None))
 
-    address1 = mailing_street or property_street
-    city = mailing_city or property_city
-    state = mailing_state or property_state
-    zip_code = mailing_zip or property_zip
+    if _complete_address(mailing_street, mailing_city, mailing_state, mailing_zip):
+        address1, city, state, zip_code = (
+            mailing_street, mailing_city, mailing_state, mailing_zip,
+        )
+    elif _complete_address(property_street, property_city, property_state, property_zip):
+        address1, city, state, zip_code = (
+            property_street, property_city, property_state, property_zip,
+        )
+    else:
+        address1 = mailing_street or property_street
+        city = mailing_city or property_city
+        state = mailing_state or property_state
+        zip_code = mailing_zip or property_zip
 
     phone = None
     for slot in ('phone_1', 'phone_2', 'phone_3', 'phone_4', 'phone_5', 'phone_6', 'phone_7'):

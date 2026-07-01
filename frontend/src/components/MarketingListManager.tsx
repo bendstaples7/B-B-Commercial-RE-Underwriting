@@ -236,9 +236,11 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
       if (dialogMode === 'create') {
         await leadService.createMarketingList({ name: trimmedName })
         setSuccessMessage(`List "${trimmedName}" created.`)
+        setShowMailQueueLink(false)
       } else if (dialogMode === 'rename' && dialogListId !== null) {
         await leadService.renameMarketingList(dialogListId, trimmedName)
         setSuccessMessage(`List renamed to "${trimmedName}".`)
+        setShowMailQueueLink(false)
         // Update selected list name if it's the one being renamed
         if (selectedList?.id === dialogListId) {
           setSelectedList((prev) => (prev ? { ...prev, name: trimmedName } : prev))
@@ -256,6 +258,7 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
           filter_criteria: Object.keys(criteria).length > 0 ? criteria : undefined,
         })
         setSuccessMessage(`List "${trimmedName}" created from filters.`)
+        setShowMailQueueLink(false)
       }
       setDialogOpen(false)
       await fetchLists()
@@ -278,6 +281,7 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
     try {
       await leadService.deleteMarketingList(deleteListId)
       setSuccessMessage(`List "${deleteListName}" deleted.`)
+      setShowMailQueueLink(false)
       if (selectedList?.id === deleteListId) {
         setSelectedList(null)
         setMembers([])
@@ -380,7 +384,7 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
           <Button
             variant="outlined"
             size="small"
-            disabled={enqueueing || members.length === 0}
+            disabled={enqueueing || membersLoading || members.length === 0}
             onClick={handleAddPageToMailQueue}
           >
             {enqueueing ? 'Adding…' : 'Add page to mail queue'}

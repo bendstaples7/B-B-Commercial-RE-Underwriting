@@ -23,7 +23,7 @@ export const MailQueuePanel: React.FC = () => {
     )
   }
 
-  if (error) {
+  if (error && !data) {
     return (
       <Alert
         severity="error"
@@ -40,6 +40,19 @@ export const MailQueuePanel: React.FC = () => {
 
   return (
     <Box>
+      {error ? (
+        <Alert
+          severity="error"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" onClick={() => refetch()} disabled={isFetching}>
+              Retry
+            </Button>
+          }
+        >
+          {errorMessage}
+        </Alert>
+      ) : null}
       <MailBatchSummary title="Mail Queue" queueData={data} />
       <MailQueueStagedTable
         items={data?.items ?? []}

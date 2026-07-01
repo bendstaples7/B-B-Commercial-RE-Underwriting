@@ -6,6 +6,7 @@ from functools import wraps
 
 from flask import jsonify
 from marshmallow import ValidationError
+from werkzeug.exceptions import BadRequest, HTTPException
 
 from app.exceptions import MailQueueError, RealEstateAnalysisException
 
@@ -19,6 +20,10 @@ def handle_mail_api_errors(f):
             return f(*args, **kwargs)
         except ValidationError as e:
             return jsonify({'error': 'Validation error', 'details': e.messages}), 400
+        except BadRequest as e:
+            return jsonify({'error': 'Invalid request', 'message': e.description}), 400
+        except HTTPException as e:
+            return jsonify({'error': 'Invalid request', 'message': e.description}), e.code
         except MailQueueError as e:
             return jsonify({'error': 'Mail queue error', 'message': e.message}), e.status_code
         except RealEstateAnalysisException as e:

@@ -161,6 +161,7 @@ def _sibling_mailer_history_dates(leads: list[Lead]) -> dict[int, datetime | Non
             lead_addr[lead.id] = addr_key
 
     owner_user_ids = {lead.owner_user_id for lead in leads if lead.owner_user_id}
+    has_null_owner = any(lead.owner_user_id is None for lead in leads)
 
     sibling_leads: dict[int, Lead] = {lead.id: lead for lead in leads}
     if pin_digits:
@@ -168,6 +169,8 @@ def _sibling_mailer_history_dates(leads: list[Lead]) -> dict[int, datetime | Non
         q = Lead.query.filter(or_(*pin_clauses))
         if owner_user_ids:
             q = q.filter(Lead.owner_user_id.in_(owner_user_ids))
+        elif has_null_owner:
+            q = q.filter(Lead.owner_user_id.is_(None))
         for row in q.all():
             sibling_leads[row.id] = row
 

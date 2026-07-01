@@ -75,9 +75,7 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
                 </TableCell>
                 <TableCell>{formatLastMailedDate(item.last_mailed_at)}</TableCell>
                 <TableCell>{formatLastSaleDate(item.last_sale_at)}</TableCell>
-                <TableCell>
-                  {item.created_at ? new Date(item.created_at).toLocaleDateString() : '—'}
-                </TableCell>
+                <TableCell>{formatLastMailedDate(item.created_at)}</TableCell>
                 <TableCell align="right">
                   <IconButton
                     size="small"
