@@ -5,7 +5,7 @@ Pure functions — no DB access. Used by LeadScoringEngine for dimension breakdo
 import json
 import logging
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from app.models.lead import Lead
@@ -152,6 +152,74 @@ def effective_acquisition_date(lead: Lead) -> Optional[date]:
     if lead.acquisition_date:
         return lead.acquisition_date
     return parse_sale_date_string(getattr(lead, 'most_recent_sale', None))
+
+
+RECENT_SALE_SUPPRESSION_DAYS = 730  # 24 months
+
+
+def is_recently_sold(lead: Lead, days: int = RECENT_SALE_SUPPRESSION_DAYS) -> bool:
+    """True when the lead's effective sale/acquisition date is within *days*."""
+    sale = effective_acquisition_date(lead)
+    if sale is None or sale > date.today():
+        return False
+    return (date.today() - sale).days < days
+
+
+def format_last_sale_at(lead: Lead) -> str | None:
+    """ISO date string for the lead's most recent sale, if known."""
+    sale = effective_acquisition_date(lead)
+    if sale is None:
+        return None
+    return sale.isoformat()
+
+
+def effective_acquisition_date_sql():
+    """SQL expression matching effective_acquisition_date() on PostgreSQL."""
+    from sqlalchemy import Date, Integer, case, cast
+    from sqlalchemy.sql import func
+
+    mrs = Lead.most_recent_sale
+    parts = func.regexp_match(mrs, r'(\d{1,2})/(\d{1,2})/(\d{2,4})')
+    month = cast(parts[1], Integer)
+    day = cast(parts[2], Integer)
+    year_raw = cast(parts[3], Integer)
+    year = case(
+        (year_raw < 100, case((year_raw >= 50, year_raw + 1900), else_=year_raw + 2000)),
+        else_=year_raw,
+    )
+    us_date = func.make_date(year, month, day)
+
+    dash_parts = func.regexp_match(mrs, r'(\d{1,2})-(\d{1,2})-(\d{2,4})')
+    dash_month = cast(dash_parts[1], Integer)
+    dash_day = cast(dash_parts[2], Integer)
+    dash_year_raw = cast(dash_parts[3], Integer)
+    dash_year = case(
+        (dash_year_raw < 100, case((dash_year_raw >= 50, dash_year_raw + 1900), else_=dash_year_raw + 2000)),
+        else_=dash_year_raw,
+    )
+    dash_date = func.make_date(dash_year, dash_month, dash_day)
+
+    parsed = case(
+        (mrs.op('~')(r'^\d{4}-\d{2}-\d{2}'), cast(func.substring(mrs, 1, 10), Date)),
+        (mrs.op('~')(r'\d{1,2}/\d{1,2}/\d{2,4}'), us_date),
+        (mrs.op('~')(r'\d{1,2}-\d{1,2}-\d{2,4}'), dash_date),
+        else_=None,
+    )
+    return func.coalesce(Lead.acquisition_date, parsed)
+
+
+def sql_not_recently_sold(cutoff: date | None = None):
+    """SQL filter: lead is outside the recent-sale suppression window."""
+    from sqlalchemy import or_
+
+    if cutoff is None:
+        cutoff = date.today() - timedelta(days=RECENT_SALE_SUPPRESSION_DAYS)
+    effective = effective_acquisition_date_sql()
+    return or_(
+        effective.is_(None),
+        effective > date.today(),
+        effective <= cutoff,
+    )
 
 
 def calculate_residential_score(lead: Lead) -> dict:

@@ -942,6 +942,7 @@ def log_call(lead_id: int):
         contact_phone_id=data.get('contact_phone_id'),
         phone_number=data.get('phone_number'),
         phone_label=data.get('phone_label'),
+        mail_campaign_id=data.get('mail_campaign_id'),
     )
     return jsonify(_serialize_timeline_entry(entry)), 201
 

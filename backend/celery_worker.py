@@ -945,6 +945,24 @@ def generate_backup_export() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Open Letter Connect — direct mail campaigns
+# ---------------------------------------------------------------------------
+
+@celery.task(name='open_letter.submit_campaign', bind=True, max_retries=2)
+def submit_open_letter_campaign(self, campaign_id: int) -> None:
+    """Submit a mail campaign to Open Letter Connect."""
+    from app.tasks.open_letter_tasks import submit_mail_campaign
+    submit_mail_campaign(campaign_id)
+
+
+@celery.task(name='open_letter.sync_campaign_analytics')
+def sync_open_letter_campaign_analytics(campaign_id: int) -> None:
+    """Sync delivery/scan analytics from OLC for a campaign."""
+    from app.tasks.open_letter_tasks import sync_mail_campaign_analytics
+    sync_mail_campaign_analytics(campaign_id)
+
+
+# ---------------------------------------------------------------------------
 # HubSpot Webhook Processing Tasks
 # ---------------------------------------------------------------------------
 
@@ -1217,6 +1235,8 @@ REQUIRED_TASKS = {
     'hubspot.extract_signals',
     'hubspot.rescore_leads',
     'hubspot.generate_backup',
+    'open_letter.submit_campaign',
+    'open_letter.sync_campaign_analytics',
     'hubspot.post_import_pipeline',
     'hubspot.rescore_only',
     'hubspot.scheduled_engagement_sync',

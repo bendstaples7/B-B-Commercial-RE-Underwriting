@@ -3,6 +3,7 @@
 Modes:
   unit (default) — bare building vs unit suffix (e.g. "2553 N Drake" vs "2553 N Drake 1")
   normalized     — same owner + normalized street variants (e.g. "Schiller" vs "Schiller St")
+  pin            — same owner + normalized county assessor PIN (dash format variants)
 
 Run from the backend/ directory:
     python scripts/merge_duplicate_leads.py [--mode unit|normalized] [--dry-run]
@@ -26,6 +27,7 @@ from app.services.lead_merge_utils import (  # noqa: E402
     owner_group_key,
     pick_merge_winner,
 )
+from app.services.plugins.pin_utils import normalize_pin_for_socrata  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
@@ -79,7 +81,7 @@ COPYABLE_FIELDS = [
     'bedrooms', 'bathrooms', 'square_footage', 'lot_size', 'year_built',
     'units', 'units_allowed', 'zoning',
     'most_recent_sale', 'owner_2_first_name', 'owner_2_last_name',
-    'address_2', 'returned_addresses', 'up_next_to_mail',
+    'address_2', 'returned_addresses', 'up_next_to_mail', 'mailer_history',
     'lead_score', 'lead_category', 'property_type',
 ]
 
@@ -172,13 +174,18 @@ def _merge_loser_into_winner(cur, winner: dict, loser: dict) -> None:
     loser_row = cur.fetchone()
 
     if winner_row and loser_row:
+        from psycopg2.extras import Json
+
         updates = {}
         for field in COPYABLE_FIELDS:
             if field in winner_row and field in loser_row:
                 w_val = winner_row[field]
                 l_val = loser_row[field]
                 if (w_val is None or w_val == '') and l_val not in (None, ''):
-                    updates[field] = l_val
+                    if field == 'mailer_history':
+                        updates[field] = Json(l_val)
+                    else:
+                        updates[field] = l_val
 
         if updates:
             set_clause = ', '.join(f'"{k}" = %s' for k in updates)
@@ -248,6 +255,21 @@ def _find_dedup_merge_groups(rows: list[dict]) -> list[list[dict]]:
     return [members for members in buckets.values() if len(members) >= 2]
 
 
+def _find_pin_merge_groups(rows: list[dict]) -> list[list[dict]]:
+    """Group leads with the same normalized county assessor PIN."""
+    buckets: dict[tuple, list[dict]] = defaultdict(list)
+    for row in rows:
+        pin = (row.get('county_assessor_pin') or '').strip()
+        if not pin:
+            continue
+        pin_digits = normalize_pin_for_socrata(pin)
+        if not pin_digits:
+            continue
+        key = (row.get('owner_user_id'), pin_digits)
+        buckets[key].append(dict(row))
+    return [members for members in buckets.values() if len(members) >= 2]
+
+
 def run(dry_run: bool = False, mode: str = 'unit'):
     import psycopg2
     import psycopg2.extras
@@ -263,21 +285,33 @@ def run(dry_run: bool = False, mode: str = 'unit'):
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     try:
-        if mode in ('normalized', 'dedup'):
-            cur.execute("""
-                SELECT id, owner_first_name, owner_last_name, property_street,
-                       owner_user_id, lead_status, has_phone, has_email,
-                       last_hubspot_sync_at
-                FROM leads
-                WHERE owner_first_name IS NOT NULL AND owner_first_name != ''
-                  AND owner_last_name  IS NOT NULL AND owner_last_name  != ''
-                  AND property_street  IS NOT NULL AND property_street  != ''
-            """)
+        if mode in ('normalized', 'dedup', 'pin'):
+            if mode == 'pin':
+                cur.execute("""
+                    SELECT id, owner_first_name, owner_last_name, property_street,
+                           owner_user_id, lead_status, has_phone, has_email,
+                           last_hubspot_sync_at, county_assessor_pin
+                    FROM leads
+                    WHERE county_assessor_pin IS NOT NULL AND county_assessor_pin != ''
+                """)
+            else:
+                cur.execute("""
+                    SELECT id, owner_first_name, owner_last_name, property_street,
+                           owner_user_id, lead_status, has_phone, has_email,
+                           last_hubspot_sync_at
+                    FROM leads
+                    WHERE owner_first_name IS NOT NULL AND owner_first_name != ''
+                      AND owner_last_name  IS NOT NULL AND owner_last_name  != ''
+                      AND property_street  IS NOT NULL AND property_street  != ''
+                """)
             rows = cur.fetchall()
             confirmed_hs_ids = _fetch_confirmed_hubspot_lead_ids(cur)
             if mode == 'dedup':
                 merge_groups = _find_dedup_merge_groups(rows)
                 label = 'dedup-key'
+            elif mode == 'pin':
+                merge_groups = _find_pin_merge_groups(rows)
+                label = 'pin'
             else:
                 merge_groups = _find_normalized_merge_groups(rows)
                 label = 'normalized'
@@ -367,9 +401,9 @@ if __name__ == '__main__':
     parser.add_argument('--dry-run', action='store_true', help='Preview without making changes')
     parser.add_argument(
         '--mode',
-        choices=['unit', 'normalized', 'dedup'],
+        choices=['unit', 'normalized', 'dedup', 'pin'],
         default='unit',
-        help='Merge mode: unit, normalized (prefix cluster), or dedup (DB identity key)',
+        help='Merge mode: unit, normalized, dedup, or pin (normalized assessor PIN)',
     )
     args = parser.parse_args()
     run(dry_run=args.dry_run, mode=args.mode)

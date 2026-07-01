@@ -36,6 +36,8 @@ const mockCounts: QueueCounts = {
   needs_review: 1,
   do_not_contact: 4,
   missing_property_match: 6,
+  ready_to_mail: 2,
+  mail_candidates: 8,
 }
 
 // ---------------------------------------------------------------------------

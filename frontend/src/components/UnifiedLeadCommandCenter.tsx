@@ -30,6 +30,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import BarChartIcon from '@mui/icons-material/BarChart'
 import { commandCenterService, leadTaskService, leadScoreService } from '@/services/api'
 import { leadService } from '@/services/leadApi'
+import openLetterService from '@/services/openLetterApi'
 import { deriveQueueContext } from '@/utils/deriveQueueContext'
 import { parseLogActivityParam } from '@/utils/queueLogNavigation'
 import { ALL_LEAD_STATUSES } from '@/constants/leadStatuses'
@@ -445,7 +446,12 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const showLead = !commandCenterLoading && !leadLoading && !commandCenterError
   const [activityModal, setActivityModal] = useState<ActivityLogType | null>(null)
   const [highlightEntryId, setHighlightEntryId] = useState<number | null>(null)
-  const [activitySnackbar, setActivitySnackbar] = useState<{ open: boolean; message: string }>({
+  const [activitySnackbar, setActivitySnackbar] = useState<{
+    open: boolean
+    message: string
+    linkTo?: string
+    linkLabel?: string
+  }>({
     open: false,
     message: '',
   })
@@ -478,6 +484,19 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         tasksPanelRef.current?.scrollIntoView()
         window.setTimeout(() => tasksPanelRef.current?.openCreateForm(), 300)
         return
+      case 'add_to_mail_batch': {
+        const result = await openLetterService.enqueue([leadId])
+        setActivitySnackbar({
+          open: true,
+          message: `Added to mail queue (${result.queued_count}/${result.batch_minimum})`,
+          linkTo: '/queues/ready-to-mail',
+          linkLabel: 'View batch',
+        })
+        await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+        await queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
+        await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+        return
+      }
       default:
         await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
     }
@@ -638,6 +657,18 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           severity="success"
           onClose={() => setActivitySnackbar((s) => ({ ...s, open: false }))}
           data-testid="activity-success-alert"
+          action={
+            activitySnackbar.linkTo ? (
+              <Button
+                color="inherit"
+                size="small"
+                component={RouterLink}
+                to={activitySnackbar.linkTo}
+              >
+                {activitySnackbar.linkLabel ?? 'View'}
+              </Button>
+            ) : undefined
+          }
         >
           {activitySnackbar.message}
         </Alert>

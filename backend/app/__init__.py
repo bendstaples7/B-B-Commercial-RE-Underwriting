@@ -564,6 +564,12 @@ def create_app(config_name='development'):
     
     from app.controllers.marketing_controller import marketing_bp
     app.register_blueprint(marketing_bp, url_prefix='/api/leads/marketing')
+
+    from app.controllers.open_letter_controller import open_letter_bp
+    app.register_blueprint(open_letter_bp, url_prefix='/api/open-letter')
+
+    from app.controllers.mail_queue_controller import mail_queue_bp
+    app.register_blueprint(mail_queue_bp, url_prefix='/api/mail-queue')
     
     from app.controllers.condo_filter_controller import condo_filter_bp
     app.register_blueprint(condo_filter_bp, url_prefix='/api/condo-filter')

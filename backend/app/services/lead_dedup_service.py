@@ -17,6 +17,7 @@ from app.services.lead_merge_utils import (
     streets_match_normalized,
     winner_sort_key,
 )
+from app.services.plugins.pin_utils import normalize_pin_for_socrata
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ COPYABLE_FIELDS = [
     'bedrooms', 'bathrooms', 'square_footage', 'lot_size', 'year_built',
     'units', 'units_allowed', 'zoning',
     'most_recent_sale', 'owner_2_first_name', 'owner_2_last_name',
-    'address_2', 'returned_addresses', 'up_next_to_mail',
+    'address_2', 'returned_addresses', 'up_next_to_mail', 'mailer_history',
     'lead_score', 'lead_category', 'property_type',
 ]
 
@@ -71,6 +72,14 @@ def _owner_name_filters(
     return query
 
 
+def _pin_digits_sql():
+    return func.replace(
+        func.replace(func.coalesce(Lead.county_assessor_pin, ''), '-', ''),
+        ' ',
+        '',
+    )
+
+
 def find_lead_by_identity(
     *,
     owner_user_id: Optional[str] = None,
@@ -82,7 +91,8 @@ def find_lead_by_identity(
     """Find an existing lead by PIN or owner + building-level street identity."""
     pin = (county_assessor_pin or '').strip()
     if pin:
-        q = Lead.query.filter(Lead.county_assessor_pin == pin)
+        pin_digits = normalize_pin_for_socrata(pin)
+        q = Lead.query.filter(_pin_digits_sql() == pin_digits)
         if owner_user_id:
             q = q.filter(Lead.owner_user_id == owner_user_id)
         hit = q.first()

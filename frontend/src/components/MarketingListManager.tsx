@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import { Link as RouterLink } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   Box,
   Paper,
@@ -39,6 +41,7 @@ import type {
   OutreachStatus,
 } from '@/types'
 import { leadService } from '@/services/leadApi'
+import openLetterService from '@/services/openLetterApi'
 
 const OUTREACH_STATUS_OPTIONS: { value: OutreachStatus; label: string }[] = [
   { value: 'not_contacted' as OutreachStatus, label: 'Not Contacted' },
@@ -85,7 +88,8 @@ const formatDate = (dateStr: string | null): string => {
  *
  * Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6
  */
-export const MarketingListManager: React.FC = () => {
+export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedded = false }) => {
+  const queryClient = useQueryClient()
   // ---------------------------------------------------------------------------
   // List-level state
   // ---------------------------------------------------------------------------
@@ -126,9 +130,11 @@ export const MarketingListManager: React.FC = () => {
   const [membersTotalPages, setMembersTotalPages] = useState(0)
   const [membersTotal, setMembersTotal] = useState(0)
   const [statusUpdating, setStatusUpdating] = useState<number | null>(null)
+  const [enqueueing, setEnqueueing] = useState(false)
 
   // Success feedback
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [showMailQueueLink, setShowMailQueueLink] = useState(false)
 
   // ---------------------------------------------------------------------------
   // Data fetching
@@ -330,18 +336,40 @@ export const MarketingListManager: React.FC = () => {
     setSuccessMessage(null)
   }
 
+  const handleAddPageToMailQueue = async () => {
+    if (!selectedList || members.length === 0) return
+    setEnqueueing(true)
+    setSuccessMessage(null)
+    setShowMailQueueLink(false)
+    try {
+      const result = await openLetterService.enqueue(members.map((m) => m.lead_id))
+      setSuccessMessage(
+        `Added ${result.added} to mail queue (${result.queued_count}/${result.batch_minimum}).`,
+      )
+      setShowMailQueueLink(true)
+      await queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
+      await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+      await queryClient.invalidateQueries({ queryKey: ['queue-mail-candidates'] })
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to add to mail queue.'
+      setMembersError(message)
+    } finally {
+      setEnqueueing(false)
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Render: member detail view
   // ---------------------------------------------------------------------------
 
   if (selectedList) {
     return (
-      <Box component="section" aria-labelledby="member-list-heading" sx={{ px: { xs: 1, sm: 2 } }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+      <Box component="section" aria-labelledby="member-list-heading" sx={{ px: embedded ? 0 : { xs: 1, sm: 2 } }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, flexWrap: 'wrap' }}>
           <IconButton onClick={handleBackToLists} aria-label="Back to marketing lists" size="small">
             <ArrowBackIcon />
           </IconButton>
-          <Box>
+          <Box sx={{ flex: 1 }}>
             <Typography variant="h5" id="member-list-heading" component="h2">
               {selectedList.name}
             </Typography>
@@ -349,11 +377,40 @@ export const MarketingListManager: React.FC = () => {
               {membersTotal} member{membersTotal !== 1 ? 's' : ''}
             </Typography>
           </Box>
+          <Button
+            variant="outlined"
+            size="small"
+            disabled={enqueueing || members.length === 0}
+            onClick={handleAddPageToMailQueue}
+          >
+            {enqueueing ? 'Adding…' : 'Add page to mail queue'}
+          </Button>
         </Box>
 
         {membersError && (
           <Alert severity="error" sx={{ mb: 2 }} role="alert" onClose={() => setMembersError(null)}>
             {membersError}
+          </Alert>
+        )}
+
+        {successMessage && (
+          <Alert
+            severity="success"
+            sx={{ mb: 2 }}
+            role="status"
+            onClose={() => {
+              setSuccessMessage(null)
+              setShowMailQueueLink(false)
+            }}
+            action={
+              showMailQueueLink ? (
+                <Button color="inherit" size="small" component={RouterLink} to="/queues/ready-to-mail">
+                  View batch
+                </Button>
+              ) : undefined
+            }
+          >
+            {successMessage}
           </Alert>
         )}
 
@@ -510,10 +567,10 @@ export const MarketingListManager: React.FC = () => {
   // ---------------------------------------------------------------------------
 
   return (
-    <Box component="section" aria-labelledby="marketing-lists-heading" sx={{ px: { xs: 1, sm: 2 } }}>
+    <Box component="section" aria-labelledby="marketing-lists-heading" sx={{ px: embedded ? 0 : { xs: 1, sm: 2 } }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography variant="h5" id="marketing-lists-heading" component="h2">
-          Marketing Lists
+          {embedded ? 'Marketing Lists' : 'Outreach Lists'}
         </Typography>
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Button
@@ -542,7 +599,22 @@ export const MarketingListManager: React.FC = () => {
       )}
 
       {successMessage && (
-        <Alert severity="success" sx={{ mb: 2 }} role="status" onClose={() => setSuccessMessage(null)}>
+        <Alert
+          severity="success"
+          sx={{ mb: 2 }}
+          role="status"
+          onClose={() => {
+            setSuccessMessage(null)
+            setShowMailQueueLink(false)
+          }}
+          action={
+            showMailQueueLink ? (
+              <Button color="inherit" size="small" component={RouterLink} to="/queues/ready-to-mail">
+                View batch
+              </Button>
+            ) : undefined
+          }
+        >
           {successMessage}
         </Alert>
       )}

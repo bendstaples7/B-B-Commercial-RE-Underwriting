@@ -346,6 +346,33 @@ class HubSpotAuthenticationError(RealEstateAnalysisException):
         }
 
 
+class OpenLetterAuthenticationError(RealEstateAnalysisException):
+    """Open Letter Connect API returned 401/403."""
+
+    def __init__(self, message: str = 'Open Letter authentication failed; check API token'):
+        super().__init__(message, status_code=401)
+        self.payload = {'error_type': 'open_letter_authentication_error'}
+
+
+class OpenLetterRateLimitError(RealEstateAnalysisException):
+    """Open Letter Connect API returned 429."""
+
+    def __init__(self, message: str = 'Open Letter API rate limit exceeded', retry_after: int = None):
+        super().__init__(message, status_code=429)
+        self.payload = {
+            'error_type': 'open_letter_rate_limit_error',
+            'retry_after': retry_after,
+        }
+
+
+class MailQueueError(RealEstateAnalysisException):
+    """Mail queue business rule violation."""
+
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message, status_code=status_code)
+        self.payload = {'error_type': 'mail_queue_error'}
+
+
 class HubSpotRateLimitError(RealEstateAnalysisException):
     """Exception raised when the HubSpot API returns a 429 Too Many Requests response.
 

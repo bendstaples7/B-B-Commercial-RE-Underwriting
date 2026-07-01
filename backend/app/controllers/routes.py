@@ -298,6 +298,32 @@ def health_check():
     except Exception as e:
         checks['celery_worker'] = f'WARN: Celery check failed ({e})'
 
+    # ------------------------------------------------------------------
+    # Check 7: Open Letter / mail queue schema
+    # ------------------------------------------------------------------
+    try:
+        db.session.execute(db.text('SELECT 1 FROM mail_queue_items LIMIT 0'))
+        db.session.execute(db.text('SELECT 1 FROM open_letter_config LIMIT 0'))
+        checks['open_letter_schema'] = 'ok'
+    except Exception as e:
+        checks['open_letter_schema'] = (
+            f'FAIL: mail_queue_items or open_letter_config missing ({e}). '
+            f'Run: flask db upgrade head'
+        )
+        degraded = True
+
+    olc_token = os.environ.get('OPEN_LETTER_API_TOKEN', '').strip()
+    encryption_key = os.environ.get('HUBSPOT_ENCRYPTION_KEY', '').strip()
+    if olc_token and not encryption_key:
+        checks['open_letter_encryption'] = (
+            'FAIL: OPEN_LETTER_API_TOKEN is set but HUBSPOT_ENCRYPTION_KEY is missing'
+        )
+        degraded = True
+    elif olc_token:
+        checks['open_letter_encryption'] = 'ok'
+    else:
+        checks['open_letter_encryption'] = 'skipped (OPEN_LETTER_API_TOKEN not set)'
+
     status = 'degraded' if degraded else 'healthy'
     http_status = 503 if degraded else 200
     from flask import current_app
