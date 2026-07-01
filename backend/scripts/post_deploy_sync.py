@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Post-deploy HubSpot sync — dispatch on the VPS after every deploy.
 
-Queues the post-import pipeline (matching → enrich → activities → signals →
-rescore) via Celery when workers are live, otherwise a detached subprocess.
-Does not block the deploy SSH session — sync runs asynchronously.
+Queues tiered post-deploy work (skip, rescore-only, or full pipeline) via
+Celery when workers are live, otherwise a detached subprocess. Does not
+block the deploy SSH session — sync runs asynchronously.
 
 Usage (from backend/ on the VPS):
     FLASK_ENV=production python3.11 scripts/post_deploy_sync.py
@@ -22,36 +22,60 @@ logger = logging.getLogger(__name__)
 
 
 def dispatch_post_deploy_sync(app) -> str:
-    """Queue post-import pipeline work without blocking. Returns dispatch mode."""
+    """Queue tiered post-deploy sync without blocking. Returns dispatch mode."""
     from app.models.hubspot_config import HubSpotConfig
+    from app.services.deploy_sync_policy import (
+        load_changed_paths_for_deploy,
+        resolve_deploy_sync_from_manifest,
+        should_upgrade_dangling_to_full_pipeline,
+    )
     from app.services.hubspot_pipeline_runner import (
         count_dangling_confirmed_lead_matches,
-        dispatch_post_import_pipeline,
+        dispatch_tiered_post_deploy_sync,
     )
+
+    paths_file = os.environ.get('DEPLOY_CHANGED_PATHS_FILE')
 
     with app.app_context():
         if HubSpotConfig.query.first() is None:
             logger.info('HubSpot not configured — skipping post-deploy sync')
             return 'skipped'
 
-        dangling = count_dangling_confirmed_lead_matches()
+        sync_mode = resolve_deploy_sync_from_manifest(paths_file)
+        changed_paths, _unknown = load_changed_paths_for_deploy(paths_file)
         logger.info(
-            'Post-deploy sync dispatch (dangling confirmed lead matches: %d)',
-            dangling,
+            'Post-deploy sync: mode=%s changed_paths=%d',
+            sync_mode,
+            len(changed_paths),
         )
 
-        mode = dispatch_post_import_pipeline(app, run_ids=None)
-        logger.info('Post-import pipeline dispatched via %s', mode)
+        dangling = count_dangling_confirmed_lead_matches()
+        if dangling > 0 and sync_mode == 'skip':
+            if should_upgrade_dangling_to_full_pipeline():
+                sync_mode = 'full_pipeline'
+                logger.info(
+                    'Post-deploy sync upgraded to full_pipeline '
+                    '(dangling confirmed lead matches: %d)',
+                    dangling,
+                )
+            else:
+                logger.info(
+                    'Dangling confirmed lead matches (%d) — deferring full pipeline '
+                    '(recent pipeline within cooldown)',
+                    dangling,
+                )
+        elif dangling > 0:
+            logger.info(
+                'Post-deploy sync (dangling confirmed lead matches: %d)',
+                dangling,
+            )
 
-        try:
-            from celery import current_app as celery_app  # noqa: PLC0415
+        mode = dispatch_tiered_post_deploy_sync(app, sync_mode)
+        logger.info('Post-deploy sync dispatched via %s (mode=%s)', mode, sync_mode)
 
-            celery_app.send_task('hubspot.scheduled_engagement_sync')
-            logger.info('Queued engagement sync for fresh HubSpot data')
-        except Exception as exc:
-            logger.warning(
-                'Celery unavailable — skipped engagement fetch (%s)',
-                exc,
+        if sync_mode == 'skip':
+            logger.info(
+                'Skipped engagement sync — hourly hubspot-scheduled-engagement-sync covers catch-up',
             )
 
         return mode

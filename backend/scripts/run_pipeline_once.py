@@ -14,13 +14,22 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
 
 
+def _parse_payload(raw: object) -> tuple[list, str]:
+    if isinstance(raw, dict):
+        return raw.get('run_ids') or [], raw.get('mode', 'full')
+    if isinstance(raw, list):
+        return raw, 'full'
+    return [], 'full'
+
+
 def main() -> int:
     """Entry point for detached post-import pipeline subprocess execution."""
     backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if backend_dir not in sys.path:
         sys.path.insert(0, backend_dir)
 
-    run_ids = json.loads(sys.argv[1]) if len(sys.argv) > 1 else []
+    raw = json.loads(sys.argv[1]) if len(sys.argv) > 1 else []
+    run_ids, mode = _parse_payload(raw)
 
     os.environ.setdefault('FLASK_ENV', 'production')
     os.environ['PIPELINE_SUBPROCESS'] = '1'
@@ -30,7 +39,7 @@ def main() -> int:
 
     app = create_app('production')
     try:
-        run_pipeline_after_imports(app, run_ids or None)
+        run_pipeline_after_imports(app, run_ids or None, mode=mode)
         return 0
     except Exception as exc:
         logger.error("Detached pipeline run failed: %s", exc, exc_info=True)

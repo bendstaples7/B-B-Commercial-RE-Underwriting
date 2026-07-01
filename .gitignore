@@ -29,6 +29,8 @@ instance/
 
 # Testing
 .pytest_cache/
+backend/pytest_full.txt
+backend/pytest_results.txt
 .hypothesis/
 .coverage
 htmlcov/

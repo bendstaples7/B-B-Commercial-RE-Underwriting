@@ -725,6 +725,7 @@ def run_hubspot_matching(run_id: int = None) -> None:
         from app import db
         from app.models import HubSpotDeal, HubSpotContact, HubSpotCompany, HubSpotMatch, Lead
         from app.services.hubspot_matcher_service import HubSpotMatcherService
+        from app.services.hubspot_pipeline_runner import note_pipeline_affected_leads
 
         matcher = HubSpotMatcherService()
 
@@ -816,8 +817,25 @@ def run_hubspot_matching(run_id: int = None) -> None:
             if deal.hubspot_id in matched_deals:
                 continue
             try:
+                prior = HubSpotMatch.query.filter_by(
+                    hubspot_id=deal.hubspot_id,
+                    hubspot_record_type='deal',
+                ).first()
+                prior_status = prior.status if prior else None
                 matcher.match_deal(deal, stage_label_map=_stage_label_map)
                 db.session.commit()
+                match = HubSpotMatch.query.filter_by(
+                    hubspot_id=deal.hubspot_id,
+                    hubspot_record_type='deal',
+                ).first()
+                if (
+                    match
+                    and match.status == 'confirmed'
+                    and prior_status != 'confirmed'
+                    and match.internal_record_type == 'lead'
+                    and match.internal_record_id
+                ):
+                    note_pipeline_affected_leads([match.internal_record_id])
             except Exception as exc:
                 logger.warning(
                     "run_hubspot_matching: error matching deal hubspot_id=%s: %s",
@@ -831,8 +849,25 @@ def run_hubspot_matching(run_id: int = None) -> None:
             if contact.hubspot_id in matched_contacts:
                 continue
             try:
+                prior = HubSpotMatch.query.filter_by(
+                    hubspot_id=contact.hubspot_id,
+                    hubspot_record_type='contact',
+                ).first()
+                prior_status = prior.status if prior else None
                 matcher.match_contact(contact)
                 db.session.commit()
+                match = HubSpotMatch.query.filter_by(
+                    hubspot_id=contact.hubspot_id,
+                    hubspot_record_type='contact',
+                ).first()
+                if (
+                    match
+                    and match.status == 'confirmed'
+                    and prior_status != 'confirmed'
+                    and match.internal_record_type == 'lead'
+                    and match.internal_record_id
+                ):
+                    note_pipeline_affected_leads([match.internal_record_id])
             except Exception as exc:
                 logger.warning(
                     "run_hubspot_matching: error matching contact hubspot_id=%s: %s",
@@ -928,6 +963,7 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         contact_errors = 0
         contact_refreshed = 0
         action_recomputed = 0
+        enriched_lead_ids: set[int] = set()
 
         # --- Enrich from confirmed deal matches ----------------------------
         confirmed_deal_matches = (
@@ -957,6 +993,7 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                 if enriched:
                     db.session.commit()
                     deal_enriched += 1
+                    enriched_lead_ids.add(lead.id)
                     logger.debug(
                         "run_enrich_leads_from_hubspot: lead_id=%d deal enriched fields=%s",
                         lead.id, enriched,
@@ -995,6 +1032,7 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                 if enriched:
                     db.session.commit()
                     contact_enriched += 1
+                    enriched_lead_ids.add(lead.id)
                     logger.debug(
                         "run_enrich_leads_from_hubspot: lead_id=%d contact enriched fields=%s",
                         lead.id, enriched,
@@ -1060,6 +1098,7 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                     if enriched:
                         db.session.commit()
                         contact_enriched += 1
+                        enriched_lead_ids.add(lead.id)
                         logger.debug(
                             "run_enrich_leads_from_hubspot: lead_id=%d associated contact %s enriched fields=%s",
                             lead.id, cid, enriched,
@@ -1079,6 +1118,7 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                         contact_match.internal_record_id = lead.id
                         contact_match.status = 'confirmed'
                         db.session.commit()
+                        enriched_lead_ids.add(lead.id)
                         logger.debug(
                             "run_enrich_leads_from_hubspot: updated contact match %s -> lead_id=%d",
                             cid, lead.id,
@@ -1136,6 +1176,7 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                     if enriched:
                         db.session.commit()
                         contact_enriched += 1
+                        enriched_lead_ids.add(lead.id)
                     # Update the contact's match record. Promote it to
                     # 'confirmed' (not just back-filling internal_record_id) so
                     # the downstream _resolve_associations() — which only links
@@ -1175,6 +1216,10 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                 )
                 db.session.rollback()
 
+        from app.services.hubspot_pipeline_runner import note_pipeline_affected_leads
+
+        note_pipeline_affected_leads(enriched_lead_ids)
+
         summary = {
             'deal_refreshed': deal_refreshed,
             'deal_enriched': deal_enriched,
@@ -1200,7 +1245,13 @@ def run_sync_hubspot_tasks_for_confirmed_leads(limit: int = 200) -> dict:
     app = create_app()
     with app.app_context():
         from app.services.hubspot_deal_sync_service import HubSpotDealSyncService
-        return HubSpotDealSyncService().sync_all_confirmed_lead_tasks(limit=limit)
+        from app.services.hubspot_pipeline_runner import note_pipeline_affected_leads
+
+        stats = HubSpotDealSyncService().sync_all_confirmed_lead_tasks(limit=limit)
+        affected = stats.get('affected_lead_ids') or []
+        if affected:
+            note_pipeline_affected_leads(affected)
+        return stats
 
 
 # ---------------------------------------------------------------------------
@@ -1239,10 +1290,21 @@ def run_convert_hubspot_activities(run_id: int = None) -> None:
     app = create_app()
     with app.app_context():
         from app import db
-        from app.models import HubSpotEngagement, Interaction, Task
+        from app.models import HubSpotEngagement, Interaction, InteractionAssociation, Task, TaskAssociation
         from app.services.hubspot_activity_converter_service import HubSpotActivityConverterService
 
         converter = HubSpotActivityConverterService()
+        from app.services.hubspot_pipeline_runner import note_pipeline_affected_leads
+
+        def _note_leads_for_interaction(interaction_id: int) -> None:
+            lead_ids = [
+                row[0]
+                for row in db.session.query(InteractionAssociation.target_id)
+                .filter_by(interaction_id=interaction_id, target_type='lead')
+                .all()
+            ]
+            if lead_ids:
+                note_pipeline_affected_leads(lead_ids)
 
         # Build sets of already-converted engagement IDs for fast O(1) lookup
         existing_interaction_ids = {
@@ -1271,6 +1333,16 @@ def run_convert_hubspot_activities(run_id: int = None) -> None:
                     try:
                         if converter.reconcile_task_from_engagement(engagement):
                             converted += 1
+                            task = Task.query.filter_by(hubspot_task_id=eid).first()
+                            if task is not None:
+                                lead_ids = [
+                                    row[0]
+                                    for row in db.session.query(TaskAssociation.target_id)
+                                    .filter_by(task_id=task.id, target_type='lead')
+                                    .all()
+                                ]
+                                if lead_ids:
+                                    note_pipeline_affected_leads(lead_ids)
                         else:
                             skipped += 1
                     except Exception as exc:
@@ -1295,6 +1367,8 @@ def run_convert_hubspot_activities(run_id: int = None) -> None:
                     db.session.add(result)
                     db.session.commit()
                     converted += 1
+                    if hasattr(result, 'id'):
+                        _note_leads_for_interaction(result.id)
                 else:
                     # Unrecognized engagement type — skip silently
                     skipped += 1
@@ -1343,6 +1417,8 @@ def run_convert_hubspot_activities(run_id: int = None) -> None:
                             target_type=assoc['target_type'],
                             target_id=assoc['target_id'],
                         ))
+                        if assoc['target_type'] == 'lead':
+                            note_pipeline_affected_leads([assoc['target_id']])
                 interaction.is_orphaned = False
                 db.session.commit()
                 re_linked += 1
@@ -1557,6 +1633,7 @@ def run_extract_hubspot_signals(run_id: int = None) -> None:
         from app import db
         from app.models import Interaction, InteractionAssociation
         from app.services.hubspot_signal_extractor_service import HubSpotSignalExtractorService
+        from app.services.hubspot_pipeline_runner import note_pipeline_affected_leads
 
         extractor = HubSpotSignalExtractorService()
 
@@ -1605,6 +1682,7 @@ def run_extract_hubspot_signals(run_id: int = None) -> None:
                 # Apply suppression flags for DO_NOT_CONTACT / WRONG_NUMBER signals
                 if signals:
                     extractor.apply_suppression(signals)
+                    note_pipeline_affected_leads([lead_id])
 
                 db.session.commit()
 
@@ -1645,7 +1723,11 @@ def run_extract_hubspot_signals(run_id: int = None) -> None:
 # Task 8: rescore_leads_after_import
 # ---------------------------------------------------------------------------
 
-def run_rescore_leads_after_import(user_id: str = 'default') -> int:
+def run_rescore_leads_after_import(
+    user_id: str = 'default',
+    lead_ids: list[int] | None = None,
+    force_full: bool = False,
+) -> int:
     """Trigger LeadScoringEngine.bulk_rescore() after HubSpot signal extraction.
 
     Passes HubSpot signals to compute_score for each lead so that signal
@@ -1660,9 +1742,31 @@ def run_rescore_leads_after_import(user_id: str = 'default') -> int:
     app = create_app()
     with app.app_context():
         from app.services import LeadScoringEngine
+        from app.services.deploy_sync_policy import (
+            record_scoring_code_hash,
+            scoring_code_changed_since_last_run,
+        )
+        from app.services.hubspot_pipeline_runner import get_pipeline_affected_leads
 
         engine = LeadScoringEngine()
-        rescored = engine.bulk_rescore(user_id)
+        affected = lead_ids if lead_ids is not None else get_pipeline_affected_leads()
+
+        if force_full:
+            rescored = engine.bulk_rescore(user_id)
+        elif affected:
+            rescored = engine.bulk_rescore(user_id, lead_ids=affected)
+        elif scoring_code_changed_since_last_run():
+            logger.info(
+                "run_rescore_leads_after_import: scoring code changed — full rescore fallback",
+            )
+            rescored = engine.bulk_rescore(user_id)
+        else:
+            logger.info(
+                "run_rescore_leads_after_import: no affected leads and scoring unchanged — skip",
+            )
+            return 0
+
+        record_scoring_code_hash()
 
         logger.info(
             "run_rescore_leads_after_import: user_id=%s rescored=%d leads",
