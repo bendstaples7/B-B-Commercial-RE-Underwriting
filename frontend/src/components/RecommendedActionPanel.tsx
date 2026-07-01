@@ -16,18 +16,9 @@ import {
 } from '@mui/material'
 import BlockIcon from '@mui/icons-material/Block'
 import AddTaskIcon from '@mui/icons-material/AddTask'
-import type { RecommendedActionMeta, LeadStatus, LeadTask, CRMRecommendedAction } from '@/types'
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function humanizeValue(value: string): string {
-  return value
-    .replace(/_/g, ' ')
-    .replace(/-/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase())
-}
+import type { RecommendedActionMeta, LeadStatus, LeadTask, CRMRecommendedAction, OutreachContact } from '@/types'
+import { outreachDisplayLabel } from '@/constants/scoringRecommendedActions'
+import { OutreachContactInline, OutreachContactMissingHint } from '@/components/OutreachContactCallout'
 
 // ---------------------------------------------------------------------------
 // Action button definitions per RA type
@@ -46,6 +37,25 @@ const UNIVERSAL_ACTIONS: ActionButton[] = [
   { label: 'Log Note', action: 'log_note' },
   { label: 'Log Email', action: 'log_email', isOutreach: true },
 ]
+
+const METHOD_PRIMARY_ACTIONS: Record<string, string> = {
+  phone: 'log_call',
+  email: 'log_email',
+  direct_mail: 'add_to_mail_batch',
+  text: 'log_call',
+}
+
+function prioritizeButtonsForMethod(
+  buttons: ActionButton[],
+  method?: string | null,
+): ActionButton[] {
+  if (!method) return buttons
+  const primary = METHOD_PRIMARY_ACTIONS[method]
+  if (!primary) return buttons
+  const match = buttons.find((b) => b.action === primary)
+  if (!match) return buttons
+  return [match, ...buttons.filter((b) => b.action !== primary)]
+}
 
 const ACTION_BUTTONS: Record<CRMRecommendedAction, ActionButton[]> = {
   review_now: [
@@ -117,6 +127,8 @@ export interface RecommendedActionPanelProps {
   recommendedAction: RecommendedActionMeta | null
   leadStatus: LeadStatus
   openTasks: LeadTask[]
+  /** When true, show outreach contact inline under the action label */
+  showOutreachContact?: boolean
   onAction: (action: string) => Promise<void>
   onCreateTask?: () => void
 }
@@ -138,6 +150,7 @@ export function RecommendedActionPanel({
   recommendedAction,
   leadStatus,
   openTasks,
+  showOutreachContact = false,
   onAction,
   onCreateTask,
 }: RecommendedActionPanelProps) {
@@ -224,12 +237,13 @@ export function RecommendedActionPanel({
     )
   }
 
-  const { value, label, explanation } = recommendedAction
-  const displayLabel = label ?? humanizeValue(value)
+  const { value, label, explanation, recommended_contact_method: contactMethod, outreach_contact: outreachContact } = recommendedAction
+  const displayLabel = label ?? (value ? outreachDisplayLabel(value, contactMethod) : 'No recommended action')
   const hideRaHeading = value === 'nurture'
   const raButtons = (ACTION_BUTTONS[value] ?? []).filter(
     (btn) => !UNIVERSAL_ACTIONS.some((u) => u.action === btn.action),
   )
+  const prioritizedRaButtons = prioritizeButtonsForMethod(raButtons, contactMethod)
   const hasOpenTasks = openTasks.length > 0
   const showCreateTaskCTA = value === 'create_task' && !hasOpenTasks && typeof onCreateTask === 'function'
 
@@ -260,6 +274,14 @@ export function RecommendedActionPanel({
         >
           {displayLabel}
         </Typography>
+      )}
+
+      {!hideRaHeading && showOutreachContact && outreachContact && (
+        <OutreachContactInline contact={outreachContact} />
+      )}
+
+      {!hideRaHeading && showOutreachContact && !outreachContact && contactMethod && (
+        <OutreachContactMissingHint channel={contactMethod as OutreachContact['channel']} />
       )}
 
       {!hideRaHeading && explanation && (
@@ -301,12 +323,12 @@ export function RecommendedActionPanel({
       )}
 
       {/* Universal quick actions — always available unless DNC blocks outreach */}
-      {renderUniversalActions(raButtons)}
+      {renderUniversalActions(prioritizedRaButtons)}
 
       {/* RA-specific action buttons */}
-      {raButtons.length > 0 && (
+      {prioritizedRaButtons.length > 0 && (
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-          {raButtons.map((btn) => renderActionButton(btn))}
+          {prioritizedRaButtons.map((btn) => renderActionButton(btn))}
         </Stack>
       )}
     </Box>

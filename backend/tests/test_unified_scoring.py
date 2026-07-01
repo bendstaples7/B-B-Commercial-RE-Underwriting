@@ -476,3 +476,30 @@ class TestDefaultWeights:
         assert DEFAULT_WEIGHTS["location_desirability_weight"] == 0.15
         assert DEFAULT_WEIGHTS["data_enrichment_weight"] == 0.20
         assert abs(sum(DEFAULT_WEIGHTS.values()) - 1.0) < 0.001
+
+
+class TestOutreachContactMethod:
+    """Unified engine attaches recommended_contact_method on compute."""
+
+    def test_compute_sets_contact_method_for_outreach(self, app):
+        lead = _make_lead(has_phone=True, has_email=True)
+        lead.lead_status = 'mailing_contacted_interested'
+        lead.has_property_match = True
+        lead.analysis_complete = True
+        lead.is_warm = True
+        lead.follow_up_overdue = False
+
+        engine = LeadScoringEngine()
+        weights = _default_mock_weights()
+
+        with app.app_context(), \
+             patch.object(engine, 'get_weights', return_value=weights), \
+             patch.object(LeadScoringEngine, '_has_recent_email', return_value=False), \
+             patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
+             patch('app.services.lead_scoring_engine._has_overdue_hubspot_task', return_value=False), \
+             patch('app.services.lead_scoring_engine._resolve_crm_flags', return_value=(True, True, True)), \
+             patch.object(LeadScoringEngine, '_score_engagement', return_value=0.0):
+            result = engine.compute(lead, weights)
+
+        assert result.recommended_contact_method == 'phone'
+        assert result.recommended_action == 'call_ready'

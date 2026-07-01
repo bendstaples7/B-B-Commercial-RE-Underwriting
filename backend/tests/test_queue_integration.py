@@ -480,8 +480,8 @@ class TestActionEngineIntegration:
             action = ActionEngineService.compute_recommended_action(lead)
             assert action == 'analyze_property'
 
-    def test_warm_lead_gets_follow_up_now(self, app):
-        """A warm lead with complete data gets recommended_action=follow_up_now."""
+    def test_warm_lead_gets_mail_ready_in_residential_early_stage(self, app):
+        """A warm residential lead in early mailing stages gets mail_ready."""
         with app.app_context():
             lead = _make_lead(app, '4 Action Engine St',
                               lead_status='mailing_no_contact_made',
@@ -491,7 +491,7 @@ class TestActionEngineIntegration:
                               is_warm=True,
                               data_completeness_score=80.0)
             action = ActionEngineService.compute_recommended_action(lead)
-            assert action == 'follow_up_now'
+            assert action == 'mail_ready'
 
     def test_dnc_lead_gets_none(self, app):
         """A do_not_contact lead gets recommended_action=do_not_contact."""

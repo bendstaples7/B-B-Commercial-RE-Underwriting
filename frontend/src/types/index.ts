@@ -415,6 +415,7 @@ export interface PropertySummary {
   score_tier?: 'A' | 'B' | 'C' | 'D' | null
   data_quality_score?: number | null
   recommended_action?: string | null
+  recommended_contact_method?: ContactMethod | null
   top_signal?: string | null
   missing_data?: string[]
   missing_data_count?: number | null
@@ -1092,6 +1093,18 @@ export interface DealListResponse {
 // Property Scoring Types (formerly "Lead Scoring Types")
 // ---------------------------------------------------------------------------
 
+export type ContactMethod = 'phone' | 'email' | 'text' | 'direct_mail'
+
+/** Resolved outreach target (phone, email, or mailing address) for UI callouts. */
+export interface OutreachContact {
+  channel: ContactMethod
+  label: string
+  value: string
+  display: string
+  href?: string | null
+  lines?: string[]
+}
+
 /** Unified recommended action vocabulary (scoring + workflow). */
 export type UnifiedRecommendedAction =
   | 'enrich_data'
@@ -1729,6 +1742,8 @@ export interface LeadTimelineEntry {
 
 export interface RecommendedActionMeta {
   value: CRMRecommendedAction | null;
+  recommended_contact_method?: ContactMethod | null;
+  outreach_contact?: OutreachContact | null;
   label: string | null;
   explanation: string | null;
   signals: Record<string, unknown>;
@@ -1744,6 +1759,9 @@ export interface QueueRow {
   lead_score: number;
   lead_status: LeadStatus;
   recommended_action: CRMRecommendedAction | null;
+  recommended_contact_method?: ContactMethod | null;
+  outreach_action_label?: string | null;
+  outreach_contact?: OutreachContact | null;
   has_property_match: boolean;
   last_contact_date: string | null;
   last_hubspot_sync_at: string | null;
@@ -1808,6 +1826,7 @@ export interface CommandCenterPayload {
   email_4?: string | null;
   email_5?: string | null;
   phones?: LeadPhone[];
+  emails?: string[];
   notes?: string | null;
   lead_score: number;
   lead_status: LeadStatus;
