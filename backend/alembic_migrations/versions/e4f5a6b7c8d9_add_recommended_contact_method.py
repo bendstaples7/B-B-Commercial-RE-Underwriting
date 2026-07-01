@@ -4,7 +4,7 @@ Revision ID: e4f5a6b7c8d9
 Revises: d3e4f5a6b7c8
 Create Date: 2026-06-30
 
-Granular outreach scoring — persist phone / email / text / direct_mail channel.
+Granular outreach scoring ? persist phone / email / text / direct_mail channel.
 """
 from alembic import op
 

@@ -503,3 +503,61 @@ class TestOutreachContactMethod:
 
         assert result.recommended_contact_method == 'phone'
         assert result.recommended_action == 'call_ready'
+
+
+class TestRecentlySoldMailGuard:
+    def test_recent_sale_suppresses_mail_ready(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        def _flags(lead):
+            return True, True, True
+
+        monkeypatch.setattr('app.services.lead_scoring_engine._resolve_crm_flags', _flags)
+        monkeypatch.setattr('app.services.lead_scoring_engine._count_open_tasks', lambda _id: 0)
+        monkeypatch.setattr('app.services.lead_scoring_engine._has_overdue_hubspot_task', lambda _id: False)
+
+        lead = MagicMock()
+        lead.lead_status = 'mailing_no_contact_made'
+        lead.lead_category = 'residential'
+        lead.do_not_contact = False
+        lead.follow_up_overdue = False
+        lead.is_warm = False
+        lead.id = 1
+        lead.property_street = '123 Main St'
+        lead.analysis_complete = True
+        sale = date.today() - timedelta(days=60)
+        lead.acquisition_date = None
+        lead.most_recent_sale = sale.strftime('%m/%d/%Y')
+
+        action, reason, _meta = LeadScoringEngine.evaluate_recommended_action(
+            lead, total_score=85.0, data_quality_score=80.0, score_tier='A',
+        )
+        assert action == 'nurture'
+        assert reason == 'recently_sold'
+
+    def test_tier_b_recently_sold_downgrades_to_nurture(self, monkeypatch):
+        def _flags(lead):
+            return True, True, True
+
+        monkeypatch.setattr('app.services.lead_scoring_engine._resolve_crm_flags', _flags)
+        monkeypatch.setattr('app.services.lead_scoring_engine._count_open_tasks', lambda _id: 0)
+        monkeypatch.setattr('app.services.lead_scoring_engine._has_overdue_hubspot_task', lambda _id: False)
+
+        lead = MagicMock()
+        lead.lead_status = 'mailing_no_contact_made'
+        lead.lead_category = 'residential'
+        lead.do_not_contact = False
+        lead.follow_up_overdue = False
+        lead.is_warm = False
+        lead.id = 2
+        lead.property_street = '456 Oak St'
+        lead.analysis_complete = True
+        sale = date.today() - timedelta(days=60)
+        lead.acquisition_date = None
+        lead.most_recent_sale = sale.strftime('%m/%d/%Y')
+
+        action, reason, _meta = LeadScoringEngine.evaluate_recommended_action(
+            lead, total_score=75.0, data_quality_score=80.0, score_tier='B',
+        )
+        assert action == 'nurture'
+        assert reason == 'recently_sold'

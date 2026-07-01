@@ -64,7 +64,7 @@ const ACTION_BUTTONS: Record<CRMRecommendedAction, ActionButton[]> = {
     { label: 'Create Task', action: 'create_task' },
   ],
   mail_ready: [
-    { label: 'Add to Mail Batch', action: 'add_to_mail_batch', isOutreach: true },
+    { label: 'Add to Mail Queue', action: 'add_to_mail_batch', isOutreach: true },
     { label: 'Log Note', action: 'log_note' },
   ],
   call_ready: [
@@ -99,7 +99,7 @@ const ACTION_BUTTONS: Record<CRMRecommendedAction, ActionButton[]> = {
   ],
   ready_for_outreach: [
     { label: 'Log Call', action: 'log_call', isOutreach: true },
-    { label: 'Add to Mail Batch', action: 'add_to_mail_batch', isOutreach: true },
+    { label: 'Add to Mail Queue', action: 'add_to_mail_batch', isOutreach: true },
     { label: 'Log Note', action: 'log_note', isOutreach: true },
     { label: 'Create Task', action: 'create_task' },
   ],

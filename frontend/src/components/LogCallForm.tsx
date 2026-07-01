@@ -20,6 +20,8 @@ import {
 } from '@mui/material'
 import type { LeadTimelineEntry, LogCallPayload, PropertyContact } from '@/types'
 import { callLogService } from '@/services/api'
+import openLetterService from '@/services/openLetterApi'
+import { useQuery } from '@tanstack/react-query'
 import {
   ContactMethodFields,
   EMPTY_CONTACT_METHOD,
@@ -102,9 +104,16 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
 ) {
   const formRef = useRef<HTMLDivElement>(null)
   const outcomeInputRef = useRef<HTMLInputElement>(null)
+
+  const { data: recentMailCampaigns } = useQuery({
+    queryKey: ['mail-campaigns-for-lead', leadId],
+    queryFn: () => openLetterService.campaignsForLead(leadId),
+  })
+  const mailCampaignOptions = recentMailCampaigns?.campaigns ?? []
   const [outcome, setOutcome] = useState<LogCallPayload['outcome'] | ''>('')
   const [duration, setDuration] = useState('')
   const [notes, setNotes] = useState('')
+  const [mailCampaignId, setMailCampaignId] = useState<number | ''>('')
   const [contactMethod, setContactMethod] = useState<ContactMethodValue>(EMPTY_CONTACT_METHOD)
 
   const [outcomeError, setOutcomeError] = useState<string | null>(null)
@@ -186,6 +195,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
       outcome: outcome as LogCallPayload['outcome'],
       duration_minutes: duration !== '' ? Number(duration) : null,
       notes: notes.trim() || null,
+      mail_campaign_id: mailCampaignId === '' ? null : mailCampaignId,
       ...contactMethodToCallPayload(contactMethod),
     }
 
@@ -210,6 +220,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
       setOutcome('')
       setDuration('')
       setNotes('')
+      setMailCampaignId('')
       setContactMethod(EMPTY_CONTACT_METHOD)
     } catch (err) {
       // Preserve form data on server error — do NOT clear fields
@@ -333,6 +344,30 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
         sx={{ mb: 2 }}
         inputProps={{ 'data-testid': 'call-notes-input' }}
       />
+
+      {mailCampaignOptions.length > 0 && (
+        <FormControl fullWidth sx={{ mb: 2 }} size="small">
+          <InputLabel id="mail-campaign-label">Response to mailer? (optional)</InputLabel>
+          <Select
+            labelId="mail-campaign-label"
+            label="Response to mailer? (optional)"
+            value={mailCampaignId}
+            onChange={(e) =>
+              setMailCampaignId(e.target.value === '' ? '' : Number(e.target.value))
+            }
+          >
+            <MenuItem value="">— Not mail-related —</MenuItem>
+            {mailCampaignOptions.map((c) => (
+              <MenuItem key={c.id} value={c.id}>
+                {c.submitted_at
+                  ? new Date(c.submitted_at).toLocaleDateString()
+                  : 'Campaign'}{' '}
+                — {c.template_name || `Template ${c.template_id}`}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+      )}
 
       <Stack direction="row" spacing={1} justifyContent="flex-end">
         {onCancel && (

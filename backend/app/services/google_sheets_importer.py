@@ -624,7 +624,15 @@ class GoogleSheetsImporter:
         # when last_name is absent (common import pattern from HubSpot/spreadsheet exports)
         self._normalize_name_fields(cleaned)
 
+        pin = cleaned.get('county_assessor_pin')
+        if pin:
+            from app.services.plugins.pin_utils import format_pin_for_storage
+            cleaned['county_assessor_pin'] = format_pin_for_storage(str(pin))
+
         return ValidationResult(valid=True, cleaned_data=cleaned, errors=warnings)
+
+    @staticmethod
+    def _normalize_name_fields(cleaned: dict) -> None:
         """Split owner_first_name into first + last when owner_last_name is absent.
 
         Mutates cleaned in-place. Also applies the same logic for owner_2 names.

@@ -65,7 +65,9 @@ def property_equity_score(lead: Lead, max_points: float = 25.0) -> float:
 
 def ownership_duration_score(lead: Lead, max_points: float = 15.0) -> float:
     """Score based on how long the owner has held the property."""
-    acquisition = safe_attr(lead, "acquisition_date")
+    from app.services.scoring_rubric import effective_acquisition_date
+
+    acquisition = effective_acquisition_date(lead)
     if acquisition is None:
         return 0.0
 

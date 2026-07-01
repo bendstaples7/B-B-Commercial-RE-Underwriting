@@ -322,10 +322,24 @@ class LeadScoringEngine:
         open_tasks = _count_open_tasks(lead_id) if isinstance(lead_id, int) else 0
 
         if score_tier == "A" and data_quality_score >= 70:
+            if rubric.is_recently_sold(lead):
+                sale = rubric.effective_acquisition_date(lead)
+                days_since = (date.today() - sale).days if sale else None
+                return 'nurture', 'recently_sold', {
+                    'most_recent_sale': getattr(lead, 'most_recent_sale', None),
+                    'days_since_sale': days_since,
+                }
             return 'mail_ready', 'tier_a_high_quality', {
                 'score_tier': score_tier, 'data_quality_score': data_quality_score,
             }
         if score_tier == "B" and data_quality_score >= 70:
+            if rubric.is_recently_sold(lead):
+                sale = rubric.effective_acquisition_date(lead)
+                days_since = (date.today() - sale).days if sale else None
+                return 'nurture', 'recently_sold', {
+                    'most_recent_sale': getattr(lead, 'most_recent_sale', None),
+                    'days_since_sale': days_since,
+                }
             return 'review_now', 'tier_b_high_quality', {
                 'score_tier': score_tier, 'data_quality_score': data_quality_score,
             }

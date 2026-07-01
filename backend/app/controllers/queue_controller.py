@@ -5,6 +5,7 @@ from functools import wraps
 from flask import Blueprint, g, jsonify, request
 from marshmallow import ValidationError
 
+from app.services.mail_queue_service import MailQueueService
 from app.services.queue_service import QueueService
 
 logger = logging.getLogger(__name__)
@@ -59,8 +60,17 @@ def _parse_pagination_params():
 @queue_bp.route('/counts', methods=['GET'])
 @handle_errors
 def get_counts():
-    """GET /api/queues/counts — returns badge counts for all 7 queues."""
-    counts = _get_queue_service().get_counts()
+    """GET /api/queues/counts — returns badge counts for all queues."""
+    user_id = getattr(g, 'user_id', None)
+    svc = _get_queue_service()
+    counts = svc.get_counts()
+    if user_id and user_id != 'anonymous':
+        mail = MailQueueService().get_summary(user_id)
+        counts['ready_to_mail'] = mail['queued_count']
+        counts['mail_candidates'] = svc.count_mail_candidates(user_id)
+    else:
+        counts['ready_to_mail'] = 0
+        counts['mail_candidates'] = 0
     return jsonify(counts), 200
 
 
@@ -124,4 +134,19 @@ def get_missing_property_match():
     """GET /api/queues/missing-property-match — paginated Missing Property Match queue."""
     page, per_page, sort_by, sort_order = _parse_pagination_params()
     rows, total = _get_queue_service().get_missing_property_match(page, per_page, sort_by, sort_order)
+    return jsonify({'rows': rows, 'total': total, 'page': page, 'per_page': per_page}), 200
+
+
+@queue_bp.route('/mail-candidates', methods=['GET'])
+@handle_errors
+def get_mail_candidates():
+    """GET /api/queues/mail-candidates — paginated mail-ready leads not yet staged."""
+    from flask import abort
+    user_id = getattr(g, 'user_id', None)
+    if not user_id or user_id == 'anonymous':
+        abort(401)
+    page, per_page, sort_by, sort_order = _parse_pagination_params()
+    rows, total = _get_queue_service().get_mail_candidates(
+        user_id, page, per_page, sort_by, sort_order,
+    )
     return jsonify({'rows': rows, 'total': total, 'page': page, 'per_page': per_page}), 200

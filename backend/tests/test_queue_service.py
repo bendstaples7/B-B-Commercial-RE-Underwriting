@@ -315,6 +315,92 @@ def test_get_counts_returns_all_queue_keys(app):
             assert isinstance(val, int), f"{key} should be int, got {type(val)}"
 
 
+def test_mail_candidates_excludes_queued_leads(app):
+    """mail_ready leads already in the user's mail queue are excluded."""
+    from app import db
+    from app.models.mail_queue_item import MailQueueItem
+
+    with app.app_context():
+        lead = _make_lead(
+            app, '19 Mail Ready St',
+            lead_status='mailing_no_contact_made',
+            recommended_action='mail_ready',
+            owner_user_id='test-owner',
+        )
+        svc = QueueService(owner_user_id='test-owner')
+        rows, total = svc.get_mail_candidates('test-owner')
+        assert lead.id in [r['id'] for r in rows]
+        assert total >= 1
+
+        db.session.add(MailQueueItem(
+            lead_id=lead.id, user_id='test-owner', status='queued',
+        ))
+        db.session.commit()
+
+        rows, total = svc.get_mail_candidates('test-owner')
+        assert lead.id not in [r['id'] for r in rows]
+
+
+def test_mail_candidates_excludes_recently_sold(app):
+    """mail_ready leads with a sale in the last 24 months are excluded."""
+    from datetime import date, timedelta
+
+    with app.app_context():
+        recent_sale = (date.today() - timedelta(days=60)).strftime('%m/%d/%Y')
+        lead = _make_lead(
+            app, '20 Recent Sale St',
+            lead_status='mailing_no_contact_made',
+            recommended_action='mail_ready',
+            owner_user_id='test-owner',
+            most_recent_sale=recent_sale,
+        )
+        svc = QueueService(owner_user_id='test-owner')
+        rows, total = svc.get_mail_candidates('test-owner')
+        assert lead.id not in [r['id'] for r in rows]
+
+
+def test_mail_candidates_includes_last_sale_at(app):
+    """mail candidate rows include parsed last_sale_at from most_recent_sale."""
+    with app.app_context():
+        lead = _make_lead(
+            app, '21 Sale Date St',
+            lead_status='mailing_no_contact_made',
+            recommended_action='mail_ready',
+            owner_user_id='test-owner',
+            most_recent_sale='6/15/2010',
+        )
+        svc = QueueService(owner_user_id='test-owner')
+        rows, _ = svc.get_mail_candidates('test-owner')
+        match = next(r for r in rows if r['id'] == lead.id)
+        assert match['last_sale_at'] == '2010-06-15'
+
+
+def test_mail_candidates_count_matches_list(app):
+    """Badge count and paginated list use the same recent-sale eligibility rules."""
+    from datetime import date, timedelta
+
+    with app.app_context():
+        recent_sale = (date.today() - timedelta(days=60)).strftime('%m/%d/%Y')
+        _make_lead(
+            app, '22 Count Mismatch St',
+            lead_status='mailing_no_contact_made',
+            recommended_action='mail_ready',
+            owner_user_id='test-owner',
+            most_recent_sale=recent_sale,
+        )
+        eligible = _make_lead(
+            app, '23 Count Match St',
+            lead_status='mailing_no_contact_made',
+            recommended_action='mail_ready',
+            owner_user_id='test-owner',
+            most_recent_sale='6/15/2010',
+        )
+        svc = QueueService(owner_user_id='test-owner')
+        rows, total = svc.get_mail_candidates('test-owner')
+        assert svc.count_mail_candidates('test-owner') == total
+        assert eligible.id in [r['id'] for r in rows]
+
+
 def test_get_counts_reflects_actual_leads(app):
     """get_counts badge counts match the actual number of qualifying leads."""
     with app.app_context():

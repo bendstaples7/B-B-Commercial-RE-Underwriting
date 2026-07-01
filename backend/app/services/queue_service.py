@@ -4,11 +4,12 @@ from datetime import date, timedelta
 from sqlalchemy import exists, and_, or_, case, select
 
 from app import db
-from app.models import Lead, LeadTask, LeadTimelineEntry
+from app.models import Lead, LeadTask, LeadTimelineEntry, MailQueueItem
 from app.models.task import Task
 from app.models.task_association import TaskAssociation
 from app.services.recommended_action_metadata import get_recommended_action_display
 from app.services.outreach_method_service import resolve_outreach_contacts_for_leads
+from app.services.scoring_rubric import format_last_sale_at, is_recently_sold
 
 # Statuses that represent active outreach pipeline (not terminal or suppressed)
 ACTIVE_PIPELINE_STATUSES = [
@@ -32,7 +33,12 @@ CONTACTED_STATUSES = [
 ]
 
 
-def _lead_to_queue_row(lead, outreach_contacts: dict[int, dict | None] | None = None) -> dict:
+def _lead_to_queue_row(
+    lead,
+    outreach_contacts: dict[int, dict | None] | None = None,
+    *,
+    last_mailed_at=None,
+) -> dict:
     """Convert a Lead model instance to a queue row dict."""
     contact_method = lead.recommended_contact_method
     ra_display = get_recommended_action_display(lead.recommended_action, contact_method)
@@ -65,6 +71,8 @@ def _lead_to_queue_row(lead, outreach_contacts: dict[int, dict | None] | None = 
         'review_triggered_at': lead.review_triggered_at.isoformat() if lead.review_triggered_at else None,
         'unanswered_call_count': lead.unanswered_call_count,
         'is_warm': lead.is_warm,
+        'last_mailed_at': last_mailed_at,
+        'last_sale_at': format_last_sale_at(lead),
     }
 
 
@@ -150,6 +158,11 @@ class QueueService:
             "do_not_contact": self._count_do_not_contact(),
             "missing_property_match": self._count_missing_property_match(),
         }
+
+    def count_mail_candidates(self, mail_user_id: str) -> int:
+        """Leads recommended for mail that are not already queued by this user."""
+        query = self._mail_candidates_query(mail_user_id)
+        return sum(1 for lead in query.all() if not is_recently_sold(lead))
 
     # ------------------------------------------------------------------
     # Private count helpers
@@ -496,3 +509,52 @@ class QueueService:
         query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
         return [_leads_to_queue_rows(leads), total]
+
+    def _mail_candidates_query(self, mail_user_id: str):
+        """Leads with mail_ready recommendation not already in this user's mail queue."""
+        already_queued = exists().where(
+            and_(
+                MailQueueItem.lead_id == Lead.id,
+                MailQueueItem.user_id == mail_user_id,
+                MailQueueItem.status == 'queued',
+            )
+        )
+        q = (
+            Lead.query.filter(Lead.owner_user_id == mail_user_id)
+            .filter(
+                Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
+                Lead.recommended_action == 'mail_ready',
+                ~already_queued,
+            )
+        )
+        return q
+
+    def get_mail_candidates(
+        self,
+        mail_user_id: str,
+        page: int = 1,
+        per_page: int = 20,
+        sort_by: str = 'lead_score',
+        sort_order: str = 'desc',
+    ) -> tuple[list[dict], int]:
+        """Paginated mail-ready leads not yet staged for the next batch."""
+        from app.services.last_mailed_service import format_last_mailed_at, get_last_mailed_at_by_lead_ids
+
+        query = self._mail_candidates_query(mail_user_id)
+        sort_col = getattr(Lead, sort_by, Lead.lead_score)
+        order = sort_col.desc() if sort_order == 'desc' else sort_col.asc()
+        ordered = query.order_by(order).all()
+        eligible = [lead for lead in ordered if not is_recently_sold(lead)]
+        total = len(eligible)
+        start = (page - 1) * per_page
+        leads = eligible[start:start + per_page]
+        contacts = resolve_outreach_contacts_for_leads(leads)
+        last_mailed = get_last_mailed_at_by_lead_ids([lead.id for lead in leads])
+        return [
+            _lead_to_queue_row(
+                lead,
+                contacts,
+                last_mailed_at=format_last_mailed_at(last_mailed.get(lead.id)),
+            )
+            for lead in leads
+        ], total

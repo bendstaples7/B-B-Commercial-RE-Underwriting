@@ -96,6 +96,8 @@ const defaultQueueCounts = {
   needs_review: 0,
   do_not_contact: 0,
   missing_property_match: 0,
+  ready_to_mail: 0,
+  mail_candidates: 0,
 }
 
 // Source file paths for static analysis

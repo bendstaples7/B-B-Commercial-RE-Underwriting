@@ -13,10 +13,12 @@ from app.models.hubspot_match import HubSpotMatch
 from app.models.lead import Lead, LeadAuditTrail
 from app.services.lead_merge_utils import (
     dedup_street_key,
+    merge_mailer_history,
     pick_merge_winner,
     streets_match_normalized,
     winner_sort_key,
 )
+from app.services.plugins.pin_utils import normalize_pin_for_socrata
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,7 @@ COPYABLE_FIELDS = [
     'bedrooms', 'bathrooms', 'square_footage', 'lot_size', 'year_built',
     'units', 'units_allowed', 'zoning',
     'most_recent_sale', 'owner_2_first_name', 'owner_2_last_name',
-    'address_2', 'returned_addresses', 'up_next_to_mail',
+    'address_2', 'returned_addresses', 'up_next_to_mail', 'mailer_history',
     'lead_score', 'lead_category', 'property_type',
 ]
 
@@ -71,6 +73,14 @@ def _owner_name_filters(
     return query
 
 
+def _pin_digits_sql():
+    return func.replace(
+        func.replace(func.coalesce(Lead.county_assessor_pin, ''), '-', ''),
+        ' ',
+        '',
+    )
+
+
 def find_lead_by_identity(
     *,
     owner_user_id: Optional[str] = None,
@@ -82,12 +92,14 @@ def find_lead_by_identity(
     """Find an existing lead by PIN or owner + building-level street identity."""
     pin = (county_assessor_pin or '').strip()
     if pin:
-        q = Lead.query.filter(Lead.county_assessor_pin == pin)
-        if owner_user_id:
-            q = q.filter(Lead.owner_user_id == owner_user_id)
-        hit = q.first()
-        if hit:
-            return hit
+        pin_digits = normalize_pin_for_socrata(pin)
+        if pin_digits:
+            q = Lead.query.filter(_pin_digits_sql() == pin_digits)
+            if owner_user_id:
+                q = q.filter(Lead.owner_user_id == owner_user_id)
+            hit = q.first()
+            if hit:
+                return hit
 
     street_key = dedup_street_key(property_street)
     first = (owner_first_name or '').strip()
@@ -197,6 +209,11 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
     _repoint_hubspot_matches(winner_id, loser_id)
 
     for field in COPYABLE_FIELDS:
+        if field == 'mailer_history':
+            merged = merge_mailer_history(winner.mailer_history, loser.mailer_history)
+            if merged is not None:
+                winner.mailer_history = merged
+            continue
         w_val = getattr(winner, field, None)
         l_val = getattr(loser, field, None)
         if (w_val is None or w_val == '') and l_val not in (None, ''):

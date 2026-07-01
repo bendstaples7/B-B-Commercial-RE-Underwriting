@@ -1772,6 +1772,8 @@ export interface QueueRow {
   review_triggered_at: string | null;
   unanswered_call_count: number;
   is_warm: boolean;
+  last_mailed_at?: string | null;
+  last_sale_at?: string | null;
 }
 
 export interface QueuePage {
@@ -1789,6 +1791,8 @@ export interface QueueCounts {
   needs_review: number;
   do_not_contact: number;
   missing_property_match: number;
+  ready_to_mail: number;
+  mail_candidates: number;
 }
 
 export interface CommandCenterPayload {
@@ -1864,6 +1868,7 @@ export interface LogCallPayload {
   contact_phone_id?: number | null;
   phone_number?: string | null;
   phone_label?: string | null;
+  mail_campaign_id?: number | null;
 }
 
 export interface LogNotePayload {

@@ -1,5 +1,5 @@
 /**
- * QueueSidebar — sidebar navigation with 7 queue links and live badge counts.
+ * QueueSidebar — sidebar navigation with queue links and live badge counts.
  *
  * Polls /api/queues/counts every 5 minutes via React Query (pauses when tab is hidden).
  * Highlights the active queue using useLocation.
@@ -23,6 +23,7 @@ interface QueueLink {
 }
 
 const QUEUE_LINKS: QueueLink[] = [
+  { label: 'Ready to Mail',          path: '/queues/ready-to-mail',          badgeKey: 'ready_to_mail' },
   { label: "Today's Action",         path: '/queues/todays-action',          badgeKey: 'todays_action' },
   { label: 'Previously Warm',        path: '/queues/previously-warm',        badgeKey: 'previously_warm' },
   { label: 'Follow-Up Overdue',      path: '/queues/follow-up-overdue',      badgeKey: 'follow_up_overdue' },
@@ -37,7 +38,7 @@ const QUEUE_LINKS: QueueLink[] = [
 // ---------------------------------------------------------------------------
 
 /**
- * QueueSidebar renders a vertical nav list of the 7 CRM queues.
+ * QueueSidebar renders a vertical nav list of CRM work queues.
  * Badge counts are fetched from the API and refreshed every 5 minutes (paused when tab is hidden).
  * The currently active queue is highlighted based on the current URL path.
  */

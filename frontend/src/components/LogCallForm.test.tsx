@@ -421,6 +421,7 @@ describe('LogCallForm', () => {
           outcome: 'no_answer',
           duration_minutes: 5,
           notes: 'Left message',
+          mail_campaign_id: null,
         })
       })
     })
