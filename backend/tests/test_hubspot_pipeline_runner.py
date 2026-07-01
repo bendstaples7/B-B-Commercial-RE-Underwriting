@@ -1,5 +1,5 @@
 """Tests for hubspot_pipeline_runner."""
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -40,7 +40,7 @@ class TestDispatchPostImportPipeline:
         ) as mock_subprocess:
             mode = dispatch_post_import_pipeline(app_ctx, run_ids=None)
             assert mode == 'subprocess'
-            mock_subprocess.assert_called_once_with(None)
+            mock_subprocess.assert_called_once_with(None, mode='full')
 
     def test_uses_celery_when_available(self, app_ctx):
         from app.services.hubspot_pipeline_runner import dispatch_post_import_pipeline
@@ -54,6 +54,17 @@ class TestDispatchPostImportPipeline:
             mode = dispatch_post_import_pipeline(app_ctx, run_ids=[1, 2])
             assert mode == 'celery'
             mock_subprocess.assert_not_called()
+
+    def test_rescore_only_uses_celery_task(self, app_ctx):
+        from app.services.hubspot_pipeline_runner import try_dispatch_celery_pipeline
+
+        with patch(
+            'app.services.hubspot_pipeline_runner._celery_workers_responding',
+            return_value=True,
+        ), patch('celery.current_app') as mock_celery_app:
+            mock_celery_app.send_task = MagicMock()
+            assert try_dispatch_celery_pipeline(mode='rescore_only') is True
+            mock_celery_app.send_task.assert_called_once_with('hubspot.rescore_only')
 
     def test_try_dispatch_returns_false_when_no_workers(self, app_ctx):
         from app.services.hubspot_pipeline_runner import try_dispatch_celery_pipeline
@@ -128,10 +139,56 @@ class TestRunPostImportPipelineSync:
              patch('app.tasks.hubspot_tasks.run_sync_hubspot_tasks_for_confirmed_leads', _track('sync_tasks')), \
              patch('app.tasks.hubspot_tasks.run_convert_hubspot_activities', _track('convert')), \
              patch('app.tasks.hubspot_tasks.run_extract_hubspot_signals', _track('signals')), \
-             patch('app.tasks.hubspot_tasks.run_rescore_leads_after_import', _track('rescore')):
+             patch('app.tasks.hubspot_tasks.run_rescore_leads_after_import', return_value=5), \
+             patch('app.services.deploy_sync_policy.record_pipeline_completed') as mock_record:
             run_post_import_pipeline_sync()
 
-        assert calls == ['matching', 'enrich', 'convert', 'sync_tasks', 'signals', 'rescore']
+        assert calls == ['matching', 'enrich', 'convert', 'sync_tasks', 'signals']
+        mock_record.assert_called_once_with(rescore_count=5)
+
+    def test_passes_affected_lead_ids_to_rescore(self, app_ctx):
+        from app.services.hubspot_pipeline_runner import (
+            note_pipeline_affected_leads,
+            run_post_import_pipeline_sync,
+        )
+
+        def _enrich():
+            note_pipeline_affected_leads([10, 20])
+
+        with patch('app.tasks.hubspot_tasks.run_hubspot_matching'), \
+             patch('app.tasks.hubspot_tasks.run_enrich_leads_from_hubspot', side_effect=_enrich), \
+             patch('app.tasks.hubspot_tasks.run_sync_hubspot_tasks_for_confirmed_leads'), \
+             patch('app.tasks.hubspot_tasks.run_convert_hubspot_activities'), \
+             patch('app.tasks.hubspot_tasks.run_extract_hubspot_signals'), \
+             patch('app.tasks.hubspot_tasks.run_rescore_leads_after_import') as mock_rescore, \
+             patch('app.services.deploy_sync_policy.record_pipeline_completed'):
+            run_post_import_pipeline_sync()
+
+        mock_rescore.assert_called_once_with(lead_ids=[10, 20], force_full=False)
+
+
+class TestRescoreOnlySync:
+    def test_run_rescore_only_sync(self, app_ctx):
+        from app.services.hubspot_pipeline_runner import run_rescore_only_sync
+
+        with patch(
+            'app.tasks.hubspot_tasks.run_rescore_leads_after_import',
+            return_value=99,
+        ) as mock_rescore, patch(
+            'app.services.deploy_sync_policy.record_pipeline_completed',
+        ) as mock_record:
+            run_rescore_only_sync()
+
+        mock_rescore.assert_called_once_with(force_full=True)
+        mock_record.assert_called_once_with(rescore_count=99)
+
+
+class TestDeployPostDeployDispatch:
+    def test_skip_mode(self, app_ctx):
+        from app.services.hubspot_pipeline_runner import dispatch_tiered_post_deploy_sync
+
+        mode = dispatch_tiered_post_deploy_sync(app_ctx, 'skip')
+        assert mode == 'skipped'
 
 
 class TestPipelineLock:

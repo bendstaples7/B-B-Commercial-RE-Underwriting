@@ -98,11 +98,30 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           ref: ${{ inputs.target_sha || github.event.workflow_run.head_sha || 'main' }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Resolve target SHA
         id: resolve_sha
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Compute changed paths for post-deploy sync
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
+        run: |
+          PREVIOUS_SHA=$(ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "cat /home/deploy/app/DEPLOY_SHA 2>/dev/null || echo ''")
+          echo "Previous deploy SHA: ${PREVIOUS_SHA:-<none>}"
+          if [ -n "$PREVIOUS_SHA" ] && git cat-file -e "$PREVIOUS_SHA^{commit}" 2>/dev/null; then
+            git diff --name-only "$PREVIOUS_SHA" "$TARGET_SHA" > changed_paths.txt
+          elif git rev-parse "${TARGET_SHA}^" >/dev/null 2>&1; then
+            git diff --name-only "${TARGET_SHA}^" "$TARGET_SHA" > changed_paths.txt
+          else
+            : > changed_paths.txt
+          fi
+          echo "Changed paths ($(wc -l < changed_paths.txt | tr -d ' ')):"
+          head -20 changed_paths.txt || true
 
       # ── Step 4c: VPS readiness (+ optional root auto-migrate) ───────────
       - name: Ensure VPS readiness
@@ -188,6 +207,7 @@ jobs:
             || { echo "ERROR: backup.sh --check failed — PostgreSQL connectivity issue. Check /home/deploy/logs/backup.log on VPS."; exit 1; }
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "rm -rf /home/deploy/frontend-dist"
           scp -i ~/.ssh/id_deploy -r frontend/dist $VPS_USER@$VPS_HOST:/home/deploy/frontend-dist
+          scp -i ~/.ssh/id_deploy changed_paths.txt $VPS_USER@$VPS_HOST:/home/deploy/changed_paths.txt
           # Run deploy script (keepalive in ~/.ssh/config; explicit opts on long session)
           ssh -i ~/.ssh/id_deploy \
             -o ServerAliveInterval=30 \
@@ -229,13 +249,12 @@ jobs:
           # Health check — poll from t=0 with no upfront sleep.
           # deploy.sh already verifies Gunicorn is healthy on localhost before
           # returning, so by the time we reach this step the server is up.
-          # This loop is the public-facing (nginx) confirmation: 20 attempts,
-          # worst case (20 × (--max-time 20 + sleep 5)) = ~500s total, which
-          # is ample headroom for any nginx proxy lag or transient network blip.
+          # This loop is the public-facing (nginx) confirmation: 18 attempts,
+          # worst case (18 × (--max-time 12 + sleep 3)) = ~270s total.
           #
           # --connect-timeout 5  → fail fast when the port isn't open yet
           #                        (expected early in reload, retry quickly)
-          # --max-time 20        → fail if connected but server hangs >20s
+          # --max-time 12        → fail if connected but server hangs >12s
           #                        (this is the signal of a real problem)
           # Together these let curl distinguish "not ready yet" from "stuck".
           #
@@ -243,12 +262,12 @@ jobs:
           # runs each `run:` block under `set -e`. Without the guard, a non-zero
           # curl exit (e.g. exit 7 = connection refused, exit 28 = timeout) would
           # terminate the step immediately before the retry loop could continue.
-          echo "Polling ${BASE_URL}/api/health (max 20 attempts, ~500s worst case)..."
+          echo "Polling ${BASE_URL}/api/health (max 18 attempts, ~270s worst case)..."
           HEALTH_PASSED=0
-          for i in $(seq 1 20); do
+          for i in $(seq 1 18); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
               --connect-timeout 5 \
-              --max-time 20 \
+              --max-time 12 \
               "${BASE_URL}/api/health" 2>/dev/null || echo "000")
             echo "Attempt $i: HTTP $STATUS"
             if [ "$STATUS" = "200" ]; then
@@ -256,10 +275,10 @@ jobs:
               HEALTH_PASSED=1
               break
             fi
-            sleep 5
+            sleep 3
           done
           if [ "$HEALTH_PASSED" = "0" ]; then
-            echo "Health check failed after 20 attempts."
+            echo "Health check failed after 18 attempts."
             exit 1
           fi
 

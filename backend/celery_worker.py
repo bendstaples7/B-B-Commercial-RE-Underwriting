@@ -1118,6 +1118,22 @@ def run_post_import_pipeline(run_ids: list = None) -> None:
     run_pipeline_after_imports(app, run_ids)
 
 
+@celery.task(name='hubspot.rescore_only')
+def run_rescore_only_pipeline() -> None:
+    """Run a full lead rescore without HubSpot fetch/enrich (deploy scoring deploys)."""
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info("Starting rescore-only pipeline")
+
+    from dotenv import load_dotenv
+    load_dotenv()
+    from app import create_app
+    from app.services.hubspot_pipeline_runner import run_pipeline_after_imports
+
+    app = create_app()
+    run_pipeline_after_imports(app, run_ids=None, mode='rescore_only')
+
+
 # ---------------------------------------------------------------------------
 # DuPage Lead Database — async CSV ingestion task (Requirements 6.9, 9.3–9.5)
 # ---------------------------------------------------------------------------
@@ -1202,6 +1218,7 @@ REQUIRED_TASKS = {
     'hubspot.rescore_leads',
     'hubspot.generate_backup',
     'hubspot.post_import_pipeline',
+    'hubspot.rescore_only',
     'hubspot.scheduled_engagement_sync',
     'tasks.mark_overdue',
     'action_engine.recompute_recommended_action',
