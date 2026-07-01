@@ -98,6 +98,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           ref: ${{ inputs.target_sha || github.event.workflow_run.head_sha || 'main' }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Resolve target SHA
@@ -249,7 +250,7 @@ jobs:
           # deploy.sh already verifies Gunicorn is healthy on localhost before
           # returning, so by the time we reach this step the server is up.
           # This loop is the public-facing (nginx) confirmation: 15 attempts,
-          # worst case (15 × (--max-time 12 + sleep 3)) = ~225s total.
+          # worst case (18 × (--max-time 12 + sleep 3)) = ~270s total.
           #
           # --connect-timeout 5  → fail fast when the port isn't open yet
           #                        (expected early in reload, retry quickly)
@@ -261,9 +262,9 @@ jobs:
           # runs each `run:` block under `set -e`. Without the guard, a non-zero
           # curl exit (e.g. exit 7 = connection refused, exit 28 = timeout) would
           # terminate the step immediately before the retry loop could continue.
-          echo "Polling ${BASE_URL}/api/health (max 15 attempts, ~225s worst case)..."
+          echo "Polling ${BASE_URL}/api/health (max 18 attempts, ~270s worst case)..."
           HEALTH_PASSED=0
-          for i in $(seq 1 15); do
+          for i in $(seq 1 18); do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
               --connect-timeout 5 \
               --max-time 12 \
@@ -277,7 +278,7 @@ jobs:
             sleep 3
           done
           if [ "$HEALTH_PASSED" = "0" ]; then
-            echo "Health check failed after 15 attempts."
+            echo "Health check failed after 18 attempts."
             exit 1
           fi
 

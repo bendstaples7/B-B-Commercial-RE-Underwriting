@@ -50,7 +50,7 @@ def dispatch_post_deploy_sync(app) -> str:
         )
 
         dangling = count_dangling_confirmed_lead_matches()
-        if dangling > 0 and sync_mode == 'skip':
+        if dangling > 0 and sync_mode in ('skip', 'rescore_only'):
             if should_upgrade_dangling_to_full_pipeline():
                 sync_mode = 'full_pipeline'
                 logger.info(

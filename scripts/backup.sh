@@ -296,6 +296,9 @@ else
             INTEGRITY="$INTEGRITY" \
             BACKUP_TYPE="$BACKUP_TYPE" \
             WEBHOOK_URL="${WEBHOOK_URL:-}" \
+            ALERT_METHOD="${ALERT_METHOD:-}" \
+            ALERT_EMAIL="${ALERT_EMAIL:-}" \
+            MSMTP_ACCOUNT="${MSMTP_ACCOUNT:-}" \
             bash -c '
 set -euo pipefail
 RETRY_MAX="${REMOTE_RETRY_COUNT:-3}"
@@ -351,10 +354,18 @@ print(json.dumps({
         2>>"$LOG_FILE" || true
 else
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh (bg): remote transfer failed after $RETRY_MAX attempts (non-blocking)" >> "$LOG_FILE"
-    if [[ -n "${WEBHOOK_URL:-}" ]]; then
+    ALERT_SUBJECT="Pre-deploy-fast background B2 upload failed for $FILENAME after $RETRY_MAX attempts"
+    ALERT_BODY="Check $LOG_FILE."
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT: $ALERT_SUBJECT" >> "$LOG_FILE"
+    if [[ "${ALERT_METHOD:-}" == "email" || "${ALERT_METHOD:-}" == "both" ]] && [[ -n "${ALERT_EMAIL:-}" ]]; then
+        echo "$ALERT_BODY" | msmtp --account="${MSMTP_ACCOUNT}" "${ALERT_EMAIL}" \
+            --subject="[Backup Alert] $ALERT_SUBJECT" 2>>"$LOG_FILE" \
+            || echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT DELIVERY FAILED (email): $?" >> "$LOG_FILE"
+    fi
+    if [[ "${ALERT_METHOD:-}" == "webhook" || "${ALERT_METHOD:-}" == "both" ]] && [[ -n "${WEBHOOK_URL:-}" ]]; then
         curl -s -X POST "$WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            -d "{\"text\": \"[Backup Alert] Pre-deploy-fast background B2 upload failed for $FILENAME after $RETRY_MAX attempts. Check $LOG_FILE.\"}" \
+            -d "{\"text\": \"[Backup Alert] $ALERT_SUBJECT\n$ALERT_BODY\"}" \
             --max-time 10 >> "$LOG_FILE" 2>&1 || true
     fi
 fi

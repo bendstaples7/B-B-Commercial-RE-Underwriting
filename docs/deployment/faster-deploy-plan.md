@@ -100,10 +100,12 @@ Most code-only deploys (frontend, docs, local-dev scripts) do not need steps 1â€
 
 ### 2a. Pass deploy context from CI â†’ VPS
 
-In `.github/workflows/deploy.yml`, compute changed paths and pass to deploy:
+In `.github/workflows/deploy.yml`, compute changed paths from the previous deploy SHA and SCP a manifest to the VPS. `deploy.sh` reads it via `DEPLOY_CHANGED_PATHS_FILE` (default `/tmp/changed_paths.txt`):
 
 ```bash
-bash /home/deploy/deploy.sh '$TARGET_SHA' --changed-paths 'backend/app/services/lead_scoring_engine.py,...'
+# CI writes changed_paths.txt, copies to VPS, then:
+bash /home/deploy/deploy.sh '$TARGET_SHA'
+# deploy.sh exports DEPLOY_CHANGED_PATHS_FILE for post_deploy_sync.py
 ```
 
 ### 2b. Tiered `post_deploy_sync` modes

@@ -145,6 +145,34 @@ class TestPostDeploySyncDispatch:
         assert mode == 'celery'
         mock_dispatch.assert_called_once_with(app, 'full_pipeline')
 
+    def test_upgrades_rescore_only_to_full_pipeline_when_dangling_matches(self, app, tmp_path):
+        from scripts.post_deploy_sync import dispatch_post_deploy_sync
+
+        paths_file = tmp_path / 'changed_paths.txt'
+        paths_file.write_text(
+            'backend/app/services/lead_scoring_engine.py\n',
+            encoding='utf-8',
+        )
+
+        with patch('app.models.hubspot_config.HubSpotConfig') as mock_config:
+            mock_config.query.first.return_value = MagicMock()
+            with patch(
+                'app.services.hubspot_pipeline_runner.dispatch_tiered_post_deploy_sync',
+                return_value='celery',
+            ) as mock_dispatch:
+                with patch(
+                    'app.services.hubspot_pipeline_runner.count_dangling_confirmed_lead_matches',
+                    return_value=2,
+                ):
+                    with patch.dict(
+                        'os.environ',
+                        {'DEPLOY_CHANGED_PATHS_FILE': str(paths_file)},
+                    ):
+                        mode = dispatch_post_deploy_sync(app)
+
+        assert mode == 'celery'
+        mock_dispatch.assert_called_once_with(app, 'full_pipeline')
+
     def test_main_returns_zero_for_subprocess_dispatch(self, app):
         with patch('app.create_app', return_value=app):
             with patch(
@@ -174,7 +202,7 @@ class TestDeployContractPostDeploy:
         text = (repo_root / 'backend' / 'scripts' / 'post_deploy_sync.py').read_text(
             encoding='utf-8',
         )
-        assert 'dispatch_tiered_post_deploy_sync' in text or 'resolve_deploy_sync_from_manifest' in text
+        assert 'dispatch_tiered_post_deploy_sync' in text
         assert 'run_post_import_pipeline_sync' not in text
 
         deploy_sh = (repo_root / 'scripts' / 'deploy.sh').read_text(encoding='utf-8')

@@ -272,7 +272,7 @@ class HubSpotDealSyncService:
 
         return {'synced': True, 'task_id': task_id, **stats}
 
-    def sync_all_confirmed_lead_tasks(self, *, limit: int = 200) -> dict[str, int]:
+    def sync_all_confirmed_lead_tasks(self, *, limit: int = 200) -> dict[str, Any]:
         """Live-sync HubSpot tasks for every lead with a confirmed deal match."""
         lead_ids = [
             row[0]

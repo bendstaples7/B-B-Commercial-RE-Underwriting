@@ -98,7 +98,7 @@ def run_post_import_pipeline_sync(force_full_rescore: bool = False) -> None:
 
     affected = get_pipeline_affected_leads()
     rescored = run_rescore_leads_after_import(
-        lead_ids=affected or None,
+        lead_ids=affected,
         force_full=force_full_rescore,
     )
     from app.services.deploy_sync_policy import record_pipeline_completed
@@ -109,6 +109,7 @@ def run_post_import_pipeline_sync(force_full_rescore: bool = False) -> None:
 
 def run_rescore_only_sync() -> None:
     """Run a full lead rescore without HubSpot fetch/enrich steps."""
+    reset_pipeline_affected_leads()
     from app.services.deploy_sync_policy import record_pipeline_completed
     from app.tasks.hubspot_tasks import run_rescore_leads_after_import
 

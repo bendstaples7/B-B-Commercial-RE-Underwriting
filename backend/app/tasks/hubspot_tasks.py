@@ -1187,6 +1187,7 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                     contact_match.internal_record_id = lead.id
                     contact_match.status = 'confirmed'
                     db.session.commit()
+                    enriched_lead_ids.add(lead.id)
                     logger.debug(
                         "run_enrich_leads_from_hubspot: resolved unlinked contact %s -> lead_id=%d via deal %s",
                         contact_match.hubspot_id, lead.id, did,
@@ -1306,6 +1307,16 @@ def run_convert_hubspot_activities(run_id: int = None) -> None:
             if lead_ids:
                 note_pipeline_affected_leads(lead_ids)
 
+        def _note_leads_for_task(task_id: int) -> None:
+            lead_ids = [
+                row[0]
+                for row in db.session.query(TaskAssociation.target_id)
+                .filter_by(task_id=task_id, target_type='lead')
+                .all()
+            ]
+            if lead_ids:
+                note_pipeline_affected_leads(lead_ids)
+
         # Build sets of already-converted engagement IDs for fast O(1) lookup
         existing_interaction_ids = {
             row[0]
@@ -1368,7 +1379,10 @@ def run_convert_hubspot_activities(run_id: int = None) -> None:
                     db.session.commit()
                     converted += 1
                     if hasattr(result, 'id'):
-                        _note_leads_for_interaction(result.id)
+                        if isinstance(result, Interaction):
+                            _note_leads_for_interaction(result.id)
+                        elif isinstance(result, Task):
+                            _note_leads_for_task(result.id)
                 else:
                     # Unrecognized engagement type — skip silently
                     skipped += 1
@@ -1764,6 +1778,7 @@ def run_rescore_leads_after_import(
             logger.info(
                 "run_rescore_leads_after_import: no affected leads and scoring unchanged — skip",
             )
+            record_scoring_code_hash()
             return 0
 
         record_scoring_code_hash()

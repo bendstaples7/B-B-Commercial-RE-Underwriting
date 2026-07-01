@@ -104,6 +104,9 @@ class TestPipelineCooldown:
         assert paths_require_hubspot_data_pipeline(
             ['backend/app/services/hubspot_matcher_service.py'],
         ) is True
+        assert paths_require_hubspot_data_pipeline(
+            ['backend/app/integrations/foo/hubspot_sync.py'],
+        ) is True
 
 
 class TestLoadChangedPaths:

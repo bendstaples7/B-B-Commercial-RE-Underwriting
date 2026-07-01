@@ -256,9 +256,9 @@ echo "    Gunicorn reloaded"
 echo "==> (6) Wait for Gunicorn to be healthy on localhost"
 # Poll localhost directly (bypasses nginx) so the CI health check step can
 # start immediately rather than sleeping an arbitrary number of seconds.
-# Worst case: 15 attempts × (--max-time 5 + sleep 2) = ~105s total.
+# Worst case: 18 attempts × (--max-time 5 + sleep 2) = ~126s total.
 GUNICORN_READY=0
-for i in $(seq 1 15); do
+for i in $(seq 1 18); do
     HC_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
         --connect-timeout 3 \
         --max-time 5 \
@@ -272,7 +272,7 @@ for i in $(seq 1 15); do
     sleep 2
 done
 if [ "$GUNICORN_READY" = "0" ]; then
-    echo "FAILED: Gunicorn did not become healthy on localhost after ~105s"
+    echo "FAILED: Gunicorn did not become healthy on localhost after ~126s"
     exit 1
 fi
 

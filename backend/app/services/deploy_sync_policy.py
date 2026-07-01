@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import fnmatch
+import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -47,6 +48,8 @@ _RESCORE_ONLY_PATTERNS = (
 DEPLOY_PIPELINE_COOLDOWN_HOURS = int(
     os.environ.get('DEPLOY_PIPELINE_COOLDOWN_HOURS', '4'),
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_path(path: str) -> str:
@@ -114,6 +117,7 @@ def paths_require_hubspot_data_pipeline(changed_paths: list[str]) -> bool:
         not _is_pipeline_glue_path(path)
         and (
             _matches_any(path, _FULL_PIPELINE_PATTERNS)
+            or _path_has_hubspot_or_webhook_component(path)
             or _matches_any(path, _RESCORE_ONLY_PATTERNS)
         )
         for path in changed_paths
@@ -189,8 +193,8 @@ def set_redis_value(key: str, value: str) -> None:
         return
     try:
         client.set(key, value)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning('Redis set failed for key=%s: %s', key, exc)
 
 
 def pipeline_completed_within_cooldown() -> bool:
@@ -221,13 +225,11 @@ def apply_pipeline_cooldown(
         return mode
     if paths_require_hubspot_data_pipeline(changed_paths):
         return mode
-    logger_msg = (
-        'full_pipeline downgraded to skip — pipeline completed within '
-        f'{DEPLOY_PIPELINE_COOLDOWN_HOURS}h and only deploy-glue paths changed'
-    )
     # Lazy import to avoid circular logging at module import
-    import logging
-    logging.getLogger(__name__).info(logger_msg)
+    logger.info(
+        'full_pipeline downgraded to skip — pipeline completed within '
+        f'{DEPLOY_PIPELINE_COOLDOWN_HOURS}h and only deploy-glue paths changed',
+    )
     return 'skip'
 
 
@@ -235,8 +237,7 @@ def should_upgrade_dangling_to_full_pipeline() -> bool:
     """Whether dangling matches should trigger a full pipeline on this deploy."""
     if not pipeline_completed_within_cooldown():
         return True
-    import logging
-    logging.getLogger(__name__).info(
+    logger.info(
         'Skipping dangling-match full pipeline upgrade — pipeline completed '
         'within %dh (nightly/beat catch-up)',
         DEPLOY_PIPELINE_COOLDOWN_HOURS,
@@ -254,8 +255,7 @@ def resolve_deploy_sync_from_manifest(path: Optional[str]) -> DeploySyncMode:
     """Resolve sync mode from the VPS changed-paths manifest file."""
     changed_paths, unknown_delta = load_changed_paths_for_deploy(path)
     if unknown_delta:
-        import logging
-        logging.getLogger(__name__).warning(
+        logger.warning(
             'Changed-path manifest missing or empty — defaulting to full_pipeline',
         )
         return 'full_pipeline'
