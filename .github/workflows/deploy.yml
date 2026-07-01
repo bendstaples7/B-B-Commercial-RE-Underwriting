@@ -1,6 +1,10 @@
 # .github/workflows/deploy.yml
 name: Deploy
 
+permissions:
+  contents: read
+  actions: read
+
 on:
   workflow_run:
     workflows: ["CI"]
@@ -136,8 +140,18 @@ jobs:
             VPS_ROOT_SSH_KEY="$VPS_ROOT_SSH_KEY" \
             bash scripts/ci-ensure-vps-readiness.sh
 
-      # ── Step 5: Build frontend on runner ────────────────────────────────
-      - name: Build frontend on runner (avoids OOM on 2GB VPS)
+      # ── Step 5: Frontend dist (from CI artifact or manual rebuild) ───────
+      - name: Download frontend dist from CI
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Build frontend on runner (manual deploy fallback)
+        if: github.event_name == 'workflow_dispatch'
         run: |
           cd frontend
           npm ci

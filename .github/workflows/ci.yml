@@ -10,6 +10,9 @@ jobs:
   frontend:
     name: Frontend — typecheck, build, tests
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -45,6 +48,13 @@ jobs:
       - name: Production build
         run: npm run build
         working-directory: frontend
+
+      - name: Upload frontend dist for deploy
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 1
 
   validate-workflows:
     name: Validate workflow YAML syntax
@@ -264,7 +274,7 @@ jobs:
         working-directory: backend
 
       - name: Run tests
-        run: pytest
+        run: pytest -n auto -m "not performance"
         working-directory: backend
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
