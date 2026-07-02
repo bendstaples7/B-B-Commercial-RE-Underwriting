@@ -18,6 +18,9 @@ import type {
   MarketingListsResponse,
   MarketingListMembersResponse,
   OutreachStatus,
+  QuickAddPayload,
+  QuickAddLookupResponse,
+  QuickAddResponse,
 } from '@/types'
 
 /**
@@ -48,6 +51,22 @@ export const leadService = {
    */
   async getLeadDetail(leadId: number): Promise<PropertyDetail> {
     const response = await api.get<PropertyDetail>(`/properties/${leadId}`)
+    return response.data
+  },
+
+  /**
+   * Quick-add a walk-by lead (Skip Trace + HubSpot push queued).
+   */
+  async quickAdd(payload: QuickAddPayload): Promise<QuickAddResponse> {
+    const response = await api.post<QuickAddResponse>('/leads/quick-add', payload)
+    return response.data
+  },
+
+  async lookupQuickAdd(q: string, signal?: AbortSignal): Promise<QuickAddLookupResponse> {
+    const response = await api.get<QuickAddLookupResponse>('/leads/quick-add/lookup', {
+      params: { q },
+      signal,
+    })
     return response.data
   },
 

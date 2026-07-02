@@ -39,6 +39,7 @@ import {
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 import LockIcon from '@mui/icons-material/Lock'
+import SyncIcon from '@mui/icons-material/Sync'
 import CloudDownloadIcon from '@mui/icons-material/CloudDownload'
 import BackupIcon from '@mui/icons-material/Backup'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
@@ -278,6 +279,7 @@ export const HubSpotImportArea: React.FC = () => {
   // ── Render ───────────────────────────────────────────────────────────────
 
   const isConfigured = Boolean(config && config.configured !== false)
+  const writeBackEnabled = Boolean(config?.write_back_enabled)
 
   return (
     <Box sx={{ maxWidth: 900, mx: 'auto', p: { xs: 2, sm: 3 } }}>
@@ -287,8 +289,17 @@ export const HubSpotImportArea: React.FC = () => {
           HubSpot CRM Import
         </Typography>
 
-        {/* Read-Only Mode badge — always visible when configured (Req 6.5) */}
-        {isConfigured && (
+        {isConfigured && writeBackEnabled && (
+          <Chip
+            icon={<SyncIcon fontSize="small" />}
+            label="Write-back enabled"
+            color="info"
+            size="small"
+            aria-label="HubSpot write-back is enabled"
+          />
+        )}
+
+        {isConfigured && !writeBackEnabled && (
           <Chip
             icon={<LockIcon fontSize="small" />}
             label="Read-Only Mode"
@@ -336,6 +347,14 @@ export const HubSpotImportArea: React.FC = () => {
               <Chip label={`Portal ID: ${config.portal_id}`} size="small" />
             )}
           </Box>
+        )}
+
+        {writeBackEnabled && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Quick Add pushes new leads to HubSpot as deals at Skip Trace. Your Private App
+            token must include the <strong>crm.objects.deals.write</strong> scope. Set{' '}
+            <code>HUBSPOT_WRITE_BACK_ENABLED=true</code> in the server environment.
+          </Alert>
         )}
 
         <Box

@@ -66,6 +66,7 @@ import LocationOffIcon from '@mui/icons-material/LocationOff'
 import TodayIcon from '@mui/icons-material/Today'
 import ViewKanbanIcon from '@mui/icons-material/ViewKanban'
 import SettingsIcon from '@mui/icons-material/Settings'
+import AddLocationAltIcon from '@mui/icons-material/AddLocationAlt'
 import ExpandLess from '@mui/icons-material/ExpandLess'
 import ExpandMore from '@mui/icons-material/ExpandMore'
 import StorageIcon from '@mui/icons-material/Storage'
@@ -105,6 +106,7 @@ import { ScoringWeightsEditor } from './components/ScoringWeightsEditor'
 import GlobalSearchBar from '@/components/GlobalSearchBar'
 import SearchResultsPage from '@/pages/SearchResultsPage'
 import { DealKanbanPage } from './pages/DealKanbanPage'
+import { QuickAddPage } from './pages/QuickAddPage'
 import { PipelineConfigAdminPage } from './pages/PipelineConfigAdminPage'
 import DataSourcesPanel from '@/components/DataSourcesPanel'
 import type { QueueCounts } from './types'
@@ -149,6 +151,7 @@ const NAV_SECTIONS = [
       {
         label: null,
         items: [
+          { label: 'Quick Add', path: '/quick-add', icon: <AddLocationAltIcon />, badgeKey: null },
           { label: 'Sheets Import', path: '/import', icon: <CloudUploadIcon />, badgeKey: null },
           { label: 'HubSpot Import', path: '/import/hubspot', icon: <HubIcon />, badgeKey: null },
           { label: 'Review Queue', path: '/import/hubspot/review-queue', icon: <RateReviewIcon />, badgeKey: null },
@@ -1448,12 +1451,14 @@ function App() {
   //   - auth has resolved but user is null (unauthenticated — AuthGuard will redirect)
   const isLoginPage = location.pathname === '/login'
   const isSetPasswordPage = location.pathname === '/set-password'
-  if (isLoginPage || isSetPasswordPage || authLoading || !user) {
+  const useLoginShell = isLoginPage || isSetPasswordPage || authLoading || !user
+  if (useLoginShell) {
     return (
       <GoogleMapsLoadedContext.Provider value={mapsLoaded}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/set-password" element={<SetPasswordPage />} />
+          <Route path="/quick-add" element={<LoginPage />} />
           <Route path="/*" element={<LoginPage />} />
         </Routes>
       </GoogleMapsLoadedContext.Provider>
@@ -1674,6 +1679,7 @@ function App() {
           <Route path="/settings/scoring-weights" element={<ScoringWeightsEditor />} />
           {/* Kanban view */}
           <Route path="/kanban" element={<DealKanbanPage />} />
+          <Route path="/quick-add" element={<QuickAddPage />} />
           {/* Old /leads/views/* — redirect to new /queues/* routes */}
           <Route path="/leads/views/previously-warm" element={<Navigate to="/queues/previously-warm" replace />} />
           <Route path="/leads/views/needs-review" element={<Navigate to="/queues/needs-review" replace />} />

@@ -1751,6 +1751,51 @@ class ReactivateLeadSchema(RequestSchema):
     actor = fields.String(load_default='anonymous')
 
 
+class QuickAddSchema(RequestSchema):
+    """Validation schema for POST /api/leads/quick-add."""
+    property_street = fields.String(required=True, validate=validate.Length(min=1, max=500))
+    note = fields.String(allow_none=True, load_default=None, validate=validate.Length(max=5000))
+    priority = fields.String(
+        allow_none=True,
+        load_default=None,
+        validate=validate.OneOf(['high', 'medium', 'low', 'High', 'Medium', 'Low']),
+    )
+    deal_source = fields.String(
+        allow_none=True,
+        load_default=None,
+        validate=validate.OneOf([
+            'Driving For Dollars',
+            'Cityscape',
+            'Cityscape Unused Zoning Capacity',
+            'Referral',
+            'Direct Mail',
+            'Other',
+        ]),
+    )
+    date_identified = fields.Date(allow_none=True, load_default=None)
+    capture_latitude = fields.Float(
+        allow_none=True,
+        load_default=None,
+        validate=validate.Range(min=-90, max=90),
+    )
+    capture_longitude = fields.Float(
+        allow_none=True,
+        load_default=None,
+        validate=validate.Range(min=-180, max=180),
+    )
+    capture_location_label = fields.String(
+        allow_none=True,
+        load_default=None,
+        validate=validate.Length(max=500),
+    )
+
+
+class QuickAddLookupSchema(RequestSchema):
+    """Validation schema for GET /api/leads/quick-add/lookup."""
+    q = fields.String(required=True, validate=validate.Length(min=2, max=200))
+    limit = fields.Integer(load_default=5, validate=validate.Range(min=1, max=10))
+
+
 class RecommendedActionResponseSchema(Schema):
     """Response schema for GET /api/leads/:id/recommended-action."""
     recommended_action = fields.String(dump_only=True, allow_none=True)

@@ -140,6 +140,8 @@ def get_config():
 
     data = _config_schema.dump(config)
     data['has_client_secret'] = config.encrypted_client_secret is not None
+    from app.services.hubspot_writeback_service import hubspot_write_back_enabled
+    data['write_back_enabled'] = hubspot_write_back_enabled()
     return jsonify(data), 200
 
 

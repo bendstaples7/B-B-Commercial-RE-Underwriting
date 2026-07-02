@@ -654,6 +654,9 @@ def create_app(config_name='development'):
     from app.controllers.command_center_controller import command_center_bp
     app.register_blueprint(command_center_bp, url_prefix='/api/leads')
 
+    from app.controllers.quick_add_controller import quick_add_bp
+    app.register_blueprint(quick_add_bp, url_prefix='/api/leads')
+
     # Pipeline Config — stages and weights for Kanban scoring
     from app.controllers.pipeline_config_controller import pipeline_config_bp
     app.register_blueprint(pipeline_config_bp, url_prefix='/api')

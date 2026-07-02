@@ -28,6 +28,7 @@ export const HubSpotConfigSchema = z.object({
   configured_at: z.string().nullable().optional(),
   /** Present when no config has been saved yet */
   configured: z.boolean().optional(),
+  write_back_enabled: z.boolean().optional(),
 })
 
 export type HubSpotConfigParsed = z.infer<typeof HubSpotConfigSchema>
