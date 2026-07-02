@@ -21,7 +21,16 @@ def run_quick_add_followup_inner(lead_id: int) -> dict:
         except Exception as exc:
             logger.warning('Quick-add assessor enrichment failed for lead %s: %s', lead_id, exc)
 
-        push_result = HubSpotWriteBackService().push_lead_as_deal(lead_id)
+        try:
+            push_result = HubSpotWriteBackService().push_lead_as_deal(lead_id)
+        except Exception as exc:
+            logger.exception('Quick-add HubSpot push failed for lead %s', lead_id)
+            push_result = {
+                'synced': False,
+                'action': 'failed',
+                'lead_id': lead_id,
+                'error': str(exc),
+            }
 
         if push_result.get('action') in ('failed', 'skipped') and push_result.get('reason') != 'write_back_disabled':
             lead = db.session.get(Lead, lead_id)

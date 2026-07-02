@@ -1362,6 +1362,8 @@ export const queueService = {
     api.get('/queues/do-not-contact', { params: { page, per_page: perPage } }).then(r => r.data),
   getMissingPropertyMatch: (page = 1, perPage = 20): Promise<QueuePage> =>
     api.get('/queues/missing-property-match', { params: { page, per_page: perPage } }).then(r => r.data),
+  getMailCandidates: (page = 1, perPage = 20): Promise<QueuePage> =>
+    api.get('/queues/mail-candidates', { params: { page, per_page: perPage } }).then(r => r.data),
 }
 
 export const commandCenterService = {

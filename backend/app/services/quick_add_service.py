@@ -32,6 +32,11 @@ PRIORITY_TO_MANUAL: dict[str, int] = {
 }
 
 
+def _escape_like_pattern(value: str) -> str:
+    """Escape SQL LIKE metacharacters so user input is matched literally."""
+    return value.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+
+
 def _format_capture_timestamp(when: datetime | None = None) -> str:
     dt = when or datetime.now(timezone.utc)
     if dt.tzinfo is None:
@@ -114,7 +119,7 @@ class QuickAddService:
         rows = (
             Lead.query.filter(Lead.owner_user_id == user_id)
             .filter(Lead.property_street.isnot(None))
-            .filter(Lead.property_street.ilike(f'%{needle}%'))
+            .filter(Lead.property_street.ilike(f'%{_escape_like_pattern(needle)}%', escape='\\'))
             .order_by(Lead.updated_at.desc())
             .limit(limit)
             .all()

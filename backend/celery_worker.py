@@ -951,6 +951,34 @@ def generate_backup_export() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Open Letter Connect — direct mail campaigns
+# ---------------------------------------------------------------------------
+
+from app.exceptions import ExternalServiceError, MailQueueError
+
+@celery.task(
+    name='open_letter.submit_campaign',
+    bind=True,
+    max_retries=2,
+    autoretry_for=(ExternalServiceError, ConnectionError, TimeoutError),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    dont_autoretry_for=(MailQueueError,),
+)
+def submit_open_letter_campaign(self, campaign_id: int) -> None:
+    """Submit a mail campaign to Open Letter Connect."""
+    from app.tasks.open_letter_tasks import submit_mail_campaign
+    submit_mail_campaign(campaign_id)
+
+
+@celery.task(name='open_letter.sync_campaign_analytics')
+def sync_open_letter_campaign_analytics(campaign_id: int) -> None:
+    """Sync delivery/scan analytics from OLC for a campaign."""
+    from app.tasks.open_letter_tasks import sync_mail_campaign_analytics
+    sync_mail_campaign_analytics(campaign_id)
+
+
+# ---------------------------------------------------------------------------
 # HubSpot Webhook Processing Tasks
 # ---------------------------------------------------------------------------
 
@@ -1124,6 +1152,22 @@ def run_post_import_pipeline(run_ids: list = None) -> None:
     run_pipeline_after_imports(app, run_ids)
 
 
+@celery.task(name='hubspot.rescore_only')
+def run_rescore_only_pipeline() -> None:
+    """Run a full lead rescore without HubSpot fetch/enrich (deploy scoring deploys)."""
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info("Starting rescore-only pipeline")
+
+    from dotenv import load_dotenv
+    load_dotenv()
+    from app import create_app
+    from app.services.hubspot_pipeline_runner import run_pipeline_after_imports
+
+    app = create_app()
+    run_pipeline_after_imports(app, run_ids=None, mode='rescore_only')
+
+
 # ---------------------------------------------------------------------------
 # DuPage Lead Database — async CSV ingestion task (Requirements 6.9, 9.3–9.5)
 # ---------------------------------------------------------------------------
@@ -1207,7 +1251,10 @@ REQUIRED_TASKS = {
     'hubspot.extract_signals',
     'hubspot.rescore_leads',
     'hubspot.generate_backup',
+    'open_letter.submit_campaign',
+    'open_letter.sync_campaign_analytics',
     'hubspot.post_import_pipeline',
+    'hubspot.rescore_only',
     'hubspot.scheduled_engagement_sync',
     'tasks.mark_overdue',
     'action_engine.recompute_recommended_action',

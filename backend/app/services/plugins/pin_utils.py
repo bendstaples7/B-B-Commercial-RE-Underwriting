@@ -34,3 +34,14 @@ def normalize_pin_for_socrata(pin: str) -> str:
     if not pin:
         return pin
     return pin.replace("-", "").replace(" ", "").strip()
+
+
+def format_pin_for_storage(pin: str) -> str:
+    """Canonical dashed Cook County PIN for DB storage (14-digit parcels)."""
+    digits = normalize_pin_for_socrata(pin)
+    if len(digits) == 14 and digits.isdigit():
+        return (
+            f"{digits[0:2]}-{digits[2:4]}-{digits[4:7]}-"
+            f"{digits[7:10]}-{digits[10:14]}"
+        )
+    return (pin or "").strip()

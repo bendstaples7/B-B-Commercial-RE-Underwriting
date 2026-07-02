@@ -72,9 +72,17 @@ python dev.py
 ```
 
 This is the **recommended way** to run the app locally. It handles everything:
+- Ensures local PostgreSQL has production lead data (auto-downloads via GitHub Actions if empty)
 - Starts Redis (or detects it's already running)
 - Starts the Celery worker (required for background tasks: imports, AI extraction, lead scoring)
 - Starts the Flask dev server on http://localhost:5000
+
+**One-time prerequisite:** authenticate GitHub CLI so prod dumps can be fetched unattended:
+```bash
+gh auth login
+```
+
+No manual dump download or restore commands — `dev.py` runs `scripts/ensure-local-prod-data.ps1` (Windows) or `scripts/ensure-local-prod-data.sh` (macOS/Linux) automatically when lead count is below 1,000.
 
 Then in a separate terminal, start the frontend:
 ```bash
@@ -98,6 +106,36 @@ CREATE DATABASE real_estate_analysis;
 ```bash
 flask db upgrade
 ```
+
+### Local dev with production data (fully automated)
+
+`flask db upgrade` creates tables only. Lead data is copied from production automatically when you run `python dev.py`.
+
+**Symptoms if auto-restore fails:** login works but lists are empty; `/api/health` may report `lead_visibility: FAIL`.
+
+| Component | Role |
+|-----------|------|
+| [`scripts/ensure-local-prod-data.ps1`](scripts/ensure-local-prod-data.ps1) | Windows — called by `dev.py`; cached dump, GitHub Actions, or SSH |
+| [`scripts/ensure-local-prod-data.sh`](scripts/ensure-local-prod-data.sh) | macOS/Linux — same behavior |
+| [Download Prod Dump](.github/workflows/download-prod-dump.yml) | Nightly + on-demand `pg_dump` on GitHub Actions |
+| [`scripts/restore-prod-dump.ps1`](scripts/restore-prod-dump.ps1) | Internal restore helper (not run manually) |
+| [`scripts/sync-from-prod.ps1`](scripts/sync-from-prod.ps1) | SSH fallback when deploy key is configured |
+| [`scripts/pre-flight-data-check.sh`](scripts/pre-flight-data-check.sh) | macOS/Linux restore from `~/prod_for_dev.dump` |
+
+**Requirements (once per machine):**
+- PostgreSQL on `localhost:5432` (`DATABASE_URL` in `.env`)
+- `gh auth login` for `bendstaples7/B-B-Commercial-RE-Underwriting`
+
+**Optional — refresh while not running the IDE:**
+```powershell
+.\scripts\ensure-local-prod-data.ps1 -Install   # Windows: 3 AM daily + logon
+```
+```bash
+bash scripts/ensure-local-prod-data.sh --install   # cron: 3 AM daily
+```
+
+Baseline: [`backend/data-snapshot.json`](backend/data-snapshot.json) (~75k leads). After restore, use your **production** login password, not dev placeholders in `.env` comments.
+
 
 ### Redis Setup
 

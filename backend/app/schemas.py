@@ -1732,6 +1732,7 @@ class LogCallSchema(RequestSchema):
     contact_phone_id = fields.Integer(allow_none=True, load_default=None)
     phone_number = fields.String(allow_none=True, load_default=None, validate=validate.Length(max=50))
     phone_label = fields.String(allow_none=True, load_default=None, validate=validate.Length(max=20))
+    mail_campaign_id = fields.Integer(allow_none=True, load_default=None)
 
 
 class ParkLeadSchema(RequestSchema):

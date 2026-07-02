@@ -22,8 +22,7 @@ def _make_lead(**overrides):
 
 class TestHubSpotWriteBackService:
     @patch.dict('os.environ', {'HUBSPOT_WRITE_BACK_ENABLED': 'true'})
-    @patch('app.services.hubspot_writeback_service.HubSpotConfig')
-    def test_create_deal_from_lead(self, mock_config_cls, app):
+    def test_create_deal_from_lead(self, app):
         from app.services.hubspot_writeback_service import HubSpotWriteBackService
 
         with app.app_context():
@@ -40,11 +39,8 @@ class TestHubSpotWriteBackService:
                 'properties': {'dealname': lead.property_street},
             }
 
-            mock_config_cls.query.order_by.return_value.first.return_value = object()
-
-            with patch.object(HubSpotWriteBackService, '_get_client', return_value=mock_client):
-                with patch('app.services.hubspot_writeback_service._upsert_hubspot_record'):
-                    result = HubSpotWriteBackService(client=mock_client).push_lead_as_deal(lead.id)
+            with patch('app.services.hubspot_writeback_service._upsert_hubspot_record'):
+                result = HubSpotWriteBackService(client=mock_client).push_lead_as_deal(lead.id)
 
             assert result['synced'] is True
             assert result['action'] == 'created'
@@ -72,8 +68,7 @@ class TestHubSpotWriteBackService:
             assert result['reason'] == 'write_back_disabled'
 
     @patch.dict('os.environ', {'HUBSPOT_WRITE_BACK_ENABLED': 'true'})
-    @patch('app.services.hubspot_writeback_service.HubSpotConfig')
-    def test_update_existing_deal_skips_stage(self, mock_config_cls, app):
+    def test_update_existing_deal_skips_stage(self, app):
         from app.services.hubspot_writeback_service import HubSpotWriteBackService
 
         with app.app_context():
@@ -90,23 +85,16 @@ class TestHubSpotWriteBackService:
             db.session.commit()
 
             mock_client = MagicMock()
-            mock_client._get.return_value = {
-                'results': [{
-                    'id': 'default',
-                    'stages': [{'id': 'stage1', 'label': 'Skip Trace'}],
-                }],
-            }
             mock_client.update_deal.return_value = {
                 'id': 'hs-deal-existing',
                 'properties': {'dealname': lead.property_street},
             }
 
-            mock_config_cls.query.order_by.return_value.first.return_value = object()
-
-            with patch.object(HubSpotWriteBackService, '_get_client', return_value=mock_client):
+            with patch.object(HubSpotWriteBackService, 'resolve_deal_stage') as mock_resolve:
                 with patch('app.services.hubspot_writeback_service._upsert_hubspot_record'):
                     result = HubSpotWriteBackService(client=mock_client).push_lead_as_deal(lead.id)
 
+            mock_resolve.assert_not_called()
             assert result['synced'] is True
             assert result['action'] == 'updated'
 

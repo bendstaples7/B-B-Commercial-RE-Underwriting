@@ -114,15 +114,27 @@ class HubSpotWriteBackService:
             logger.warning('HubSpot write-back: no client for lead %s: %s', lead_id, exc)
             return {'synced': False, 'action': 'skipped', 'reason': 'no_hubspot_config', 'error': str(exc)}
 
-        pipeline_id, stage_id = self.resolve_deal_stage()
         existing_match = self._confirmed_deal_match(lead_id)
-        if not stage_id and existing_match is None:
-            return {
-                'synced': False,
-                'action': 'skipped',
-                'reason': 'stage_not_found',
-                'error': f'Could not resolve HubSpot stage "{DEFAULT_DEAL_STAGE_LABEL}"',
-            }
+        pipeline_id: str | None = None
+        stage_id: str | None = None
+        if existing_match is None:
+            try:
+                pipeline_id, stage_id = self.resolve_deal_stage()
+            except Exception as exc:
+                logger.warning('HubSpot write-back: stage lookup failed for lead %s: %s', lead_id, exc)
+                return {
+                    'synced': False,
+                    'action': 'skipped',
+                    'reason': 'stage_lookup_failed',
+                    'error': str(exc),
+                }
+            if not stage_id:
+                return {
+                    'synced': False,
+                    'action': 'skipped',
+                    'reason': 'stage_not_found',
+                    'error': f'Could not resolve HubSpot stage "{DEFAULT_DEAL_STAGE_LABEL}"',
+                }
 
         properties = self._deal_properties_from_lead(
             lead,
@@ -131,6 +143,8 @@ class HubSpotWriteBackService:
             include_stage=existing_match is None,
         )
 
+        hubspot_deal_id = ''
+        action: str | None = None
         try:
             if existing_match:
                 hubspot_deal_id = existing_match.hubspot_id
@@ -193,6 +207,21 @@ class HubSpotWriteBackService:
             }
         except Exception as exc:
             db.session.rollback()
+            if action == 'created' and hubspot_deal_id:
+                try:
+                    recovery_match = HubSpotMatch(
+                        hubspot_record_type='deal',
+                        hubspot_id=hubspot_deal_id,
+                        internal_record_type='lead',
+                        internal_record_id=lead_id,
+                        confidence='HIGH',
+                        status='confirmed',
+                        matching_criteria='quick_add_writeback_recovery',
+                    )
+                    db.session.add(recovery_match)
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
             logger.exception('HubSpot write-back failed for lead %s', lead_id)
             return {
                 'synced': False,

@@ -3,6 +3,7 @@ import logging
 
 from flask import Blueprint, g, jsonify, request
 from marshmallow import ValidationError
+from werkzeug.exceptions import BadRequest, HTTPException
 
 from app import limiter
 from app.api_utils import require_auth
@@ -30,6 +31,10 @@ def handle_errors(f):
             return jsonify({'error': 'Validation error', 'message': str(exc)}), 400
         except RealEstateAnalysisException as exc:
             return jsonify({'error': exc.message, **getattr(exc, 'payload', {})}), exc.status_code
+        except BadRequest as exc:
+            return jsonify({'error': 'Invalid request', 'message': exc.description}), 400
+        except HTTPException as exc:
+            return jsonify({'error': 'Invalid request', 'message': exc.description}), exc.code
         except Exception:
             logger.exception('Quick-add error')
             return jsonify({'error': 'Internal server error'}), 500

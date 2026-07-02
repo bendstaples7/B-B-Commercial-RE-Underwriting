@@ -110,6 +110,11 @@ from app.models.hubspot_webhook_log import HubSpotWebhookLog
 from app.models.hubspot_sync_run import HubSpotSyncRun
 from app.models.hubspot_platform_write import HubSpotPlatformWrite
 
+# Open Letter Connect / direct mail
+from app.models.open_letter_config import OpenLetterConfig
+from app.models.mail_queue_item import MailQueueItem
+from app.models.mail_campaign import MailCampaign
+
 __all__ = [
     # Authentication
     'User',
@@ -207,4 +212,8 @@ __all__ = [
     'HubSpotWebhookLog',
     'HubSpotSyncRun',
     'HubSpotPlatformWrite',
+    # Open Letter Connect
+    'OpenLetterConfig',
+    'MailQueueItem',
+    'MailCampaign',
 ]

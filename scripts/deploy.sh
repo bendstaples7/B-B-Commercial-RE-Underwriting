@@ -37,6 +37,7 @@ rollback() {
     git checkout -- . 2>/dev/null || { echo "ROLLBACK WARNING: git checkout -- . failed"; ROLLBACK_FAILED=1; }
     git clean -fd 2>/dev/null || { echo "ROLLBACK WARNING: git clean -fd failed"; ROLLBACK_FAILED=1; }
     git checkout "$PREVIOUS_SHA" 2>/dev/null || { echo "ROLLBACK WARNING: git checkout $PREVIOUS_SHA failed"; ROLLBACK_FAILED=1; }
+    echo "$PREVIOUS_SHA" > "$APP_DIR/DEPLOY_SHA" 2>/dev/null || { echo "ROLLBACK WARNING: could not write DEPLOY_SHA"; ROLLBACK_FAILED=1; }
     pip install --user -r backend/requirements.txt -q 2>/dev/null || { echo "ROLLBACK WARNING: pip install failed"; ROLLBACK_FAILED=1; }
     # Restore the previous frontend/dist backup to avoid a version mismatch:
     # without this, backend would be at PREVIOUS_SHA but frontend/dist would
@@ -125,7 +126,7 @@ elif [[ ! -x /home/deploy/backup.sh ]]; then
     echo "FAILED: /home/deploy/backup.sh exists but is not executable — check permissions"
     exit 1
 else
-    /home/deploy/backup.sh --pre-deploy || {
+    /home/deploy/backup.sh --pre-deploy-fast || {
         echo "FAILED: pre-deploy backup failed — aborting deploy (no restore point)"
         echo "--- backup bootstrap error log (if any) ---"
         cat /tmp/backup_bootstrap.log 2>/dev/null || echo "(no bootstrap log found)"
@@ -152,11 +153,19 @@ until git fetch origin main; do
     sleep 5
 done
 git checkout "$TARGET_SHA" || { echo "FAILED: git checkout $TARGET_SHA"; exit 1; }
+echo "$TARGET_SHA" > "$APP_DIR/DEPLOY_SHA" || { echo "FAILED: could not write DEPLOY_SHA"; exit 1; }
 echo "    Checked out $TARGET_SHA"
 
 echo "==> (2) Install Python dependencies"
-pip install --user -r backend/requirements.txt -q || { echo "FAILED: pip install"; exit 1; }
-echo "    Python dependencies installed"
+REQ_HASH=$(sha256sum backend/requirements.txt | awk '{print $1}')
+REQ_HASH_UPDATED=0
+if [ -f /home/deploy/.requirements-hash ] && [ "$(cat /home/deploy/.requirements-hash)" = "$REQ_HASH" ]; then
+    echo "    requirements unchanged — skipping pip install"
+else
+    pip install --user -r backend/requirements.txt -q || { echo "FAILED: pip install"; exit 1; }
+    REQ_HASH_UPDATED=1
+    echo "    Python dependencies installed"
+fi
 
 echo "==> (3) Install frontend (pre-built on CI runner, copied to VPS)"
 # The dist/ was built on the GitHub Actions runner (7GB RAM) and copied here
@@ -248,13 +257,12 @@ echo "    Gunicorn reloaded"
 echo "==> (6) Wait for Gunicorn to be healthy on localhost"
 # Poll localhost directly (bypasses nginx) so the CI health check step can
 # start immediately rather than sleeping an arbitrary number of seconds.
-# Worst case: 20 attempts × (--max-time 10 + sleep 3) = ~260s total.
-# flask db upgrade + app factory init typically completes in <20s on this VPS.
+# Worst case: 18 attempts × (--max-time 5 + sleep 2) = ~126s total.
 GUNICORN_READY=0
-for i in $(seq 1 20); do
+for i in $(seq 1 18); do
     HC_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
         --connect-timeout 3 \
-        --max-time 10 \
+        --max-time 5 \
         http://localhost:5000/api/health 2>/dev/null || echo "000")
     echo "    localhost health check attempt $i: HTTP $HC_STATUS"
     if [ "$HC_STATUS" = "200" ]; then
@@ -262,10 +270,10 @@ for i in $(seq 1 20); do
         GUNICORN_READY=1
         break
     fi
-    sleep 3
+    sleep 2
 done
 if [ "$GUNICORN_READY" = "0" ]; then
-    echo "FAILED: Gunicorn did not become healthy on localhost after ~260s"
+    echo "FAILED: Gunicorn did not become healthy on localhost after ~126s"
     exit 1
 fi
 
@@ -298,6 +306,7 @@ verify_async_stack_services || exit 1
 echo "    async stack verified"
 
 echo "==> (8) Post-deploy HubSpot sync dispatch (non-blocking)"
+export DEPLOY_CHANGED_PATHS_FILE="${DEPLOY_CHANGED_PATHS_FILE:-/home/deploy/changed_paths.txt}"
 cd backend
 set -a
 # shellcheck source=/dev/null
@@ -309,6 +318,11 @@ FLASK_ENV=production python3.11 scripts/post_deploy_sync.py || {
 }
 cd ..
 echo "    Post-deploy HubSpot sync dispatched (runs via Celery or subprocess)"
+
+if [ "$REQ_HASH_UPDATED" = "1" ]; then
+    echo "$REQ_HASH" > /home/deploy/.requirements-hash
+    echo "    requirements hash updated after successful deploy"
+fi
 
 echo "==> Deploy complete: $TARGET_SHA"
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Deploy successful: $PREVIOUS_SHA -> $TARGET_SHA" >> "$ROLLBACK_LOG"

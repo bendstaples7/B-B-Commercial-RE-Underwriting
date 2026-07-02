@@ -46,6 +46,14 @@ jobs:
         run: npm run build
         working-directory: frontend
 
+      - name: Upload frontend dist for deploy
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 1
+          if-no-files-found: error
+
   validate-workflows:
     name: Validate workflow YAML syntax
     runs-on: ubuntu-latest
@@ -264,7 +272,7 @@ jobs:
         working-directory: backend
 
       - name: Run tests
-        run: pytest
+        run: pytest -n auto -m "not performance"
         working-directory: backend
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db

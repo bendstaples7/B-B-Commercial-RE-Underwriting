@@ -8,7 +8,7 @@
   "theme_color": "#1976d2",
   "icons": [
     {
-      "src": "/vite.svg",
+      "src": "/quick-add-icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"

@@ -30,10 +30,11 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import BarChartIcon from '@mui/icons-material/BarChart'
 import { commandCenterService, leadTaskService, leadScoreService } from '@/services/api'
 import { leadService } from '@/services/leadApi'
+import openLetterService from '@/services/openLetterApi'
 import { deriveQueueContext } from '@/utils/deriveQueueContext'
 import { parseLogActivityParam } from '@/utils/queueLogNavigation'
 import { ALL_LEAD_STATUSES } from '@/constants/leadStatuses'
-import type { CommandCenterPayload, PropertyDetail, LeadTask, LeadTimelineEntry, PropertyScoreResponse, PropertyScoreRecord } from '@/types'
+import type { CommandCenterPayload, PropertyDetail, LeadTask, LeadTimelineEntry, PropertyScoreResponse, PropertyScoreRecord, OutreachContact } from '@/types'
 import { LeadScoreBadge } from '@/components/LeadScoreBadge'
 import type { ScoreTier } from '@/components/LeadScoreBadge'
 import { LeadStatusSelector } from '@/components/LeadStatusSelector'
@@ -42,6 +43,8 @@ import { LeadTimeline } from '@/components/LeadTimeline'
 import { LogActivityModal, type ActivityLogType } from '@/components/LogActivityModal'
 import { ScoreBreakdownDialog } from '@/components/ScoreBreakdownDialog'
 import { RecommendedActionPanel } from '@/components/RecommendedActionPanel'
+import { resolveOutreachContactFromCommandCenter } from '@/utils/outreachContact'
+import { outreachContactPlacement } from '@/utils/outreachContactPlacement'
 import { LeadDetailTabPanel } from '@/components/lead-detail/LeadDetailTabPanel'
 import { PropertySidebar } from '@/components/lead-detail/PropertySidebar'
 
@@ -208,6 +211,9 @@ function QueueContextBanners({ commandCenterData }: QueueContextBannersProps) {
 interface TasksPanelProps {
   leadId: number
   initialTasks: LeadTask[]
+  outreachContact?: OutreachContact | null
+  showOutreachContactOnPrimaryTask?: boolean
+  missingOutreachChannel?: OutreachContact['channel'] | null
   onTasksChanged: () => void
 }
 
@@ -217,7 +223,14 @@ export interface TasksPanelHandle {
 }
 
 const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function TasksPanel(
-  { leadId, initialTasks, onTasksChanged },
+  {
+    leadId,
+    initialTasks,
+    outreachContact,
+    showOutreachContactOnPrimaryTask = false,
+    missingOutreachChannel = null,
+    onTasksChanged,
+  },
   ref,
 ) {
   const queryClient = useQueryClient()
@@ -225,6 +238,11 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
   const taskListRef = useRef<LeadTaskListHandle>(null)
   const [tasks, setTasks] = useState<LeadTask[]>(initialTasks)
   const tasksRef = useRef<LeadTask[]>(initialTasks)
+
+  useEffect(() => {
+    setTasks(initialTasks)
+    tasksRef.current = initialTasks
+  }, [initialTasks])
 
   React.useImperativeHandle(ref, () => ({
     scrollIntoView: () => {
@@ -289,6 +307,9 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
         ref={taskListRef}
         leadId={leadId}
         tasks={tasks}
+        outreachContact={outreachContact}
+        showOutreachContactOnPrimaryTask={showOutreachContactOnPrimaryTask}
+        missingOutreachChannel={missingOutreachChannel}
         onTaskCreated={handleTaskCreated}
         onTaskCompleted={handleTaskCompleted}
         onOptimisticTaskCreate={handleOptimisticTaskCreate}
@@ -425,7 +446,12 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const showLead = !commandCenterLoading && !leadLoading && !commandCenterError
   const [activityModal, setActivityModal] = useState<ActivityLogType | null>(null)
   const [highlightEntryId, setHighlightEntryId] = useState<number | null>(null)
-  const [activitySnackbar, setActivitySnackbar] = useState<{ open: boolean; message: string }>({
+  const [activitySnackbar, setActivitySnackbar] = useState<{
+    open: boolean
+    message: string
+    linkTo?: string
+    linkLabel?: string
+  }>({
     open: false,
     message: '',
   })
@@ -458,6 +484,19 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         tasksPanelRef.current?.scrollIntoView()
         window.setTimeout(() => tasksPanelRef.current?.openCreateForm(), 300)
         return
+      case 'add_to_mail_batch': {
+        const result = await openLetterService.enqueue([leadId])
+        setActivitySnackbar({
+          open: true,
+          message: `Added to mail queue (${result.queued_count}/${result.batch_minimum})`,
+          linkTo: '/queues/ready-to-mail',
+          linkLabel: 'View batch',
+        })
+        await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+        await queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
+        await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+        return
+      }
       default:
         await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
     }
@@ -521,6 +560,20 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   }
 
   // Main layout
+  const outreachContact = resolveOutreachContactFromCommandCenter(commandCenterData!)
+  const openTasks = commandCenterData!.open_tasks ?? []
+  const recommendedActionValue = commandCenterData!.recommended_action?.value ?? null
+  const contactMethod = commandCenterData!.recommended_action?.recommended_contact_method ?? null
+  const placement = outreachContactPlacement(openTasks, outreachContact, recommendedActionValue)
+  const missingOutreachChannel =
+    placement !== 'none' && contactMethod && !outreachContact
+      ? (contactMethod as OutreachContact['channel'])
+      : null
+  const recommendedActionWithContact = {
+    ...commandCenterData!.recommended_action,
+    outreach_contact: outreachContact,
+  }
+
   return (
     <Box>
       {/* Sticky header — owner name, address, score, status, back button (Req 5.1, 10.1, 10.2) */}
@@ -542,9 +595,10 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           {/* RecommendedActionPanel — first in ActivityColumn (Req 5.3) */}
           <Box sx={{ mb: 2 }}>
             <RecommendedActionPanel
-              recommendedAction={commandCenterData!.recommended_action}
+              recommendedAction={recommendedActionWithContact}
               leadStatus={commandCenterData!.lead_status}
-              openTasks={commandCenterData!.open_tasks ?? []}
+              openTasks={openTasks}
+              showOutreachContact={placement === 'recommended_action'}
               onAction={handleRaAction}
               onCreateTask={handleCreateTask}
             />
@@ -554,7 +608,10 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           <TasksPanel
             ref={tasksPanelRef}
             leadId={leadId}
-            initialTasks={commandCenterData!.open_tasks ?? []}
+            initialTasks={openTasks}
+            outreachContact={outreachContact}
+            showOutreachContactOnPrimaryTask={placement === 'primary_task'}
+            missingOutreachChannel={missingOutreachChannel}
             onTasksChanged={() => queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })}
           />
 
@@ -600,6 +657,18 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           severity="success"
           onClose={() => setActivitySnackbar((s) => ({ ...s, open: false }))}
           data-testid="activity-success-alert"
+          action={
+            activitySnackbar.linkTo ? (
+              <Button
+                color="inherit"
+                size="small"
+                component={RouterLink}
+                to={activitySnackbar.linkTo}
+              >
+                {activitySnackbar.linkLabel ?? 'View'}
+              </Button>
+            ) : undefined
+          }
         >
           {activitySnackbar.message}
         </Alert>

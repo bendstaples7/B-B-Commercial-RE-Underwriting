@@ -25,8 +25,9 @@ import AddIcon from '@mui/icons-material/Add'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import AddTaskIcon from '@mui/icons-material/AddTask'
 import HubIcon from '@mui/icons-material/Hub'
-import type { LeadTask, CRMRecommendedAction } from '@/types'
+import type { LeadTask, CRMRecommendedAction, OutreachContact } from '@/types'
 import { leadTaskService, callLogService } from '@/services/api'
+import { OutreachContactInline, OutreachContactMissingHint } from '@/components/OutreachContactCallout'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -99,6 +100,11 @@ export interface LeadTaskListProps {
    *  placeholder task (id = 0) so the parent can remove it from the list.
    */
   onOptimisticTaskRevert?: (optimisticTask: LeadTask) => void
+  outreachContact?: OutreachContact | null
+  /** Show outreach contact inline on the primary (first sorted) open task only */
+  showOutreachContactOnPrimaryTask?: boolean
+  /** Channel when outreach is recommended but no contact could be resolved */
+  missingOutreachChannel?: OutreachContact['channel'] | null
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +126,9 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
     onHubSpotTaskDone,
     onOptimisticTaskCreate,
     onOptimisticTaskRevert,
+    outreachContact,
+    showOutreachContactOnPrimaryTask = false,
+    missingOutreachChannel = null,
   },
   ref,
 ) {
@@ -270,6 +279,10 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
             const overdue = dueStatus === 'overdue'
             const dueToday = dueStatus === 'due_today'
             const isHubSpot = task.source === 'hubspot'
+            const showContactOnTask =
+              showOutreachContactOnPrimaryTask
+              && index === 0
+              && (outreachContact || missingOutreachChannel)
             return (
               <Box key={task.id}>
                 {index > 0 && <Divider component="li" />}
@@ -375,6 +388,12 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
                             {formatDueDate(task.due_date)}
                             {overdue && ' (overdue)'}
                           </Typography>
+                        )}
+                        {showContactOnTask && outreachContact && (
+                          <OutreachContactInline contact={outreachContact} />
+                        )}
+                        {showContactOnTask && !outreachContact && missingOutreachChannel && (
+                          <OutreachContactMissingHint channel={missingOutreachChannel} />
                         )}
                         {task.source === 'hubspot' && (
                           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>

@@ -13,7 +13,7 @@ import {
 } from '@mui/material'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import type { PropertyScoreRecord, RecommendedAction } from '@/types'
-import { SCORING_ACTION_LABELS } from '@/constants/scoringRecommendedActions'
+import { SCORING_ACTION_LABELS, outreachDisplayLabel } from '@/constants/scoringRecommendedActions'
 import { humanize } from '@/utils/formatters'
 import { LeadScoreBadge } from './LeadScoreBadge'
 import { getDimensionMeta, getScoreVersionMeta } from '@/utils/scoreDimensionMeta'
@@ -82,7 +82,16 @@ export function ScoreBreakdownCard({ score, className, compact = false }: ScoreB
     missing_data,
   } = score
 
-  const actionLabel = SCORING_ACTION_LABELS[recommended_action] ?? humanize(recommended_action)
+  const inferredMethod =
+    recommended_action === 'call_ready'
+      ? 'phone'
+      : recommended_action === 'mail_ready'
+        ? 'direct_mail'
+        : null
+  const actionLabel =
+    outreachDisplayLabel(recommended_action, inferredMethod) ??
+    SCORING_ACTION_LABELS[recommended_action] ??
+    humanize(recommended_action)
   const actionColor = ACTION_COLORS[recommended_action] ?? 'default'
   const versionMeta = getScoreVersionMeta(score_version)
 

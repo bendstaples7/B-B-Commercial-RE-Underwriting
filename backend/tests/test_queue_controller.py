@@ -76,7 +76,7 @@ class TestGetCounts:
             expected_keys = {
                 'todays_action', 'previously_warm', 'follow_up_overdue',
                 'no_next_action', 'needs_review', 'do_not_contact',
-                'missing_property_match',
+                'missing_property_match', 'ready_to_mail', 'mail_candidates',
             }
             assert set(data.keys()) == expected_keys
 
@@ -440,5 +440,78 @@ class TestMissingPropertyMatchQueue:
             assert lead.id not in ids
 
 
+# ---------------------------------------------------------------------------
+# GET /api/queues/mail-candidates
+# ---------------------------------------------------------------------------
 
+class TestMailCandidatesQueue:
+    def test_returns_200(self, client, app):
+        with app.app_context():
+            response = client.get('/api/queues/mail-candidates', headers=_AUTH_HEADERS)
+            assert response.status_code == 200
+
+    def test_mail_ready_lead_appears(self, client, app):
+        with app.app_context():
+            lead = _make_lead(
+                app, '1 Mail Ready St',
+                lead_status='mailing_no_contact_made',
+                recommended_action='mail_ready',
+            )
+            response = client.get('/api/queues/mail-candidates', headers=_AUTH_HEADERS)
+            data = json.loads(response.data)
+            ids = [r['id'] for r in data['rows']]
+            assert lead.id in ids
+
+    def test_already_queued_lead_excluded(self, client, app):
+        from app import db
+        from app.models.mail_queue_item import MailQueueItem
+
+        with app.app_context():
+            lead = _make_lead(
+                app, '2 Mail Ready St',
+                lead_status='mailing_no_contact_made',
+                recommended_action='mail_ready',
+            )
+            db.session.add(MailQueueItem(
+                lead_id=lead.id, user_id='test-user', status='queued',
+            ))
+            db.session.commit()
+            response = client.get('/api/queues/mail-candidates', headers=_AUTH_HEADERS)
+            data = json.loads(response.data)
+            ids = [r['id'] for r in data['rows']]
+            assert lead.id not in ids
+
+    def test_mail_candidates_include_last_sale_at(self, client, app):
+        with app.app_context():
+            lead = _make_lead(
+                app, '4 Mail Sale St',
+                lead_status='mailing_no_contact_made',
+                recommended_action='mail_ready',
+                most_recent_sale='6/15/2010',
+            )
+            response = client.get('/api/queues/mail-candidates', headers=_AUTH_HEADERS)
+            data = json.loads(response.data)
+            match = next(r for r in data['rows'] if r['id'] == lead.id)
+            assert match['last_sale_at'] == '2010-06-15'
+
+    def test_counts_include_ready_to_mail(self, client, app):
+        from app import db
+        from app.models.mail_queue_item import MailQueueItem
+
+        with app.app_context():
+            lead = _make_lead(
+                app, '3 Mail Ready St',
+                lead_status='mailing_no_contact_made',
+                recommended_action='mail_ready',
+            )
+            db.session.add(MailQueueItem(
+                lead_id=lead.id, user_id='test-user', status='queued',
+            ))
+            db.session.commit()
+            response = client.get('/api/queues/counts', headers=_AUTH_HEADERS)
+            data = json.loads(response.data)
+            assert data['ready_to_mail'] >= 1
+            candidates = client.get('/api/queues/mail-candidates', headers=_AUTH_HEADERS)
+            candidate_rows = json.loads(candidates.data)['rows']
+            assert lead.id not in [row['id'] for row in candidate_rows]
 

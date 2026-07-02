@@ -135,22 +135,33 @@ export function QuickAddPage() {
       setGpsStatus('error')
       return
     }
+    if (coords) return
+
     setGpsStatus('loading')
     navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        const lat = position.coords.latitude
-        const lng = position.coords.longitude
-        setCoords({ lat, lng })
+      (position) => {
+        setCoords({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        })
         setGpsStatus('ok')
-        if (mapsLoaded) {
-          const label = await reverseGeocodeLabel(lat, lng)
-          if (label) setGpsLabel(label)
-        }
       },
       () => setGpsStatus('error'),
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 },
     )
-  }, [mapsLoaded])
+  }, [coords])
+
+  useEffect(() => {
+    if (!mapsLoaded || !coords) return
+
+    let cancelled = false
+    reverseGeocodeLabel(coords.lat, coords.lng).then((label) => {
+      if (!cancelled && label) setGpsLabel(label)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [mapsLoaded, coords])
 
   const quickAddMutation = useMutation({
     mutationFn: (payload: QuickAddPayload) => leadService.quickAdd(payload),

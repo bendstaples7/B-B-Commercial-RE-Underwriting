@@ -476,3 +476,88 @@ class TestDefaultWeights:
         assert DEFAULT_WEIGHTS["location_desirability_weight"] == 0.15
         assert DEFAULT_WEIGHTS["data_enrichment_weight"] == 0.20
         assert abs(sum(DEFAULT_WEIGHTS.values()) - 1.0) < 0.001
+
+
+class TestOutreachContactMethod:
+    """Unified engine attaches recommended_contact_method on compute."""
+
+    def test_compute_sets_contact_method_for_outreach(self, app):
+        lead = _make_lead(has_phone=True, has_email=True)
+        lead.lead_status = 'mailing_contacted_interested'
+        lead.has_property_match = True
+        lead.analysis_complete = True
+        lead.is_warm = True
+        lead.follow_up_overdue = False
+
+        engine = LeadScoringEngine()
+        weights = _default_mock_weights()
+
+        with app.app_context(), \
+             patch.object(engine, 'get_weights', return_value=weights), \
+             patch.object(LeadScoringEngine, '_has_recent_email', return_value=False), \
+             patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
+             patch('app.services.lead_scoring_engine._has_overdue_hubspot_task', return_value=False), \
+             patch('app.services.lead_scoring_engine._resolve_crm_flags', return_value=(True, True, True)), \
+             patch.object(LeadScoringEngine, '_score_engagement', return_value=0.0):
+            result = engine.compute(lead, weights)
+
+        assert result.recommended_contact_method == 'phone'
+        assert result.recommended_action == 'call_ready'
+
+
+class TestRecentlySoldMailGuard:
+    def test_recent_sale_suppresses_mail_ready(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        def _flags(lead):
+            return True, True, True
+
+        monkeypatch.setattr('app.services.lead_scoring_engine._resolve_crm_flags', _flags)
+        monkeypatch.setattr('app.services.lead_scoring_engine._count_open_tasks', lambda _id: 0)
+        monkeypatch.setattr('app.services.lead_scoring_engine._has_overdue_hubspot_task', lambda _id: False)
+
+        lead = MagicMock()
+        lead.lead_status = 'mailing_no_contact_made'
+        lead.lead_category = 'residential'
+        lead.do_not_contact = False
+        lead.follow_up_overdue = False
+        lead.is_warm = False
+        lead.id = 1
+        lead.property_street = '123 Main St'
+        lead.analysis_complete = True
+        sale = date.today() - timedelta(days=60)
+        lead.acquisition_date = None
+        lead.most_recent_sale = sale.strftime('%m/%d/%Y')
+
+        action, reason, _meta = LeadScoringEngine.evaluate_recommended_action(
+            lead, total_score=85.0, data_quality_score=80.0, score_tier='A',
+        )
+        assert action == 'nurture'
+        assert reason == 'recently_sold'
+
+    def test_tier_b_recently_sold_downgrades_to_nurture(self, monkeypatch):
+        def _flags(lead):
+            return True, True, True
+
+        monkeypatch.setattr('app.services.lead_scoring_engine._resolve_crm_flags', _flags)
+        monkeypatch.setattr('app.services.lead_scoring_engine._count_open_tasks', lambda _id: 0)
+        monkeypatch.setattr('app.services.lead_scoring_engine._has_overdue_hubspot_task', lambda _id: False)
+
+        lead = MagicMock()
+        lead.lead_status = 'mailing_no_contact_made'
+        lead.lead_category = 'residential'
+        lead.do_not_contact = False
+        lead.follow_up_overdue = False
+        lead.is_warm = False
+        lead.id = 2
+        lead.property_street = '456 Oak St'
+        lead.analysis_complete = True
+        sale = date.today() - timedelta(days=60)
+        lead.acquisition_date = None
+        lead.most_recent_sale = sale.strftime('%m/%d/%Y')
+
+        action, reason, _meta = LeadScoringEngine.evaluate_recommended_action(
+            lead, total_score=75.0, data_quality_score=80.0, score_tier='B',
+        )
+        assert action == 'nurture'
+        assert reason == 'recently_sold'
