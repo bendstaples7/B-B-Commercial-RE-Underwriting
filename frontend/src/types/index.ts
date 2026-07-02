@@ -1531,7 +1531,52 @@ export interface HubSpotConfig {
   account_name?: string | null
   configured?: boolean
   has_client_secret?: boolean
+  write_back_enabled?: boolean
 }
+
+export interface QuickAddPayload {
+  property_street: string
+  note?: string | null
+  priority?: 'high' | 'medium' | 'low' | null
+  deal_source?: string | null
+  date_identified?: string | null
+  capture_latitude?: number | null
+  capture_longitude?: number | null
+  capture_location_label?: string | null
+}
+
+export interface QuickAddResponse {
+  lead_id: number
+  created: boolean
+  property_street: string
+  lead_status: string
+  deal_source: string
+  date_identified: string | null
+  hubspot_push_status: 'disabled' | 'queued' | 'queue_failed'
+  hubspot_write_back_enabled: boolean
+}
+
+export interface QuickAddLookupMatch {
+  lead_id: number
+  property_street: string | null
+  lead_status: string | null
+  deal_source: string | null
+  date_identified: string | null
+}
+
+export interface QuickAddLookupResponse {
+  matches: QuickAddLookupMatch[]
+}
+
+/** HubSpot-aligned deal sources for quick-add (Driving For Dollars is the walk-by default). */
+export const QUICK_ADD_DEAL_SOURCES = [
+  'Driving For Dollars',
+  'Cityscape',
+  'Cityscape Unused Zoning Capacity',
+  'Referral',
+  'Direct Mail',
+  'Other',
+] as const
 
 export interface HubSpotImportRun {
   id: number

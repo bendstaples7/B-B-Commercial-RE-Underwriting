@@ -477,6 +477,12 @@ def bulk_enrich_task(lead_ids: list[int], source_name: str) -> int:
         return len(records)
 
 
+@celery.task(name='quick_add.followup')
+def run_quick_add_followup(lead_id: int) -> dict:
+    from app.tasks.quick_add_tasks import run_quick_add_followup_inner
+    return run_quick_add_followup_inner(lead_id)
+
+
 @celery.task(name='workflow.run_comparable_search')
 def run_comparable_search_task(session_id: str) -> dict:
     """Celery task wrapper for running the comparable search workflow step.

@@ -349,6 +349,20 @@ class HubSpotClientService:
         logger.info("HubSpotClientService.complete_task: marking task %s COMPLETED", hubspot_task_id)
         return self._patch(path, body)
 
+    def create_deal(self, properties: dict) -> dict:
+        """Create a HubSpot deal via POST /crm/v3/objects/deals."""
+        path = "/crm/v3/objects/deals"
+        body = {"properties": properties}
+        logger.info("HubSpotClientService.create_deal: dealname=%r", properties.get('dealname'))
+        return self._post(path, body)
+
+    def update_deal(self, hubspot_deal_id: str, properties: dict) -> dict:
+        """Update a HubSpot deal via PATCH /crm/v3/objects/deals/{id}."""
+        path = f"/crm/v3/objects/deals/{hubspot_deal_id}"
+        body = {"properties": properties}
+        logger.info("HubSpotClientService.update_deal: id=%s", hubspot_deal_id)
+        return self._patch(path, body)
+
     # ------------------------------------------------------------------ #
     # Paginated object iterators                                           #
     # ------------------------------------------------------------------ #

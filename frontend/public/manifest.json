@@ -1,0 +1,17 @@
+{
+  "name": "RE Analysis — Quick Add",
+  "short_name": "Quick Add",
+  "description": "Capture walk-by commercial real estate leads in the field.",
+  "start_url": "/quick-add",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1976d2",
+  "icons": [
+    {
+      "src": "/vite.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

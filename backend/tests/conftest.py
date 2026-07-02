@@ -74,6 +74,10 @@ def app():
         _celery_worker.run_comparable_search_task,
         'delay',
         return_value=MagicMock(),
+    ), patch.object(
+        _celery_worker.run_quick_add_followup,
+        'delay',
+        return_value=MagicMock(),
     ):
         with app.app_context():
             db.create_all()
