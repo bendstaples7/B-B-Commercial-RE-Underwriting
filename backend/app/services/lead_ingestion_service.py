@@ -111,13 +111,20 @@ class LeadIngestionService:
         self.gis_registry = gis_registry  # type: dict[str, GISConnector]
 
     def _gis_connector_for_lead(self, lead):
-        """Resolve the GIS connector for a lead (registry + global fallback)."""
+        """Resolve the GIS connector for a lead (instance registry + global fallback)."""
         from app.services.gis.routing import connector_for_lead, _resolve_market
+        from app.services.gis.base import GISConnectorRegistry
 
         market = _resolve_market(lead)
         if market and market in self.gis_registry:
             return self.gis_registry.get(market)
-        return connector_for_lead(lead)
+
+        # Only use the global connector registry in production wiring where
+        # gis_registry *is* GISConnectorRegistry. Tests pass an explicit dict
+        # (often empty) and must not fall through to live connectors.
+        if self.gis_registry is GISConnectorRegistry:
+            return connector_for_lead(lead)
+        return None
 
     # ------------------------------------------------------------------ #
     # Skip-trace flag (Requirement 1.5)                                   #

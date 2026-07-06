@@ -386,6 +386,13 @@ class DataSourceConnector:
     @staticmethod
     def _merge_json_field(existing, incoming):
         """Merge enrichment JSON payloads from multiple plugins."""
+        def merge_records(left, right):
+            merged = []
+            for item in left + right:
+                if item not in merged:
+                    merged.append(item)
+            return merged
+
         if existing is None:
             return incoming
         if isinstance(existing, dict) and isinstance(incoming, dict):
@@ -394,19 +401,25 @@ class DataSourceConnector:
                 if key not in merged:
                     merged[key] = value
                 elif isinstance(merged[key], list) and isinstance(value, list):
-                    merged[key] = merged[key] + value
+                    merged[key] = merge_records(merged[key], value)
                 elif isinstance(merged[key], dict) and isinstance(value, dict):
                     merged[key] = {**merged[key], **value}
                 else:
                     merged[key] = value
             return merged
         if isinstance(existing, list) and isinstance(incoming, dict):
-            return {"records": existing, **incoming}
+            merged = dict(incoming)
+            incoming_records = merged.get("records")
+            merged["records"] = merge_records(
+                existing,
+                incoming_records if isinstance(incoming_records, list) else [],
+            )
+            return merged
         if isinstance(existing, dict) and isinstance(incoming, list):
             merged = dict(existing)
             records = merged.get("records")
             if isinstance(records, list):
-                merged["records"] = records + incoming
+                merged["records"] = merge_records(records, incoming)
             else:
                 merged["records"] = incoming
             return merged

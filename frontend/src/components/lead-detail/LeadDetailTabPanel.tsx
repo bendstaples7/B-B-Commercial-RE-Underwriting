@@ -86,6 +86,7 @@ function EnrichmentDetailsCell({
         </Typography>
         <IconButton
           size="small"
+          aria-expanded={open}
           aria-label={open ? 'Hide enrichment JSON' : 'Show enrichment JSON'}
           onClick={() => setOpen((prev) => !prev)}
         >

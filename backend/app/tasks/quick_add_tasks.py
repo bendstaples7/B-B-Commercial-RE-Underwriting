@@ -13,7 +13,7 @@ def run_quick_add_followup_inner(lead_id: int) -> dict:
 
     app = create_app()
     with app.app_context():
-        enrich_result = None
+        enrich_result = False
         try:
             from app.services.cook_county_enrichment_service import (
                 dispatch_cook_county_enrichment,
@@ -63,6 +63,6 @@ def run_quick_add_followup_inner(lead_id: int) -> dict:
 
         return {
             'lead_id': lead_id,
-            'enriched': enrich_result is not None,
+            'enriched': enrich_result is True,
             'hubspot': push_result,
         }

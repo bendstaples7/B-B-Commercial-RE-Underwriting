@@ -40,6 +40,12 @@ class TestOwnerNameUtils:
         assert fields["owner_first_name"] == "John"
         assert fields["owner_last_name"] == "Smith"
 
+    def test_individual_name_not_misclassified_as_entity(self):
+        fields = {}
+        apply_owner_name_fields(fields, "Vincent Alpha")
+        assert fields["ownership_type"] == "individual"
+        assert fields["owner_first_name"] == "Vincent"
+
 
 class TestPluginRegistration:
     def test_all_new_plugins_registered(self):

@@ -273,9 +273,18 @@ def backfill_cook_county_enrichment(
                 summary["skipped"] += 1
                 continue
 
+            estimated_calls = len(plugins_for_lead(lead))
+            if estimated_calls == 0:
+                summary["skipped"] += 1
+                continue
+            if summary["socrata_calls"] + estimated_calls > socrata_call_cap:
+                summary["capped"] = True
+                summary["last_id"] = cursor
+                return summary
+
             try:
                 result = enrich_cook_county_lead(lead.id)
-                summary["socrata_calls"] += result.get("plugins_run", 0)
+                summary["socrata_calls"] += result.get("plugins_run", estimated_calls)
                 if result.get("skipped"):
                     summary["skipped"] += 1
                 else:
