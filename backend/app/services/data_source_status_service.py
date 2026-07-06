@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 
 from app import db
 from app.models.enrichment import DataSource, EnrichmentRecord
@@ -12,6 +12,7 @@ from app.models.import_job import ImportJob
 from app.models.lead import Lead
 from app.models.hubspot_config import HubSpotConfig
 from app.services.cache_status_service import CacheStatusService
+from app.services.cook_county_enrichment_service import AUTOMATED_ENRICHMENT_SOURCES
 
 
 def compute_days_since(dt: datetime) -> int:
@@ -99,52 +100,70 @@ class DataSourceStatusService:
     def _get_enrichment_statuses(self, user_id: str) -> list:
         """Return per-enrichment-source coverage counts scoped to user_id.
 
-        Uses a single GROUP BY query across leads and enrichment_records to
-        avoid N+1 queries.  Returns zeroed counts (not an error) when the user
-        has no leads.
+        Counts are per *lead* (distinct lead_id), not per enrichment record.
+        ``no_results`` runs reduce ``not_run_count`` but do not increase
+        ``success_count``.
         """
-        # All active enrichment data sources
         sources = db.session.query(DataSource).order_by(DataSource.id).all()
         if not sources:
             return []
 
-        # Total leads owned by this user
         total_leads = (
             db.session.query(func.count(Lead.id))
             .filter(Lead.owner_user_id == user_id)
             .scalar()
         ) or 0
 
-        # Single GROUP BY query: data_source_id × status → count
-        # Joins enrichment_records through leads filtered by owner_user_id.
-        rows = (
+        # Per lead + source: did this lead get success and/or failed?
+        lead_rows = (
             db.session.query(
                 EnrichmentRecord.data_source_id,
-                EnrichmentRecord.status,
-                func.count(EnrichmentRecord.id).label("cnt"),
+                EnrichmentRecord.lead_id,
+                func.max(
+                    case((EnrichmentRecord.status == "success", 1), else_=0)
+                ).label("has_success"),
+                func.max(
+                    case((EnrichmentRecord.status == "failed", 1), else_=0)
+                ).label("has_failed"),
+                func.max(
+                    case((EnrichmentRecord.status == "pending", 1), else_=0)
+                ).label("has_pending"),
             )
             .join(Lead, Lead.id == EnrichmentRecord.lead_id)
             .filter(Lead.owner_user_id == user_id)
-            .group_by(EnrichmentRecord.data_source_id, EnrichmentRecord.status)
+            .group_by(EnrichmentRecord.data_source_id, EnrichmentRecord.lead_id)
             .all()
         )
 
-        # Build a lookup: { data_source_id: { status: count } }
-        counts: dict[int, dict[str, int]] = {}
-        for source_id, status, cnt in rows:
-            counts.setdefault(source_id, {})[status] = cnt
+        per_source: dict[int, dict[str, int]] = {}
+        for source_id, _lead_id, has_success, has_failed, has_pending in lead_rows:
+            bucket = per_source.setdefault(source_id, {
+                "success": 0,
+                "failed": 0,
+                "pending": 0,
+                "attempted": 0,
+            })
+            bucket["attempted"] += 1
+            if has_success:
+                bucket["success"] += 1
+            elif has_failed:
+                bucket["failed"] += 1
+            elif has_pending:
+                bucket["pending"] += 1
 
         results = []
         for source in sources:
-            source_counts = counts.get(source.id, {})
-            success_count = source_counts.get("success", 0)
-            failed_count = source_counts.get("failed", 0)
-            pending_count = source_counts.get("pending", 0)
-            not_run_count = max(
-                0, total_leads - (success_count + failed_count + pending_count)
-            )
+            bucket = per_source.get(source.id, {
+                "success": 0,
+                "failed": 0,
+                "pending": 0,
+                "attempted": 0,
+            })
+            success_count = bucket["success"]
+            failed_count = bucket["failed"]
+            pending_count = bucket["pending"]
+            not_run_count = max(0, total_leads - bucket["attempted"])
 
-            # Most recent enrichment record for this source / user
             latest_record = (
                 db.session.query(EnrichmentRecord.created_at)
                 .join(Lead, Lead.id == EnrichmentRecord.lead_id)
@@ -160,10 +179,16 @@ class DataSourceStatusService:
                 latest_record.isoformat() + "Z" if latest_record else None
             )
 
+            refresh_type = (
+                "automatic"
+                if source.name in AUTOMATED_ENRICHMENT_SOURCES
+                else "on_demand"
+            )
+
             results.append({
                 "name": source.name,
                 "source_type": "enrichment",
-                "refresh_type": "on_demand",
+                "refresh_type": refresh_type,
                 "is_active": source.is_active,
                 "last_refreshed_at": last_refreshed_at,
                 "success_count": success_count,

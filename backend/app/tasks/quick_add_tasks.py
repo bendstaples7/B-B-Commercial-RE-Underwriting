@@ -15,11 +15,12 @@ def run_quick_add_followup_inner(lead_id: int) -> dict:
     with app.app_context():
         enrich_result = None
         try:
-            from app.services.data_source_connector import DataSourceConnector
-            connector = DataSourceConnector()
-            enrich_result = connector.enrich_lead(lead_id, 'cook_county_assessor')
+            from app.services.cook_county_enrichment_service import (
+                dispatch_cook_county_enrichment,
+            )
+            enrich_result = dispatch_cook_county_enrichment(lead_id)
         except Exception as exc:
-            logger.warning('Quick-add assessor enrichment failed for lead %s: %s', lead_id, exc)
+            logger.warning('Quick-add Cook County enrichment failed for lead %s: %s', lead_id, exc)
 
         try:
             push_result = HubSpotWriteBackService().push_lead_as_deal(lead_id)

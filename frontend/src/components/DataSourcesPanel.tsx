@@ -270,7 +270,7 @@ interface EnrichmentSourceCardProps {
 
 /**
  * Card for one enrichment plugin. Displays:
- * - Source name, "On Demand" refresh type label
+ * - Source name, refresh type label (Automatic / On Demand)
  * - CoverageBar with enriched/failed/not-run counts
  * - Last updated timestamp with staleness note when data is > 60s old
  * - Amber warning when failures exist
@@ -294,7 +294,9 @@ export function EnrichmentSourceCard({ source, dataUpdatedAt }: EnrichmentSource
               </Typography>
             )}
           </Typography>
-          <Typography variant="caption" color="text.secondary">On Demand</Typography>
+          <Typography variant="caption" color="text.secondary">
+            {source.refresh_type === 'automatic' ? 'Automatic' : 'On Demand'}
+          </Typography>
         </Box>
 
         <CoverageBar

@@ -163,6 +163,12 @@ celery.conf.update(
             'schedule': 6 * 3600,  # every 6 hours
             'options': {'expires': 3600},
         },
+        # Cook County open-data enrichment backfill — offset 3h from GIS backfill.
+        'cook-county-backfill-enrichment': {
+            'task': 'cook_county.backfill_enrichment',
+            'schedule': crontab(hour='3,9,15,21', minute=30),
+            'options': {'expires': 3600},
+        },
         # Nightly duplicate sentinel — auto-merge clear owner+street duplicates,
         # flag ambiguous clusters for review. Runs after other nightly jobs.
         'lead-dedup-nightly-sentinel': {
@@ -481,6 +487,49 @@ def bulk_enrich_task(lead_ids: list[int], source_name: str) -> int:
 def run_quick_add_followup(lead_id: int) -> dict:
     from app.tasks.quick_add_tasks import run_quick_add_followup_inner
     return run_quick_add_followup_inner(lead_id)
+
+
+@celery.task(name='cook_county.enrich_lead')
+def cook_county_enrich_lead_task(lead_id: int) -> dict:
+    """Run the Cook County enrichment orchestrator for one lead."""
+    import logging
+    _logger = logging.getLogger('celery.cook_county.enrich_lead')
+
+    try:
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            from app.services.cook_county_enrichment_service import enrich_cook_county_lead
+            return enrich_cook_county_lead(lead_id)
+    except Exception as exc:
+        _logger.error("cook_county.enrich_lead failed for lead %s: %s", lead_id, exc)
+        return {
+            'lead_id': lead_id,
+            'skipped': True,
+            'skip_reason': 'task_error',
+            'error': str(exc),
+        }
+
+
+@celery.task(bind=True, name='cook_county.backfill_enrichment')
+def cook_county_backfill_enrichment_task(self):
+    """Periodic task: enrich Cook County leads missing recent county plugin runs."""
+    import logging
+    _logger = logging.getLogger('celery.cook_county.backfill_enrichment')
+
+    try:
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            from app.services.cook_county_enrichment_service import (
+                backfill_cook_county_enrichment,
+            )
+            summary = backfill_cook_county_enrichment()
+            _logger.info("cook_county.backfill_enrichment: %s", summary)
+            return summary
+    except Exception as exc:
+        _logger.error("cook_county.backfill_enrichment failed: %s", exc)
+        raise
 
 
 @celery.task(name='workflow.run_comparable_search')
