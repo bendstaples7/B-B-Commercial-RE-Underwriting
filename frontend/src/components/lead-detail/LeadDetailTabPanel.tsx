@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Alert,
@@ -76,7 +76,10 @@ function EnrichmentDetailsCell({
   }
 
   const fieldCount = Object.keys(retrievedData).length
-  const preview = JSON.stringify(retrievedData, null, 2)
+  const preview = useMemo(
+    () => (open ? JSON.stringify(retrievedData, null, 2) : ''),
+    [open, retrievedData],
+  )
 
   return (
     <Box>

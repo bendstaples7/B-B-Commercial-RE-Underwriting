@@ -27,6 +27,11 @@ def _app_token(portal: str) -> str:
     )
 
 
+def escape_soql_literal(value: str) -> str:
+    """Escape a string for use inside a SoQL single-quoted literal."""
+    return (value or "").replace("'", "''")
+
+
 def socrata_get(
     dataset_id: str,
     *,

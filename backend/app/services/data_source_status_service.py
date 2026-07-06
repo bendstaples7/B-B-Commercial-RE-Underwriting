@@ -114,7 +114,7 @@ class DataSourceStatusService:
             .scalar()
         ) or 0
 
-        # Per lead + source: did this lead get success and/or failed?
+        # Per lead + source: did this lead get success, failed, pending, or no_results?
         lead_rows = (
             db.session.query(
                 EnrichmentRecord.data_source_id,
@@ -128,6 +128,9 @@ class DataSourceStatusService:
                 func.max(
                     case((EnrichmentRecord.status == "pending", 1), else_=0)
                 ).label("has_pending"),
+                func.max(
+                    case((EnrichmentRecord.status == "no_results", 1), else_=0)
+                ).label("has_no_results"),
             )
             .join(Lead, Lead.id == EnrichmentRecord.lead_id)
             .filter(Lead.owner_user_id == user_id)
@@ -136,11 +139,12 @@ class DataSourceStatusService:
         )
 
         per_source: dict[int, dict[str, int]] = {}
-        for source_id, _lead_id, has_success, has_failed, has_pending in lead_rows:
+        for source_id, _lead_id, has_success, has_failed, has_pending, has_no_results in lead_rows:
             bucket = per_source.setdefault(source_id, {
                 "success": 0,
                 "failed": 0,
                 "pending": 0,
+                "no_results": 0,
                 "attempted": 0,
             })
             bucket["attempted"] += 1
@@ -150,6 +154,8 @@ class DataSourceStatusService:
                 bucket["failed"] += 1
             elif has_pending:
                 bucket["pending"] += 1
+            elif has_no_results:
+                bucket["no_results"] += 1
 
         results = []
         for source in sources:
@@ -157,11 +163,13 @@ class DataSourceStatusService:
                 "success": 0,
                 "failed": 0,
                 "pending": 0,
+                "no_results": 0,
                 "attempted": 0,
             })
             success_count = bucket["success"]
             failed_count = bucket["failed"]
             pending_count = bucket["pending"]
+            no_results_count = bucket["no_results"]
             not_run_count = max(0, total_leads - bucket["attempted"])
 
             latest_record = (
@@ -194,6 +202,7 @@ class DataSourceStatusService:
                 "success_count": success_count,
                 "failed_count": failed_count,
                 "pending_count": pending_count,
+                "no_results_count": no_results_count,
                 "not_run_count": not_run_count,
                 "total_leads_count": total_leads,
             })

@@ -160,7 +160,7 @@ celery.conf.update(
         # to 200 leads per run to keep the job short and avoid DB lock contention.
         'gis-backfill-property-matches': {
             'task': 'gis.backfill_property_matches',
-            'schedule': 6 * 3600,  # every 6 hours
+            'schedule': crontab(hour='0,6,12,18', minute=0),
             'options': {'expires': 3600},
         },
         # Cook County open-data enrichment backfill — offset 3h from GIS backfill.
@@ -503,12 +503,7 @@ def cook_county_enrich_lead_task(lead_id: int) -> dict:
             return enrich_cook_county_lead(lead_id)
     except Exception as exc:
         _logger.error("cook_county.enrich_lead failed for lead %s: %s", lead_id, exc)
-        return {
-            'lead_id': lead_id,
-            'skipped': True,
-            'skip_reason': 'task_error',
-            'error': str(exc),
-        }
+        raise
 
 
 @celery.task(bind=True, name='cook_county.backfill_enrichment')

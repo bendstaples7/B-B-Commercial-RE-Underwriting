@@ -7,9 +7,6 @@ from typing import Optional
 
 import requests
 
-from app.services.plugins.address_utils import is_chicago_address, normalize_chicago_street
-from app.services.plugins.chicago_scofflaw import ChicagoScofflawPlugin
-from app.services.plugins.cook_county_tax_exempt import CookCountyTaxExemptPlugin
 from app.services.plugins.owner_name_utils import apply_owner_name_fields
 from app.services.plugins.pin_utils import extract_pin, format_pin_for_storage
 
@@ -114,17 +111,6 @@ def lookup_owner_fields(
 
     resolved_pin = pin or extract_pin(address)
     if resolved_pin:
-        tax_exempt = CookCountyTaxExemptPlugin().lookup_by_pin(resolved_pin)
-        if tax_exempt and tax_exempt.fields:
-            sources["tax_exempt"] = tax_exempt.fields.get("permit_data", {}).get("tax_exempt")
-            for key in (
-                "owner_first_name",
-                "owner_last_name",
-                "ownership_type",
-            ):
-                if tax_exempt.fields.get(key) and not fields.get(key):
-                    fields[key] = tax_exempt.fields[key]
-
         clerk_grantee = _fetch_clerk_grantee(resolved_pin)
         if clerk_grantee:
             sources["clerk_grantee"] = clerk_grantee
@@ -142,20 +128,6 @@ def lookup_owner_fields(
             ):
                 if mailing.get(key) and not fields.get(key):
                     fields[key] = mailing[key]
-
-    if is_chicago_address(city=city, address=address):
-        street = normalize_chicago_street(address)
-        if street:
-            scofflaw = ChicagoScofflawPlugin()._lookup_by_street(street)
-            if scofflaw and scofflaw.fields:
-                sources["chicago_scofflaw"] = scofflaw.fields.get("violation_data")
-                for key in (
-                    "owner_first_name",
-                    "owner_last_name",
-                    "ownership_type",
-                ):
-                    if scofflaw.fields.get(key) and not fields.get(key):
-                        fields[key] = scofflaw.fields[key]
 
     if sources:
         fields["permit_data"] = {"owner_lookup_sources": sources}

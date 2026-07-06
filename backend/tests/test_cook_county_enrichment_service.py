@@ -194,3 +194,106 @@ class TestForeclosureGisRouting:
 
             cook_connector.lookup_by_address.assert_called()
             dupage_connector.lookup_by_address.assert_not_called()
+
+
+class TestBackfillEnrichment:
+    @patch("app.services.cook_county_enrichment_service.enrich_cook_county_lead")
+    def test_backfill_respects_batch_size(self, mock_enrich, app):
+        with app.app_context():
+            from app.services.cook_county_enrichment_service import backfill_cook_county_enrichment
+            from app.models.enrichment import DataSource
+
+            source = DataSource(name="cook_county_commercial_valuation", is_active=True)
+            db.session.add(source)
+            for i in range(5):
+                lead = Property(
+                    property_street=f"{i} N Michigan Ave",
+                    property_city="Chicago",
+                    property_state="IL",
+                    county_assessor_pin=f"01-02-202-04{i}-0000",
+                    source_type="manual_distress",
+                )
+                db.session.add(lead)
+            db.session.commit()
+
+            mock_enrich.return_value = {"plugins_run": 3, "skipped": False}
+
+            summary = backfill_cook_county_enrichment(batch_size=2, socrata_call_cap=200)
+
+            assert summary["enriched"] == 2
+            assert mock_enrich.call_count == 2
+
+    @patch("app.services.cook_county_enrichment_service.enrich_cook_county_lead")
+    def test_backfill_skips_recently_enriched(self, mock_enrich, app):
+        with app.app_context():
+            from datetime import datetime, timedelta
+            from app.models.enrichment import DataSource, EnrichmentRecord
+            from app.services.cook_county_enrichment_service import backfill_cook_county_enrichment
+
+            source = DataSource(name="cook_county_commercial_valuation", is_active=True)
+            db.session.add(source)
+            db.session.flush()
+
+            lead = Property(
+                property_street="123 N Michigan Ave",
+                property_city="Chicago",
+                property_state="IL",
+                county_assessor_pin="01-02-202-045-0000",
+                source_type="manual_distress",
+            )
+            db.session.add(lead)
+            db.session.flush()
+            db.session.add(EnrichmentRecord(
+                lead_id=lead.id,
+                data_source_id=source.id,
+                status="success",
+                created_at=datetime.utcnow(),
+            ))
+            db.session.commit()
+
+            summary = backfill_cook_county_enrichment(batch_size=75, socrata_call_cap=200)
+
+            assert summary["skipped"] >= 1
+            mock_enrich.assert_not_called()
+
+    @patch("app.services.cook_county_enrichment_service.enrich_cook_county_lead")
+    def test_backfill_stops_at_socrata_cap(self, mock_enrich, app):
+        with app.app_context():
+            from app.services.cook_county_enrichment_service import backfill_cook_county_enrichment
+            from app.models.enrichment import DataSource
+
+            source = DataSource(name="cook_county_commercial_valuation", is_active=True)
+            db.session.add(source)
+            for i in range(4):
+                lead = Property(
+                    property_street=f"{i} N Michigan Ave",
+                    property_city="Chicago",
+                    property_state="IL",
+                    county_assessor_pin=f"01-02-202-04{i}-0000",
+                    source_type="manual_distress",
+                )
+                db.session.add(lead)
+            db.session.commit()
+
+            mock_enrich.return_value = {"plugins_run": 5, "skipped": False}
+
+            summary = backfill_cook_county_enrichment(batch_size=75, socrata_call_cap=12)
+
+            assert summary["capped"] is True
+            assert summary["socrata_calls"] == 5
+            assert mock_enrich.call_count == 1
+
+
+class TestScheduleAfterCommit:
+    def test_deduplicates_lead_ids_in_session(self, app):
+        with app.app_context():
+            from app.services.cook_county_enrichment_service import (
+                schedule_cook_county_enrichment_after_commit,
+            )
+
+            schedule_cook_county_enrichment_after_commit(42)
+            schedule_cook_county_enrichment_after_commit(42)
+            schedule_cook_county_enrichment_after_commit(43)
+
+            pending = db.session.info.get("cook_county_enrichment_pending", set())
+            assert pending == {42, 43}

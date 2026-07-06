@@ -367,9 +367,7 @@ class DataSourceConnector:
         """Resolve enrichment data, preferring county_assessor_pin when available."""
         lookup_for_lead = getattr(plugin, "lookup_for_lead", None)
         if callable(lookup_for_lead):
-            result = lookup_for_lead(lead)
-            if result is not None:
-                return result
+            return lookup_for_lead(lead)
 
         owner_name = (
             f"{lead.owner_first_name or ''} {lead.owner_last_name or ''}"
@@ -423,6 +421,8 @@ class DataSourceConnector:
             else:
                 merged["records"] = incoming
             return merged
+        if isinstance(existing, list) and isinstance(incoming, list):
+            return merge_records(existing, incoming)
         return incoming
 
     def _resolve_plugin(

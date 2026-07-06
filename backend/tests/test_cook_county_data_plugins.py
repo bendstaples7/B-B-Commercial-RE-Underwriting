@@ -26,6 +26,10 @@ class TestAddressUtils:
         assert is_chicago_address(city="Chicago") is True
         assert is_chicago_address(city="Evanston") is False
 
+    def test_is_chicago_address_rejects_chicago_heights(self):
+        assert is_chicago_address(address="100 Main St, Chicago Heights, IL") is False
+        assert is_chicago_address(address="100 Main St, Chicago, IL") is True
+
 
 class TestOwnerNameUtils:
     def test_entity_owner(self):
@@ -45,6 +49,17 @@ class TestOwnerNameUtils:
         apply_owner_name_fields(fields, "Vincent Alpha")
         assert fields["ownership_type"] == "individual"
         assert fields["owner_first_name"] == "Vincent"
+
+    def test_last_first_format(self):
+        fields = {}
+        apply_owner_name_fields(fields, "Smith, John")
+        assert fields["owner_first_name"] == "John"
+        assert fields["owner_last_name"] == "Smith"
+
+    def test_entity_with_punctuation_suffix(self):
+        fields = {}
+        apply_owner_name_fields(fields, "ACME HOLDINGS, INC.")
+        assert fields["ownership_type"] == "entity"
 
 
 class TestPluginRegistration:
@@ -79,13 +94,28 @@ class TestCommercialValuationPlugin:
         assert result.fields["assessed_value"] == pytest.approx(633366.19)
         assert result.fields["year_built"] == 1975
 
+    @patch("app.services.plugins.cook_county_pin_plugin.socrata_get")
+    def test_skips_blank_first_row(self, mock_get):
+        mock_get.return_value = [
+            {"property_type_use": "", "bldgsf": "", "finalmarketvalue": "", "yearbuilt": ""},
+            {
+                "property_type_use": "Office",
+                "bldgsf": "5000.0",
+                "finalmarketvalue": "100000.0",
+                "yearbuilt": "1980.0",
+            },
+        ]
+        result = CookCountyCommercialValuationPlugin().lookup_by_pin("01-02-202-045-0000")
+        assert result.fields["square_footage"] == 5000
+        assert result.fields["assessed_value"] == pytest.approx(100000.0)
+
 
 class TestAppealsPlugin:
     @patch("app.services.plugins.cook_county_pin_plugin.socrata_get")
-    def test_wraps_appeals_in_tax_distress_data(self, mock_get):
+    def test_wraps_appeals_in_permit_data(self, mock_get):
         mock_get.return_value = [{"case_no": "9000140", "change": "change"}]
         result = CookCountyAppealsPlugin().lookup_by_pin("01011000060000")
-        assert result.fields["tax_distress_data"]["appeals"] == mock_get.return_value
+        assert result.fields["permit_data"]["appeals"] == mock_get.return_value
 
 
 class TestTaxExemptPlugin:
@@ -155,6 +185,21 @@ class TestJsonMerge:
         assert merged["records"][0]["tax_sale_year"] == "2020"
         assert merged["appeals"][0]["case_no"] == "1"
 
+    def test_merge_two_lists(self):
+        merged = DataSourceConnector._merge_json_field(
+            [{"tax_sale_year": "2020"}],
+            [{"tax_sale_year": "2021"}],
+        )
+        assert len(merged) == 2
+
+    def test_merge_none_existing(self):
+        incoming = {"appeals": [{"case_no": "1"}]}
+        assert DataSourceConnector._merge_json_field(None, incoming) == incoming
+
+    def test_merge_empty_existing_dict(self):
+        incoming = {"appeals": [{"case_no": "1"}]}
+        assert DataSourceConnector._merge_json_field({}, incoming) == incoming
+
 
 class TestOwnerLookupPlugin:
     @patch("app.services.plugins.cook_county_owner_lookup.lookup_owner_fields")
@@ -176,3 +221,17 @@ class TestOwnerLookupPlugin:
             address="123 Main St",
             city="Chicago",
         )
+
+    @patch("app.services.plugins.cook_county_owner_lookup.lookup_owner_fields")
+    def test_lookup_for_lead_does_not_double_call_when_empty(self, mock_lookup):
+        mock_lookup.return_value = {}
+        lead = SimpleNamespace(
+            id=1,
+            county_assessor_pin="17-21-321-018-0000",
+            property_street="123 Main St",
+            property_city="Chicago",
+        )
+        connector = DataSourceConnector()
+        plugin = connector._plugins["cook_county_owner_lookup"]
+        assert connector._lookup_plugin(plugin, lead) is None
+        mock_lookup.assert_called_once()

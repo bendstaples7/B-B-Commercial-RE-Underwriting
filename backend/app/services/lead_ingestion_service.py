@@ -112,8 +112,21 @@ class LeadIngestionService:
 
     def _gis_connector_for_lead(self, lead):
         """Resolve the GIS connector for a lead (instance registry + global fallback)."""
-        from app.services.gis.routing import connector_for_lead, _resolve_market
+        from app.services.gis.routing import (
+            connector_for_lead,
+            parse_city_state_from_address,
+            _resolve_market,
+        )
         from app.services.gis.base import GISConnectorRegistry
+
+        if not getattr(lead, "property_city", None) or not getattr(lead, "property_state", None):
+            city, state = parse_city_state_from_address(
+                getattr(lead, "property_street", None) or ""
+            )
+            if city and not getattr(lead, "property_city", None):
+                lead.property_city = city
+            if state and not getattr(lead, "property_state", None):
+                lead.property_state = state
 
         market = _resolve_market(lead)
         if market and market in self.gis_registry:

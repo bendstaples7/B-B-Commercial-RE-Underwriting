@@ -17,7 +17,7 @@ class CookCountyCommercialValuationPlugin(CookCountyPinPlugin):
     result_limit = 3
 
     def _map_rows(self, pin: str, rows: list[dict]) -> dict:
-        row = rows[0]
+        row = self._best_valuation_row(rows)
         fields: dict = {
             "permit_data": {"commercial_valuation": rows},
         }
@@ -44,3 +44,11 @@ class CookCountyCommercialValuationPlugin(CookCountyPinPlugin):
                 )
 
         return fields
+
+    @staticmethod
+    def _best_valuation_row(rows: list[dict]) -> dict:
+        value_keys = ("bldgsf", "finalmarketvalue", "yearbuilt", "property_type_use")
+        for row in rows:
+            if any(row.get(key) not in (None, "") for key in value_keys):
+                return row
+        return rows[0]

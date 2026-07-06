@@ -105,6 +105,17 @@ def _ensure_connectors_loaded() -> None:
     import app.services.gis.lake_county_gis_connector  # noqa: F401
 
 
+def parse_city_state_from_address(address: str) -> tuple[Optional[str], Optional[str]]:
+    """Infer city and IL state from a comma-separated address string."""
+    parts = [p.strip() for p in (address or "").split(",") if p.strip()]
+    if len(parts) < 2:
+        return None, None
+    state = parts[-1].strip().upper()
+    if state not in ("IL", "ILLINOIS"):
+        return None, None
+    return parts[-2].strip(), "IL"
+
+
 def _resolve_market(lead) -> Optional[str]:
     """Return the GISConnectorRegistry market key for this lead, or None."""
     city  = (getattr(lead, 'property_city',  None) or '').strip().upper()

@@ -40,4 +40,5 @@ def is_chicago_address(city: Optional[str] = None, address: str = "") -> bool:
     """Return True when the lead appears to be in Chicago."""
     if city and city.strip().upper() == "CHICAGO":
         return True
-    return ", CHICAGO" in (address or "").upper()
+    upper = (address or "").upper()
+    return bool(re.search(r",\s*CHICAGO(?:\s*,|\s+IL\b|\s*$)", upper))

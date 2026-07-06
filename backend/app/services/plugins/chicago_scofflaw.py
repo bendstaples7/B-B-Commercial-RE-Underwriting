@@ -7,7 +7,7 @@ from typing import Optional
 from app.services.data_source_connector import DataSourcePlugin, EnrichmentData
 from app.services.plugins.address_utils import is_chicago_address, normalize_chicago_street
 from app.services.plugins.owner_name_utils import apply_owner_name_fields
-from app.services.plugins.socrata_client import socrata_get
+from app.services.plugins.socrata_client import escape_soql_literal, socrata_get
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class ChicagoScofflawPlugin(DataSourcePlugin):
         street = normalize_chicago_street(address)
         if not street or not is_chicago_address(address=address):
             return None
-        return self._lookup_by_street(street)
+        return self.lookup_by_street(street)
 
     def lookup_for_lead(self, lead) -> Optional[EnrichmentData]:
         address = lead.property_street or ""
@@ -34,19 +34,22 @@ class ChicagoScofflawPlugin(DataSourcePlugin):
         street = normalize_chicago_street(address)
         if not street:
             return None
-        return self._lookup_by_street(street)
+        return self.lookup_by_street(street)
 
     def lookup_by_pin(self, pin: str) -> Optional[EnrichmentData]:
         return None
 
+    def lookup_by_street(self, street: str) -> Optional[EnrichmentData]:
+        return self._lookup_by_street(street)
+
     def _lookup_by_street(self, street: str) -> Optional[EnrichmentData]:
-        escaped = street.replace("'", "''")
+        escaped = escape_soql_literal(street)
         rows = socrata_get(
             self.dataset_id,
             params={
                 "$where": (
                     f"upper(address)=upper('{escaped}') "
-                    f"OR upper(secondary_address) like upper('{escaped}%')"
+                    f"OR starts_with(upper(secondary_address), upper('{escaped}'))"
                 ),
                 "$limit": 5,
             },
@@ -55,7 +58,7 @@ class ChicagoScofflawPlugin(DataSourcePlugin):
         if not rows:
             prefix = " ".join(street.split()[:3])
             if prefix != street:
-                pescaped = prefix.replace("'", "''")
+                pescaped = escape_soql_literal(prefix)
                 rows = socrata_get(
                     self.dataset_id,
                     params={
@@ -68,7 +71,15 @@ class ChicagoScofflawPlugin(DataSourcePlugin):
             return None
 
         fields: dict = {"violation_data": {"chicago_scofflaw": rows}}
-        defendant = rows[0].get("defendant_owner")
+        defendant = self._first_defendant_owner(rows)
         if defendant:
             apply_owner_name_fields(fields, str(defendant))
         return EnrichmentData(fields=fields)
+
+    @staticmethod
+    def _first_defendant_owner(rows: list[dict]) -> Optional[str]:
+        for row in rows:
+            defendant = row.get("defendant_owner")
+            if defendant and str(defendant).strip():
+                return str(defendant).strip()
+        return None

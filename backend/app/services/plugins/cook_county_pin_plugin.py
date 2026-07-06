@@ -39,6 +39,13 @@ class CookCountyPinPlugin(DataSourcePlugin):
         if not self.dataset_id:
             return []
         normalized = normalize_pin_for_socrata(pin)
+        if not normalized.isdigit() or len(normalized) != 14:
+            logger.warning(
+                "%s: invalid PIN %r — skipping Socrata lookup",
+                self.__class__.__name__,
+                pin,
+            )
+            return []
         dashed = format_pin_for_storage(pin)
         if self.pin_field in {"keypin", "pins"}:
             where = f"keypin='{dashed}' OR pins='{dashed}'"

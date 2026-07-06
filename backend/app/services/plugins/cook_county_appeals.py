@@ -13,4 +13,4 @@ class CookCountyAppealsPlugin(CookCountyPinPlugin):
     result_limit = 10
 
     def _map_rows(self, pin: str, rows: list[dict]) -> dict:
-        return {"tax_distress_data": {"appeals": rows}}
+        return {"permit_data": {"appeals": rows}}

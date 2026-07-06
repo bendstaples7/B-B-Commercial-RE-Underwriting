@@ -2177,6 +2177,7 @@ export interface EnrichmentSourceStatus {
   success_count: number
   failed_count: number
   pending_count: number
+  no_results_count: number
   not_run_count: number
   total_leads_count: number
 }

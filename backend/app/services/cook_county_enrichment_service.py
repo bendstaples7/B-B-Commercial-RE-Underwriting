@@ -184,9 +184,25 @@ def dispatch_cook_county_enrichment(lead_id: int) -> bool:
 
 def schedule_cook_county_enrichment_after_commit(lead_id: int) -> None:
     """Dispatch enrichment only after the current DB transaction commits."""
-    @event.listens_for(db.session, "after_commit", once=True)
-    def _dispatch_after_commit(_session) -> None:
-        dispatch_cook_county_enrichment(lead_id)
+    session = db.session
+    pending: set[int] = session.info.setdefault("cook_county_enrichment_pending", set())
+    pending.add(lead_id)
+
+    if session.info.get("cook_county_enrichment_listener"):
+        return
+    session.info["cook_county_enrichment_listener"] = True
+
+    @event.listens_for(session, "after_commit", once=True)
+    def _dispatch_after_commit(sess) -> None:
+        lead_ids = sess.info.pop("cook_county_enrichment_pending", set())
+        sess.info.pop("cook_county_enrichment_listener", None)
+        for lid in lead_ids:
+            dispatch_cook_county_enrichment(lid)
+
+    @event.listens_for(session, "after_rollback", once=True)
+    def _clear_after_rollback(sess) -> None:
+        sess.info.pop("cook_county_enrichment_pending", None)
+        sess.info.pop("cook_county_enrichment_listener", None)
 
 
 def maybe_dispatch_after_gis_match(lead: Lead, connector) -> None:
