@@ -1961,6 +1961,7 @@ class EnrichmentSourceStatusSchema(Schema):
     success_count = fields.Int(required=True)
     failed_count = fields.Int(required=True)
     pending_count = fields.Int(required=True)
+    no_results_count = fields.Int(required=True)
     not_run_count = fields.Int(required=True)
     total_leads_count = fields.Int(required=True)
 

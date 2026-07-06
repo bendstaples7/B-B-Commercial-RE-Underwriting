@@ -32,9 +32,16 @@ ENRICHABLE_FIELDS = [
     "assessed_value", "most_recent_sale_price",
     "phone_1", "phone_2", "phone_3", "email_1", "email_2",
     "mailing_address", "mailing_city", "mailing_state", "mailing_zip",
+    "owner_first_name", "owner_last_name",
     # Enrichment-specific JSON data fields
     "violation_data", "permit_data", "tax_distress_data",
 ]
+
+JSON_MERGE_FIELDS = frozenset({
+    "tax_distress_data",
+    "violation_data",
+    "permit_data",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +200,13 @@ class DataSourceConnector:
     # Single-lead enrichment
     # ------------------------------------------------------------------
 
-    def enrich_lead(self, lead_id: int, source_name: str) -> EnrichmentRecord:
+    def enrich_lead(
+        self,
+        lead_id: int,
+        source_name: str,
+        *,
+        refresh_scoring: bool = True,
+    ) -> EnrichmentRecord:
         """Enrich a single lead from the specified data source.
 
         Creates an ``EnrichmentRecord`` regardless of outcome:
@@ -207,6 +220,10 @@ class DataSourceConnector:
             ID of the lead to enrich.
         source_name : str
             Name of the registered data source plugin.
+        refresh_scoring : bool, optional
+            When True (default), recompute lead score after a successful enrich.
+            Orchestrated multi-plugin runs should pass False and rescore once at
+            the end.
 
         Returns
         -------
@@ -273,8 +290,9 @@ class DataSourceConnector:
         # change the data-completeness and owner-situation sub-scores. Refresh
         # lead_score + recommended_action (error-isolated) so the score does not
         # go stale until the nightly bulk rescore.
-        from app.services.lead_refresh import refresh_lead_scoring
-        refresh_lead_scoring(lead.id)
+        if refresh_scoring:
+            from app.services.lead_refresh import refresh_lead_scoring
+            refresh_lead_scoring(lead.id)
 
         return record
 
@@ -347,6 +365,10 @@ class DataSourceConnector:
     @staticmethod
     def _lookup_plugin(plugin: DataSourcePlugin, lead: Lead) -> Optional[EnrichmentData]:
         """Resolve enrichment data, preferring county_assessor_pin when available."""
+        lookup_for_lead = getattr(plugin, "lookup_for_lead", None)
+        if callable(lookup_for_lead):
+            return lookup_for_lead(lead)
+
         owner_name = (
             f"{lead.owner_first_name or ''} {lead.owner_last_name or ''}"
         ).strip()
@@ -358,6 +380,50 @@ class DataSourceConnector:
 
         address = lead.property_street or ""
         return plugin.lookup(address, owner_name)
+
+    @staticmethod
+    def _merge_json_field(existing, incoming):
+        """Merge enrichment JSON payloads from multiple plugins."""
+        def merge_records(left, right):
+            merged = []
+            for item in left + right:
+                if item not in merged:
+                    merged.append(item)
+            return merged
+
+        if existing is None:
+            return incoming
+        if isinstance(existing, dict) and isinstance(incoming, dict):
+            merged = dict(existing)
+            for key, value in incoming.items():
+                if key not in merged:
+                    merged[key] = value
+                elif isinstance(merged[key], list) and isinstance(value, list):
+                    merged[key] = merge_records(merged[key], value)
+                elif isinstance(merged[key], dict) and isinstance(value, dict):
+                    merged[key] = {**merged[key], **value}
+                else:
+                    merged[key] = value
+            return merged
+        if isinstance(existing, list) and isinstance(incoming, dict):
+            merged = dict(incoming)
+            incoming_records = merged.get("records")
+            merged["records"] = merge_records(
+                existing,
+                incoming_records if isinstance(incoming_records, list) else [],
+            )
+            return merged
+        if isinstance(existing, dict) and isinstance(incoming, list):
+            merged = dict(existing)
+            records = merged.get("records")
+            if isinstance(records, list):
+                merged["records"] = merge_records(records, incoming)
+            else:
+                merged["records"] = incoming
+            return merged
+        if isinstance(existing, list) and isinstance(incoming, list):
+            return merge_records(existing, incoming)
+        return incoming
 
     def _resolve_plugin(
         self, source_name: str
@@ -421,6 +487,8 @@ class DataSourceConnector:
                 continue
 
             old_value = getattr(lead, field_name, None)
+            if field_name in JSON_MERGE_FIELDS:
+                new_value = DataSourceConnector._merge_json_field(old_value, new_value)
 
             # Convert to comparable string representations
             old_str = str(old_value) if old_value is not None else None
@@ -458,11 +526,31 @@ def _register_default_plugins(connector: "DataSourceConnector") -> None:
     from app.services.plugins.cook_county_assessor import CookCountyAssessorPlugin
     from app.services.plugins.cook_county_permits import CookCountyPermitsPlugin
     from app.services.plugins.cook_county_tax_sales import CookCountyTaxSalesPlugin
+    from app.services.plugins.cook_county_commercial_valuation import (
+        CookCountyCommercialValuationPlugin,
+    )
+    from app.services.plugins.cook_county_appeals import CookCountyAppealsPlugin
+    from app.services.plugins.cook_county_tax_exempt import CookCountyTaxExemptPlugin
+    from app.services.plugins.cook_county_scavenger_tax_sale import (
+        CookCountyScavengerTaxSalePlugin,
+    )
+    from app.services.plugins.chicago_building_violations import (
+        ChicagoBuildingViolationsPlugin,
+    )
+    from app.services.plugins.chicago_scofflaw import ChicagoScofflawPlugin
+    from app.services.plugins.cook_county_owner_lookup import CookCountyOwnerLookupPlugin
 
     for plugin_cls in (
         CookCountyAssessorPlugin,
         CookCountyPermitsPlugin,
         CookCountyTaxSalesPlugin,
+        CookCountyCommercialValuationPlugin,
+        CookCountyAppealsPlugin,
+        CookCountyTaxExemptPlugin,
+        CookCountyScavengerTaxSalePlugin,
+        ChicagoBuildingViolationsPlugin,
+        ChicagoScofflawPlugin,
+        CookCountyOwnerLookupPlugin,
     ):
         try:
             connector._register_plugin_in_memory(plugin_cls())

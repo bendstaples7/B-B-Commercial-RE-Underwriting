@@ -62,10 +62,11 @@ def _make_gis_parcel(**kwargs):
     return GISParcel(**defaults)
 
 
-def _make_mock_connector(parcel=None, raise_exc=None):
+def _make_mock_connector(parcel=None, raise_exc=None, market="dupage_il"):
     """Return a mock GISConnector."""
     connector = MagicMock()
     connector.connector_name = "dupage_gis"
+    connector.market = market
     if raise_exc:
         connector.lookup_by_address.side_effect = raise_exc
         connector.lookup_by_pin.side_effect = raise_exc

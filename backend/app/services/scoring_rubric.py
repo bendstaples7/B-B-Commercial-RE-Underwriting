@@ -149,9 +149,13 @@ def parse_sale_date_string(value: Optional[str]) -> Optional[date]:
 
 
 def effective_acquisition_date(lead: Lead) -> Optional[date]:
-    if lead.acquisition_date:
-        return lead.acquisition_date
-    return parse_sale_date_string(getattr(lead, 'most_recent_sale', None))
+    acquisition = getattr(lead, 'acquisition_date', None)
+    if isinstance(acquisition, date):
+        return acquisition
+    sale_text = getattr(lead, 'most_recent_sale', None)
+    if isinstance(sale_text, str):
+        return parse_sale_date_string(sale_text)
+    return None
 
 
 RECENT_SALE_SUPPRESSION_DAYS = 730  # 24 months

@@ -2154,7 +2154,7 @@ export interface SearchParams {
 // -----------------------------------------------------------------------
 
 export type SocrataDatasetStatusValue = 'fresh' | 'stale' | 'empty' | 'never_synced'
-export type RefreshType = 'periodic' | 'on_demand' | 'static'
+export type RefreshType = 'periodic' | 'on_demand' | 'static' | 'automatic'
 
 export interface SocrataDatasetStatus {
   name: string
@@ -2171,12 +2171,13 @@ export interface SocrataDatasetStatus {
 export interface EnrichmentSourceStatus {
   name: string
   source_type: 'enrichment'
-  refresh_type: 'on_demand'
+  refresh_type: 'on_demand' | 'automatic'
   is_active: boolean
   last_refreshed_at: string | null
   success_count: number
   failed_count: number
   pending_count: number
+  no_results_count: number
   not_run_count: number
   total_leads_count: number
 }

@@ -82,6 +82,8 @@ def make_mock_lead(
     lead.suppression_flag = False
     lead.lead_category = 'residential'
     lead.unanswered_call_count = 0
+    lead.acquisition_date = None
+    lead.most_recent_sale = None
     return lead
 
 

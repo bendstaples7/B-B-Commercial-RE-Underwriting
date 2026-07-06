@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Alert,
@@ -6,7 +6,9 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Collapse,
   Divider,
+  IconButton,
   Paper,
   Tab,
   Table,
@@ -18,6 +20,8 @@ import {
   Tabs,
   Typography,
 } from '@mui/material'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import HomeWorkIcon from '@mui/icons-material/HomeWork'
 import ApartmentIcon from '@mui/icons-material/Apartment'
 import { multifamilyService } from '@/services/api'
@@ -53,6 +57,65 @@ export function tabParamToIndex(param: string | null | undefined): number {
   if (!param) return DEFAULT_TAB_INDEX
   const index = TAB_PARAM_TO_INDEX[param.toLowerCase()]
   return index ?? DEFAULT_TAB_INDEX
+}
+
+function EnrichmentDetailsCell({
+  status,
+  retrievedData,
+  errorReason,
+}: {
+  status: string
+  retrievedData?: Record<string, unknown> | null
+  errorReason?: string | null
+}) {
+  const [open, setOpen] = useState(false)
+  const hasData = status === 'success' && retrievedData && Object.keys(retrievedData).length > 0
+
+  if (!hasData) {
+    return <>{errorReason || '—'}</>
+  }
+
+  const fieldCount = Object.keys(retrievedData).length
+  const preview = useMemo(
+    () => (open ? JSON.stringify(retrievedData, null, 2) : ''),
+    [open, retrievedData],
+  )
+
+  return (
+    <Box>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+        <Typography variant="body2" component="span">
+          {fieldCount} field(s) enriched
+        </Typography>
+        <IconButton
+          size="small"
+          aria-expanded={open}
+          aria-label={open ? 'Hide enrichment JSON' : 'Show enrichment JSON'}
+          onClick={() => setOpen((prev) => !prev)}
+        >
+          {open ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+        </IconButton>
+      </Box>
+      <Collapse in={open}>
+        <Box
+          component="pre"
+          sx={{
+            mt: 1,
+            p: 1,
+            maxHeight: 240,
+            overflow: 'auto',
+            fontSize: '0.75rem',
+            bgcolor: 'action.hover',
+            borderRadius: 1,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          }}
+        >
+          {preview}
+        </Box>
+      </Collapse>
+    </Box>
+  )
 }
 
 export interface LeadDetailTabPanelProps {
@@ -273,9 +336,11 @@ export function LeadDetailTabPanel({
                       </TableCell>
                       <TableCell>{formatDateTime(rec.created_at)}</TableCell>
                       <TableCell>
-                        {rec.status === 'success' && rec.retrieved_data
-                          ? `${Object.keys(rec.retrieved_data).length} field(s) enriched`
-                          : rec.error_reason || '—'}
+                        <EnrichmentDetailsCell
+                          status={rec.status}
+                          retrievedData={rec.retrieved_data}
+                          errorReason={rec.error_reason}
+                        />
                       </TableCell>
                     </TableRow>
                   ))}

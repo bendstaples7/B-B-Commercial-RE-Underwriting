@@ -224,6 +224,7 @@ function nextSundayRefresh(): string {
 interface CoverageBarProps {
   successCount: number
   failedCount: number
+  noResultsCount: number
   notRunCount: number
   totalLeadsCount: number
 }
@@ -235,7 +236,7 @@ interface CoverageBarProps {
  *
  * Requirements: 4.1, 4.2, 4.3, 4.4, 4.5
  */
-export function CoverageBar({ successCount, failedCount, notRunCount, totalLeadsCount }: CoverageBarProps) {
+export function CoverageBar({ successCount, failedCount, noResultsCount, notRunCount, totalLeadsCount }: CoverageBarProps) {
   const pct = totalLeadsCount > 0 ? Math.min(100, Math.max(0, (successCount / totalLeadsCount) * 100)) : 0
   const coverageText = totalLeadsCount === 0
     ? '0 / 0 (N/A)'
@@ -253,7 +254,7 @@ export function CoverageBar({ successCount, failedCount, notRunCount, totalLeads
         {coverageText}
       </Typography>
       <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
-        Enriched {successCount} | Failed {failedCount} | Not Run {notRunCount}
+        Enriched {successCount} | Failed {failedCount} | No Data {noResultsCount} | Not Run {notRunCount}
       </Typography>
     </Box>
   )
@@ -270,7 +271,7 @@ interface EnrichmentSourceCardProps {
 
 /**
  * Card for one enrichment plugin. Displays:
- * - Source name, "On Demand" refresh type label
+ * - Source name, refresh type label (Automatic / On Demand)
  * - CoverageBar with enriched/failed/not-run counts
  * - Last updated timestamp with staleness note when data is > 60s old
  * - Amber warning when failures exist
@@ -294,12 +295,15 @@ export function EnrichmentSourceCard({ source, dataUpdatedAt }: EnrichmentSource
               </Typography>
             )}
           </Typography>
-          <Typography variant="caption" color="text.secondary">On Demand</Typography>
+          <Typography variant="caption" color="text.secondary">
+            {source.refresh_type === 'automatic' ? 'Automatic' : 'On Demand'}
+          </Typography>
         </Box>
 
         <CoverageBar
           successCount={source.success_count}
           failedCount={source.failed_count}
+          noResultsCount={source.no_results_count}
           notRunCount={source.not_run_count}
           totalLeadsCount={source.total_leads_count}
         />
