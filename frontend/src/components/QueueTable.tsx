@@ -26,6 +26,8 @@ import {
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import type { QueueRow, BulkActionResult } from '@/types'
 import { LeadStatusChip } from './LeadStatusChip'
+import { OutreachContactCallout } from './OutreachContactCallout'
+import { outreachDisplayLabel } from '@/constants/scoringRecommendedActions'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -382,9 +384,17 @@ export function QueueTable({
 
                     {/* Recommended action */}
                     <TableCell data-testid={`row-action-${row.id}`}>
-                      {row.recommended_action
-                        ? row.recommended_action.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-                        : '—'}
+                      {row.recommended_action ? (
+                        <Box>
+                          <Typography variant="body2" component="span">
+                            {row.outreach_action_label
+                              ?? outreachDisplayLabel(row.recommended_action, row.recommended_contact_method)}
+                          </Typography>
+                          <OutreachContactCallout contact={row.outreach_contact} compact />
+                        </Box>
+                      ) : (
+                        '—'
+                      )}
                     </TableCell>
 
                     {/* Extra columns */}

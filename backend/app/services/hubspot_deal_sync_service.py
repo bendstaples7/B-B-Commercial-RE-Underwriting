@@ -272,7 +272,7 @@ class HubSpotDealSyncService:
 
         return {'synced': True, 'task_id': task_id, **stats}
 
-    def sync_all_confirmed_lead_tasks(self, *, limit: int = 200) -> dict[str, int]:
+    def sync_all_confirmed_lead_tasks(self, *, limit: int = 200) -> dict[str, Any]:
         """Live-sync HubSpot tasks for every lead with a confirmed deal match."""
         lead_ids = [
             row[0]
@@ -292,6 +292,7 @@ class HubSpotDealSyncService:
             )
         ]
         stats = {'leads_synced': 0, 'created': 0, 'updated': 0, 'unchanged': 0, 'errors': 0}
+        affected_lead_ids: list[int] = []
         for lead_id in lead_ids:
             try:
                 result = self.sync_tasks_for_lead(lead_id)
@@ -302,12 +303,15 @@ class HubSpotDealSyncService:
                 stats['updated'] += result.get('updated', 0)
                 stats['unchanged'] += result.get('unchanged', 0)
                 stats['errors'] += result.get('errors', 0)
+                if result.get('created', 0) or result.get('updated', 0):
+                    affected_lead_ids.append(lead_id)
             except Exception as exc:
                 stats['errors'] += 1
                 logger.warning('sync_all_confirmed_lead_tasks: failed lead_id=%s: %s', lead_id, exc)
                 db.session.rollback()
 
         logger.info('sync_all_confirmed_lead_tasks complete: %s', stats)
+        stats['affected_lead_ids'] = affected_lead_ids
         return stats
 
     def sweep_stale_open_hubspot_tasks(

@@ -151,6 +151,7 @@ def test_enrichment_returns_zeroed_counts_when_no_leads():
         "success_count": 0,
         "failed_count": 0,
         "pending_count": 0,
+        "no_results_count": 0,
         "not_run_count": 0,
         "total_leads_count": 0,
     }
@@ -168,6 +169,7 @@ def test_enrichment_returns_zeroed_counts_when_no_leads():
     assert src["success_count"] == 0
     assert src["failed_count"] == 0
     assert src["pending_count"] == 0
+    assert src["no_results_count"] == 0
     assert src["total_leads_count"] == 0
 
 

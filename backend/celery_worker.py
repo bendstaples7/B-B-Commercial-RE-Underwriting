@@ -160,7 +160,13 @@ celery.conf.update(
         # to 200 leads per run to keep the job short and avoid DB lock contention.
         'gis-backfill-property-matches': {
             'task': 'gis.backfill_property_matches',
-            'schedule': 6 * 3600,  # every 6 hours
+            'schedule': crontab(hour='0,6,12,18', minute=0),
+            'options': {'expires': 3600},
+        },
+        # Cook County open-data enrichment backfill — offset 3h from GIS backfill.
+        'cook-county-backfill-enrichment': {
+            'task': 'cook_county.backfill_enrichment',
+            'schedule': crontab(hour='3,9,15,21', minute=30),
             'options': {'expires': 3600},
         },
         # Nightly duplicate sentinel — auto-merge clear owner+street duplicates,
@@ -475,6 +481,50 @@ def bulk_enrich_task(lead_ids: list[int], source_name: str) -> int:
         connector = DataSourceConnector()
         records = connector.bulk_enrich(lead_ids, source_name)
         return len(records)
+
+
+@celery.task(name='quick_add.followup')
+def run_quick_add_followup(lead_id: int) -> dict:
+    from app.tasks.quick_add_tasks import run_quick_add_followup_inner
+    return run_quick_add_followup_inner(lead_id)
+
+
+@celery.task(name='cook_county.enrich_lead')
+def cook_county_enrich_lead_task(lead_id: int) -> dict:
+    """Run the Cook County enrichment orchestrator for one lead."""
+    import logging
+    _logger = logging.getLogger('celery.cook_county.enrich_lead')
+
+    try:
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            from app.services.cook_county_enrichment_service import enrich_cook_county_lead
+            return enrich_cook_county_lead(lead_id)
+    except Exception as exc:
+        _logger.error("cook_county.enrich_lead failed for lead %s: %s", lead_id, exc)
+        raise
+
+
+@celery.task(bind=True, name='cook_county.backfill_enrichment')
+def cook_county_backfill_enrichment_task(self):
+    """Periodic task: enrich Cook County leads missing recent county plugin runs."""
+    import logging
+    _logger = logging.getLogger('celery.cook_county.backfill_enrichment')
+
+    try:
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            from app.services.cook_county_enrichment_service import (
+                backfill_cook_county_enrichment,
+            )
+            summary = backfill_cook_county_enrichment()
+            _logger.info("cook_county.backfill_enrichment: %s", summary)
+            return summary
+    except Exception as exc:
+        _logger.error("cook_county.backfill_enrichment failed: %s", exc)
+        raise
 
 
 @celery.task(name='workflow.run_comparable_search')
@@ -945,6 +995,34 @@ def generate_backup_export() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Open Letter Connect — direct mail campaigns
+# ---------------------------------------------------------------------------
+
+from app.exceptions import ExternalServiceError, MailQueueError
+
+@celery.task(
+    name='open_letter.submit_campaign',
+    bind=True,
+    max_retries=2,
+    autoretry_for=(ExternalServiceError, ConnectionError, TimeoutError),
+    retry_backoff=True,
+    retry_backoff_max=300,
+    dont_autoretry_for=(MailQueueError,),
+)
+def submit_open_letter_campaign(self, campaign_id: int) -> None:
+    """Submit a mail campaign to Open Letter Connect."""
+    from app.tasks.open_letter_tasks import submit_mail_campaign
+    submit_mail_campaign(campaign_id)
+
+
+@celery.task(name='open_letter.sync_campaign_analytics')
+def sync_open_letter_campaign_analytics(campaign_id: int) -> None:
+    """Sync delivery/scan analytics from OLC for a campaign."""
+    from app.tasks.open_letter_tasks import sync_mail_campaign_analytics
+    sync_mail_campaign_analytics(campaign_id)
+
+
+# ---------------------------------------------------------------------------
 # HubSpot Webhook Processing Tasks
 # ---------------------------------------------------------------------------
 
@@ -1118,6 +1196,22 @@ def run_post_import_pipeline(run_ids: list = None) -> None:
     run_pipeline_after_imports(app, run_ids)
 
 
+@celery.task(name='hubspot.rescore_only')
+def run_rescore_only_pipeline() -> None:
+    """Run a full lead rescore without HubSpot fetch/enrich (deploy scoring deploys)."""
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info("Starting rescore-only pipeline")
+
+    from dotenv import load_dotenv
+    load_dotenv()
+    from app import create_app
+    from app.services.hubspot_pipeline_runner import run_pipeline_after_imports
+
+    app = create_app()
+    run_pipeline_after_imports(app, run_ids=None, mode='rescore_only')
+
+
 # ---------------------------------------------------------------------------
 # DuPage Lead Database — async CSV ingestion task (Requirements 6.9, 9.3–9.5)
 # ---------------------------------------------------------------------------
@@ -1201,7 +1295,10 @@ REQUIRED_TASKS = {
     'hubspot.extract_signals',
     'hubspot.rescore_leads',
     'hubspot.generate_backup',
+    'open_letter.submit_campaign',
+    'open_letter.sync_campaign_analytics',
     'hubspot.post_import_pipeline',
+    'hubspot.rescore_only',
     'hubspot.scheduled_engagement_sync',
     'tasks.mark_overdue',
     'action_engine.recompute_recommended_action',

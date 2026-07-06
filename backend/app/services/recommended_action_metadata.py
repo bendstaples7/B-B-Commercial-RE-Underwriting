@@ -1,5 +1,10 @@
 """Labels and explanations for unified recommended actions."""
 
+from app.services.outreach_method_service import (
+    outreach_action_explanation,
+    outreach_action_label,
+)
+
 RECOMMENDED_ACTION_METADATA = {
     'enrich_data': {
         'label': 'Enrich Data',
@@ -71,3 +76,22 @@ TASK_TYPE_TO_RECOMMENDED_ACTION = {
     'call_owner_today': 'follow_up_now',
     'research_missing_pin': 'resolve_match',
 }
+
+
+def get_recommended_action_display(
+    action: str | None,
+    contact_method: str | None = None,
+) -> dict:
+    """Return label and explanation, with channel-specific overrides when applicable."""
+    if not action:
+        return {'label': None, 'explanation': None}
+
+    metadata = RECOMMENDED_ACTION_METADATA.get(action, {})
+    base_label = metadata.get('label')
+    base_explanation = metadata.get('explanation')
+
+    channel_label = outreach_action_label(action, contact_method)
+    label = channel_label or base_label
+
+    explanation = outreach_action_explanation(action, contact_method, base_explanation)
+    return {'label': label, 'explanation': explanation}

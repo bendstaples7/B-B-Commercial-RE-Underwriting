@@ -162,6 +162,19 @@ def _build_email_summary(
     return body[:500]
 
 
+def _mail_attribution_eligible(lead_id: int, mail_campaign_id: int, actor_user_id: str) -> bool:
+    from app.models import MailCampaign, MailQueueItem
+
+    campaign = MailCampaign.query.get(mail_campaign_id)
+    if campaign is None or campaign.created_by != actor_user_id:
+        return False
+    return MailQueueItem.query.filter_by(
+        campaign_id=mail_campaign_id,
+        lead_id=lead_id,
+        status='sent',
+    ).first() is not None
+
+
 class CallLogService:
     """Handles logging calls and notes on leads."""
 
@@ -176,6 +189,7 @@ class CallLogService:
         contact_phone_id: int | None = None,
         phone_number: str | None = None,
         phone_label: str | None = None,
+        mail_campaign_id: int | None = None,
     ) -> LeadTimelineEntry:
         """Log a call on a lead."""
         if outcome not in VALID_CALL_OUTCOMES:
@@ -232,6 +246,13 @@ class CallLogService:
             metadata['phone_number'] = phone_number
         if phone_label:
             metadata['phone_label'] = phone_label
+        attributed_to_mail = (
+            mail_campaign_id is not None
+            and _mail_attribution_eligible(lead_id, mail_campaign_id, actor)
+        )
+        if attributed_to_mail:
+            metadata['mail_campaign_id'] = mail_campaign_id
+            metadata['attributed_to_mail'] = True
 
         entry = LeadTimelineEntry(
             lead_id=lead_id,
@@ -268,6 +289,16 @@ class CallLogService:
                 "refresh_lead_scoring failed for lead %s after call log: %s",
                 lead_id, exc, exc_info=True,
             )
+
+        if attributed_to_mail:
+            try:
+                from app.services.mail_campaign_service import MailCampaignService
+                MailCampaignService().record_call_attribution(mail_campaign_id, lead_id, actor)
+            except Exception as exc:
+                logger.warning(
+                    'Mail call attribution failed for lead %s campaign %s: %s',
+                    lead_id, mail_campaign_id, exc,
+                )
 
         return entry
 

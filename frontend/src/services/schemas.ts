@@ -28,6 +28,7 @@ export const HubSpotConfigSchema = z.object({
   configured_at: z.string().nullable().optional(),
   /** Present when no config has been saved yet */
   configured: z.boolean().optional(),
+  write_back_enabled: z.boolean().optional(),
 })
 
 export type HubSpotConfigParsed = z.infer<typeof HubSpotConfigSchema>
@@ -165,6 +166,7 @@ export const LeadSummarySchema = z.object({
   score_tier: z.enum(['A', 'B', 'C', 'D']).nullish(),
   data_quality_score: z.number().nullish(),
   recommended_action: z.string().nullish(),
+  recommended_contact_method: z.enum(['phone', 'email', 'text', 'direct_mail']).nullish(),
   top_signal: z.string().nullish(),
   missing_data: z.array(z.string()).nullish(),
   missing_data_count: z.number().nullish(),

@@ -122,11 +122,12 @@ def main() -> int:
         if "run_post_import_pipeline_sync" in post_deploy_text:
             errors.append(
                 "post_deploy_sync.py must not call run_post_import_pipeline_sync "
-                "(blocks deploy SSH — use dispatch_post_import_pipeline)"
+                "(blocks deploy SSH — use dispatch_tiered_post_deploy_sync)"
             )
-        if "dispatch_post_import_pipeline" not in post_deploy_text:
+        if "dispatch_tiered_post_deploy_sync" not in post_deploy_text:
             errors.append(
-                "post_deploy_sync.py must use dispatch_post_import_pipeline"
+                "post_deploy_sync.py must dispatch async via hubspot_pipeline_runner "
+                "(dispatch_tiered_post_deploy_sync)"
             )
     else:
         errors.append(

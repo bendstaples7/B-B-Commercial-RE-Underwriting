@@ -17,7 +17,7 @@
  * **Validates: Requirements 10.1**
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ThemeProvider, createTheme } from '@mui/material/styles'
@@ -169,8 +169,11 @@ describe('App sidebar — Properties section navigation vs. toggle', () => {
     // not a button that calls toggleSection. React Router Link renders with href.
     expect(propertiesLabel).toHaveAttribute('href', '/properties')
 
-    // Record the chevron state BEFORE clicking the label
-    const chevronBefore = screen.getByRole('button', {
+    const propertiesSection = propertiesLabel.closest('div')?.parentElement
+    expect(propertiesSection).toBeTruthy()
+
+    // Record the Properties chevron state BEFORE clicking the label
+    const chevronBefore = within(propertiesSection!).getByRole('button', {
       name: /collapse section|expand section/i,
     })
     const initialAriaLabel = chevronBefore.getAttribute('aria-label')
@@ -180,7 +183,7 @@ describe('App sidebar — Properties section navigation vs. toggle', () => {
 
     // The chevron aria-label should NOT have changed — clicking the label does not
     // call toggleSection (the section expand/collapse state is unaffected)
-    const chevronAfter = screen.getByRole('button', {
+    const chevronAfter = within(propertiesSection!).getByRole('button', {
       name: /collapse section|expand section/i,
     })
     expect(chevronAfter.getAttribute('aria-label')).toBe(initialAriaLabel)
@@ -197,8 +200,12 @@ describe('App sidebar — Properties section navigation vs. toggle', () => {
       expect(screen.getByRole('navigation', { name: 'Main navigation' })).toBeInTheDocument()
     }, { timeout: 3000 })
 
+    const propertiesLabel = screen.getByRole('link', { name: 'Navigate to Properties' })
+    const propertiesSection = propertiesLabel.closest('div')?.parentElement
+    expect(propertiesSection).toBeTruthy()
+
     // The Properties section starts expanded, so chevron initially says "Collapse section"
-    const chevron = screen.getByRole('button', { name: 'Collapse section' })
+    const chevron = within(propertiesSection!).getByRole('button', { name: 'Collapse section' })
     expect(chevron).toBeInTheDocument()
 
     // Click the chevron
@@ -209,17 +216,17 @@ describe('App sidebar — Properties section navigation vs. toggle', () => {
 
     // After clicking, the chevron label should flip to "Expand section"
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Expand section' })).toBeInTheDocument()
+      expect(within(propertiesSection!).getByRole('button', { name: 'Expand section' })).toBeInTheDocument()
     })
 
     // Click the chevron again — section expands back
-    const chevronAgain = screen.getByRole('button', { name: 'Expand section' })
+    const chevronAgain = within(propertiesSection!).getByRole('button', { name: 'Expand section' })
     await user.click(chevronAgain)
 
     expect(mockNavigate).not.toHaveBeenCalled()
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Collapse section' })).toBeInTheDocument()
+      expect(within(propertiesSection!).getByRole('button', { name: 'Collapse section' })).toBeInTheDocument()
     })
   })
 })

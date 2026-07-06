@@ -415,6 +415,7 @@ export interface PropertySummary {
   score_tier?: 'A' | 'B' | 'C' | 'D' | null
   data_quality_score?: number | null
   recommended_action?: string | null
+  recommended_contact_method?: ContactMethod | null
   top_signal?: string | null
   missing_data?: string[]
   missing_data_count?: number | null
@@ -1092,6 +1093,18 @@ export interface DealListResponse {
 // Property Scoring Types (formerly "Lead Scoring Types")
 // ---------------------------------------------------------------------------
 
+export type ContactMethod = 'phone' | 'email' | 'text' | 'direct_mail'
+
+/** Resolved outreach target (phone, email, or mailing address) for UI callouts. */
+export interface OutreachContact {
+  channel: ContactMethod
+  label: string
+  value: string
+  display: string
+  href?: string | null
+  lines?: string[]
+}
+
 /** Unified recommended action vocabulary (scoring + workflow). */
 export type UnifiedRecommendedAction =
   | 'enrich_data'
@@ -1531,7 +1544,52 @@ export interface HubSpotConfig {
   account_name?: string | null
   configured?: boolean
   has_client_secret?: boolean
+  write_back_enabled?: boolean
 }
+
+export interface QuickAddPayload {
+  property_street: string
+  note?: string | null
+  priority?: 'high' | 'medium' | 'low' | null
+  deal_source?: string | null
+  date_identified?: string | null
+  capture_latitude?: number | null
+  capture_longitude?: number | null
+  capture_location_label?: string | null
+}
+
+export interface QuickAddResponse {
+  lead_id: number
+  created: boolean
+  property_street: string
+  lead_status: string
+  deal_source: string
+  date_identified: string | null
+  hubspot_push_status: 'disabled' | 'queued' | 'queue_failed'
+  hubspot_write_back_enabled: boolean
+}
+
+export interface QuickAddLookupMatch {
+  lead_id: number
+  property_street: string | null
+  lead_status: string | null
+  deal_source: string | null
+  date_identified: string | null
+}
+
+export interface QuickAddLookupResponse {
+  matches: QuickAddLookupMatch[]
+}
+
+/** HubSpot-aligned deal sources for quick-add (Driving For Dollars is the walk-by default). */
+export const QUICK_ADD_DEAL_SOURCES = [
+  'Driving For Dollars',
+  'Cityscape',
+  'Cityscape Unused Zoning Capacity',
+  'Referral',
+  'Direct Mail',
+  'Other',
+] as const
 
 export interface HubSpotImportRun {
   id: number
@@ -1729,6 +1787,8 @@ export interface LeadTimelineEntry {
 
 export interface RecommendedActionMeta {
   value: CRMRecommendedAction | null;
+  recommended_contact_method?: ContactMethod | null;
+  outreach_contact?: OutreachContact | null;
   label: string | null;
   explanation: string | null;
   signals: Record<string, unknown>;
@@ -1744,6 +1804,9 @@ export interface QueueRow {
   lead_score: number;
   lead_status: LeadStatus;
   recommended_action: CRMRecommendedAction | null;
+  recommended_contact_method?: ContactMethod | null;
+  outreach_action_label?: string | null;
+  outreach_contact?: OutreachContact | null;
   has_property_match: boolean;
   last_contact_date: string | null;
   last_hubspot_sync_at: string | null;
@@ -1754,6 +1817,8 @@ export interface QueueRow {
   review_triggered_at: string | null;
   unanswered_call_count: number;
   is_warm: boolean;
+  last_mailed_at?: string | null;
+  last_sale_at?: string | null;
 }
 
 export interface QueuePage {
@@ -1771,6 +1836,8 @@ export interface QueueCounts {
   needs_review: number;
   do_not_contact: number;
   missing_property_match: number;
+  ready_to_mail: number;
+  mail_candidates: number;
 }
 
 export interface CommandCenterPayload {
@@ -1808,6 +1875,7 @@ export interface CommandCenterPayload {
   email_4?: string | null;
   email_5?: string | null;
   phones?: LeadPhone[];
+  emails?: string[];
   notes?: string | null;
   lead_score: number;
   lead_status: LeadStatus;
@@ -1845,6 +1913,7 @@ export interface LogCallPayload {
   contact_phone_id?: number | null;
   phone_number?: string | null;
   phone_label?: string | null;
+  mail_campaign_id?: number | null;
 }
 
 export interface LogNotePayload {
@@ -2085,7 +2154,7 @@ export interface SearchParams {
 // -----------------------------------------------------------------------
 
 export type SocrataDatasetStatusValue = 'fresh' | 'stale' | 'empty' | 'never_synced'
-export type RefreshType = 'periodic' | 'on_demand' | 'static'
+export type RefreshType = 'periodic' | 'on_demand' | 'static' | 'automatic'
 
 export interface SocrataDatasetStatus {
   name: string
@@ -2102,12 +2171,13 @@ export interface SocrataDatasetStatus {
 export interface EnrichmentSourceStatus {
   name: string
   source_type: 'enrichment'
-  refresh_type: 'on_demand'
+  refresh_type: 'on_demand' | 'automatic'
   is_active: boolean
   last_refreshed_at: string | null
   success_count: number
   failed_count: number
   pending_count: number
+  no_results_count: number
   not_run_count: number
   total_leads_count: number
 }

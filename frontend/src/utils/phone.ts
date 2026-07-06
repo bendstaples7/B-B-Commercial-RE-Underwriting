@@ -23,6 +23,15 @@ export function phoneTelHref(phone: string): string {
   return `tel:${phone}`
 }
 
+/** Build an sms: href from a display or raw phone string. */
+export function phoneSmsHref(phone: string): string {
+  const digits = phone.replace(/\D/g, '')
+  if (digits.length === 10) return `sms:+1${digits}`
+  if (digits.length === 11 && digits.startsWith('1')) return `sms:+${digits}`
+  if (digits.length > 0) return `sms:${digits}`
+  return `sms:${phone}`
+}
+
 /** Normalize phone for clipboard copy (digits only, with leading +1 for US 10-digit). */
 export function phoneCopyText(phone: string): string {
   const digits = phone.replace(/\D/g, '')

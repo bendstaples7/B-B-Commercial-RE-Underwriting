@@ -24,7 +24,11 @@ from app.schemas import (
 from app.services.lead_task_service import LeadTaskService
 from app.services.lead_timeline_service import LeadTimelineService
 from app.services.call_log_service import CallLogService
-from app.services.recommended_action_metadata import RECOMMENDED_ACTION_METADATA
+from app.services.recommended_action_metadata import (
+    RECOMMENDED_ACTION_METADATA,
+    get_recommended_action_display,
+)
+from app.services.outreach_method_service import resolve_outreach_contact
 from app.services.lead_scoring_engine import LeadScoringEngine
 
 logger = logging.getLogger(__name__)
@@ -266,14 +270,19 @@ def get_recommended_action(lead_id: int):
         return jsonify({'error': 'Not found', 'message': f'Lead {lead_id} not found'}), 404
 
     ra = lead.recommended_action
-    metadata = RECOMMENDED_ACTION_METADATA.get(ra, {}) if ra else {}
+    contact_method = lead.recommended_contact_method
+    display = get_recommended_action_display(ra, contact_method)
     signals = _get_winning_rule_signals(lead)
+    if contact_method:
+        signals = {**signals, 'recommended_contact_method': contact_method}
 
     return jsonify({
         'recommended_action': ra,
-        'label': metadata.get('label'),
-        'explanation': metadata.get('explanation'),
+        'recommended_contact_method': contact_method,
+        'label': display.get('label'),
+        'explanation': display.get('explanation'),
         'signals': signals,
+        'outreach_contact': resolve_outreach_contact(lead, contact_method),
     }), 200
 
 
@@ -306,7 +315,8 @@ def get_command_center(lead_id: int):
     _hs_health = HubSpotDealSyncService.get_lead_sync_health(lead_id)
 
     ra = lead.recommended_action
-    ra_metadata = RECOMMENDED_ACTION_METADATA.get(ra, {}) if ra else {}
+    contact_method = lead.recommended_contact_method
+    ra_display = get_recommended_action_display(ra, contact_method)
     open_tasks = _lead_task_service.list_open(lead_id)
     timeline_entries, timeline_total = _lead_timeline_service.get_page(lead_id, page=1, per_page=25)
 
@@ -577,9 +587,14 @@ def get_command_center(lead_id: int):
         'review_reason': lead.review_reason,
         'recommended_action': {
             'value': ra,
-            'label': ra_metadata.get('label'),
-            'explanation': ra_metadata.get('explanation'),
-            'signals': _get_winning_rule_signals(lead),
+            'recommended_contact_method': contact_method,
+            'label': ra_display.get('label'),
+            'explanation': ra_display.get('explanation'),
+            'outreach_contact': resolve_outreach_contact(lead, contact_method),
+            'signals': {
+                **_get_winning_rule_signals(lead),
+                **({'recommended_contact_method': contact_method} if contact_method else {}),
+            },
         },
         'open_tasks': [
             {
@@ -927,6 +942,7 @@ def log_call(lead_id: int):
         contact_phone_id=data.get('contact_phone_id'),
         phone_number=data.get('phone_number'),
         phone_label=data.get('phone_label'),
+        mail_campaign_id=data.get('mail_campaign_id'),
     )
     return jsonify(_serialize_timeline_entry(entry)), 201
 

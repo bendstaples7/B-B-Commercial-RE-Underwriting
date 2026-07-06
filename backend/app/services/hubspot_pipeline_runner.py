@@ -13,9 +13,14 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Optional
+from typing import Literal, Optional
 
 logger = logging.getLogger(__name__)
+
+PipelineMode = Literal['full', 'rescore_only']
+
+# Per-thread lead IDs touched during the current pipeline run.
+_pipeline_ctx = threading.local()
 
 # Import-run statuses that mean the batch is finished (success, partial, or failed).
 _TERMINAL_IMPORT_STATUSES = frozenset({'success', 'partial', 'failed'})
@@ -35,7 +40,33 @@ _lock_connection = None
 _spawn_coord_connection = None
 
 
-def run_post_import_pipeline_sync() -> None:
+def _affected_lead_set() -> set[int]:
+    lead_ids = getattr(_pipeline_ctx, 'lead_ids', None)
+    if lead_ids is None:
+        lead_ids = set()
+        _pipeline_ctx.lead_ids = lead_ids
+    return lead_ids
+
+
+def reset_pipeline_affected_leads() -> None:
+    """Clear affected-lead tracking at the start of a pipeline run."""
+    _pipeline_ctx.lead_ids = set()
+
+
+def note_pipeline_affected_leads(lead_ids) -> None:
+    """Record lead IDs that upstream pipeline steps modified."""
+    affected = _affected_lead_set()
+    for lead_id in lead_ids:
+        if lead_id is not None:
+            affected.add(int(lead_id))
+
+
+def get_pipeline_affected_leads() -> list[int]:
+    """Return sorted lead IDs touched in the current pipeline run."""
+    return sorted(_affected_lead_set())
+
+
+def run_post_import_pipeline_sync(force_full_rescore: bool = False) -> None:
     """Run the full post-import pipeline synchronously in the current process."""
     from app.tasks.hubspot_tasks import (
         run_convert_hubspot_activities,
@@ -46,25 +77,49 @@ def run_post_import_pipeline_sync() -> None:
         run_sync_hubspot_tasks_for_confirmed_leads,
     )
 
-    run_hubspot_matching()
-    logger.info("Post-import pipeline: matching complete")
+    reset_pipeline_affected_leads()
 
-    run_enrich_leads_from_hubspot()
-    logger.info("Post-import pipeline: lead enrichment complete")
+    try:
+        run_hubspot_matching()
+        logger.info("Post-import pipeline: matching complete")
 
-    # Legacy engagement payloads can be stale for task status — convert first,
-    # then live CRM v3 sync so authoritative HubSpot status wins each run.
-    run_convert_hubspot_activities()
-    logger.info("Post-import pipeline: activity conversion complete")
+        run_enrich_leads_from_hubspot()
+        logger.info("Post-import pipeline: lead enrichment complete")
 
-    run_sync_hubspot_tasks_for_confirmed_leads()
-    logger.info("Post-import pipeline: HubSpot task sync complete")
+        # Legacy engagement payloads can be stale for task status — convert first,
+        # then live CRM v3 sync so authoritative HubSpot status wins each run.
+        run_convert_hubspot_activities()
+        logger.info("Post-import pipeline: activity conversion complete")
 
-    run_extract_hubspot_signals()
-    logger.info("Post-import pipeline: signal extraction complete")
+        run_sync_hubspot_tasks_for_confirmed_leads()
+        logger.info("Post-import pipeline: HubSpot task sync complete")
 
-    run_rescore_leads_after_import()
-    logger.info("Post-import pipeline: rescore complete")
+        run_extract_hubspot_signals()
+        logger.info("Post-import pipeline: signal extraction complete")
+
+        affected = get_pipeline_affected_leads()
+        rescored = run_rescore_leads_after_import(
+            lead_ids=affected,
+            force_full=force_full_rescore,
+        )
+        from app.services.deploy_sync_policy import record_pipeline_completed
+
+        record_pipeline_completed(rescore_count=rescored)
+        logger.info("Post-import pipeline: rescore complete")
+    finally:
+        reset_pipeline_affected_leads()
+
+
+def run_rescore_only_sync() -> None:
+    """Run a full lead rescore without HubSpot fetch/enrich steps."""
+    reset_pipeline_affected_leads()
+    from app.services.deploy_sync_policy import record_pipeline_completed
+    from app.tasks.hubspot_tasks import run_rescore_leads_after_import
+
+    rescored = run_rescore_leads_after_import(force_full=True)
+    record_pipeline_completed(rescore_count=rescored)
+    logger.info("Rescore-only pipeline complete")
+    reset_pipeline_affected_leads()
 
 
 def _wait_for_import_runs(run_ids: list[int], max_wait: int = 3600, poll_interval: int = 15) -> None:
@@ -165,13 +220,21 @@ def release_pipeline_lock() -> None:
         _in_process_pipeline_lock.release()
 
 
-def run_pipeline_after_imports(app, run_ids: Optional[list[int]] = None) -> None:
+def run_pipeline_after_imports(
+    app,
+    run_ids: Optional[list[int]] = None,
+    mode: PipelineMode = 'full',
+) -> None:
     """Run the post-import pipeline inside *app*'s context (blocking)."""
     with app.app_context():
         if not try_acquire_pipeline_lock():
             logger.info("Pipeline already running — skipping duplicate invocation")
             return
         try:
+            if mode == 'rescore_only':
+                run_rescore_only_sync()
+                return
+
             if run_ids:
                 _wait_for_import_runs(run_ids)
             else:
@@ -198,11 +261,14 @@ def start_pipeline_in_background(app, run_ids: Optional[list[int]] = None) -> th
     return thread
 
 
-def start_pipeline_subprocess(run_ids: Optional[list[int]] = None) -> None:
+def start_pipeline_subprocess(
+    run_ids: Optional[list[int]] = None,
+    mode: PipelineMode = 'full',
+) -> None:
     """Spawn a detached subprocess so pipeline work survives Gunicorn reloads."""
     backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     script = os.path.join(backend_dir, 'scripts', 'run_pipeline_once.py')
-    payload = json.dumps(run_ids or [])
+    payload = json.dumps({'run_ids': run_ids or [], 'mode': mode})
     env = os.environ.copy()
     env.setdefault('FLASK_ENV', 'production')
     env[_PIPELINE_SUBPROCESS_ENV] = '1'
@@ -213,7 +279,7 @@ def start_pipeline_subprocess(run_ids: Optional[list[int]] = None) -> None:
         env=env,
         start_new_session=True,
     )
-    logger.info("Pipeline subprocess started (run_ids=%s)", run_ids)
+    logger.info("Pipeline subprocess started (run_ids=%s, mode=%s)", run_ids, mode)
 
 
 def _try_claim_recovery_spawn() -> bool:
@@ -336,7 +402,10 @@ def _celery_workers_responding() -> bool:
     return bool(ping)
 
 
-def try_dispatch_celery_pipeline(run_ids: Optional[list[int]] = None) -> bool:
+def try_dispatch_celery_pipeline(
+    run_ids: Optional[list[int]] = None,
+    mode: PipelineMode = 'full',
+) -> bool:
     """Queue the pipeline on Celery when a live workers is available."""
     try:
         if not _celery_workers_responding():
@@ -347,6 +416,11 @@ def try_dispatch_celery_pipeline(run_ids: Optional[list[int]] = None) -> bool:
 
         from celery import current_app as celery_app  # noqa: PLC0415
 
+        if mode == 'rescore_only':
+            celery_app.send_task('hubspot.rescore_only')
+            logger.info("Rescore-only pipeline dispatched to Celery")
+            return True
+
         celery_app.send_task('hubspot.post_import_pipeline', kwargs={'run_ids': run_ids})
         logger.info("Post-import pipeline dispatched to Celery (run_ids=%s)", run_ids)
         return True
@@ -355,12 +429,32 @@ def try_dispatch_celery_pipeline(run_ids: Optional[list[int]] = None) -> bool:
         return False
 
 
-def dispatch_post_import_pipeline(app, run_ids: Optional[list[int]] = None) -> str:
+def dispatch_post_import_pipeline(
+    app,
+    run_ids: Optional[list[int]] = None,
+    mode: PipelineMode = 'full',
+) -> str:
     """Queue via Celery when a workers is live, else run in a detached subprocess.
 
     Returns ``'celery'`` or ``'subprocess'``.
     """
-    if try_dispatch_celery_pipeline(run_ids):
+    if try_dispatch_celery_pipeline(run_ids, mode=mode):
         return 'celery'
-    start_pipeline_subprocess(run_ids)
+    start_pipeline_subprocess(run_ids, mode=mode)
     return 'subprocess'
+
+
+def dispatch_tiered_post_deploy_sync(app, sync_mode: str) -> str:
+    """Dispatch tiered post-deploy sync work without blocking.
+
+    *sync_mode* is ``skip``, ``rescore_only``, or ``full_pipeline``.
+    Returns dispatch channel or ``skipped``.
+    """
+    if sync_mode == 'skip':
+        logger.info('Post-deploy sync skipped — no HubSpot/scoring paths changed')
+        return 'skipped'
+
+    if sync_mode == 'rescore_only':
+        return dispatch_post_import_pipeline(app, run_ids=None, mode='rescore_only')
+
+    return dispatch_post_import_pipeline(app, run_ids=None, mode='full')

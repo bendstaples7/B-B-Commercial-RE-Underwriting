@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, Component } from 'react'
-import { Routes, Route, Link, Navigate, useNavigate, useParams, useLocation } from 'react-router-dom'
+import { Routes, Route, Link, Navigate, useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import { LoginPage } from './pages/LoginPage'
 import { SetPasswordPage } from './pages/SetPasswordPage'
@@ -66,9 +66,12 @@ import LocationOffIcon from '@mui/icons-material/LocationOff'
 import TodayIcon from '@mui/icons-material/Today'
 import ViewKanbanIcon from '@mui/icons-material/ViewKanban'
 import SettingsIcon from '@mui/icons-material/Settings'
+import AddLocationAltIcon from '@mui/icons-material/AddLocationAlt'
 import ExpandLess from '@mui/icons-material/ExpandLess'
 import ExpandMore from '@mui/icons-material/ExpandMore'
 import StorageIcon from '@mui/icons-material/Storage'
+import ListAltIcon from '@mui/icons-material/ListAlt'
+import LocalPostOfficeIcon from '@mui/icons-material/LocalPostOffice'
 import { usePipelineStatus } from './context/PipelineStatusContext'
 import Avatar from '@mui/material/Avatar'
 import { WorkflowStep, PropertyFacts, PropertyType, ConstructionType, InteriorCondition } from './types'
@@ -77,7 +80,7 @@ import { PropertyFactsForm } from './components/PropertyFactsForm'
 import { PropertyListPage } from './components/PropertyListPage'
 import { ImportWizard } from './components/ImportWizard'
 import { ImportHistoryTable } from './components/ImportHistoryTable'
-import { MarketingListManager } from './components/MarketingListManager'
+import { MarketingHub } from './components/MarketingHub'
 import { OAuthCallback } from './components/OAuthCallback'
 import { DealListPage } from './pages/multifamily/DealListPage'
 import { DealDetailPage } from './pages/multifamily/DealDetailPage'
@@ -94,6 +97,8 @@ import { NoNextActionQueue } from './components/NoNextActionQueue'
 import { NeedsReviewQueue } from './components/NeedsReviewQueue'
 import { DoNotContactQueue } from './components/DoNotContactQueue'
 import { MissingPropertyMatchQueue } from './components/MissingPropertyMatchQueue'
+import { ReadyToMailQueue } from './components/ReadyToMailQueue'
+import { MarketingListManager } from './components/MarketingListManager'
 import { UnifiedLeadCommandCenter } from '@/components/UnifiedLeadCommandCenter'
 import { AdminPanel } from './components/AdminPanel'
 import AdminUserDetail from './components/AdminUserDetail'
@@ -101,6 +106,7 @@ import { ScoringWeightsEditor } from './components/ScoringWeightsEditor'
 import GlobalSearchBar from '@/components/GlobalSearchBar'
 import SearchResultsPage from '@/pages/SearchResultsPage'
 import { DealKanbanPage } from './pages/DealKanbanPage'
+import { QuickAddPage } from './pages/QuickAddPage'
 import { PipelineConfigAdminPage } from './pages/PipelineConfigAdminPage'
 import DataSourcesPanel from '@/components/DataSourcesPanel'
 import type { QueueCounts } from './types'
@@ -124,6 +130,7 @@ const NAV_SECTIONS = [
     label: 'Analysis',
     path: '/analysis',
     icon: <HomeIcon />,
+    headerNavigates: false,
     groups: [
       {
         label: null,
@@ -139,21 +146,24 @@ const NAV_SECTIONS = [
     label: 'Properties',
     path: '/properties',
     icon: <PeopleIcon />,
+    headerNavigates: true,
     groups: [
       {
         label: null,
         items: [
+          { label: 'Quick Add', path: '/quick-add', icon: <AddLocationAltIcon />, badgeKey: null },
           { label: 'Sheets Import', path: '/import', icon: <CloudUploadIcon />, badgeKey: null },
           { label: 'HubSpot Import', path: '/import/hubspot', icon: <HubIcon />, badgeKey: null },
           { label: 'Review Queue', path: '/import/hubspot/review-queue', icon: <RateReviewIcon />, badgeKey: null },
-          { label: 'Marketing', path: '/marketing', icon: <CampaignIcon />, badgeKey: null },
           { label: 'Data Sources', path: '/leads/data-sources', icon: <StorageIcon />, badgeKey: null },
+          { label: 'Outreach Lists', path: '/properties/outreach-lists', icon: <ListAltIcon />, badgeKey: null },
         ],
       },
       {
         label: 'Work Queues',
         items: [
           { label: 'Kanban',                path: '/kanban',                           icon: <ViewKanbanIcon />,             badgeKey: null },
+          { label: 'Ready to Mail',          path: '/queues/ready-to-mail',          icon: <LocalPostOfficeIcon />,        badgeKey: 'ready_to_mail' as keyof QueueCounts },
           { label: "Today's Action",         path: '/queues/todays-action',          icon: <TodayIcon />,                  badgeKey: 'todays_action' as keyof QueueCounts },
           { label: 'Previously Warm',        path: '/queues/previously-warm',        icon: <LocalFireDepartmentIcon />,    badgeKey: 'previously_warm' as keyof QueueCounts },
           { label: 'Follow-Up Overdue',      path: '/queues/follow-up-overdue',      icon: <AlarmIcon />,                  badgeKey: 'follow_up_overdue' as keyof QueueCounts },
@@ -165,11 +175,43 @@ const NAV_SECTIONS = [
       },
     ],
   },
+  {
+    label: 'Marketing',
+    path: '/marketing/direct-mail',
+    icon: <CampaignIcon />,
+    headerNavigates: true,
+    groups: [
+      {
+        label: null,
+        items: [
+          { label: 'Direct Mail', path: '/marketing/direct-mail', icon: <LocalPostOfficeIcon />, badgeKey: null },
+        ],
+      },
+    ],
+  },
 ]
 
 // ---------------------------------------------------------------------------
 // Page wrapper components that handle route params / navigation
 // ---------------------------------------------------------------------------
+
+/** Direct Mail — setup only; legacy tab URLs redirect to work queues. */
+function DirectMailRoute() {
+  const [searchParams] = useSearchParams()
+  const tab = searchParams.get('tab')
+  if (tab === 'queue' || tab === 'campaigns') {
+    return <Navigate to="/queues/ready-to-mail" replace />
+  }
+  if (tab === 'lists') {
+    return <Navigate to="/properties/outreach-lists" replace />
+  }
+  return <MarketingHub />
+}
+
+function MarketingRedirect({ to }: { to: string }) {
+  const location = useLocation()
+  return <Navigate to={`${to}${location.search}`} replace />
+}
 
 /** Wraps PropertyListPage — no lead selection prop needed; row clicks navigate via useNavigate inside the component. */
 function LeadListRoute() {
@@ -1247,10 +1289,11 @@ function App() {
     refetchOnWindowFocus: true,
   })
 
-  // Track which top-level sections are expanded; default both open
+  // Track which top-level sections are expanded; default all open
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     '/analysis': true,
     '/properties': true,
+    '/marketing/direct-mail': true,
   })
 
   const toggleSection = (path: string) => {
@@ -1268,9 +1311,8 @@ function App() {
       <List disablePadding>
         {NAV_SECTIONS.map((section) => (
           <Box key={section.path}>
-            {/* Section header — Properties gets split label/chevron targets; all others toggle only */}
-            {section.path === '/properties' ? (
-              // Properties: label navigates to /properties, chevron toggles expand/collapse — Req 10.1
+            {/* Section header — navigable sections split label/chevron; others toggle only */}
+            {section.headerNavigates ? (
               <Box
                 sx={{ display: 'flex', alignItems: 'center', py: 1.5, cursor: 'pointer' }}
               >
@@ -1298,7 +1340,6 @@ function App() {
                 </IconButton>
               </Box>
             ) : (
-              // All other sections: single ListItemButton toggles collapse only
               <ListItemButton
                 onClick={() => toggleSection(section.path)}
                 sx={{ py: 1.5 }}
@@ -1410,12 +1451,14 @@ function App() {
   //   - auth has resolved but user is null (unauthenticated — AuthGuard will redirect)
   const isLoginPage = location.pathname === '/login'
   const isSetPasswordPage = location.pathname === '/set-password'
-  if (isLoginPage || isSetPasswordPage || authLoading || !user) {
+  const useLoginShell = isLoginPage || isSetPasswordPage || authLoading || !user
+  if (useLoginShell) {
     return (
       <GoogleMapsLoadedContext.Provider value={mapsLoaded}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/set-password" element={<SetPasswordPage />} />
+          <Route path="/quick-add" element={<LoginPage />} />
           <Route path="/*" element={<LoginPage />} />
         </Routes>
       </GoogleMapsLoadedContext.Provider>
@@ -1591,6 +1634,7 @@ function App() {
           <Route path="/queues/needs-review" element={<NeedsReviewQueue />} />
           <Route path="/queues/do-not-contact" element={<DoNotContactQueue />} />
           <Route path="/queues/missing-property-match" element={<MissingPropertyMatchQueue />} />
+          <Route path="/queues/ready-to-mail" element={<ReadyToMailQueue />} />
           {/* Lead Command Center — now redirects to canonical /leads/:id */}
           <Route path="/leads/:id/command-center" element={<LegacyCommandCenterRedirect />} />
 
@@ -1611,7 +1655,11 @@ function App() {
           <Route path="/leads/data-sources" element={<DataSourcesPanel />} />
           <Route path="/import" element={<ImportRoute />} />
           <Route path="/import/callback" element={<OAuthCallback />} />
-          <Route path="/marketing" element={<MarketingListManager />} />
+          <Route path="/properties/outreach-lists" element={<MarketingListManager />} />
+          <Route path="/marketing" element={<MarketingRedirect to="/marketing/direct-mail" />} />
+          <Route path="/marketing/direct-mail" element={<DirectMailRoute />} />
+          <Route path="/marketing/open-letter" element={<MarketingRedirect to="/marketing/direct-mail" />} />
+          <Route path="/import/open-letter" element={<MarketingRedirect to="/marketing/direct-mail" />} />
           {/* Multifamily routes (Req 14.1) */}
           <Route path="/multifamily/deals" element={<DealListPage />} />
           <Route path="/multifamily/deals/:dealId" element={<DealDetailPage />} />
@@ -1631,6 +1679,7 @@ function App() {
           <Route path="/settings/scoring-weights" element={<ScoringWeightsEditor />} />
           {/* Kanban view */}
           <Route path="/kanban" element={<DealKanbanPage />} />
+          <Route path="/quick-add" element={<QuickAddPage />} />
           {/* Old /leads/views/* — redirect to new /queues/* routes */}
           <Route path="/leads/views/previously-warm" element={<Navigate to="/queues/previously-warm" replace />} />
           <Route path="/leads/views/needs-review" element={<Navigate to="/queues/needs-review" replace />} />

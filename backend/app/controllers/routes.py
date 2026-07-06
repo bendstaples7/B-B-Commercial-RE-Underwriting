@@ -79,6 +79,53 @@ def handle_errors(f):
     return decorated_function
 
 
+def resolve_deploy_sha(app_dir=None):
+    """Return the deployed git SHA for CI/CD verification.
+
+    Resolution order:
+      1. DEPLOY_SHA file (written by deploy.sh on the VPS)
+      2. Parse APP_DIR/.git/HEAD (no subprocess; works under systemd)
+      3. git rev-parse via absolute binary paths
+    """
+    import os
+    import subprocess
+    from pathlib import Path
+
+    app_path = Path(app_dir or os.environ.get('DEPLOY_APP_DIR', '/home/deploy/app'))
+
+    deploy_sha_file = app_path / 'DEPLOY_SHA'
+    if deploy_sha_file.is_file():
+        sha = deploy_sha_file.read_text(encoding='utf-8').strip()
+        if sha:
+            return sha
+
+    git_head = app_path / '.git' / 'HEAD'
+    if git_head.is_file():
+        head = git_head.read_text(encoding='utf-8').strip()
+        if head.startswith('ref: '):
+            ref_path = app_path / '.git' / head[5:]
+            if ref_path.is_file():
+                sha = ref_path.read_text(encoding='utf-8').strip()
+                if sha:
+                    return sha
+        elif len(head) >= 40:
+            return head[:40]
+
+    for git_bin in ('/usr/bin/git', '/usr/local/bin/git', 'git'):
+        try:
+            sha = subprocess.check_output(
+                [git_bin, 'rev-parse', 'HEAD'],
+                cwd=str(app_path),
+                stderr=subprocess.DEVNULL,
+            ).decode().strip()
+            if sha:
+                return sha
+        except Exception:
+            continue
+
+    return 'unknown'
+
+
 @api_bp.route('/version', methods=['GET'])
 def version():
     """Returns the currently deployed git SHA.
@@ -86,16 +133,7 @@ def version():
     Used by the CI/CD post-deploy smoke test to verify the correct
     version of the code is running after a deployment.
     """
-    import subprocess
-    try:
-        sha = subprocess.check_output(
-            ['git', 'rev-parse', 'HEAD'],
-            cwd='/home/deploy/app',
-            stderr=subprocess.DEVNULL
-        ).decode().strip()
-    except Exception:
-        sha = 'unknown'
-    return jsonify({'sha': sha}), 200
+    return jsonify({'sha': resolve_deploy_sha()}), 200
 
 
 @api_bp.route('/health', methods=['GET'])
@@ -259,6 +297,32 @@ def health_check():
             )
     except Exception as e:
         checks['celery_worker'] = f'WARN: Celery check failed ({e})'
+
+    # ------------------------------------------------------------------
+    # Check 7: Open Letter / mail queue schema
+    # ------------------------------------------------------------------
+    try:
+        db.session.execute(db.text('SELECT 1 FROM mail_queue_items LIMIT 0'))
+        db.session.execute(db.text('SELECT 1 FROM open_letter_config LIMIT 0'))
+        checks['open_letter_schema'] = 'ok'
+    except Exception as e:
+        checks['open_letter_schema'] = (
+            f'FAIL: mail_queue_items or open_letter_config missing ({e}). '
+            f'Run: flask db upgrade head'
+        )
+        degraded = True
+
+    olc_token = os.environ.get('OPEN_LETTER_API_TOKEN', '').strip()
+    encryption_key = os.environ.get('HUBSPOT_ENCRYPTION_KEY', '').strip()
+    if olc_token and not encryption_key:
+        checks['open_letter_encryption'] = (
+            'FAIL: OPEN_LETTER_API_TOKEN is set but HUBSPOT_ENCRYPTION_KEY is missing'
+        )
+        degraded = True
+    elif olc_token:
+        checks['open_letter_encryption'] = 'ok'
+    else:
+        checks['open_letter_encryption'] = 'skipped (OPEN_LETTER_API_TOKEN not set)'
 
     status = 'degraded' if degraded else 'healthy'
     http_status = 503 if degraded else 200

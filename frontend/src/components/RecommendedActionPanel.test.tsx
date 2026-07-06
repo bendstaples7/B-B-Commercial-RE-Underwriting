@@ -129,6 +129,55 @@ describe('RecommendedActionPanel', () => {
       expect(screen.getByTestId('ra-action-btn-run_analysis')).toBeInTheDocument()
     })
 
+    it('renders outreach contact callout when outreach_contact is present and showOutreachContact', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={{
+            ...makeRA('follow_up_now', 'Call Now', 'Reach out now.'),
+            recommended_contact_method: 'phone',
+            outreach_contact: {
+              channel: 'phone',
+              label: 'Call',
+              value: '5551234567',
+              display: '(555) 123-4567',
+              href: 'tel:+15551234567',
+            },
+          }}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          showOutreachContact
+          onAction={vi.fn()}
+        />
+      )
+
+      expect(screen.getByTestId('outreach-contact-inline')).toBeInTheDocument()
+      expect(screen.getByTestId('outreach-contact-link')).toHaveTextContent('(555) 123-4567')
+      expect(screen.queryByTestId('outreach-contact-callout')).not.toBeInTheDocument()
+    })
+
+    it('does not render outreach contact when showOutreachContact is false', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={{
+            ...makeRA('follow_up_now', 'Call Now', 'Reach out now.'),
+            outreach_contact: {
+              channel: 'phone',
+              label: 'Call',
+              value: '5551234567',
+              display: '(555) 123-4567',
+              href: 'tel:+15551234567',
+            },
+          }}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[makeTask(1)]}
+          showOutreachContact={false}
+          onAction={vi.fn()}
+        />
+      )
+
+      expect(screen.queryByTestId('outreach-contact-inline')).not.toBeInTheDocument()
+    })
+
     it('calls onAction with the correct action string when a button is clicked', async () => {
       const onAction = vi.fn().mockResolvedValue(undefined)
 

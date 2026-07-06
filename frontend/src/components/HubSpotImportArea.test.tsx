@@ -487,8 +487,11 @@ describe('HubSpotImportArea', () => {
   })
 
   describe('Read-Only Mode badge', () => {
-    it('shows Read-Only Mode badge when config is present', async () => {
-      vi.mocked(hubSpotService.getHubSpotConfig).mockResolvedValue(mockConfig)
+    it('shows Read-Only Mode badge when configured without write-back', async () => {
+      vi.mocked(hubSpotService.getHubSpotConfig).mockResolvedValue({
+        ...mockConfig,
+        write_back_enabled: false,
+      })
 
       render(<HubSpotImportArea />)
 
@@ -497,7 +500,21 @@ describe('HubSpotImportArea', () => {
       })
     })
 
-    it('does not show Read-Only Mode badge when config is absent', async () => {
+    it('shows Write-back enabled badge when write-back is on', async () => {
+      vi.mocked(hubSpotService.getHubSpotConfig).mockResolvedValue({
+        ...mockConfig,
+        write_back_enabled: true,
+      })
+
+      render(<HubSpotImportArea />)
+
+      await waitFor(() => {
+        expect(screen.getByLabelText('HubSpot write-back is enabled')).toBeInTheDocument()
+        expect(screen.queryByLabelText('HubSpot connection is read-only')).not.toBeInTheDocument()
+      })
+    })
+
+    it('does not show connection badge when config is absent', async () => {
       vi.mocked(hubSpotService.getHubSpotConfig).mockRejectedValue(new Error('Not configured'))
 
       render(<HubSpotImportArea />)

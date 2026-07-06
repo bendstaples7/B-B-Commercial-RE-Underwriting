@@ -5,6 +5,14 @@ import pytest
 from unittest.mock import MagicMock, patch, call
 
 from app.services.action_engine_service import ActionEngineService
+from app.services.lead_scoring_engine import LeadScoringEngine
+
+
+@pytest.fixture(autouse=True)
+def _mock_recent_email(monkeypatch):
+    monkeypatch.setattr(
+        LeadScoringEngine, '_has_recent_email', staticmethod(lambda _lead_id: False),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +47,8 @@ def make_lead(
     data_completeness_score=60.0,
     property_street='123 Main St',
     recommended_action=None,
+    lead_category='residential',
+    unanswered_call_count=0,
 ):
     lead = MagicMock()
     lead.id = 1
@@ -55,7 +65,8 @@ def make_lead(
     lead.recommended_action = recommended_action
     lead.do_not_contact = False
     lead.suppression_flag = False
-    lead.lead_category = 'residential'
+    lead.lead_category = lead_category
+    lead.unanswered_call_count = unanswered_call_count
     return lead
 
 
@@ -175,33 +186,59 @@ def test_priority_5_has_match_no_analysis_no_longer_returns_analyze_property():
 # Priority 6: follow_up_overdue → follow_up_now
 # ---------------------------------------------------------------------------
 
-def test_priority_6_follow_up_overdue_returns_follow_up_now():
-    lead = make_lead(follow_up_overdue=True)
-    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
+def test_priority_6_follow_up_overdue_returns_mail_ready_for_residential_early_stage():
+    lead = make_lead(follow_up_overdue=True, lead_status='mailing_no_contact_made')
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
+         patch.object(LeadScoringEngine, '_has_recent_email', return_value=False):
         result = ActionEngineService.compute_recommended_action(lead)
-    assert result == 'follow_up_now'
+    assert result == 'mail_ready'
+
+
+def test_priority_6_follow_up_overdue_post_mailing_returns_call_ready():
+    lead = make_lead(
+        follow_up_overdue=True,
+        lead_status='mailing_contacted_interested',
+    )
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
+         patch.object(LeadScoringEngine, '_has_recent_email', return_value=False):
+        result = ActionEngineService.compute_recommended_action(lead)
+    assert result == 'call_ready'
 
 
 # ---------------------------------------------------------------------------
 # Priority 7: is_warm → follow_up_now
 # ---------------------------------------------------------------------------
 
-def test_priority_7_is_warm_returns_follow_up_now():
-    lead = make_lead(is_warm=True)
-    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
+def test_priority_7_is_warm_residential_early_stage_returns_mail_ready():
+    lead = make_lead(is_warm=True, lead_status='mailing_no_contact_made')
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
+         patch.object(LeadScoringEngine, '_has_recent_email', return_value=False):
         result = ActionEngineService.compute_recommended_action(lead)
-    assert result == 'follow_up_now'
+    assert result == 'mail_ready'
+
+
+def test_commercial_three_unanswered_calls_returns_mail_ready():
+    lead = make_lead(
+        lead_category='commercial',
+        unanswered_call_count=3,
+        lead_score=70.0,
+        data_completeness_score=60.0,
+    )
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
+         patch.object(LeadScoringEngine, '_has_recent_email', return_value=False):
+        result = ActionEngineService.compute_recommended_action(lead)
+    assert result == 'mail_ready'
 
 
 # ---------------------------------------------------------------------------
 # Priority 8: high score + analysis complete + no open tasks → ready_for_outreach
 # ---------------------------------------------------------------------------
 
-def test_priority_8_high_score_no_tasks_returns_ready_for_outreach():
+def test_priority_8_high_score_no_tasks_returns_mail_ready_for_residential_early_stage():
     lead = make_lead(lead_score=70.0, data_completeness_score=60.0)
     with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
-    assert result == 'ready_for_outreach'
+    assert result == 'mail_ready'
 
 
 def test_priority_7_high_score_with_open_tasks_skips_ready_for_outreach():
@@ -305,14 +342,14 @@ def test_recompute_and_persist_appends_timeline_when_ra_changes(app):
         assert len(entries) == 1
         meta = entries[0].event_metadata
         assert meta['previous_action'] is None
-        assert meta['new_action'] == 'follow_up_now'
+        assert meta['new_action'] == 'call_ready'
+        assert meta['new_contact_method'] == 'phone'
         assert meta['winning_rule'] == 'follow_up_overdue'
         assert isinstance(meta['lead_score'], float)
         assert meta['is_warm'] is False
-        assert meta['signals'] == {
-            'follow_up_overdue': True,
-            'has_overdue_hs_task': False,
-        }
+        assert meta['signals']['follow_up_overdue'] is True
+        assert meta['signals']['has_overdue_hs_task'] is False
+        assert meta['signals']['recommended_contact_method'] == 'phone'
         assert 'property_street' not in meta['signals']
 
 
@@ -333,7 +370,8 @@ def test_recompute_and_persist_no_timeline_when_ra_unchanged(app):
             is_warm=False,
             lead_score=50.0,
             data_completeness_score=60.0,
-            recommended_action='follow_up_now',  # already correct
+            recommended_action='call_ready',
+            recommended_contact_method='phone',
         )
         db.session.add(lead)
         db.session.commit()

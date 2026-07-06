@@ -110,6 +110,35 @@ class LeadIngestionService:
         self.dedup_engine = dedup_engine
         self.gis_registry = gis_registry  # type: dict[str, GISConnector]
 
+    def _gis_connector_for_lead(self, lead):
+        """Resolve the GIS connector for a lead (instance registry + global fallback)."""
+        from app.services.gis.routing import (
+            connector_for_lead,
+            parse_city_state_from_address,
+            _resolve_market,
+        )
+        from app.services.gis.base import GISConnectorRegistry
+
+        if not getattr(lead, "property_city", None) or not getattr(lead, "property_state", None):
+            city, state = parse_city_state_from_address(
+                getattr(lead, "property_street", None) or ""
+            )
+            if city and not getattr(lead, "property_city", None):
+                lead.property_city = city
+            if state and not getattr(lead, "property_state", None):
+                lead.property_state = state
+
+        market = _resolve_market(lead)
+        if market and market in self.gis_registry:
+            return self.gis_registry.get(market)
+
+        # Only use the global connector registry in production wiring where
+        # gis_registry *is* GISConnectorRegistry. Tests pass an explicit dict
+        # (often empty) and must not fall through to live connectors.
+        if self.gis_registry is GISConnectorRegistry:
+            return connector_for_lead(lead)
+        return None
+
     # ------------------------------------------------------------------ #
     # Skip-trace flag (Requirement 1.5)                                   #
     # ------------------------------------------------------------------ #
@@ -243,6 +272,18 @@ class LeadIngestionService:
             lead.has_property_match = True
             outcome['match_found'] = True
             outcome['fields_populated'] = fields_populated
+
+            try:
+                from app.services.cook_county_enrichment_service import (
+                    maybe_dispatch_after_gis_match,
+                )
+                maybe_dispatch_after_gis_match(lead, connector)
+            except Exception as dispatch_exc:
+                logger.warning(
+                    "Cook County enrichment dispatch failed for lead %s: %s",
+                    getattr(lead, 'id', '?'),
+                    dispatch_exc,
+                )
 
         except Exception as exc:
             # Log and continue — never fail the batch (Requirement 8.6)
@@ -778,9 +819,7 @@ class LeadIngestionService:
                 is_creation = (dedup_result.outcome == 'created')
 
                 # GIS enrichment for foreclosure leads (Req 8.1)
-                # Foreclosure is always DuPage County
-                market = 'dupage_il'
-                connector = self.gis_registry.get(market)
+                connector = self._gis_connector_for_lead(lead)
                 if connector:
                     gis_outcome = self._enrich_with_gis(lead, connector, job.id)
                     error_log_entry = {
@@ -920,7 +959,7 @@ class LeadIngestionService:
                 is_creation = (dedup_result.outcome == 'created')
 
                 # GIS enrichment for tax_distress (Req 8.1)
-                connector = self.gis_registry.get('dupage_il')
+                connector = self._gis_connector_for_lead(lead)
                 if connector:
                     gis_outcome = self._enrich_with_gis(lead, connector, job.id)
                     if gis_outcome.get('error'):
@@ -1176,7 +1215,7 @@ class LeadIngestionService:
                     # --------------------------------------------------
                     # GIS enrichment for manual_distress leads (Req 8.1)
                     # --------------------------------------------------
-                    connector = self.gis_registry.get('dupage_il')
+                    connector = self._gis_connector_for_lead(lead)
                     if connector:
                         gis_outcome = self._enrich_with_gis(lead, connector, job_id)
                         if gis_outcome.get('error'):

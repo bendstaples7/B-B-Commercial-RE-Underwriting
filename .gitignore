@@ -29,6 +29,8 @@ instance/
 
 # Testing
 .pytest_cache/
+backend/pytest_full.txt
+backend/pytest_results.txt
 .hypothesis/
 .coverage
 htmlcov/
@@ -95,3 +97,6 @@ scripts/sync-local-db.conf
 backend/.venv/
 
 # GitHub auth temp files (create-pr.sh may use /tmp/pr-body.md)
+
+# VPS runtime deploy marker (written by deploy.sh, not committed)
+DEPLOY_SHA

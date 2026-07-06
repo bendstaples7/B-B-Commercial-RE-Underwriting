@@ -8,6 +8,7 @@ import App from './App'
 import { NotificationProvider, globalNotify } from './context/NotificationContext'
 import { PipelineStatusProvider } from './context/PipelineStatusContext'
 import { AuthProvider } from './context/AuthContext'
+import { QuickAddFabHost } from '@/components/QuickAddFab'
 
 // ---------------------------------------------------------------------------
 // Global mutation error handler
@@ -125,6 +126,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <NotificationProvider>
               <PipelineStatusProvider>
                 <App />
+                <QuickAddFabHost />
               </PipelineStatusProvider>
             </NotificationProvider>
           </AuthProvider>

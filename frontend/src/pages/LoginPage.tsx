@@ -51,7 +51,9 @@ export function LoginPage() {
   const from =
     (isInternalPath ? rawReturnUrl : null) ??
     (location.state as { from?: Location })?.from?.pathname ??
-    '/'
+    (location.pathname !== '/login' && location.pathname !== '/set-password'
+      ? `${location.pathname}${location.search}${location.hash}`
+      : '/')
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')

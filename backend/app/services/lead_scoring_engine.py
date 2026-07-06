@@ -20,6 +20,11 @@ from app.models.lead_task import LeadTask
 from app.models.lead_timeline_entry import LeadTimelineEntry
 from app.models.lead_crm_flags_view import LeadCRMFlagsView
 from app.services import scoring_rubric as rubric
+from app.services.outreach_method_service import (
+    evaluate_contact_method,
+    refine_outreach_action,
+    OUTREACH_ACTIONS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +69,7 @@ class ScoringResult:
     score_tier: str
     data_quality_score: float
     recommended_action: str | None
+    recommended_contact_method: str | None
     winning_rule: str
     action_signals: dict
     score_details: dict
@@ -79,22 +85,26 @@ class ScoringResult:
 
 def _count_open_tasks(lead_id: int) -> int:
     from sqlalchemy import text as _text
-    native = LeadTask.query.filter_by(lead_id=lead_id, status='open').count()
-    hs = db.session.execute(_text("""
-        SELECT COUNT(*) FROM tasks t
-        JOIN task_associations ta ON ta.task_id = t.id
-        WHERE ta.target_type = 'lead' AND ta.target_id = :lid
-          AND t.status IN ('open', 'overdue')
-          AND t.source = 'hubspot_import'
-        UNION ALL
-        SELECT COUNT(*) FROM tasks
-        WHERE lead_id = :lid
-          AND status IN ('open', 'overdue')
-          AND source = 'hubspot_import'
-    """), {'lid': lead_id}).fetchall()
-    hs_counts = [r[0] for r in hs]
-    hs_total = max(hs_counts) if hs_counts else 0
-    return native + hs_total
+    try:
+        native = LeadTask.query.filter_by(lead_id=lead_id, status='open').count()
+        hs = db.session.execute(_text("""
+            SELECT COUNT(*) FROM tasks t
+            JOIN task_associations ta ON ta.task_id = t.id
+            WHERE ta.target_type = 'lead' AND ta.target_id = :lid
+              AND t.status IN ('open', 'overdue')
+              AND t.source = 'hubspot_import'
+            UNION ALL
+            SELECT COUNT(*) FROM tasks
+            WHERE lead_id = :lid
+              AND status IN ('open', 'overdue')
+              AND source = 'hubspot_import'
+        """), {'lid': lead_id}).fetchall()
+        hs_counts = [r[0] for r in hs]
+        hs_total = max(hs_counts) if hs_counts else 0
+        return native + hs_total
+    except Exception as exc:
+        logger.warning("open task count query failed for lead_id=%s: %s", lead_id, exc)
+        return 0
 
 
 def _has_overdue_hubspot_task(lead_id: int) -> bool:
@@ -114,7 +124,7 @@ def _has_overdue_hubspot_task(lead_id: int) -> bool:
                 SELECT 1 FROM tasks
                 WHERE lead_id = :lid
                   AND status IN ('open', 'overdue')
-                  AND (t.due_date <= :now OR (t.due_date IS NULL AND t.status = 'overdue'))
+                  AND (due_date <= :now OR (due_date IS NULL AND status = 'overdue'))
                   AND source = 'hubspot_import'
                 LIMIT 1
             """), {'lid': lead_id, 'now': datetime.utcnow()}).fetchone()
@@ -216,6 +226,11 @@ class LeadScoringEngine:
         recommended_action, winning_rule, action_signals = self.evaluate_recommended_action(
             lead, total, data_quality_score, score_tier,
         )
+        recommended_action, recommended_contact_method = self._apply_outreach_method(
+            lead, recommended_action, action_signals,
+        )
+        if recommended_contact_method:
+            action_signals['recommended_contact_method'] = recommended_contact_method
         top_signals = rubric.extract_top_signals(score_details)
 
         return ScoringResult(
@@ -223,6 +238,7 @@ class LeadScoringEngine:
             score_tier=score_tier,
             data_quality_score=data_quality_score,
             recommended_action=recommended_action,
+            recommended_contact_method=recommended_contact_method,
             winning_rule=winning_rule,
             action_signals=action_signals,
             score_details=score_details,
@@ -306,10 +322,24 @@ class LeadScoringEngine:
         open_tasks = _count_open_tasks(lead_id) if isinstance(lead_id, int) else 0
 
         if score_tier == "A" and data_quality_score >= 70:
+            if rubric.is_recently_sold(lead):
+                sale = rubric.effective_acquisition_date(lead)
+                days_since = (date.today() - sale).days if sale else None
+                return 'nurture', 'recently_sold', {
+                    'most_recent_sale': getattr(lead, 'most_recent_sale', None),
+                    'days_since_sale': days_since,
+                }
             return 'mail_ready', 'tier_a_high_quality', {
                 'score_tier': score_tier, 'data_quality_score': data_quality_score,
             }
         if score_tier == "B" and data_quality_score >= 70:
+            if rubric.is_recently_sold(lead):
+                sale = rubric.effective_acquisition_date(lead)
+                days_since = (date.today() - sale).days if sale else None
+                return 'nurture', 'recently_sold', {
+                    'most_recent_sale': getattr(lead, 'most_recent_sale', None),
+                    'days_since_sale': days_since,
+                }
             return 'review_now', 'tier_b_high_quality', {
                 'score_tier': score_tier, 'data_quality_score': data_quality_score,
             }
@@ -343,8 +373,10 @@ class LeadScoringEngine:
     ) -> LeadScore | None:
         """Update live lead fields; optionally append ``lead_scores`` history."""
         previous_action = lead.recommended_action
+        previous_method = lead.recommended_contact_method
         lead.lead_score = result.total_score
         lead.recommended_action = result.recommended_action
+        lead.recommended_contact_method = result.recommended_contact_method
         db.session.add(lead)
 
         lead_score: LeadScore | None = None
@@ -377,6 +409,31 @@ class LeadScoringEngine:
                 event_metadata={
                     'previous_action': previous_action,
                     'new_action': result.recommended_action,
+                    'previous_contact_method': previous_method,
+                    'new_contact_method': result.recommended_contact_method,
+                    'winning_rule': result.winning_rule,
+                    'lead_score': result.total_score,
+                    'is_warm': lead.is_warm,
+                    'signals': _timeline_signals(result.action_signals),
+                },
+            )
+            db.session.add(entry)
+        elif result.recommended_contact_method != previous_method:
+            entry = LeadTimelineEntry(
+                lead_id=lead.id,
+                event_type='recommended_action_changed',
+                occurred_at=datetime.now(timezone.utc),
+                source='system',
+                actor='System',
+                summary=(
+                    f"Recommended contact method changed from '{previous_method}' "
+                    f"to '{result.recommended_contact_method}'."
+                ),
+                event_metadata={
+                    'previous_action': previous_action,
+                    'new_action': result.recommended_action,
+                    'previous_contact_method': previous_method,
+                    'new_contact_method': result.recommended_contact_method,
                     'winning_rule': result.winning_rule,
                     'lead_score': result.total_score,
                     'is_warm': lead.is_warm,
@@ -747,24 +804,84 @@ class LeadScoringEngine:
         total = float(getattr(lead, 'lead_score', 0) or 0)
         data_quality = float(getattr(lead, 'data_completeness_score', 0) or 0)
         tier = rubric.calculate_score_tier(total)
-        action, _, _ = LeadScoringEngine.evaluate_recommended_action(
+        action, _, signals = LeadScoringEngine.evaluate_recommended_action(
             lead, total, data_quality, tier,
         )
-        return action
+        refined, _method = LeadScoringEngine()._apply_outreach_method(lead, action, signals)
+        return refined
 
     @staticmethod
     def get_winning_rule_signals(lead: Lead) -> dict:
         total = float(getattr(lead, 'lead_score', 0) or 0)
         data_quality = float(getattr(lead, 'data_completeness_score', 0) or 0)
         tier = rubric.calculate_score_tier(total)
-        _, _, signals = LeadScoringEngine.evaluate_recommended_action(
+        action, _, signals = LeadScoringEngine.evaluate_recommended_action(
             lead, total, data_quality, tier,
         )
+        _refined, method = LeadScoringEngine()._apply_outreach_method(lead, action, signals)
+        if method:
+            signals = {**signals, 'recommended_contact_method': method}
         return signals
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _apply_outreach_method(
+        self,
+        lead: Lead,
+        recommended_action: str | None,
+        action_signals: dict,
+    ) -> tuple[str | None, str | None]:
+        """Resolve contact channel and refine outreach action."""
+        if not recommended_action:
+            return recommended_action, None
+
+        if recommended_action == 'mail_ready':
+            return recommended_action, 'direct_mail'
+        if recommended_action == 'call_ready':
+            return recommended_action, 'phone'
+
+        if recommended_action not in OUTREACH_ACTIONS:
+            return recommended_action, None
+
+        has_phone, has_email, _has_match = _resolve_crm_flags(lead)
+        lead_id = getattr(lead, 'id', None)
+        recent_email = (
+            self._has_recent_email(lead_id)
+            if isinstance(lead_id, int)
+            else False
+        )
+
+        method = evaluate_contact_method(
+            lead,
+            recommended_action,
+            has_phone=has_phone,
+            has_email=has_email,
+            recent_email=recent_email,
+        )
+        refined = refine_outreach_action(recommended_action, method)
+        if refined == 'mail_ready':
+            method = 'direct_mail'
+        elif refined == 'call_ready':
+            method = 'phone'
+        return refined, method
+
+    @staticmethod
+    def _has_recent_email(lead_id: int) -> bool:
+        cutoff = datetime.utcnow() - timedelta(days=ENGAGEMENT_LOOKBACK_DAYS)
+        row = (
+            LeadTimelineEntry.query
+            .filter(
+                LeadTimelineEntry.lead_id == lead_id,
+                LeadTimelineEntry.event_type == 'email_logged',
+                LeadTimelineEntry.is_deleted.is_(False),
+                LeadTimelineEntry.occurred_at >= cutoff,
+            )
+            .limit(1)
+            .first()
+        )
+        return row is not None
 
     def _hubspot_signal_adjustment(self, signals: Optional[list]) -> float:
         if not signals:

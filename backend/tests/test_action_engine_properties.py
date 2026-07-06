@@ -27,6 +27,10 @@ def _mock_action_engine_db(monkeypatch):
         'app.services.lead_scoring_engine._has_overdue_hubspot_task',
         lambda _lead_id: False,
     )
+    monkeypatch.setattr(
+        'app.services.lead_scoring_engine.LeadScoringEngine._has_recent_email',
+        staticmethod(lambda _lead_id: False),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +81,9 @@ def make_mock_lead(
     lead.do_not_contact = False
     lead.suppression_flag = False
     lead.lead_category = 'residential'
+    lead.unanswered_call_count = 0
+    lead.acquisition_date = None
+    lead.most_recent_sale = None
     return lead
 
 

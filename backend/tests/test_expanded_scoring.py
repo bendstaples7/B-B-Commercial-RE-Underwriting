@@ -246,6 +246,16 @@ class TestOwnershipDurationScore:
         expected = self.max_pts * 0.15
         assert score == expected, f"Expected {expected}, got {score}"
 
+    def test_most_recent_sale_used_when_acquisition_missing(self):
+        one_year_ago = date.today() - timedelta(days=365)
+        lead = _make_lead(
+            acquisition_date=None,
+            most_recent_sale=one_year_ago.strftime('%m/%d/%Y'),
+        )
+        score = self.engine._ownership_duration_score(lead)
+        expected = self.max_pts * 0.15
+        assert score == expected, f"Expected {expected}, got {score}"
+
     def test_future_acquisition_date_scores_zero(self):
         """Future dates (negative years owned) → 0."""
         future_date = date.today() + timedelta(days=365)

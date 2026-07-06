@@ -81,6 +81,11 @@ _KNOWN_REVISIONS = frozenset({
     'c2d3e4f5a6b7',
     # leads.assessed_value for enrichment scoring
     'd3e4f5a6b7c8',
+    # leads.recommended_contact_method for granular outreach scoring
+    'e4f5a6b7c8d9',
+    # Open Letter Connect — mail queue and campaigns
+    'f5a6b7c8d9e0',
+    'g6a7b8c9d0e1',
 })
 
 
