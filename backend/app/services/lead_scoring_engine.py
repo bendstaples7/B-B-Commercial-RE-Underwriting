@@ -474,7 +474,7 @@ class LeadScoringEngine:
             )
         return lead_score
 
-    def score_and_persist(self, lead_id: int) -> LeadScore | None:
+    def score_and_persist(self, lead_id: int, *, commit: bool = True) -> LeadScore | None:
         lead = db.session.get(Lead, lead_id)
         if lead is None:
             return None
@@ -486,7 +486,7 @@ class LeadScoringEngine:
             .all()
         )
         result = self.compute(lead, weights, signals=signals)
-        return self.persist(lead, result)
+        return self.persist(lead, result, commit=commit)
 
     # ------------------------------------------------------------------
     # Bulk / recalculate (formerly DeterministicScoringEngine)

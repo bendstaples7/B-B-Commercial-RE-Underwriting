@@ -137,7 +137,7 @@ def reject_candidate(
 
 def _score_and_persist_lead(lead_id: int) -> None:
     try:
-        LeadScoringEngine().score_and_persist(lead_id)
+        LeadScoringEngine().score_and_persist(lead_id, commit=False)
     except Exception as exc:
         db.session.rollback()
         raise ValueError('Failed to complete prospect import scoring') from exc
