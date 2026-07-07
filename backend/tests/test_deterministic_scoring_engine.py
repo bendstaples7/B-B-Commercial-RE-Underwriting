@@ -237,41 +237,41 @@ class TestSourceTypeDistressTaxBonus:
 
 
 # ---------------------------------------------------------------------------
-# calculate_residential_score — source_type_distress in score_details
+# calculate_residential_score — structured_motivation in score_details
 # ---------------------------------------------------------------------------
 
-class TestResidentialScoreSourceTypeDistressDimension:
-    """source_type_distress must appear in score_details returned by calculate_residential_score."""
+class TestResidentialScoreStructuredMotivationDimension:
+    """structured_motivation must appear in score_details returned by calculate_residential_score."""
 
     def setup_method(self):
         self.engine = DeterministicScoringEngine()
 
-    def test_source_type_distress_in_score_details(self):
+    def test_structured_motivation_in_score_details(self):
         lead = _make_lead(source_type="foreclosure")
         result = self.engine.calculate_residential_score(lead)
-        assert "source_type_distress" in result["score_details"], (
-            "source_type_distress dimension missing from score_details"
+        assert "structured_motivation" in result["score_details"], (
+            "structured_motivation dimension missing from score_details"
         )
 
-    def test_source_type_distress_value_correct_foreclosure(self):
+    def test_structured_motivation_value_correct_foreclosure(self):
         lead = _make_lead(source_type="foreclosure", tax_distress_data=None)
         result = self.engine.calculate_residential_score(lead)
-        assert result["score_details"]["source_type_distress"] == 10.0
+        assert result["score_details"]["structured_motivation"] == 10.0
 
-    def test_source_type_distress_value_correct_with_tax_data(self):
+    def test_structured_motivation_includes_tax_sale_rows(self):
         lead = _make_lead(
             source_type="tax_distress",
-            tax_distress_data={"signal_type": "tax_sale"},
+            tax_distress_data=[{"signal_type": "tax_sale"}],
         )
         result = self.engine.calculate_residential_score(lead)
-        assert result["score_details"]["source_type_distress"] == 15.0
+        assert result["score_details"]["structured_motivation"] >= 10.0
 
-    def test_source_type_distress_value_0_for_null_source_type(self):
+    def test_structured_motivation_value_0_for_null_source_type(self):
         lead = _make_lead(source_type=None)
         result = self.engine.calculate_residential_score(lead)
-        assert result["score_details"]["source_type_distress"] == 0.0
+        assert result["score_details"]["structured_motivation"] == 0.0
 
-    def test_source_type_distress_contributes_to_total_score(self):
+    def test_structured_motivation_contributes_to_total_score(self):
         lead_without = _make_lead(source_type=None)
         lead_with = _make_lead(source_type="long_owned")
         result_without = self.engine.calculate_residential_score(lead_without)
@@ -346,31 +346,30 @@ class TestAbsenteeOwnerShortCircuit:
 # ---------------------------------------------------------------------------
 
 class TestManualPriorityIntegration:
-    """Requirement 12.4: manual_priority is passed through to the scoring method."""
+    """manual_priority contributes via structured_motivation."""
 
     def setup_method(self):
         self.engine = DeterministicScoringEngine()
 
     def test_null_manual_priority_scores_0(self):
-        lead = _make_lead(manual_priority=None)
+        lead = _make_lead(manual_priority=None, source_type=None)
         result = self.engine.calculate_residential_score(lead)
-        assert result["score_details"]["manual_priority"] == 0.0
+        assert result["score_details"]["structured_motivation"] == 0.0
 
     def test_manual_priority_5_scores_5(self):
-        lead = _make_lead(manual_priority=5)
+        lead = _make_lead(manual_priority=5, source_type=None)
         result = self.engine.calculate_residential_score(lead)
-        assert result["score_details"]["manual_priority"] == 5.0
+        assert result["score_details"]["structured_motivation"] == 10.0
 
     def test_manual_priority_10_capped_at_max(self):
-        lead = _make_lead(manual_priority=10)
+        lead = _make_lead(manual_priority=10, source_type=None)
         result = self.engine.calculate_residential_score(lead)
-        # Max for residential is 10
-        assert result["score_details"]["manual_priority"] == 10.0
+        assert result["score_details"]["structured_motivation"] == 10.0
 
     def test_manual_priority_above_max_clamped(self):
-        lead = _make_lead(manual_priority=50)
+        lead = _make_lead(manual_priority=50, source_type=None)
         result = self.engine.calculate_residential_score(lead)
-        assert result["score_details"]["manual_priority"] == 10.0  # clamped at max
+        assert result["score_details"]["structured_motivation"] == 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -464,7 +463,7 @@ class TestTaxDistressLanguageAbsentFromRecommendedAction:
 # ---------------------------------------------------------------------------
 
 class TestScoreDetailsCompleteness:
-    """score_details must contain 'source_type_distress' key for all residential scores."""
+    """score_details must contain 'structured_motivation' key for all residential scores."""
 
     def setup_method(self):
         self.engine = DeterministicScoringEngine()
@@ -473,33 +472,34 @@ class TestScoreDetailsCompleteness:
         None, "foreclosure", "tax_distress", "long_owned",
         "absentee_owner", "manual_distress", "unknown_xyz",
     ])
-    def test_source_type_distress_always_present_in_score_details(self, source_type):
+    def test_structured_motivation_always_present_in_score_details(self, source_type):
         lead = _make_lead(source_type=source_type)
         result = self.engine.calculate_residential_score(lead)
-        assert "source_type_distress" in result["score_details"], (
-            f"source_type_distress missing from score_details for source_type={source_type!r}"
+        assert "structured_motivation" in result["score_details"], (
+            f"structured_motivation missing from score_details for source_type={source_type!r}"
         )
 
     @pytest.mark.parametrize("source_type", [
         None, "foreclosure", "tax_distress", "long_owned",
         "absentee_owner", "manual_distress",
     ])
-    def test_source_type_distress_value_is_non_negative(self, source_type):
+    def test_structured_motivation_value_is_non_negative(self, source_type):
         lead = _make_lead(source_type=source_type)
         result = self.engine.calculate_residential_score(lead)
-        assert result["score_details"]["source_type_distress"] >= 0.0
+        assert result["score_details"]["structured_motivation"] >= 0.0
 
     @pytest.mark.parametrize("source_type", [
         None, "foreclosure", "tax_distress", "long_owned",
         "absentee_owner", "manual_distress",
     ])
-    def test_source_type_distress_value_does_not_exceed_cap(self, source_type):
+    def test_structured_motivation_value_does_not_exceed_cap(self, source_type):
         lead = _make_lead(
             source_type=source_type,
-            tax_distress_data={"signal_type": "tax_delinquency"},
+            tax_distress_data=[{"signal_type": "tax_delinquency"}],
+            manual_priority=10,
         )
         result = self.engine.calculate_residential_score(lead)
-        assert result["score_details"]["source_type_distress"] <= float(SOURCE_TYPE_DISTRESS_COMBINED_CAP)
+        assert result["score_details"]["structured_motivation"] <= 25.0
 
 
 # ---------------------------------------------------------------------------

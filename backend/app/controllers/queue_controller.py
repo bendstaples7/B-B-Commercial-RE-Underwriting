@@ -6,6 +6,7 @@ from flask import Blueprint, g, jsonify, request
 from marshmallow import ValidationError
 
 from app.services.mail_queue_service import MailQueueService
+from app.services.prospect_review_service import count_pending_candidates
 from app.services.queue_service import QueueService
 
 logger = logging.getLogger(__name__)
@@ -65,12 +66,17 @@ def get_counts():
     svc = _get_queue_service()
     counts = svc.get_counts()
     if user_id and user_id != 'anonymous':
+        from app.models.user import User
+        user = User.query.filter_by(user_id=user_id).first()
+        is_admin = bool(user and user.is_admin)
         mail = MailQueueService().get_summary(user_id)
         counts['ready_to_mail'] = mail['queued_count']
         counts['mail_candidates'] = svc.count_mail_candidates(user_id)
+        counts['prospect_candidates'] = count_pending_candidates(user_id, is_admin=is_admin)
     else:
         counts['ready_to_mail'] = 0
         counts['mail_candidates'] = 0
+        counts['prospect_candidates'] = 0
     return jsonify(counts), 200
 
 

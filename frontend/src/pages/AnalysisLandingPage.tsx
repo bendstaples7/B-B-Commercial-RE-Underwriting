@@ -48,7 +48,7 @@ import usePlacesAutocomplete from 'use-places-autocomplete'
 import UploadFileIcon from '@mui/icons-material/UploadFile'
 import { multifamilyService } from '@/services/api'
 import type { DealCreatePayload, DealSummary } from '@/types'
-import { useGoogleMapsLoaded } from '@/App'
+import { useGoogleMapsLoaded } from '@/context/GoogleMapsContext'
 
 // ---------------------------------------------------------------------------
 // Helpers

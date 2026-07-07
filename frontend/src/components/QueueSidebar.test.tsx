@@ -38,6 +38,7 @@ const mockCounts: QueueCounts = {
   missing_property_match: 6,
   ready_to_mail: 2,
   mail_candidates: 8,
+  prospect_candidates: 3,
 }
 
 // ---------------------------------------------------------------------------

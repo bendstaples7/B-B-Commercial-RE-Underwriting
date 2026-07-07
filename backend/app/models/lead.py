@@ -174,6 +174,8 @@ class Property(db.Model):
     tax_distress_data = db.Column(_JSONBCompatible, nullable=True)
     violation_data = db.Column(_JSONBCompatible, nullable=True)
     permit_data = db.Column(_JSONBCompatible, nullable=True)
+    motivation_score = db.Column(db.Float, nullable=True, default=0.0)
+    motivation_signal_summary = db.Column(_JSONBCompatible, nullable=True)
     manual_priority = db.Column(db.Integer, nullable=True)
     last_import_job_id = db.Column(db.Integer, db.ForeignKey('import_jobs.id'), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)

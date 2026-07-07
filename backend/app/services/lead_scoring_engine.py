@@ -35,9 +35,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_WEIGHTS = {
     "property_characteristics_weight": 0.25,
     "data_completeness_weight": 0.15,
-    "owner_situation_weight": 0.25,
+    "owner_situation_weight": 0.30,
     "location_desirability_weight": 0.15,
-    "data_enrichment_weight": 0.20,
+    "data_enrichment_weight": 0.15,
 }
 
 WEIGHT_SUM_TOLERANCE = 0.01
@@ -189,6 +189,14 @@ class LeadScoringEngine:
         weights: ScoringWeights,
         signals: Optional[list] = None,
     ) -> ScoringResult:
+        from app.services.motivation_signal_service import MotivationSignalService
+
+        if getattr(lead, 'id', None) is not None:
+            try:
+                MotivationSignalService().sync_from_lead(lead, commit=False)
+            except Exception as exc:
+                logger.warning("motivation signal sync failed for lead %s: %s", lead.id, exc)
+
         category = getattr(lead, "lead_category", "residential") or "residential"
         if category == "commercial":
             rubric_result = rubric.calculate_commercial_score(lead)
@@ -231,7 +239,7 @@ class LeadScoringEngine:
         )
         if recommended_contact_method:
             action_signals['recommended_contact_method'] = recommended_contact_method
-        top_signals = rubric.extract_top_signals(score_details)
+        top_signals = rubric.extract_top_signals(score_details, lead=lead)
 
         return ScoringResult(
             total_score=total,
@@ -321,6 +329,10 @@ class LeadScoringEngine:
 
         open_tasks = _count_open_tasks(lead_id) if isinstance(lead_id, int) else 0
 
+        motivation_score = float(getattr(lead, 'motivation_score', 0) or 0)
+        if motivation_score < 0:
+            return 'nurture', 'negative_motivation', {'motivation_score': motivation_score}
+
         if score_tier == "A" and data_quality_score >= 70:
             if rubric.is_recently_sold(lead):
                 sale = rubric.effective_acquisition_date(lead)
@@ -340,10 +352,21 @@ class LeadScoringEngine:
                     'most_recent_sale': getattr(lead, 'most_recent_sale', None),
                     'days_since_sale': days_since,
                 }
+            if motivation_score >= 15:
+                return 'review_now', 'high_motivation_tier_b', {
+                    'score_tier': score_tier,
+                    'motivation_score': motivation_score,
+                }
             return 'review_now', 'tier_b_high_quality', {
                 'score_tier': score_tier, 'data_quality_score': data_quality_score,
             }
         if total_score >= 70 and open_tasks == 0:
+            if motivation_score >= 12:
+                return 'ready_for_outreach', 'high_motivation_high_score', {
+                    'lead_score': total_score,
+                    'motivation_score': motivation_score,
+                    'open_task_count': open_tasks,
+                }
             return 'ready_for_outreach', 'high_score_no_tasks', {
                 'lead_score': total_score, 'open_task_count': open_tasks,
             }
@@ -710,8 +733,8 @@ class LeadScoringEngine:
         return action or 'enrich_data'
 
     @staticmethod
-    def extract_top_signals(score_details: dict) -> list:
-        return rubric.extract_top_signals(score_details)
+    def extract_top_signals(score_details: dict, lead=None) -> list:
+        return rubric.extract_top_signals(score_details, lead=lead)
 
     @staticmethod
     def _normalize_for_tier(raw_total: float, category: str) -> float:

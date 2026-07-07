@@ -82,6 +82,18 @@ def _leads_to_queue_rows(leads: list) -> list[dict]:
     return [_lead_to_queue_row(lead, contacts) for lead in leads]
 
 
+def _apply_queue_sort(query, sort_by: str, sort_order: str, default_col=None):
+    """Order queue results; tie-break lead_score sorts with motivation_score DESC."""
+    sort_col = getattr(Lead, sort_by, default_col or Lead.lead_score)
+    if sort_order == 'desc':
+        primary = sort_col.desc()
+    else:
+        primary = sort_col.asc()
+    if sort_by == 'lead_score' or sort_col is Lead.lead_score:
+        return query.order_by(primary, Lead.motivation_score.desc())
+    return query.order_by(primary)
+
+
 def _hubspot_task_overdue_subquery(cutoff_date):
     """Return an EXISTS subquery: lead has an open/overdue HubSpot task due on or before cutoff_date.
 
@@ -350,8 +362,7 @@ class QueueService:
             )
         )
         total = query.count()
-        sort_col = getattr(Lead, sort_by, Lead.lead_score)
-        query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
+        query = _apply_queue_sort(query, sort_by, sort_order)
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
         return [_leads_to_queue_rows(leads), total]
 
@@ -365,8 +376,7 @@ class QueueService:
         """Previously Warm: leads where is_warm = True."""
         query = self._base_query().filter(Lead.is_warm.is_(True))
         total = query.count()
-        sort_col = getattr(Lead, sort_by, Lead.lead_score)
-        query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
+        query = _apply_queue_sort(query, sort_by, sort_order)
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
         return [_leads_to_queue_rows(leads), total]
 
@@ -448,10 +458,17 @@ class QueueService:
         total = query.count()
         status_order = case((Lead.lead_status == 'awaiting_skip_trace', 0), else_=1)
         sort_col = getattr(Lead, sort_by, Lead.lead_score)
-        query = query.order_by(
-            status_order.asc(),
-            sort_col.desc() if sort_order == 'desc' else sort_col.asc(),
-        )
+        if sort_by == 'lead_score':
+            query = query.order_by(
+                status_order.asc(),
+                sort_col.desc() if sort_order == 'desc' else sort_col.asc(),
+                Lead.motivation_score.desc(),
+            )
+        else:
+            query = query.order_by(
+                status_order.asc(),
+                sort_col.desc() if sort_order == 'desc' else sort_col.asc(),
+            )
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
         return [_leads_to_queue_rows(leads), total]
 
@@ -466,7 +483,10 @@ class QueueService:
         query = self._base_query().filter(Lead.review_required.is_(True))
         total = query.count()
         sort_col = getattr(Lead, sort_by, Lead.review_triggered_at)
-        query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
+        if sort_by == 'lead_score':
+            query = _apply_queue_sort(query, sort_by, sort_order, Lead.review_triggered_at)
+        else:
+            query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
         return [_leads_to_queue_rows(leads), total]
 
@@ -480,8 +500,7 @@ class QueueService:
         """Do Not Contact: lead_status = 'do_not_contact'."""
         query = self._base_query().filter(Lead.lead_status == 'do_not_contact')
         total = query.count()
-        sort_col = getattr(Lead, sort_by, Lead.lead_score)
-        query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
+        query = _apply_queue_sort(query, sort_by, sort_order)
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
         return [_leads_to_queue_rows(leads), total]
 
@@ -505,8 +524,7 @@ class QueueService:
             ~has_research_task,
         )
         total = query.count()
-        sort_col = getattr(Lead, sort_by, Lead.lead_score)
-        query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
+        query = _apply_queue_sort(query, sort_by, sort_order)
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
         return [_leads_to_queue_rows(leads), total]
 
@@ -542,8 +560,11 @@ class QueueService:
 
         query = self._mail_candidates_query(mail_user_id)
         sort_col = getattr(Lead, sort_by, Lead.lead_score)
-        order = sort_col.desc() if sort_order == 'desc' else sort_col.asc()
-        ordered = query.order_by(order).all()
+        if sort_order == 'desc':
+            order = (sort_col.desc(), Lead.motivation_score.desc())
+        else:
+            order = (sort_col.asc(), Lead.motivation_score.desc())
+        ordered = query.order_by(*order).all()
         eligible = [lead for lead in ordered if not is_recently_sold(lead)]
         total = len(eligible)
         start = (page - 1) * per_page

@@ -169,6 +169,18 @@ celery.conf.update(
             'schedule': crontab(hour='3,9,15,21', minute=30),
             'options': {'expires': 3600},
         },
+        # Motivation signal backfill — after Cook County enrichment window
+        'motivation-backfill-signals': {
+            'task': 'motivation.backfill_signals',
+            'schedule': crontab(hour=5, minute=0),
+            'options': {'expires': 7200},
+        },
+        # Cook County prospect feeders — review queue candidates (no auto-import)
+        'cook-county-prospect-feed-sync': {
+            'task': 'cook_county.prospect_feed_sync',
+            'schedule': crontab(hour=4, minute=0),
+            'options': {'expires': 3600},
+        },
         # Nightly duplicate sentinel — auto-merge clear owner+street duplicates,
         # flag ambiguous clusters for review. Runs after other nightly jobs.
         'lead-dedup-nightly-sentinel': {
@@ -524,6 +536,49 @@ def cook_county_backfill_enrichment_task(self):
             return summary
     except Exception as exc:
         _logger.error("cook_county.backfill_enrichment failed: %s", exc)
+        raise
+
+
+@celery.task(bind=True, name='motivation.backfill_signals')
+def motivation_backfill_signals_task(self):
+    """Nightly batch: extract motivation signals and rescore Cook County leads."""
+    import logging
+    _logger = logging.getLogger('celery.motivation.backfill_signals')
+
+    try:
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            from app.services.motivation_signal_service import backfill_motivation_signals
+            summary = backfill_motivation_signals()
+            _logger.info("motivation.backfill_signals: %s", summary)
+            return summary
+    except Exception as exc:
+        _logger.error("motivation.backfill_signals failed: %s", exc)
+        raise
+
+
+@celery.task(bind=True, name='cook_county.prospect_feed_sync')
+def cook_county_prospect_feed_sync_task(self):
+    """Daily Socrata prospect feeders into the review queue."""
+    import logging
+    import os
+    _logger = logging.getLogger('celery.cook_county.prospect_feed_sync')
+
+    try:
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            from app.services.cook_county_prospect_config import (
+                resolve_cook_county_prospect_owner_user_id,
+            )
+            from app.services.cook_county_prospect_feed_service import sync_all_prospect_feeds
+            owner_user_id = resolve_cook_county_prospect_owner_user_id()
+            summary = sync_all_prospect_feeds(owner_user_id)
+            _logger.info("cook_county.prospect_feed_sync: %s", summary)
+            return summary
+    except Exception as exc:
+        _logger.error("cook_county.prospect_feed_sync failed: %s", exc)
         raise
 
 

@@ -46,40 +46,53 @@ def socrata_get(
     if params:
         url = f"{url}?{urlencode(params)}"
 
-    headers = {}
     token = _app_token(portal)
+    header_variants: list[dict[str, str]] = []
     if token:
-        headers["X-App-Token"] = token
+        header_variants.append({"X-App-Token": token})
+    header_variants.append({})
 
     last_exc: Optional[Exception] = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            response = requests.get(url, headers=headers, timeout=timeout)
-            if response.ok:
-                data = response.json()
-                return data if isinstance(data, list) else []
-            last_exc = requests.HTTPError(
-                f"HTTP {response.status_code} for {dataset_id}",
-                response=response,
-            )
-            logger.warning(
-                "Socrata %s attempt %d/%d failed: HTTP %s",
-                dataset_id,
-                attempt,
-                max_retries,
-                response.status_code,
-            )
-        except requests.RequestException as exc:
-            last_exc = exc
-            logger.warning(
-                "Socrata %s attempt %d/%d error: %s",
-                dataset_id,
-                attempt,
-                max_retries,
-                exc,
-            )
-        if attempt < max_retries:
-            time.sleep(2)
+    for headers in header_variants:
+        using_token = bool(headers.get("X-App-Token"))
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = requests.get(url, headers=headers, timeout=timeout)
+                if response.ok:
+                    data = response.json()
+                    return data if isinstance(data, list) else []
+                if (
+                    using_token
+                    and response.status_code == 403
+                    and "Invalid app_token" in response.text
+                ):
+                    logger.warning(
+                        "Socrata %s rejected app token; retrying without authentication",
+                        dataset_id,
+                    )
+                    break
+                last_exc = requests.HTTPError(
+                    f"HTTP {response.status_code} for {dataset_id}",
+                    response=response,
+                )
+                logger.warning(
+                    "Socrata %s attempt %d/%d failed: HTTP %s",
+                    dataset_id,
+                    attempt,
+                    max_retries,
+                    response.status_code,
+                )
+            except requests.RequestException as exc:
+                last_exc = exc
+                logger.warning(
+                    "Socrata %s attempt %d/%d error: %s",
+                    dataset_id,
+                    attempt,
+                    max_retries,
+                    exc,
+                )
+            if attempt < max_retries:
+                time.sleep(2)
 
     logger.warning("Socrata fetch exhausted retries for %s: %s", dataset_id, last_exc)
     return []
