@@ -63,6 +63,49 @@ rollback() {
 }
 trap rollback ERR
 
+# Celery is stopped before the memory guard to free worker RSS on the 2GB VPS.
+# EXIT trap restores Celery if deploy exits before step 7 restart (memory preflight failure).
+CELERY_STOPPED_FOR_DEPLOY=0
+DEPLOY_ASYNC_STACK_RESTARTED=0
+
+stop_celery_for_deploy() {
+    if systemctl list-unit-files celery.service &>/dev/null 2>&1; then
+        sudo -n systemctl stop celery || { echo "FAILED: celery stop"; exit 1; }
+        CELERY_STOPPED_FOR_DEPLOY=1
+    fi
+    if systemctl list-unit-files celery-beat.service &>/dev/null 2>&1; then
+        sudo -n systemctl stop celery-beat || { echo "FAILED: celery-beat stop"; exit 1; }
+        CELERY_STOPPED_FOR_DEPLOY=1
+    fi
+    if [ "$CELERY_STOPPED_FOR_DEPLOY" -eq 1 ]; then
+        sleep 5
+        echo "    celery: stopped for deploy memory prep"
+    fi
+}
+
+restore_celery_if_stopped_for_prep() {
+    if [ "$CELERY_STOPPED_FOR_DEPLOY" -eq 1 ] && [ "$DEPLOY_ASYNC_STACK_RESTARTED" -eq 0 ]; then
+        sudo -n systemctl restart celery 2>/dev/null || true
+        sudo -n systemctl restart celery-beat 2>/dev/null || true
+        echo "    celery: restored after early deploy exit"
+    fi
+}
+
+dump_memory_diagnostics() {
+    echo "--- Memory diagnostics ---"
+    free -h 2>/dev/null || true
+    awk '/MemTotal|MemAvailable|SwapTotal|SwapFree/ {print}' /proc/meminfo 2>/dev/null || true
+    echo "--- Top memory processes ---"
+    ps aux --sort=-%mem 2>/dev/null | head -15 || true
+    echo "--- Recent celery journal ---"
+    sudo -n journalctl -u celery -u celery-beat --no-pager -n 30 2>/dev/null || true
+}
+
+cleanup_deploy_exit() {
+    restore_celery_if_stopped_for_prep
+}
+trap cleanup_deploy_exit EXIT
+
 # ── Pre-deploy VPS health checks ─────────────────────────────────────────────
 echo "==> Pre-deploy checks"
 
@@ -81,6 +124,18 @@ if [ "$FREE_KB" -lt 1048576 ]; then
     exit 1
 fi
 echo "    disk space: ${FREE_KB}KB free (OK)"
+
+# Stop Celery workers before memory poll — frees RSS held by in-flight tasks.
+PREP_CHECKS_SCRIPT="${APP_DIR}/scripts/deploy-async-stack-checks.sh"
+if [[ ! -f "${PREP_CHECKS_SCRIPT}" ]] && [[ -f /home/deploy/deploy-async-stack-checks.sh ]]; then
+    PREP_CHECKS_SCRIPT=/home/deploy/deploy-async-stack-checks.sh
+fi
+if [[ -f "${PREP_CHECKS_SCRIPT}" ]]; then
+    # shellcheck source=deploy-async-stack-checks.sh
+    source "${PREP_CHECKS_SCRIPT}"
+    assert_celery_stop_sudo_ready || exit 1
+fi
+stop_celery_for_deploy
 
 # Check memory headroom before deploy.
 # Frontend is pre-built on CI; pip/migrations still need headroom on this 2GB VPS.
@@ -111,9 +166,11 @@ if [ "$memory_ok" -eq 0 ]; then
     HEADROOM_KB=$((FREE_MEM_KB + SWAP_FREE_KB))
     if [ "$FREE_MEM_KB" -lt "$MIN_RAM_KB" ]; then
         echo "FAILED: Less than 150MB RAM available (${FREE_MEM_KB}KB MemAvailable) after ${MEMORY_WAIT_ATTEMPTS} attempts."
+        dump_memory_diagnostics
         exit 1
     fi
     echo "FAILED: Less than 300MB memory+swap headroom (${FREE_MEM_KB}KB RAM + ${SWAP_FREE_KB}KB swap) after ${MEMORY_WAIT_ATTEMPTS} attempts."
+    dump_memory_diagnostics
     exit 1
 fi
 
@@ -304,6 +361,7 @@ if systemctl list-unit-files celery-beat.service &>/dev/null 2>&1; then
 fi
 verify_async_stack_services || exit 1
 echo "    async stack verified"
+DEPLOY_ASYNC_STACK_RESTARTED=1
 
 echo "==> (8) Post-deploy HubSpot sync dispatch (non-blocking)"
 export DEPLOY_CHANGED_PATHS_FILE="${DEPLOY_CHANGED_PATHS_FILE:-/home/deploy/changed_paths.txt}"

@@ -63,6 +63,8 @@ check_sudo_rule() {
 }
 
 check_sudo_rule "gunicorn reload" /bin/systemctl reload gunicorn
+check_sudo_rule "celery stop" /bin/systemctl stop celery
+check_sudo_rule "celery-beat stop" /bin/systemctl stop celery-beat
 check_sudo_rule "celery restart" /bin/systemctl restart celery
 check_sudo_rule "celery-beat restart" /bin/systemctl restart celery-beat
 check_sudo_rule "redis is-active" /bin/systemctl is-active --quiet redis-server

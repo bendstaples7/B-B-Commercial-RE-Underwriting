@@ -17,6 +17,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Canonical passwordless-sudo commands the deploy user must have.
 REQUIRED_SUDO_COMMANDS = [
     "/bin/systemctl reload gunicorn",
+    "/bin/systemctl stop celery",
+    "/bin/systemctl stop celery-beat",
     "/bin/systemctl restart celery",
     "/bin/systemctl restart celery-beat",
     "/bin/systemctl is-active --quiet redis-server",
