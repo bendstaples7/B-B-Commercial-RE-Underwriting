@@ -145,9 +145,21 @@ class LeadTaskService:
         db.session.add(entry)
         db.session.commit()
 
-        # Trigger RA recomputation (skipped when the caller will refresh the
-        # lead itself, so the action is recomputed once per op rather than twice).
-        if recompute_action:
+        if task.task_type == 'run_property_analysis':
+            try:
+                from app.services.analysis_completion_service import mark_lead_analysis_complete
+                mark_lead_analysis_complete(
+                    lead_id,
+                    source='manual',
+                    actor=actor,
+                    recompute_action=recompute_action,
+                )
+            except Exception as exc:
+                logger.error(
+                    "mark_lead_analysis_complete failed for lead %s: %s",
+                    lead_id, exc, exc_info=True,
+                )
+        elif recompute_action:
             try:
                 from app.services.action_engine_service import ActionEngineService
                 ActionEngineService.recompute_and_persist(lead_id)

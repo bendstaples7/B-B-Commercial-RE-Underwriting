@@ -1,6 +1,7 @@
 """Workflow Controller for orchestrating the 6-step analysis workflow."""
 from typing import Dict, Any, Optional, List
 from datetime import datetime
+import logging
 import uuid
 from flask import current_app
 from app import db
@@ -22,6 +23,8 @@ from app.services.valuation_engine import ValuationEngine
 from app.services.scenario_analysis_engine import ScenarioAnalysisEngine
 from app.services.report_generator import ReportGenerator
 from app.services.dto import RankedComparableDTO
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowController:
@@ -290,6 +293,18 @@ class WorkflowController:
         session.current_step = target_step
         session.updated_at = datetime.utcnow()
         db.session.commit()
+
+        if target_step == WorkflowStep.WEIGHTED_SCORING:
+            from app.services.analysis_completion_service import (
+                mark_lead_analysis_complete_for_session,
+            )
+            try:
+                mark_lead_analysis_complete_for_session(session.id)
+            except Exception as exc:
+                logger.error(
+                    "Failed to mark analysis complete for session %s: %s",
+                    session_id, exc, exc_info=True,
+                )
         
         return {
             'session_id': session_id,
