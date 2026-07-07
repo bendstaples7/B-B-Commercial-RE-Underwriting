@@ -172,14 +172,65 @@ def test_priority_4_no_match_no_address_returns_enrich_data():
 
 
 # ---------------------------------------------------------------------------
-# Priority 5: has match but no analysis → analyze_property
+# Priority 5: has match but no analysis → score-derived action (not analyze_property)
 # ---------------------------------------------------------------------------
 
-def test_priority_5_has_match_no_analysis_no_longer_returns_analyze_property():
+def test_priority_5_has_match_no_analysis_does_not_return_analyze_property():
     lead = make_lead(has_property_match=True, analysis_complete=False)
     with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
-    assert result == 'analyze_property'
+    assert result != 'analyze_property'
+    assert result == 'nurture'
+
+
+def test_scoring_never_returns_analyze_property():
+    """Analysis is manual-only; scoring must never recommend analyze_property."""
+    from hypothesis import given, settings
+    from hypothesis import strategies as st
+
+    lead_statuses = [
+        'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+        'mailing_contacted_no_interest', 'mailing_contacted_interested',
+        'negotiating_remote', 'in_person_appointment', 'offer_delivered',
+    ]
+
+    @given(
+        lead_status=st.sampled_from(lead_statuses),
+        has_phone=st.booleans(),
+        has_email=st.booleans(),
+        has_property_match=st.booleans(),
+        analysis_complete=st.booleans(),
+        follow_up_overdue=st.booleans(),
+        is_warm=st.booleans(),
+        lead_score=st.floats(min_value=0, max_value=100, allow_nan=False),
+        data_completeness_score=st.floats(min_value=0, max_value=100, allow_nan=False),
+        open_task_count=st.integers(min_value=0, max_value=5),
+    )
+    @settings(max_examples=200)
+    def _never_analyze_property(
+        lead_status, has_phone, has_email, has_property_match,
+        analysis_complete, follow_up_overdue, is_warm,
+        lead_score, data_completeness_score, open_task_count,
+    ):
+        if not has_phone and not has_email:
+            return
+        lead = make_lead(
+            lead_status=lead_status,
+            has_phone=has_phone,
+            has_email=has_email,
+            has_property_match=has_property_match,
+            analysis_complete=analysis_complete,
+            follow_up_overdue=follow_up_overdue,
+            is_warm=is_warm,
+            lead_score=lead_score,
+            data_completeness_score=data_completeness_score,
+        )
+        with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=open_task_count), \
+             patch('app.services.lead_scoring_engine._has_overdue_hubspot_task', return_value=False):
+            result = ActionEngineService.compute_recommended_action(lead)
+        assert result != 'analyze_property'
+
+    _never_analyze_property()
 
 
 # ---------------------------------------------------------------------------
