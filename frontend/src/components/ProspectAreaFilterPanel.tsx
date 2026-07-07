@@ -238,11 +238,11 @@ export function ProspectAreaFilterPanel({
   }, [stopDrawing])
 
   const resolveGeometryForSave = useCallback((): ProspectAreaFilterConfig['geometry'] => {
-    if (draftGeometry) return draftGeometry
     const points = polygonPointsRef.current.map((pt) => ({ lat: pt.lat(), lng: pt.lng() }))
     if (points.length >= 3) {
       return geometryFromLatLngs(points)
     }
+    if (draftGeometry) return draftGeometry
     return null
   }, [draftGeometry])
 

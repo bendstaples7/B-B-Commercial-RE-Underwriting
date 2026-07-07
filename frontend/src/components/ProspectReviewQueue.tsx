@@ -33,6 +33,7 @@ import { computeTotalPages, clampPage } from '@/utils/pagination'
 import { formatDateTime } from '@/utils/formatters'
 import {
   PROSPECT_SIGNAL_LABELS,
+  formatProspectAddressLines,
   formatProspectMotivationPct,
   prospectSignalLabel,
   sortedProspectSignals,
@@ -51,14 +52,6 @@ function signalLabel(candidate: ProspectCandidate): string {
   const top = sortedProspectSignals(candidate)[0]
   if (top) return prospectSignalLabel(top)
   return PROSPECT_SIGNAL_LABELS[candidate.primary_signal_type] ?? candidate.primary_signal_type
-}
-
-function formatAddress(row: ProspectCandidate): { primary: string; secondary: string | null } {
-  const secondary = [row.property_city, row.property_state].filter(Boolean).join(', ')
-  return {
-    primary: row.property_street || '—',
-    secondary: secondary || null,
-  }
 }
 
 export function ProspectReviewQueue() {
@@ -87,19 +80,29 @@ export function ProspectReviewQueue() {
     refetchIntervalInBackground: false,
   })
 
+  const [actionError, setActionError] = useState<string | null>(null)
+
   const approveMutation = useMutation({
     mutationFn: (id: number) => prospectService.approveCandidate(id),
     onSuccess: () => {
+      setActionError(null)
       queryClient.invalidateQueries({ queryKey: ['prospect-candidates'] })
       queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+    },
+    onError: () => {
+      setActionError('Failed to approve prospect. Try again.')
     },
   })
 
   const rejectMutation = useMutation({
     mutationFn: (id: number) => prospectService.rejectCandidate(id),
     onSuccess: () => {
+      setActionError(null)
       queryClient.invalidateQueries({ queryKey: ['prospect-candidates'] })
       queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+    },
+    onError: () => {
+      setActionError('Failed to reject prospect. Try again.')
     },
   })
 
@@ -182,6 +185,12 @@ export function ProspectReviewQueue() {
         </Alert>
       )}
 
+      {actionError && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setActionError(null)}>
+          {actionError}
+        </Alert>
+      )}
+
       <ProspectAreaFilterPanel
         mapsLoaded={mapsLoaded}
         config={areaFilterConfig}
@@ -226,12 +235,21 @@ export function ProspectReviewQueue() {
               </TableRow>
             ) : (
               rows.map((row) => {
-                const address = formatAddress(row)
+                const address = formatProspectAddressLines(row)
                 return (
                   <TableRow
                     key={row.id}
                     hover
+                    tabIndex={0}
+                    role="button"
+                    aria-label={`View motivation details for ${address.primary}`}
                     onClick={() => setSelectedCandidate(row)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        setSelectedCandidate(row)
+                      }
+                    }}
                     sx={{ cursor: 'pointer' }}
                     selected={selectedCandidate?.id === row.id}
                   >

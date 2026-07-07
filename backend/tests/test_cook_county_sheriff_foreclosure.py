@@ -1,7 +1,8 @@
 """Tests for Cook County sheriff foreclosure listing parser."""
 from app.services.plugins.cook_county_sheriff_foreclosure import (
-    parse_sheriff_property_address,
     _parse_html_table,
+    _parse_sale_date,
+    parse_sheriff_property_address,
 )
 
 
@@ -35,3 +36,9 @@ class TestSheriffForeclosureParser:
         assert rows[0]['case_number'] == '2024CH08121'
         assert rows[0]['property_city'] == 'CHICAGO'
         assert rows[1]['case_status'] == 'Cancelled'
+
+    def test_parse_sale_date_unrecognized_returns_none(self):
+        assert _parse_sale_date('TBD next month') is None
+
+    def test_parse_sale_date_slash_format(self):
+        assert _parse_sale_date('7/14/2026') == '2026-07-14'

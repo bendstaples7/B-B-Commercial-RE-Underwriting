@@ -1,10 +1,9 @@
 """Queue API endpoints for the Actionable Lead Command Center."""
 import logging
-from functools import wraps
 
 from flask import Blueprint, g, jsonify, request
-from marshmallow import ValidationError
 
+from app.controllers.decorators import handle_errors
 from app.services.mail_queue_service import MailQueueService
 from app.services.prospect_review_service import count_pending_candidates
 from app.services.queue_service import QueueService
@@ -29,24 +28,6 @@ def _get_queue_service():
     is_admin = bool(user and user.is_admin)
     owner_filter = None if is_admin else user_id
     return QueueService(owner_user_id=owner_filter)
-
-
-def handle_errors(f):
-    """Decorator for consistent error handling."""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        try:
-            return f(*args, **kwargs)
-        except ValidationError as e:
-            return jsonify({'error': 'Validation error', 'details': e.messages}), 400
-        except ValueError as e:
-            return jsonify({'error': 'Invalid request', 'message': str(e)}), 400
-        except Exception as e:
-            if hasattr(e, 'code') and hasattr(e, 'description'):
-                return jsonify({'error': getattr(e, 'name', 'HTTP error'), 'message': e.description}), e.code
-            logger.error("Unexpected error: %s", str(e), exc_info=True)
-            return jsonify({'error': 'Internal server error', 'message': 'An unexpected error occurred'}), 500
-    return decorated_function
 
 
 def _parse_pagination_params():

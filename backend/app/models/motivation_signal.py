@@ -2,18 +2,7 @@
 from datetime import datetime
 
 from app import db
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy import TypeDecorator, JSON as SaJSON
-
-
-class _JSONBCompatible(TypeDecorator):
-    impl = SaJSON
-    cache_ok = True
-
-    def load_dialect_impl(self, dialect):
-        if dialect.name == 'postgresql':
-            return dialect.type_descriptor(JSONB())
-        return dialect.type_descriptor(SaJSON())
+from app.models.json_types import JSONBCompatible
 
 
 class MotivationSignal(db.Model):
@@ -27,7 +16,7 @@ class MotivationSignal(db.Model):
     source = db.Column(db.String(32), nullable=False)
     source_dataset = db.Column(db.String(64), nullable=True)
     evidence_key = db.Column(db.String(255), nullable=True)
-    evidence = db.Column(_JSONBCompatible, nullable=True)
+    evidence = db.Column(JSONBCompatible, nullable=True)
     detected_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     expires_at = db.Column(db.DateTime, nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
@@ -51,7 +40,7 @@ class ProspectCandidate(db.Model):
     longitude = db.Column(db.Float, nullable=True)
     primary_signal_type = db.Column(db.String(64), nullable=False)
     motivation_score = db.Column(db.Float, nullable=False, default=0.0)
-    signals = db.Column(_JSONBCompatible, nullable=True)
+    signals = db.Column(JSONBCompatible, nullable=True)
     source_feed = db.Column(db.String(64), nullable=False)
     external_key = db.Column(db.String(255), nullable=False)
     status = db.Column(db.String(32), nullable=False, default='pending')
@@ -60,7 +49,7 @@ class ProspectCandidate(db.Model):
     reviewed_at = db.Column(db.DateTime, nullable=True)
     reviewed_by = db.Column(db.String(36), nullable=True)
     rejection_reason = db.Column(db.Text, nullable=True)
-    raw_record = db.Column(_JSONBCompatible, nullable=True)
+    raw_record = db.Column(JSONBCompatible, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     def __repr__(self):
@@ -87,7 +76,7 @@ class ProspectAreaFilter(db.Model):
     user_id = db.Column(db.String(36), nullable=False, unique=True, index=True)
     enabled = db.Column(db.Boolean, nullable=False, default=False)
     label = db.Column(db.String(255), nullable=True)
-    geometry = db.Column(_JSONBCompatible, nullable=True)
+    geometry = db.Column(JSONBCompatible, nullable=True)
     updated_at = db.Column(
         db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow,
     )

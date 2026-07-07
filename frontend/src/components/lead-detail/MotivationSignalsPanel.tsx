@@ -11,15 +11,10 @@ import {
   Typography,
 } from '@mui/material'
 import type { MotivationSignalDetail, PropertyDetail } from '@/types'
+import { motivationSeverityColor } from '@/utils/prospectMotivation'
 
 interface MotivationSignalsPanelProps {
   lead: PropertyDetail
-}
-
-function severityColor(severity: string): 'error' | 'warning' | 'default' {
-  if (severity === 'high') return 'error'
-  if (severity === 'medium') return 'warning'
-  return 'default'
 }
 
 export function MotivationSignalsPanel({ lead }: MotivationSignalsPanelProps) {
@@ -71,7 +66,7 @@ export function MotivationSignalsPanel({ lead }: MotivationSignalsPanelProps) {
                 <TableRow key={sig.id}>
                   <TableCell>{sig.label ?? sig.signal_type}</TableCell>
                   <TableCell>
-                    <Chip size="small" label={sig.severity} color={severityColor(sig.severity)} />
+                    <Chip size="small" label={sig.severity} color={motivationSeverityColor(sig.severity)} />
                   </TableCell>
                   <TableCell align="right">{sig.points > 0 ? `+${sig.points}` : sig.points}</TableCell>
                   <TableCell>{sig.source}</TableCell>

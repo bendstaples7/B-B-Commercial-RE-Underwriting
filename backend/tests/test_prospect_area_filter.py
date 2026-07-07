@@ -119,6 +119,34 @@ class TestProspectAreaFilterService:
         assert stats.filter_enabled is False
         assert len(filtered) == 1
 
+    def test_enabled_invalid_geometry_reports_filter_enabled(self, app, db_session):
+        row = ProspectAreaFilter(
+            user_id='user-1',
+            enabled=True,
+            geometry={'type': 'Polygon', 'coordinates': []},
+        )
+        db_session.add(row)
+        candidate = ProspectCandidate(
+            owner_user_id='user-1',
+            pin='14-28-400-008-0000',
+            property_street='100 MAIN ST',
+            property_city='Chicago',
+            property_state='IL',
+            latitude=41.70,
+            longitude=-87.67,
+            primary_signal_type='TAX_ANNUAL_SALE',
+            motivation_score=15.0,
+            source_feed='stacked',
+            external_key='stacked:invalid-geom',
+            status='pending',
+        )
+        db_session.add(candidate)
+        db_session.commit()
+
+        filtered, stats = apply_area_filter_to_candidates([candidate], 'user-1')
+        assert stats.filter_enabled is True
+        assert len(filtered) == 1
+
 
 class TestProspectQueueAreaFilter:
     def test_list_and_count_respect_area_filter(self, app, db_session):

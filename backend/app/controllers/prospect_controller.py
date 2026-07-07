@@ -4,7 +4,7 @@ from typing import Optional
 
 from flask import Blueprint, g, jsonify, request
 
-from app.controllers.queue_controller import handle_errors
+from app.controllers.decorators import handle_errors
 from app.services.cook_county_prospect_config import motivation_pct
 from app.services.prospect_area_filter_service import (
     clear_area_filter,
@@ -59,8 +59,15 @@ def get_candidates():
     user_id = _user_id()
     if not user_id:
         return jsonify({'error': 'Unauthorized'}), 401
-    page = int(request.args.get('page', 1))
-    per_page = int(request.args.get('per_page', 20))
+    try:
+        page = int(request.args.get('page', 1))
+        per_page = int(request.args.get('per_page', 20))
+    except (TypeError, ValueError) as exc:
+        raise ValueError('page and per_page must be integers') from exc
+    if page < 1:
+        raise ValueError('page must be >= 1')
+    if per_page < 1 or per_page > 100:
+        raise ValueError('per_page must be between 1 and 100')
     status = request.args.get('status', 'pending')
     min_score = float(request.args.get('min_score', 0))
     rows, total, area_filter = list_candidates(

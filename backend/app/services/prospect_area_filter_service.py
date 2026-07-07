@@ -203,7 +203,7 @@ def apply_area_filter_to_candidates(
     ring = polygon_ring(row.geometry)
     if ring is None:
         return candidates, AreaFilterStats(
-            filter_enabled=False,
+            filter_enabled=bool(row.enabled),
             total_unfiltered=total_unfiltered,
             total_filtered=total_unfiltered,
             hidden_outside_area=0,

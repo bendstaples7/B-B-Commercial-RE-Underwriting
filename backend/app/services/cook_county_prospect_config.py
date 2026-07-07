@@ -8,9 +8,6 @@ from app.services.motivation_signal_service import STRUCTURED_MOTIVATION_CAP
 
 logger = logging.getLogger(__name__)
 
-# Ben's platform account (ben.d.staples.7@gmail.com)
-DEFAULT_COOK_COUNTY_PROSPECT_OWNER_EMAIL = 'ben.d.staples.7@gmail.com'
-FALLBACK_COOK_COUNTY_PROSPECT_OWNER_USER_ID = 'e5bc61c7-4db1-4307-a7b6-0a6b5a3d84c9'
 DEFAULT_PROSPECT_MIN_MOTIVATION_PCT = 60.0
 
 
@@ -62,18 +59,21 @@ def resolve_cook_county_prospect_owner_user_id() -> str:
     if explicit:
         return explicit
 
-    try:
-        from flask import has_app_context
+    email = os.environ.get('COOK_COUNTY_PROSPECT_OWNER_EMAIL', '').strip()
+    if email:
+        try:
+            from flask import has_app_context
 
-        if has_app_context():
-            from app.models.user import User
+            if has_app_context():
+                from app.models.user import User
 
-            user = User.query.filter_by(
-                email_lower=DEFAULT_COOK_COUNTY_PROSPECT_OWNER_EMAIL,
-            ).first()
-            if user and user.user_id:
-                return user.user_id
-    except Exception as exc:
-        logger.warning('Could not resolve prospect owner from DB: %s', exc)
+                user = User.query.filter_by(email_lower=email.lower()).first()
+                if user and user.user_id:
+                    return user.user_id
+        except Exception as exc:
+            logger.warning('Could not resolve prospect owner from email: %s', exc)
 
-    return FALLBACK_COOK_COUNTY_PROSPECT_OWNER_USER_ID
+    raise ValueError(
+        'COOK_COUNTY_PROSPECT_OWNER_USER_ID or COOK_COUNTY_PROSPECT_OWNER_EMAIL must be set '
+        'for Cook County prospect feeds'
+    )

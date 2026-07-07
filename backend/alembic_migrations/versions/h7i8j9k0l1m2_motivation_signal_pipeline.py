@@ -93,10 +93,6 @@ def upgrade():
             updated_at TIMESTAMP NOT NULL DEFAULT NOW()
         )
     """)
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS ix_prospect_area_filters_user_id
-        ON prospect_area_filters(user_id)
-    """)
 
     op.execute("""
         ALTER TABLE leads
@@ -116,7 +112,6 @@ def downgrade():
     op.execute("DROP INDEX IF EXISTS ix_leads_motivation_score")
     op.execute("ALTER TABLE leads DROP COLUMN IF EXISTS motivation_signal_summary")
     op.execute("ALTER TABLE leads DROP COLUMN IF EXISTS motivation_score")
-    op.execute("DROP INDEX IF EXISTS ix_prospect_area_filters_user_id")
     op.execute("DROP TABLE IF EXISTS prospect_area_filters")
     op.execute("DROP TABLE IF EXISTS prospect_feed_state")
     op.execute("DROP INDEX IF EXISTS ix_prospect_candidates_pin")

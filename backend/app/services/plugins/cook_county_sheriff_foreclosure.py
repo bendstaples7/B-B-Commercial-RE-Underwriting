@@ -53,7 +53,7 @@ def _parse_sale_date(raw: str) -> Optional[str]:
             return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
         except ValueError:
             continue
-    return text
+    return None
 
 
 def _parse_html_table(html: str) -> list[dict]:

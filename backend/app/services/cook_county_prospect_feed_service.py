@@ -27,6 +27,7 @@ from app.services.cook_county_prospect_config import (
     min_motivation_score_for_queue,
     motivation_pct,
 )
+from app.services.lead_merge_utils import dedup_street_key
 from app.services.plugins.pin_utils import format_pin_for_storage, normalize_pin_for_socrata
 from app.services.plugins.socrata_client import socrata_get
 from app.services.prospect_coords_service import resolve_coords_from_pin
@@ -311,14 +312,19 @@ def _find_duplicate_lead(pin: Optional[str], street: str, city: str) -> Optional
             if lead:
                 return lead.id
     if street:
-        norm = _normalize_street(street)
-        leads = Property.query.filter(
-            Property.property_state.in_(('IL', 'Illinois', 'il')),
-        ).all()
-        for lead in leads:
-            if _normalize_street(lead.property_street or '') == norm:
-                if not city or (lead.property_city or '').upper() == city.upper():
-                    return lead.id
+        street_key = dedup_street_key(street)
+        if street_key:
+            query = Property.query.filter(
+                Property.property_state.in_(('IL', 'Illinois', 'il')),
+                Property.normalized_street == street_key,
+            )
+            if city:
+                query = query.filter(
+                    db.func.upper(Property.property_city) == city.strip().upper(),
+                )
+            lead = query.limit(1).first()
+            if lead:
+                return lead.id
     return None
 
 
@@ -771,7 +777,7 @@ def backfill_prospect_candidate_addresses(*, limit: int = 500) -> dict:
                 changed = True
             if candidate.status == 'pending':
                 candidate.status = 'rejected'
-                if candidate.motivation_score < min_score:
+                if (candidate.motivation_score or 0) < min_score:
                     candidate.rejection_reason = 'auto:below_min_motivation'
                 else:
                     candidate.rejection_reason = 'auto:no_address'

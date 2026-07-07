@@ -136,3 +136,31 @@ export function formatSignalPoints(signal: ProspectCandidateSignal): string {
 export function sortedProspectSignals(candidate: ProspectCandidate): ProspectCandidateSignal[] {
   return [...(candidate.signals ?? [])].sort((a, b) => b.points - a.points)
 }
+
+export function motivationSeverityColor(severity: string): 'error' | 'warning' | 'default' {
+  if (severity === 'high') return 'error'
+  if (severity === 'medium') return 'warning'
+  return 'default'
+}
+
+type ProspectAddressFields = Pick<
+  ProspectCandidate,
+  'property_street' | 'property_city' | 'property_state'
+>
+
+export function formatProspectAddressLines(
+  row: ProspectAddressFields,
+): { primary: string; secondary: string | null } {
+  const secondary = [row.property_city, row.property_state].filter(Boolean).join(', ')
+  return {
+    primary: row.property_street || '—',
+    secondary: secondary || null,
+  }
+}
+
+export function formatProspectAddress(row: ProspectAddressFields): string {
+  const street = row.property_street?.trim()
+  const cityState = [row.property_city, row.property_state].filter(Boolean).join(', ')
+  if (street && cityState) return `${street}, ${cityState}`
+  return street || cityState || '—'
+}

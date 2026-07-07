@@ -18,9 +18,11 @@ import {
   PROSPECT_MIN_MOTIVATION_PCT,
   PROSPECT_MOTIVATION_CAP,
   formatEvidenceLines,
+  formatProspectAddress,
   formatProspectMotivationPct,
   formatRecencyNote,
   formatSignalPoints,
+  motivationSeverityColor,
   prospectSignalLabel,
   sortedProspectSignals,
 } from '@/utils/prospectMotivation'
@@ -29,19 +31,6 @@ interface ProspectMotivationDetailDrawerProps {
   candidate: ProspectCandidate | null
   open: boolean
   onClose: () => void
-}
-
-function severityColor(severity: string): 'error' | 'warning' | 'default' {
-  if (severity === 'high') return 'error'
-  if (severity === 'medium') return 'warning'
-  return 'default'
-}
-
-function formatAddress(candidate: ProspectCandidate): string {
-  const street = candidate.property_street?.trim()
-  const cityState = [candidate.property_city, candidate.property_state].filter(Boolean).join(', ')
-  if (street && cityState) return `${street}, ${cityState}`
-  return street || cityState || '—'
 }
 
 export function ProspectMotivationDetailDrawer({
@@ -69,7 +58,7 @@ export function ProspectMotivationDetailDrawer({
                 Motivation breakdown
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                {formatAddress(candidate)}
+                {formatProspectAddress(candidate)}
               </Typography>
               {candidate.pin && (
                 <Typography variant="caption" color="text.secondary" display="block">
@@ -124,7 +113,7 @@ export function ProspectMotivationDetailDrawer({
                             <Chip
                               size="small"
                               label={sig.severity}
-                              color={severityColor(sig.severity)}
+                              color={motivationSeverityColor(sig.severity)}
                               variant="outlined"
                             />
                           </Box>

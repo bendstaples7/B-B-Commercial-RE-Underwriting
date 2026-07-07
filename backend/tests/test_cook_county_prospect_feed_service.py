@@ -2,6 +2,8 @@
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
+import pytest
+
 from app.models.motivation_signal import ProspectCandidate, ProspectFeedState
 from app.services.cook_county_prospect_config import (
     get_prospect_min_motivation_pct,
@@ -33,6 +35,23 @@ class TestMotivationPct:
     def test_sixty_percent_threshold_raw_score(self):
         assert min_motivation_score_for_queue() == 15.0
         assert get_prospect_min_motivation_pct() == 60.0
+
+
+class TestProspectOwnerConfig:
+    def test_resolve_explicit_user_id(self, monkeypatch):
+        from app.services.cook_county_prospect_config import resolve_cook_county_prospect_owner_user_id
+
+        monkeypatch.setenv('COOK_COUNTY_PROSPECT_OWNER_USER_ID', 'user-abc')
+        monkeypatch.delenv('COOK_COUNTY_PROSPECT_OWNER_EMAIL', raising=False)
+        assert resolve_cook_county_prospect_owner_user_id() == 'user-abc'
+
+    def test_raises_when_unconfigured(self, monkeypatch):
+        from app.services.cook_county_prospect_config import resolve_cook_county_prospect_owner_user_id
+
+        monkeypatch.delenv('COOK_COUNTY_PROSPECT_OWNER_USER_ID', raising=False)
+        monkeypatch.delenv('COOK_COUNTY_PROSPECT_OWNER_EMAIL', raising=False)
+        with pytest.raises(ValueError, match='COOK_COUNTY_PROSPECT_OWNER'):
+            resolve_cook_county_prospect_owner_user_id()
 
 
 class TestChicagoApiConfig:
