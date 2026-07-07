@@ -90,6 +90,7 @@ describe('ProspectAreaFilterPanel', () => {
       </QueryClientProvider>,
     )
 
+    await user.click(screen.getByTestId('prospect-area-filter-enabled'))
     await user.click(screen.getByTestId('prospect-area-save'))
 
     await waitFor(() => {

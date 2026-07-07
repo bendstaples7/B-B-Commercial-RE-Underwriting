@@ -54,6 +54,10 @@ function signalLabel(candidate: ProspectCandidate): string {
   return PROSPECT_SIGNAL_LABELS[candidate.primary_signal_type] ?? candidate.primary_signal_type
 }
 
+function isRowInteractiveTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(target.closest('button, a, input, textarea, select'))
+}
+
 export function ProspectReviewQueue() {
   const queryClient = useQueryClient()
   const mapsLoaded = useGoogleMapsLoaded()
@@ -241,10 +245,10 @@ export function ProspectReviewQueue() {
                     key={row.id}
                     hover
                     tabIndex={0}
-                    role="button"
                     aria-label={`View motivation details for ${address.primary}`}
                     onClick={() => setSelectedCandidate(row)}
                     onKeyDown={(e) => {
+                      if (isRowInteractiveTarget(e.target)) return
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault()
                         setSelectedCandidate(row)
@@ -278,7 +282,7 @@ export function ProspectReviewQueue() {
                     <TableCell>
                       {formatDateTime(row.created_at)}
                     </TableCell>
-                    <TableCell align="right" onClick={(e) => e.stopPropagation()}>
+                    <TableCell align="right" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
                       <Button
                         size="small"
                         color="success"

@@ -64,7 +64,6 @@ POINTS_COMMERCIAL = {
 }
 
 STRUCTURED_MOTIVATION_CAP = {'residential': 25.0, 'commercial': 20.0}
-TOTAL_MOTIVATION_CAP = 40.0
 
 SEVERE_VIOLATION_CODES = frozenset({'CN', 'EV', 'BLDG', 'FAIL'})
 
@@ -437,6 +436,27 @@ def compute_structured_motivation_score(lead, *, signals: Optional[list[Extracte
     return _cap_score(sum(s.points for s in extracted), category)
 
 
+def extracted_signals_from_candidate_payload(items: list[dict]) -> list[ExtractedSignal]:
+    """Rebuild ExtractedSignal rows from prospect candidate JSON payload."""
+    extracted: list[ExtractedSignal] = []
+    for item in items:
+        sig_type = item.get('signal_type')
+        if not sig_type:
+            continue
+        extracted.append(ExtractedSignal(
+            signal_type=sig_type,
+            severity=item.get('severity', 'medium'),
+            points=float(item.get('points', 0)),
+            source='prospect_feed',
+            evidence_key=item.get('evidence_key'),
+            evidence=item.get('evidence'),
+            base_points=item.get('base_points'),
+            recency_multiplier=item.get('recency_multiplier'),
+            event_date=item.get('event_date'),
+        ))
+    return extracted
+
+
 def build_signal_summary(signals: list[ExtractedSignal], limit: int = 3) -> list[dict]:
     ranked = sorted(signals, key=lambda s: abs(s.points), reverse=True)
     summary = []
@@ -515,22 +535,41 @@ class MotivationSignalService:
         return score
 
     def copy_signals_to_lead(self, from_candidate_signals: list[dict], lead_id: int) -> None:
-        """Attach precomputed prospect signals to a newly imported lead."""
+        """Attach precomputed prospect signals to a lead (upsert by type + evidence key)."""
         for item in from_candidate_signals:
             sig_type = item.get('signal_type')
             if not sig_type:
                 continue
-            row = MotivationSignal(
+            evidence_key = item.get('evidence_key')
+            row = MotivationSignal.query.filter_by(
                 lead_id=lead_id,
                 signal_type=sig_type,
-                severity=item.get('severity', 'medium'),
-                points=float(item.get('points', 0)),
-                source='prospect_feed',
-                evidence_key=item.get('evidence_key'),
-                evidence=item.get('evidence'),
-                is_active=True,
-            )
-            db.session.add(row)
+                evidence_key=evidence_key,
+            ).first()
+            if row is None:
+                row = MotivationSignal(
+                    lead_id=lead_id,
+                    signal_type=sig_type,
+                    evidence_key=evidence_key,
+                )
+                db.session.add(row)
+            row.severity = item.get('severity', 'medium')
+            row.points = float(item.get('points', 0))
+            row.source = 'prospect_feed'
+            row.evidence = item.get('evidence')
+            row.is_active = True
+            row.detected_at = datetime.utcnow()
+
+    def apply_prospect_signals_to_lead(self, signal_payload: list[dict], lead) -> None:
+        """Copy prospect signals and refresh denormalized motivation fields on the lead."""
+        lead_id = getattr(lead, 'id', None)
+        if not isinstance(lead_id, int) or not signal_payload:
+            return
+        self.copy_signals_to_lead(signal_payload, lead_id)
+        extracted = extracted_signals_from_candidate_payload(signal_payload)
+        lead.motivation_score = compute_structured_motivation_score(lead, signals=extracted)
+        lead.motivation_signal_summary = build_signal_summary(extracted)
+        db.session.add(lead)
 
 
 def structured_motivation_score(lead) -> float:

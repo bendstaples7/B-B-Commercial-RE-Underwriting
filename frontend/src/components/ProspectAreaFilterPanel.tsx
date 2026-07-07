@@ -269,9 +269,8 @@ export function ProspectAreaFilterPanel({
     if (!geometry) return
     setDraftGeometry(geometry)
     stopDrawing()
-    setEnabled(true)
     saveMutation.mutate({
-      enabled: true,
+      enabled,
       geometry,
       label: label.trim() || null,
     })

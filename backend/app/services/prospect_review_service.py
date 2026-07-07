@@ -15,8 +15,8 @@ from app.services.prospect_area_filter_service import apply_area_filter_to_candi
 from app.services.cook_county_enrichment_service import schedule_cook_county_enrichment_after_commit
 from app.services.deduplication_engine import DeduplicationEngine
 from app.services.lead_ingestion_service import LeadIngestionService
+from app.services.lead_scoring_engine import LeadScoringEngine
 from app.services.motivation_signal_service import MotivationSignalService
-from app.services.lead_refresh import refresh_lead_scoring
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +135,34 @@ def reject_candidate(
     return candidate
 
 
+def _score_and_persist_lead(lead_id: int) -> None:
+    try:
+        LeadScoringEngine().score_and_persist(lead_id)
+    except Exception as exc:
+        db.session.rollback()
+        raise ValueError('Failed to complete prospect import scoring') from exc
+
+
+def _finalize_imported_candidate(
+    candidate: ProspectCandidate,
+    lead: Property,
+    reviewer_id: str,
+) -> dict:
+    if candidate.signals:
+        MotivationSignalService().apply_prospect_signals_to_lead(candidate.signals, lead)
+
+    schedule_cook_county_enrichment_after_commit(lead.id)
+    db.session.flush()
+    _score_and_persist_lead(lead.id)
+
+    candidate.status = 'imported'
+    candidate.imported_lead_id = lead.id
+    candidate.reviewed_at = datetime.utcnow()
+    candidate.reviewed_by = reviewer_id
+    db.session.commit()
+    return {'lead_id': lead.id, 'duplicate': False}
+
+
 def approve_candidate(
     candidate_id: int,
     owner_user_id: str,
@@ -151,9 +179,15 @@ def approve_candidate(
     if not (candidate.property_street or '').strip():
         raise ValueError('Cannot approve prospect without a street address')
 
+    lead_owner_id = candidate.owner_user_id
+
     if candidate.duplicate_lead_id:
         lead = db.session.get(Property, candidate.duplicate_lead_id)
         if lead:
+            if candidate.signals:
+                MotivationSignalService().apply_prospect_signals_to_lead(candidate.signals, lead)
+                db.session.flush()
+            _score_and_persist_lead(lead.id)
             candidate.status = 'imported'
             candidate.imported_lead_id = lead.id
             candidate.reviewed_at = datetime.utcnow()
@@ -172,7 +206,7 @@ def approve_candidate(
         'county_assessor_pin': candidate.pin,
         'source_type': source_type,
         'data_source': 'cook_county_prospect_feed',
-        'owner_user_id': owner_user_id,
+        'owner_user_id': lead_owner_id,
         'lead_category': 'residential',
         'notes': f'Imported from prospect feed {candidate.source_feed}',
     }
@@ -180,8 +214,14 @@ def approve_candidate(
     dedup = DeduplicationEngine()
     from app.services.gis.base import GISConnectorRegistry
     ingestion = LeadIngestionService(dedup_engine=dedup, gis_registry=GISConnectorRegistry)
-    job = ingestion._create_import_job(owner_user_id, 'prospect_feed')
+    job = ingestion._create_import_job(lead_owner_id, 'prospect_feed')
     result = dedup.process_record(normalized, job.id)
+    if result.outcome == 'conflict':
+        db.session.rollback()
+        raise ValueError(
+            'Import conflict: existing lead data could not be merged safely for this prospect'
+        )
+
     lead = result.lead
     is_creation = result.outcome == 'created'
 
@@ -195,24 +235,12 @@ def approve_candidate(
     db.session.add(lead)
     db.session.flush()
 
-    if candidate.signals:
-        MotivationSignalService().copy_signals_to_lead(candidate.signals, lead.id)
-        MotivationSignalService().sync_from_lead(lead, commit=False)
-
-    schedule_cook_county_enrichment_after_commit(lead.id)
-
     job.status = 'completed'
     job.completed_at = datetime.utcnow()
     job.rows_processed = 1
     job.rows_imported = 1
     db.session.flush()
 
-    refresh_lead_scoring(lead.id)
-
-    candidate.status = 'imported'
-    candidate.imported_lead_id = lead.id
-    candidate.reviewed_at = datetime.utcnow()
-    candidate.reviewed_by = reviewer_id
-    db.session.commit()
-
-    return {'lead_id': lead.id, 'duplicate': False, 'import_job_id': job.id}
+    result_payload = _finalize_imported_candidate(candidate, lead, reviewer_id)
+    result_payload['import_job_id'] = job.id
+    return result_payload

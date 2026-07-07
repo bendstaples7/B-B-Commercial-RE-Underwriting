@@ -16,7 +16,10 @@ def get_prospect_min_motivation_pct() -> float:
     raw = os.environ.get('COOK_COUNTY_PROSPECT_MIN_MOTIVATION_PCT', '').strip()
     if raw:
         try:
-            return float(raw)
+            value = float(raw)
+            if 0 <= value <= 100:
+                return value
+            logger.warning('COOK_COUNTY_PROSPECT_MIN_MOTIVATION_PCT out of range: %r', raw)
         except ValueError:
             logger.warning('Invalid COOK_COUNTY_PROSPECT_MIN_MOTIVATION_PCT=%r', raw)
     return DEFAULT_PROSPECT_MIN_MOTIVATION_PCT

@@ -147,6 +147,30 @@ class TestProspectAreaFilterService:
         assert stats.filter_enabled is True
         assert len(filtered) == 1
 
+    def test_null_coords_hidden_from_filter(self, app, db_session):
+        save_area_filter('user-1', enabled=True, geometry=_north_side_polygon())
+        no_coords = ProspectCandidate(
+            owner_user_id='user-1',
+            pin='14-28-400-008-0002',
+            property_street='300 MAIN ST',
+            property_city='Chicago',
+            property_state='IL',
+            latitude=None,
+            longitude=None,
+            primary_signal_type='TAX_ANNUAL_SALE',
+            motivation_score=15.0,
+            source_feed='stacked',
+            external_key='stacked:no-coords',
+            status='pending',
+        )
+        db_session.add(no_coords)
+        db_session.commit()
+
+        filtered, stats = apply_area_filter_to_candidates([no_coords], 'user-1')
+        assert stats.filter_enabled is True
+        assert stats.hidden_no_coords == 1
+        assert len(filtered) == 0
+
 
 class TestProspectQueueAreaFilter:
     def test_list_and_count_respect_area_filter(self, app, db_session):
