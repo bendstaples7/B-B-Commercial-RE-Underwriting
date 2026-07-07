@@ -138,12 +138,29 @@ export const ScoreLegend: React.FC<ScoreLegendProps> = ({
             </Typography>
           }
         >
-          Total motivation score. Residential leads are rated on property type
+          Total lead score (0–100). Residential leads are rated on property type
           fit, neighborhood, unit count, absentee ownership, mailing quality,
-          motivation notes, manual priority, and data enrichment dimensions
+          structured motivation signals, and data enrichment dimensions
           (contactability, property equity, ownership duration, engagement).
           Commercial leads use a separate rubric with the same enrichment
           dimensions. Higher is better.
+        </LegendRow>
+
+        <Divider />
+
+        {/* -------- Structured Motivation -------- */}
+        <LegendRow
+          label={
+            <Typography variant="body2" fontWeight={600}>
+              Motivation
+            </Typography>
+          }
+        >
+          Structured distress signals extracted from Cook County enrichment (tax
+          sales, scofflaw, violations), ingestion source type, notes keywords,
+          and manual priority. Capped at 25 pts residential / 20 commercial
+          within the owner-situation bucket. Strong signals (e.g. scavenger tax
+          sale) can move a lead several tiers when other factors are equal.
         </LegendRow>
 
         <Divider />
@@ -223,8 +240,10 @@ export const ScoreLegend: React.FC<ScoreLegendProps> = ({
           }
         >
           The single scoring dimension that contributed the most points.
-          Open a lead's detail page for the full breakdown across all
-          dimensions.
+          When Cook County enrichment has run, this may show a structured
+          motivation label (e.g. &quot;Scavenger tax sale&quot;) instead of a
+          generic dimension name. Open a lead&apos;s detail page for the full
+          breakdown across all dimensions.
         </LegendRow>
 
         <Divider />

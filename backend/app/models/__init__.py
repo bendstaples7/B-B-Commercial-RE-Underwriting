@@ -26,6 +26,12 @@ from app.models.lead import Property, Lead, LeadAuditTrail
 from app.models.import_job import ImportJob, FieldMapping, OAuthToken
 from app.models.lead_scoring import ScoringWeights
 from app.models.enrichment import DataSource, EnrichmentRecord
+from app.models.motivation_signal import (
+    MotivationSignal,
+    ProspectAreaFilter,
+    ProspectCandidate,
+    ProspectFeedState,
+)
 from app.models.marketing import MarketingList, MarketingListMember
 
 # Condo filter models

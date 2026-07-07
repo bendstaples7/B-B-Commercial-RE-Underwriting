@@ -689,6 +689,9 @@ def create_app(config_name='development'):
     from app.controllers.data_sources_controller import data_sources_bp
     app.register_blueprint(data_sources_bp, url_prefix='/api/data-sources')
 
+    from app.controllers.prospect_controller import prospect_bp
+    app.register_blueprint(prospect_bp, url_prefix='/api/prospects')
+
     # ---------------------------------------------------------------------------
     # Auto-configure HubSpot client secret from environment variable.
     #

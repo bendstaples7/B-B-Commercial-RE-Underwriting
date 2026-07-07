@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, Component } from 'react'
+import { useState, Component } from 'react'
 import { Routes, Route, Link, Navigate, useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import { LoginPage } from './pages/LoginPage'
@@ -72,6 +72,7 @@ import ExpandMore from '@mui/icons-material/ExpandMore'
 import StorageIcon from '@mui/icons-material/Storage'
 import ListAltIcon from '@mui/icons-material/ListAlt'
 import LocalPostOfficeIcon from '@mui/icons-material/LocalPostOffice'
+import TravelExploreIcon from '@mui/icons-material/TravelExplore'
 import { usePipelineStatus } from './context/PipelineStatusContext'
 import Avatar from '@mui/material/Avatar'
 import { WorkflowStep, PropertyFacts, PropertyType, ConstructionType, InteriorCondition } from './types'
@@ -98,6 +99,7 @@ import { NeedsReviewQueue } from './components/NeedsReviewQueue'
 import { DoNotContactQueue } from './components/DoNotContactQueue'
 import { MissingPropertyMatchQueue } from './components/MissingPropertyMatchQueue'
 import { ReadyToMailQueue } from './components/ReadyToMailQueue'
+import { ProspectReviewQueue } from './components/ProspectReviewQueue'
 import { MarketingListManager } from './components/MarketingListManager'
 import { UnifiedLeadCommandCenter } from '@/components/UnifiedLeadCommandCenter'
 import { AdminPanel } from './components/AdminPanel'
@@ -117,12 +119,76 @@ const DRAWER_WIDTH = 240
 // Google Maps context — provides isLoaded state to child components
 // (e.g. PropertyFactsForm uses usePlacesAutocomplete which needs the API ready)
 // ---------------------------------------------------------------------------
-export const GoogleMapsLoadedContext = createContext(false)
-export const useGoogleMapsLoaded = () => useContext(GoogleMapsLoadedContext)
-
+import { GoogleMapsLoadedContext } from '@/context/GoogleMapsContext'
 // @react-google-maps/api reloads the script if this array changes identity.
 // Declare it outside the component so it's stable across renders.
 const GOOGLE_MAPS_LIBRARIES: ['places'] = ['places']
+
+/** Work queue sub-groups nested under Properties → Work Queues. */
+type NavQueueItem = {
+  label: string
+  path: string
+  icon: React.ReactNode
+  badgeKey: keyof QueueCounts | null
+}
+
+const WORK_QUEUE_SUBGROUPS = [
+  {
+    label: 'Prospecting',
+    description: 'Pre-lead discovery from open data',
+    items: [
+      { label: 'Prospect Review', path: '/queues/prospect-review', icon: <TravelExploreIcon />, badgeKey: 'prospect_candidates' as keyof QueueCounts },
+    ],
+  },
+  {
+    label: 'Daily outreach',
+    description: 'Leads that need attention today',
+    items: [
+      { label: "Today's Action", path: '/queues/todays-action', icon: <TodayIcon />, badgeKey: 'todays_action' as keyof QueueCounts },
+      { label: 'Follow-Up Overdue', path: '/queues/follow-up-overdue', icon: <AlarmIcon />, badgeKey: 'follow_up_overdue' as keyof QueueCounts },
+      { label: 'Ready to Mail', path: '/queues/ready-to-mail', icon: <LocalPostOfficeIcon />, badgeKey: 'ready_to_mail' as keyof QueueCounts },
+    ],
+  },
+  {
+    label: 'Pipeline views',
+    description: 'Visual deal stage',
+    items: [
+      { label: 'Kanban', path: '/kanban', icon: <ViewKanbanIcon />, badgeKey: null },
+    ],
+  },
+  {
+    label: 'Data & review',
+    description: 'Fix data and routing gaps',
+    items: [
+      { label: 'Needs Review', path: '/queues/needs-review', icon: <RateReviewIcon />, badgeKey: 'needs_review' as keyof QueueCounts },
+      { label: 'Missing Property Match', path: '/queues/missing-property-match', icon: <LocationOffIcon />, badgeKey: 'missing_property_match' as keyof QueueCounts },
+      { label: 'No Next Action', path: '/queues/no-next-action', icon: <RadioButtonUncheckedIcon />, badgeKey: 'no_next_action' as keyof QueueCounts },
+    ],
+  },
+  {
+    label: 'History & hold',
+    description: 'Lower-frequency and terminal queues',
+    items: [
+      { label: 'Previously Warm', path: '/queues/previously-warm', icon: <LocalFireDepartmentIcon />, badgeKey: 'previously_warm' as keyof QueueCounts },
+      { label: 'Do Not Contact', path: '/queues/do-not-contact', icon: <BlockIcon />, badgeKey: 'do_not_contact' as keyof QueueCounts },
+    ],
+  },
+]
+
+type NavItemGroup = {
+  label: string | null
+  description?: string
+  items: NavQueueItem[]
+  subgroups?: undefined
+}
+
+type NavSubgroupGroup = {
+  label: string | null
+  subgroups: typeof WORK_QUEUE_SUBGROUPS
+  items?: undefined
+}
+
+type NavGroup = NavItemGroup | NavSubgroupGroup
 
 /** Nav structure: top-level sections, each with grouped child items. */
 const NAV_SECTIONS = [
@@ -161,17 +227,7 @@ const NAV_SECTIONS = [
       },
       {
         label: 'Work Queues',
-        items: [
-          { label: 'Kanban',                path: '/kanban',                           icon: <ViewKanbanIcon />,             badgeKey: null },
-          { label: 'Ready to Mail',          path: '/queues/ready-to-mail',          icon: <LocalPostOfficeIcon />,        badgeKey: 'ready_to_mail' as keyof QueueCounts },
-          { label: "Today's Action",         path: '/queues/todays-action',          icon: <TodayIcon />,                  badgeKey: 'todays_action' as keyof QueueCounts },
-          { label: 'Previously Warm',        path: '/queues/previously-warm',        icon: <LocalFireDepartmentIcon />,    badgeKey: 'previously_warm' as keyof QueueCounts },
-          { label: 'Follow-Up Overdue',      path: '/queues/follow-up-overdue',      icon: <AlarmIcon />,                  badgeKey: 'follow_up_overdue' as keyof QueueCounts },
-          { label: 'No Next Action',         path: '/queues/no-next-action',         icon: <RadioButtonUncheckedIcon />,   badgeKey: 'no_next_action' as keyof QueueCounts },
-          { label: 'Needs Review',           path: '/queues/needs-review',           icon: <RateReviewIcon />,             badgeKey: 'needs_review' as keyof QueueCounts },
-          { label: 'Do Not Contact',         path: '/queues/do-not-contact',         icon: <BlockIcon />,                  badgeKey: 'do_not_contact' as keyof QueueCounts },
-          { label: 'Missing Property Match', path: '/queues/missing-property-match', icon: <LocationOffIcon />,            badgeKey: 'missing_property_match' as keyof QueueCounts },
-        ],
+        subgroups: WORK_QUEUE_SUBGROUPS,
       },
     ],
   },
@@ -1354,8 +1410,85 @@ function App() {
             )}
 
             <Collapse in={expandedSections[section.path]} timeout="auto" unmountOnExit>
-              {section.groups.map((group, groupIdx) => (
+              {section.groups.map((group: NavGroup, groupIdx) => (
                 <Box key={groupIdx}>
+                  {'subgroups' in group && group.subgroups ? (
+                    <>
+                      {group.label && (
+                        <Box sx={{ px: 2, pt: 1, pb: 0.25 }}>
+                          <Typography
+                            variant="overline"
+                            sx={{ fontSize: '0.7rem', letterSpacing: 1, color: 'text.secondary', lineHeight: 1 }}
+                          >
+                            {group.label}
+                          </Typography>
+                        </Box>
+                      )}
+                      {group.subgroups.map((subgroup, subIdx) => (
+                        <Box key={subIdx} sx={{ pl: 1 }}>
+                          <Box sx={{ px: 2, pt: 0.75, pb: 0.25 }}>
+                            <Typography
+                              variant="overline"
+                              sx={{ fontSize: '0.6rem', letterSpacing: 1, color: 'text.disabled', lineHeight: 1 }}
+                            >
+                              {subgroup.label}
+                            </Typography>
+                            {'description' in subgroup && subgroup.description && (
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                sx={{ display: 'block', lineHeight: 1.3, mt: 0.25 }}
+                              >
+                                {subgroup.description}
+                              </Typography>
+                            )}
+                          </Box>
+                          <List disablePadding>
+                            {subgroup.items.map((item) => {
+                              const isActive = location.pathname === item.path
+                              const badgeCount = item.badgeKey ? (queueCounts?.[item.badgeKey] ?? 0) : 0
+                              return (
+                                <ListItemButton
+                                  key={item.path}
+                                  component={Link}
+                                  to={item.path}
+                                  onClick={() => isMobile && setDrawerOpen(false)}
+                                  selected={isActive}
+                                  sx={{
+                                    pl: 5,
+                                    py: 0.75,
+                                    borderLeft: isActive ? '3px solid' : '3px solid transparent',
+                                    borderColor: isActive ? 'primary.main' : 'transparent',
+                                  }}
+                                  aria-label={`Navigate to ${item.label}`}
+                                >
+                                  <ListItemIcon sx={{ minWidth: 32, color: isActive ? 'primary.main' : 'text.secondary' }}>
+                                    {item.icon}
+                                  </ListItemIcon>
+                                  <ListItemText
+                                    primary={item.label}
+                                    primaryTypographyProps={{
+                                      variant: 'body2',
+                                      fontWeight: isActive ? 600 : 400,
+                                    }}
+                                  />
+                                  {badgeCount > 0 && (
+                                    <Chip
+                                      label={badgeCount}
+                                      size="small"
+                                      color={isActive ? 'default' : 'primary'}
+                                      sx={{ ml: 0.5, height: 18, fontSize: '0.65rem', minWidth: 24 }}
+                                    />
+                                  )}
+                                </ListItemButton>
+                              )
+                            })}
+                          </List>
+                        </Box>
+                      ))}
+                    </>
+                  ) : group.items ? (
+                    <>
                   {/* Optional group label */}
                   {group.label && (
                     <Box sx={{ px: 2, pt: 1, pb: 0.25 }}>
@@ -1365,6 +1498,15 @@ function App() {
                       >
                         {group.label}
                       </Typography>
+                      {'description' in group && group.description && (
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ display: 'block', lineHeight: 1.3, mt: 0.25 }}
+                        >
+                          {group.description}
+                        </Typography>
+                      )}
                     </Box>
                   )}
                   <List disablePadding>
@@ -1408,6 +1550,8 @@ function App() {
                       )
                     })}
                   </List>
+                    </>
+                  ) : null}
                   {groupIdx < section.groups.length - 1 && (
                     <Divider sx={{ mx: 2, my: 0.5 }} />
                   )}
@@ -1635,6 +1779,7 @@ function App() {
           <Route path="/queues/do-not-contact" element={<DoNotContactQueue />} />
           <Route path="/queues/missing-property-match" element={<MissingPropertyMatchQueue />} />
           <Route path="/queues/ready-to-mail" element={<ReadyToMailQueue />} />
+          <Route path="/queues/prospect-review" element={<ProspectReviewQueue />} />
           {/* Lead Command Center — now redirects to canonical /leads/:id */}
           <Route path="/leads/:id/command-center" element={<LegacyCommandCenterRedirect />} />
 

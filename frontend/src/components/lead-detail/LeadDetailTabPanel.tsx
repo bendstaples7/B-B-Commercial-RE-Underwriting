@@ -40,6 +40,7 @@ import { RecalculateButton } from '@/components/RecalculateButton'
 import { ScoreBreakdownCard } from '@/components/ScoreBreakdownCard'
 import { ScoreHistoryTimeline } from '@/components/ScoreHistoryTimeline'
 import { ScoreLegend } from '@/components/ScoreLegend'
+import { MotivationSignalsPanel } from '@/components/lead-detail/MotivationSignalsPanel'
 import { formatImportedSource } from './leadDetailFormatters'
 
 const DEFAULT_TAB_INDEX = 0
@@ -303,6 +304,12 @@ export function LeadDetailTabPanel({
             <>
               <Box sx={{ mb: 2 }}>
                 <ScoreBreakdownCard score={scoreData.latest} />
+              </Box>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                Motivation signals
+              </Typography>
+              <Box sx={{ mb: 2 }}>
+                <MotivationSignalsPanel lead={leadData} />
               </Box>
               <ScoreHistoryTimeline history={scoreData.history} />
             </>

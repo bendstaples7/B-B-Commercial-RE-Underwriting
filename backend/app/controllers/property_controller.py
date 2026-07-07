@@ -318,6 +318,8 @@ def _serialize_property_detail(lead):
         'mailer_history': lead.mailer_history,
         # Scoring
         'lead_score': lead.lead_score,
+        'motivation_score': getattr(lead, 'motivation_score', None),
+        'motivation_signal_summary': getattr(lead, 'motivation_signal_summary', None) or [],
         # Classification
         'lead_category': lead.lead_category,
         # Metadata
@@ -342,6 +344,28 @@ def _serialize_property_detail(lead):
             'created_at': er.created_at.isoformat() if er.created_at else None,
         }
         for er in enrichment_records
+    ]
+
+    from app.services.motivation_signal_service import SIGNAL_LABELS
+    active_signals = sorted(
+        (sig for sig in lead.motivation_signals if sig.is_active),
+        key=lambda s: abs(s.points),
+        reverse=True,
+    )
+    data['motivation_signals'] = [
+        {
+            'id': sig.id,
+            'signal_type': sig.signal_type,
+            'label': SIGNAL_LABELS.get(sig.signal_type, sig.signal_type),
+            'severity': sig.severity,
+            'points': sig.points,
+            'source': sig.source,
+            'source_dataset': sig.source_dataset,
+            'evidence': sig.evidence,
+            'detected_at': sig.detected_at.isoformat() + 'Z' if sig.detected_at else None,
+            'is_active': sig.is_active,
+        }
+        for sig in active_signals
     ]
 
     # Marketing list memberships

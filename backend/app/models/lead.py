@@ -1,19 +1,8 @@
 """Lead and LeadAuditTrail models."""
 from app import db
 from datetime import datetime, date
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy import TypeDecorator, JSON as SaJSON, event, select, or_
-
-
-class _JSONBCompatible(TypeDecorator):
-    """JSONB on PostgreSQL, portable JSON on other dialects (SQLite)."""
-    impl = SaJSON
-    cache_ok = True
-
-    def load_dialect_impl(self, dialect):
-        if dialect.name == 'postgresql':
-            return dialect.type_descriptor(JSONB())
-        return dialect.type_descriptor(SaJSON())
+from app.models.json_types import JSONBCompatible
+from sqlalchemy import event, select, or_
 
 
 class Property(db.Model):
@@ -171,9 +160,11 @@ class Property(db.Model):
     # Metadata
     data_source = db.Column(db.String(100), nullable=True)
     source_type = db.Column(db.String(50), nullable=True, index=True)
-    tax_distress_data = db.Column(_JSONBCompatible, nullable=True)
-    violation_data = db.Column(_JSONBCompatible, nullable=True)
-    permit_data = db.Column(_JSONBCompatible, nullable=True)
+    tax_distress_data = db.Column(JSONBCompatible, nullable=True)
+    violation_data = db.Column(JSONBCompatible, nullable=True)
+    permit_data = db.Column(JSONBCompatible, nullable=True)
+    motivation_score = db.Column(db.Float, nullable=True, default=0.0)
+    motivation_signal_summary = db.Column(JSONBCompatible, nullable=True)
     manual_priority = db.Column(db.Integer, nullable=True)
     last_import_job_id = db.Column(db.Integer, db.ForeignKey('import_jobs.id'), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)

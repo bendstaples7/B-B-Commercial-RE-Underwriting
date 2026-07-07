@@ -424,6 +424,26 @@ export interface PropertySummary {
 /** @deprecated Use `PropertySummary` instead */
 export type LeadSummary = PropertySummary
 
+export interface MotivationSignalSummaryItem {
+  signal_type: string;
+  label: string;
+  points: number;
+  severity: string;
+}
+
+export interface MotivationSignalDetail {
+  id: number;
+  signal_type: string;
+  label?: string;
+  severity: string;
+  points: number;
+  source: string;
+  source_dataset?: string | null;
+  evidence?: Record<string, unknown> | null;
+  detected_at?: string | null;
+  is_active: boolean;
+}
+
 /** Minimal contact summary embedded inside PropertyDetail.
  *  Comes from the relational contacts system (property_contacts join table).
  *  This is the authoritative source — the legacy owner_first_name / owner_last_name
@@ -440,6 +460,9 @@ export interface PropertyContactSummary {
 }
 
 export interface PropertyDetail extends Property {
+  motivation_score?: number | null;
+  motivation_signal_summary?: MotivationSignalSummaryItem[];
+  motivation_signals?: MotivationSignalDetail[];
   enrichment_records: EnrichmentRecord[]
   marketing_lists: PropertyMarketingListMembership[]
   analysis_session: PropertyAnalysisSession | null
@@ -1838,6 +1861,83 @@ export interface QueueCounts {
   missing_property_match: number;
   ready_to_mail: number;
   mail_candidates: number;
+  prospect_candidates: number;
+}
+
+export interface ProspectCandidateSignal {
+  signal_type: string;
+  severity: string;
+  points: number;
+  base_points?: number;
+  recency_multiplier?: number;
+  event_date?: string;
+  evidence_key?: string;
+  evidence?: Record<string, unknown>;
+  label?: string;
+}
+
+export interface ProspectCandidate {
+  id: number;
+  pin: string | null;
+  property_street: string | null;
+  property_city: string | null;
+  property_state: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  location_hint: string | null;
+  primary_signal_type: string;
+  motivation_score: number;
+  motivation_pct: number;
+  signals: ProspectCandidateSignal[] | null;
+  source_feed: string;
+  status: string;
+  duplicate_lead_id: number | null;
+  imported_lead_id: number | null;
+  created_at: string | null;
+  reviewed_at: string | null;
+}
+
+export interface ProspectAreaFilterConfig {
+  enabled: boolean;
+  label: string | null;
+  geometry: {
+    type: 'Polygon';
+    coordinates: number[][][];
+  } | null;
+  updated_at: string | null;
+}
+
+export interface ProspectAreaFilterStats {
+  filter_enabled: boolean;
+  total_unfiltered: number;
+  total_filtered: number;
+  hidden_outside_area: number;
+  hidden_no_coords: number;
+}
+
+export interface ProspectFeedStatus {
+  last_sync_at: string | null;
+  next_scheduled_label: string;
+  chicago_api_configured?: boolean;
+  feeds: Array<{
+    feed_name: string;
+    last_synced_at: string | null;
+    rows_processed: number;
+  }>;
+}
+
+export interface ProspectCandidatePage {
+  rows: ProspectCandidate[];
+  total: number;
+  page: number;
+  per_page: number;
+  area_filter?: ProspectAreaFilterStats;
+}
+
+export interface ProspectApproveResult {
+  lead_id: number;
+  duplicate: boolean;
+  import_job_id?: number;
 }
 
 export interface CommandCenterPayload {

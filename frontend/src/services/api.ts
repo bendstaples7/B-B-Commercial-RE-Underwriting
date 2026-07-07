@@ -1366,6 +1366,42 @@ export const queueService = {
     api.get('/queues/mail-candidates', { params: { page, per_page: perPage } }).then(r => r.data),
 }
 
+import type {
+  ProspectAreaFilterConfig,
+  ProspectAreaFilterStats,
+  ProspectCandidatePage,
+  ProspectApproveResult,
+  ProspectFeedStatus,
+} from '@/types'
+
+export const prospectService = {
+  getCount: (): Promise<{ prospect_candidates: number } & ProspectAreaFilterStats> =>
+    api.get('/prospects/candidates/count').then(r => r.data),
+  getStatus: (): Promise<ProspectFeedStatus> =>
+    api.get('/prospects/status').then(r => r.data),
+  getAreaFilter: (): Promise<ProspectAreaFilterConfig> =>
+    api.get('/prospects/area-filter').then(r => r.data),
+  saveAreaFilter: (payload: {
+    enabled: boolean;
+    geometry?: ProspectAreaFilterConfig['geometry'];
+    label?: string | null;
+    clear?: boolean;
+  }): Promise<ProspectAreaFilterConfig> =>
+    api.put('/prospects/area-filter', payload).then(r => r.data),
+  getCandidates: (page = 1, perPage = 20, status = 'pending', minScore = 0): Promise<ProspectCandidatePage> =>
+    api.get('/prospects/candidates', {
+      params: { page, per_page: perPage, status, min_score: minScore },
+    }).then(r => r.data),
+  getCandidate: (id: number) =>
+    api.get(`/prospects/candidates/${id}`).then(r => r.data),
+  approveCandidate: (id: number): Promise<ProspectApproveResult> =>
+    api.post(`/prospects/candidates/${id}/approve`).then(r => r.data),
+  rejectCandidate: (id: number, reason = ''): Promise<unknown> =>
+    api.post(`/prospects/candidates/${id}/reject`, { reason }).then(r => r.data),
+  syncFeeds: (): Promise<{ summary: Record<string, unknown>; prospect_candidates: number; last_sync_at: string | null }> =>
+    api.post('/prospects/sync').then(r => r.data),
+}
+
 export const commandCenterService = {
   getCommandCenter: (leadId: number): Promise<CommandCenterPayload> =>
     api.get(`/leads/${leadId}/command-center`).then(r => r.data),

@@ -158,32 +158,80 @@ def _lookup_pin_from_address(address: str, parcel_addresses_url: str) -> Optiona
 
 def _try_lookup(normalised: str, parcel_addresses_url: str) -> Optional[str]:
     """Attempt exact then LIKE-prefix lookup for a single normalised address string."""
-    # 1. Exact match
-    where = f"property_address='{normalised.replace(chr(39), chr(39)*2)}'"
-    url = parcel_addresses_url + "?$where=" + urllib.parse.quote(where) + "&$limit=5"
-    results = _socrata_get(url)
+    from app.services.plugins.socrata_client import escape_soql_literal, socrata_get
+
+    safe = escape_soql_literal(normalised)
+    results = socrata_get(
+        'c49d-89sn',
+        params={'$where': f"property_address='{safe}'", '$limit': 5},
+        portal='cook_county',
+    )
 
     if not results:
-        # 2. LIKE prefix on first 3 tokens (handles suffix variant: AVE vs AVENUE)
         tokens = normalised.split()
         if len(tokens) >= 2:
             prefix = ' '.join(tokens[:3]) if len(tokens) >= 3 else ' '.join(tokens[:2])
-            safe_prefix = prefix.replace("'", "''")
-            where2 = f"property_address like '{safe_prefix}%'"
-            url2 = parcel_addresses_url + "?$where=" + urllib.parse.quote(where2) + "&$limit=10"
-            results = _socrata_get(url2)
+            safe_prefix = escape_soql_literal(prefix)
+            results = socrata_get(
+                'c49d-89sn',
+                params={'$where': f"property_address like '{safe_prefix}%'", '$limit': 10},
+                portal='cook_county',
+            )
 
     if not results:
         logger.debug("CookCountyGIS: no PIN found for %r", normalised)
         return None
 
-    # Prefer Chicago records when multiple results; fall back to first
     chicago = [r for r in results if r.get('property_city', '').upper() == 'CHICAGO']
     row = chicago[0] if chicago else results[0]
     pin = row.get('pin')
     if pin:
         logger.debug("CookCountyGIS: PIN=%s for %r", pin, normalised)
     return pin
+
+
+def _parcel_address_row_from_results(results: list) -> Optional[dict]:
+    if not results:
+        return None
+    chicago = [r for r in results if (r.get('property_city') or '').upper() == 'CHICAGO']
+    row = chicago[0] if chicago else results[0]
+    street = (row.get('property_address') or '').strip()
+    if not street:
+        return None
+    return {
+        'property_street': street,
+        'property_city': (row.get('property_city') or '').strip() or None,
+        'property_state': (row.get('property_state') or 'IL').strip(),
+        'property_zip': (row.get('property_zip') or '').strip() or None,
+    }
+
+
+def _lookup_address_from_pin(pin: str, parcel_addresses_url: str) -> Optional[dict]:
+    """PIN → street address via Cook County parcel addresses dataset (c49d-89sn)."""
+    if not pin or not str(pin).strip():
+        return None
+    from app.services.plugins.pin_utils import format_pin_for_storage, normalize_pin_for_socrata
+    from app.services.plugins.socrata_client import escape_soql_literal, socrata_get
+
+    pin_text = str(pin).strip()
+    variants: list[str] = []
+    for candidate in (normalize_pin_for_socrata(pin_text), format_pin_for_storage(pin_text), pin_text):
+        if candidate and candidate not in variants:
+            variants.append(candidate)
+
+    for variant in variants:
+        where = f"pin='{escape_soql_literal(variant)}'"
+        results = socrata_get(
+            'c49d-89sn',
+            params={'$where': where, '$limit': 10},
+            portal='cook_county',
+        )
+        resolved = _parcel_address_row_from_results(results)
+        if resolved:
+            return resolved
+
+    logger.warning('CookCountyGIS: no parcel address found for PIN=%r (tried %s)', pin, variants)
+    return None
 
 
 def _fetch_improvement_chars(pin: str, improvement_chars_url: str) -> dict:
@@ -311,6 +359,10 @@ class CookCountyGISConnector(GISConnector):
             return None
         chars = _fetch_improvement_chars(pin, self._improvement_chars_url)
         return _build_parcel(pin, chars)
+
+    def lookup_address_by_pin(self, pin: str) -> Optional[dict]:
+        """Return street/city/state/zip for a Cook County PIN, or None if not found."""
+        return _lookup_address_from_pin(pin, self._parcel_addresses_url)
 
     def lookup_by_pin(self, pin: str) -> Optional[GISParcel]:
         """Look up a parcel by 14-digit Cook County PIN.
