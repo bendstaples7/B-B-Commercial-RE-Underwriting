@@ -47,7 +47,7 @@ BOOTSTRAP_SRC="${SCRIPT_DIR}/bootstrap-async-stack.sh"
 BOOTSTRAP_INSTALL="/usr/local/sbin/bootstrap-async-stack"
 # Exact rules required for zero-downtime deploys and async stack management.
 # is-active uses --quiet to match deploy.sh verification commands.
-SUDOERS_RULE="deploy ALL=(ALL) NOPASSWD: /bin/systemctl reload gunicorn, /bin/systemctl restart celery, /bin/systemctl restart celery-beat, /bin/systemctl is-active --quiet redis-server, /bin/systemctl is-active --quiet celery, /bin/systemctl is-active --quiet celery-beat, /usr/local/sbin/bootstrap-async-stack"
+SUDOERS_RULE="deploy ALL=(ALL) NOPASSWD: /bin/systemctl reload gunicorn, /bin/systemctl stop celery, /bin/systemctl stop celery-beat, /bin/systemctl restart celery, /bin/systemctl restart celery-beat, /bin/systemctl is-active --quiet redis-server, /bin/systemctl is-active --quiet celery, /bin/systemctl is-active --quiet celery-beat, /usr/local/sbin/bootstrap-async-stack"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # ── Verify running as root ────────────────────────────────────────────────────
@@ -185,6 +185,20 @@ if echo "${SUDO_LIST}" | grep -qE '/bin/systemctl restart celery([^-]|$)'; then
 else
     error "  Missing passwordless sudo for: /bin/systemctl restart celery"
     die "Celery restart sudo rule required by deploy.sh."
+fi
+
+if echo "${SUDO_LIST}" | grep -qE '/bin/systemctl stop celery([^-]|$)'; then
+    info "  ✓ Rule confirmed: deploy can stop celery without a password."
+else
+    error "  Missing passwordless sudo for: /bin/systemctl stop celery"
+    die "Celery stop sudo rule required by deploy.sh."
+fi
+
+if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl stop celery-beat"; then
+    info "  ✓ Rule confirmed: deploy can stop celery-beat without a password."
+else
+    error "  Missing passwordless sudo for: /bin/systemctl stop celery-beat"
+    die "Celery-beat stop sudo rule required by deploy.sh."
 fi
 
 if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl restart celery-beat"; then
