@@ -69,12 +69,12 @@ CELERY_STOPPED_FOR_DEPLOY=0
 DEPLOY_ASYNC_STACK_RESTARTED=0
 
 stop_celery_for_deploy() {
-    if systemctl list-unit-files celery.service &>/dev/null 2>&1; then
-        sudo -n systemctl stop celery || { echo "FAILED: celery stop"; exit 1; }
+    if systemctl cat celery-beat.service &>/dev/null 2>&1; then
+        sudo -n systemctl stop celery-beat || { echo "FAILED: celery-beat stop"; exit 1; }
         CELERY_STOPPED_FOR_DEPLOY=1
     fi
-    if systemctl list-unit-files celery-beat.service &>/dev/null 2>&1; then
-        sudo -n systemctl stop celery-beat || { echo "FAILED: celery-beat stop"; exit 1; }
+    if systemctl cat celery.service &>/dev/null 2>&1; then
+        sudo -n systemctl stop celery || { echo "FAILED: celery stop"; exit 1; }
         CELERY_STOPPED_FOR_DEPLOY=1
     fi
     if [ "$CELERY_STOPPED_FOR_DEPLOY" -eq 1 ]; then
@@ -85,9 +85,24 @@ stop_celery_for_deploy() {
 
 restore_celery_if_stopped_for_prep() {
     if [ "$CELERY_STOPPED_FOR_DEPLOY" -eq 1 ] && [ "$DEPLOY_ASYNC_STACK_RESTARTED" -eq 0 ]; then
-        sudo -n systemctl restart celery 2>/dev/null || true
-        sudo -n systemctl restart celery-beat 2>/dev/null || true
-        echo "    celery: restored after early deploy exit"
+        local restore_ok=1
+        if systemctl cat celery.service &>/dev/null 2>&1; then
+            if ! sudo -n systemctl restart celery; then
+                echo "WARNING: celery restart failed during early deploy exit cleanup"
+                restore_ok=0
+            fi
+        fi
+        if systemctl cat celery-beat.service &>/dev/null 2>&1; then
+            if ! sudo -n systemctl restart celery-beat; then
+                echo "WARNING: celery-beat restart failed during early deploy exit cleanup"
+                restore_ok=0
+            fi
+        fi
+        if [ "$restore_ok" -eq 1 ]; then
+            echo "    celery: restored after early deploy exit"
+        else
+            echo "WARNING: celery restore incomplete after early deploy exit — manual intervention may be required"
+        fi
     fi
 }
 
@@ -98,7 +113,9 @@ dump_memory_diagnostics() {
     echo "--- Top memory processes ---"
     ps aux --sort=-%mem 2>/dev/null | head -15 || true
     echo "--- Recent celery journal ---"
-    sudo -n journalctl -u celery -u celery-beat --no-pager -n 30 2>/dev/null || true
+    if ! sudo -n journalctl -u celery -u celery-beat --no-pager -n 30 2>/dev/null; then
+        echo "(journalctl unavailable — deploy user lacks journal access)"
+    fi
 }
 
 cleanup_deploy_exit() {
@@ -126,9 +143,10 @@ fi
 echo "    disk space: ${FREE_KB}KB free (OK)"
 
 # Stop Celery workers before memory poll — frees RSS held by in-flight tasks.
-PREP_CHECKS_SCRIPT="${APP_DIR}/scripts/deploy-async-stack-checks.sh"
-if [[ ! -f "${PREP_CHECKS_SCRIPT}" ]] && [[ -f /home/deploy/deploy-async-stack-checks.sh ]]; then
-    PREP_CHECKS_SCRIPT=/home/deploy/deploy-async-stack-checks.sh
+# Prefer the workflow-uploaded helper (pre-checkout); APP_DIR is still on the previous release.
+PREP_CHECKS_SCRIPT="/home/deploy/deploy-async-stack-checks.sh"
+if [[ ! -f "${PREP_CHECKS_SCRIPT}" ]] && [[ -f "${APP_DIR}/scripts/deploy-async-stack-checks.sh" ]]; then
+    PREP_CHECKS_SCRIPT="${APP_DIR}/scripts/deploy-async-stack-checks.sh"
 fi
 if [[ -f "${PREP_CHECKS_SCRIPT}" ]]; then
     # shellcheck source=deploy-async-stack-checks.sh

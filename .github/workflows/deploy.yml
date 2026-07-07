@@ -159,8 +159,8 @@ jobs:
           npm run build
           echo "Frontend built successfully ($(du -sh dist | cut -f1) total)"
 
-      - name: Deploy
-        id: deploy
+      - name: Prepare VPS for deploy
+        id: deploy_prepare
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -223,7 +223,15 @@ jobs:
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "rm -rf /home/deploy/frontend-dist"
           scp -i ~/.ssh/id_deploy -r frontend/dist $VPS_USER@$VPS_HOST:/home/deploy/frontend-dist
           scp -i ~/.ssh/id_deploy changed_paths.txt $VPS_USER@$VPS_HOST:/home/deploy/changed_paths.txt
-          # Run deploy script (keepalive in ~/.ssh/config; explicit opts on long session)
+
+      - name: Run deploy on VPS
+        id: deploy_run
+        continue-on-error: true
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
+        run: |
           ssh -i ~/.ssh/id_deploy \
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=20 \
@@ -232,19 +240,26 @@ jobs:
             "chmod +x /home/deploy/deploy.sh && bash /home/deploy/deploy.sh '$TARGET_SHA'"
 
       - name: Retry deploy after failure
-        if: failure() && steps.deploy.outcome == 'failure'
+        id: retry_deploy
+        if: steps.deploy_run.outcome == 'failure'
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
         run: |
-          echo "Deploy step failed — retrying deploy.sh once (scripts already on VPS)..."
+          echo "Deploy failed — retrying deploy.sh once..."
           ssh -i ~/.ssh/id_deploy \
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=20 \
             -o TCPKeepAlive=yes \
             $VPS_USER@$VPS_HOST \
             "bash /home/deploy/deploy.sh '$TARGET_SHA'"
+
+      - name: Fail job if both deploy attempts failed
+        if: steps.deploy_run.outcome == 'failure' && steps.retry_deploy.outcome != 'success'
+        run: |
+          echo "Deploy failed after initial attempt and retry."
+          exit 1
 
       - name: Deploy failure diagnostics
         if: failure()
@@ -279,6 +294,7 @@ jobs:
 
       # ── Step 6: Post-deploy health check + SHA verification ──────────────
       - name: Post-deploy health check
+        if: steps.deploy_run.outcome == 'success' || steps.retry_deploy.outcome == 'success'
         env:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
           TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
@@ -343,6 +359,7 @@ jobs:
       # Set SMOKE_TEST_SENTINEL_LEAD_ID to the database ID of a known unowned
       # lead (any lead imported before the ownership model) to enable check (a).
       - name: Post-deploy ownership smoke test
+        if: steps.deploy_run.outcome == 'success' || steps.retry_deploy.outcome == 'success'
         env:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
           SMOKE_TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
@@ -420,6 +437,7 @@ jobs:
       # query path causes every search to 500 (e.g. duplicate ELSE in CASE).
       # Skipped if smoke test credentials are not configured.
       - name: Post-deploy search smoke test
+        if: steps.deploy_run.outcome == 'success' || steps.retry_deploy.outcome == 'success'
         env:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
           SMOKE_TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}

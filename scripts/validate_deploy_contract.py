@@ -42,6 +42,11 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _script_references_command(text: str, cmd: str) -> bool:
+    """Match cmd as a whole token (celery-beat must not satisfy celery)."""
+    return re.search(re.escape(cmd) + r"(?!\w)", text) is not None
+
+
 def parse_sudoers_commands() -> set[str]:
     text = _read(REPO_ROOT / "scripts" / "vps-setup" / "11-sudoers-deploy.sh")
     match = re.search(r'SUDOERS_RULE="([^"]+)"', text)
@@ -97,14 +102,14 @@ def main() -> int:
     # 3. migrate-async-stack.sh references all required sudo commands
     migrate_text = _read(REPO_ROOT / "scripts" / "vps-setup" / "migrate-async-stack.sh")
     for cmd in REQUIRED_SUDO_COMMANDS:
-        if cmd not in migrate_text:
+        if not _script_references_command(migrate_text, cmd):
             errors.append(f"migrate-async-stack.sh missing reference to sudo command: {cmd}")
 
     # 4. deploy-async-stack-checks covers async commands (gunicorn separate)
     checks_path = REPO_ROOT / "scripts" / "deploy-async-stack-checks.sh"
     checks_text = _read(checks_path)
     for cmd in REQUIRED_SUDO_COMMANDS:
-        if cmd not in checks_text:
+        if not _script_references_command(checks_text, cmd):
             errors.append(f"deploy-async-stack-checks.sh does not reference: {cmd}")
 
     # 5. run-vps-readiness-check sources shared module
