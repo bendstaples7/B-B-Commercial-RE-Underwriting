@@ -472,9 +472,9 @@ class TestDefaultWeights:
     def test_default_weights_defined(self):
         assert DEFAULT_WEIGHTS["property_characteristics_weight"] == 0.25
         assert DEFAULT_WEIGHTS["data_completeness_weight"] == 0.15
-        assert DEFAULT_WEIGHTS["owner_situation_weight"] == 0.25
+        assert DEFAULT_WEIGHTS["owner_situation_weight"] == 0.30
         assert DEFAULT_WEIGHTS["location_desirability_weight"] == 0.15
-        assert DEFAULT_WEIGHTS["data_enrichment_weight"] == 0.20
+        assert DEFAULT_WEIGHTS["data_enrichment_weight"] == 0.15
         assert abs(sum(DEFAULT_WEIGHTS.values()) - 1.0) < 0.001
 
 

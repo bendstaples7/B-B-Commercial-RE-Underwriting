@@ -418,9 +418,9 @@ class TestGetScoringWeights:
         assert data['user_id'] == 'test-user'
         assert data['property_characteristics_weight'] == 0.25
         assert data['data_completeness_weight'] == 0.15
-        assert data['owner_situation_weight'] == 0.25
+        assert data['owner_situation_weight'] == 0.30
         assert data['location_desirability_weight'] == 0.15
-        assert data['data_enrichment_weight'] == 0.20
+        assert data['data_enrichment_weight'] == 0.15
 
     def test_get_weights_existing(self, client, app):
         """Returns existing weights for user."""
