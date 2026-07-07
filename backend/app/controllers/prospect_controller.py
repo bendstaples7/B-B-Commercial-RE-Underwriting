@@ -1,10 +1,10 @@
 """Prospect candidate review queue API."""
 import logging
-from functools import wraps
 from typing import Optional
 
 from flask import Blueprint, g, jsonify, request
 
+from app.controllers.queue_controller import handle_errors
 from app.services.cook_county_prospect_config import motivation_pct
 from app.services.prospect_area_filter_service import (
     clear_area_filter,
@@ -23,19 +23,6 @@ from app.services.prospect_review_service import (
 logger = logging.getLogger(__name__)
 
 prospect_bp = Blueprint('prospects', __name__)
-
-
-def handle_errors(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        try:
-            return f(*args, **kwargs)
-        except ValueError as exc:
-            return jsonify({'error': str(exc)}), 400
-        except Exception as exc:
-            logger.error('Prospect API error: %s', exc, exc_info=True)
-            return jsonify({'error': 'Internal server error'}), 500
-    return decorated
 
 
 def _user_id():

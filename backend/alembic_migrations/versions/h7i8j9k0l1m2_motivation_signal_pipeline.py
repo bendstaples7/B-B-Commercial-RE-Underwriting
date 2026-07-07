@@ -5,8 +5,6 @@ Revises: g6a7b8c9d0e1
 Create Date: 2026-07-06
 """
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 revision = 'h7i8j9k0l1m2'
 down_revision = 'g6a7b8c9d0e1'
@@ -16,118 +14,113 @@ depends_on = None
 
 def upgrade():
     op.execute("""
-        CREATE TYPE motivation_signal_type_enum AS ENUM (
-            'TAX_SCAVENGER_SALE',
-            'TAX_ANNUAL_SALE',
-            'CHICAGO_SCOFFLAW',
-            'BUILDING_VIOLATION',
-            'MANUAL_PRIORITY',
-            'NOTES_KEYWORD',
-            'SOURCE_TYPE_DISTRESS',
-            'HUBSPOT_MOTIVATION',
-            'TAX_EXEMPT',
-            'ASSESSMENT_APPEAL'
+        CREATE TABLE IF NOT EXISTS motivation_signals (
+            id SERIAL PRIMARY KEY,
+            lead_id INTEGER REFERENCES leads(id) ON DELETE CASCADE,
+            signal_type VARCHAR(64) NOT NULL,
+            severity VARCHAR(16) NOT NULL,
+            points DOUBLE PRECISION NOT NULL DEFAULT 0,
+            source VARCHAR(32) NOT NULL,
+            source_dataset VARCHAR(64),
+            evidence_key VARCHAR(255),
+            evidence JSONB,
+            detected_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            expires_at TIMESTAMP,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            CONSTRAINT uq_motivation_signal_lead_type_key
+                UNIQUE (lead_id, signal_type, evidence_key)
         )
     """)
     op.execute("""
-        CREATE TYPE motivation_severity_enum AS ENUM ('low', 'medium', 'high')
+        CREATE INDEX IF NOT EXISTS ix_motivation_signals_lead_id
+        ON motivation_signals(lead_id)
     """)
+
     op.execute("""
-        CREATE TYPE motivation_signal_source_enum AS ENUM (
-            'cook_county_enrichment',
-            'ingestion',
-            'notes',
-            'hubspot',
-            'prospect_feed'
+        CREATE TABLE IF NOT EXISTS prospect_candidates (
+            id SERIAL PRIMARY KEY,
+            owner_user_id VARCHAR(36) NOT NULL,
+            pin VARCHAR(50),
+            property_street VARCHAR(500),
+            property_city VARCHAR(100),
+            property_state VARCHAR(50),
+            latitude DOUBLE PRECISION,
+            longitude DOUBLE PRECISION,
+            primary_signal_type VARCHAR(64) NOT NULL,
+            motivation_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+            signals JSONB,
+            source_feed VARCHAR(64) NOT NULL,
+            external_key VARCHAR(255) NOT NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'pending',
+            duplicate_lead_id INTEGER REFERENCES leads(id) ON DELETE SET NULL,
+            imported_lead_id INTEGER REFERENCES leads(id) ON DELETE SET NULL,
+            reviewed_at TIMESTAMP,
+            reviewed_by VARCHAR(36),
+            rejection_reason TEXT,
+            raw_record JSONB,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_prospect_feed_external_key
+                UNIQUE (source_feed, external_key)
         )
     """)
     op.execute("""
-        CREATE TYPE prospect_candidate_status_enum AS ENUM (
-            'pending', 'approved', 'rejected', 'imported', 'duplicate'
+        CREATE INDEX IF NOT EXISTS ix_prospect_candidates_owner_user_id
+        ON prospect_candidates(owner_user_id)
+    """)
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS ix_prospect_candidates_pin
+        ON prospect_candidates(pin)
+    """)
+
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS prospect_feed_state (
+            id SERIAL PRIMARY KEY,
+            feed_name VARCHAR(64) NOT NULL UNIQUE,
+            last_synced_at TIMESTAMP,
+            cursor VARCHAR(255),
+            rows_processed INTEGER NOT NULL DEFAULT 0,
+            updated_at TIMESTAMP NOT NULL DEFAULT NOW()
         )
     """)
 
-    op.create_table(
-        'motivation_signals',
-        sa.Column('id', sa.Integer(), primary_key=True),
-        sa.Column('lead_id', sa.Integer(), sa.ForeignKey('leads.id', ondelete='CASCADE'), nullable=True, index=True),
-        sa.Column(
-            'signal_type',
-            postgresql.ENUM(name='motivation_signal_type_enum', create_type=False),
-            nullable=False,
-        ),
-        sa.Column(
-            'severity',
-            postgresql.ENUM(name='motivation_severity_enum', create_type=False),
-            nullable=False,
-        ),
-        sa.Column('points', sa.Float(), nullable=False, server_default='0'),
-        sa.Column(
-            'source',
-            postgresql.ENUM(name='motivation_signal_source_enum', create_type=False),
-            nullable=False,
-        ),
-        sa.Column('source_dataset', sa.String(64), nullable=True),
-        sa.Column('evidence_key', sa.String(255), nullable=True),
-        sa.Column('evidence', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-        sa.Column('detected_at', sa.DateTime(), nullable=False, server_default=sa.text('NOW()')),
-        sa.Column('expires_at', sa.DateTime(), nullable=True),
-        sa.Column('is_active', sa.Boolean(), nullable=False, server_default='true'),
-        sa.UniqueConstraint('lead_id', 'signal_type', 'evidence_key', name='uq_motivation_signal_lead_type_key'),
-    )
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS prospect_area_filters (
+            id SERIAL PRIMARY KEY,
+            user_id VARCHAR(36) NOT NULL UNIQUE,
+            enabled BOOLEAN NOT NULL DEFAULT FALSE,
+            label VARCHAR(255),
+            geometry JSONB,
+            updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """)
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS ix_prospect_area_filters_user_id
+        ON prospect_area_filters(user_id)
+    """)
 
-    op.create_table(
-        'prospect_candidates',
-        sa.Column('id', sa.Integer(), primary_key=True),
-        sa.Column('owner_user_id', sa.String(36), nullable=False, index=True),
-        sa.Column('pin', sa.String(50), nullable=True, index=True),
-        sa.Column('property_street', sa.String(500), nullable=True),
-        sa.Column('property_city', sa.String(100), nullable=True),
-        sa.Column('property_state', sa.String(50), nullable=True),
-        sa.Column('primary_signal_type', sa.String(64), nullable=False),
-        sa.Column('motivation_score', sa.Float(), nullable=False, server_default='0'),
-        sa.Column('signals', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-        sa.Column('source_feed', sa.String(64), nullable=False),
-        sa.Column('external_key', sa.String(255), nullable=False),
-        sa.Column(
-            'status',
-            postgresql.ENUM(name='prospect_candidate_status_enum', create_type=False),
-            nullable=False,
-            server_default='pending',
-        ),
-        sa.Column('duplicate_lead_id', sa.Integer(), sa.ForeignKey('leads.id', ondelete='SET NULL'), nullable=True),
-        sa.Column('imported_lead_id', sa.Integer(), sa.ForeignKey('leads.id', ondelete='SET NULL'), nullable=True),
-        sa.Column('reviewed_at', sa.DateTime(), nullable=True),
-        sa.Column('reviewed_by', sa.String(36), nullable=True),
-        sa.Column('rejection_reason', sa.Text(), nullable=True),
-        sa.Column('raw_record', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-        sa.Column('created_at', sa.DateTime(), nullable=False, server_default=sa.text('NOW()')),
-        sa.UniqueConstraint('source_feed', 'external_key', name='uq_prospect_feed_external_key'),
-    )
-
-    op.create_table(
-        'prospect_feed_state',
-        sa.Column('id', sa.Integer(), primary_key=True),
-        sa.Column('feed_name', sa.String(64), nullable=False, unique=True),
-        sa.Column('last_synced_at', sa.DateTime(), nullable=True),
-        sa.Column('cursor', sa.String(255), nullable=True),
-        sa.Column('rows_processed', sa.Integer(), nullable=False, server_default='0'),
-        sa.Column('updated_at', sa.DateTime(), nullable=False, server_default=sa.text('NOW()')),
-    )
-
-    op.add_column('leads', sa.Column('motivation_score', sa.Float(), nullable=True, server_default='0'))
-    op.add_column('leads', sa.Column('motivation_signal_summary', postgresql.JSONB(astext_type=sa.Text()), nullable=True))
-    op.create_index('ix_leads_motivation_score', 'leads', ['motivation_score'])
+    op.execute("""
+        ALTER TABLE leads
+        ADD COLUMN IF NOT EXISTS motivation_score DOUBLE PRECISION DEFAULT 0
+    """)
+    op.execute("""
+        ALTER TABLE leads
+        ADD COLUMN IF NOT EXISTS motivation_signal_summary JSONB
+    """)
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS ix_leads_motivation_score
+        ON leads(motivation_score)
+    """)
 
 
 def downgrade():
-    op.drop_index('ix_leads_motivation_score', table_name='leads')
-    op.drop_column('leads', 'motivation_signal_summary')
-    op.drop_column('leads', 'motivation_score')
-    op.drop_table('prospect_feed_state')
-    op.drop_table('prospect_candidates')
-    op.drop_table('motivation_signals')
-    op.execute('DROP TYPE IF EXISTS prospect_candidate_status_enum')
-    op.execute('DROP TYPE IF EXISTS motivation_signal_source_enum')
-    op.execute('DROP TYPE IF EXISTS motivation_severity_enum')
-    op.execute('DROP TYPE IF EXISTS motivation_signal_type_enum')
+    op.execute("DROP INDEX IF EXISTS ix_leads_motivation_score")
+    op.execute("ALTER TABLE leads DROP COLUMN IF EXISTS motivation_signal_summary")
+    op.execute("ALTER TABLE leads DROP COLUMN IF EXISTS motivation_score")
+    op.execute("DROP INDEX IF EXISTS ix_prospect_area_filters_user_id")
+    op.execute("DROP TABLE IF EXISTS prospect_area_filters")
+    op.execute("DROP TABLE IF EXISTS prospect_feed_state")
+    op.execute("DROP INDEX IF EXISTS ix_prospect_candidates_pin")
+    op.execute("DROP INDEX IF EXISTS ix_prospect_candidates_owner_user_id")
+    op.execute("DROP TABLE IF EXISTS prospect_candidates")
+    op.execute("DROP INDEX IF EXISTS ix_motivation_signals_lead_id")
+    op.execute("DROP TABLE IF EXISTS motivation_signals")
