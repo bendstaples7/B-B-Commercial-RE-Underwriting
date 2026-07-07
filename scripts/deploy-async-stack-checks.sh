@@ -25,6 +25,14 @@ assert_gunicorn_sudo_ready() {
     _require_passwordless_sudo "gunicorn reload" /bin/systemctl reload gunicorn
 }
 
+assert_celery_stop_sudo_ready() {
+    _require_passwordless_sudo "celery stop" /bin/systemctl stop celery \
+        || return 1
+    _require_passwordless_sudo "celery-beat stop" /bin/systemctl stop celery-beat \
+        || return 1
+    return 0
+}
+
 assert_async_stack_sudo_ready() {
     _require_passwordless_sudo "celery restart" /bin/systemctl restart celery \
         || return 1
