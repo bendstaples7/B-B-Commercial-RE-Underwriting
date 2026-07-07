@@ -38,6 +38,13 @@ const UNIVERSAL_ACTIONS: ActionButton[] = [
   { label: 'Log Email', action: 'log_email', isOutreach: true },
 ]
 
+const RUN_ANALYSIS_BUTTON: ActionButton = { label: 'Run Analysis', action: 'run_analysis' }
+
+function withRunAnalysis(buttons: ActionButton[]): ActionButton[] {
+  if (buttons.some((b) => b.action === 'run_analysis')) return buttons
+  return [...buttons, RUN_ANALYSIS_BUTTON]
+}
+
 const METHOD_PRIMARY_ACTIONS: Record<string, string> = {
   phone: 'log_call',
   email: 'log_email',
@@ -58,19 +65,19 @@ function prioritizeButtonsForMethod(
 }
 
 const ACTION_BUTTONS: Record<CRMRecommendedAction, ActionButton[]> = {
-  review_now: [
+  review_now: withRunAnalysis([
     { label: 'Research Property', action: 'research_property' },
     { label: 'Log Note', action: 'log_note' },
     { label: 'Create Task', action: 'create_task' },
-  ],
-  mail_ready: [
+  ]),
+  mail_ready: withRunAnalysis([
     { label: 'Add to Mail Queue', action: 'add_to_mail_batch', isOutreach: true },
     { label: 'Log Note', action: 'log_note' },
-  ],
-  call_ready: [
+  ]),
+  call_ready: withRunAnalysis([
     { label: 'Log Call', action: 'log_call', isOutreach: true },
     { label: 'Create Task', action: 'create_task' },
-  ],
+  ]),
   valuation_needed: [
     { label: 'Run Analysis', action: 'run_analysis' },
     { label: 'Research Property', action: 'research_property' },
@@ -92,17 +99,17 @@ const ACTION_BUTTONS: Record<CRMRecommendedAction, ActionButton[]> = {
   analyze_property: [
     { label: 'Run Analysis', action: 'run_analysis' },
   ],
-  follow_up_now: [
+  follow_up_now: withRunAnalysis([
     { label: 'Log Call', action: 'log_call', isOutreach: true },
     { label: 'Log Note', action: 'log_note', isOutreach: true },
     { label: 'Create Task', action: 'create_task' },
-  ],
-  ready_for_outreach: [
+  ]),
+  ready_for_outreach: withRunAnalysis([
     { label: 'Log Call', action: 'log_call', isOutreach: true },
     { label: 'Add to Mail Queue', action: 'add_to_mail_batch', isOutreach: true },
     { label: 'Log Note', action: 'log_note', isOutreach: true },
     { label: 'Create Task', action: 'create_task' },
-  ],
+  ]),
   add_contact_info: [
     { label: 'Add Contact Info', action: 'add_contact_info' },
     { label: 'Run Skip Trace', action: 'skip_trace' },

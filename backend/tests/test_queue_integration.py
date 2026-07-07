@@ -469,8 +469,8 @@ class TestActionEngineIntegration:
             action = ActionEngineService.compute_recommended_action(lead)
             assert action == 'resolve_match'
 
-    def test_lead_with_match_no_analysis_gets_analyze_property(self, app):
-        """A lead with property match but no analysis gets analyze_property."""
+    def test_lead_with_match_no_analysis_gets_outreach_action_not_analyze_property(self, app):
+        """A matched lead without analysis gets a score-derived action, not analyze_property."""
         with app.app_context():
             lead = _make_lead(app, '3 Action Engine St',
                               lead_status='mailing_no_contact_made',
@@ -478,7 +478,8 @@ class TestActionEngineIntegration:
                               has_property_match=True,
                               analysis_complete=False)
             action = ActionEngineService.compute_recommended_action(lead)
-            assert action == 'analyze_property'
+            assert action != 'analyze_property'
+            assert action == 'nurture'
 
     def test_warm_lead_gets_mail_ready_in_residential_early_stage(self, app):
         """A warm residential lead in early mailing stages gets mail_ready."""

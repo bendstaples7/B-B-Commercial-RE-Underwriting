@@ -129,6 +129,32 @@ describe('RecommendedActionPanel', () => {
       expect(screen.getByTestId('ra-action-btn-run_analysis')).toBeInTheDocument()
     })
 
+    it('renders Run Analysis on follow_up_now RA', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('follow_up_now')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          onAction={vi.fn()}
+        />
+      )
+
+      expect(screen.getByTestId('ra-action-btn-run_analysis')).toBeInTheDocument()
+    })
+
+    it('renders Run Analysis on ready_for_outreach RA', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('ready_for_outreach')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          onAction={vi.fn()}
+        />
+      )
+
+      expect(screen.getByTestId('ra-action-btn-run_analysis')).toBeInTheDocument()
+    })
+
     it('renders outreach contact callout when outreach_contact is present and showOutreachContact', () => {
       render(
         <RecommendedActionPanel
