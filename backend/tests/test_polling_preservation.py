@@ -113,6 +113,9 @@ class LeadStub:
         self.tax_distress_data = kwargs.get('tax_distress_data', None)
         self.manual_priority = kwargs.get('manual_priority', None)
         self.owner_user_id = kwargs.get('owner_user_id', None)
+        self.motivation_score = kwargs.get('motivation_score', 0.0)
+        self.motivation_signal_summary = kwargs.get('motivation_signal_summary', [])
+        self.motivation_signals = kwargs.get('motivation_signals', [])
         # Lazy-loaded relationships
         self.enrichment_records = _EmptyRelationship()
         self.marketing_list_members = _EmptyRelationship()

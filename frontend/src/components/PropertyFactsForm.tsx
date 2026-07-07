@@ -28,7 +28,7 @@ import {
   ConstructionType,
   InteriorCondition,
 } from '@/types'
-import { useGoogleMapsLoaded } from '@/App'
+import { useGoogleMapsLoaded } from '@/context/GoogleMapsContext'
 
 interface PropertyFactsFormProps {
   propertyFacts?: PropertyFacts

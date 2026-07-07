@@ -538,6 +538,8 @@ def _register_default_plugins(connector: "DataSourceConnector") -> None:
         ChicagoBuildingViolationsPlugin,
     )
     from app.services.plugins.chicago_scofflaw import ChicagoScofflawPlugin
+    from app.services.plugins.chicago_vacant_buildings import ChicagoVacantBuildingsPlugin
+    from app.services.plugins.chicago_311_complaints import Chicago311ComplaintsPlugin
     from app.services.plugins.cook_county_owner_lookup import CookCountyOwnerLookupPlugin
 
     for plugin_cls in (
@@ -550,6 +552,8 @@ def _register_default_plugins(connector: "DataSourceConnector") -> None:
         CookCountyScavengerTaxSalePlugin,
         ChicagoBuildingViolationsPlugin,
         ChicagoScofflawPlugin,
+        ChicagoVacantBuildingsPlugin,
+        Chicago311ComplaintsPlugin,
         CookCountyOwnerLookupPlugin,
     ):
         try:

@@ -86,6 +86,8 @@ _KNOWN_REVISIONS = frozenset({
     # Open Letter Connect — mail queue and campaigns
     'f5a6b7c8d9e0',
     'g6a7b8c9d0e1',
+    # Motivation signal pipeline — signals, prospect candidates, lead denorm
+    'h7i8j9k0l1m2',
 })
 
 

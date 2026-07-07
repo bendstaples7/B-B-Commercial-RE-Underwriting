@@ -36,6 +36,8 @@ _PIN_PLUGINS = (
 _CHICAGO_PLUGINS = (
     "chicago_building_violations",
     "chicago_scofflaw",
+    "chicago_vacant_buildings",
+    "chicago_311_complaints",
 )
 
 AUTOMATED_ENRICHMENT_SOURCES = frozenset({
@@ -147,6 +149,8 @@ def enrich_cook_county_lead(lead_id: int) -> dict:
             )
 
     if summary["plugins_run"] > 0:
+        from app.services.motivation_signal_service import MotivationSignalService
+        MotivationSignalService().sync_from_lead(lead, commit=False)
         refresh_lead_scoring(lead_id)
 
     logger.info(

@@ -50,6 +50,7 @@ RESIDENTIAL_MAX_POINTS = {
     "existing_notes_motivation": 10,
     "manual_priority": 10,
     "source_type_distress": SOURCE_TYPE_DISTRESS_COMBINED_CAP,
+    "structured_motivation": 25,
     "property_heuristics": 20,
     "contactability": 20,
     "property_equity": 25,
@@ -67,6 +68,7 @@ COMMERCIAL_MAX_POINTS = {
     "building_size_fit": 5,
     "existing_notes_motivation": 5,
     "manual_priority": 5,
+    "structured_motivation": 20,
     "contactability": 20,
     "property_equity": 25,
     "ownership_duration": 15,
@@ -119,6 +121,7 @@ SCORING_ATTRIBUTES = frozenset({
     'data_source', 'updated_at', 'id', 'lead_category', 'unanswered_call_count',
     'last_contact_date', 'lead_status', 'condo_risk_status', 'building_sale_possible',
     'analysis_complete', 'most_recent_sale',
+    'motivation_score', 'motivation_signal_summary',
 })
 
 
@@ -242,13 +245,8 @@ def calculate_residential_score(lead: Lead) -> dict:
 
     details["owner_mailing_quality"] = owner_mailing_quality(lead)
     details["years_owned"] = 0.0
-    details["existing_notes_motivation"] = notes_motivation_score(
-        lead, max_points=RESIDENTIAL_MAX_POINTS["existing_notes_motivation"]
-    )
-    details["manual_priority"] = manual_priority_score(
-        lead, max_points=RESIDENTIAL_MAX_POINTS["manual_priority"]
-    )
-    details["source_type_distress"] = source_type_distress_score(lead)
+    from app.services.motivation_signal_service import structured_motivation_score
+    details["structured_motivation"] = structured_motivation_score(lead)
     details["property_heuristics"] = property_heuristics_bonus(lead)
 
     details["contactability"] = contactability_score(lead, max_points=20.0)
@@ -272,12 +270,8 @@ def calculate_commercial_score(lead: Lead) -> dict:
     details["owner_concentration"] = owner_concentration_score(lead)
     details["absentee_owner"] = absentee_owner_score(lead)
     details["building_size_fit"] = building_size_fit_score(lead)
-    details["existing_notes_motivation"] = notes_motivation_score(
-        lead, max_points=COMMERCIAL_MAX_POINTS["existing_notes_motivation"]
-    )
-    details["manual_priority"] = manual_priority_score(
-        lead, max_points=COMMERCIAL_MAX_POINTS["manual_priority"]
-    )
+    from app.services.motivation_signal_service import structured_motivation_score
+    details["structured_motivation"] = structured_motivation_score(lead)
     details["contactability"] = contactability_score(lead, max_points=20.0)
     details["property_equity"] = property_equity_score(lead, max_points=25.0)
     details["ownership_duration"] = ownership_duration_score(lead, max_points=15.0)
@@ -557,9 +551,9 @@ def identify_missing_data(lead: Lead) -> list[str]:
         "building_sale_possible": lambda: (
             getattr(lead, "building_sale_possible", None) and lead.building_sale_possible.strip()
         ),
-        "violation_data": lambda: False,
-        "permit_data": lambda: False,
-        "tax_data": lambda: False,
+        "violation_data": lambda: bool(getattr(lead, "violation_data", None)),
+        "permit_data": lambda: bool(getattr(lead, "permit_data", None)),
+        "tax_data": lambda: bool(getattr(lead, "tax_distress_data", None)),
         "skip_trace_data": lambda: (
             lead.date_skip_traced is not None or bool(lead.phone_1) or bool(lead.email_1)
         ),
@@ -582,8 +576,18 @@ def calculate_score_tier(total_score: float) -> str:
     return "D"
 
 
-def extract_top_signals(score_details: dict) -> list:
+def extract_top_signals(score_details: dict, lead=None) -> list:
     non_zero = []
+    if lead is not None:
+        summary = getattr(lead, 'motivation_signal_summary', None) or []
+        if isinstance(summary, list):
+            for item in summary[:3]:
+                pts = item.get('points', 0)
+                if pts > 0:
+                    non_zero.append({
+                        'dimension': item.get('label', item.get('signal_type', 'motivation')),
+                        'points': pts,
+                    })
     for dim, pts in score_details.items():
         if pts <= 0:
             continue
@@ -602,12 +606,16 @@ def bucket_scores(score_details: dict, data_quality_score: float, category: str)
             "property_type_fit", "condo_clarity", "building_sale_possible", "building_size_fit",
         ]
         prop_max = sum(COMMERCIAL_MAX_POINTS[d] for d in prop_dims)
-        owner_dims = ["absentee_owner", "owner_concentration", "ownership_duration", "owner_mailing_quality"]
+        owner_dims = [
+            "absentee_owner", "owner_concentration", "ownership_duration",
+            "owner_mailing_quality", "structured_motivation",
+        ]
         owner_max = (
             COMMERCIAL_MAX_POINTS["absentee_owner"]
             + COMMERCIAL_MAX_POINTS["owner_concentration"]
             + COMMERCIAL_MAX_POINTS["ownership_duration"]
             + 10  # owner_mailing_quality max (residential cap)
+            + COMMERCIAL_MAX_POINTS["structured_motivation"]
         )
         loc_max = COMMERCIAL_MAX_POINTS["neighborhood_fit"]
     else:
@@ -621,15 +629,13 @@ def bucket_scores(score_details: dict, data_quality_score: float, category: str)
         )
         owner_dims = [
             "absentee_owner", "owner_mailing_quality", "ownership_duration",
-            "existing_notes_motivation", "manual_priority", "source_type_distress",
+            "structured_motivation",
         ]
         owner_max = (
             RESIDENTIAL_MAX_POINTS["absentee_owner"]
             + RESIDENTIAL_MAX_POINTS["owner_mailing_quality"]
             + RESIDENTIAL_MAX_POINTS["ownership_duration"]
-            + RESIDENTIAL_MAX_POINTS["existing_notes_motivation"]
-            + RESIDENTIAL_MAX_POINTS["manual_priority"]
-            + RESIDENTIAL_MAX_POINTS["source_type_distress"]
+            + RESIDENTIAL_MAX_POINTS["structured_motivation"]
         )
         loc_max = RESIDENTIAL_MAX_POINTS["neighborhood_fit"]
 

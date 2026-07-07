@@ -76,7 +76,7 @@ class TestGetCounts:
             expected_keys = {
                 'todays_action', 'previously_warm', 'follow_up_overdue',
                 'no_next_action', 'needs_review', 'do_not_contact',
-                'missing_property_match', 'ready_to_mail', 'mail_candidates',
+                'missing_property_match', 'ready_to_mail', 'mail_candidates', 'prospect_candidates',
             }
             assert set(data.keys()) == expected_keys
 

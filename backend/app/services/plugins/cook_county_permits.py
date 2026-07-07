@@ -15,10 +15,15 @@ _PERMITS_URL = "https://datacatalog.cookcountyil.gov/resource/6yjf-dfxs.json"
 _OPEN_PERMIT_STATUSES = {"OPEN", "PENDING", "ISSUED", "ACTIVE", "PERMIT ISSUED"}
 
 # Statuses that indicate an actual code violation / enforcement action.
-_VIOLATION_STATUSES = {
+VIOLATION_STATUSES = frozenset({
     "VIOLATION", "CODE VIOLATION", "OPEN VIOLATION", "ENFORCEMENT",
     "FAIL", "FAILED", "NON-COMPLIANT", "NONCOMPLIANT",
-}
+})
+
+
+def is_permit_violation_row(row: dict) -> bool:
+    status = (row.get("status") or "").upper().strip()
+    return status in VIOLATION_STATUSES
 
 
 class CookCountyPermitsPlugin(DataSourcePlugin):
@@ -71,10 +76,7 @@ class CookCountyPermitsPlugin(DataSourcePlugin):
 
         fields: dict = {"permit_data": rows}
 
-        violations = [
-            r for r in rows
-            if r.get("status", "").upper() in _VIOLATION_STATUSES
-        ]
+        violations = [r for r in rows if is_permit_violation_row(r)]
         if violations:
             fields["violation_data"] = violations
 

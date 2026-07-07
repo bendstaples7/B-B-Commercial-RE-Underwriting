@@ -23,6 +23,7 @@ const RESIDENTIAL_MAX: Record<string, number> = {
   absentee_owner: 10,
   owner_mailing_quality: 10,
   years_owned: 10,
+  structured_motivation: 25,
   existing_notes_motivation: 10,
   manual_priority: 10,
   source_type_distress: 15,
@@ -36,6 +37,7 @@ const COMMERCIAL_MAX: Record<string, number> = {
   owner_concentration: 10,
   absentee_owner: 10,
   building_size_fit: 5,
+  structured_motivation: 20,
   existing_notes_motivation: 5,
   manual_priority: 5,
 }
@@ -77,6 +79,12 @@ const DIMENSION_COPY: Record<string, Omit<ScoreDimensionMeta, 'maxPoints'>> = {
     description:
       'Longer hold periods score higher (10+ years = max). Uses acquisition date when set, otherwise parses the last sale date on the lead.',
     dataSource: 'Acquisition date, or last sale date (most_recent_sale) on the lead',
+  },
+  structured_motivation: {
+    label: 'Structured Motivation',
+    description:
+      'Distress signals from Cook County enrichment (tax sales, scofflaw, violations), source type, notes keywords, and manual priority — unified and capped to avoid double-counting.',
+    dataSource: 'motivation_signals table (synced from enrichment JSON and ingestion fields)',
   },
   existing_notes_motivation: {
     label: 'Motivation in Notes',
