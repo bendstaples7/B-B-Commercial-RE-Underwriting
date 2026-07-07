@@ -20,6 +20,45 @@ def _session_reached_weighted_scoring(session) -> bool:
     return ANALYSIS_COMPLETE_STEP in completed
 
 
+def session_reached_weighted_scoring(session) -> bool:
+    """True when the analysis session completed the weighted-scoring step."""
+    return _session_reached_weighted_scoring(session)
+
+
+def query_lead_ids_for_analysis_complete_backfill() -> list[int]:
+    """Lead IDs with completed weighted-scoring session but analysis_complete=false."""
+    from sqlalchemy.orm import joinedload
+
+    from app.models import AnalysisSession
+
+    bind = db.session.get_bind()
+    if bind.dialect.name == 'postgresql':
+        from sqlalchemy import text
+
+        rows = db.session.execute(
+            text("""
+                SELECT l.id
+                FROM leads l
+                JOIN analysis_sessions s ON l.analysis_session_id = s.id
+                WHERE l.analysis_complete = FALSE
+                  AND s.completed_steps::jsonb ? :step
+            """),
+            {'step': ANALYSIS_COMPLETE_STEP},
+        ).fetchall()
+        return [row[0] for row in rows]
+
+    leads = (
+        Lead.query.options(joinedload(Lead.analysis_session))
+        .join(AnalysisSession, Lead.analysis_session_id == AnalysisSession.id)
+        .filter(Lead.analysis_complete.is_(False))
+        .all()
+    )
+    return [
+        lead.id for lead in leads
+        if _session_reached_weighted_scoring(lead.analysis_session)
+    ]
+
+
 def resolve_analysis_complete(lead: Lead) -> bool:
     """True when analysis is done — DB flag or linked session reached weighted scoring."""
     if getattr(lead, 'analysis_complete', False):
@@ -58,12 +97,11 @@ def mark_lead_analysis_complete(
         )
         db.session.add(entry)
 
-    if commit and not already_complete:
-        db.session.commit()
-
     if recompute_action:
         from app.services.lead_scoring_engine import LeadScoringEngine
         LeadScoringEngine().score_and_persist(lead_id, commit=commit)
+    elif commit and not already_complete:
+        db.session.commit()
 
     return lead
 

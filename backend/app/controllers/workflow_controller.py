@@ -301,6 +301,7 @@ class WorkflowController:
             try:
                 mark_lead_analysis_complete_for_session(session.id)
             except Exception as exc:
+                db.session.rollback()
                 logger.error(
                     "Failed to mark analysis complete for session %s: %s",
                     session_id, exc, exc_info=True,

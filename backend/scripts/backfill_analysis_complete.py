@@ -26,29 +26,11 @@ logger = logging.getLogger('backfill_analysis_complete')
 from app import create_app
 from app import db
 from app.models.lead import Lead
-from app.services.analysis_completion_service import ANALYSIS_COMPLETE_STEP
+from app.services.analysis_completion_service import (
+    ANALYSIS_COMPLETE_STEP,
+    query_lead_ids_for_analysis_complete_backfill,
+)
 from app.services.lead_scoring_engine import LeadScoringEngine
-
-
-def _eligible_lead_ids() -> list[int]:
-    """Leads linked to a session that reached WEIGHTED_SCORING but flag is false."""
-    from app.models import AnalysisSession
-
-    rows = (
-        db.session.query(Lead.id)
-        .join(AnalysisSession, Lead.analysis_session_id == AnalysisSession.id)
-        .filter(Lead.analysis_complete.is_(False))
-        .all()
-    )
-    eligible: list[int] = []
-    for (lead_id,) in rows:
-        lead = db.session.get(Lead, lead_id)
-        if lead is None or lead.analysis_session is None:
-            continue
-        completed = lead.analysis_session.completed_steps or []
-        if ANALYSIS_COMPLETE_STEP in completed:
-            eligible.append(lead_id)
-    return eligible
 
 
 def main() -> None:
@@ -62,7 +44,7 @@ def main() -> None:
 
     app = create_app('development')
     with app.app_context():
-        lead_ids = _eligible_lead_ids()
+        lead_ids = query_lead_ids_for_analysis_complete_backfill()
         logger.info(
             "Found %d leads with session at %s and analysis_complete=false",
             len(lead_ids),
@@ -78,16 +60,24 @@ def main() -> None:
             logger.info("Sample lead IDs: %s", lead_ids[:20])
             return
 
-        updated = (
-            Lead.query.filter(Lead.id.in_(lead_ids))
-            .update({Lead.analysis_complete: True}, synchronize_session=False)
-        )
-        db.session.commit()
-        logger.info("Set analysis_complete=true on %d leads", updated)
+        try:
+            engine = LeadScoringEngine()
+            rescored = engine.bulk_rescore('default', lead_ids=lead_ids)
+            logger.info("Rescored %d leads", rescored)
 
-        engine = LeadScoringEngine()
-        rescored = engine.bulk_rescore('default', lead_ids=lead_ids)
-        logger.info("Rescored %d leads", rescored)
+            updated = (
+                Lead.query.filter(Lead.id.in_(lead_ids))
+                .update({Lead.analysis_complete: True}, synchronize_session=False)
+            )
+            db.session.commit()
+            logger.info("Set analysis_complete=true on %d leads", updated)
+        except Exception:
+            db.session.rollback()
+            logger.exception(
+                "Backfill failed after rescoring; analysis_complete was not updated. "
+                "Re-run the script to retry."
+            )
+            raise
 
 
 if __name__ == '__main__':

@@ -155,6 +155,7 @@ class LeadTaskService:
                     recompute_action=recompute_action,
                 )
             except Exception as exc:
+                db.session.rollback()
                 logger.error(
                     "mark_lead_analysis_complete failed for lead %s: %s",
                     lead_id, exc, exc_info=True,

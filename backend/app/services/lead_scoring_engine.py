@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
+from sqlalchemy.orm import selectinload
+
 from app import db
 from app.models.hubspot_signal import HubSpotSignal
 from app.models.lead import Lead
@@ -651,17 +653,20 @@ class LeadScoringEngine:
             if pending_commits >= BULK_RESCORE_BATCH_SIZE:
                 _flush_batch()
 
+        def _lead_query():
+            return Lead.query.options(selectinload(Lead.analysis_session))
+
         try:
             if lead_ids is not None:
                 for i in range(0, len(lead_ids), BULK_RESCORE_BATCH_SIZE):
                     batch_ids = lead_ids[i:i + BULK_RESCORE_BATCH_SIZE]
-                    for lead in Lead.query.filter(Lead.id.in_(batch_ids)).all():
+                    for lead in _lead_query().filter(Lead.id.in_(batch_ids)).all():
                         _rescore_one(lead)
             else:
                 offset = 0
                 while True:
                     leads = (
-                        Lead.query.order_by(Lead.id)
+                        _lead_query().order_by(Lead.id)
                         .offset(offset).limit(BULK_RESCORE_BATCH_SIZE).all()
                     )
                     if not leads:

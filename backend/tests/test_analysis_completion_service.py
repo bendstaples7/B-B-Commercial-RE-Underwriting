@@ -106,7 +106,9 @@ def test_mark_lead_analysis_complete_sets_flag_and_timeline(app):
         lead = _make_lead(app, analysis_complete=False, recommended_action='analyze_property')
 
         with patch('app.services.lead_scoring_engine.LeadScoringEngine.score_and_persist'):
-            mark_lead_analysis_complete(lead.id, source='test', actor='Tester')
+            mark_lead_analysis_complete(
+                lead.id, source='test', actor='Tester', recompute_action=False,
+            )
 
         db.session.refresh(lead)
         assert lead.analysis_complete is True
@@ -127,7 +129,10 @@ def test_mark_lead_analysis_complete_for_session_links_lead(app):
         session = _make_session(app, completed_steps=['COMPARABLE_REVIEW'])
         lead = _make_lead(app, analysis_complete=False, analysis_session_id=session.id)
 
-        with patch('app.services.lead_scoring_engine.LeadScoringEngine.score_and_persist'):
+        with patch(
+            'app.services.lead_scoring_engine.LeadScoringEngine.score_and_persist',
+            side_effect=lambda lead_id, commit=True: db.session.commit(),
+        ):
             result = mark_lead_analysis_complete_for_session(session.id)
 
         assert result is not None
@@ -187,11 +192,14 @@ def test_complete_run_property_analysis_sets_analysis_complete(app):
 
 def test_backfill_eligible_lead_ids(app):
     with app.app_context():
-        from scripts.backfill_analysis_complete import _eligible_lead_ids
+        from app.services.analysis_completion_service import (
+            query_lead_ids_for_analysis_complete_backfill,
+        )
 
         session = _make_session(app)
         stuck = _make_lead(app, analysis_complete=False, analysis_session_id=session.id)
-        _make_lead(app, analysis_complete=False)  # no session
+        no_session = _make_lead(app, analysis_complete=False)
 
-        eligible = _eligible_lead_ids()
+        eligible = query_lead_ids_for_analysis_complete_backfill()
         assert stuck.id in eligible
+        assert no_session.id not in eligible
