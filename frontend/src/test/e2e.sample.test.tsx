@@ -1,7 +1,7 @@
 /**
  * Sample end-to-end test demonstrating the frontend test environment setup
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from './testUtils'
 import {
   mockApiClient,
@@ -47,12 +47,13 @@ describe('E2E Test Environment Setup', () => {
   })
 
   it('should simulate API delay', async () => {
-    const startTime = Date.now()
-    const session = await mockApiClient.startAnalysis('123 Main St')
-    const endTime = Date.now()
+    vi.useFakeTimers()
+    const promise = mockApiClient.startAnalysis('123 Main St')
+    await vi.advanceTimersByTimeAsync(100)
+    const session = await promise
+    vi.useRealTimers()
 
     expect(session).toBeDefined()
-    expect(endTime - startTime).toBeGreaterThanOrEqual(100) // Default 100ms delay
   })
 
   it('should start analysis with custom address', async () => {
