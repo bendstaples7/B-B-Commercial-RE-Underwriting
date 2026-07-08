@@ -376,7 +376,9 @@ describe('P6: Failed row action leaves page unchanged', () => {
 
           await user.click(screen.getByTestId('action-log-note'))
 
-          expect(mockNavigate).toHaveBeenCalledWith('/leads/1?log=note')
+          expect(mockNavigate).toHaveBeenCalledWith('/leads/1?log=note&queue=no-next-action', {
+            state: { fromQueue: { key: 'no-next-action', label: 'No Next Action' } },
+          })
           expect(screen.getByTestId('queue-page-label')).toHaveTextContent(
             `Page ${initialPage} of`
           )
