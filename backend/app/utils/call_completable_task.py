@@ -6,7 +6,7 @@ from typing import Any
 
 CALL_TITLE_RE = re.compile(r'\b(call|phone|voicemail)\b', re.IGNORECASE)
 FOLLOW_UP_TITLE_RE = re.compile(r'\bfollow[\s-]?up\b', re.IGNORECASE)
-MAIL_OR_EMAIL_TITLE_RE = re.compile(r'\b(email|e-mail|mail|letter|send)\b', re.IGNORECASE)
+MAIL_OR_EMAIL_TITLE_RE = re.compile(r'\b(email|e-mail|mail|letter)\b', re.IGNORECASE)
 
 NON_CALL_TASK_TYPES = frozenset({
     'research_missing_pin',

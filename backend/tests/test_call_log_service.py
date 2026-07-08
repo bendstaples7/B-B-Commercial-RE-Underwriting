@@ -325,3 +325,39 @@ def test_log_call_rejects_completing_mail_task(app):
 
         assert LeadTask.query.get(task.id).status == 'open'
 
+        from app.models import LeadTimelineEntry
+        assert LeadTimelineEntry.query.filter_by(
+            lead_id=lead.id, event_type='call_logged',
+        ).count() == 0
+
+
+def test_log_call_follow_up_only_without_complete_task(app):
+    """follow_up without complete_task_id creates a follow-up after the call log."""
+    from app.models import LeadTask
+    from datetime import timedelta
+
+    with app.app_context():
+        lead = _make_lead(app, '14 Call St')
+        follow_due = date.today() + timedelta(days=3)
+        svc = CallLogService()
+        with patch(_REFRESH_PATCH):
+            entry = svc.log_call(
+                lead.id,
+                outcome='answered',
+                duration_minutes=5,
+                notes='Spoke with owner',
+                follow_up={
+                    'title': 'Follow up call',
+                    'due_date': follow_due,
+                    'task_type': 'call_owner_today',
+                },
+            )
+
+        follow = LeadTask.query.filter_by(
+            lead_id=lead.id, title='Follow up call', status='open',
+        ).first()
+        assert follow is not None
+        assert follow.due_date == follow_due
+        assert entry.event_metadata.get('follow_up_task_id') == follow.id
+        assert entry.event_metadata.get('completed_task_id') is None
+

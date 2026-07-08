@@ -365,6 +365,7 @@ export function QueueTable({
                       <Link
                         component={RouterLink}
                         to={leadTo(row.id)}
+                        state={leadNavState}
                         underline="hover"
                         color="primary"
                         fontWeight={500}
@@ -422,6 +423,7 @@ export function QueueTable({
                             size="small"
                             component={RouterLink}
                             to={leadTo(row.id)}
+                            state={leadNavState}
                             aria-label="Open lead detail"
                             data-testid={`row-action-view-${row.id}`}
                           >

@@ -6,7 +6,7 @@ import type { LeadTask, LeadTaskType } from '@/types'
 
 const CALL_TITLE_RE = /\b(call|phone|voicemail)\b/i
 const FOLLOW_UP_TITLE_RE = /\bfollow[\s-]?up\b/i
-const MAIL_OR_EMAIL_TITLE_RE = /\b(email|e-mail|mail|letter|send)\b/i
+const MAIL_OR_EMAIL_TITLE_RE = /\b(email|e-mail|mail|letter)\b/i
 
 const NON_CALL_TASK_TYPES = new Set<LeadTaskType>([
   'research_missing_pin',

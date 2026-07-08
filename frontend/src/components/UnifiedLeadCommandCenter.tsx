@@ -410,7 +410,9 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
         console.error('Failed to complete task:', err)
       }
     } else {
-      // HubSpot tasks are completed via LeadTaskList → still advance when in a queue
+      // HubSpot tasks are completed in LeadTaskList before this callback
+      queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+      onTasksChanged()
       onAfterTaskCompleted?.()
     }
   }

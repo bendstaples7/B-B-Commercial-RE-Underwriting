@@ -7,11 +7,12 @@ from decimal import Decimal
 
 from app import db
 from app.exceptions import ExternalServiceError, MailQueueError
-from app.models import Lead, LeadTask, MailCampaign, MailQueueItem, MarketingListMember
+from app.models import Lead, MailCampaign, MailQueueItem, MarketingListMember
 from app.services.lead_timeline_service import LeadTimelineService
 from app.services.open_letter_config_service import OpenLetterConfigService
 from app.services.open_letter_contact_mapper import lead_to_olc_contact
 from app.services.mail_task_lifecycle_service import (
+    complete_mail_prep_tasks,
     refresh_leads_after_mail_task_changes,
     schedule_mail_follow_up_task,
 )
@@ -156,12 +157,7 @@ class MailCampaignService:
             })
             lead.mailer_history = history
 
-            LeadTask.query.filter_by(
-                lead_id=lead.id, task_type='add_to_mail_batch', status='open',
-            ).update({
-                'status': 'completed',
-                'completed_at': datetime.utcnow(),
-            })
+            complete_mail_prep_tasks(lead.id, actor=campaign.created_by, commit=False)
 
             schedule_mail_follow_up_task(
                 lead=lead,

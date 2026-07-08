@@ -34,6 +34,13 @@ export const EMPTY_CONTACT_METHOD: ContactMethodValue = {
   methodRecordId: null,
 }
 
+const selectWrapSx = {
+  '& .MuiSelect-select': {
+    whiteSpace: 'normal',
+    wordBreak: 'break-word',
+  },
+} as const
+
 function formatContactShortLabel(contact: PropertyContact): string {
   return [contact.first_name, contact.last_name].filter(Boolean).join(' ') || 'Unnamed contact'
 }
@@ -273,12 +280,7 @@ export function ContactMethodFields({
             const contact = contacts.find((c) => String(c.id) === selected)
             return contact ? formatContactShortLabel(contact) : selected
           }}
-          sx={{
-            '& .MuiSelect-select': {
-              whiteSpace: 'normal',
-              wordBreak: 'break-word',
-            },
-          }}
+          sx={selectWrapSx}
         >
           <MenuItem value={CONTACT_NONE}>— None —</MenuItem>
           {contacts.map((contact) => (
@@ -312,12 +314,7 @@ export function ContactMethodFields({
             const opt = methodOptions.find((o) => o.key === selected)
             return opt?.label ?? selected
           }}
-          sx={{
-            '& .MuiSelect-select': {
-              whiteSpace: 'normal',
-              wordBreak: 'break-word',
-            },
-          }}
+          sx={selectWrapSx}
         >
           <MenuItem value={METHOD_NONE}>— None —</MenuItem>
           {methodOptions.map((opt) => (

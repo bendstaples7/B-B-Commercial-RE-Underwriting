@@ -1,5 +1,6 @@
 """QueueService — badge counts and paginated results for all 7 lead queues."""
 from datetime import date, datetime, timedelta
+from typing import ClassVar
 
 from sqlalchemy import exists, and_, or_, case, select
 
@@ -634,7 +635,7 @@ class QueueService:
     QUEUE_NAV_CAP = 500
 
     # URL kebab-key → (service method name, default sort_by, default sort_order)
-    _QUEUE_NAV_CONFIG = {
+    _QUEUE_NAV_CONFIG: ClassVar[dict[str, tuple[str, str, str]]] = {
         'todays-action': ('get_todays_action', 'lead_score', 'desc'),
         'previously-warm': ('get_previously_warm', 'lead_score', 'desc'),
         'follow-up-overdue': ('get_follow_up_overdue', 'last_contact_date', 'asc'),
@@ -668,13 +669,7 @@ class QueueService:
 
         if queue_key == 'todays-action':
             today = date.today()
-            open_lead_task_due_today = exists().where(
-                and_(
-                    LeadTask.lead_id == Lead.id,
-                    LeadTask.status == 'open',
-                    LeadTask.due_date <= today,
-                )
-            )
+            open_lead_task_due_today = _open_lead_task_due_today_excluding_mail_awaiting(today)
             hubspot_task_due_today = _hubspot_task_overdue_subquery(today)
             query = self._base_query().filter(
                 or_(

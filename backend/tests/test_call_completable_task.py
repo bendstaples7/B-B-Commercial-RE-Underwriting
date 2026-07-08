@@ -2,6 +2,7 @@
 from app.utils.call_completable_task import (
     find_call_completable_task,
     is_call_completable_task,
+    is_mail_or_email_outreach_task,
 )
 
 
@@ -16,6 +17,21 @@ def test_mail_batch_never_matches():
 def test_email_title_never_matches_custom():
     assert is_call_completable_task('custom', 'Email outreach to owner') is False
     assert is_call_completable_task('custom', 'Send mail letter') is False
+
+
+def test_send_only_title_not_excluded():
+    """'send' alone should not classify a task as mail/email outreach."""
+    assert is_mail_or_email_outreach_task('custom', 'Send contract to owner') is False
+    assert is_mail_or_email_outreach_task('custom', 'Send mail letter') is True
+    found = find_call_completable_task([{
+        'id': 1,
+        'task_type': 'custom',
+        'title': 'Send contract to owner',
+        'status': 'open',
+        'source': 'native',
+    }])
+    assert found is not None
+    assert found['id'] == 1
 
 
 def test_call_title_custom_matches():

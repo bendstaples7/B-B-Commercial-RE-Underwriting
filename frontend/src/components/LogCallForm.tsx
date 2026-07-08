@@ -243,8 +243,12 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
 
       let completedHubSpotTaskId: number | undefined
       if (hubSpotTaskId != null) {
-        await callLogService.markHubSpotTaskDone(leadId, hubSpotTaskId)
-        completedHubSpotTaskId = hubSpotTaskId
+        try {
+          await callLogService.markHubSpotTaskDone(leadId, hubSpotTaskId)
+          completedHubSpotTaskId = hubSpotTaskId
+        } catch (hubSpotErr) {
+          console.error('Call logged but HubSpot task completion failed:', hubSpotErr)
+        }
       }
 
       const summaryParts = [`Call logged: ${payload.outcome}`]
