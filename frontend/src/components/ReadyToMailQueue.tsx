@@ -42,6 +42,7 @@ export function ReadyToMailQueue() {
   const [candidatesPage, setCandidatesPage] = useState(1)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [snackbarMessage, setSnackbarMessage] = useState<string | null>(null)
+  const [snackbarSeverity, setSnackbarSeverity] = useState<'success' | 'error'>('success')
   const [confirmAdd, setConfirmAdd] = useState<{ limit?: number; count: number } | null>(null)
 
   const { data: queueData, isLoading: queueLoading, error: queueError, refetch: refetchQueue, isFetching: queueFetching } = useQuery({
@@ -58,7 +59,15 @@ export function ReadyToMailQueue() {
   })
 
   const showEnqueueFeedback = (result: EnqueueCounts) => {
+    setSnackbarSeverity('success')
     setSnackbarMessage(formatEnqueueSummary(result))
+  }
+
+  const showEnqueueError = (error: unknown) => {
+    setSnackbarSeverity('error')
+    setSnackbarMessage(
+      error instanceof Error ? error.message : 'Failed to add leads to batch. Try again.',
+    )
   }
 
   const enqueueMutation = useMutation({
@@ -68,6 +77,7 @@ export function ReadyToMailQueue() {
       setSelectedIds([])
       showEnqueueFeedback(result)
     },
+    onError: showEnqueueError,
   })
 
   const enqueueCandidatesMutation = useMutation({
@@ -78,6 +88,7 @@ export function ReadyToMailQueue() {
       setCandidatesPage(1)
       showEnqueueFeedback(result)
     },
+    onError: showEnqueueError,
   })
 
   const candidateRows = candidatesData?.rows ?? []
@@ -287,9 +298,16 @@ export function ReadyToMailQueue() {
         open={snackbarMessage !== null}
         autoHideDuration={8000}
         onClose={() => setSnackbarMessage(null)}
-        message={snackbarMessage ?? ''}
         data-testid="enqueue-feedback-snackbar"
-      />
+      >
+        <Alert
+          onClose={() => setSnackbarMessage(null)}
+          severity={snackbarSeverity}
+          sx={{ width: '100%' }}
+        >
+          {snackbarMessage ?? ''}
+        </Alert>
+      </Snackbar>
     </Box>
   )
 }

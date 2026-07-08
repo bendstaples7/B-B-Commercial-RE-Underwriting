@@ -207,6 +207,37 @@ class TestEnqueueCandidates:
             assert data['added'] == 0
             assert data['queued_count'] == 0
 
+    def test_skips_recent_invalid_address_queue_items(self, client, app):
+        from app import db
+        from app.models.mail_queue_item import MailQueueItem
+
+        with app.app_context():
+            suppressed = _make_mail_ready_lead(app, '9 Invalid St')
+            eligible = _make_mail_ready_lead(app, '10 Eligible St')
+            db.session.add(MailQueueItem(
+                lead_id=suppressed.id,
+                user_id='test-user',
+                status='invalid_address',
+            ))
+            db.session.commit()
+
+            candidates = client.get('/api/queues/mail-candidates', headers=_AUTH_HEADERS)
+            candidate_ids = [row['id'] for row in json.loads(candidates.data)['rows']]
+            assert suppressed.id not in candidate_ids
+            assert eligible.id in candidate_ids
+
+            response = client.post(
+                '/api/mail-queue/enqueue-candidates',
+                headers=_AUTH_HEADERS,
+                json={},
+            )
+            assert response.status_code == 201
+            data = json.loads(response.data)
+            assert data['added'] == 1
+            queued_ids = [r['lead_id'] for r in data['results'] if r['status'] == 'queued']
+            assert eligible.id in queued_ids
+            assert suppressed.id not in queued_ids
+
 
 class TestMailCampaignAuth:
     def test_get_campaign_rejects_other_users_campaign(self, client, app):

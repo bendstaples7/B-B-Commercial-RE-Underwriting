@@ -175,7 +175,10 @@ class QueueService:
     def count_mail_candidates(self, mail_user_id: str) -> int:
         """Leads recommended for mail that are not already queued by this user."""
         query = self._mail_candidates_query(mail_user_id)
-        return sum(1 for lead in query.all() if not is_recently_sold(lead))
+        return sum(
+            1 for lead in query.all()
+            if not is_recently_sold(lead) and is_mailable_lead(lead)
+        )
 
     # ------------------------------------------------------------------
     # Private count helpers

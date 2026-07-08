@@ -58,29 +58,38 @@ def main() -> None:
         scanned = 0
 
         for lead in query.all():
-            if validate_lead_mail_address(lead) is None:
-                continue
-            scanned += 1
+            try:
+                if validate_lead_mail_address(lead) is None:
+                    continue
+                scanned += 1
 
-            changed = persist_embedded_address_fields(lead)
-            if changed and is_mailable_lead(lead):
-                updated += 1
-                logger.info(
-                    'lead %s parsed: property=%r, %s %s %s',
-                    lead.id,
-                    lead.property_street,
-                    lead.property_city,
-                    lead.property_state,
-                    lead.property_zip,
-                )
-            elif changed:
-                still_invalid += 1
-                logger.info(
-                    'lead %s parse incomplete: street=%r',
-                    lead.id,
-                    lead.property_street or lead.mailing_address,
-                )
-            else:
+                changed = persist_embedded_address_fields(lead)
+                if changed and is_mailable_lead(lead):
+                    updated += 1
+                    logger.info(
+                        'lead %s parsed: property=%r, %s %s %s | mailing=%r, %s %s %s',
+                        lead.id,
+                        lead.property_street,
+                        lead.property_city,
+                        lead.property_state,
+                        lead.property_zip,
+                        lead.mailing_address,
+                        lead.mailing_city,
+                        lead.mailing_state,
+                        lead.mailing_zip,
+                    )
+                elif changed:
+                    still_invalid += 1
+                    logger.info(
+                        'lead %s parse incomplete: property=%r | mailing=%r',
+                        lead.id,
+                        lead.property_street,
+                        lead.mailing_address,
+                    )
+                else:
+                    still_invalid += 1
+            except Exception:
+                logger.exception('lead %s failed during backfill', lead.id)
                 still_invalid += 1
 
             if not args.apply:
