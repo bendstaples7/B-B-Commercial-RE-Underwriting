@@ -53,6 +53,22 @@ export interface EnqueueLeadResult {
   error?: string
 }
 
+export type EnqueueResult = MailQueueSummary & {
+  added: number
+  skipped: number
+  invalid: number
+  results?: EnqueueLeadResult[]
+}
+
+export type EnqueuePreviewResult = MailQueueSummary & {
+  dry_run: true
+  would_add: number
+  would_skip: number
+  would_fail: number
+  candidate_count: number
+  results?: EnqueueLeadResult[]
+}
+
 export interface MailCampaign {
   id: number
   olc_order_id?: string | null
@@ -94,11 +110,16 @@ export const openLetterService = {
   getQueue: (): Promise<MailQueueSummary> =>
     api.get('/mail-queue/').then((r) => r.data),
 
-  enqueue: (leadIds: number[]): Promise<MailQueueSummary & { added: number; skipped: number; invalid: number; results?: EnqueueLeadResult[] }> =>
+  enqueue: (leadIds: number[]): Promise<EnqueueResult> =>
     api.post('/mail-queue/', { lead_ids: leadIds }).then((r) => r.data),
 
-  enqueueCandidates: (limit?: number): Promise<MailQueueSummary & { added: number; skipped: number; invalid: number; results?: EnqueueLeadResult[] }> =>
+  enqueueCandidates: (limit?: number): Promise<EnqueueResult> =>
     api.post('/mail-queue/enqueue-candidates', { limit: limit ?? null }).then((r) => r.data),
+
+  previewEnqueueCandidates: (limit?: number): Promise<EnqueuePreviewResult> =>
+    api
+      .post('/mail-queue/enqueue-candidates', { limit: limit ?? null, dry_run: true })
+      .then((r) => r.data),
 
   removeFromQueue: (itemId: number): Promise<MailQueueSummary> =>
     api.delete(`/mail-queue/${itemId}`).then((r) => r.data),

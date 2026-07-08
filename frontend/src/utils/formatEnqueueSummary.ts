@@ -13,6 +13,7 @@ const STATUS_LABELS: Record<string, string> = {
   recently_sold: 'recently sold',
   not_found: 'not found',
   not_authorized: 'not authorized',
+  error: 'could not queue',
 }
 
 /** Human-readable summary of an enqueue API response. */
@@ -40,5 +41,21 @@ export function formatEnqueueSummary(result: EnqueueCounts): string {
   }
 
   if (parts.length === 0) return 'No leads added'
+  return parts.join(' · ')
+}
+
+/** Human-readable dry-run preview before enqueue. */
+export function formatEnqueuePreview(preview: {
+  would_add: number
+  would_skip: number
+  would_fail: number
+}): string {
+  const parts = [`${preview.would_add} ready to add`]
+  if (preview.would_skip > 0) parts.push(`${preview.would_skip} skipped`)
+  if (preview.would_fail > 0) {
+    parts.push(
+      `${preview.would_fail} would fail validation`,
+    )
+  }
   return parts.join(' · ')
 }

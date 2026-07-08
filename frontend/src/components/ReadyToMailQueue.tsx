@@ -27,9 +27,14 @@ import { queueService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 import { formatLastMailedDate, formatLastSaleDate } from '@/utils/formatLastMailedDate'
-import { formatEnqueueSummary, type EnqueueCounts } from '@/utils/formatEnqueueSummary'
+import {
+  formatEnqueuePreview,
+  formatEnqueueSummary,
+  type EnqueueCounts,
+} from '@/utils/formatEnqueueSummary'
 import type { QueueRow } from '@/types'
 import PostAddIcon from '@mui/icons-material/PostAdd'
+import type { EnqueuePreviewResult } from '@/services/openLetterApi'
 
 function invalidateMailQueries(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
@@ -43,7 +48,10 @@ export function ReadyToMailQueue() {
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [snackbarMessage, setSnackbarMessage] = useState<string | null>(null)
   const [snackbarSeverity, setSnackbarSeverity] = useState<'success' | 'error'>('success')
-  const [confirmAdd, setConfirmAdd] = useState<{ limit?: number; count: number } | null>(null)
+  const [confirmAdd, setConfirmAdd] = useState<{
+    limit?: number
+    preview: EnqueuePreviewResult
+  } | null>(null)
 
   const { data: queueData, isLoading: queueLoading, error: queueError, refetch: refetchQueue, isFetching: queueFetching } = useQuery({
     queryKey: ['mail-queue'],
@@ -91,6 +99,11 @@ export function ReadyToMailQueue() {
     onError: showEnqueueError,
   })
 
+  const previewMutation = useMutation({
+    mutationFn: (limit?: number) => openLetterService.previewEnqueueCandidates(limit),
+    onError: showEnqueueError,
+  })
+
   const candidateRows = candidatesData?.rows ?? []
   const candidateTotal = candidatesData?.total ?? 0
   const candidateTotalPages = computeTotalPages(candidateTotal, candidatesData?.per_page ?? 20)
@@ -119,16 +132,20 @@ export function ReadyToMailQueue() {
     await enqueueCandidatesMutation.mutateAsync(limit)
   }
 
-  const requestEnqueueCandidates = (limit?: number, count?: number) => {
-    const addCount = count ?? (limit ?? candidateTotal)
-    if (addCount > batchMinimum) {
-      setConfirmAdd({ limit, count: addCount })
+  const requestEnqueueCandidates = async (limit?: number) => {
+    const preview = await previewMutation.mutateAsync(limit)
+    if (preview.would_add === 0) {
+      setSnackbarSeverity('success')
+      setSnackbarMessage(formatEnqueuePreview(preview))
       return
     }
-    void runEnqueueCandidates(limit)
+    setConfirmAdd({ limit, preview })
   }
 
-  const isEnqueueing = enqueueMutation.isPending || enqueueCandidatesMutation.isPending
+  const isEnqueueing =
+    enqueueMutation.isPending
+    || enqueueCandidatesMutation.isPending
+    || previewMutation.isPending
 
   const rowActions: RowAction[] = [
     {
@@ -174,6 +191,9 @@ export function ReadyToMailQueue() {
     )
   }
 
+  const preview = confirmAdd?.preview
+  const previewWouldAdd = preview?.would_add ?? 0
+
   return (
     <Box data-testid="ready-to-mail-queue" sx={{ p: 2 }}>
       <Typography variant="h5" component="h1" gutterBottom>
@@ -215,17 +235,17 @@ export function ReadyToMailQueue() {
             variant="outlined"
             size="small"
             disabled={isEnqueueing}
-            onClick={() => requestEnqueueCandidates(undefined, candidateTotal)}
+            onClick={() => void requestEnqueueCandidates(undefined)}
             data-testid="add-all-candidates-button"
           >
-            {isEnqueueing ? 'Adding…' : `Add all ${candidateTotal} to batch`}
+            {isEnqueueing ? 'Checking…' : `Add all ${candidateTotal} to batch`}
           </Button>
           {neededForMinimum > 0 && neededForMinimum <= candidateTotal && (
             <Button
               variant="outlined"
               size="small"
               disabled={isEnqueueing}
-              onClick={() => requestEnqueueCandidates(neededForMinimum, neededForMinimum)}
+              onClick={() => void requestEnqueueCandidates(neededForMinimum)}
               data-testid="add-to-minimum-button"
             >
               Add {neededForMinimum} to reach minimum
@@ -274,23 +294,49 @@ export function ReadyToMailQueue() {
       </Typography>
       <MailCampaignsPanel embedded />
 
-      <Dialog open={confirmAdd !== null} onClose={() => setConfirmAdd(null)}>
-        <DialogTitle>Add {confirmAdd?.count} leads to batch?</DialogTitle>
+      <Dialog
+        open={confirmAdd !== null}
+        onClose={() => setConfirmAdd(null)}
+        data-testid="enqueue-preflight-dialog"
+      >
+        <DialogTitle>
+          {previewWouldAdd > 0
+            ? `Add ${previewWouldAdd} leads to batch?`
+            : 'Nothing to add'}
+        </DialogTitle>
         <DialogContent>
-          <DialogContentText>
-            This will stage {confirmAdd?.count} mailers, more than your batch minimum of {batchMinimum}.
-            You can review addresses in the staged list before sending.
-          </DialogContentText>
+          {preview && (
+            <DialogContentText component="div">
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                {formatEnqueuePreview(preview)}
+              </Typography>
+              {preview.would_add > batchMinimum && (
+                <Typography variant="body2" color="text.secondary">
+                  This is more than your batch minimum of {batchMinimum}. You can review
+                  addresses in the staged list before sending.
+                </Typography>
+              )}
+              {preview.would_fail > 0 && (
+                <Typography variant="body2" color="warning.main" sx={{ mt: 1 }}>
+                  {preview.would_fail} lead{preview.would_fail === 1 ? '' : 's'} will be
+                  skipped due to incomplete addresses.
+                </Typography>
+              )}
+            </DialogContentText>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmAdd(null)}>Cancel</Button>
-          <Button
-            variant="contained"
-            onClick={() => void runEnqueueCandidates(confirmAdd?.limit)}
-            disabled={isEnqueueing}
-          >
-            Add to batch
-          </Button>
+          {previewWouldAdd > 0 && (
+            <Button
+              variant="contained"
+              onClick={() => void runEnqueueCandidates(confirmAdd?.limit)}
+              disabled={isEnqueueing}
+              data-testid="enqueue-preflight-confirm"
+            >
+              Add to batch
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
 

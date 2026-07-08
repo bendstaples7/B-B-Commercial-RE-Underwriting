@@ -97,8 +97,9 @@ def enqueue_candidates():
             limit = parse_positive_int(limit, default=1, field_name='limit')
         except ValueError as exc:
             return jsonify({'error': 'Invalid request', 'message': str(exc)}), 400
-    result = _queue_service.enqueue_candidates(g.user_id, limit=limit)
-    return jsonify(result), 201
+    dry_run = parse_bool(data.get('dry_run'))
+    result = _queue_service.enqueue_candidates(g.user_id, limit=limit, dry_run=dry_run)
+    return jsonify(result), 200 if dry_run else 201
 
 
 @mail_queue_bp.route('/<int:item_id>', methods=['DELETE'])

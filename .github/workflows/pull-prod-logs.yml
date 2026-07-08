@@ -1,0 +1,45 @@
+name: Pull prod logs (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: journalctl --since value
+        required: false
+        default: '6 hours ago'
+
+jobs:
+  pull-logs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Setup SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          echo "$VPS_HOST_KEY" >> ~/.ssh/known_hosts
+
+      - name: Pull gunicorn mail API errors
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          SINCE: ${{ github.event.inputs.since }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/id_deploy -o ConnectTimeout=15 "$VPS_USER@$VPS_HOST" bash -s <<REMOTE
+          set -euo pipefail
+          echo "=== Mail API errors since: ${SINCE} ==="
+          journalctl -u gunicorn --since "${SINCE}" --no-pager \
+            | grep -A30 'Mail API error' | tail -150 || true
+          echo
+          echo "=== enqueue-candidates requests since: ${SINCE} ==="
+          journalctl -u gunicorn --since "${SINCE}" --no-pager \
+            | grep -i 'enqueue-candidates' | tail -40 || true
+          echo
+          echo "=== errors.log tail ==="
+          tail -120 /home/deploy/app/backend/logs/errors.log 2>/dev/null || echo NO_ERRORS_LOG
+          REMOTE

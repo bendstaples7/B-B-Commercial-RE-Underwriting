@@ -238,6 +238,26 @@ class TestEnqueueCandidates:
             assert eligible.id in queued_ids
             assert suppressed.id not in queued_ids
 
+    def test_dry_run_preflight_does_not_write(self, client, app):
+        with app.app_context():
+            lead = _make_mail_ready_lead(app, '11 Preview St', lead_score=90.0)
+            response = client.post(
+                '/api/mail-queue/enqueue-candidates',
+                headers=_AUTH_HEADERS,
+                json={'dry_run': True},
+            )
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            assert data['dry_run'] is True
+            assert data['would_add'] == 1
+            assert data['would_fail'] == 0
+            assert data['queued_count'] == 0
+            assert any(r['lead_id'] == lead.id and r['status'] == 'would_queue' for r in data['results'])
+
+            queued = client.get('/api/mail-queue/', headers=_AUTH_HEADERS)
+            assert json.loads(queued.data)['queued_count'] == 0
+            assert json.loads(queued.data)['items'] == []
+
 
 class TestMailCampaignAuth:
     def test_get_campaign_rejects_other_users_campaign(self, client, app):

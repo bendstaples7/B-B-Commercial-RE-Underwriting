@@ -76,65 +76,147 @@ class MailQueueService:
         results = []
 
         for lead_id in lead_ids:
-            lead = Lead.query.get(lead_id)
-            if lead is None:
+            try:
+                with db.session.begin_nested():
+                    lead = Lead.query.get(lead_id)
+                    if lead is None:
+                        skipped += 1
+                        results.append({'lead_id': lead_id, 'status': 'not_found'})
+                        continue
+
+                    if lead.owner_user_id != user_id:
+                        skipped += 1
+                        results.append({'lead_id': lead_id, 'status': 'not_authorized'})
+                        continue
+
+                    if is_recently_sold(lead):
+                        skipped += 1
+                        results.append({'lead_id': lead_id, 'status': 'recently_sold'})
+                        continue
+
+                    existing = MailQueueItem.query.filter_by(
+                        lead_id=lead_id, status='queued', user_id=user_id,
+                    ).first()
+                    if existing:
+                        skipped += 1
+                        results.append({'lead_id': lead_id, 'status': 'already_queued'})
+                        continue
+
+                    persist_embedded_address_fields(lead)
+                    error = validate_lead_mail_address(lead)
+                    if error:
+                        item = MailQueueItem(
+                            lead_id=lead_id,
+                            user_id=user_id,
+                            status='invalid_address',
+                            validation_error=error,
+                        )
+                        db.session.add(item)
+                        invalid += 1
+                        results.append({
+                            'lead_id': lead_id,
+                            'status': 'invalid_address',
+                            'error': error,
+                        })
+                        continue
+
+                    item = MailQueueItem(lead_id=lead_id, user_id=user_id, status='queued')
+                    db.session.add(item)
+                    db.session.flush()
+                    lead.up_next_to_mail = True
+                    self._timeline.append(
+                        lead_id=lead_id,
+                        event_type='mail_queued',
+                        actor=user_id,
+                        summary='Added to mail queue',
+                        metadata={'queue_item_id': item.id},
+                        source='system',
+                        commit=False,
+                    )
+                    added += 1
+                    results.append({'lead_id': lead_id, 'status': 'queued'})
+            except Exception as exc:
+                # Soft-fail: one bad lead must never 500 the whole batch.
+                logger.warning('Failed to enqueue lead %s: %s', lead_id, exc, exc_info=True)
                 skipped += 1
-                results.append({'lead_id': lead_id, 'status': 'not_found'})
-                continue
-
-            if lead.owner_user_id != user_id:
-                skipped += 1
-                results.append({'lead_id': lead_id, 'status': 'not_authorized'})
-                continue
-
-            if is_recently_sold(lead):
-                skipped += 1
-                results.append({'lead_id': lead_id, 'status': 'recently_sold'})
-                continue
-
-            existing = MailQueueItem.query.filter_by(
-                lead_id=lead_id, status='queued', user_id=user_id,
-            ).first()
-            if existing:
-                skipped += 1
-                results.append({'lead_id': lead_id, 'status': 'already_queued'})
-                continue
-
-            persist_embedded_address_fields(lead)
-            error = validate_lead_mail_address(lead)
-            if error:
-                item = MailQueueItem(
-                    lead_id=lead_id,
-                    user_id=user_id,
-                    status='invalid_address',
-                    validation_error=error,
-                )
-                db.session.add(item)
-                invalid += 1
-                results.append({'lead_id': lead_id, 'status': 'invalid_address', 'error': error})
-                continue
-
-            item = MailQueueItem(lead_id=lead_id, user_id=user_id, status='queued')
-            db.session.add(item)
-            db.session.flush()
-            lead.up_next_to_mail = True
-            self._timeline.append(
-                lead_id=lead_id,
-                event_type='mail_queued',
-                actor=user_id,
-                summary='Added to mail queue',
-                metadata={'queue_item_id': item.id},
-                source='system',
-                commit=False,
-            )
-            added += 1
-            results.append({'lead_id': lead_id, 'status': 'queued'})
+                results.append({
+                    'lead_id': lead_id,
+                    'status': 'error',
+                    'error': 'Could not queue lead',
+                })
 
         db.session.commit()
         return {'added': added, 'skipped': skipped, 'invalid': invalid, 'results': results}
 
-    def enqueue_candidates(self, user_id: str, *, limit: int | None = None) -> dict:
+    def preview_enqueue_candidates(self, user_id: str, *, limit: int | None = None) -> dict:
+        """Dry-run validation for recommended mail candidates (no DB writes)."""
+        from app.services.queue_service import QueueService
+
+        ids = QueueService().get_mail_candidate_ids(user_id)
+        if limit is not None:
+            ids = ids[:limit]
+
+        would_add = 0
+        would_skip = 0
+        would_fail = 0
+        results: list[dict] = []
+
+        for lead_id in ids:
+            lead = Lead.query.get(lead_id)
+            if lead is None:
+                would_skip += 1
+                results.append({'lead_id': lead_id, 'status': 'not_found'})
+                continue
+            if lead.owner_user_id != user_id:
+                would_skip += 1
+                results.append({'lead_id': lead_id, 'status': 'not_authorized'})
+                continue
+            if is_recently_sold(lead):
+                would_skip += 1
+                results.append({'lead_id': lead_id, 'status': 'recently_sold'})
+                continue
+            existing = MailQueueItem.query.filter_by(
+                lead_id=lead_id, status='queued', user_id=user_id,
+            ).first()
+            if existing:
+                would_skip += 1
+                results.append({'lead_id': lead_id, 'status': 'already_queued'})
+                continue
+
+            error = validate_lead_mail_address(lead)
+            if error:
+                would_fail += 1
+                results.append({
+                    'lead_id': lead_id,
+                    'status': 'invalid_address',
+                    'error': error,
+                })
+                continue
+
+            would_add += 1
+            results.append({'lead_id': lead_id, 'status': 'would_queue'})
+
+        return {
+            'dry_run': True,
+            'would_add': would_add,
+            'would_skip': would_skip,
+            'would_fail': would_fail,
+            'candidate_count': len(ids),
+            'results': results,
+            **self.get_summary(user_id),
+        }
+
+    def enqueue_candidates(
+        self,
+        user_id: str,
+        *,
+        limit: int | None = None,
+        dry_run: bool = False,
+    ) -> dict:
         """Enqueue recommended mail-ready leads, optionally capped by limit."""
+        if dry_run:
+            return self.preview_enqueue_candidates(user_id, limit=limit)
+
         from app.services.queue_service import QueueService
 
         ids = QueueService().get_mail_candidate_ids(user_id)
