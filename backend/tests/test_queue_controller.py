@@ -444,6 +444,18 @@ class TestMissingPropertyMatchQueue:
 # GET /api/queues/mail-candidates
 # ---------------------------------------------------------------------------
 
+def _make_mail_ready_lead(app, street, **kwargs):
+    defaults = dict(
+        lead_status='mailing_no_contact_made',
+        recommended_action='mail_ready',
+        property_city='Chicago',
+        property_state='IL',
+        property_zip='60601',
+    )
+    defaults.update(kwargs)
+    return _make_lead(app, street, **defaults)
+
+
 class TestMailCandidatesQueue:
     def test_returns_200(self, client, app):
         with app.app_context():
@@ -452,11 +464,7 @@ class TestMailCandidatesQueue:
 
     def test_mail_ready_lead_appears(self, client, app):
         with app.app_context():
-            lead = _make_lead(
-                app, '1 Mail Ready St',
-                lead_status='mailing_no_contact_made',
-                recommended_action='mail_ready',
-            )
+            lead = _make_mail_ready_lead(app, '1 Mail Ready St')
             response = client.get('/api/queues/mail-candidates', headers=_AUTH_HEADERS)
             data = json.loads(response.data)
             ids = [r['id'] for r in data['rows']]
@@ -467,11 +475,7 @@ class TestMailCandidatesQueue:
         from app.models.mail_queue_item import MailQueueItem
 
         with app.app_context():
-            lead = _make_lead(
-                app, '2 Mail Ready St',
-                lead_status='mailing_no_contact_made',
-                recommended_action='mail_ready',
-            )
+            lead = _make_mail_ready_lead(app, '2 Mail Ready St')
             db.session.add(MailQueueItem(
                 lead_id=lead.id, user_id='test-user', status='queued',
             ))
@@ -483,10 +487,8 @@ class TestMailCandidatesQueue:
 
     def test_mail_candidates_include_last_sale_at(self, client, app):
         with app.app_context():
-            lead = _make_lead(
+            lead = _make_mail_ready_lead(
                 app, '4 Mail Sale St',
-                lead_status='mailing_no_contact_made',
-                recommended_action='mail_ready',
                 most_recent_sale='6/15/2010',
             )
             response = client.get('/api/queues/mail-candidates', headers=_AUTH_HEADERS)
@@ -499,11 +501,7 @@ class TestMailCandidatesQueue:
         from app.models.mail_queue_item import MailQueueItem
 
         with app.app_context():
-            lead = _make_lead(
-                app, '3 Mail Ready St',
-                lead_status='mailing_no_contact_made',
-                recommended_action='mail_ready',
-            )
+            lead = _make_mail_ready_lead(app, '3 Mail Ready St')
             db.session.add(MailQueueItem(
                 lead_id=lead.id, user_id='test-user', status='queued',
             ))

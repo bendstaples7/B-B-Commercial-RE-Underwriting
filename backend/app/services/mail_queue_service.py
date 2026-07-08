@@ -10,7 +10,10 @@ from app.models import Lead, MailQueueItem
 from app.models.lead_timeline_entry import LeadTimelineEntry
 from app.services.lead_timeline_service import LeadTimelineService
 from app.services.open_letter_config_service import OpenLetterConfigService
-from app.services.open_letter_contact_mapper import validate_lead_mail_address
+from app.services.open_letter_contact_mapper import (
+    persist_embedded_address_fields,
+    validate_lead_mail_address,
+)
 from app.services.scoring_rubric import is_recently_sold
 
 logger = logging.getLogger(__name__)
@@ -97,6 +100,7 @@ class MailQueueService:
                 results.append({'lead_id': lead_id, 'status': 'already_queued'})
                 continue
 
+            persist_embedded_address_fields(lead)
             error = validate_lead_mail_address(lead)
             if error:
                 item = MailQueueItem(
@@ -128,6 +132,23 @@ class MailQueueService:
 
         db.session.commit()
         return {'added': added, 'skipped': skipped, 'invalid': invalid, 'results': results}
+
+    def enqueue_candidates(self, user_id: str, *, limit: int | None = None) -> dict:
+        """Enqueue recommended mail-ready leads, optionally capped by limit."""
+        from app.services.queue_service import QueueService
+
+        ids = QueueService().get_mail_candidate_ids(user_id)
+        if limit is not None:
+            ids = ids[:limit]
+        if not ids:
+            return {
+                'added': 0,
+                'skipped': 0,
+                'invalid': 0,
+                'results': [],
+                **self.get_summary(user_id),
+            }
+        return {**self.enqueue_leads(ids, user_id), **self.get_summary(user_id)}
 
     def remove_item(self, item_id: int, user_id: str) -> MailQueueItem:
         item = MailQueueItem.query.get(item_id)

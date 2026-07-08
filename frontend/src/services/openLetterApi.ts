@@ -47,6 +47,12 @@ export interface MailQueueSummary {
   items: MailQueueItem[]
 }
 
+export interface EnqueueLeadResult {
+  lead_id: number
+  status: string
+  error?: string
+}
+
 export interface MailCampaign {
   id: number
   olc_order_id?: string | null
@@ -88,8 +94,11 @@ export const openLetterService = {
   getQueue: (): Promise<MailQueueSummary> =>
     api.get('/mail-queue/').then((r) => r.data),
 
-  enqueue: (leadIds: number[]): Promise<MailQueueSummary & { added: number; skipped: number; invalid: number }> =>
+  enqueue: (leadIds: number[]): Promise<MailQueueSummary & { added: number; skipped: number; invalid: number; results?: EnqueueLeadResult[] }> =>
     api.post('/mail-queue/', { lead_ids: leadIds }).then((r) => r.data),
+
+  enqueueCandidates: (limit?: number): Promise<MailQueueSummary & { added: number; skipped: number; invalid: number; results?: EnqueueLeadResult[] }> =>
+    api.post('/mail-queue/enqueue-candidates', { limit: limit ?? null }).then((r) => r.data),
 
   removeFromQueue: (itemId: number): Promise<MailQueueSummary> =>
     api.delete(`/mail-queue/${itemId}`).then((r) => r.data),

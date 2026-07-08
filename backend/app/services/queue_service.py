@@ -1,5 +1,5 @@
 """QueueService — badge counts and paginated results for all 7 lead queues."""
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import exists, and_, or_, case, select
 
@@ -7,6 +7,7 @@ from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry, MailQueueItem
 from app.models.task import Task
 from app.models.task_association import TaskAssociation
+from app.services.open_letter_contact_mapper import is_mailable_lead
 from app.services.recommended_action_metadata import get_recommended_action_display
 from app.services.outreach_method_service import resolve_outreach_contacts_for_leads
 from app.services.scoring_rubric import format_last_sale_at, is_recently_sold
@@ -537,12 +538,21 @@ class QueueService:
                 MailQueueItem.status == 'queued',
             )
         )
+        recent_invalid = exists().where(
+            and_(
+                MailQueueItem.lead_id == Lead.id,
+                MailQueueItem.user_id == mail_user_id,
+                MailQueueItem.status == 'invalid_address',
+                MailQueueItem.created_at >= datetime.utcnow() - timedelta(days=30),
+            )
+        )
         q = (
             Lead.query.filter(Lead.owner_user_id == mail_user_id)
             .filter(
                 Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
                 Lead.recommended_action == 'mail_ready',
                 ~already_queued,
+                ~recent_invalid,
             )
         )
         return q
@@ -565,7 +575,10 @@ class QueueService:
         else:
             order = (sort_col.asc(), Lead.motivation_score.desc())
         ordered = query.order_by(*order).all()
-        eligible = [lead for lead in ordered if not is_recently_sold(lead)]
+        eligible = [
+            lead for lead in ordered
+            if not is_recently_sold(lead) and is_mailable_lead(lead)
+        ]
         total = len(eligible)
         start = (page - 1) * per_page
         leads = eligible[start:start + per_page]
@@ -579,3 +592,22 @@ class QueueService:
             )
             for lead in leads
         ], total
+
+    def get_mail_candidate_ids(
+        self,
+        mail_user_id: str,
+        sort_by: str = 'lead_score',
+        sort_order: str = 'desc',
+    ) -> list[int]:
+        """All mail-ready lead IDs not yet staged, excluding recently sold."""
+        query = self._mail_candidates_query(mail_user_id)
+        sort_col = getattr(Lead, sort_by, Lead.lead_score)
+        if sort_order == 'desc':
+            order = (sort_col.desc(), Lead.motivation_score.desc())
+        else:
+            order = (sort_col.asc(), Lead.motivation_score.desc())
+        ordered = query.order_by(*order).all()
+        return [
+            lead.id for lead in ordered
+            if not is_recently_sold(lead) and is_mailable_lead(lead)
+        ]

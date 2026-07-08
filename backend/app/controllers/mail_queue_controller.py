@@ -86,6 +86,21 @@ def enqueue():
     return jsonify({**result, **summary}), 201
 
 
+@mail_queue_bp.route('/enqueue-candidates', methods=['POST'])
+@require_auth
+@handle_errors
+def enqueue_candidates():
+    data = request.get_json(silent=True) or {}
+    limit = data.get('limit')
+    if limit is not None:
+        try:
+            limit = parse_positive_int(limit, default=1, field_name='limit')
+        except ValueError as exc:
+            return jsonify({'error': 'Invalid request', 'message': str(exc)}), 400
+    result = _queue_service.enqueue_candidates(g.user_id, limit=limit)
+    return jsonify(result), 201
+
+
 @mail_queue_bp.route('/<int:item_id>', methods=['DELETE'])
 @require_auth
 @handle_errors
