@@ -129,17 +129,25 @@ export function ReadyToMailQueue() {
 
   const runEnqueueCandidates = async (limit?: number) => {
     setConfirmAdd(null)
-    await enqueueCandidatesMutation.mutateAsync(limit)
+    try {
+      await enqueueCandidatesMutation.mutateAsync(limit)
+    } catch {
+      // Error is surfaced by enqueueCandidatesMutation.onError.
+    }
   }
 
   const requestEnqueueCandidates = async (limit?: number) => {
-    const preview = await previewMutation.mutateAsync(limit)
-    if (preview.would_add === 0) {
-      setSnackbarSeverity('success')
-      setSnackbarMessage(formatEnqueuePreview(preview))
-      return
+    try {
+      const preview = await previewMutation.mutateAsync(limit)
+      if (preview.would_add === 0) {
+        setSnackbarSeverity('success')
+        setSnackbarMessage(formatEnqueuePreview(preview))
+        return
+      }
+      setConfirmAdd({ limit, preview })
+    } catch {
+      // Error is surfaced by previewMutation.onError.
     }
-    setConfirmAdd({ limit, preview })
   }
 
   const isEnqueueing =

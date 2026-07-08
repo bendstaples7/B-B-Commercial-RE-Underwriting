@@ -76,65 +76,69 @@ class MailQueueService:
         results = []
 
         for lead_id in lead_ids:
+            outcome: dict | None = None
             try:
                 with db.session.begin_nested():
                     lead = Lead.query.get(lead_id)
                     if lead is None:
-                        skipped += 1
-                        results.append({'lead_id': lead_id, 'status': 'not_found'})
-                        continue
-
-                    if lead.owner_user_id != user_id:
-                        skipped += 1
-                        results.append({'lead_id': lead_id, 'status': 'not_authorized'})
-                        continue
-
-                    if is_recently_sold(lead):
-                        skipped += 1
-                        results.append({'lead_id': lead_id, 'status': 'recently_sold'})
-                        continue
-
-                    existing = MailQueueItem.query.filter_by(
+                        outcome = {'lead_id': lead_id, 'status': 'not_found'}
+                    elif lead.owner_user_id != user_id:
+                        outcome = {'lead_id': lead_id, 'status': 'not_authorized'}
+                    elif is_recently_sold(lead):
+                        outcome = {'lead_id': lead_id, 'status': 'recently_sold'}
+                    elif MailQueueItem.query.filter_by(
                         lead_id=lead_id, status='queued', user_id=user_id,
-                    ).first()
-                    if existing:
-                        skipped += 1
-                        results.append({'lead_id': lead_id, 'status': 'already_queued'})
-                        continue
+                    ).first():
+                        outcome = {'lead_id': lead_id, 'status': 'already_queued'}
+                    else:
+                        persist_embedded_address_fields(lead)
+                        error = validate_lead_mail_address(lead)
+                        if error:
+                            item = MailQueueItem(
+                                lead_id=lead_id,
+                                user_id=user_id,
+                                status='invalid_address',
+                                validation_error=error,
+                            )
+                            db.session.add(item)
+                            db.session.flush()
+                            outcome = {
+                                'lead_id': lead_id,
+                                'status': 'invalid_address',
+                                'error': error,
+                            }
+                        else:
+                            item = MailQueueItem(
+                                lead_id=lead_id, user_id=user_id, status='queued',
+                            )
+                            db.session.add(item)
+                            db.session.flush()
+                            lead.up_next_to_mail = True
+                            self._timeline.append(
+                                lead_id=lead_id,
+                                event_type='mail_queued',
+                                actor=user_id,
+                                summary='Added to mail queue',
+                                metadata={'queue_item_id': item.id},
+                                source='system',
+                                commit=False,
+                            )
+                            # Flush remaining writes before savepoint release so
+                            # success accounting only runs if the unit commits.
+                            db.session.flush()
+                            outcome = {'lead_id': lead_id, 'status': 'queued'}
 
-                    persist_embedded_address_fields(lead)
-                    error = validate_lead_mail_address(lead)
-                    if error:
-                        item = MailQueueItem(
-                            lead_id=lead_id,
-                            user_id=user_id,
-                            status='invalid_address',
-                            validation_error=error,
-                        )
-                        db.session.add(item)
-                        invalid += 1
-                        results.append({
-                            'lead_id': lead_id,
-                            'status': 'invalid_address',
-                            'error': error,
-                        })
-                        continue
-
-                    item = MailQueueItem(lead_id=lead_id, user_id=user_id, status='queued')
-                    db.session.add(item)
-                    db.session.flush()
-                    lead.up_next_to_mail = True
-                    self._timeline.append(
-                        lead_id=lead_id,
-                        event_type='mail_queued',
-                        actor=user_id,
-                        summary='Added to mail queue',
-                        metadata={'queue_item_id': item.id},
-                        source='system',
-                        commit=False,
-                    )
+                # Savepoint released successfully — record a single outcome.
+                if outcome is None:
+                    continue
+                status = outcome['status']
+                if status == 'queued':
                     added += 1
-                    results.append({'lead_id': lead_id, 'status': 'queued'})
+                elif status == 'invalid_address':
+                    invalid += 1
+                else:
+                    skipped += 1
+                results.append(outcome)
             except Exception as exc:
                 # Soft-fail: one bad lead must never 500 the whole batch.
                 logger.warning('Failed to enqueue lead %s: %s', lead_id, exc, exc_info=True)
