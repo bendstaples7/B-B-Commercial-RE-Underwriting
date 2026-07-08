@@ -15,6 +15,10 @@ from app.services.open_letter_contact_mapper import (
     validate_lead_mail_address,
 )
 from app.services.scoring_rubric import is_recently_sold
+from app.services.mail_task_lifecycle_service import (
+    complete_mail_prep_tasks,
+    refresh_leads_after_mail_task_changes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +78,7 @@ class MailQueueService:
         skipped = 0
         invalid = 0
         results = []
+        queued_lead_ids: list[int] = []
 
         for lead_id in lead_ids:
             outcome: dict | None = None
@@ -123,6 +128,7 @@ class MailQueueService:
                                 source='system',
                                 commit=False,
                             )
+                            complete_mail_prep_tasks(lead_id, actor=user_id, commit=False)
                             # Flush remaining writes before savepoint release so
                             # success accounting only runs if the unit commits.
                             db.session.flush()
@@ -134,6 +140,7 @@ class MailQueueService:
                 status = outcome['status']
                 if status == 'queued':
                     added += 1
+                    queued_lead_ids.append(lead_id)
                 elif status == 'invalid_address':
                     invalid += 1
                 else:
@@ -150,6 +157,7 @@ class MailQueueService:
                 })
 
         db.session.commit()
+        refresh_leads_after_mail_task_changes(queued_lead_ids)
         return {'added': added, 'skipped': skipped, 'invalid': invalid, 'results': results}
 
     def preview_enqueue_candidates(self, user_id: str, *, limit: int | None = None) -> dict:

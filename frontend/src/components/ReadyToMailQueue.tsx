@@ -155,6 +155,8 @@ export function ReadyToMailQueue() {
     || enqueueCandidatesMutation.isPending
     || previewMutation.isPending
 
+  const fromQueue = { key: 'mail-candidates', label: 'Ready to Mail' }
+
   const rowActions: RowAction[] = [
     {
       label: 'Add to batch',
@@ -270,6 +272,7 @@ export function ReadyToMailQueue() {
         <QueueTable
           rows={candidateRows}
           total={candidateTotal}
+          fromQueue={fromQueue}
           selectedIds={selectedIds}
           onSelectionChange={setSelectedIds}
           rowActions={rowActions}

@@ -75,8 +75,11 @@ export function NoNextActionQueue() {
     },
   ]
 
+  const fromQueue = { key: 'no-next-action', label: 'No Next Action' }
+  const navigateOptions = { navigate, fromQueue }
+
   const rowActions: RowAction[] = [
-    createLogNoteRowAction({ navigate }),
+    createLogNoteRowAction(navigateOptions),
     {
       label: 'Suppress',
       icon: <BlockIcon fontSize="small" />,
@@ -99,6 +102,7 @@ export function NoNextActionQueue() {
       <QueueTable
         rows={rows}
         total={total}
+        fromQueue={fromQueue}
         rowActions={rowActions}
         extraColumns={extraColumns}
         {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}

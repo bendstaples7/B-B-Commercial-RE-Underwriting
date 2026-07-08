@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
 import { LogCallForm } from './LogCallForm'
-import type { LeadTimelineEntry } from '@/types'
+import type { LeadTask, LeadTimelineEntry } from '@/types'
 
 // ---------------------------------------------------------------------------
 // Mock the API service
@@ -20,12 +20,14 @@ vi.mock('@/services/api', () => ({
   callLogService: {
     logNote: vi.fn(),
     logCall: vi.fn(),
+    markHubSpotTaskDone: vi.fn(),
   },
 }))
 
 import { callLogService } from '@/services/api'
 
 const mockLogCall = callLogService.logCall as ReturnType<typeof vi.fn>
+const mockMarkHubSpotTaskDone = callLogService.markHubSpotTaskDone as ReturnType<typeof vi.fn>
 
 // ---------------------------------------------------------------------------
 // Test data helpers
@@ -45,6 +47,21 @@ function makeTimelineEntry(overrides: Partial<LeadTimelineEntry> = {}): LeadTime
     is_deleted: false,
     created_at: '2024-01-01T00:00:00Z',
     ...overrides,
+  }
+}
+
+function makeOpenHubSpotTask(): LeadTask {
+  return {
+    id: 'hs-42',
+    lead_id: 1,
+    title: 'Follow up on 1726 W Roscoe St',
+    task_type: 'custom',
+    status: 'overdue',
+    due_date: '2026-07-01',
+    created_at: '2026-01-01T00:00:00Z',
+    completed_at: null,
+    created_by: 'hubspot',
+    source: 'hubspot',
   }
 }
 
@@ -222,6 +239,7 @@ describe('LogCallForm', () => {
             summary: entry.summary,
             event_type: entry.event_type,
           }),
+          undefined,
         )
       })
     })
@@ -246,6 +264,7 @@ describe('LogCallForm', () => {
             summary: entry.summary,
             event_type: entry.event_type,
           }),
+          undefined,
         )
       })
     })
@@ -268,6 +287,7 @@ describe('LogCallForm', () => {
             summary: entry.summary,
             event_type: entry.event_type,
           }),
+          undefined,
         )
       })
       expect(mockLogCall).toHaveBeenCalledWith(
@@ -399,6 +419,7 @@ describe('LogCallForm', () => {
             summary: entry.summary,
             event_type: entry.event_type,
           }),
+          undefined,
         )
       })
     })
@@ -417,12 +438,12 @@ describe('LogCallForm', () => {
       await user.click(screen.getByTestId('call-save-btn'))
 
       await waitFor(() => {
-        expect(mockLogCall).toHaveBeenCalledWith(42, {
+        expect(mockLogCall).toHaveBeenCalledWith(42, expect.objectContaining({
           outcome: 'no_answer',
           duration_minutes: 5,
           notes: 'Left message',
           mail_campaign_id: null,
-        })
+        }))
       })
     })
 
@@ -439,6 +460,66 @@ describe('LogCallForm', () => {
         expect(mockLogCall).toHaveBeenCalledWith(
           1,
           expect.objectContaining({ notes: null })
+        )
+      })
+    })
+  })
+
+  describe('open task completion', () => {
+    it('shows complete-task checkbox for hubspot follow-up tasks', () => {
+      render(
+        <LogCallForm leadId={1} openTasks={[makeOpenHubSpotTask()]} onSaved={vi.fn()} />,
+      )
+
+      expect(screen.getByRole('checkbox', { name: /Complete task:/i })).toBeChecked()
+      expect(screen.getByText(/Follow up on 1726 W Roscoe St/)).toBeInTheDocument()
+      expect(screen.getByTestId('call-save-btn')).toHaveTextContent('Log call and complete task')
+    })
+
+    it('marks hubspot task done after logging call', async () => {
+      const entry = makeTimelineEntry()
+      mockLogCall.mockResolvedValue(entry)
+      mockMarkHubSpotTaskDone.mockResolvedValue({ task_id: 42, status: 'completed' })
+      const onSaved = vi.fn()
+
+      render(
+        <LogCallForm leadId={1} openTasks={[makeOpenHubSpotTask()]} onSaved={onSaved} />,
+      )
+
+      selectOutcome('answered')
+      await user.click(screen.getByTestId('call-save-btn'))
+
+      await waitFor(() => {
+        expect(mockLogCall).toHaveBeenCalled()
+        expect(mockMarkHubSpotTaskDone).toHaveBeenCalledWith(1, 42)
+        expect(onSaved).toHaveBeenCalledWith(
+          expect.objectContaining({ event_type: 'call_logged' }),
+          { completedHubSpotTaskId: 42 },
+        )
+      })
+    })
+
+    it('creates follow-up task when checkbox is enabled', async () => {
+      const entry = makeTimelineEntry()
+      mockLogCall.mockResolvedValue(entry)
+      const onSaved = vi.fn()
+
+      render(<LogCallForm leadId={1} onSaved={onSaved} />)
+
+      selectOutcome('voicemail')
+      await user.click(screen.getByTestId('create-follow-up-checkbox'))
+      await user.click(screen.getByTestId('follow-up-3d'))
+      await user.click(screen.getByTestId('call-save-btn'))
+
+      await waitFor(() => {
+        expect(mockLogCall).toHaveBeenCalledWith(
+          1,
+          expect.objectContaining({
+            follow_up: expect.objectContaining({
+              title: 'Follow up call',
+              task_type: 'call_owner_today',
+            }),
+          }),
         )
       })
     })

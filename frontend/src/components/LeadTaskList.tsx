@@ -105,6 +105,8 @@ export interface LeadTaskListProps {
   showOutreachContactOnPrimaryTask?: boolean
   /** Channel when outreach is recommended but no contact could be resolved */
   missingOutreachChannel?: OutreachContact['channel'] | null
+  mailQueueStatus?: 'queued' | 'sent_recently' | null
+  upNextToMail?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +131,8 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
     outreachContact,
     showOutreachContactOnPrimaryTask = false,
     missingOutreachChannel = null,
+    mailQueueStatus = null,
+    upNextToMail = false,
   },
   ref,
 ) {
@@ -143,6 +147,11 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
   const openTasks = tasks.filter((t) => t.status === 'open' || t.status === 'overdue')
   const sortedTasks = sortTasks(openTasks)
   const showCreateTaskCTA = recommendedAction === 'create_task' && openTasks.length === 0
+  const awaitingMailBatch = mailQueueStatus === 'queued' || upNextToMail
+  const onlyMailPrepTaskOpen =
+    awaitingMailBatch
+    && openTasks.length === 1
+    && openTasks[0].task_type === 'add_to_mail_batch'
 
   // ---------------------------------------------------------------------------
   // Form handlers
@@ -255,6 +264,28 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
           </Button>
         )}
       </Stack>
+
+      {awaitingMailBatch && (
+        <Chip
+          label="Awaiting mail batch"
+          size="small"
+          color="info"
+          sx={{ mb: 1.5 }}
+          data-testid="awaiting-mail-batch-chip"
+        />
+      )}
+
+      {onlyMailPrepTaskOpen && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          display="block"
+          sx={{ mb: 1.5 }}
+          data-testid="mail-prep-waiting-note"
+        >
+          Mail prep complete — waiting for batch send.
+        </Typography>
+      )}
 
       {/* create_task CTA — shown when RA is create_task and no open tasks */}
       {showCreateTaskCTA && !formOpen && (

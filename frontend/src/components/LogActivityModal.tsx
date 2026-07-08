@@ -7,10 +7,10 @@ import {
   DialogTitle,
 } from '@mui/material'
 import { useQuery } from '@tanstack/react-query'
-import type { LeadTimelineEntry } from '@/types'
+import type { LeadTask, LeadTimelineEntry } from '@/types'
 import { contactService } from '@/services/api'
 import { LogNoteForm } from '@/components/LogNoteForm'
-import { LogCallForm } from '@/components/LogCallForm'
+import { LogCallForm, type LogCallSavedMeta } from '@/components/LogCallForm'
 import { LogEmailForm } from '@/components/LogEmailForm'
 
 export type ActivityLogType = 'note' | 'call' | 'email'
@@ -25,14 +25,20 @@ export interface LogActivityModalProps {
   open: boolean
   activityType: ActivityLogType | null
   leadId: number
+  openTasks?: LeadTask[]
   onClose: () => void
-  onSaved: (entry: LeadTimelineEntry, activityType: ActivityLogType) => void
+  onSaved: (
+    entry: LeadTimelineEntry,
+    activityType: ActivityLogType,
+    meta?: LogCallSavedMeta,
+  ) => void
 }
 
 export function LogActivityModal({
   open,
   activityType,
   leadId,
+  openTasks = [],
   onClose,
   onSaved,
 }: LogActivityModalProps) {
@@ -44,8 +50,8 @@ export function LogActivityModal({
 
   if (!activityType) return null
 
-  const handleSaved = (entry: LeadTimelineEntry) => {
-    onSaved(entry, activityType)
+  const handleSaved = (entry: LeadTimelineEntry, meta?: LogCallSavedMeta) => {
+    onSaved(entry, activityType, meta)
   }
 
   return (
@@ -54,11 +60,20 @@ export function LogActivityModal({
       onClose={onClose}
       maxWidth="sm"
       fullWidth
+      scroll="paper"
       aria-labelledby="log-activity-dialog-title"
       data-testid={`log-activity-modal-${activityType}`}
     >
       <DialogTitle id="log-activity-dialog-title">{TITLES[activityType]}</DialogTitle>
-      <DialogContent>
+      <DialogContent
+        dividers
+        sx={{
+          overflowY: 'auto',
+          maxHeight: 'min(80vh, 720px)',
+          pt: 2,
+          '& .MuiFormControl-root': { overflow: 'visible' },
+        }}
+      >
         {activityType === 'note' && (
           <LogNoteForm leadId={leadId} onSaved={handleSaved} onCancel={onClose} />
         )}
@@ -67,6 +82,7 @@ export function LogActivityModal({
             leadId={leadId}
             contacts={contacts}
             contactsLoading={contactsLoading}
+            openTasks={openTasks}
             onSaved={handleSaved}
             onCancel={onClose}
           />

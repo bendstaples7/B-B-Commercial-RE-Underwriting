@@ -5,6 +5,7 @@
  * Requirements: 7.2, 7.3, 7.4, 4.3
  */
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   Alert,
   Box,
@@ -134,6 +135,7 @@ export interface RecommendedActionPanelProps {
   recommendedAction: RecommendedActionMeta | null
   leadStatus: LeadStatus
   openTasks: LeadTask[]
+  mailQueueStatus?: 'queued' | 'sent_recently' | null
   /** When true, show outreach contact inline under the action label */
   showOutreachContact?: boolean
   onAction: (action: string) => Promise<void>
@@ -157,6 +159,7 @@ export function RecommendedActionPanel({
   recommendedAction,
   leadStatus,
   openTasks,
+  mailQueueStatus = null,
   showOutreachContact = false,
   onAction,
   onCreateTask,
@@ -165,6 +168,7 @@ export function RecommendedActionPanel({
   const [pendingAction, setPendingAction] = useState<string | null>(null)
 
   const isDNC = leadStatus === 'do_not_contact'
+  const isInMailBatch = mailQueueStatus === 'queued'
 
   const handleAction = async (action: string) => {
     setActionError(null)
@@ -335,7 +339,39 @@ export function RecommendedActionPanel({
       {/* RA-specific action buttons */}
       {prioritizedRaButtons.length > 0 && (
         <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-          {prioritizedRaButtons.map((btn) => renderActionButton(btn))}
+          {prioritizedRaButtons.map((btn) => {
+            if (btn.action === 'add_to_mail_batch' && isInMailBatch) {
+              return (
+                <Stack
+                  key="in-mail-batch"
+                  direction="row"
+                  spacing={1}
+                  alignItems="center"
+                  flexWrap="wrap"
+                  useFlexGap
+                >
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    disabled
+                    data-testid="ra-action-btn-in-mail-batch"
+                  >
+                    In mail batch
+                  </Button>
+                  <Button
+                    component={Link}
+                    to="/queues/ready-to-mail"
+                    variant="text"
+                    size="small"
+                    data-testid="ra-action-btn-view-mail-batch"
+                  >
+                    View batch
+                  </Button>
+                </Stack>
+              )
+            }
+            return renderActionButton(btn)
+          })}
         </Stack>
       )}
     </Box>

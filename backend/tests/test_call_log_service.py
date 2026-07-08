@@ -249,3 +249,79 @@ def test_log_call_rejects_phone_id_from_other_contact(app):
                 contact_phone_id=phone_b.id,
             )
 
+
+def test_log_call_completes_call_task_and_creates_follow_up(app):
+    """complete_task_id + follow_up complete the call task and create a due task."""
+    from app.models import LeadTask
+    from datetime import timedelta
+
+    with app.app_context():
+        lead = _make_lead(app, '12 Call St')
+        task = LeadTask(
+            lead_id=lead.id,
+            task_type='call_owner_today',
+            title='Call owner',
+            status='open',
+            created_by='test',
+        )
+        from app import db
+        db.session.add(task)
+        db.session.commit()
+
+        follow_due = date.today() + timedelta(days=3)
+        svc = CallLogService()
+        with patch(_REFRESH_PATCH):
+            entry = svc.log_call(
+                lead.id,
+                outcome='voicemail',
+                duration_minutes=None,
+                notes='Left VM',
+                complete_task_id=task.id,
+                follow_up={
+                    'title': 'Follow up call',
+                    'due_date': follow_due,
+                    'task_type': 'call_owner_today',
+                },
+            )
+
+        updated = LeadTask.query.get(task.id)
+        assert updated.status == 'completed'
+        follow = LeadTask.query.filter_by(
+            lead_id=lead.id, title='Follow up call', status='open',
+        ).first()
+        assert follow is not None
+        assert follow.due_date == follow_due
+        assert entry.event_metadata.get('completed_task_id') == task.id
+        assert entry.event_metadata.get('follow_up_task_id') == follow.id
+
+
+def test_log_call_rejects_completing_mail_task(app):
+    """Logging a call must not complete an add_to_mail_batch / email outreach task."""
+    from app.models import LeadTask
+    from app import db
+
+    with app.app_context():
+        lead = _make_lead(app, '13 Call St')
+        task = LeadTask(
+            lead_id=lead.id,
+            task_type='add_to_mail_batch',
+            title='Add to mail batch',
+            status='open',
+            created_by='test',
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        svc = CallLogService()
+        with pytest.raises(LeadTaskValidationError):
+            with patch(_REFRESH_PATCH):
+                svc.log_call(
+                    lead.id,
+                    outcome='answered',
+                    duration_minutes=1,
+                    notes=None,
+                    complete_task_id=task.id,
+                )
+
+        assert LeadTask.query.get(task.id).status == 'open'
+

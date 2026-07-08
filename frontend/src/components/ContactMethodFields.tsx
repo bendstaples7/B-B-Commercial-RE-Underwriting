@@ -34,6 +34,10 @@ export const EMPTY_CONTACT_METHOD: ContactMethodValue = {
   methodRecordId: null,
 }
 
+function formatContactShortLabel(contact: PropertyContact): string {
+  return [contact.first_name, contact.last_name].filter(Boolean).join(' ') || 'Unnamed contact'
+}
+
 function formatContactLabel(contact: PropertyContact): string {
   const name = [contact.first_name, contact.last_name].filter(Boolean).join(' ') || 'Unnamed contact'
   const role = contact.property_contact_role.replace(/_/g, ' ')
@@ -254,7 +258,9 @@ export function ContactMethodFields({
   return (
     <>
       <FormControl fullWidth size="small" sx={{ mb: 2 }}>
-        <InputLabel id="contact-method-contact-label">Contact (optional)</InputLabel>
+        <InputLabel id="contact-method-contact-label" shrink>
+          Contact (optional)
+        </InputLabel>
         <Select
           labelId="contact-method-contact-label"
           label="Contact (optional)"
@@ -262,6 +268,17 @@ export function ContactMethodFields({
           onChange={(e) => handleContactChange(e.target.value)}
           disabled={contactsLoading}
           data-testid="contact-method-contact-select"
+          renderValue={(selected) => {
+            if (selected === CONTACT_NONE) return '— None —'
+            const contact = contacts.find((c) => String(c.id) === selected)
+            return contact ? formatContactShortLabel(contact) : selected
+          }}
+          sx={{
+            '& .MuiSelect-select': {
+              whiteSpace: 'normal',
+              wordBreak: 'break-word',
+            },
+          }}
         >
           <MenuItem value={CONTACT_NONE}>— None —</MenuItem>
           {contacts.map((contact) => (
@@ -279,7 +296,9 @@ export function ContactMethodFields({
       )}
 
       <FormControl fullWidth size="small" sx={{ mb: 2 }}>
-        <InputLabel id="contact-method-method-label">{methodLabel} (optional)</InputLabel>
+        <InputLabel id="contact-method-method-label" shrink>
+          {methodLabel} (optional)
+        </InputLabel>
         <Select
           labelId="contact-method-method-label"
           label={`${methodLabel} (optional)`}
@@ -287,6 +306,18 @@ export function ContactMethodFields({
           onChange={(e) => handleMethodChange(e.target.value)}
           disabled={contactsLoading}
           data-testid="contact-method-method-select"
+          renderValue={(selected) => {
+            if (selected === METHOD_NONE) return '— None —'
+            if (selected === METHOD_OTHER) return 'Other…'
+            const opt = methodOptions.find((o) => o.key === selected)
+            return opt?.label ?? selected
+          }}
+          sx={{
+            '& .MuiSelect-select': {
+              whiteSpace: 'normal',
+              wordBreak: 'break-word',
+            },
+          }}
         >
           <MenuItem value={METHOD_NONE}>— None —</MenuItem>
           {methodOptions.map((opt) => (
