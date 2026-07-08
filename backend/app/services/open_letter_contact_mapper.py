@@ -50,8 +50,19 @@ def is_mailable_lead(lead: Lead) -> bool:
     return validate_lead_mail_address(lead) is None
 
 
+# Identity / dedup keys — never mutate during mail address backfill.
+_IDENTITY_FIELDS = ('property_street', 'mailing_address', 'normalized_street')
+
+
 def persist_embedded_address_fields(lead: Lead) -> bool:
-    """Parse one-line addresses and persist into empty structured columns."""
+    """Parse one-line addresses and persist into empty structured columns.
+
+    Only city/state/zip are written — never property_street, mailing_address,
+    or normalized_street. Rewriting street text changes the dedup unique index
+    and can fail enqueue when duplicate owner+building rows exist.
+    Validation and OLC mapping still parse the one-line street in memory.
+    """
+    before = {field: getattr(lead, field, None) for field in _IDENTITY_FIELDS}
     updated = False
 
     mailing_street = _clean(getattr(lead, 'mailing_address', None))
@@ -62,7 +73,7 @@ def persist_embedded_address_fields(lead: Lead) -> bool:
     if mailing_street and not _complete_address(mailing_street, mailing_city, mailing_state, mailing_zip):
         parsed = parse_embedded_us_address(mailing_street)
         if parsed:
-            p_street, p_city, p_state, p_zip = parsed
+            _p_street, p_city, p_state, p_zip = parsed
             if not mailing_city and p_city:
                 lead.mailing_city = p_city
                 updated = True
@@ -71,9 +82,6 @@ def persist_embedded_address_fields(lead: Lead) -> bool:
                 updated = True
             if not mailing_zip and p_zip:
                 lead.mailing_zip = p_zip
-                updated = True
-            if p_street and p_street != mailing_street and mailing_street == _clean(lead.mailing_address):
-                lead.mailing_address = p_street
                 updated = True
 
     property_street = _clean(getattr(lead, 'property_street', None))
@@ -84,7 +92,7 @@ def persist_embedded_address_fields(lead: Lead) -> bool:
     if property_street and not _complete_address(property_street, property_city, property_state, property_zip):
         parsed = parse_embedded_us_address(property_street)
         if parsed:
-            p_street, p_city, p_state, p_zip = parsed
+            _p_street, p_city, p_state, p_zip = parsed
             if not property_city and p_city:
                 lead.property_city = p_city
                 updated = True
@@ -94,9 +102,15 @@ def persist_embedded_address_fields(lead: Lead) -> bool:
             if not property_zip and p_zip:
                 lead.property_zip = p_zip
                 updated = True
-            if p_street and p_street != property_street and property_street == _clean(lead.property_street):
-                lead.property_street = p_street
-                updated = True
+
+    for field in _IDENTITY_FIELDS:
+        if getattr(lead, field, None) != before[field]:
+            # Restore and fail hard — enqueue must never rewrite dedup identity.
+            for restore_field, value in before.items():
+                setattr(lead, restore_field, value)
+            raise RuntimeError(
+                f'persist_embedded_address_fields must not mutate {field}'
+            )
 
     return updated
 

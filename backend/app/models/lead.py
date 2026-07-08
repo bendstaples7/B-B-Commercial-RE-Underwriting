@@ -197,8 +197,22 @@ class Property(db.Model):
 @event.listens_for(Property, 'before_insert')
 @event.listens_for(Property, 'before_update')
 def _refresh_lead_normalized_street(mapper, connection, target):
-    """Keep normalized_street in sync with property_street for dedup enforcement."""
+    """Keep normalized_street in sync with property_street for dedup enforcement.
+
+    On update, only refresh when property_street itself changed. Mail enqueue
+    may fill empty city/state/zip without touching the street; recomputing
+    normalized_street on those writes can hit uq_leads_owner_normalized_street
+    against a sibling lead with a cleaner street key.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
     from app.services.lead_merge_utils import dedup_street_key
+
+    state = sa_inspect(target)
+    if state.persistent:
+        history = state.attrs.property_street.history
+        if not history.has_changes():
+            return
     key = dedup_street_key(target.property_street)
     target.normalized_street = key or None
 

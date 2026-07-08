@@ -21,6 +21,7 @@ vi.mock('@/services/openLetterApi', () => ({
     listCampaigns: vi.fn(),
     enqueue: vi.fn(),
     enqueueCandidates: vi.fn(),
+    previewEnqueueCandidates: vi.fn(),
   },
 }))
 
@@ -114,6 +115,15 @@ beforeEach(() => {
     invalid: 0,
     results: [],
   })
+  vi.mocked(openLetterService.previewEnqueueCandidates).mockResolvedValue({
+    ...queueSummary,
+    dry_run: true,
+    would_add: 25,
+    would_skip: 0,
+    would_fail: 0,
+    candidate_count: 25,
+    results: [],
+  })
 })
 
 describe('ReadyToMailQueue', () => {
@@ -181,7 +191,7 @@ describe('ReadyToMailQueue', () => {
     expect(openLetterService.getQueue).toHaveBeenCalledTimes(2)
   })
 
-  it('renders add-all button and calls enqueueCandidates on click', async () => {
+  it('renders add-all button and confirms via dry-run preflight before enqueue', async () => {
     vi.mocked(openLetterService.getQueue).mockResolvedValue(queueSummary)
 
     renderPage()
@@ -191,6 +201,16 @@ describe('ReadyToMailQueue', () => {
     })
 
     await userEvent.click(screen.getByTestId('add-all-candidates-button'))
+
+    await waitFor(() => {
+      expect(openLetterService.previewEnqueueCandidates).toHaveBeenCalledWith(undefined)
+    })
+    expect(openLetterService.enqueueCandidates).not.toHaveBeenCalled()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('enqueue-preflight-dialog')).toBeInTheDocument()
+    })
+    await userEvent.click(screen.getByTestId('enqueue-preflight-confirm'))
 
     await waitFor(() => {
       expect(openLetterService.enqueueCandidates).toHaveBeenCalledWith(undefined)

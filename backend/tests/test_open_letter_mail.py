@@ -108,10 +108,136 @@ class TestOpenLetterContactMapper:
             property_zip=None,
         )
         assert persist_embedded_address_fields(lead) is True
-        assert lead.property_street == '847-849 W Sunnyside Ave'
+        assert lead.property_street == '847-849 W Sunnyside Ave Chicago IL 60640'
         assert lead.property_city == 'Chicago'
         assert lead.property_state == 'IL'
         assert lead.property_zip == '60640'
+
+    def test_persist_never_mutates_identity_fields(self):
+        """Hard guard: street / normalized_street must stay identical after persist."""
+        lead = _make_lead(
+            mailing_address='1021 Saint James Pl Park Ridge IL 60068',
+            mailing_city=None,
+            mailing_state=None,
+            mailing_zip=None,
+            property_street='3446 N Harding Ave Chicago IL 60618',
+            property_city=None,
+            property_state=None,
+            property_zip=None,
+            normalized_street='3446 N HARDING AVENUE CHICAGO IL',
+        )
+        before_property = lead.property_street
+        before_mailing = lead.mailing_address
+        before_norm = lead.normalized_street
+
+        assert persist_embedded_address_fields(lead) is True
+        assert lead.property_street == before_property
+        assert lead.mailing_address == before_mailing
+        assert lead.normalized_street == before_norm
+        assert lead.property_city == 'Chicago'
+        assert lead.mailing_city == 'Park Ridge'
+
+    def test_enqueue_isolates_per_lead_failures(self, app):
+        """One lead raising during flush must soft-fail; siblings still enqueue."""
+        from unittest.mock import patch
+
+        from app import db
+        from app.models.lead import Lead
+        from sqlalchemy.exc import IntegrityError
+
+        user_id = 'soft-fail-user'
+        with app.app_context():
+            good_a = Lead(
+                owner_user_id=user_id,
+                owner_first_name='Ada',
+                owner_last_name='Good',
+                property_street='1 Good St',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60601',
+                lead_status='mailing_no_contact_made',
+            )
+            bad = Lead(
+                owner_user_id=user_id,
+                owner_first_name='Bad',
+                owner_last_name='Lead',
+                property_street='2 Bad St',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60602',
+                lead_status='mailing_no_contact_made',
+            )
+            good_b = Lead(
+                owner_user_id=user_id,
+                owner_first_name='Bea',
+                owner_last_name='Good',
+                property_street='3 Good St',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60603',
+                lead_status='mailing_no_contact_made',
+            )
+            db.session.add_all([good_a, bad, good_b])
+            db.session.commit()
+            ids = [good_a.id, bad.id, good_b.id]
+            bad_id = bad.id
+
+            original_flush = db.session.flush
+
+            def flaky_flush(*args, **kwargs):
+                # Raise only when inserting the bad lead's queue row.
+                for obj in db.session.new:
+                    if getattr(obj, 'lead_id', None) == bad_id:
+                        raise IntegrityError(
+                            'mocked', {}, Exception('uq collision'),
+                        )
+                return original_flush(*args, **kwargs)
+
+            with patch.object(db.session, 'flush', side_effect=flaky_flush):
+                result = MailQueueService().enqueue_leads(ids, user_id)
+
+            assert result['added'] == 2
+            assert result['skipped'] == 1
+            by_id = {r['lead_id']: r['status'] for r in result['results']}
+            assert by_id[ids[0]] == 'queued'
+            assert by_id[bad_id] == 'error'
+            assert by_id[ids[2]] == 'queued'
+
+    def test_enqueue_one_line_property_without_rewriting_street(self, app):
+        """Persisting parsed city/state/zip must not rewrite property_street (dedup index)."""
+        from app import db
+        from app.models.lead import Lead
+
+        user_id = 'dedup-test-user'
+        with app.app_context():
+            existing = Lead(
+                owner_user_id=user_id,
+                owner_first_name='Joseph',
+                owner_last_name='Zajac',
+                property_street='3446 N Harding Ave 1',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60618',
+                lead_status='mailing_no_contact_made',
+            )
+            embedded = Lead(
+                owner_user_id=user_id,
+                owner_first_name='Joseph',
+                owner_last_name='Zajac',
+                property_street='3446 N Harding Ave Chicago IL 60618',
+                lead_status='mailing_no_contact_made',
+            )
+            db.session.add_all([existing, embedded])
+            db.session.commit()
+            embedded_id = embedded.id
+
+            result = MailQueueService().enqueue_leads([embedded_id], user_id)
+            assert result['added'] == 1
+            db.session.refresh(embedded)
+            assert embedded.property_street == '3446 N Harding Ave Chicago IL 60618'
+            assert embedded.property_city == 'Chicago'
+            assert embedded.property_state == 'IL'
+            assert embedded.property_zip == '60618'
 
 
 class TestOpenLetterPerUserConfig:
