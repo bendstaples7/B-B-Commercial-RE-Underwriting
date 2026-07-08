@@ -514,7 +514,8 @@ describe('Preservation 3.8 — Queue action invalidations trigger immediate refe
     expect(actionsSource).toContain('Log Call')
     expect(actionsSource).toContain('buildLeadLogUrl')
     expect(actionsSource).toContain("'call'")
-    expect(navSource).toContain('?log=')
+    expect(navSource).toContain("params.set('log'")
+    expect(navSource).toContain("params.set('queue'")
   })
 
   it('property: Log Note action navigates to lead detail with ?log=note', () => {

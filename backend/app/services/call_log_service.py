@@ -190,8 +190,14 @@ class CallLogService:
         phone_number: str | None = None,
         phone_label: str | None = None,
         mail_campaign_id: int | None = None,
+        complete_task_id: int | None = None,
+        follow_up: dict | None = None,
     ) -> LeadTimelineEntry:
-        """Log a call on a lead."""
+        """Log a call on a lead.
+
+        Optionally completes a matching open call task and/or creates a follow-up
+        task. Scoring is refreshed once at the end when those side effects run.
+        """
         if outcome not in VALID_CALL_OUTCOMES:
             raise LeadTaskValidationError(
                 f"Invalid call outcome '{outcome}'. Must be one of: {', '.join(sorted(VALID_CALL_OUTCOMES))}",
@@ -214,6 +220,36 @@ class CallLogService:
         _validate_contact_for_lead(lead_id, contact_id)
         _validate_contact_phone_for_lead(lead_id, contact_id, contact_phone_id)
         contact_name = _resolve_contact_name(lead_id, contact_id)
+
+        if complete_task_id is not None or follow_up:
+            from app.models import LeadTask
+            from app.utils.call_completable_task import find_call_completable_task
+
+            if complete_task_id is not None:
+                task = LeadTask.query.filter_by(id=complete_task_id, lead_id=lead_id).first()
+                if task is None:
+                    raise ValueError(f"Task {complete_task_id} not found for lead {lead_id}")
+                open_native = LeadTask.query.filter_by(lead_id=lead_id, status='open').all()
+                completable = find_call_completable_task(open_native)
+                if completable is None or completable.id != complete_task_id:
+                    raise LeadTaskValidationError(
+                        "Only a matching open call task can be completed when logging a call.",
+                        field='complete_task_id',
+                    )
+
+            if follow_up:
+                title = (follow_up.get('title') or '').strip()
+                due_date = follow_up.get('due_date')
+                if not title:
+                    raise LeadTaskValidationError(
+                        'Follow-up task title is required.',
+                        field='follow_up.title',
+                    )
+                if due_date is None:
+                    raise LeadTaskValidationError(
+                        'Follow-up task due date is required.',
+                        field='follow_up.due_date',
+                    )
 
         if outcome == 'answered':
             lead.last_contact_date = date.today()
@@ -281,6 +317,37 @@ class CallLogService:
                 lead_id, exc, exc_info=True,
             )
 
+        if complete_task_id is not None or follow_up:
+            from app.services.lead_task_service import LeadTaskService
+
+            task_svc = LeadTaskService()
+
+            if complete_task_id is not None:
+                task_svc.complete(
+                    complete_task_id, lead_id, actor=actor, recompute_action=False,
+                )
+                metadata['completed_task_id'] = complete_task_id
+                entry.event_metadata = dict(metadata)
+                db.session.add(entry)
+                db.session.commit()
+
+            if follow_up:
+                created = task_svc.create(
+                    lead_id,
+                    {
+                        'title': follow_up['title'],
+                        'due_date': follow_up['due_date'],
+                        'task_type': follow_up.get('task_type', 'call_owner_today'),
+                    },
+                    actor=actor,
+                    recompute_action=False,
+                )
+                metadata['follow_up_task_id'] = created.id
+                entry.event_metadata = dict(metadata)
+                db.session.add(entry)
+                db.session.commit()
+
+        # Always refresh scoring after the call (and any task side effects).
         try:
             from app.services.lead_refresh import refresh_lead_scoring
             refresh_lead_scoring(lead_id)

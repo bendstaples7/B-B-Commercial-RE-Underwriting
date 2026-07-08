@@ -1851,6 +1851,15 @@ export interface QueuePage {
   per_page: number;
 }
 
+export interface QueueNavigation {
+  queue_key: string;
+  lead_id: number;
+  position: number | null;
+  total: number;
+  prev_id: number | null;
+  next_id: number | null;
+}
+
 export interface QueueCounts {
   todays_action: number;
   previously_warm: number;
@@ -1996,6 +2005,8 @@ export interface CommandCenterPayload {
   date_added_to_hubspot?: string | null;
   recommended_action: RecommendedActionMeta;
   open_tasks: LeadTask[];
+  up_next_to_mail?: boolean | null;
+  mail_queue_status?: 'queued' | 'sent_recently' | null;
   timeline: {
     entries: LeadTimelineEntry[];
     total: number;
@@ -2003,6 +2014,12 @@ export interface CommandCenterPayload {
     per_page: number;
   };
   data_completeness_score?: number | null;
+}
+
+export interface LogCallFollowUpPayload {
+  title: string;
+  due_date: string;
+  task_type?: string;
 }
 
 export interface LogCallPayload {
@@ -2014,6 +2031,8 @@ export interface LogCallPayload {
   phone_number?: string | null;
   phone_label?: string | null;
   mail_campaign_id?: number | null;
+  complete_task_id?: number | null;
+  follow_up?: LogCallFollowUpPayload | null;
 }
 
 export interface LogNotePayload {

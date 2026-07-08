@@ -513,3 +513,78 @@ class TestMailCandidatesQueue:
             candidate_rows = json.loads(candidates.data)['rows']
             assert lead.id not in [row['id'] for row in candidate_rows]
 
+
+# ---------------------------------------------------------------------------
+# GET /api/queues/<queue_key>/navigation
+# ---------------------------------------------------------------------------
+
+class TestQueueNavigation:
+    def test_requires_lead_id(self, client, app):
+        with app.app_context():
+            response = client.get('/api/queues/todays-action/navigation', headers=_AUTH_HEADERS)
+            assert response.status_code == 400
+
+    def test_unknown_queue_key_404(self, client, app):
+        with app.app_context():
+            response = client.get(
+                '/api/queues/not-a-real-queue/navigation?lead_id=1',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 404
+
+    def test_neighbors_for_todays_action(self, client, app):
+        with app.app_context():
+            from app.services.queue_order_cache import queue_order_cache
+            queue_order_cache.clear()
+
+            lead_a = _make_lead(
+                app, 'Nav A St',
+                lead_status='mailing_no_contact_made',
+                recommended_action='follow_up_now',
+                lead_score=90,
+            )
+            lead_b = _make_lead(
+                app, 'Nav B St',
+                lead_status='mailing_no_contact_made',
+                recommended_action='follow_up_now',
+                lead_score=80,
+            )
+            lead_c = _make_lead(
+                app, 'Nav C St',
+                lead_status='mailing_no_contact_made',
+                recommended_action='follow_up_now',
+                lead_score=70,
+            )
+
+            response = client.get(
+                f'/api/queues/todays-action/navigation?lead_id={lead_b.id}',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            assert data['queue_key'] == 'todays-action'
+            assert data['lead_id'] == lead_b.id
+            assert data['total'] >= 3
+            assert data['position'] is not None
+            assert data['prev_id'] == lead_a.id
+            assert data['next_id'] == lead_c.id
+
+    def test_lead_not_in_queue_returns_null_position(self, client, app):
+        with app.app_context():
+            from app.services.queue_order_cache import queue_order_cache
+            queue_order_cache.clear()
+
+            outside = _make_lead(
+                app, 'Outside St',
+                lead_status='do_not_contact',
+                lead_score=10,
+            )
+            response = client.get(
+                f'/api/queues/todays-action/navigation?lead_id={outside.id}',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            assert data['position'] is None
+            assert data['prev_id'] is None
+

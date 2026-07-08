@@ -12,6 +12,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import { RecommendedActionPanel } from './RecommendedActionPanel'
 import type { RecommendedActionMeta, LeadTask } from '@/types'
 
@@ -491,6 +492,26 @@ describe('RecommendedActionPanel', () => {
       await user.click(screen.getByTestId('create-task-cta-button'))
 
       expect(onCreateTask).toHaveBeenCalledOnce()
+    })
+  })
+
+  describe('mail batch state', () => {
+    it('shows In mail batch instead of Add to Mail Queue when queued', () => {
+      render(
+        <MemoryRouter>
+          <RecommendedActionPanel
+            recommendedAction={makeRA('mail_ready', 'Ready to Mail')}
+            leadStatus="mailing_no_contact_made"
+            openTasks={[]}
+            mailQueueStatus="queued"
+            onAction={vi.fn()}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.getByTestId('ra-action-btn-in-mail-batch')).toBeDisabled()
+      expect(screen.getByTestId('ra-action-btn-view-mail-batch')).toBeInTheDocument()
+      expect(screen.queryByTestId('ra-action-btn-add_to_mail_batch')).not.toBeInTheDocument()
     })
   })
 })

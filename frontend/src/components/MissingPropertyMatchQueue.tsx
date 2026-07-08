@@ -52,6 +52,8 @@ export function MissingPropertyMatchQueue() {
     },
   ]
 
+  const fromQueue = { key: 'missing-property-match', label: 'Missing Property Match' }
+
   const rowActions: RowAction[] = [
     {
       label: 'Research PIN',
@@ -88,6 +90,7 @@ export function MissingPropertyMatchQueue() {
       <QueueTable
         rows={rows}
         total={total}
+        fromQueue={fromQueue}
         rowActions={rowActions}
         extraColumns={extraColumns}
         {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}

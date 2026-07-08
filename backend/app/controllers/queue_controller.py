@@ -137,3 +137,37 @@ def get_mail_candidates():
         user_id, page, per_page, sort_by, sort_order,
     )
     return jsonify({'rows': rows, 'total': total, 'page': page, 'per_page': per_page}), 200
+
+
+@queue_bp.route('/<queue_key>/navigation', methods=['GET'])
+@handle_errors
+def get_queue_navigation(queue_key: str):
+    """GET /api/queues/<queue_key>/navigation?lead_id= — neighbors for HubSpot-style queue work."""
+    from flask import abort
+
+    lead_id_raw = request.args.get('lead_id')
+    if lead_id_raw is None:
+        raise ValueError('lead_id is required')
+    try:
+        lead_id = int(lead_id_raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('lead_id must be an integer') from exc
+
+    sort_by = request.args.get('sort_by') or None
+    sort_order = request.args.get('sort_order') or None
+    user_id = getattr(g, 'user_id', None)
+    mail_user_id = user_id if queue_key == 'mail-candidates' else None
+
+    try:
+        payload = _get_queue_service().get_navigation(
+            queue_key,
+            lead_id,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            mail_user_id=mail_user_id,
+        )
+    except ValueError as exc:
+        if str(exc).startswith('Unknown queue key'):
+            abort(404)
+        raise
+    return jsonify(payload), 200

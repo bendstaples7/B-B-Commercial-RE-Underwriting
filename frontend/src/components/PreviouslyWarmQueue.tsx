@@ -62,9 +62,12 @@ export function PreviouslyWarmQueue() {
     },
   ]
 
+  const fromQueue = { key: 'previously-warm', label: 'Previously Warm' }
+  const navigateOptions = { navigate, fromQueue }
+
   const rowActions: RowAction[] = [
-    createLogCallRowAction({ navigate }),
-    createLogNoteRowAction({ navigate }),
+    createLogCallRowAction(navigateOptions),
+    createLogNoteRowAction(navigateOptions),
     createCreateTaskRowAction({
       queryClient,
       queryKey: 'queue-previously-warm',
@@ -92,6 +95,7 @@ export function PreviouslyWarmQueue() {
       <QueueTable
         rows={rows}
         total={total}
+        fromQueue={fromQueue}
         rowActions={rowActions}
         extraColumns={extraColumns}
         {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}

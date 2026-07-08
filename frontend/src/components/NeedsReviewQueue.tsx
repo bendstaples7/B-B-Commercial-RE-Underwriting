@@ -52,6 +52,8 @@ export function NeedsReviewQueue() {
     },
   ]
 
+  const fromQueue = { key: 'needs-review', label: 'Needs Review' }
+
   const rowActions: RowAction[] = [
     {
       label: 'View Analysis',
@@ -85,6 +87,7 @@ export function NeedsReviewQueue() {
       <QueueTable
         rows={rows}
         total={total}
+        fromQueue={fromQueue}
         rowActions={rowActions}
         extraColumns={extraColumns}
         {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}

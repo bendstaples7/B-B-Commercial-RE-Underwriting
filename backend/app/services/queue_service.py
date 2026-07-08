@@ -1,5 +1,6 @@
 """QueueService — badge counts and paginated results for all 7 lead queues."""
 from datetime import date, datetime, timedelta
+from typing import ClassVar
 
 from sqlalchemy import exists, and_, or_, case, select
 
@@ -7,6 +8,7 @@ from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry, MailQueueItem
 from app.models.task import Task
 from app.models.task_association import TaskAssociation
+from app.services.queue_order_cache import queue_order_cache
 from app.services.open_letter_contact_mapper import is_mailable_lead
 from app.services.recommended_action_metadata import get_recommended_action_display
 from app.services.outreach_method_service import resolve_outreach_contacts_for_leads
@@ -130,6 +132,32 @@ def _hubspot_task_overdue_subquery(cutoff_date):
     return or_(via_assoc, via_direct)
 
 
+def _lead_awaiting_mail_subquery():
+    """Lead is staged in a mail batch and should not surface as a due native task."""
+    queued_item = exists().where(
+        and_(
+            MailQueueItem.lead_id == Lead.id,
+            MailQueueItem.status == 'queued',
+            MailQueueItem.user_id == Lead.owner_user_id,
+        )
+    )
+    return or_(Lead.up_next_to_mail.is_(True), queued_item)
+
+
+def _open_lead_task_due_today_excluding_mail_awaiting(today: date):
+    """Open native task due today, excluding leads waiting in a mail batch."""
+    return and_(
+        exists().where(
+            and_(
+                LeadTask.lead_id == Lead.id,
+                LeadTask.status == 'open',
+                LeadTask.due_date <= today,
+            )
+        ),
+        ~_lead_awaiting_mail_subquery(),
+    )
+
+
 class QueueService:
     """Computes badge counts and paginated rows for the 7 Actionable Lead Command Center queues."""
 
@@ -192,13 +220,7 @@ class QueueService:
           - lead_status in (active, follow_up) AND has an open lead_task due today
           - Has an open/overdue HubSpot task (tasks table) due today (any lead_status)
         """
-        open_lead_task_due_today = exists().where(
-            and_(
-                LeadTask.lead_id == Lead.id,
-                LeadTask.status == 'open',
-                LeadTask.due_date <= today,
-            )
-        )
+        open_lead_task_due_today = _open_lead_task_due_today_excluding_mail_awaiting(today)
         hubspot_task_due_today = _hubspot_task_overdue_subquery(today)
 
         return (
@@ -340,13 +362,7 @@ class QueueService:
     ) -> tuple[list[dict], int]:
         """Today's Action — see _count_todays_action for criteria."""
         today = date.today()
-        open_lead_task_due_today = exists().where(
-            and_(
-                LeadTask.lead_id == Lead.id,
-                LeadTask.status == 'open',
-                LeadTask.due_date <= today,
-            )
-        )
+        open_lead_task_due_today = _open_lead_task_due_today_excluding_mail_awaiting(today)
         hubspot_task_due_today = _hubspot_task_overdue_subquery(today)
 
         query = self._base_query().filter(
@@ -614,3 +630,234 @@ class QueueService:
             lead.id for lead in ordered
             if not is_recently_sold(lead) and is_mailable_lead(lead)
         ]
+
+    # Cap for prev/next neighbor lookup (same order as list endpoints).
+    QUEUE_NAV_CAP = 500
+
+    # URL kebab-key → (service method name, default sort_by, default sort_order)
+    _QUEUE_NAV_CONFIG: ClassVar[dict[str, tuple[str, str, str]]] = {
+        'todays-action': ('get_todays_action', 'lead_score', 'desc'),
+        'previously-warm': ('get_previously_warm', 'lead_score', 'desc'),
+        'follow-up-overdue': ('get_follow_up_overdue', 'last_contact_date', 'asc'),
+        'no-next-action': ('get_no_next_action', 'lead_score', 'desc'),
+        'needs-review': ('get_needs_review', 'review_triggered_at', 'desc'),
+        'do-not-contact': ('get_do_not_contact', 'lead_score', 'desc'),
+        'missing-property-match': ('get_missing_property_match', 'lead_score', 'desc'),
+        'mail-candidates': ('get_mail_candidates', 'lead_score', 'desc'),
+    }
+
+    def _ordered_ids_from_query(self, query, cap: int) -> tuple[list[int], int]:
+        """Count matching leads and return up to ``cap`` IDs in the query's current order."""
+        total = query.count()
+        rows = query.with_entities(Lead.id).limit(cap).all()
+        return [row[0] for row in rows], total
+
+    def _get_ordered_ids_for_queue(
+        self,
+        queue_key: str,
+        sort_by: str,
+        sort_order: str,
+        mail_user_id: str | None,
+        cap: int,
+    ) -> tuple[list[int], int]:
+        """Lightweight ordered ID list for navigation (no outreach row hydration)."""
+        if queue_key == 'mail-candidates':
+            if not mail_user_id:
+                raise ValueError('mail_user_id is required for mail-candidates navigation')
+            all_ids = self.get_mail_candidate_ids(mail_user_id, sort_by, sort_order)
+            return all_ids[:cap], len(all_ids)
+
+        if queue_key == 'todays-action':
+            today = date.today()
+            open_lead_task_due_today = _open_lead_task_due_today_excluding_mail_awaiting(today)
+            hubspot_task_due_today = _hubspot_task_overdue_subquery(today)
+            query = self._base_query().filter(
+                or_(
+                    and_(
+                        Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
+                        or_(
+                            Lead.recommended_action == 'follow_up_now',
+                            open_lead_task_due_today,
+                        ),
+                    ),
+                    and_(
+                        Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
+                        hubspot_task_due_today,
+                    ),
+                )
+            )
+            query = _apply_queue_sort(query, sort_by, sort_order)
+            return self._ordered_ids_from_query(query, cap)
+
+        if queue_key == 'previously-warm':
+            query = _apply_queue_sort(
+                self._base_query().filter(Lead.is_warm.is_(True)),
+                sort_by,
+                sort_order,
+            )
+            return self._ordered_ids_from_query(query, cap)
+
+        if queue_key == 'follow-up-overdue':
+            today = date.today()
+            yesterday = today - timedelta(days=1)
+            seven_days_ago = today - timedelta(days=7)
+            open_lead_task_overdue = exists().where(
+                and_(
+                    LeadTask.lead_id == Lead.id,
+                    LeadTask.status == 'open',
+                    LeadTask.due_date < today,
+                )
+            )
+            hubspot_task_overdue = _hubspot_task_overdue_subquery(yesterday)
+            query = self._base_query().filter(
+                or_(
+                    open_lead_task_overdue,
+                    and_(
+                        Lead.recommended_action == 'follow_up_now',
+                        Lead.last_contact_date < seven_days_ago,
+                    ),
+                    hubspot_task_overdue,
+                )
+            )
+            sort_col = getattr(Lead, sort_by, Lead.last_contact_date)
+            query = query.order_by(sort_col.asc() if sort_order == 'asc' else sort_col.desc())
+            return self._ordered_ids_from_query(query, cap)
+
+        if queue_key == 'no-next-action':
+            has_open_lead_task = exists().where(
+                and_(LeadTask.lead_id == Lead.id, LeadTask.status == 'open')
+            )
+            has_open_hubspot_task = exists().where(
+                and_(
+                    TaskAssociation.target_type == 'lead',
+                    TaskAssociation.target_id == Lead.id,
+                    TaskAssociation.task_id == Task.id,
+                    Task.status.in_(['open', 'overdue']),
+                )
+            )
+            has_open_direct_task = exists().where(
+                and_(Task.lead_id == Lead.id, Task.status.in_(['open', 'overdue']))
+            )
+            query = self._base_query().filter(
+                Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
+                or_(
+                    Lead.recommended_action.is_(None),
+                    Lead.recommended_action.in_(['create_task', 'ready_for_outreach', 'add_contact_info']),
+                ),
+                ~has_open_lead_task,
+                ~has_open_hubspot_task,
+                ~has_open_direct_task,
+            )
+            status_order = case((Lead.lead_status == 'awaiting_skip_trace', 0), else_=1)
+            sort_col = getattr(Lead, sort_by, Lead.lead_score)
+            if sort_by == 'lead_score':
+                query = query.order_by(
+                    status_order.asc(),
+                    sort_col.desc() if sort_order == 'desc' else sort_col.asc(),
+                    Lead.motivation_score.desc(),
+                )
+            else:
+                query = query.order_by(
+                    status_order.asc(),
+                    sort_col.desc() if sort_order == 'desc' else sort_col.asc(),
+                )
+            return self._ordered_ids_from_query(query, cap)
+
+        if queue_key == 'needs-review':
+            query = self._base_query().filter(Lead.review_required.is_(True))
+            sort_col = getattr(Lead, sort_by, Lead.review_triggered_at)
+            if sort_by == 'lead_score':
+                query = _apply_queue_sort(query, sort_by, sort_order, Lead.review_triggered_at)
+            else:
+                query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
+            return self._ordered_ids_from_query(query, cap)
+
+        if queue_key == 'do-not-contact':
+            query = _apply_queue_sort(
+                self._base_query().filter(Lead.lead_status == 'do_not_contact'),
+                sort_by,
+                sort_order,
+            )
+            return self._ordered_ids_from_query(query, cap)
+
+        if queue_key == 'missing-property-match':
+            has_research_task = exists().where(
+                and_(
+                    LeadTask.lead_id == Lead.id,
+                    LeadTask.task_type == 'research_missing_pin',
+                    LeadTask.status == 'open',
+                )
+            )
+            query = _apply_queue_sort(
+                self._base_query().filter(
+                    Lead.has_property_match.is_(False),
+                    ~has_research_task,
+                ),
+                sort_by,
+                sort_order,
+            )
+            return self._ordered_ids_from_query(query, cap)
+
+        raise ValueError(f'Unknown queue key: {queue_key}')
+
+    def _navigation_cache_key(
+        self,
+        queue_key: str,
+        sort_by: str,
+        sort_order: str,
+        mail_user_id: str | None,
+    ) -> tuple:
+        scope = self._owner_user_id or '__admin__'
+        return (scope, queue_key, sort_by, sort_order, mail_user_id or '')
+
+    def get_navigation(
+        self,
+        queue_key: str,
+        lead_id: int,
+        sort_by: str | None = None,
+        sort_order: str | None = None,
+        mail_user_id: str | None = None,
+    ) -> dict:
+        """Return position / neighbors for a lead within a work queue.
+
+        Uses a cached ordered ID list (IDs only — no row hydration) so rapid
+        prev/next in the command center does not re-scan the full queue.
+        """
+        config = self._QUEUE_NAV_CONFIG.get(queue_key)
+        if config is None:
+            raise ValueError(f"Unknown queue key: {queue_key}")
+
+        _, default_sort_by, default_sort_order = config
+        sort_by = sort_by or default_sort_by
+        sort_order = sort_order or default_sort_order
+
+        cache_key = self._navigation_cache_key(queue_key, sort_by, sort_order, mail_user_id)
+        cached = queue_order_cache.get(cache_key)
+        if cached is not None:
+            ids, total = cached
+        else:
+            ids, total = self._get_ordered_ids_for_queue(
+                queue_key, sort_by, sort_order, mail_user_id, self.QUEUE_NAV_CAP,
+            )
+            queue_order_cache.set(cache_key, ids, total)
+
+        try:
+            idx = ids.index(lead_id)
+        except ValueError:
+            return {
+                'queue_key': queue_key,
+                'lead_id': lead_id,
+                'position': None,
+                'total': total,
+                'prev_id': None,
+                'next_id': ids[0] if ids else None,
+            }
+
+        return {
+            'queue_key': queue_key,
+            'lead_id': lead_id,
+            'position': idx + 1,
+            'total': total,
+            'prev_id': ids[idx - 1] if idx > 0 else None,
+            'next_id': ids[idx + 1] if idx + 1 < len(ids) else None,
+        }

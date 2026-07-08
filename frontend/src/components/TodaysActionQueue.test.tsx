@@ -133,7 +133,9 @@ describe('TodaysActionQueue', () => {
 
     await user.click(screen.getByTestId('action-log-call'))
 
-    expect(mockNavigate).toHaveBeenCalledWith('/leads/1?log=call')
+    expect(mockNavigate).toHaveBeenCalledWith('/leads/1?log=call&queue=todays-action', {
+      state: { fromQueue: { key: 'todays-action', label: "Today's Action" } },
+    })
   })
 
   it('Log Note navigates to lead detail with log=note deep link', async () => {
@@ -148,7 +150,9 @@ describe('TodaysActionQueue', () => {
 
     await user.click(screen.getByTestId('action-log-note'))
 
-    expect(mockNavigate).toHaveBeenCalledWith('/leads/1?log=note')
+    expect(mockNavigate).toHaveBeenCalledWith('/leads/1?log=note&queue=todays-action', {
+      state: { fromQueue: { key: 'todays-action', label: "Today's Action" } },
+    })
   })
 
   it('Create Task calls API and refetches queue', async () => {

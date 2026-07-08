@@ -55,7 +55,8 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
       || (r.recommended_action === 'follow_up_now' && r.recommended_contact_method === 'direct_mail'),
   ).length
 
-  const navigateOptions = { navigate }
+  const fromQueue = { key: 'todays-action', label: "Today's Action" }
+  const navigateOptions = { navigate, fromQueue }
   const taskOptions = {
     queryClient,
     queryKey: 'queue-todays-action',
@@ -103,6 +104,7 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
         <QueueTable
           rows={rows}
           total={total}
+          fromQueue={fromQueue}
           rowActions={rowActions}
           {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
         />

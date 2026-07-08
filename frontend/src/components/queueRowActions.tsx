@@ -4,6 +4,7 @@ import AddTaskIcon from '@mui/icons-material/AddTask'
 import type { QueryClient } from '@tanstack/react-query'
 import type { NavigateFunction } from 'react-router-dom'
 import { buildLeadLogUrl } from '@/utils/queueLogNavigation'
+import type { FromQueueState } from '@/utils/fromQueue'
 import { outreachContactTaskTitle } from '@/utils/outreachContact'
 import { leadTaskService } from '@/services/api'
 import type { RowAction } from './QueueTable'
@@ -14,6 +15,7 @@ interface QueueRowActionOptions {
   queryKey: string
   extraQueryKeys?: string[]
   onAfterAction?: () => void
+  fromQueue?: FromQueueState
 }
 
 function invalidateQueueQueries(
@@ -30,14 +32,15 @@ function invalidateQueueQueries(
 export function createLogCallRowAction({
   navigate,
   onAfterAction,
-}: Pick<QueueRowActionOptions, 'navigate' | 'onAfterAction'>): RowAction {
+  fromQueue,
+}: Pick<QueueRowActionOptions, 'navigate' | 'onAfterAction' | 'fromQueue'>): RowAction {
   return {
     label: 'Log Call',
     icon: <PhoneIcon fontSize="small" />,
     testId: 'action-log-call',
     onClick: async (row) => {
       onAfterAction?.()
-      navigate(buildLeadLogUrl(row.id, 'call'))
+      navigate(buildLeadLogUrl(row.id, 'call', fromQueue?.key), fromQueue ? { state: { fromQueue } } : undefined)
     },
   }
 }
@@ -45,14 +48,15 @@ export function createLogCallRowAction({
 export function createLogNoteRowAction({
   navigate,
   onAfterAction,
-}: Pick<QueueRowActionOptions, 'navigate' | 'onAfterAction'>): RowAction {
+  fromQueue,
+}: Pick<QueueRowActionOptions, 'navigate' | 'onAfterAction' | 'fromQueue'>): RowAction {
   return {
     label: 'Log Note',
     icon: <NoteIcon fontSize="small" />,
     testId: 'action-log-note',
     onClick: async (row) => {
       onAfterAction?.()
-      navigate(buildLeadLogUrl(row.id, 'note'))
+      navigate(buildLeadLogUrl(row.id, 'note', fromQueue?.key), fromQueue ? { state: { fromQueue } } : undefined)
     },
   }
 }

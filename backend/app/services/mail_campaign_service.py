@@ -7,10 +7,15 @@ from decimal import Decimal
 
 from app import db
 from app.exceptions import ExternalServiceError, MailQueueError
-from app.models import Lead, LeadTask, MailCampaign, MailQueueItem, MarketingListMember
+from app.models import Lead, MailCampaign, MailQueueItem, MarketingListMember
 from app.services.lead_timeline_service import LeadTimelineService
 from app.services.open_letter_config_service import OpenLetterConfigService
 from app.services.open_letter_contact_mapper import lead_to_olc_contact
+from app.services.mail_task_lifecycle_service import (
+    complete_mail_prep_tasks,
+    refresh_leads_after_mail_task_changes,
+    schedule_mail_follow_up_task,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +134,7 @@ class MailCampaignService:
                 config.estimated_cost_per_piece = campaign.cost_per_piece
 
         now_iso = campaign.submitted_at.isoformat()
+        sent_lead_ids: list[int] = []
         for item in items:
             if item.status != 'queued':
                 continue
@@ -151,12 +157,15 @@ class MailCampaignService:
             })
             lead.mailer_history = history
 
-            LeadTask.query.filter_by(
-                lead_id=lead.id, task_type='add_to_mail_batch', status='open',
-            ).update({
-                'status': 'completed',
-                'completed_at': datetime.utcnow(),
-            })
+            complete_mail_prep_tasks(lead.id, actor=campaign.created_by, commit=False)
+
+            schedule_mail_follow_up_task(
+                lead=lead,
+                sent_at=campaign.submitted_at,
+                actor=campaign.created_by,
+                campaign_id=campaign.id,
+            )
+            sent_lead_ids.append(lead.id)
 
             MarketingListMember.query.filter_by(lead_id=lead.id).filter(
                 MarketingListMember.outreach_status == 'not_contacted',
@@ -176,6 +185,7 @@ class MailCampaignService:
             )
 
         db.session.commit()
+        refresh_leads_after_mail_task_changes(sent_lead_ids)
         return campaign
 
     def sync_campaign_analytics(self, campaign_id: int) -> MailCampaign:

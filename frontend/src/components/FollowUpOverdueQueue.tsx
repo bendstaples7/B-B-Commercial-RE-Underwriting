@@ -66,9 +66,12 @@ export function FollowUpOverdueQueue() {
     },
   ]
 
+  const fromQueue = { key: 'follow-up-overdue', label: 'Follow-Up Overdue' }
+  const navigateOptions = { navigate, fromQueue }
+
   const rowActions: RowAction[] = [
-    createLogCallRowAction({ navigate }),
-    createLogNoteRowAction({ navigate }),
+    createLogCallRowAction(navigateOptions),
+    createLogNoteRowAction(navigateOptions),
   ]
 
   return (
@@ -83,6 +86,7 @@ export function FollowUpOverdueQueue() {
       <QueueTable
         rows={rows}
         total={total}
+        fromQueue={fromQueue}
         rowActions={rowActions}
         extraColumns={extraColumns}
         {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}

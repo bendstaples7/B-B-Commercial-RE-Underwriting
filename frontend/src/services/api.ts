@@ -1335,6 +1335,7 @@ export const contactService = {
 import type {
   QueueCounts,
   QueuePage,
+  QueueNavigation,
   CommandCenterPayload,
   LeadTask,
   LeadTimelineEntry,
@@ -1364,6 +1365,8 @@ export const queueService = {
     api.get('/queues/missing-property-match', { params: { page, per_page: perPage } }).then(r => r.data),
   getMailCandidates: (page = 1, perPage = 20): Promise<QueuePage> =>
     api.get('/queues/mail-candidates', { params: { page, per_page: perPage } }).then(r => r.data),
+  getNavigation: (queueKey: string, leadId: number): Promise<QueueNavigation> =>
+    api.get(`/queues/${queueKey}/navigation`, { params: { lead_id: leadId } }).then(r => r.data),
 }
 
 import type {
