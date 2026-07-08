@@ -7,7 +7,11 @@ from app.models.open_letter_config import OpenLetterConfig
 from app.models.user import User
 from app.services.mail_queue_service import MailQueueService
 from app.services.open_letter_config_service import OpenLetterConfigService
-from app.services.open_letter_contact_mapper import lead_to_olc_contact, validate_lead_mail_address
+from app.services.open_letter_contact_mapper import (
+    lead_to_olc_contact,
+    persist_embedded_address_fields,
+    validate_lead_mail_address,
+)
 
 BEN_USER_ID = 'e5bc61c7-4db1-4307-a7b6-0a6b5a3d84c9'
 OTHER_USER_ID = 'd5f4f0ce-4d5b-48e5-bdcb-6b4679f66879'
@@ -73,6 +77,41 @@ class TestOpenLetterContactMapper:
         contact = lead_to_olc_contact(lead)
         assert contact['address1'] == '456 Oak Ave'
         assert contact['city'] == 'Chicago'
+
+    def test_parses_embedded_property_street_for_mail(self):
+        lead = _make_lead(
+            mailing_address=None,
+            mailing_city=None,
+            mailing_state=None,
+            mailing_zip=None,
+            property_street='4439 N Kimball Ave Chicago IL 60625',
+            property_city=None,
+            property_state=None,
+            property_zip=None,
+        )
+        assert validate_lead_mail_address(lead) is None
+        contact = lead_to_olc_contact(lead)
+        assert contact['address1'] == '4439 N Kimball Ave'
+        assert contact['city'] == 'Chicago'
+        assert contact['state'] == 'IL'
+        assert contact['zip'] == '60625'
+
+    def test_persist_embedded_property_fields(self):
+        lead = _make_lead(
+            mailing_address=None,
+            mailing_city=None,
+            mailing_state=None,
+            mailing_zip=None,
+            property_street='847-849 W Sunnyside Ave Chicago IL 60640',
+            property_city=None,
+            property_state=None,
+            property_zip=None,
+        )
+        assert persist_embedded_address_fields(lead) is True
+        assert lead.property_street == '847-849 W Sunnyside Ave'
+        assert lead.property_city == 'Chicago'
+        assert lead.property_state == 'IL'
+        assert lead.property_zip == '60640'
 
 
 class TestOpenLetterPerUserConfig:

@@ -2028,6 +2028,8 @@ export interface LogNotePayload {
 export interface BulkActionResult {
   successes: number;
   failures: number;
+  /** Optional detailed breakdown shown instead of the generic failure message. */
+  message?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -194,7 +194,9 @@ export function QueueTable({
     try {
       const result = await action.onClick(selectedIds)
       if (result.failures > 0) {
-        setBulkMessage(`${result.successes} succeeded, ${result.failures} failed`)
+        setBulkMessage(
+          result.message ?? `${result.successes} succeeded, ${result.failures} failed`,
+        )
       }
       if (onSelectionChange) {
         onSelectionChange([])

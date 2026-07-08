@@ -3,7 +3,7 @@ import { Alert, Box, Button, CircularProgress } from '@mui/material'
 import { useQuery } from '@tanstack/react-query'
 import openLetterService from '@/services/openLetterApi'
 import { MailBatchSummary } from './MailBatchSummary'
-import { MailQueueStagedTable } from './MailQueueStagedTable'
+import { MailQueueStagedAccordion } from './MailQueueStagedAccordion'
 
 export const MailQueuePanel: React.FC = () => {
   const { data, isLoading, error, refetch, isFetching } = useQuery({
@@ -54,7 +54,7 @@ export const MailQueuePanel: React.FC = () => {
         </Alert>
       ) : null}
       <MailBatchSummary title="Mail Queue" queueData={data} />
-      <MailQueueStagedTable
+      <MailQueueStagedAccordion
         items={data?.items ?? []}
         emptyMessage="No leads in the mail queue. Add leads from property detail or outreach lists."
       />

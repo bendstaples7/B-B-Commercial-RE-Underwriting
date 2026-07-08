@@ -37,6 +37,20 @@ def _make_lead(app, street, **kwargs):
     return lead
 
 
+def _make_mail_ready_lead(app, street, **kwargs):
+    """Create a mail-ready lead with a valid mailable address."""
+    defaults = dict(
+        lead_status='mailing_no_contact_made',
+        recommended_action='mail_ready',
+        property_city='Chicago',
+        property_state='IL',
+        property_zip='60601',
+        owner_user_id='test-owner',
+    )
+    defaults.update(kwargs)
+    return _make_lead(app, street, **defaults)
+
+
 def _make_task(app, lead_id, status='open', due_date=None, task_type='custom'):
     from app import db
     from app.models import LeadTask
@@ -321,12 +335,7 @@ def test_mail_candidates_excludes_queued_leads(app):
     from app.models.mail_queue_item import MailQueueItem
 
     with app.app_context():
-        lead = _make_lead(
-            app, '19 Mail Ready St',
-            lead_status='mailing_no_contact_made',
-            recommended_action='mail_ready',
-            owner_user_id='test-owner',
-        )
+        lead = _make_mail_ready_lead(app, '19 Mail Ready St')
         svc = QueueService(owner_user_id='test-owner')
         rows, total = svc.get_mail_candidates('test-owner')
         assert lead.id in [r['id'] for r in rows]
@@ -347,13 +356,7 @@ def test_mail_candidates_excludes_recently_sold(app):
 
     with app.app_context():
         recent_sale = (date.today() - timedelta(days=60)).strftime('%m/%d/%Y')
-        lead = _make_lead(
-            app, '20 Recent Sale St',
-            lead_status='mailing_no_contact_made',
-            recommended_action='mail_ready',
-            owner_user_id='test-owner',
-            most_recent_sale=recent_sale,
-        )
+        lead = _make_mail_ready_lead(app, '20 Recent Sale St', most_recent_sale=recent_sale)
         svc = QueueService(owner_user_id='test-owner')
         rows, total = svc.get_mail_candidates('test-owner')
         assert lead.id not in [r['id'] for r in rows]
@@ -362,13 +365,7 @@ def test_mail_candidates_excludes_recently_sold(app):
 def test_mail_candidates_includes_last_sale_at(app):
     """mail candidate rows include parsed last_sale_at from most_recent_sale."""
     with app.app_context():
-        lead = _make_lead(
-            app, '21 Sale Date St',
-            lead_status='mailing_no_contact_made',
-            recommended_action='mail_ready',
-            owner_user_id='test-owner',
-            most_recent_sale='6/15/2010',
-        )
+        lead = _make_mail_ready_lead(app, '21 Sale Date St', most_recent_sale='6/15/2010')
         svc = QueueService(owner_user_id='test-owner')
         rows, _ = svc.get_mail_candidates('test-owner')
         match = next(r for r in rows if r['id'] == lead.id)
@@ -381,20 +378,8 @@ def test_mail_candidates_count_matches_list(app):
 
     with app.app_context():
         recent_sale = (date.today() - timedelta(days=60)).strftime('%m/%d/%Y')
-        _make_lead(
-            app, '22 Count Mismatch St',
-            lead_status='mailing_no_contact_made',
-            recommended_action='mail_ready',
-            owner_user_id='test-owner',
-            most_recent_sale=recent_sale,
-        )
-        eligible = _make_lead(
-            app, '23 Count Match St',
-            lead_status='mailing_no_contact_made',
-            recommended_action='mail_ready',
-            owner_user_id='test-owner',
-            most_recent_sale='6/15/2010',
-        )
+        _make_mail_ready_lead(app, '22 Count Mismatch St', most_recent_sale=recent_sale)
+        eligible = _make_mail_ready_lead(app, '23 Count Match St', most_recent_sale='6/15/2010')
         svc = QueueService(owner_user_id='test-owner')
         rows, total = svc.get_mail_candidates('test-owner')
         assert svc.count_mail_candidates('test-owner') == total

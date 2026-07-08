@@ -120,6 +120,125 @@ class TestEnqueueMailQueue:
             assert data['results'][0]['status'] == 'recently_sold'
 
 
+def _make_mail_ready_lead(app, street, **kwargs):
+    """Create a mail-ready lead with a valid mailable address."""
+    defaults = dict(
+        lead_status='mailing_no_contact_made',
+        recommended_action='mail_ready',
+        property_city='Chicago',
+        property_state='IL',
+        property_zip='60601',
+        owner_user_id='test-user',
+    )
+    defaults.update(kwargs)
+    return _make_lead(app, street, **defaults)
+
+
+class TestEnqueueCandidates:
+    def test_enqueues_all_mail_ready_candidates(self, client, app):
+        with app.app_context():
+            lead_a = _make_mail_ready_lead(app, '1 Candidate St', lead_score=90.0)
+            lead_b = _make_mail_ready_lead(app, '2 Candidate St', lead_score=80.0)
+            response = client.post(
+                '/api/mail-queue/enqueue-candidates',
+                headers=_AUTH_HEADERS,
+                json={},
+            )
+            assert response.status_code == 201
+            data = json.loads(response.data)
+            assert data['added'] == 2
+            assert data['queued_count'] == 2
+            queued = client.get('/api/mail-queue/', headers=_AUTH_HEADERS)
+            queued_ids = [item['lead_id'] for item in json.loads(queued.data)['items']]
+            assert lead_a.id in queued_ids
+            assert lead_b.id in queued_ids
+
+    def test_respects_limit(self, client, app):
+        with app.app_context():
+            _make_mail_ready_lead(app, '3 Candidate St', lead_score=90.0)
+            _make_mail_ready_lead(app, '4 Candidate St', lead_score=80.0)
+            _make_mail_ready_lead(app, '5 Candidate St', lead_score=70.0)
+            response = client.post(
+                '/api/mail-queue/enqueue-candidates',
+                headers=_AUTH_HEADERS,
+                json={'limit': 2},
+            )
+            assert response.status_code == 201
+            data = json.loads(response.data)
+            assert data['added'] == 2
+            assert data['queued_count'] == 2
+
+    def test_skips_already_queued_and_recently_sold(self, client, app):
+        from datetime import date, timedelta
+
+        from app import db
+        from app.models.mail_queue_item import MailQueueItem
+
+        with app.app_context():
+            queued = _make_mail_ready_lead(app, '6 Candidate St')
+            fresh = _make_mail_ready_lead(app, '7 Candidate St')
+            recent_sale = (date.today() - timedelta(days=30)).strftime('%m/%d/%Y')
+            _make_mail_ready_lead(app, '8 Candidate St', most_recent_sale=recent_sale)
+            db.session.add(MailQueueItem(
+                lead_id=queued.id, user_id='test-user', status='queued',
+            ))
+            db.session.commit()
+            response = client.post(
+                '/api/mail-queue/enqueue-candidates',
+                headers=_AUTH_HEADERS,
+                json={},
+            )
+            assert response.status_code == 201
+            data = json.loads(response.data)
+            assert data['added'] == 1
+            assert data['queued_count'] == 2
+            queued_ids = [r['lead_id'] for r in data['results'] if r['status'] == 'queued']
+            assert fresh.id in queued_ids
+
+    def test_returns_zero_when_no_candidates(self, client, app):
+        with app.app_context():
+            response = client.post(
+                '/api/mail-queue/enqueue-candidates',
+                headers=_AUTH_HEADERS,
+                json={},
+            )
+            assert response.status_code == 201
+            data = json.loads(response.data)
+            assert data['added'] == 0
+            assert data['queued_count'] == 0
+
+    def test_skips_recent_invalid_address_queue_items(self, client, app):
+        from app import db
+        from app.models.mail_queue_item import MailQueueItem
+
+        with app.app_context():
+            suppressed = _make_mail_ready_lead(app, '9 Invalid St')
+            eligible = _make_mail_ready_lead(app, '10 Eligible St')
+            db.session.add(MailQueueItem(
+                lead_id=suppressed.id,
+                user_id='test-user',
+                status='invalid_address',
+            ))
+            db.session.commit()
+
+            candidates = client.get('/api/queues/mail-candidates', headers=_AUTH_HEADERS)
+            candidate_ids = [row['id'] for row in json.loads(candidates.data)['rows']]
+            assert suppressed.id not in candidate_ids
+            assert eligible.id in candidate_ids
+
+            response = client.post(
+                '/api/mail-queue/enqueue-candidates',
+                headers=_AUTH_HEADERS,
+                json={},
+            )
+            assert response.status_code == 201
+            data = json.loads(response.data)
+            assert data['added'] == 1
+            queued_ids = [r['lead_id'] for r in data['results'] if r['status'] == 'queued']
+            assert eligible.id in queued_ids
+            assert suppressed.id not in queued_ids
+
+
 class TestMailCampaignAuth:
     def test_get_campaign_rejects_other_users_campaign(self, client, app):
         from app import db

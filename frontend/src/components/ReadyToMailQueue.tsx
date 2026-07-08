@@ -7,12 +7,19 @@ import {
   Box,
   Button,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
   Divider,
+  Snackbar,
+  Stack,
   Typography,
 } from '@mui/material'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { MailBatchSummary } from './MailBatchSummary'
-import { MailQueueStagedTable } from './MailQueueStagedTable'
+import { MailQueueStagedAccordion } from './MailQueueStagedAccordion'
 import { MailCampaignsPanel } from './MailCampaignsPanel'
 import { QueueTable } from './QueueTable'
 import type { BulkAction, RowAction, ExtraColumn } from './QueueTable'
@@ -20,13 +27,23 @@ import { queueService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 import { formatLastMailedDate, formatLastSaleDate } from '@/utils/formatLastMailedDate'
+import { formatEnqueueSummary, type EnqueueCounts } from '@/utils/formatEnqueueSummary'
 import type { QueueRow } from '@/types'
 import PostAddIcon from '@mui/icons-material/PostAdd'
+
+function invalidateMailQueries(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
+  queryClient.invalidateQueries({ queryKey: ['queue-mail-candidates'] })
+  queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+}
 
 export function ReadyToMailQueue() {
   const queryClient = useQueryClient()
   const [candidatesPage, setCandidatesPage] = useState(1)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [snackbarMessage, setSnackbarMessage] = useState<string | null>(null)
+  const [snackbarSeverity, setSnackbarSeverity] = useState<'success' | 'error'>('success')
+  const [confirmAdd, setConfirmAdd] = useState<{ limit?: number; count: number } | null>(null)
 
   const { data: queueData, isLoading: queueLoading, error: queueError, refetch: refetchQueue, isFetching: queueFetching } = useQuery({
     queryKey: ['mail-queue'],
@@ -41,32 +58,77 @@ export function ReadyToMailQueue() {
     refetchIntervalInBackground: false,
   })
 
+  const showEnqueueFeedback = (result: EnqueueCounts) => {
+    setSnackbarSeverity('success')
+    setSnackbarMessage(formatEnqueueSummary(result))
+  }
+
+  const showEnqueueError = (error: unknown) => {
+    setSnackbarSeverity('error')
+    setSnackbarMessage(
+      error instanceof Error ? error.message : 'Failed to add leads to batch. Try again.',
+    )
+  }
+
   const enqueueMutation = useMutation({
     mutationFn: (leadIds: number[]) => openLetterService.enqueue(leadIds),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
-      queryClient.invalidateQueries({ queryKey: ['queue-mail-candidates'] })
-      queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+    onSuccess: (result) => {
+      invalidateMailQueries(queryClient)
+      setSelectedIds([])
+      showEnqueueFeedback(result)
+    },
+    onError: showEnqueueError,
+  })
+
+  const enqueueCandidatesMutation = useMutation({
+    mutationFn: (limit?: number) => openLetterService.enqueueCandidates(limit),
+    onSuccess: (result) => {
+      invalidateMailQueries(queryClient)
       setSelectedIds([])
       setCandidatesPage(1)
+      showEnqueueFeedback(result)
     },
+    onError: showEnqueueError,
   })
 
   const candidateRows = candidatesData?.rows ?? []
   const candidateTotal = candidatesData?.total ?? 0
   const candidateTotalPages = computeTotalPages(candidateTotal, candidatesData?.per_page ?? 20)
+  const queuedCount = queueData?.queued_count ?? 0
+  const batchMinimum = queueData?.batch_minimum ?? 50
+  const neededForMinimum = batchMinimum - queuedCount
+
   const handleCandidatesPageChange = (newPage: number) => {
     setCandidatesPage(clampPage(newPage, candidateTotalPages))
     setSelectedIds([])
   }
 
+  const buildBulkResult = (result: EnqueueCounts) => ({
+    successes: result.added,
+    failures: result.skipped + result.invalid,
+    message: formatEnqueueSummary(result),
+  })
+
   const handleAddToBatch = async (leadIds: number[]) => {
     const result = await enqueueMutation.mutateAsync(leadIds)
-    return {
-      successes: result.added,
-      failures: result.skipped + result.invalid,
-    }
+    return buildBulkResult(result)
   }
+
+  const runEnqueueCandidates = async (limit?: number) => {
+    setConfirmAdd(null)
+    await enqueueCandidatesMutation.mutateAsync(limit)
+  }
+
+  const requestEnqueueCandidates = (limit?: number, count?: number) => {
+    const addCount = count ?? (limit ?? candidateTotal)
+    if (addCount > batchMinimum) {
+      setConfirmAdd({ limit, count: addCount })
+      return
+    }
+    void runEnqueueCandidates(limit)
+  }
+
+  const isEnqueueing = enqueueMutation.isPending || enqueueCandidatesMutation.isPending
 
   const rowActions: RowAction[] = [
     {
@@ -138,17 +200,6 @@ export function ReadyToMailQueue() {
         <MailBatchSummary title="Next batch" queueData={queueData} isLoading={queueLoading && !queueData} />
       )}
 
-      <Typography variant="h6" sx={{ mb: 1 }}>
-        Staged for next batch
-      </Typography>
-      {queueError ? (
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Staged leads are unavailable until the mail queue loads.
-        </Typography>
-      ) : (
-        <MailQueueStagedTable items={queueData?.items ?? []} />
-      )}
-
       <Divider sx={{ my: 3 }} />
 
       <Typography variant="h6" gutterBottom>
@@ -157,6 +208,31 @@ export function ReadyToMailQueue() {
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Leads scored as mail-ready that are not yet in your batch ({candidateTotal} total).
       </Typography>
+
+      {candidateTotal > 0 && (
+        <Stack direction="row" spacing={1} sx={{ mb: 2 }} flexWrap="wrap" useFlexGap>
+          <Button
+            variant="outlined"
+            size="small"
+            disabled={isEnqueueing}
+            onClick={() => requestEnqueueCandidates(undefined, candidateTotal)}
+            data-testid="add-all-candidates-button"
+          >
+            {isEnqueueing ? 'Adding…' : `Add all ${candidateTotal} to batch`}
+          </Button>
+          {neededForMinimum > 0 && neededForMinimum <= candidateTotal && (
+            <Button
+              variant="outlined"
+              size="small"
+              disabled={isEnqueueing}
+              onClick={() => requestEnqueueCandidates(neededForMinimum, neededForMinimum)}
+              data-testid="add-to-minimum-button"
+            >
+              Add {neededForMinimum} to reach minimum
+            </Button>
+          )}
+        </Stack>
+      )}
 
       {candidatesLoading && candidateRows.length === 0 ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
@@ -183,10 +259,55 @@ export function ReadyToMailQueue() {
 
       <Divider sx={{ my: 3 }} />
 
+      {queueError ? (
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Staged leads are unavailable until the mail queue loads.
+        </Typography>
+      ) : (
+        <MailQueueStagedAccordion items={queueData?.items ?? []} />
+      )}
+
+      <Divider sx={{ my: 3 }} />
+
       <Typography variant="h6" sx={{ mb: 2 }}>
         Recent sends
       </Typography>
       <MailCampaignsPanel embedded />
+
+      <Dialog open={confirmAdd !== null} onClose={() => setConfirmAdd(null)}>
+        <DialogTitle>Add {confirmAdd?.count} leads to batch?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            This will stage {confirmAdd?.count} mailers, more than your batch minimum of {batchMinimum}.
+            You can review addresses in the staged list before sending.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmAdd(null)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={() => void runEnqueueCandidates(confirmAdd?.limit)}
+            disabled={isEnqueueing}
+          >
+            Add to batch
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Snackbar
+        open={snackbarMessage !== null}
+        autoHideDuration={8000}
+        onClose={() => setSnackbarMessage(null)}
+        data-testid="enqueue-feedback-snackbar"
+      >
+        <Alert
+          onClose={() => setSnackbarMessage(null)}
+          severity={snackbarSeverity}
+          sx={{ width: '100%' }}
+        >
+          {snackbarMessage ?? ''}
+        </Alert>
+      </Snackbar>
     </Box>
   )
 }
