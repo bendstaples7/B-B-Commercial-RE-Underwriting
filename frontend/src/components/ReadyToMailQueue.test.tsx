@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
@@ -19,6 +19,9 @@ vi.mock('@/services/openLetterApi', () => ({
     getQueue: vi.fn(),
     getConfig: vi.fn(),
     listCampaigns: vi.fn(),
+    enqueue: vi.fn(),
+    enqueueCandidates: vi.fn(),
+    previewEnqueueCandidates: vi.fn(),
   },
 }))
 
@@ -50,7 +53,7 @@ const emptyCandidates: QueuePage = {
     last_mailed_at: '2024-08-01T15:00:00Z',
     last_sale_at: '2010-06-15',
   }],
-  total: 1,
+  total: 25,
   page: 1,
   per_page: 20,
 }
@@ -105,10 +108,26 @@ beforeEach(() => {
     default_template_id: 371,
   })
   vi.mocked(queueService.getMailCandidates).mockResolvedValue(emptyCandidates)
+  vi.mocked(openLetterService.enqueueCandidates).mockResolvedValue({
+    ...queueSummary,
+    added: 25,
+    skipped: 0,
+    invalid: 0,
+    results: [],
+  })
+  vi.mocked(openLetterService.previewEnqueueCandidates).mockResolvedValue({
+    ...queueSummary,
+    dry_run: true,
+    would_add: 25,
+    would_skip: 0,
+    would_fail: 0,
+    candidate_count: 25,
+    results: [],
+  })
 })
 
 describe('ReadyToMailQueue', () => {
-  it('renders batch summary and staged table when queue loads', async () => {
+  it('renders batch summary and staged accordion when queue loads', async () => {
     vi.mocked(openLetterService.getQueue).mockResolvedValue(queueSummary)
 
     renderPage()
@@ -117,10 +136,9 @@ describe('ReadyToMailQueue', () => {
       expect(screen.getByTestId('ready-to-mail-queue')).toBeInTheDocument()
     })
     expect(screen.getByTestId('mail-batch-summary')).toBeInTheDocument()
-    expect(screen.getByTestId('mail-queue-staged-table')).toBeInTheDocument()
-    expect(screen.getByText('123 Main St')).toBeInTheDocument()
-    expect(screen.getByText('11/15/2025')).toBeInTheDocument()
-    expect(screen.getByText('4/11/2025')).toBeInTheDocument()
+    expect(screen.getByTestId('mail-queue-staged-accordion')).toBeInTheDocument()
+    expect(screen.queryByTestId('mail-queue-staged-table')).not.toBeInTheDocument()
+    expect(screen.getByText('Staged for next batch (1)')).toBeInTheDocument()
   })
 
   it('shows last mailed on recommended candidates', async () => {
@@ -171,5 +189,78 @@ describe('ReadyToMailQueue', () => {
       expect(screen.getByTestId('mail-batch-summary')).toBeInTheDocument()
     })
     expect(openLetterService.getQueue).toHaveBeenCalledTimes(2)
+  })
+
+  it('renders add-all button and confirms via dry-run preflight before enqueue', async () => {
+    vi.mocked(openLetterService.getQueue).mockResolvedValue(queueSummary)
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('add-all-candidates-button')).toBeInTheDocument()
+    })
+
+    await userEvent.click(screen.getByTestId('add-all-candidates-button'))
+
+    await waitFor(() => {
+      expect(openLetterService.previewEnqueueCandidates).toHaveBeenCalledWith(undefined)
+    })
+    expect(openLetterService.enqueueCandidates).not.toHaveBeenCalled()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('enqueue-preflight-dialog')).toBeInTheDocument()
+    })
+    await userEvent.click(screen.getByTestId('enqueue-preflight-confirm'))
+
+    await waitFor(() => {
+      expect(openLetterService.enqueueCandidates).toHaveBeenCalledWith(undefined)
+    })
+  })
+
+  it('places recommended section before staged accordion in DOM order', async () => {
+    vi.mocked(openLetterService.getQueue).mockResolvedValue(queueSummary)
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mail-queue-staged-accordion')).toBeInTheDocument()
+    })
+
+    const recommended = screen.getByText('Recommended for mail')
+    const accordion = screen.getByTestId('mail-queue-staged-accordion')
+    const position = recommended.compareDocumentPosition(accordion)
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('hides staged table inside collapsed accordion when items exist', async () => {
+    vi.mocked(openLetterService.getQueue).mockResolvedValue(queueSummary)
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mail-queue-staged-accordion')).toBeInTheDocument()
+    })
+    expect(screen.queryByText('123 Main St')).not.toBeInTheDocument()
+
+    const accordion = screen.getByTestId('mail-queue-staged-accordion')
+    await userEvent.click(within(accordion).getByRole('button', { expanded: false }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mail-queue-staged-table')).toBeInTheDocument()
+    })
+    expect(screen.getByText('123 Main St')).toBeInTheDocument()
+  })
+
+  it('shows reach-minimum button when below batch minimum', async () => {
+    vi.mocked(openLetterService.getQueue).mockResolvedValue({
+      ...queueSummary,
+      queued_count: 30,
+    })
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('add-to-minimum-button')).toHaveTextContent('Add 20 to reach minimum')
+    })
   })
 })

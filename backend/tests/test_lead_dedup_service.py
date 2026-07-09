@@ -45,6 +45,47 @@ class TestLeadDedupFields:
             db.session.commit()
             assert lead.normalized_street == '100 MAIN'
 
+    def test_before_update_skips_normalized_street_when_street_unchanged(self, app):
+        """City/state/zip-only updates must not recompute normalized_street."""
+        with app.app_context():
+            lead = Lead(
+                property_street='3446 N Harding Ave Chicago IL 60618',
+                owner_first_name='Joseph',
+                owner_last_name='Zajac',
+                owner_user_id='user-1',
+            )
+            db.session.add(lead)
+            db.session.commit()
+            stale_key = '3446 N HARDING AVENUE CHICAGO IL'
+            lead.normalized_street = stale_key
+            db.session.commit()
+
+            lead.property_city = 'Chicago'
+            lead.property_state = 'IL'
+            lead.property_zip = '60618'
+            db.session.commit()
+
+            db.session.refresh(lead)
+            assert lead.normalized_street == stale_key
+            assert lead.property_city == 'Chicago'
+
+    def test_before_update_refreshes_normalized_street_when_street_changes(self, app):
+        with app.app_context():
+            lead = Lead(
+                property_street='100 Main St',
+                owner_first_name='Jane',
+                owner_last_name='Doe',
+                owner_user_id='user-1',
+            )
+            db.session.add(lead)
+            db.session.commit()
+            assert lead.normalized_street == '100 MAIN'
+
+            lead.property_street = '200 Oak Ave'
+            db.session.commit()
+            db.session.refresh(lead)
+            assert lead.normalized_street == '200 OAK'
+
 
 class TestFindLeadByIdentity:
     def test_finds_by_normalized_street_column(self, app):

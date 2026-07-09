@@ -30,6 +30,7 @@ from app.services.recommended_action_metadata import (
 )
 from app.services.outreach_method_service import resolve_outreach_contact
 from app.services.lead_scoring_engine import LeadScoringEngine
+from app.services.mail_task_lifecycle_service import resolve_mail_queue_status
 
 logger = logging.getLogger(__name__)
 
@@ -558,6 +559,7 @@ def get_command_center(lead_id: int):
         'skip_tracer': lead.skip_tracer,
         'date_skip_traced': lead.date_skip_traced.isoformat() if lead.date_skip_traced else None,
         'up_next_to_mail': lead.up_next_to_mail,
+        'mail_queue_status': resolve_mail_queue_status(lead),
         'mailer_history': lead.mailer_history,
         'data_source': lead.data_source,
         'created_at': lead.created_at.isoformat() if lead.created_at else None,
@@ -943,6 +945,8 @@ def log_call(lead_id: int):
         phone_number=data.get('phone_number'),
         phone_label=data.get('phone_label'),
         mail_campaign_id=data.get('mail_campaign_id'),
+        complete_task_id=data.get('complete_task_id'),
+        follow_up=data.get('follow_up'),
     )
     return jsonify(_serialize_timeline_entry(entry)), 201
 

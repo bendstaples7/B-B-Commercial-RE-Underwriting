@@ -98,6 +98,7 @@ describe('LogActivityModal', () => {
       expect(onSaved).toHaveBeenCalledWith(
         expect.objectContaining({ summary: 'Saved note' }),
         'note',
+        undefined,
       )
     })
   })

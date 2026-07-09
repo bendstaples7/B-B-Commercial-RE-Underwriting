@@ -51,6 +51,8 @@ export function DoNotContactQueue() {
     },
   ]
 
+  const fromQueue = { key: 'do-not-contact', label: 'Do Not Contact' }
+
   const rowActions: RowAction[] = [
     {
       label: 'Reactivate',
@@ -76,6 +78,7 @@ export function DoNotContactQueue() {
       <QueueTable
         rows={rows}
         total={total}
+        fromQueue={fromQueue}
         rowActions={rowActions}
         extraColumns={extraColumns}
         {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}

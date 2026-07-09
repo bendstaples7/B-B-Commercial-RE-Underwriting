@@ -444,6 +444,18 @@ class TestMissingPropertyMatchQueue:
 # GET /api/queues/mail-candidates
 # ---------------------------------------------------------------------------
 
+def _make_mail_ready_lead(app, street, **kwargs):
+    defaults = dict(
+        lead_status='mailing_no_contact_made',
+        recommended_action='mail_ready',
+        property_city='Chicago',
+        property_state='IL',
+        property_zip='60601',
+    )
+    defaults.update(kwargs)
+    return _make_lead(app, street, **defaults)
+
+
 class TestMailCandidatesQueue:
     def test_returns_200(self, client, app):
         with app.app_context():
@@ -452,11 +464,7 @@ class TestMailCandidatesQueue:
 
     def test_mail_ready_lead_appears(self, client, app):
         with app.app_context():
-            lead = _make_lead(
-                app, '1 Mail Ready St',
-                lead_status='mailing_no_contact_made',
-                recommended_action='mail_ready',
-            )
+            lead = _make_mail_ready_lead(app, '1 Mail Ready St')
             response = client.get('/api/queues/mail-candidates', headers=_AUTH_HEADERS)
             data = json.loads(response.data)
             ids = [r['id'] for r in data['rows']]
@@ -467,11 +475,7 @@ class TestMailCandidatesQueue:
         from app.models.mail_queue_item import MailQueueItem
 
         with app.app_context():
-            lead = _make_lead(
-                app, '2 Mail Ready St',
-                lead_status='mailing_no_contact_made',
-                recommended_action='mail_ready',
-            )
+            lead = _make_mail_ready_lead(app, '2 Mail Ready St')
             db.session.add(MailQueueItem(
                 lead_id=lead.id, user_id='test-user', status='queued',
             ))
@@ -483,10 +487,8 @@ class TestMailCandidatesQueue:
 
     def test_mail_candidates_include_last_sale_at(self, client, app):
         with app.app_context():
-            lead = _make_lead(
+            lead = _make_mail_ready_lead(
                 app, '4 Mail Sale St',
-                lead_status='mailing_no_contact_made',
-                recommended_action='mail_ready',
                 most_recent_sale='6/15/2010',
             )
             response = client.get('/api/queues/mail-candidates', headers=_AUTH_HEADERS)
@@ -499,11 +501,7 @@ class TestMailCandidatesQueue:
         from app.models.mail_queue_item import MailQueueItem
 
         with app.app_context():
-            lead = _make_lead(
-                app, '3 Mail Ready St',
-                lead_status='mailing_no_contact_made',
-                recommended_action='mail_ready',
-            )
+            lead = _make_mail_ready_lead(app, '3 Mail Ready St')
             db.session.add(MailQueueItem(
                 lead_id=lead.id, user_id='test-user', status='queued',
             ))
@@ -514,4 +512,79 @@ class TestMailCandidatesQueue:
             candidates = client.get('/api/queues/mail-candidates', headers=_AUTH_HEADERS)
             candidate_rows = json.loads(candidates.data)['rows']
             assert lead.id not in [row['id'] for row in candidate_rows]
+
+
+# ---------------------------------------------------------------------------
+# GET /api/queues/<queue_key>/navigation
+# ---------------------------------------------------------------------------
+
+class TestQueueNavigation:
+    def test_requires_lead_id(self, client, app):
+        with app.app_context():
+            response = client.get('/api/queues/todays-action/navigation', headers=_AUTH_HEADERS)
+            assert response.status_code == 400
+
+    def test_unknown_queue_key_404(self, client, app):
+        with app.app_context():
+            response = client.get(
+                '/api/queues/not-a-real-queue/navigation?lead_id=1',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 404
+
+    def test_neighbors_for_todays_action(self, client, app):
+        with app.app_context():
+            from app.services.queue_order_cache import queue_order_cache
+            queue_order_cache.clear()
+
+            lead_a = _make_lead(
+                app, 'Nav A St',
+                lead_status='mailing_no_contact_made',
+                recommended_action='follow_up_now',
+                lead_score=90,
+            )
+            lead_b = _make_lead(
+                app, 'Nav B St',
+                lead_status='mailing_no_contact_made',
+                recommended_action='follow_up_now',
+                lead_score=80,
+            )
+            lead_c = _make_lead(
+                app, 'Nav C St',
+                lead_status='mailing_no_contact_made',
+                recommended_action='follow_up_now',
+                lead_score=70,
+            )
+
+            response = client.get(
+                f'/api/queues/todays-action/navigation?lead_id={lead_b.id}',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            assert data['queue_key'] == 'todays-action'
+            assert data['lead_id'] == lead_b.id
+            assert data['total'] >= 3
+            assert data['position'] is not None
+            assert data['prev_id'] == lead_a.id
+            assert data['next_id'] == lead_c.id
+
+    def test_lead_not_in_queue_returns_null_position(self, client, app):
+        with app.app_context():
+            from app.services.queue_order_cache import queue_order_cache
+            queue_order_cache.clear()
+
+            outside = _make_lead(
+                app, 'Outside St',
+                lead_status='do_not_contact',
+                lead_score=10,
+            )
+            response = client.get(
+                f'/api/queues/todays-action/navigation?lead_id={outside.id}',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            assert data['position'] is None
+            assert data['prev_id'] is None
 

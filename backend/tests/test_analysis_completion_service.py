@@ -79,7 +79,7 @@ def test_resolve_analysis_complete_true_from_session_completed_steps(app):
         assert resolve_analysis_complete(lead) is True
 
 
-def test_compute_recommended_action_skips_analyze_property_when_session_complete(app):
+def test_compute_recommended_action_never_returns_analyze_property(app):
     with app.app_context():
         from app import db
 

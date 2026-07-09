@@ -1715,6 +1715,16 @@ class LogNoteSchema(RequestSchema):
     subject = fields.String(allow_none=True, load_default=None, validate=validate.Length(max=200))
 
 
+class LogCallFollowUpSchema(RequestSchema):
+    """Optional follow-up task created when logging a call."""
+    title = fields.String(required=True, validate=validate.Length(min=1, max=255))
+    due_date = fields.Date(required=True)
+    task_type = fields.String(
+        load_default='call_owner_today',
+        validate=validate.OneOf(VALID_TASK_TYPES),
+    )
+
+
 class LogCallSchema(RequestSchema):
     """Validation schema for POST /api/leads/:id/calls."""
     outcome = fields.String(
@@ -1733,6 +1743,8 @@ class LogCallSchema(RequestSchema):
     phone_number = fields.String(allow_none=True, load_default=None, validate=validate.Length(max=50))
     phone_label = fields.String(allow_none=True, load_default=None, validate=validate.Length(max=20))
     mail_campaign_id = fields.Integer(allow_none=True, load_default=None)
+    complete_task_id = fields.Integer(allow_none=True, load_default=None)
+    follow_up = fields.Nested(LogCallFollowUpSchema, allow_none=True, load_default=None)
 
 
 class ParkLeadSchema(RequestSchema):

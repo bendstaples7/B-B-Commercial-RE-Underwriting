@@ -27,8 +27,6 @@ from app.services.outreach_method_service import (
     refine_outreach_action,
     OUTREACH_ACTIONS,
 )
-from app.services.analysis_completion_service import resolve_analysis_complete
-
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -315,9 +313,6 @@ class LeadScoringEngine:
                 'enrich_data', 'no_property_match_no_address',
                 {'has_property_match': False, 'property_street': lead.property_street},
             )
-
-        if has_property_match and not resolve_analysis_complete(lead):
-            return 'analyze_property', 'no_analysis', {'analysis_complete': False}
 
         lead_id = getattr(lead, 'id', None)
         has_overdue_hs_task = _has_overdue_hubspot_task(lead_id) if isinstance(lead_id, int) else False

@@ -10,7 +10,7 @@
  *
  * Requirements: 5.8, 5.9, 12.1, 12.2
  */
-import React, { useState, useRef, useEffect, useCallback } from 'react'
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   CircularProgress,
@@ -27,14 +27,23 @@ import {
 } from '@mui/material'
 import { Link as RouterLink, useNavigate, useSearchParams, useLocation } from 'react-router-dom'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
+import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import BarChartIcon from '@mui/icons-material/BarChart'
-import { commandCenterService, leadTaskService, leadScoreService } from '@/services/api'
+import { commandCenterService, leadTaskService, leadScoreService, queueService } from '@/services/api'
 import { leadService } from '@/services/leadApi'
 import openLetterService from '@/services/openLetterApi'
 import { deriveQueueContext } from '@/utils/deriveQueueContext'
-import { parseLogActivityParam } from '@/utils/queueLogNavigation'
+import { parseLogActivityParam, buildLeadUrl } from '@/utils/queueLogNavigation'
+import { isFromQueueState, fromQueueFromKey, queuePath, type FromQueueState } from '@/utils/fromQueue'
+import {
+  LEAD_WORKSPACE_STALE_MS,
+  prefetchAdjacentQueueLeads,
+  prefetchLeadWorkspace,
+  prefetchQueueNavigation,
+} from '@/utils/prefetchLeadWorkspace'
 import { ALL_LEAD_STATUSES } from '@/constants/leadStatuses'
-import type { CommandCenterPayload, PropertyDetail, LeadTask, LeadTimelineEntry, PropertyScoreResponse, PropertyScoreRecord, OutreachContact } from '@/types'
+import type { CommandCenterPayload, PropertyDetail, LeadTask, LeadTimelineEntry, PropertyScoreResponse, PropertyScoreRecord, OutreachContact, QueueNavigation } from '@/types'
 import { LeadScoreBadge } from '@/components/LeadScoreBadge'
 import type { ScoreTier } from '@/components/LeadScoreBadge'
 import { LeadStatusSelector } from '@/components/LeadStatusSelector'
@@ -80,9 +89,17 @@ interface StickyHeaderProps {
   scoreRecord?: PropertyScoreRecord | null
   onStatusChanged: () => void
   onViewFullBreakdown?: () => void
+  fromQueue?: FromQueueState | null
 }
 
-function StickyHeader({ leadId, commandCenterData, scoreRecord, onStatusChanged, onViewFullBreakdown }: StickyHeaderProps) {
+function StickyHeader({
+  leadId,
+  commandCenterData,
+  scoreRecord,
+  onStatusChanged,
+  onViewFullBreakdown,
+  fromQueue,
+}: StickyHeaderProps) {
   const [scoreDialogOpen, setScoreDialogOpen] = useState(false)
   const navigate = useNavigate()
 
@@ -103,15 +120,23 @@ function StickyHeader({ leadId, commandCenterData, scoreRecord, onStatusChanged,
   const displayScore = scoreRecord?.total_score ?? commandCenterData.lead_score
   const tierTooltip = `Tier ${scoreTier}: ${TIER_RANGE_LABELS[scoreTier]} — letter grade from total score (0–100)`
 
+  const handleBack = () => {
+    if (fromQueue) {
+      navigate(queuePath(fromQueue.key))
+      return
+    }
+    navigate(-1)
+  }
+
   return (
-    <Box sx={{ position: 'sticky', top: 0, zIndex: 100 }}>
+    <>
       <AppBar position="static" color="default" elevation={1}>
         <Toolbar>
           <IconButton
             data-testid="back-button"
-            onClick={() => navigate(-1)}
+            onClick={handleBack}
             edge="start"
-            aria-label="Go back"
+            aria-label={fromQueue ? `Back to ${fromQueue.label}` : 'Go back'}
             sx={{ mr: 1 }}
           >
             <ArrowBackIcon />
@@ -169,6 +194,84 @@ function StickyHeader({ leadId, commandCenterData, scoreRecord, onStatusChanged,
           onViewFullBreakdown={onViewFullBreakdown}
         />
       )}
+    </>
+  )
+}
+
+// ── QueueWorkHeader ───────────────────────────────────────────────────────────
+
+interface QueueWorkHeaderProps {
+  fromQueue: FromQueueState
+  navigation: QueueNavigation | undefined
+  isLoading: boolean
+  onAdvance: (leadId: number) => void
+  onPrefetchLead?: (leadId: number) => void
+}
+
+function QueueWorkHeader({
+  fromQueue,
+  navigation,
+  isLoading,
+  onAdvance,
+  onPrefetchLead,
+}: QueueWorkHeaderProps) {
+  const navigate = useNavigate()
+  const positionLabel =
+    navigation?.position != null
+      ? `${navigation.position} of ${navigation.total}`
+      : navigation
+        ? `${navigation.total} in queue`
+        : '…'
+
+  return (
+    <Box
+      data-testid="queue-work-header"
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1,
+        px: 2,
+        py: 1,
+        bgcolor: 'action.hover',
+        borderBottom: 1,
+        borderColor: 'divider',
+      }}
+    >
+      <Typography variant="body2" fontWeight={600} sx={{ flexGrow: 1 }}>
+        {fromQueue.label}
+        <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 1 }}>
+          · {isLoading ? '…' : positionLabel}
+        </Typography>
+      </Typography>
+      <Button
+        size="small"
+        onClick={() => navigate(queuePath(fromQueue.key))}
+        data-testid="queue-back-to-list"
+      >
+        Back to queue
+      </Button>
+      <IconButton
+        size="small"
+        disabled={!navigation?.prev_id}
+        aria-label="Previous in queue"
+        data-testid="queue-prev-btn"
+        onMouseEnter={() => navigation?.prev_id && onPrefetchLead?.(navigation.prev_id)}
+        onFocus={() => navigation?.prev_id && onPrefetchLead?.(navigation.prev_id)}
+        onClick={() => navigation?.prev_id && onAdvance(navigation.prev_id)}
+      >
+        <ChevronLeftIcon />
+      </IconButton>
+      <IconButton
+        size="small"
+        disabled={!navigation?.next_id}
+        aria-label="Next in queue"
+        data-testid="queue-next-btn"
+        onMouseEnter={() => navigation?.next_id && onPrefetchLead?.(navigation.next_id)}
+        onFocus={() => navigation?.next_id && onPrefetchLead?.(navigation.next_id)}
+        onClick={() => navigation?.next_id && onAdvance(navigation.next_id)}
+      >
+        <ChevronRightIcon />
+      </IconButton>
     </Box>
   )
 }
@@ -214,7 +317,11 @@ interface TasksPanelProps {
   outreachContact?: OutreachContact | null
   showOutreachContactOnPrimaryTask?: boolean
   missingOutreachChannel?: OutreachContact['channel'] | null
+  mailQueueStatus?: 'queued' | 'sent_recently' | null
+  upNextToMail?: boolean
   onTasksChanged: () => void
+  /** Called after a task is successfully completed (for queue auto-advance). */
+  onAfterTaskCompleted?: () => void
 }
 
 export interface TasksPanelHandle {
@@ -229,7 +336,10 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
     outreachContact,
     showOutreachContactOnPrimaryTask = false,
     missingOutreachChannel = null,
+    mailQueueStatus = null,
+    upNextToMail = false,
     onTasksChanged,
+    onAfterTaskCompleted,
   },
   ref,
 ) {
@@ -293,11 +403,17 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
         await leadTaskService.completeTask(leadId, taskId)
         queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
         onTasksChanged()
+        onAfterTaskCompleted?.()
       } catch (err) {
         // Rollback from snapshot
         setTasks(snapshot)
         console.error('Failed to complete task:', err)
       }
+    } else {
+      // HubSpot tasks are completed in LeadTaskList before this callback
+      queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+      onTasksChanged()
+      onAfterTaskCompleted?.()
     }
   }
 
@@ -310,6 +426,8 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
         outreachContact={outreachContact}
         showOutreachContactOnPrimaryTask={showOutreachContactOnPrimaryTask}
         missingOutreachChannel={missingOutreachChannel}
+        mailQueueStatus={mailQueueStatus}
+        upNextToMail={upNextToMail}
         onTaskCreated={handleTaskCreated}
         onTaskCompleted={handleTaskCompleted}
         onOptimisticTaskCreate={handleOptimisticTaskCreate}
@@ -399,6 +517,13 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const location = useLocation()
+  const [searchParams] = useSearchParams()
+  const fromQueue = useMemo(() => {
+    const state = location.state as { fromQueue?: unknown } | null
+    if (isFromQueueState(state?.fromQueue)) return state.fromQueue
+    return fromQueueFromKey(searchParams.get('queue'))
+  }, [location.state, searchParams])
+
   const {
     data: commandCenterData,
     isLoading: commandCenterLoading,
@@ -406,8 +531,17 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   } = useQuery<CommandCenterPayload, Error>({
     queryKey: ['commandCenter', leadId],
     queryFn: () => commandCenterService.getCommandCenter(leadId),
-    staleTime: 0,
-    refetchOnMount: 'always',
+    staleTime: LEAD_WORKSPACE_STALE_MS,
+  })
+
+  const {
+    data: queueNavigation,
+    isLoading: queueNavLoading,
+  } = useQuery<QueueNavigation>({
+    queryKey: ['queue-navigation', fromQueue?.key, leadId],
+    queryFn: () => queueService.getNavigation(fromQueue!.key, leadId),
+    enabled: !!fromQueue,
+    staleTime: LEAD_WORKSPACE_STALE_MS,
   })
 
   const {
@@ -419,8 +553,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       const response = await leadScoreService.getLeadScore(leadId)
       return response.data
     },
-    staleTime: 0,
-    refetchOnMount: 'always',
+    staleTime: LEAD_WORKSPACE_STALE_MS,
   })
 
   const {
@@ -429,9 +562,28 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   } = useQuery<PropertyDetail, Error>({
     queryKey: ['lead', leadId],
     queryFn: () => leadService.getLeadDetail(leadId),
-    staleTime: 0,
-    refetchOnMount: 'always',
+    staleTime: LEAD_WORKSPACE_STALE_MS,
   })
+
+  const prefetchQueueLead = useCallback(
+    (targetLeadId: number) => {
+      prefetchLeadWorkspace(queryClient, targetLeadId)
+      if (fromQueue) {
+        prefetchQueueNavigation(queryClient, fromQueue.key, targetLeadId)
+      }
+    },
+    [queryClient, fromQueue],
+  )
+
+  useEffect(() => {
+    if (!fromQueue || !queueNavigation) return
+    prefetchAdjacentQueueLeads(
+      queryClient,
+      fromQueue.key,
+      queueNavigation.prev_id,
+      queueNavigation.next_id,
+    )
+  }, [fromQueue, queueNavigation, queryClient])
 
   // Deep-link handling for the `?tab=` query param. The TabPanel selects the
   // tab named by the param (info/score/enrichment/marketing/analysis/contacts).
@@ -439,11 +591,10 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   // visible ActivityPanel above the tabs — so the Needs Review queue's "View
   // Activity" deep-link (?tab=timeline) instead scrolls the ActivityPanel into
   // view once the data has loaded and the panel has rendered.
-  const [searchParams] = useSearchParams()
   const tabParam = searchParams.get('tab')
   const activityRef = useRef<ActivityPanelHandle>(null)
   const tasksPanelRef = useRef<TasksPanelHandle>(null)
-  const showLead = !commandCenterLoading && !leadLoading && !commandCenterError
+  const showLead = !!commandCenterData && !commandCenterError
   const [activityModal, setActivityModal] = useState<ActivityLogType | null>(null)
   const [highlightEntryId, setHighlightEntryId] = useState<number | null>(null)
   const [activitySnackbar, setActivitySnackbar] = useState<{
@@ -456,18 +607,64 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     message: '',
   })
 
+  const advanceInQueue = useCallback(
+    (nextLeadId: number) => {
+      if (!fromQueue) return
+      navigate(buildLeadUrl(nextLeadId, fromQueue.key), { state: { fromQueue } })
+    },
+    [fromQueue, navigate],
+  )
+
+  const exitQueueCaughtUp = useCallback(() => {
+    if (!fromQueue) return
+    navigate(queuePath(fromQueue.key))
+    setActivitySnackbar({
+      open: true,
+      message: 'Queue caught up.',
+    })
+  }, [fromQueue, navigate])
+
+  const advanceAfterTaskComplete = useCallback(async () => {
+    if (!fromQueue) return
+    const nextId = queueNavigation?.next_id
+    if (nextId) {
+      advanceInQueue(nextId)
+      return
+    }
+    try {
+      const nav = await queueService.getNavigation(fromQueue.key, leadId)
+      if (nav.next_id) {
+        advanceInQueue(nav.next_id)
+      } else {
+        exitQueueCaughtUp()
+      }
+    } catch {
+      exitQueueCaughtUp()
+    }
+  }, [fromQueue, leadId, queueNavigation?.next_id, advanceInQueue, exitQueueCaughtUp])
+
   const handleStatusChanged = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
   }, [queryClient, leadId])
 
-  const handleActivitySaved = useCallback((entry: LeadTimelineEntry, type: ActivityLogType) => {
+  const handleActivitySaved = useCallback((
+    entry: LeadTimelineEntry,
+    type: ActivityLogType,
+    meta?: { completedTaskId?: number; completedHubSpotTaskId?: number },
+  ) => {
     activityRef.current?.prependEntry(entry)
     setHighlightEntryId(entry.id)
     setActivitySnackbar({ open: true, message: ACTIVITY_SUCCESS_MESSAGES[type] })
     setActivityModal(null)
     queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
     window.setTimeout(() => setHighlightEntryId(null), 2000)
-  }, [queryClient, leadId])
+    if (
+      fromQueue
+      && (meta?.completedTaskId != null || meta?.completedHubSpotTaskId != null)
+    ) {
+      void advanceAfterTaskComplete()
+    }
+  }, [queryClient, leadId, fromQueue, advanceAfterTaskComplete])
 
   const handleRaAction = useCallback(async (action: string) => {
     switch (action) {
@@ -530,11 +727,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     const search = next.toString()
     navigate(
       { pathname: location.pathname, search: search ? `?${search}` : '' },
-      { replace: true },
+      { replace: true, state: location.state },
     )
-  }, [showLead, searchParams, navigate, location.pathname])
+  }, [showLead, searchParams, navigate, location.pathname, location.state])
 
-  if (commandCenterLoading || leadLoading) {
+  if (commandCenterLoading && !commandCenterData) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
         <CircularProgress aria-label="Loading lead" />
@@ -576,14 +773,26 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
 
   return (
     <Box>
-      {/* Sticky header — owner name, address, score, status, back button (Req 5.1, 10.1, 10.2) */}
-      <StickyHeader
-        leadId={leadId}
-        commandCenterData={commandCenterData!}
-        scoreRecord={scoreData?.latest}
-        onStatusChanged={handleStatusChanged}
-        onViewFullBreakdown={handleViewScoreBreakdown}
-      />
+      {/* Queue work bar + sticky lead header */}
+      <Box sx={{ position: 'sticky', top: 0, zIndex: 100, bgcolor: 'background.default' }}>
+        {fromQueue && (
+          <QueueWorkHeader
+            fromQueue={fromQueue}
+            navigation={queueNavigation}
+            isLoading={queueNavLoading}
+            onAdvance={advanceInQueue}
+            onPrefetchLead={prefetchQueueLead}
+          />
+        )}
+        <StickyHeader
+          leadId={leadId}
+          commandCenterData={commandCenterData!}
+          scoreRecord={scoreData?.latest}
+          onStatusChanged={handleStatusChanged}
+          onViewFullBreakdown={handleViewScoreBreakdown}
+          fromQueue={fromQueue}
+        />
+      </Box>
 
       {/* Queue context banners — one per queue membership (Req 5.2) */}
       <QueueContextBanners commandCenterData={commandCenterData!} />
@@ -598,6 +807,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               recommendedAction={recommendedActionWithContact}
               leadStatus={commandCenterData!.lead_status}
               openTasks={openTasks}
+              mailQueueStatus={commandCenterData!.mail_queue_status ?? null}
               showOutreachContact={placement === 'recommended_action'}
               onAction={handleRaAction}
               onCreateTask={handleCreateTask}
@@ -612,7 +822,10 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             outreachContact={outreachContact}
             showOutreachContactOnPrimaryTask={placement === 'primary_task'}
             missingOutreachChannel={missingOutreachChannel}
+            mailQueueStatus={commandCenterData!.mail_queue_status ?? null}
+            upNextToMail={Boolean(commandCenterData!.up_next_to_mail)}
             onTasksChanged={() => queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })}
+            onAfterTaskCompleted={fromQueue ? () => { void advanceAfterTaskComplete() } : undefined}
           />
 
           {/* ActivityPanel — third in ActivityColumn (Req 8.1–8.3) */}
@@ -625,13 +838,19 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           />
 
           {/* TabPanel — fourth in ActivityColumn (Req 9.1–9.6) */}
-          <LeadDetailTabPanel
-            leadId={leadId}
-            leadData={leadData!}
-            commandCenterData={commandCenterData!}
-            scoreData={scoreData}
-            scoreLoading={scoreLoading}
-          />
+          {leadData ? (
+            <LeadDetailTabPanel
+              leadId={leadId}
+              leadData={leadData}
+              commandCenterData={commandCenterData!}
+              scoreData={scoreData}
+              scoreLoading={scoreLoading}
+            />
+          ) : leadLoading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+              <CircularProgress size={28} aria-label="Loading property details" />
+            </Box>
+          ) : null}
         </Box>
 
         {/* Property sidebar — sticky, hidden below lg breakpoint (Req 11.1–11.5) */}
@@ -642,6 +861,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         open={activityModal != null}
         activityType={activityModal}
         leadId={leadId}
+        openTasks={openTasks}
         onClose={() => setActivityModal(null)}
         onSaved={handleActivitySaved}
       />

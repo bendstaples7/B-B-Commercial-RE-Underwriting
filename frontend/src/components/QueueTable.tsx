@@ -25,6 +25,8 @@ import {
 } from '@mui/material'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import type { QueueRow, BulkActionResult } from '@/types'
+import type { FromQueueState } from '@/utils/fromQueue'
+import { buildLeadUrl } from '@/utils/queueLogNavigation'
 import { LeadStatusChip } from './LeadStatusChip'
 import { OutreachContactCallout } from './OutreachContactCallout'
 import { outreachDisplayLabel } from '@/constants/scoringRecommendedActions'
@@ -55,6 +57,8 @@ export interface ExtraColumn {
 export interface QueueTableProps {
   rows: QueueRow[]
   total: number
+  /** When set, lead opens preserve HubSpot-style queue work session. */
+  fromQueue?: FromQueueState
   sortBy?: string
   sortOrder?: 'asc' | 'desc'
   onSort?: (column: string) => void
@@ -108,6 +112,7 @@ const SORTABLE_COLUMNS = [
 export function QueueTable({
   rows,
   total,
+  fromQueue,
   sortBy,
   sortOrder = 'asc',
   onSort,
@@ -126,6 +131,8 @@ export function QueueTable({
   const [bulkMessage, setBulkMessage] = useState<string | null>(null)
   const [isBulkProcessing, setIsBulkProcessing] = useState(false)
   const navigate = useNavigate()
+  const leadNavState = fromQueue ? { fromQueue } : undefined
+  const leadTo = (id: number) => buildLeadUrl(id, fromQueue?.key)
 
   // ---------------------------------------------------------------------------
   // Selection helpers
@@ -194,7 +201,9 @@ export function QueueTable({
     try {
       const result = await action.onClick(selectedIds)
       if (result.failures > 0) {
-        setBulkMessage(`${result.successes} succeeded, ${result.failures} failed`)
+        setBulkMessage(
+          result.message ?? `${result.successes} succeeded, ${result.failures} failed`,
+        )
       }
       if (onSelectionChange) {
         onSelectionChange([])
@@ -336,7 +345,7 @@ export function QueueTable({
                       // Don't navigate if clicking a checkbox or action button
                       const target = e.target as HTMLElement
                       if (target.closest('input[type="checkbox"]') || target.closest('button') || target.closest('a')) return
-                      navigate('/leads/' + row.id)
+                      navigate(leadTo(row.id), leadNavState ? { state: leadNavState } : undefined)
                     }}
                   >
                     {/* Row checkbox */}
@@ -355,7 +364,8 @@ export function QueueTable({
                     <TableCell data-testid={`row-name-${row.id}`}>
                       <Link
                         component={RouterLink}
-                        to={'/leads/' + row.id}
+                        to={leadTo(row.id)}
+                        state={leadNavState}
                         underline="hover"
                         color="primary"
                         fontWeight={500}
@@ -412,7 +422,8 @@ export function QueueTable({
                           <IconButton
                             size="small"
                             component={RouterLink}
-                            to={'/leads/' + row.id}
+                            to={leadTo(row.id)}
+                            state={leadNavState}
                             aria-label="Open lead detail"
                             data-testid={`row-action-view-${row.id}`}
                           >
