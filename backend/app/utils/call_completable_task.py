@@ -16,6 +16,23 @@ NON_CALL_TASK_TYPES = frozenset({
     'skip_trace_owner',
 })
 
+MAIL_SKIP_TASK_TYPES = frozenset({
+    'research_missing_pin',
+    'match_hubspot_deal',
+    'run_property_analysis',
+    'skip_trace_owner',
+})
+
+
+def is_superseded_by_mail_task(task_type: str | None, title: str | None) -> bool:
+    """Return True if an open task should be completed when a lead enters the mail batch."""
+    ttype = (task_type or 'custom').strip()
+    if ttype in MAIL_SKIP_TASK_TYPES:
+        return False
+    if ttype in ('add_to_mail_batch', 'call_owner_today'):
+        return True
+    return is_call_completable_task(task_type, title)
+
 
 def is_mail_or_email_outreach_task(task_type: str | None, title: str | None) -> bool:
     ttype = (task_type or 'custom').strip()

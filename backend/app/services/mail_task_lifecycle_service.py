@@ -5,9 +5,13 @@ import logging
 import re
 from datetime import date, datetime, timedelta, timezone
 
+from sqlalchemy import or_
+
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry, MailQueueItem
 from app.models.task import Task
+from app.models.task_association import TaskAssociation
+from app.utils.call_completable_task import is_superseded_by_mail_task
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +25,121 @@ def _lead_address_label(lead: Lead) -> str:
     return street or f'lead {lead.id}'
 
 
+def _append_native_task_completed_timeline(
+    lead_id: int,
+    task: LeadTask,
+    actor: str,
+    now: datetime,
+) -> None:
+    db.session.add(
+        LeadTimelineEntry(
+            lead_id=lead_id,
+            event_type='task_completed',
+            occurred_at=now,
+            source='system',
+            actor=actor,
+            summary=f'Task completed: {task.title}',
+            event_metadata={
+                'task_id': task.id,
+                'task_type': task.task_type,
+                'title': task.title,
+                'reason': 'mail_queued',
+            },
+        ),
+    )
+
+
+def _open_hubspot_tasks_for_lead(lead_id: int) -> list[Task]:
+    """Open/overdue HubSpot-imported tasks linked to a lead."""
+    via_assoc = (
+        Task.query.join(TaskAssociation, TaskAssociation.task_id == Task.id)
+        .filter(
+            TaskAssociation.target_type == 'lead',
+            TaskAssociation.target_id == lead_id,
+            Task.status.in_(['open', 'overdue']),
+            Task.source == 'hubspot_import',
+        )
+        .all()
+    )
+    via_direct = Task.query.filter(
+        Task.lead_id == lead_id,
+        Task.status.in_(['open', 'overdue']),
+        Task.source == 'hubspot_import',
+    ).all()
+    seen: set[int] = set()
+    merged: list[Task] = []
+    for task in via_assoc + via_direct:
+        if task.id not in seen:
+            seen.add(task.id)
+            merged.append(task)
+    return merged
+
+
+def _complete_native_task_mirror(task: Task, now: datetime) -> None:
+    task.status = 'completed'
+    task.completion_timestamp = now
+    task.updated_at = now
+    db.session.add(task)
+
+
+def complete_tasks_superseded_by_mail(
+    lead_id: int,
+    actor: str = 'system',
+    *,
+    commit: bool = False,
+) -> tuple[int, list[str]]:
+    """Complete outreach tasks superseded when a lead is staged for mail.
+
+    Returns (completed_count, hubspot_task_ids_pending_api_sync).
+    """
+    now = datetime.now(timezone.utc)
+    completed = 0
+    hubspot_ids_to_sync: list[str] = []
+
+    native_tasks = LeadTask.query.filter_by(lead_id=lead_id, status='open').all()
+    for task in native_tasks:
+        if not is_superseded_by_mail_task(task.task_type, task.title):
+            continue
+        task.status = 'completed'
+        task.completed_at = now
+        db.session.add(task)
+        _append_native_task_completed_timeline(lead_id, task, actor, now)
+        completed += 1
+
+    from app.services.hubspot_task_completion_service import mark_hubspot_task_completed_local
+
+    hubspot_tasks = _open_hubspot_tasks_for_lead(lead_id)
+    for hs_task in hubspot_tasks:
+        if not is_superseded_by_mail_task(hs_task.task_type, hs_task.title):
+            continue
+        local = mark_hubspot_task_completed_local(
+            lead_id,
+            hs_task.id,
+            actor=actor,
+            reason='mail_queued',
+        )
+        if local:
+            completed += 1
+            if local.hubspot_task_id:
+                hubspot_ids_to_sync.append(local.hubspot_task_id)
+
+    mirrored = Task.query.filter(
+        Task.lead_id == lead_id,
+        Task.status.in_(['open', 'overdue']),
+        Task.source != 'hubspot_import',
+    ).all()
+    for mirror in mirrored:
+        if not is_superseded_by_mail_task(mirror.task_type, mirror.title):
+            continue
+        _complete_native_task_mirror(mirror, now)
+        completed += 1
+
+    if commit and completed:
+        db.session.commit()
+
+    return completed, hubspot_ids_to_sync
+
+
 def complete_mail_prep_tasks(
     lead_id: int,
     actor: str = 'system',
@@ -28,54 +147,22 @@ def complete_mail_prep_tasks(
     commit: bool = False,
 ) -> int:
     """Complete open add_to_mail_batch tasks when a lead is staged for mail."""
-    now = datetime.now(timezone.utc)
-    tasks = LeadTask.query.filter(
-        LeadTask.lead_id == lead_id,
-        LeadTask.task_type == 'add_to_mail_batch',
-        LeadTask.status == 'open',
-    ).all()
+    count, _pending = complete_tasks_superseded_by_mail(lead_id, actor=actor, commit=commit)
+    return count
 
-    completed = 0
-    for task in tasks:
-        task.status = 'completed'
-        task.completed_at = now
-        db.session.add(task)
-        db.session.add(
-            LeadTimelineEntry(
-                lead_id=lead_id,
-                event_type='task_completed',
-                occurred_at=now,
-                source='system',
-                actor=actor,
-                summary=f'Task completed: {task.title}',
-                event_metadata={
-                    'task_id': task.id,
-                    'task_type': task.task_type,
-                    'title': task.title,
-                    'reason': 'mail_queued',
-                },
-            ),
+
+def find_mail_awaiting_lead_ids() -> list[int]:
+    """Lead IDs staged in a mail batch (queued item or up_next_to_mail flag)."""
+    queued_lead_ids = db.session.query(MailQueueItem.lead_id).filter(
+        MailQueueItem.status == 'queued',
+    ).distinct()
+    rows = Lead.query.filter(
+        or_(
+            Lead.up_next_to_mail.is_(True),
+            Lead.id.in_(queued_lead_ids),
         )
-        completed += 1
-
-    if completed:
-        Task.query.filter(
-            Task.lead_id == lead_id,
-            Task.task_type == 'add_to_mail_batch',
-            Task.status.in_(['open', 'overdue']),
-        ).update(
-            {
-                'status': 'completed',
-                'completion_timestamp': now,
-                'updated_at': now,
-            },
-            synchronize_session=False,
-        )
-
-    if commit and completed:
-        db.session.commit()
-
-    return completed
+    ).with_entities(Lead.id).all()
+    return [row[0] for row in rows]
 
 
 def _parse_sent_at(value) -> datetime | None:

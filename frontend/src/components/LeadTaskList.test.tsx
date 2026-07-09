@@ -891,4 +891,22 @@ describe('LeadTaskList', () => {
       expect(screen.getByTestId('task-item-2')).not.toHaveTextContent('(630) 202-3839')
     })
   })
+
+  describe('mail batch awaiting state', () => {
+    it('shows paused note when awaiting mail batch with no open tasks', () => {
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[]}
+          mailQueueStatus="queued"
+          onTaskCreated={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('awaiting-mail-batch-chip')).toBeInTheDocument()
+      expect(screen.getByTestId('mail-awaiting-paused-note')).toHaveTextContent(
+        'Outreach paused — waiting for batch send.',
+      )
+    })
+  })
 })

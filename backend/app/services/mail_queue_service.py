@@ -16,9 +16,10 @@ from app.services.open_letter_contact_mapper import (
 )
 from app.services.scoring_rubric import is_recently_sold
 from app.services.mail_task_lifecycle_service import (
-    complete_mail_prep_tasks,
+    complete_tasks_superseded_by_mail,
     refresh_leads_after_mail_task_changes,
 )
+from app.services.hubspot_task_completion_service import sync_pending_hubspot_completions
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ class MailQueueService:
         invalid = 0
         results = []
         queued_lead_ids: list[int] = []
+        hubspot_sync_ids: list[str] = []
 
         for lead_id in lead_ids:
             outcome: dict | None = None
@@ -128,7 +130,10 @@ class MailQueueService:
                                 source='system',
                                 commit=False,
                             )
-                            complete_mail_prep_tasks(lead_id, actor=user_id, commit=False)
+                            _completed, pending_sync = complete_tasks_superseded_by_mail(
+                                lead_id, actor=user_id, commit=False,
+                            )
+                            hubspot_sync_ids.extend(pending_sync)
                             # Flush remaining writes before savepoint release so
                             # success accounting only runs if the unit commits.
                             db.session.flush()
@@ -157,6 +162,7 @@ class MailQueueService:
                 })
 
         db.session.commit()
+        sync_pending_hubspot_completions(hubspot_sync_ids)
         refresh_leads_after_mail_task_changes(queued_lead_ids)
         return {'added': added, 'skipped': skipped, 'invalid': invalid, 'results': results}
 

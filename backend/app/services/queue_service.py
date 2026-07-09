@@ -158,6 +158,28 @@ def _open_lead_task_due_today_excluding_mail_awaiting(today: date):
     )
 
 
+def _open_lead_task_overdue_excluding_mail_awaiting(today: date):
+    """Open native task overdue, excluding leads waiting in a mail batch."""
+    return and_(
+        exists().where(
+            and_(
+                LeadTask.lead_id == Lead.id,
+                LeadTask.status == 'open',
+                LeadTask.due_date < today,
+            )
+        ),
+        ~_lead_awaiting_mail_subquery(),
+    )
+
+
+def _hubspot_task_overdue_excluding_mail_awaiting(cutoff_date):
+    """HubSpot task overdue, excluding leads waiting in a mail batch."""
+    return and_(
+        _hubspot_task_overdue_subquery(cutoff_date),
+        ~_lead_awaiting_mail_subquery(),
+    )
+
+
 class QueueService:
     """Computes badge counts and paginated rows for the 7 Actionable Lead Command Center queues."""
 
@@ -259,14 +281,8 @@ class QueueService:
           - Has an open/overdue HubSpot task with due_date in the past (any lead_status)
         """
         yesterday = today - timedelta(days=1)
-        open_lead_task_overdue = exists().where(
-            and_(
-                LeadTask.lead_id == Lead.id,
-                LeadTask.status == 'open',
-                LeadTask.due_date < today,
-            )
-        )
-        hubspot_task_overdue = _hubspot_task_overdue_subquery(yesterday)
+        open_lead_task_overdue = _open_lead_task_overdue_excluding_mail_awaiting(today)
+        hubspot_task_overdue = _hubspot_task_overdue_excluding_mail_awaiting(yesterday)
 
         return (
             self._base_query()
@@ -276,6 +292,7 @@ class QueueService:
                     and_(
                         Lead.recommended_action == 'follow_up_now',
                         Lead.last_contact_date < seven_days_ago,
+                        ~_lead_awaiting_mail_subquery(),
                     ),
                     hubspot_task_overdue,
                 )
@@ -412,14 +429,8 @@ class QueueService:
         yesterday = today - timedelta(days=1)
         seven_days_ago = today - timedelta(days=7)
 
-        open_lead_task_overdue = exists().where(
-            and_(
-                LeadTask.lead_id == Lead.id,
-                LeadTask.status == 'open',
-                LeadTask.due_date < today,
-            )
-        )
-        hubspot_task_overdue = _hubspot_task_overdue_subquery(yesterday)
+        open_lead_task_overdue = _open_lead_task_overdue_excluding_mail_awaiting(today)
+        hubspot_task_overdue = _hubspot_task_overdue_excluding_mail_awaiting(yesterday)
 
         query = self._base_query().filter(
             or_(
@@ -427,6 +438,7 @@ class QueueService:
                 and_(
                     Lead.recommended_action == 'follow_up_now',
                     Lead.last_contact_date < seven_days_ago,
+                    ~_lead_awaiting_mail_subquery(),
                 ),
                 hubspot_task_overdue,
             )
@@ -701,20 +713,15 @@ class QueueService:
             today = date.today()
             yesterday = today - timedelta(days=1)
             seven_days_ago = today - timedelta(days=7)
-            open_lead_task_overdue = exists().where(
-                and_(
-                    LeadTask.lead_id == Lead.id,
-                    LeadTask.status == 'open',
-                    LeadTask.due_date < today,
-                )
-            )
-            hubspot_task_overdue = _hubspot_task_overdue_subquery(yesterday)
+            open_lead_task_overdue = _open_lead_task_overdue_excluding_mail_awaiting(today)
+            hubspot_task_overdue = _hubspot_task_overdue_excluding_mail_awaiting(yesterday)
             query = self._base_query().filter(
                 or_(
                     open_lead_task_overdue,
                     and_(
                         Lead.recommended_action == 'follow_up_now',
                         Lead.last_contact_date < seven_days_ago,
+                        ~_lead_awaiting_mail_subquery(),
                     ),
                     hubspot_task_overdue,
                 )
