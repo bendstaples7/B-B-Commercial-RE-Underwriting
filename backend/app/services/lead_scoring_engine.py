@@ -22,6 +22,7 @@ from app.models.lead_task import LeadTask
 from app.models.lead_timeline_entry import LeadTimelineEntry
 from app.models.lead_crm_flags_view import LeadCRMFlagsView
 from app.services import scoring_rubric as rubric
+from app.services.open_letter_contact_mapper import is_mailable_lead
 from app.services.outreach_method_service import (
     evaluate_contact_method,
     refine_outreach_action,
@@ -301,6 +302,22 @@ class LeadScoringEngine:
 
         has_phone, has_email, has_property_match = _resolve_crm_flags(lead)
         if not has_phone and not has_email:
+            if is_mailable_lead(lead):
+                if rubric.is_recently_sold(lead):
+                    sale = rubric.effective_acquisition_date(lead)
+                    days_since = (date.today() - sale).days if sale else None
+                    return 'nurture', 'recently_sold', {
+                        'has_phone': False,
+                        'has_email': False,
+                        'is_mailable': True,
+                        'most_recent_sale': getattr(lead, 'most_recent_sale', None),
+                        'days_since_sale': days_since,
+                    }
+                return 'mail_ready', 'mailable_no_digital_contact', {
+                    'has_phone': False,
+                    'has_email': False,
+                    'is_mailable': True,
+                }
             return 'add_contact_info', 'no_contact_info', {'has_phone': False, 'has_email': False}
 
         if not has_property_match and lead.property_street:

@@ -41,6 +41,7 @@ import { ScoreBreakdownCard } from '@/components/ScoreBreakdownCard'
 import { ScoreHistoryTimeline } from '@/components/ScoreHistoryTimeline'
 import { ScoreLegend } from '@/components/ScoreLegend'
 import { MotivationSignalsPanel } from '@/components/lead-detail/MotivationSignalsPanel'
+import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
 import { formatImportedSource } from './leadDetailFormatters'
 
 const DEFAULT_TAB_INDEX = 0
@@ -231,7 +232,6 @@ export function LeadDetailTabPanel({
             ['Last Name', leadData.owner_last_name],
             ['Owner 2', [leadData.owner_2_first_name, leadData.owner_2_last_name].filter(Boolean).join(' ') || null],
             ['Ownership Type', leadData.ownership_type],
-            ['Acquisition Date', formatDate(leadData.acquisition_date)],
           ])}
           {fieldGroup('Property Details', [
             ['Street', leadData.property_street],
@@ -249,8 +249,18 @@ export function LeadDetailTabPanel({
             ['Zoning', leadData.zoning],
             ['County Assessor PIN', leadData.county_assessor_pin],
             ['Tax Bill 2021', leadData.tax_bill_2021 != null ? `$${leadData.tax_bill_2021.toLocaleString()}` : null],
-            ['Most Recent Sale', leadData.most_recent_sale],
+            ['Most Recent Sale', commandCenterData.most_recent_sale_display ?? leadData.most_recent_sale],
           ])}
+          {formatSaleDateFreshness(commandCenterData.sale_date_meta) && (
+            <Typography
+              variant="caption"
+              color="text.disabled"
+              sx={{ display: 'block', mt: -2, mb: 3, pl: 1 }}
+              data-testid="info-most-recent-sale-freshness"
+            >
+              {formatSaleDateFreshness(commandCenterData.sale_date_meta)}
+            </Typography>
+          )}
           {fieldGroup('Contact Information', [
             ['Phone 1', leadData.phone_1 ? formatPhoneNumber(leadData.phone_1) : null],
             ['Phone 2', leadData.phone_2 ? formatPhoneNumber(leadData.phone_2) : null],

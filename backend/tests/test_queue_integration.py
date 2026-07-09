@@ -452,12 +452,29 @@ class TestQueueCountsEndpoint:
 
 class TestActionEngineIntegration:
     def test_lead_with_no_phone_gets_add_contact_info(self, app):
-        """A lead with no phone or email gets recommended_action=add_contact_info."""
+        """A lead with no phone or email and no mailable address gets add_contact_info."""
         with app.app_context():
             lead = _make_lead(app, '1 Action Engine St',
                               has_phone=False, has_email=False)
             action = ActionEngineService.compute_recommended_action(lead)
             assert action == 'add_contact_info'
+
+    def test_mailable_lead_no_contact_gets_mail_ready(self, app):
+        """A mailable lead with no phone/email gets mail_ready."""
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '6 Mailable St',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60601',
+                has_phone=False,
+                has_email=False,
+                has_property_match=True,
+                lead_status='mailing_no_contact_made',
+            )
+            action = ActionEngineService.compute_recommended_action(lead)
+            assert action == 'mail_ready'
 
     def test_lead_with_phone_no_match_gets_resolve_match(self, app):
         """A lead with phone but no property match gets recommended_action=resolve_match."""

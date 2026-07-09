@@ -136,6 +136,7 @@ export interface RecommendedActionPanelProps {
   leadStatus: LeadStatus
   openTasks: LeadTask[]
   mailQueueStatus?: 'queued' | 'sent_recently' | null
+  isMailable?: boolean
   /** When true, show outreach contact inline under the action label */
   showOutreachContact?: boolean
   onAction: (action: string) => Promise<void>
@@ -160,6 +161,7 @@ export function RecommendedActionPanel({
   leadStatus,
   openTasks,
   mailQueueStatus = null,
+  isMailable = false,
   showOutreachContact = false,
   onAction,
   onCreateTask,
@@ -169,6 +171,7 @@ export function RecommendedActionPanel({
 
   const isDNC = leadStatus === 'do_not_contact'
   const isInMailBatch = mailQueueStatus === 'queued'
+  const wasSentRecently = mailQueueStatus === 'sent_recently'
 
   const handleAction = async (action: string) => {
     setActionError(null)
@@ -254,7 +257,19 @@ export function RecommendedActionPanel({
   const raButtons = (ACTION_BUTTONS[value] ?? []).filter(
     (btn) => !UNIVERSAL_ACTIONS.some((u) => u.action === btn.action),
   )
-  const prioritizedRaButtons = prioritizeButtonsForMethod(raButtons, contactMethod)
+  let prioritizedRaButtons = prioritizeButtonsForMethod(raButtons, contactMethod)
+  if (
+    isMailable
+    && !isInMailBatch
+    && !wasSentRecently
+    && value === 'add_contact_info'
+    && !prioritizedRaButtons.some((btn) => btn.action === 'add_to_mail_batch')
+  ) {
+    prioritizedRaButtons = [
+      { label: 'Add to Mail Queue', action: 'add_to_mail_batch', isOutreach: true },
+      ...prioritizedRaButtons,
+    ]
+  }
   const hasOpenTasks = openTasks.length > 0
   const showCreateTaskCTA = value === 'create_task' && !hasOpenTasks && typeof onCreateTask === 'function'
 

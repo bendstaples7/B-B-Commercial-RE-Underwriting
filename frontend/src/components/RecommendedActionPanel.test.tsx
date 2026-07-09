@@ -514,6 +514,67 @@ describe('RecommendedActionPanel', () => {
       expect(screen.queryByTestId('ra-action-btn-add_to_mail_batch')).not.toBeInTheDocument()
     })
   })
+
+  describe('mailable add_contact_info mail CTA', () => {
+    it('shows Add to Mail Queue when add_contact_info and isMailable', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('add_contact_info', 'Add Contact Info')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          isMailable
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('ra-action-btn-add_to_mail_batch')).toBeInTheDocument()
+    })
+
+    it('does not inject mail CTA when not mailable', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('add_contact_info', 'Add Contact Info')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.queryByTestId('ra-action-btn-add_to_mail_batch')).not.toBeInTheDocument()
+    })
+
+    it('does not inject mail CTA when already in mail batch', () => {
+      render(
+        <MemoryRouter>
+          <RecommendedActionPanel
+            recommendedAction={makeRA('add_contact_info', 'Add Contact Info')}
+            leadStatus="mailing_no_contact_made"
+            openTasks={[]}
+            isMailable
+            mailQueueStatus="queued"
+            onAction={vi.fn()}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.queryByTestId('ra-action-btn-add_to_mail_batch')).not.toBeInTheDocument()
+    })
+
+    it('does not inject mail CTA when mail was sent recently', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('add_contact_info', 'Add Contact Info')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          isMailable
+          mailQueueStatus="sent_recently"
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.queryByTestId('ra-action-btn-add_to_mail_batch')).not.toBeInTheDocument()
+    })
+  })
 })
 
 

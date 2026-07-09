@@ -373,6 +373,7 @@ export interface PropertySummary {
   county_assessor_pin: string | null
   tax_bill_2021: number | null
   most_recent_sale: string | null
+  most_recent_sale_display?: string | null
   owner_first_name: string | null
   owner_last_name: string | null
   owner_2_first_name: string | null
@@ -2007,6 +2008,12 @@ export interface CommandCenterPayload {
   open_tasks: LeadTask[];
   up_next_to_mail?: boolean | null;
   mail_queue_status?: 'queued' | 'sent_recently' | null;
+  is_mailable?: boolean;
+  most_recent_sale_display?: string | null;
+  sale_date_meta?: {
+    last_updated_at?: string | null;
+    source?: string | null;
+  };
   timeline: {
     entries: LeadTimelineEntry[];
     total: number;

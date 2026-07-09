@@ -180,6 +180,72 @@ def format_last_sale_at(lead: Lead) -> str | None:
     return sale.isoformat()
 
 
+def display_most_recent_sale(lead: Lead) -> str | None:
+    """Single UI display value: prefer acquisition_date, else import most_recent_sale."""
+    acquisition = getattr(lead, 'acquisition_date', None)
+    if isinstance(acquisition, date):
+        return acquisition.strftime('%m/%d/%Y')
+    sale_text = getattr(lead, 'most_recent_sale', None)
+    if not sale_text or not str(sale_text).strip():
+        return None
+    parsed = parse_sale_date_string(str(sale_text))
+    if parsed:
+        return parsed.strftime('%m/%d/%Y')
+    return str(sale_text).strip()
+
+
+def humanize_sale_date_source(changed_by: str | None) -> str | None:
+    if not changed_by:
+        return None
+    if changed_by.startswith('enrichment:cook_county_assessor'):
+        return 'Cook County records'
+    if changed_by.startswith('import_job:'):
+        return 'Import'
+    if changed_by.startswith('enrichment:'):
+        name = changed_by.removeprefix('enrichment:')
+        return name.replace('_', ' ').title()
+    if changed_by == 'manual':
+        return 'Manual'
+    return changed_by
+
+
+def resolve_sale_date_meta(lead: Lead) -> dict:
+    """Latest audit metadata for sale-date fields shown in Command Center."""
+    null_meta = {'last_updated_at': None, 'source': None}
+    from flask import has_app_context
+
+    if not has_app_context():
+        return null_meta
+
+    from app.models.lead import LeadAuditTrail
+
+    lead_id = getattr(lead, 'id', None)
+    if not isinstance(lead_id, int):
+        return null_meta
+
+    preferred_field = (
+        'acquisition_date'
+        if isinstance(getattr(lead, 'acquisition_date', None), date)
+        else 'most_recent_sale'
+    )
+    row = (
+        LeadAuditTrail.query
+        .filter(
+            LeadAuditTrail.lead_id == lead_id,
+            LeadAuditTrail.field_name == preferred_field,
+        )
+        .order_by(LeadAuditTrail.changed_at.desc())
+        .first()
+    )
+    if row is None:
+        return null_meta
+
+    return {
+        'last_updated_at': row.changed_at.isoformat() if row.changed_at else None,
+        'source': humanize_sale_date_source(row.changed_by),
+    }
+
+
 def effective_acquisition_date_sql():
     """SQL expression matching effective_acquisition_date() on PostgreSQL."""
     from sqlalchemy import Date, Integer, and_, case, cast
