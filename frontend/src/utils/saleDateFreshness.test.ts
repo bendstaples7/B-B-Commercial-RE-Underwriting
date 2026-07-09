@@ -14,4 +14,17 @@ describe('formatSaleDateFreshness', () => {
     expect(formatSaleDateFreshness(null)).toBeNull()
     expect(formatSaleDateFreshness({})).toBeNull()
   })
+
+  it('returns null for invalid timestamp', () => {
+    expect(formatSaleDateFreshness({ last_updated_at: 'not-a-date' })).toBeNull()
+  })
+
+  it('omits source when whitespace-only', () => {
+    const text = formatSaleDateFreshness({
+      last_updated_at: '2024-03-15T12:00:00Z',
+      source: '   ',
+    })
+    expect(text).toMatch(/^Updated /)
+    expect(text).not.toContain('·')
+  })
 })

@@ -201,7 +201,7 @@ def _serialize_property_summary(lead, latest_score: LeadScore | None = None):
         'zoning': lead.zoning,
         'county_assessor_pin': lead.county_assessor_pin,
         'tax_bill_2021': lead.tax_bill_2021,
-        'most_recent_sale': display_most_recent_sale(lead),
+        'most_recent_sale': lead.most_recent_sale,
         'most_recent_sale_display': display_most_recent_sale(lead),
         'owner_first_name': lead.owner_first_name,
         'owner_last_name': lead.owner_last_name,

@@ -70,3 +70,37 @@ def test_resolve_sale_date_meta_prefers_acquisition_audit(app):
         meta = resolve_sale_date_meta(lead)
         assert meta['source'] == 'Cook County records'
         assert meta['last_updated_at'].startswith('2024-03-15')
+
+
+def test_resolve_sale_date_meta_returns_null_without_preferred_field_audit(app):
+    with app.app_context():
+        from app import db
+
+        lead = Lead(
+            property_street='3 Main St',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            acquisition_date=date(2015, 3, 1),
+            most_recent_sale='1/1/2000',
+        )
+        db.session.add(lead)
+        db.session.flush()
+
+        db.session.add(LeadAuditTrail(
+            lead_id=lead.id,
+            field_name='most_recent_sale',
+            old_value=None,
+            new_value='1/1/2000',
+            changed_by='import_job:1',
+            changed_at=datetime(2020, 1, 1),
+        ))
+        db.session.commit()
+
+        meta = resolve_sale_date_meta(lead)
+        assert meta == {'last_updated_at': None, 'source': None}
+
+
+def test_resolve_sale_date_meta_returns_null_without_app_context():
+    lead = Lead(property_street='4 Main St', most_recent_sale='1/1/2000')
+    assert resolve_sale_date_meta(lead) == {'last_updated_at': None, 'source': None}

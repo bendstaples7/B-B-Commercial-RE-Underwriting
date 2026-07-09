@@ -160,7 +160,7 @@ const COLUMN_DEFS: ColDef<LeadRow>[] = [
   { field: 'zoning', headerName: 'Zoning', width: 90 },
   { field: 'county_assessor_pin', headerName: 'Assessor PIN', width: 130 },
   { field: 'tax_bill_2021', headerName: 'Tax Bill 2021', width: 110 },
-  { field: 'most_recent_sale', headerName: 'Most Recent Sale', width: 140 },
+  { field: 'most_recent_sale_display', headerName: 'Most Recent Sale', width: 140 },
   { field: 'owner_first_name', headerName: 'Owner First', width: 120 },
   { field: 'owner_last_name', headerName: 'Owner Last', width: 120 },
   { field: 'owner_2_first_name', headerName: 'Owner 2 First', width: 120 },

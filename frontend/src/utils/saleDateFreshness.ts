@@ -8,7 +8,11 @@ export function formatSaleDateFreshness(meta: SaleDateMeta | null | undefined): 
   if (!meta?.last_updated_at) return null
   const updated = new Date(meta.last_updated_at)
   if (Number.isNaN(updated.getTime())) return null
-  const monthYear = updated.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })
+  const monthYear = updated.toLocaleDateString(undefined, {
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  })
   const source = meta.source?.trim()
   return source ? `Updated ${monthYear} · ${source}` : `Updated ${monthYear}`
 }

@@ -373,6 +373,7 @@ export interface PropertySummary {
   county_assessor_pin: string | null
   tax_bill_2021: number | null
   most_recent_sale: string | null
+  most_recent_sale_display?: string | null
   owner_first_name: string | null
   owner_last_name: string | null
   owner_2_first_name: string | null

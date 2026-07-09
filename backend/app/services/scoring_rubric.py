@@ -211,30 +211,35 @@ def humanize_sale_date_source(changed_by: str | None) -> str | None:
 
 def resolve_sale_date_meta(lead: Lead) -> dict:
     """Latest audit metadata for sale-date fields shown in Command Center."""
+    null_meta = {'last_updated_at': None, 'source': None}
+    from flask import has_app_context
+
+    if not has_app_context():
+        return null_meta
+
     from app.models.lead import LeadAuditTrail
 
     lead_id = getattr(lead, 'id', None)
     if not isinstance(lead_id, int):
-        return {'last_updated_at': None, 'source': None}
+        return null_meta
 
     preferred_field = (
         'acquisition_date'
         if isinstance(getattr(lead, 'acquisition_date', None), date)
         else 'most_recent_sale'
     )
-    rows = (
+    row = (
         LeadAuditTrail.query
         .filter(
             LeadAuditTrail.lead_id == lead_id,
-            LeadAuditTrail.field_name.in_(('acquisition_date', 'most_recent_sale')),
+            LeadAuditTrail.field_name == preferred_field,
         )
         .order_by(LeadAuditTrail.changed_at.desc())
-        .all()
+        .first()
     )
-    if not rows:
-        return {'last_updated_at': None, 'source': None}
+    if row is None:
+        return null_meta
 
-    row = next((r for r in rows if r.field_name == preferred_field), rows[0])
     return {
         'last_updated_at': row.changed_at.isoformat() if row.changed_at else None,
         'source': humanize_sale_date_source(row.changed_by),

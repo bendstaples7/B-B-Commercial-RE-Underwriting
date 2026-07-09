@@ -171,6 +171,7 @@ export function RecommendedActionPanel({
 
   const isDNC = leadStatus === 'do_not_contact'
   const isInMailBatch = mailQueueStatus === 'queued'
+  const wasSentRecently = mailQueueStatus === 'sent_recently'
 
   const handleAction = async (action: string) => {
     setActionError(null)
@@ -260,6 +261,7 @@ export function RecommendedActionPanel({
   if (
     isMailable
     && !isInMailBatch
+    && !wasSentRecently
     && value === 'add_contact_info'
     && !prioritizedRaButtons.some((btn) => btn.action === 'add_to_mail_batch')
   ) {

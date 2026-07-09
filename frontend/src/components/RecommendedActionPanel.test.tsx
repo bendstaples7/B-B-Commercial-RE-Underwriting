@@ -542,6 +542,38 @@ describe('RecommendedActionPanel', () => {
 
       expect(screen.queryByTestId('ra-action-btn-add_to_mail_batch')).not.toBeInTheDocument()
     })
+
+    it('does not inject mail CTA when already in mail batch', () => {
+      render(
+        <MemoryRouter>
+          <RecommendedActionPanel
+            recommendedAction={makeRA('add_contact_info', 'Add Contact Info')}
+            leadStatus="mailing_no_contact_made"
+            openTasks={[]}
+            isMailable
+            mailQueueStatus="queued"
+            onAction={vi.fn()}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.queryByTestId('ra-action-btn-add_to_mail_batch')).not.toBeInTheDocument()
+    })
+
+    it('does not inject mail CTA when mail was sent recently', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('add_contact_info', 'Add Contact Info')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          isMailable
+          mailQueueStatus="sent_recently"
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.queryByTestId('ra-action-btn-add_to_mail_batch')).not.toBeInTheDocument()
+    })
   })
 })
 
