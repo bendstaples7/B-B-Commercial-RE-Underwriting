@@ -808,6 +808,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               leadStatus={commandCenterData!.lead_status}
               openTasks={openTasks}
               mailQueueStatus={commandCenterData!.mail_queue_status ?? null}
+              isMailable={commandCenterData!.is_mailable ?? false}
               showOutreachContact={placement === 'recommended_action'}
               onAction={handleRaAction}
               onCreateTask={handleCreateTask}

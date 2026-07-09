@@ -31,6 +31,10 @@ def _mock_action_engine_db(monkeypatch):
         'app.services.lead_scoring_engine.LeadScoringEngine._has_recent_email',
         staticmethod(lambda _lead_id: False),
     )
+    monkeypatch.setattr(
+        'app.services.lead_scoring_engine.is_mailable_lead',
+        lambda _lead: False,
+    )
 
 
 # ---------------------------------------------------------------------------

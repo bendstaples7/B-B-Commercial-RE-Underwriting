@@ -140,15 +140,35 @@ def test_priority_2_5_fires_before_follow_up_overdue():
 
 def test_priority_3_no_phone_no_email_returns_add_contact_info():
     lead = make_lead(has_phone=False, has_email=False)
-    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
+         patch('app.services.lead_scoring_engine.is_mailable_lead', return_value=False):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'add_contact_info'
+
+
+def test_priority_3_mailable_no_contact_returns_mail_ready():
+    lead = make_lead(has_phone=False, has_email=False)
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
+         patch('app.services.lead_scoring_engine.is_mailable_lead', return_value=True):
+        result = ActionEngineService.compute_recommended_action(lead)
+    assert result == 'mail_ready'
+
+
+def test_priority_3_mailable_recently_sold_returns_nurture():
+    from datetime import date, timedelta
+    lead = make_lead(has_phone=False, has_email=False)
+    lead.acquisition_date = date.today() - timedelta(days=30)
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
+         patch('app.services.lead_scoring_engine.is_mailable_lead', return_value=True):
+        result = ActionEngineService.compute_recommended_action(lead)
+    assert result == 'nurture'
 
 
 def test_priority_3_fires_before_priority_4():
     """Priority 3 (no contact info) fires before Priority 4 (no property match)."""
     lead = make_lead(has_phone=False, has_email=False, has_property_match=False)
-    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
+         patch('app.services.lead_scoring_engine.is_mailable_lead', return_value=False):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'add_contact_info'
 

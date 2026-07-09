@@ -13,6 +13,7 @@ import EmailIcon from '@mui/icons-material/Email'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import { formatPhoneNumber, phoneCopyText, phoneTelHref } from '@/utils/phone'
 import type { CommandCenterPayload, LeadPhone } from '@/types'
+import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
 import { formatImportedSource } from './leadDetailFormatters'
 import { formatPhoneConfidence } from '@/utils/helpers'
 
@@ -225,11 +226,10 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
         {data.socials && <SidebarRow label="Socials" value={data.socials} />}
       </SidebarSection>
 
-      {(owner2Name || commandCenterData.ownership_type || commandCenterData.acquisition_date) && (
+      {(owner2Name || commandCenterData.ownership_type) && (
         <SidebarSection title="Owner">
           {owner2Name && <SidebarRow label="Owner 2" value={owner2Name} />}
           <SidebarRow label="Type" value={commandCenterData.ownership_type} />
-          <SidebarRow label="Acquired" value={commandCenterData.acquisition_date} />
         </SidebarSection>
       )}
 
@@ -282,7 +282,17 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
             data.tax_bill_2021 != null ? `$${Number(data.tax_bill_2021).toLocaleString()}` : null
           }
         />
-        <SidebarRow label="Last Sale" value={data.most_recent_sale} />
+        <Box sx={{ mb: 0.5 }} data-testid="sidebar-most-recent-sale">
+          <SidebarRow
+            label="Most Recent Sale"
+            value={commandCenterData.most_recent_sale_display ?? data.most_recent_sale}
+          />
+          {formatSaleDateFreshness(commandCenterData.sale_date_meta) && (
+            <Typography variant="caption" color="text.disabled" sx={{ display: 'block', pl: '90px' }}>
+              {formatSaleDateFreshness(commandCenterData.sale_date_meta)}
+            </Typography>
+          )}
+        </Box>
         <SidebarRow
           label="Deal Source"
           value={commandCenterData.deal_source}

@@ -30,7 +30,7 @@ from app.models.property_contact import PropertyContact
 from app.models.user import User
 from app.schemas import LeadListQuerySchema
 from app.services.lead_scoring_engine import LeadScoringEngine
-from app.services.scoring_rubric import calculate_score_tier
+from app.services.scoring_rubric import calculate_score_tier, display_most_recent_sale
 from app.services import scoring_rubric as rubric
 
 logger = logging.getLogger(__name__)
@@ -201,7 +201,8 @@ def _serialize_property_summary(lead, latest_score: LeadScore | None = None):
         'zoning': lead.zoning,
         'county_assessor_pin': lead.county_assessor_pin,
         'tax_bill_2021': lead.tax_bill_2021,
-        'most_recent_sale': lead.most_recent_sale,
+        'most_recent_sale': display_most_recent_sale(lead),
+        'most_recent_sale_display': display_most_recent_sale(lead),
         'owner_first_name': lead.owner_first_name,
         'owner_last_name': lead.owner_last_name,
         'owner_2_first_name': lead.owner_2_first_name,
@@ -303,6 +304,8 @@ def _serialize_property_detail(lead):
         'county_assessor_pin': lead.county_assessor_pin,
         'tax_bill_2021': lead.tax_bill_2021,
         'most_recent_sale': lead.most_recent_sale,
+        'most_recent_sale_display': display_most_recent_sale(lead),
+        'sale_date_meta': rubric.resolve_sale_date_meta(lead),
         # Research tracking
         'source': lead.source,
         'deal_source': getattr(lead, 'deal_source', None),

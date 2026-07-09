@@ -31,6 +31,8 @@ from app.services.recommended_action_metadata import (
 from app.services.outreach_method_service import resolve_outreach_contact
 from app.services.lead_scoring_engine import LeadScoringEngine
 from app.services.mail_task_lifecycle_service import resolve_mail_queue_status
+from app.services.open_letter_contact_mapper import is_mailable_lead
+from app.services.scoring_rubric import display_most_recent_sale, resolve_sale_date_meta
 
 logger = logging.getLogger(__name__)
 
@@ -313,6 +315,11 @@ def get_command_center(lead_id: int):
     if HubSpotDealSyncService.auto_sync_lead_if_stale(lead_id):
         lead = Lead.query.get(lead_id)
 
+    if lead.recommended_action == 'add_contact_info' and is_mailable_lead(lead):
+        from app.services.lead_refresh import refresh_lead_scoring
+        refresh_lead_scoring(lead_id)
+        lead = Lead.query.get(lead_id)
+
     _hs_health = HubSpotDealSyncService.get_lead_sync_health(lead_id)
 
     ra = lead.recommended_action
@@ -551,6 +558,9 @@ def get_command_center(lead_id: int):
         'zoning': lead.zoning,
         'tax_bill_2021': lead.tax_bill_2021,
         'most_recent_sale': lead.most_recent_sale,
+        'most_recent_sale_display': display_most_recent_sale(lead),
+        'sale_date_meta': resolve_sale_date_meta(lead),
+        'is_mailable': is_mailable_lead(lead),
         'address_2': lead.address_2,
         'returned_addresses': lead.returned_addresses,
         # Research / workflow tracking

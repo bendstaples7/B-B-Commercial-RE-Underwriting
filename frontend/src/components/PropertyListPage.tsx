@@ -166,7 +166,6 @@ const COLUMN_DEFS: ColDef<LeadRow>[] = [
   { field: 'owner_2_first_name', headerName: 'Owner 2 First', width: 120 },
   { field: 'owner_2_last_name', headerName: 'Owner 2 Last', width: 120 },
   { field: 'ownership_type', headerName: 'Ownership Type', width: 130 },
-  { field: 'acquisition_date', headerName: 'Acquisition Date', width: 130 },
   { field: 'phone_1', headerName: 'Phone 1', width: 130 },
   { field: 'phone_2', headerName: 'Phone 2', width: 130 },
   { field: 'phone_3', headerName: 'Phone 3', width: 130 },
