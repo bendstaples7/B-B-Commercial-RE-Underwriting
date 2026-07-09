@@ -1,32 +1,15 @@
 """Property match review and building ownership API endpoints."""
-import logging
-from functools import wraps
-
 from flask import Blueprint, g, jsonify, request
 from marshmallow import Schema, fields, validate
 
 from app.api_utils import require_auth
+from app.controllers.decorators import handle_errors
 from app.services.building_ownership_service import BuildingOwnershipService
 from app.services.property_match_review_service import PropertyMatchReviewService
-
-logger = logging.getLogger(__name__)
 
 property_match_bp = Blueprint('property_match', __name__)
 _match_svc = PropertyMatchReviewService()
 _ownership_svc = BuildingOwnershipService()
-
-
-def handle_errors(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        try:
-            return f(*args, **kwargs)
-        except ValueError as e:
-            return jsonify({'error': 'Invalid request', 'message': str(e)}), 400
-        except Exception as e:
-            logger.error('property_match error: %s', e, exc_info=True)
-            return jsonify({'error': 'Internal server error'}), 500
-    return decorated
 
 
 class RejectMatchSchema(Schema):

@@ -1824,6 +1824,7 @@ export interface QueueRow {
   property_street: string | null;
   property_city: string | null;
   property_state: string | null;
+  property_zip?: string | null;
   lead_score: number;
   lead_status: LeadStatus;
   recommended_action: CRMRecommendedAction | null;

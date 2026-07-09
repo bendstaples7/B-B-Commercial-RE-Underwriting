@@ -15,7 +15,7 @@ import { PropertyMatchReviewCard } from './PropertyMatchReviewCard'
 import { PropertyMatchRejectDialog } from './PropertyMatchRejectDialog'
 import { PropertyAddressEditDialog } from './PropertyAddressEditDialog'
 import { SuppressLeadDialog } from './SuppressLeadDialog'
-import { computeTotalPages, clampPage } from '@/utils/pagination'
+import { computeTotalPages } from '@/utils/pagination'
 
 export function MissingPropertyMatchQueue() {
   const [page, setPage] = useState(1)

@@ -4,7 +4,6 @@
 import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert,
   Box,
   Button,
   Chip,
@@ -141,7 +140,6 @@ export function NoNextActionQueue() {
   const bulkActions: BulkAction[] = [
     {
       label: 'Suppress',
-      icon: <BlockIcon fontSize="small" />,
       testId: 'bulk-suppress',
       onClick: async (ids) => {
         const result = await bulkActionService.bulkSuppress(ids)

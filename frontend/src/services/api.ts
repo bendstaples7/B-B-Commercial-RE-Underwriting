@@ -1478,40 +1478,8 @@ export const bulkActionService = {
     api.post('/leads/bulk/update-status', { lead_ids: leadIds, status, reason }).then(r => r.data),
 }
 
-export const propertyMatchService = {
-  preview: (leadId: number) =>
-    api.get(`/leads/${leadId}/property-match/preview`).then(r => r.data),
-  approve: (leadId: number) =>
-    api.post(`/leads/${leadId}/property-match/approve`).then(r => r.data),
-  reject: (leadId: number, action: string, note?: string) =>
-    api.post(`/leads/${leadId}/property-match/reject`, { action, note }).then(r => r.data),
-  updateAddress: (
-    leadId: number,
-    data: {
-      property_street?: string
-      property_city?: string
-      property_state?: string
-      property_zip?: string
-    },
-  ) => api.patch(`/leads/${leadId}/property-address`, data).then(r => r.data),
-}
-
-export const buildingOwnershipService = {
-  get: (leadId: number) =>
-    api.get(`/leads/${leadId}/building-ownership`).then(r => r.data),
-  analyze: (leadId: number) =>
-    api.post(`/leads/${leadId}/building-ownership/analyze`).then(r => r.data),
-  override: (
-    leadId: number,
-    data: { condo_risk_status: string; building_sale_possible: string; reason: string },
-  ) => api.put(`/leads/${leadId}/building-ownership/override`, data).then(r => r.data),
-  backfill: (options?: { enqueue_async?: boolean; per_run_cap?: number; last_id?: number }) =>
-    api.post('/leads/building-ownership/backfill', options ?? {}).then(r => r.data),
-}
-
-// ---------------------------------------------------------------------------
-// Admin Panel API Service
-// ---------------------------------------------------------------------------
+export { propertyMatchService, buildingOwnershipService } from '@/services/propertyMatchApi'
+export { dataSourcesService } from '@/services/dataSourcesApi'
 import type {
   AdminUserSummary,
   AdminLeadParams,
@@ -1619,13 +1587,5 @@ export const searchService = {
 }
 
 // ---------------------------------------------------------------------------
-// Data Sources Panel API Service
+// Admin Panel API Service
 // ---------------------------------------------------------------------------
-import type { DataSourceStatus } from '@/types'
-
-export const dataSourcesService = {
-  getStatus: async (): Promise<DataSourceStatus> => {
-    const response = await api.get<DataSourceStatus>('/data-sources/status')
-    return response.data
-  },
-}
