@@ -1163,6 +1163,7 @@ def sync_lead_from_hubspot(lead_id: int):
 
 
 @command_center_bp.route('/<int:lead_id>/hubspot-tasks/<int:task_id>/done', methods=['POST'])
+@require_auth
 @handle_errors
 def mark_hubspot_task_done(lead_id: int, task_id: int):
     """
@@ -1170,7 +1171,17 @@ def mark_hubspot_task_done(lead_id: int, task_id: int):
 
     Mark a HubSpot-imported task as completed — both locally and in HubSpot.
     """
+    from app.controllers.property_controller import _current_user_is_admin
     from app.services.hubspot_task_completion_service import complete_hubspot_task
+
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    if not _current_user_is_admin():
+        current_user_id = getattr(g, 'user_id', None)
+        if not current_user_id or current_user_id == 'anonymous' or lead.owner_user_id != current_user_id:
+            return jsonify({'error': 'Not found'}), 404
 
     actor = getattr(g, 'user_id', 'anonymous')
     result = complete_hubspot_task(lead_id, task_id, actor=actor)

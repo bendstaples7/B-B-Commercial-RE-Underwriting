@@ -27,6 +27,7 @@ from app import create_app, db
 from app.services.hubspot_task_completion_service import sync_pending_hubspot_completions
 from app.services.mail_task_lifecycle_service import (
     complete_tasks_superseded_by_mail,
+    count_superseded_tasks_for_lead,
     find_mail_awaiting_lead_ids,
     refresh_leads_after_mail_task_changes,
 )
@@ -43,9 +44,12 @@ def main() -> None:
         '--limit',
         type=int,
         default=None,
-        help='Max leads to process',
+        help='Max leads to process (must be positive when set)',
     )
     args = parser.parse_args()
+
+    if args.limit is not None and args.limit <= 0:
+        parser.error('--limit must be a positive integer')
 
     app = create_app()
     with app.app_context():
@@ -74,22 +78,18 @@ def main() -> None:
                     logger.info('Lead %s: completed %s superseded task(s)', lead_id, count)
                     print(f'Lead {lead_id}: completed {count} superseded task(s)', flush=True)
             else:
-                from app.models import LeadTask
-                from app.utils.call_completable_task import is_superseded_by_mail_task
-
-                open_tasks = LeadTask.query.filter_by(lead_id=lead_id, status='open').all()
-                would_complete = [
-                    t for t in open_tasks
-                    if is_superseded_by_mail_task(t.task_type, t.title)
-                ]
+                would_complete = count_superseded_tasks_for_lead(lead_id)
                 if would_complete:
                     affected_leads.append(lead_id)
-                    total_completed += len(would_complete)
+                    total_completed += would_complete
                     logger.info(
-                        'Lead %s: would complete %s task(s): %s',
+                        'Lead %s: would complete %s task(s)',
                         lead_id,
-                        len(would_complete),
-                        [t.title for t in would_complete],
+                        would_complete,
+                    )
+                    print(
+                        f'Lead {lead_id}: would complete {would_complete} task(s)',
+                        flush=True,
                     )
 
         if args.apply and affected_leads:

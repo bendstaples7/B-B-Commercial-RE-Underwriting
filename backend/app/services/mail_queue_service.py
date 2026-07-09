@@ -133,11 +133,14 @@ class MailQueueService:
                             _completed, pending_sync = complete_tasks_superseded_by_mail(
                                 lead_id, actor=user_id, commit=False,
                             )
-                            hubspot_sync_ids.extend(pending_sync)
                             # Flush remaining writes before savepoint release so
                             # success accounting only runs if the unit commits.
                             db.session.flush()
-                            outcome = {'lead_id': lead_id, 'status': 'queued'}
+                            outcome = {
+                                'lead_id': lead_id,
+                                'status': 'queued',
+                                'hubspot_sync': pending_sync,
+                            }
 
                 # Savepoint released successfully — record a single outcome.
                 if outcome is None:
@@ -146,6 +149,7 @@ class MailQueueService:
                 if status == 'queued':
                     added += 1
                     queued_lead_ids.append(lead_id)
+                    hubspot_sync_ids.extend(outcome.get('hubspot_sync') or [])
                 elif status == 'invalid_address':
                     invalid += 1
                 else:

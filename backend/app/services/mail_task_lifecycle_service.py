@@ -82,6 +82,47 @@ def _complete_native_task_mirror(task: Task, now: datetime) -> None:
     db.session.add(task)
 
 
+def _open_mirrored_tasks_for_lead(lead_id: int) -> list[Task]:
+    """Open/overdue non-HubSpot Task rows linked to a lead (direct FK or association)."""
+    via_assoc = (
+        Task.query.join(TaskAssociation, TaskAssociation.task_id == Task.id)
+        .filter(
+            TaskAssociation.target_type == 'lead',
+            TaskAssociation.target_id == lead_id,
+            Task.status.in_(['open', 'overdue']),
+            Task.source != 'hubspot_import',
+        )
+        .all()
+    )
+    via_direct = Task.query.filter(
+        Task.lead_id == lead_id,
+        Task.status.in_(['open', 'overdue']),
+        Task.source != 'hubspot_import',
+    ).all()
+    seen: set[int] = set()
+    merged: list[Task] = []
+    for task in via_assoc + via_direct:
+        if task.id not in seen:
+            seen.add(task.id)
+            merged.append(task)
+    return merged
+
+
+def count_superseded_tasks_for_lead(lead_id: int) -> int:
+    """Count outreach tasks that would be completed when a lead enters the mail batch."""
+    count = 0
+    for task in LeadTask.query.filter_by(lead_id=lead_id, status='open').all():
+        if is_superseded_by_mail_task(task.task_type, task.title):
+            count += 1
+    for task in _open_hubspot_tasks_for_lead(lead_id):
+        if is_superseded_by_mail_task(task.task_type, task.title):
+            count += 1
+    for task in _open_mirrored_tasks_for_lead(lead_id):
+        if is_superseded_by_mail_task(task.task_type, task.title):
+            count += 1
+    return count
+
+
 def complete_tasks_superseded_by_mail(
     lead_id: int,
     actor: str = 'system',
@@ -123,11 +164,7 @@ def complete_tasks_superseded_by_mail(
             if local.hubspot_task_id:
                 hubspot_ids_to_sync.append(local.hubspot_task_id)
 
-    mirrored = Task.query.filter(
-        Task.lead_id == lead_id,
-        Task.status.in_(['open', 'overdue']),
-        Task.source != 'hubspot_import',
-    ).all()
+    mirrored = _open_mirrored_tasks_for_lead(lead_id)
     for mirror in mirrored:
         if not is_superseded_by_mail_task(mirror.task_type, mirror.title):
             continue
@@ -146,7 +183,10 @@ def complete_mail_prep_tasks(
     *,
     commit: bool = False,
 ) -> int:
-    """Complete open add_to_mail_batch tasks when a lead is staged for mail."""
+    """Complete superseded outreach tasks when a lead is staged for mail.
+
+    Delegates to complete_tasks_superseded_by_mail (native, HubSpot, mirrored).
+    """
     count, _pending = complete_tasks_superseded_by_mail(lead_id, actor=actor, commit=commit)
     return count
 

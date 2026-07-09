@@ -16,6 +16,7 @@ from app.services.mail_task_lifecycle_service import (
     MAIL_FOLLOW_UP_OFFSET_DAYS,
     complete_mail_prep_tasks,
     complete_tasks_superseded_by_mail,
+    count_superseded_tasks_for_lead,
     find_mail_awaiting_lead_ids,
     resolve_mail_queue_status,
     schedule_mail_follow_up_task,
@@ -187,6 +188,61 @@ class TestCompleteTasksSupersededByMail:
             assert pending == ['hs-999']
             refreshed = Task.query.get(hs_task.id)
             assert refreshed.status == 'completed'
+
+    def test_completes_mirrored_manual_task(self, app):
+        from app import db
+        from app.models.task import Task
+
+        with app.app_context():
+            lead = _make_lead(app, '1f Mirror St')
+            mirror = Task(
+                title='Call owner back',
+                status='open',
+                source='manual',
+                lead_id=lead.id,
+                task_type='call_owner_today',
+            )
+            db.session.add(mirror)
+            db.session.commit()
+
+            count, _pending = complete_tasks_superseded_by_mail(
+                lead.id, actor=USER_ID, commit=True,
+            )
+
+            assert count == 1
+            assert Task.query.get(mirror.id).status == 'completed'
+
+    def test_completes_associated_mirrored_task(self, app):
+        from app import db
+        from app.models.task import Task
+        from app.models.task_association import TaskAssociation
+
+        with app.app_context():
+            lead = _make_lead(app, '1g Assoc Mirror St')
+            mirror = Task(
+                title='Follow up with owner',
+                status='open',
+                source='manual',
+                task_type='custom',
+            )
+            db.session.add(mirror)
+            db.session.flush()
+            db.session.add(
+                TaskAssociation(
+                    task_id=mirror.id,
+                    target_type='lead',
+                    target_id=lead.id,
+                ),
+            )
+            db.session.commit()
+
+            assert count_superseded_tasks_for_lead(lead.id) == 1
+            count, _pending = complete_tasks_superseded_by_mail(
+                lead.id, actor=USER_ID, commit=True,
+            )
+
+            assert count == 1
+            assert Task.query.get(mirror.id).status == 'completed'
 
 
 class TestFollowUpOverdueMailAwaitingExclusion:
