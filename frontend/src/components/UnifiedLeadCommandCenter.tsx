@@ -643,9 +643,21 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     }
   }, [fromQueue, leadId, queueNavigation?.next_id, advanceInQueue, exitQueueCaughtUp])
 
-  const handleStatusChanged = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
-  }, [queryClient, leadId])
+  const handleStatusChanged = useCallback(async () => {
+    await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+    await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+    if (!fromQueue) return
+    await queryClient.invalidateQueries({ queryKey: ['queue-navigation', fromQueue.key] })
+    await queryClient.invalidateQueries({ queryKey: [`queue-${fromQueue.key}`] })
+    try {
+      const nav = await queueService.getNavigation(fromQueue.key, leadId)
+      if (nav.position === null) {
+        void advanceAfterTaskComplete()
+      }
+    } catch {
+      // Stay on lead when navigation check fails.
+    }
+  }, [queryClient, leadId, fromQueue, advanceAfterTaskComplete])
 
   const handleActivitySaved = useCallback((
     entry: LeadTimelineEntry,

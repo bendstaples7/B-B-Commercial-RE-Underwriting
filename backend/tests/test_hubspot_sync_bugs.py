@@ -1012,6 +1012,75 @@ class TestPreservation2SuppressedStatusProtected:
             db.session.rollback()
 
 
+class TestManualStatusChangeProtected:
+    """Manual platform status changes must not be reverted by HubSpot deal enrichment."""
+
+    def test_manual_status_not_overwritten_by_hubspot_enrich(self, app):
+        from datetime import datetime, timedelta, timezone
+
+        from app.models.hubspot_deal import HubSpotDeal
+        from app.models.hubspot_match import HubSpotMatch
+        from app.models.lead_timeline_entry import LeadTimelineEntry
+        from app.services.hubspot_matcher_service import HubSpotMatcherService
+
+        with app.app_context():
+            lead = Lead(
+                property_street='3017 W George St',
+                lead_status='skip_trace',
+                hubspot_deal_stage='Skip Trace',
+                last_hubspot_sync_at=datetime.utcnow() - timedelta(hours=2),
+            )
+            db.session.add(lead)
+            db.session.flush()
+
+            db.session.add(LeadTimelineEntry(
+                lead_id=lead.id,
+                event_type='status_changed',
+                source='manual',
+                actor='test-user',
+                summary="Status changed from 'mailing_no_contact_made' to 'skip_trace'.",
+                occurred_at=datetime.now(timezone.utc),
+                event_metadata={
+                    'previous_status': 'mailing_no_contact_made',
+                    'new_status': 'skip_trace',
+                },
+            ))
+
+            deal = HubSpotDeal(
+                hubspot_id='deal_manual_status',
+                raw_payload={
+                    'properties': {
+                        'dealstage': 'mailing_stage',
+                        'dealname': '3017 W George St',
+                    }
+                },
+            )
+            db.session.add(deal)
+            db.session.flush()
+
+            db.session.add(HubSpotMatch(
+                hubspot_record_type='deal',
+                hubspot_id='deal_manual_status',
+                internal_record_type='lead',
+                internal_record_id=lead.id,
+                confidence='HIGH',
+                status='confirmed',
+                matching_criteria='manual',
+            ))
+            db.session.commit()
+
+            matcher = HubSpotMatcherService()
+            stage_label_map = {'mailing_stage': 'Mailing, no contact made'}
+            matcher.enrich_lead_from_deal(lead, deal, stage_label_map=stage_label_map)
+            db.session.flush()
+
+            assert lead.lead_status == 'skip_trace', (
+                f"Manual skip_trace was reverted to '{lead.lead_status}' by HubSpot enrich."
+            )
+
+            db.session.rollback()
+
+
 class TestPreservation3IdempotencyOfActivityConversion:
     """Preservation Test 3: Activity conversion is idempotent.
 

@@ -5,6 +5,7 @@ import pytest
 
 from app import db
 from app.models import HubSpotMatch, HubSpotPlatformWrite, Lead
+from app.models.hubspot_deal import HubSpotDeal
 
 
 def _make_lead(**overrides):
@@ -101,3 +102,58 @@ class TestHubSpotWriteBackService:
             update_props = mock_client.update_deal.call_args[0][1]
             assert 'dealstage' not in update_props
             assert 'pipeline' not in update_props
+
+    def test_push_deal_stage_for_confirmed_match(self, app):
+        from app.models.hubspot_deal import HubSpotDeal
+        from app.services.hubspot_writeback_service import HubSpotWriteBackService
+
+        with app.app_context():
+            lead = _make_lead(lead_status='mailing_no_contact_made')
+            db.session.add(HubSpotMatch(
+                hubspot_record_type='deal',
+                hubspot_id='hs-deal-stage',
+                internal_record_type='lead',
+                internal_record_id=lead.id,
+                confidence='HIGH',
+                status='confirmed',
+                matching_criteria='manual',
+            ))
+            db.session.add(HubSpotDeal(
+                hubspot_id='hs-deal-stage',
+                raw_payload={
+                    'id': 'hs-deal-stage',
+                    'properties': {
+                        'pipeline': 'pipeline1',
+                        'dealname': lead.property_street,
+                    },
+                },
+            ))
+            db.session.commit()
+
+            lead.lead_status = 'skip_trace'
+            db.session.commit()
+
+            mock_client = MagicMock()
+            mock_client.update_deal.return_value = {}
+
+            with patch.object(
+                HubSpotWriteBackService,
+                'resolve_deal_stage_in_pipeline',
+                return_value='stage_skip',
+            ):
+                with patch('app.services.hubspot_writeback_service._upsert_hubspot_record') as mock_upsert:
+                    result = HubSpotWriteBackService(client=mock_client).push_deal_stage_for_lead(
+                        lead.id,
+                    )
+
+            assert result['synced'] is True
+            assert result['action'] == 'stage_updated'
+            update_props = mock_client.update_deal.call_args[0][1]
+            assert update_props == {'dealstage': 'stage_skip'}
+            upsert_payload = mock_upsert.call_args.kwargs['raw_payload']
+            assert upsert_payload['properties']['dealname'] == lead.property_street
+            assert upsert_payload['properties']['dealstage'] == 'stage_skip'
+
+            db.session.refresh(lead)
+            assert lead.hubspot_deal_stage == 'Skip Trace'
+            assert lead.last_hubspot_sync_at is not None

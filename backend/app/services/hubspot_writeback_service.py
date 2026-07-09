@@ -13,6 +13,7 @@ from app.models.hubspot_match import HubSpotMatch
 from app.models.hubspot_platform_write import HubSpotPlatformWrite
 from app.models.lead import Lead
 from app.services.hubspot_client_service import HubSpotClientService
+from app.services.hubspot_stage_mapping import hubspot_stage_label_for_lead_status
 from app.tasks.hubspot_tasks import _upsert_hubspot_record
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,44 @@ class HubSpotWriteBackService:
                 if label == target:
                     return pipeline_id, stage.get('id')
         return None, None
+
+    def resolve_deal_stage_in_pipeline(
+        self,
+        stage_label: str,
+        pipeline_id: str,
+    ) -> str | None:
+        """Return stage_id for *stage_label* within a specific pipeline."""
+        client = self._get_client()
+        response = client._get('/crm/v3/pipelines/deals')
+        target = stage_label.strip().lower()
+        for pipeline in response.get('results', []):
+            if pipeline.get('id') != pipeline_id:
+                continue
+            for stage in pipeline.get('stages', []):
+                label = (stage.get('label') or '').strip().lower()
+                if label == target:
+                    return stage.get('id')
+        return None
+
+    @staticmethod
+    def _merged_deal_raw_payload(
+        hubspot_deal_id: str,
+        record: dict | None,
+        sent_properties: dict[str, str],
+    ) -> dict:
+        """Preserve cached deal properties when HubSpot returns a partial update."""
+        if isinstance(record, dict) and record.get('properties'):
+            return record
+
+        existing = HubSpotDeal.query.filter_by(hubspot_id=hubspot_deal_id).first()
+        base: dict[str, Any] = dict(existing.raw_payload) if existing and existing.raw_payload else {
+            'id': hubspot_deal_id,
+        }
+        merged_props = dict((base.get('properties') or {}))
+        merged_props.update(sent_properties)
+        base['id'] = hubspot_deal_id
+        base['properties'] = merged_props
+        return base
 
     def _deal_properties_from_lead(
         self,
@@ -223,6 +262,127 @@ class HubSpotWriteBackService:
                 except Exception:
                     db.session.rollback()
             logger.exception('HubSpot write-back failed for lead %s', lead_id)
+            return {
+                'synced': False,
+                'action': 'failed',
+                'lead_id': lead_id,
+                'error': str(exc),
+            }
+
+    def push_deal_stage_for_lead(self, lead_id: int, lead_status: str | None = None) -> dict[str, Any]:
+        """Push a platform lead_status to the linked HubSpot deal stage.
+
+        Runs for confirmed deal matches regardless of the quick-add writeback flag,
+        since the deal already exists in HubSpot.
+        """
+        lead = db.session.get(Lead, lead_id)
+        if lead is None:
+            return {'synced': False, 'action': 'skipped', 'reason': 'lead_not_found'}
+
+        if lead_status is not None and lead_status != lead.lead_status:
+            return {
+                'synced': False,
+                'action': 'skipped',
+                'reason': 'status_mismatch',
+                'lead_status': lead.lead_status,
+            }
+
+        effective_status = lead.lead_status
+        stage_label = hubspot_stage_label_for_lead_status(effective_status)
+        if not stage_label:
+            return {
+                'synced': False,
+                'action': 'skipped',
+                'reason': 'unmapped_lead_status',
+                'lead_status': effective_status,
+            }
+
+        existing_match = self._confirmed_deal_match(lead_id)
+        if existing_match is None:
+            return {'synced': False, 'action': 'skipped', 'reason': 'no_confirmed_deal_match'}
+
+        try:
+            client = self._get_client()
+        except Exception as exc:
+            logger.warning(
+                'HubSpot stage push: no client for lead %s: %s', lead_id, exc,
+            )
+            return {
+                'synced': False,
+                'action': 'skipped',
+                'reason': 'no_hubspot_config',
+                'error': str(exc),
+            }
+
+        hubspot_deal_id = existing_match.hubspot_id
+        cached_deal = HubSpotDeal.query.filter_by(hubspot_id=hubspot_deal_id).first()
+        cached_pipeline_id = (
+            (cached_deal.raw_payload or {}).get('properties', {}).get('pipeline')
+            if cached_deal and cached_deal.raw_payload
+            else None
+        )
+
+        try:
+            resolved_pipeline_id: str | None = None
+            if cached_pipeline_id:
+                stage_id = self.resolve_deal_stage_in_pipeline(
+                    stage_label,
+                    str(cached_pipeline_id),
+                )
+            else:
+                resolved_pipeline_id, stage_id = self.resolve_deal_stage(stage_label)
+        except Exception as exc:
+            logger.warning(
+                'HubSpot stage push: stage lookup failed for lead %s: %s', lead_id, exc,
+            )
+            return {
+                'synced': False,
+                'action': 'skipped',
+                'reason': 'stage_lookup_failed',
+                'error': str(exc),
+            }
+
+        if not stage_id:
+            return {
+                'synced': False,
+                'action': 'skipped',
+                'reason': 'stage_not_found',
+                'error': f'Could not resolve HubSpot stage "{stage_label}"',
+            }
+
+        # Existing deals: update dealstage only so we do not move the deal across pipelines.
+        properties: dict[str, str] = {'dealstage': stage_id}
+        if not cached_pipeline_id and resolved_pipeline_id:
+            properties['pipeline'] = resolved_pipeline_id
+
+        try:
+            self._record_platform_write('deal', hubspot_deal_id)
+            record = client.update_deal(hubspot_deal_id, properties)
+            raw_payload = self._merged_deal_raw_payload(hubspot_deal_id, record, properties)
+            _upsert_hubspot_record(
+                db=db,
+                model_class=HubSpotDeal,
+                hubspot_id=hubspot_deal_id,
+                raw_payload=raw_payload,
+                run_id=None,
+            )
+            lead.hubspot_deal_stage = stage_label
+            lead.last_hubspot_sync_at = datetime.utcnow()
+            db.session.add(lead)
+            db.session.commit()
+
+            return {
+                'synced': True,
+                'action': 'stage_updated',
+                'hubspot_deal_id': hubspot_deal_id,
+                'lead_id': lead_id,
+                'hubspot_deal_stage': stage_label,
+            }
+        except Exception as exc:
+            db.session.rollback()
+            logger.warning(
+                'HubSpot stage push failed for lead %s: %s', lead_id, exc,
+            )
             return {
                 'synced': False,
                 'action': 'failed',
