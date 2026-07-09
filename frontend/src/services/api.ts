@@ -1357,6 +1357,16 @@ export const queueService = {
     api.get('/queues/follow-up-overdue', { params: { page, per_page: perPage } }).then(r => r.data),
   getNoNextAction: (page = 1, perPage = 20): Promise<QueuePage> =>
     api.get('/queues/no-next-action', { params: { page, per_page: perPage } }).then(r => r.data),
+  getNoNextActionStatusCounts: (): Promise<Record<string, number>> =>
+    api.get('/queues/no-next-action/status-counts').then(r => r.data),
+  getNoNextActionLeadIds: (leadStatus: string): Promise<{ lead_ids: number[]; total: number }> =>
+    api.get('/queues/no-next-action/lead-ids', { params: { lead_status: leadStatus } }).then(r => r.data),
+  bulkUpdateNoNextActionStatus: (payload: {
+    source_status: string
+    status: string
+    reason?: string
+  }): Promise<BulkActionResult & { total_matched?: number }> =>
+    api.post('/queues/no-next-action/bulk-update-status', payload).then(r => r.data),
   getNeedsReview: (page = 1, perPage = 20): Promise<QueuePage> =>
     api.get('/queues/needs-review', { params: { page, per_page: perPage } }).then(r => r.data),
   getDoNotContact: (page = 1, perPage = 20): Promise<QueuePage> =>
@@ -1460,6 +1470,43 @@ export const bulkActionService = {
     api.post('/leads/bulk/create-task', { lead_ids: leadIds, task_data: taskData }).then(r => r.data),
   bulkDoNotContact: (leadIds: number[]): Promise<BulkActionResult> =>
     api.post('/leads/bulk/do-not-contact', { lead_ids: leadIds }).then(r => r.data),
+  bulkUpdateStatus: (
+    leadIds: number[],
+    status: LeadStatus,
+    reason?: string,
+  ): Promise<BulkActionResult> =>
+    api.post('/leads/bulk/update-status', { lead_ids: leadIds, status, reason }).then(r => r.data),
+}
+
+export const propertyMatchService = {
+  preview: (leadId: number) =>
+    api.get(`/leads/${leadId}/property-match/preview`).then(r => r.data),
+  approve: (leadId: number) =>
+    api.post(`/leads/${leadId}/property-match/approve`).then(r => r.data),
+  reject: (leadId: number, action: string, note?: string) =>
+    api.post(`/leads/${leadId}/property-match/reject`, { action, note }).then(r => r.data),
+  updateAddress: (
+    leadId: number,
+    data: {
+      property_street?: string
+      property_city?: string
+      property_state?: string
+      property_zip?: string
+    },
+  ) => api.patch(`/leads/${leadId}/property-address`, data).then(r => r.data),
+}
+
+export const buildingOwnershipService = {
+  get: (leadId: number) =>
+    api.get(`/leads/${leadId}/building-ownership`).then(r => r.data),
+  analyze: (leadId: number) =>
+    api.post(`/leads/${leadId}/building-ownership/analyze`).then(r => r.data),
+  override: (
+    leadId: number,
+    data: { condo_risk_status: string; building_sale_possible: string; reason: string },
+  ) => api.put(`/leads/${leadId}/building-ownership/override`, data).then(r => r.data),
+  backfill: (options?: { enqueue_async?: boolean; per_run_cap?: number; last_id?: number }) =>
+    api.post('/leads/building-ownership/backfill', options ?? {}).then(r => r.data),
 }
 
 // ---------------------------------------------------------------------------

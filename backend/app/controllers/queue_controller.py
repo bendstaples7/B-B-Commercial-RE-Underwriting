@@ -97,6 +97,46 @@ def get_no_next_action():
     return jsonify({'rows': rows, 'total': total, 'page': page, 'per_page': per_page}), 200
 
 
+@queue_bp.route('/no-next-action/status-counts', methods=['GET'])
+@handle_errors
+def get_no_next_action_status_counts():
+    """GET /api/queues/no-next-action/status-counts — counts by lead_status."""
+    counts = _get_queue_service().get_no_next_action_status_counts()
+    return jsonify(counts), 200
+
+
+@queue_bp.route('/no-next-action/lead-ids', methods=['GET'])
+@handle_errors
+def get_no_next_action_lead_ids():
+    """GET /api/queues/no-next-action/lead-ids?lead_status= — ids in queue for status."""
+    lead_status = request.args.get('lead_status')
+    if not lead_status:
+        raise ValueError('lead_status is required')
+    ids = _get_queue_service().get_no_next_action_lead_ids_by_status(lead_status)
+    return jsonify({'lead_ids': ids, 'total': len(ids)}), 200
+
+
+@queue_bp.route('/no-next-action/bulk-update-status', methods=['POST'])
+@handle_errors
+def bulk_update_no_next_action_status():
+    """POST /api/queues/no-next-action/bulk-update-status — queue-wide status update."""
+    from app.api_utils import require_auth
+    body = request.get_json() or {}
+    source_status = body.get('source_status')
+    target_status = body.get('status') or body.get('target_status')
+    reason = body.get('reason') or ''
+    if not source_status or not target_status:
+        raise ValueError('source_status and status are required')
+    user_id = getattr(g, 'user_id', None)
+    if not user_id or user_id == 'anonymous':
+        from flask import abort
+        abort(401)
+    result = _get_queue_service().bulk_update_no_next_action_status(
+        source_status, target_status, reason=reason, actor=user_id,
+    )
+    return jsonify(result), 200
+
+
 @queue_bp.route('/needs-review', methods=['GET'])
 @handle_errors
 def get_needs_review():

@@ -190,6 +190,66 @@ def _try_lookup(normalised: str, parcel_addresses_url: str) -> Optional[str]:
     return pin
 
 
+def _lookup_all_pins_from_address(address: str, parcel_addresses_url: str, limit: int = 25) -> list[dict]:
+    """Return all parcel address rows matching an address (deduped by PIN)."""
+    from app.services.plugins.socrata_client import escape_soql_literal, socrata_get
+
+    normalised = _normalise_address(address)
+    if not normalised:
+        return []
+
+    addresses_to_try = [normalised]
+    import re as _re
+    range_match = _re.match(r'^(\d+)-\d+\s+(.+)$', normalised)
+    if range_match:
+        addresses_to_try.append(f"{range_match.group(1)} {range_match.group(2)}")
+
+    seen_pins: set[str] = set()
+    rows_out: list[dict] = []
+
+    for addr in addresses_to_try:
+        safe = escape_soql_literal(addr)
+        results = socrata_get(
+            'c49d-89sn',
+            params={'$where': f"property_address='{safe}'", '$limit': limit},
+            portal='cook_county',
+        )
+        if not results:
+            tokens = addr.split()
+            if len(tokens) >= 2:
+                prefix = ' '.join(tokens[:3]) if len(tokens) >= 3 else ' '.join(tokens[:2])
+                safe_prefix = escape_soql_literal(prefix)
+                results = socrata_get(
+                    'c49d-89sn',
+                    params={'$where': f"property_address like '{safe_prefix}%'", '$limit': limit},
+                    portal='cook_county',
+                )
+        for row in results or []:
+            pin = (row.get('pin') or '').strip()
+            if not pin or pin in seen_pins:
+                continue
+            seen_pins.add(pin)
+            street = (row.get('property_address') or '').strip()
+            if not street:
+                continue
+            rows_out.append({
+                'pin': pin,
+                'property_street': street,
+                'property_city': (row.get('property_city') or '').strip() or None,
+                'property_state': (row.get('property_state') or 'IL').strip(),
+                'property_zip': (row.get('property_zip') or '').strip() or None,
+            })
+    return rows_out
+
+
+def lookup_all_pins_at_address(address: str, parcel_addresses_url: str | None = None) -> list[dict]:
+    """Public helper: all PINs at a normalized Cook County address."""
+    url = parcel_addresses_url or os.environ.get(
+        'COOK_COUNTY_PARCEL_ADDRESSES_URL', _DEFAULT_PARCEL_ADDRESSES_URL
+    )
+    return _lookup_all_pins_from_address(address, url)
+
+
 def _parcel_address_row_from_results(results: list) -> Optional[dict]:
     if not results:
         return None

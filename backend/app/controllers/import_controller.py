@@ -11,7 +11,7 @@ from flask import Blueprint, jsonify, request
 from marshmallow import ValidationError
 
 from app import db, limiter
-from app.api_utils import get_current_user_id
+from app.api_utils import get_current_user_id, require_auth
 from app.models import ImportJob, FieldMapping, OAuthToken
 from app.services.google_sheets_importer import GoogleSheetsImporter
 
@@ -522,6 +522,7 @@ def start_import():
 
 
 @import_bp.route('/jobs', methods=['GET'])
+@require_auth
 @limiter.limit("30 per minute")
 @handle_errors
 def list_import_jobs():
@@ -529,7 +530,7 @@ def list_import_jobs():
 
     Query parameters
     ----------------
-    user_id : str (optional — filter by user)
+    user_id : str (optional — override; defaults to authenticated user + legacy ids)
     status : str (optional — filter by status)
     page : int (default 1)
     per_page : int (default 20, max 100)
@@ -538,15 +539,19 @@ def list_import_jobs():
     -------
     200 with paginated list of import jobs.
     """
+    from flask import g
+    from app.services.data_source_status_service import DataSourceStatusService
+
     args = request.args
     page = max(1, int(args.get('page', 1)))
     per_page = max(1, min(int(args.get('per_page', 20)), 100))
 
     query = ImportJob.query
 
-    user_id = args.get('user_id')
-    if user_id:
-        query = query.filter(ImportJob.user_id == user_id)
+    user_id = args.get('user_id') or getattr(g, 'user_id', None)
+    if user_id and user_id != 'anonymous':
+        user_ids = DataSourceStatusService()._resolve_import_user_ids(user_id)
+        query = query.filter(ImportJob.user_id.in_(user_ids))
 
     status = args.get('status')
     if status:

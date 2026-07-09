@@ -654,6 +654,9 @@ def create_app(config_name='development'):
     from app.controllers.command_center_controller import command_center_bp
     app.register_blueprint(command_center_bp, url_prefix='/api/leads')
 
+    from app.controllers.property_match_controller import property_match_bp
+    app.register_blueprint(property_match_bp, url_prefix='/api/leads')
+
     from app.controllers.quick_add_controller import quick_add_bp
     app.register_blueprint(quick_add_bp, url_prefix='/api/leads')
 
@@ -1181,6 +1184,59 @@ def create_app(config_name='development'):
 
             except Exception as e:
                 app.logger.warning("CRM backfill check skipped: %s", e)
+
+        # ---------------------------------------------------------------------------
+        # Building ownership backfill — enqueue Celery sweep for commercial leads
+        # without a condo_analysis_id (runs in background; capped per task).
+        # ---------------------------------------------------------------------------
+        with app.app_context():
+            try:
+                pending_count = db.session.execute(
+                    db.text(
+                        """
+                        SELECT COUNT(*) FROM leads
+                        WHERE lead_category = 'commercial'
+                          AND property_street IS NOT NULL
+                          AND TRIM(property_street) != ''
+                          AND condo_analysis_id IS NULL
+                          AND lead_status NOT IN (
+                            'suppressed', 'do_not_contact', 'deal_won', 'deal_lost'
+                          )
+                        """
+                    )
+                ).scalar()
+
+                if pending_count and pending_count > 0:
+                    app.logger.info(
+                        "Startup: %d commercial leads lack building ownership analysis; "
+                        "enqueueing backfill task.",
+                        pending_count,
+                    )
+                    import threading as _ownership_threading
+
+                    def _ownership_startup_backfill(flask_app):
+                        with flask_app.app_context():
+                            try:
+                                from celery_worker import (
+                                    building_ownership_backfill_commercial_task,
+                                )
+                                building_ownership_backfill_commercial_task.apply_async(
+                                    ignore_result=True,
+                                )
+                            except Exception as exc:
+                                flask_app.logger.warning(
+                                    "Building ownership startup backfill dispatch failed: %s",
+                                    exc,
+                                )
+
+                    _ownership_threading.Thread(
+                        target=_ownership_startup_backfill,
+                        args=(app,),
+                        daemon=True,
+                        name="building-ownership-startup-backfill",
+                    ).start()
+            except Exception as e:
+                app.logger.warning("Building ownership startup check skipped: %s", e)
 
     app.logger.info("Flask application initialized successfully")
     

@@ -2014,6 +2014,10 @@ export interface CommandCenterPayload {
     per_page: number;
   };
   data_completeness_score?: number | null;
+  condo_risk_status?: CondoRiskStatus | null;
+  building_sale_possible?: BuildingSalePossible | null;
+  condo_analysis_id?: number | null;
+  assessor_class?: string | null;
 }
 
 export interface LogCallFollowUpPayload {
@@ -2311,6 +2315,49 @@ export interface ImportSourceStatus {
   last_refreshed_at: string | null
   rows_imported: number | null
   import_status: string | null
+  completed_import_count?: number
+  scope?: 'user' | 'org' | null
+}
+
+export interface PropertyMatchPreview {
+  found: boolean
+  entered_address: {
+    property_street: string | null
+    property_city: string | null
+    property_state: string | null
+    property_zip: string | null
+  }
+  recommended_address: {
+    property_street: string | null
+    property_city: string | null
+    property_state: string | null
+    property_zip: string | null
+    property_type?: string | null
+    county_assessor_pin?: string | null
+  } | null
+  pin: string | null
+  connector: string | null
+  parcel_fields?: Record<string, unknown> | null
+  message?: string | null
+  lead_id?: number
+}
+
+export interface BuildingOwnershipDetail {
+  lead_id?: number
+  id: number
+  normalized_address: string
+  condo_risk_status: CondoRiskStatus
+  building_sale_possible: BuildingSalePossible
+  pin_count?: number
+  owner_count?: number
+  analysis_details?: Record<string, unknown> | null
+  assessor_class?: string | null
+  manually_reviewed?: boolean
+  manual_override_status?: CondoRiskStatus | null
+}
+
+export interface NoNextActionStatusCounts {
+  [leadStatus: string]: number
 }
 
 export interface HubSpotSourceStatus {

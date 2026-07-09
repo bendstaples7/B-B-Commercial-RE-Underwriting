@@ -9,6 +9,8 @@ from marshmallow import ValidationError
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry
 from app.schemas import BulkActionRequestSchema, BulkActionResultSchema
+from app.api_utils import require_auth
+from app.services.lead_status_service import apply_lead_status_change
 from app.services.lead_task_service import LeadTaskService
 
 logger = logging.getLogger(__name__)
@@ -135,3 +137,45 @@ def bulk_do_not_contact():
             failures += 1
 
     return jsonify({'successes': successes, 'failures': failures}), 200
+
+
+@bulk_action_bp.route('/update-status', methods=['POST'])
+@handle_errors
+@require_auth
+def bulk_update_status():
+    """POST /api/leads/bulk/update-status — update status for multiple leads."""
+    body = request.get_json() or {}
+    lead_ids = body.get('lead_ids', [])
+    new_status = body.get('status')
+    reason = body.get('reason') or ''
+    if not lead_ids:
+        return jsonify({'error': 'lead_ids is required'}), 400
+    if not new_status:
+        return jsonify({'error': 'status is required'}), 400
+
+    actor = getattr(g, 'user_id', 'anonymous')
+    successes = 0
+    failures = 0
+    failed_ids = []
+
+    for lead_id in lead_ids:
+        try:
+            lead = db.session.get(Lead, lead_id)
+            if lead is None:
+                failures += 1
+                failed_ids.append(lead_id)
+                continue
+            apply_lead_status_change(
+                lead, new_status, reason=reason, actor=actor, recompute_action=True,
+            )
+            successes += 1
+        except Exception:
+            db.session.rollback()
+            failures += 1
+            failed_ids.append(lead_id)
+
+    return jsonify({
+        'successes': successes,
+        'failures': failures,
+        'failed_ids': failed_ids,
+    }), 200

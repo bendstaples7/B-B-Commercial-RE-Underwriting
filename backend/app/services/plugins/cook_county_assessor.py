@@ -163,19 +163,20 @@ class CookCountyAssessorPlugin(DataSourcePlugin):
 
         prop_class = row.get("class")
         if prop_class is not None:
-            class_map = {
-                "202": "single_family",
-                "203": "multi_family",
-                "204": "multi_family",
-                "205": "multi_family",
-                "206": "multi_family",
-                "207": "multi_family",
-                "208": "multi_family",
-                "211": "multi_family",
-                "212": "multi_family",
-            }
-            if str(prop_class) in class_map:
-                fields["property_type"] = class_map[str(prop_class)]
+            fields["assessor_class"] = str(prop_class)
+            from app.services.helpers.cook_county_assessor_class import map_assessor_class_to_property_type
+            mapped_type = map_assessor_class_to_property_type(str(prop_class))
+            if mapped_type:
+                fields["property_type"] = mapped_type
+            else:
+                class_map = {
+                    "202": "single_family",
+                    "203": "multi_family", "204": "multi_family", "205": "multi_family",
+                    "206": "multi_family", "207": "multi_family", "208": "multi_family",
+                    "211": "multi_family", "212": "multi_family",
+                }
+                if str(prop_class) in class_map:
+                    fields["property_type"] = class_map[str(prop_class)]
 
         return fields
 

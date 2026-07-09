@@ -209,31 +209,74 @@ class DataSourceStatusService:
 
         return results
 
+    def _completed_import_query(self, user_ids: set[str]):
+        """Base query for completed import jobs scoped to user id set."""
+        ids = {uid for uid in user_ids if uid}
+        if not ids:
+            return ImportJob.query.filter(ImportJob.id == -1)
+        return (
+            db.session.query(ImportJob)
+            .filter(
+                ImportJob.user_id.in_(ids),
+                ImportJob.status == "completed",
+            )
+        )
+
+    def _resolve_import_user_ids(self, user_id: str) -> set[str]:
+        """User ids to match for import jobs (JWT sub + legacy aliases)."""
+        from app.models.import_job import OAuthToken
+
+        ids = {user_id}
+        if user_id != "default_user":
+            ids.add("default_user")
+        token = OAuthToken.query.filter_by(user_id=user_id).first()
+        if token and token.user_id:
+            ids.add(token.user_id)
+        return ids
+
     def _get_import_source(self, user_id: str) -> dict:
         """Return most-recent completed ImportJob info for user_id.
 
-        Returns null fields when no completed job exists for this user.
+        Falls back to org-wide most recent completed job when user-scoped
+        jobs are absent (legacy imports stored under default_user, etc.).
         """
-        # Scoped to this user only — no cross-user fallback to prevent data leakage
+        user_ids = self._resolve_import_user_ids(user_id)
+        scope = "user"
+
         job: Optional[ImportJob] = (
-            db.session.query(ImportJob)
-            .filter(
-                ImportJob.user_id == user_id,
-                ImportJob.status == "completed",
-            )
-            .order_by(ImportJob.completed_at.desc())
+            self._completed_import_query(user_ids)
+            .order_by(ImportJob.completed_at.desc().nullslast(), ImportJob.created_at.desc())
             .limit(1)
             .first()
         )
+
+        if job is None:
+            scope = "org"
+            job = (
+                db.session.query(ImportJob)
+                .filter(ImportJob.status == "completed")
+                .order_by(ImportJob.completed_at.desc().nullslast(), ImportJob.created_at.desc())
+                .limit(1)
+                .first()
+            )
+
+        completed_count = 0
+        if job is not None:
+            completed_count = self._completed_import_query(user_ids).count()
+            if completed_count == 0:
+                completed_count = (
+                    db.session.query(ImportJob)
+                    .filter(ImportJob.status == "completed")
+                    .count()
+                )
 
         last_refreshed_at: Optional[str] = None
         rows_imported: Optional[int] = None
         import_status: Optional[str] = None
 
         if job is not None:
-            last_refreshed_at = (
-                job.completed_at.isoformat() + "Z" if job.completed_at else None
-            )
+            ts = job.completed_at or job.created_at
+            last_refreshed_at = ts.isoformat() + "Z" if ts else None
             rows_imported = job.rows_imported
             import_status = job.status
 
@@ -245,6 +288,8 @@ class DataSourceStatusService:
             "last_refreshed_at": last_refreshed_at,
             "rows_imported": rows_imported,
             "import_status": import_status,
+            "completed_import_count": completed_count,
+            "scope": scope if job is not None else None,
         }
 
     def _get_hubspot_source(self) -> dict:

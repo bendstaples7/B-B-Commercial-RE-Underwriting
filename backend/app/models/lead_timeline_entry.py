@@ -17,6 +17,7 @@ class LeadTimelineEntry(db.Model):
         'hubspot_note', 'hubspot_call', 'hubspot_task', 'hubspot_deal_stage',
         'property_analysis_completed', 'lead_imported',
         'mail_queued', 'mail_sent', 'mail_delivered',
+        'property_match_approved', 'property_match_rejected',
         name='timeline_event_type_enum'
     ), nullable=False, index=True)
 

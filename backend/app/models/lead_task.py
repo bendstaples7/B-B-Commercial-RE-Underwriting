@@ -14,7 +14,8 @@ class LeadTask(db.Model):
     # Task type: built-in enum or 'custom' for free-text
     task_type = db.Column(db.Enum(
         'call_owner_today', 'research_missing_pin', 'match_hubspot_deal',
-        'run_property_analysis', 'add_to_mail_batch', 'skip_trace_owner', 'custom',
+        'run_property_analysis', 'add_to_mail_batch', 'skip_trace_owner',
+        'confirm_building_ownership', 'custom',
         name='lead_task_type_enum'
     ), nullable=False, default='custom')
 
