@@ -101,3 +101,47 @@ class TestHubSpotWriteBackService:
             update_props = mock_client.update_deal.call_args[0][1]
             assert 'dealstage' not in update_props
             assert 'pipeline' not in update_props
+
+    def test_push_deal_stage_for_confirmed_match(self, app):
+        from app.models.hubspot_deal import HubSpotDeal
+        from app.services.hubspot_writeback_service import HubSpotWriteBackService
+
+        with app.app_context():
+            lead = _make_lead(lead_status='mailing_no_contact_made')
+            db.session.add(HubSpotMatch(
+                hubspot_record_type='deal',
+                hubspot_id='hs-deal-stage',
+                internal_record_type='lead',
+                internal_record_id=lead.id,
+                confidence='HIGH',
+                status='confirmed',
+                matching_criteria='manual',
+            ))
+            db.session.commit()
+
+            mock_client = MagicMock()
+            mock_client.update_deal.return_value = {
+                'id': 'hs-deal-stage',
+                'properties': {'dealstage': 'stage_skip'},
+            }
+
+            with patch.object(
+                HubSpotWriteBackService,
+                'resolve_deal_stage',
+                return_value=('pipeline1', 'stage_skip'),
+            ):
+                with patch('app.services.hubspot_writeback_service._upsert_hubspot_record'):
+                    result = HubSpotWriteBackService(client=mock_client).push_deal_stage_for_lead(
+                        lead.id,
+                        'skip_trace',
+                    )
+
+            assert result['synced'] is True
+            assert result['action'] == 'stage_updated'
+            update_props = mock_client.update_deal.call_args[0][1]
+            assert update_props['dealstage'] == 'stage_skip'
+            assert update_props['pipeline'] == 'pipeline1'
+
+            db.session.refresh(lead)
+            assert lead.hubspot_deal_stage == 'Skip Trace'
+            assert lead.last_hubspot_sync_at is not None

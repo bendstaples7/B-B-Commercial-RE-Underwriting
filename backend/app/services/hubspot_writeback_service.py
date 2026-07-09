@@ -13,6 +13,7 @@ from app.models.hubspot_match import HubSpotMatch
 from app.models.hubspot_platform_write import HubSpotPlatformWrite
 from app.models.lead import Lead
 from app.services.hubspot_client_service import HubSpotClientService
+from app.services.hubspot_stage_mapping import hubspot_stage_label_for_lead_status
 from app.tasks.hubspot_tasks import _upsert_hubspot_record
 
 logger = logging.getLogger(__name__)
@@ -223,6 +224,106 @@ class HubSpotWriteBackService:
                 except Exception:
                     db.session.rollback()
             logger.exception('HubSpot write-back failed for lead %s', lead_id)
+            return {
+                'synced': False,
+                'action': 'failed',
+                'lead_id': lead_id,
+                'error': str(exc),
+            }
+
+    def push_deal_stage_for_lead(self, lead_id: int, lead_status: str) -> dict[str, Any]:
+        """Push a platform lead_status to the linked HubSpot deal stage.
+
+        Runs for confirmed deal matches regardless of the quick-add writeback flag,
+        since the deal already exists in HubSpot.
+        """
+        stage_label = hubspot_stage_label_for_lead_status(lead_status)
+        if not stage_label:
+            return {
+                'synced': False,
+                'action': 'skipped',
+                'reason': 'unmapped_lead_status',
+                'lead_status': lead_status,
+            }
+
+        lead = db.session.get(Lead, lead_id)
+        if lead is None:
+            return {'synced': False, 'action': 'skipped', 'reason': 'lead_not_found'}
+
+        existing_match = self._confirmed_deal_match(lead_id)
+        if existing_match is None:
+            return {'synced': False, 'action': 'skipped', 'reason': 'no_confirmed_deal_match'}
+
+        try:
+            client = self._get_client()
+        except Exception as exc:
+            logger.warning(
+                'HubSpot stage push: no client for lead %s: %s', lead_id, exc,
+            )
+            return {
+                'synced': False,
+                'action': 'skipped',
+                'reason': 'no_hubspot_config',
+                'error': str(exc),
+            }
+
+        try:
+            pipeline_id, stage_id = self.resolve_deal_stage(stage_label)
+        except Exception as exc:
+            logger.warning(
+                'HubSpot stage push: stage lookup failed for lead %s: %s', lead_id, exc,
+            )
+            return {
+                'synced': False,
+                'action': 'skipped',
+                'reason': 'stage_lookup_failed',
+                'error': str(exc),
+            }
+
+        if not stage_id:
+            return {
+                'synced': False,
+                'action': 'skipped',
+                'reason': 'stage_not_found',
+                'error': f'Could not resolve HubSpot stage "{stage_label}"',
+            }
+
+        hubspot_deal_id = existing_match.hubspot_id
+        properties: dict[str, str] = {'dealstage': stage_id}
+        if pipeline_id:
+            properties['pipeline'] = pipeline_id
+
+        try:
+            self._record_platform_write('deal', hubspot_deal_id)
+            record = client.update_deal(hubspot_deal_id, properties)
+            raw_payload = record if isinstance(record, dict) and record.get('properties') else {
+                'id': hubspot_deal_id,
+                'properties': properties,
+            }
+            _upsert_hubspot_record(
+                db=db,
+                model_class=HubSpotDeal,
+                hubspot_id=hubspot_deal_id,
+                raw_payload=raw_payload,
+                run_id=None,
+            )
+            lead.hubspot_deal_stage = stage_label
+            lead.last_hubspot_sync_at = datetime.utcnow()
+            db.session.add(lead)
+            db.session.commit()
+
+            return {
+                'synced': True,
+                'action': 'stage_updated',
+                'hubspot_deal_id': hubspot_deal_id,
+                'lead_id': lead_id,
+                'hubspot_deal_stage': stage_label,
+            }
+        except Exception as exc:
+            db.session.rollback()
+            logger.warning(
+                'HubSpot stage push failed for lead %s: %s', lead_id, exc,
+            )
             return {
                 'synced': False,
                 'action': 'failed',

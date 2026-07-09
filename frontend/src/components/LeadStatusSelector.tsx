@@ -1,7 +1,7 @@
 /**
  * LeadStatusSelector — clickable status chip that opens a menu to change lead status.
  */
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Alert,
   Box,
@@ -21,7 +21,7 @@ export interface LeadStatusSelectorProps {
   leadId: number
   status: LeadStatus
   allStatuses: LeadStatus[]
-  onStatusChanged: () => void
+  onStatusChanged: () => void | Promise<void>
 }
 
 export function LeadStatusSelector({
@@ -30,15 +30,20 @@ export function LeadStatusSelector({
   allStatuses,
   onStatusChanged,
 }: LeadStatusSelectorProps) {
+  const [displayStatus, setDisplayStatus] = useState(status)
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null)
   const [pendingStatus, setPendingStatus] = useState<LeadStatus | null>(null)
   const [statusReason, setStatusReason] = useState('')
   const [statusChanging, setStatusChanging] = useState(false)
   const [statusError, setStatusError] = useState<string | null>(null)
 
-  const label = LEAD_STATUS_LABELS[status] ?? status
-  const bgcolor = getLeadStatusColor(status)
-  const otherStatuses = allStatuses.filter((s) => s !== status)
+  useEffect(() => {
+    setDisplayStatus(status)
+  }, [status])
+
+  const label = LEAD_STATUS_LABELS[displayStatus] ?? displayStatus
+  const bgcolor = getLeadStatusColor(displayStatus)
+  const otherStatuses = allStatuses.filter((s) => s !== displayStatus)
 
   const handleOpenMenu = (event: React.MouseEvent<HTMLElement>) => {
     setAnchorEl(event.currentTarget)
@@ -67,10 +72,16 @@ export function LeadStatusSelector({
     setStatusChanging(true)
     setStatusError(null)
     try {
-      await commandCenterService.updateStatus(leadId, pendingStatus, statusReason || undefined)
+      const result = await commandCenterService.updateStatus(
+        leadId,
+        pendingStatus,
+        statusReason || undefined,
+      ) as { lead_status?: LeadStatus }
+      const nextStatus = result.lead_status ?? pendingStatus
+      setDisplayStatus(nextStatus)
       setPendingStatus(null)
       setStatusReason('')
-      onStatusChanged()
+      await onStatusChanged()
     } catch (err) {
       setStatusError(err instanceof Error ? err.message : 'Failed to update status')
     } finally {

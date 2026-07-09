@@ -228,6 +228,33 @@ class TestUpdateStatus:
             db.session.refresh(lead)
             assert lead.lead_status == 'deprioritize'
 
+    def test_status_change_updates_hubspot_deal_stage_label(self, client, app):
+        """PATCH /api/leads/<id>/status updates hubspot_deal_stage for mapped statuses."""
+        with app.app_context():
+            lead = _make_lead(app, '7b Status St', lead_status='mailing_no_contact_made')
+            client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({'status': 'skip_trace'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            db.session.refresh(lead)
+            assert lead.lead_status == 'skip_trace'
+            assert lead.hubspot_deal_stage == 'Skip Trace'
+
+    @patch('app.services.queue_order_cache.queue_order_cache.clear')
+    def test_status_change_clears_queue_navigation_cache(self, mock_clear, client, app):
+        """PATCH /api/leads/<id>/status clears the queue navigation cache."""
+        with app.app_context():
+            lead = _make_lead(app, '7c Status St', lead_status='mailing_no_contact_made')
+            client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({'status': 'skip_trace'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            mock_clear.assert_called_once()
+
     def test_status_change_appends_timeline_entry(self, client, app):
         """PATCH /api/leads/<id>/status appends a status_changed timeline entry."""
         with app.app_context():

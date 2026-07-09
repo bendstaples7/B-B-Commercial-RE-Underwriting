@@ -727,6 +727,11 @@ def update_status(lead_id: int):
 
     lead.lead_status = new_status
 
+    from app.services.hubspot_stage_mapping import hubspot_stage_label_for_lead_status
+    hs_stage_label = hubspot_stage_label_for_lead_status(new_status)
+    if hs_stage_label:
+        lead.hubspot_deal_stage = hs_stage_label
+
     # DNC special case: set RA to null, cancel all open tasks
     if new_status == 'do_not_contact':
         lead.recommended_action = None
@@ -760,10 +765,22 @@ def update_status(lead_id: int):
     db.session.add(entry)
     db.session.commit()
 
+    from app.services.queue_order_cache import queue_order_cache
+    queue_order_cache.clear()
+
     # Rescore first, then recompute RA (inside _rescore_after_status_change)
     # so the action reflects the updated score.
     if new_status not in ('do_not_contact', 'suppressed'):
         _rescore_after_status_change(lead_id)
+
+    try:
+        from app.services.hubspot_writeback_service import HubSpotWriteBackService
+        HubSpotWriteBackService().push_deal_stage_for_lead(lead_id, new_status)
+    except Exception as exc:
+        logger.warning(
+            'HubSpot stage push after status change failed for lead %s: %s',
+            lead_id, exc,
+        )
 
     return jsonify({'lead_status': lead.lead_status, 'recommended_action': lead.recommended_action}), 200
 
