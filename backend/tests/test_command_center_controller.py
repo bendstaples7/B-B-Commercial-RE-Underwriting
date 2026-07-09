@@ -228,8 +228,8 @@ class TestUpdateStatus:
             db.session.refresh(lead)
             assert lead.lead_status == 'deprioritize'
 
-    def test_status_change_updates_hubspot_deal_stage_label(self, client, app):
-        """PATCH /api/leads/<id>/status updates hubspot_deal_stage for mapped statuses."""
+    def test_status_change_does_not_set_hubspot_deal_stage_without_match(self, client, app):
+        """PATCH /api/leads/<id>/status leaves hubspot_deal_stage unset without a HubSpot deal."""
         with app.app_context():
             lead = _make_lead(app, '7b Status St', lead_status='mailing_no_contact_made')
             client.patch(
@@ -240,7 +240,25 @@ class TestUpdateStatus:
             )
             db.session.refresh(lead)
             assert lead.lead_status == 'skip_trace'
-            assert lead.hubspot_deal_stage == 'Skip Trace'
+            assert lead.hubspot_deal_stage is None
+
+    @patch('app.services.hubspot_writeback_service.HubSpotWriteBackService.push_deal_stage_for_lead')
+    def test_status_change_pushes_hubspot_stage_for_linked_deal(self, mock_push, client, app):
+        """PATCH /api/leads/<id>/status triggers HubSpot stage writeback for linked deals."""
+        mock_push.return_value = {
+            'synced': True,
+            'action': 'stage_updated',
+            'hubspot_deal_stage': 'Skip Trace',
+        }
+        with app.app_context():
+            lead = _make_lead(app, '7d Status St', lead_status='mailing_no_contact_made')
+            client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({'status': 'skip_trace'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            mock_push.assert_called_once_with(lead.id, 'skip_trace')
 
     @patch('app.services.queue_order_cache.queue_order_cache.clear')
     def test_status_change_clears_queue_navigation_cache(self, mock_clear, client, app):

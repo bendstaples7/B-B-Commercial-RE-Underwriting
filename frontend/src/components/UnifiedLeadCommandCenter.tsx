@@ -647,8 +647,8 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
     await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
     if (!fromQueue) return
-    await queryClient.invalidateQueries({ queryKey: ['queue-navigation', fromQueue.key, leadId] })
-    await queryClient.invalidateQueries({ queryKey: ['queue-todays-action'] })
+    await queryClient.invalidateQueries({ queryKey: ['queue-navigation', fromQueue.key] })
+    await queryClient.invalidateQueries({ queryKey: [`queue-${fromQueue.key}`] })
     try {
       const nav = await queueService.getNavigation(fromQueue.key, leadId)
       if (nav.position === null) {

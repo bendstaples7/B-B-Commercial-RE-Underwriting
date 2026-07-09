@@ -39,7 +39,7 @@ export function LeadStatusSelector({
 
   useEffect(() => {
     setDisplayStatus(status)
-  }, [status])
+  }, [status, leadId])
 
   const label = LEAD_STATUS_LABELS[displayStatus] ?? displayStatus
   const bgcolor = getLeadStatusColor(displayStatus)
@@ -71,6 +71,7 @@ export function LeadStatusSelector({
     if (!pendingStatus) return
     setStatusChanging(true)
     setStatusError(null)
+    let saved = false
     try {
       const result = await commandCenterService.updateStatus(
         leadId,
@@ -81,11 +82,19 @@ export function LeadStatusSelector({
       setDisplayStatus(nextStatus)
       setPendingStatus(null)
       setStatusReason('')
-      await onStatusChanged()
+      saved = true
     } catch (err) {
       setStatusError(err instanceof Error ? err.message : 'Failed to update status')
     } finally {
       setStatusChanging(false)
+    }
+
+    if (saved) {
+      try {
+        await onStatusChanged()
+      } catch {
+        // Status is saved; parent queue refresh failures are non-blocking here.
+      }
     }
   }
 

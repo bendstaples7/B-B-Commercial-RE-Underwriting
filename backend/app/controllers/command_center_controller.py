@@ -727,11 +727,6 @@ def update_status(lead_id: int):
 
     lead.lead_status = new_status
 
-    from app.services.hubspot_stage_mapping import hubspot_stage_label_for_lead_status
-    hs_stage_label = hubspot_stage_label_for_lead_status(new_status)
-    if hs_stage_label:
-        lead.hubspot_deal_stage = hs_stage_label
-
     # DNC special case: set RA to null, cancel all open tasks
     if new_status == 'do_not_contact':
         lead.recommended_action = None

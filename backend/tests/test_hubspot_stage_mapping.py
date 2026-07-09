@@ -38,6 +38,30 @@ class TestHubSpotStageMapping:
 
             assert manual_status_change_wins(lead) is True
 
+    def test_manual_status_change_wins_when_timestamps_equal(self, app):
+        with app.app_context():
+            sync_at = datetime.utcnow()
+            lead = Lead(
+                property_street='102 Manual Equal St',
+                lead_status='skip_trace',
+                last_hubspot_sync_at=sync_at,
+            )
+            db.session.add(lead)
+            db.session.flush()
+
+            db.session.add(LeadTimelineEntry(
+                lead_id=lead.id,
+                event_type='status_changed',
+                source='manual',
+                actor='test-user',
+                summary='Status changed.',
+                occurred_at=sync_at,
+                event_metadata={'previous_status': 'mailing_no_contact_made', 'new_status': 'skip_trace'},
+            ))
+            db.session.commit()
+
+            assert manual_status_change_wins(lead) is True
+
     def test_manual_status_change_does_not_win_before_hubspot_sync(self, app):
         with app.app_context():
             sync_at = datetime.utcnow()

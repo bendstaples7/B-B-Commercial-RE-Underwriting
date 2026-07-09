@@ -71,4 +71,4 @@ def manual_status_change_wins(lead: Lead) -> bool:
     sync_at = _as_utc_aware(lead.last_hubspot_sync_at)
     if sync_at is None:
         return True
-    return manual_at > sync_at
+    return manual_at >= sync_at
