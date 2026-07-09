@@ -148,10 +148,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
   const sortedTasks = sortTasks(openTasks)
   const showCreateTaskCTA = recommendedAction === 'create_task' && openTasks.length === 0
   const awaitingMailBatch = mailQueueStatus === 'queued' || upNextToMail
-  const onlyMailPrepTaskOpen =
-    awaitingMailBatch
-    && openTasks.length === 1
-    && openTasks[0].task_type === 'add_to_mail_batch'
+  const noOpenTasksWhileAwaitingMail = awaitingMailBatch && openTasks.length === 0
 
   // ---------------------------------------------------------------------------
   // Form handlers
@@ -275,15 +272,15 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
         />
       )}
 
-      {onlyMailPrepTaskOpen && (
+      {noOpenTasksWhileAwaitingMail && (
         <Typography
           variant="caption"
           color="text.secondary"
           display="block"
           sx={{ mb: 1.5 }}
-          data-testid="mail-prep-waiting-note"
+          data-testid="mail-awaiting-paused-note"
         >
-          Mail prep complete — waiting for batch send.
+          Outreach paused — waiting for batch send.
         </Typography>
       )}
 

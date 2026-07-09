@@ -12,10 +12,11 @@ from app.services.lead_timeline_service import LeadTimelineService
 from app.services.open_letter_config_service import OpenLetterConfigService
 from app.services.open_letter_contact_mapper import lead_to_olc_contact
 from app.services.mail_task_lifecycle_service import (
-    complete_mail_prep_tasks,
+    complete_tasks_superseded_by_mail,
     refresh_leads_after_mail_task_changes,
     schedule_mail_follow_up_task,
 )
+from app.services.hubspot_task_completion_service import sync_pending_hubspot_completions
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,7 @@ class MailCampaignService:
 
         now_iso = campaign.submitted_at.isoformat()
         sent_lead_ids: list[int] = []
+        hubspot_sync_ids: list[str] = []
         for item in items:
             if item.status != 'queued':
                 continue
@@ -157,7 +159,10 @@ class MailCampaignService:
             })
             lead.mailer_history = history
 
-            complete_mail_prep_tasks(lead.id, actor=campaign.created_by, commit=False)
+            _completed, pending_sync = complete_tasks_superseded_by_mail(
+                lead.id, actor=campaign.created_by, commit=False,
+            )
+            hubspot_sync_ids.extend(pending_sync)
 
             schedule_mail_follow_up_task(
                 lead=lead,
@@ -185,6 +190,7 @@ class MailCampaignService:
             )
 
         db.session.commit()
+        sync_pending_hubspot_completions(hubspot_sync_ids)
         refresh_leads_after_mail_task_changes(sent_lead_ids)
         return campaign
 

@@ -1163,125 +1163,37 @@ def sync_lead_from_hubspot(lead_id: int):
 
 
 @command_center_bp.route('/<int:lead_id>/hubspot-tasks/<int:task_id>/done', methods=['POST'])
+@require_auth
 @handle_errors
 def mark_hubspot_task_done(lead_id: int, task_id: int):
     """
     POST /api/leads/<lead_id>/hubspot-tasks/<task_id>/done
 
     Mark a HubSpot-imported task as completed — both locally and in HubSpot.
-    Looks up the task's hubspot_task_id, calls PATCH /crm/v3/objects/tasks/<id>
-    to set hs_task_status=COMPLETED, then marks it done in the local DB.
-
-    If the HubSpot API call fails (no config, auth error, rate limit, etc.),
-    the task is still marked done locally and a warning is noted in the timeline.
     """
-    import datetime as _dt
-    from app import db
+    from app.controllers.property_controller import _current_user_is_admin
+    from app.services.hubspot_task_completion_service import complete_hubspot_task
+
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    if not _current_user_is_admin():
+        current_user_id = getattr(g, 'user_id', None)
+        if not current_user_id or current_user_id == 'anonymous' or lead.owner_user_id != current_user_id:
+            return jsonify({'error': 'Not found'}), 404
 
     actor = getattr(g, 'user_id', 'anonymous')
-    now = _dt.datetime.now(_dt.timezone.utc)
-
-    # Atomically mark the task completed only if it is still open/overdue
-    # and linked to this lead. UPDATE ... RETURNING eliminates the SELECT
-    # then UPDATE race condition where two concurrent requests could both
-    # pass the SELECT check and both write timeline entries.
-    result = db.session.execute(
-        db.text("""
-            UPDATE tasks
-            SET status = 'completed',
-                updated_at = NOW(),
-                completion_timestamp = NOW()
-            WHERE id = :task_id
-              AND status IN ('open', 'overdue')
-              AND (
-                lead_id = :lead_id
-                OR EXISTS (
-                    SELECT 1 FROM task_associations ta
-                    WHERE ta.task_id = tasks.id
-                      AND ta.target_type = 'lead'
-                      AND ta.target_id = :lead_id
-                )
-              )
-            RETURNING id, title, hubspot_task_id
-        """),
-        {'task_id': task_id, 'lead_id': lead_id}
-    ).fetchone()
-
-    if result is None:
-        db.session.rollback()
-        return jsonify({'error': 'Not found', 'message': f'Task {task_id} not found or already completed for lead {lead_id}'}), 404
-
-    task_title = result[1]
-    hubspot_task_id = result[2]
-
-    # Commit the local status change BEFORE calling HubSpot so the DB write
-    # is durable regardless of external call outcome.
-    db.session.commit()
-
-    # --- Attempt to sync completion back to HubSpot ---
-    hubspot_synced = False
-    hubspot_error = None
-    if hubspot_task_id:
-        try:
-            from app.models.hubspot_config import HubSpotConfig as _HubSpotConfig
-            from app.services.hubspot_client_service import HubSpotClientService as _HCS
-            config = _HubSpotConfig.query.order_by(_HubSpotConfig.id.desc()).first()
-            if config:
-                _HCS(config).complete_task(hubspot_task_id)
-                hubspot_synced = True
-                logger.info("HubSpot task %s marked COMPLETED for lead %s", hubspot_task_id, lead_id)
-            else:
-                hubspot_error = 'HubSpot sync failed'
-        except Exception as exc:
-            # Log full exception to server logs; expose only a sanitized marker to the user
-            logger.warning(
-                "Failed to mark HubSpot task %s as completed for lead %s: %s",
-                hubspot_task_id, lead_id, exc,
-            )
-            hubspot_error = 'HubSpot sync failed'
-
-    # Build timeline summary based on sync outcome
-    if hubspot_synced:
-        summary = f"HubSpot task completed: {task_title}"
-        metadata_note = 'Marked done in HubSpot and locally'
-    elif hubspot_task_id and hubspot_error:
-        summary = f"HubSpot task marked done locally: {task_title} (HubSpot sync failed)"
-        metadata_note = 'Local only — HubSpot sync failed'
-    else:
-        summary = f"HubSpot task marked done locally: {task_title}"
-        metadata_note = 'Marked done locally — no HubSpot config'
-
-    # Store raw actor_raw (canonical user_id) — resolved to display_name at read time
-    entry = LeadTimelineEntry(
-        lead_id=lead_id,
-        event_type='task_completed',
-        occurred_at=now,
-        source='manual',
-        actor=actor,
-        summary=summary,
-        event_metadata={
-            'task_id': task_id,
-            'hubspot_task_id': hubspot_task_id,
-            'title': task_title,
-            'hubspot_synced': hubspot_synced,
-            'note': metadata_note,
-        },
-    )
-    db.session.add(entry)
-    db.session.commit()
-
-    # Trigger RA recomputation — lead may leave Today's Action queue
-    try:
-        LeadScoringEngine.recompute_and_persist(lead_id)
-    except Exception as exc:
-        logger.exception(
-            "LeadScoringEngine.recompute_and_persist failed for lead %s after hubspot task done: %s",
-            lead_id, exc,
-        )
+    result = complete_hubspot_task(lead_id, task_id, actor=actor)
+    if not result.completed:
+        return jsonify({
+            'error': 'Not found',
+            'message': f'Task {task_id} not found or already completed for lead {lead_id}',
+        }), 404
 
     return jsonify({
         'task_id': task_id,
         'status': 'completed',
-        'hubspot_synced': hubspot_synced,
-        'hubspot_task_id': hubspot_task_id,
+        'hubspot_synced': result.hubspot_synced,
+        'hubspot_task_id': result.hubspot_task_id,
     }), 200

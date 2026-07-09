@@ -3,11 +3,17 @@ from app.utils.call_completable_task import (
     find_call_completable_task,
     is_call_completable_task,
     is_mail_or_email_outreach_task,
+    is_superseded_by_mail_task,
 )
 
 
 def test_call_owner_today_always_matches():
     assert is_call_completable_task('call_owner_today', 'Anything') is True
+    assert is_superseded_by_mail_task('call_owner_today', 'Anything') is True
+
+
+def test_research_task_not_superseded_by_mail():
+    assert is_superseded_by_mail_task('research_missing_pin', 'Find PIN') is False
 
 
 def test_mail_batch_never_matches():

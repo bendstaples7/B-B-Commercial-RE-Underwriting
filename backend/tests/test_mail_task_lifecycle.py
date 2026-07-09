@@ -15,6 +15,9 @@ from app.services.mail_queue_service import MailQueueService
 from app.services.mail_task_lifecycle_service import (
     MAIL_FOLLOW_UP_OFFSET_DAYS,
     complete_mail_prep_tasks,
+    complete_tasks_superseded_by_mail,
+    count_superseded_tasks_for_lead,
+    find_mail_awaiting_lead_ids,
     resolve_mail_queue_status,
     schedule_mail_follow_up_task,
 )
@@ -91,6 +94,183 @@ class TestCompleteMailPrepTasks:
             assert db_task.completed_at is not None
 
 
+class TestCompleteTasksSupersededByMail:
+    def test_completes_overdue_call_task_on_enqueue(self, app):
+        with app.app_context():
+            lead = _make_lead(app, '1b Call Overdue St')
+            task = _make_task(
+                app,
+                lead.id,
+                task_type='call_owner_today',
+                title='Call owner',
+                due_date=date.today() - timedelta(days=30),
+            )
+
+            count, _pending = complete_tasks_superseded_by_mail(
+                lead.id, actor=USER_ID, commit=True,
+            )
+
+            assert count == 1
+            assert LeadTask.query.get(task.id).status == 'completed'
+
+    def test_completes_mail_prep_and_call_tasks(self, app):
+        with app.app_context():
+            lead = _make_lead(app, '1c Both Tasks St')
+            mail_task = _make_task(app, lead.id)
+            call_task = _make_task(
+                app,
+                lead.id,
+                task_type='call_owner_today',
+                title='Follow up call',
+                due_date=date.today() - timedelta(days=10),
+            )
+
+            count, _pending = complete_tasks_superseded_by_mail(
+                lead.id, actor=USER_ID, commit=True,
+            )
+
+            assert count == 2
+            assert LeadTask.query.get(mail_task.id).status == 'completed'
+            assert LeadTask.query.get(call_task.id).status == 'completed'
+
+    def test_skips_research_task(self, app):
+        with app.app_context():
+            lead = _make_lead(app, '1d Research St')
+            task = _make_task(
+                app,
+                lead.id,
+                task_type='research_missing_pin',
+                title='Research missing PIN',
+                due_date=date.today() - timedelta(days=5),
+            )
+
+            count, _pending = complete_tasks_superseded_by_mail(
+                lead.id, actor=USER_ID, commit=True,
+            )
+
+            assert count == 0
+            assert LeadTask.query.get(task.id).status == 'open'
+
+    def test_completes_hubspot_follow_up_task(self, app):
+        from app import db
+        from app.models.task import Task
+        from app.models.task_association import TaskAssociation
+
+        with app.app_context():
+            lead = _make_lead(app, '1e HubSpot St')
+            hs_task = Task(
+                title='Follow up on 123 Main St',
+                status='open',
+                source='hubspot_import',
+                hubspot_task_id='hs-999',
+                due_date=datetime.now(timezone.utc),
+            )
+            db.session.add(hs_task)
+            db.session.flush()
+            db.session.add(
+                TaskAssociation(
+                    task_id=hs_task.id,
+                    target_type='lead',
+                    target_id=lead.id,
+                ),
+            )
+            db.session.commit()
+
+            with patch(
+                'app.services.hubspot_task_completion_service.sync_hubspot_task_to_hubspot',
+                return_value=True,
+            ):
+                count, pending = complete_tasks_superseded_by_mail(
+                    lead.id, actor=USER_ID, commit=True,
+                )
+
+            assert count == 1
+            assert pending == ['hs-999']
+            refreshed = Task.query.get(hs_task.id)
+            assert refreshed.status == 'completed'
+
+    def test_completes_mirrored_manual_task(self, app):
+        from app import db
+        from app.models.task import Task
+
+        with app.app_context():
+            lead = _make_lead(app, '1f Mirror St')
+            mirror = Task(
+                title='Call owner back',
+                status='open',
+                source='manual',
+                lead_id=lead.id,
+                task_type='call_owner_today',
+            )
+            db.session.add(mirror)
+            db.session.commit()
+
+            count, _pending = complete_tasks_superseded_by_mail(
+                lead.id, actor=USER_ID, commit=True,
+            )
+
+            assert count == 1
+            assert Task.query.get(mirror.id).status == 'completed'
+
+    def test_completes_associated_mirrored_task(self, app):
+        from app import db
+        from app.models.task import Task
+        from app.models.task_association import TaskAssociation
+
+        with app.app_context():
+            lead = _make_lead(app, '1g Assoc Mirror St')
+            mirror = Task(
+                title='Follow up with owner',
+                status='open',
+                source='manual',
+                task_type='custom',
+            )
+            db.session.add(mirror)
+            db.session.flush()
+            db.session.add(
+                TaskAssociation(
+                    task_id=mirror.id,
+                    target_type='lead',
+                    target_id=lead.id,
+                ),
+            )
+            db.session.commit()
+
+            assert count_superseded_tasks_for_lead(lead.id) == 1
+            count, _pending = complete_tasks_superseded_by_mail(
+                lead.id, actor=USER_ID, commit=True,
+            )
+
+            assert count == 1
+            assert Task.query.get(mirror.id).status == 'completed'
+
+
+class TestFollowUpOverdueMailAwaitingExclusion:
+    def test_excludes_lead_with_overdue_task_when_up_next_to_mail(self, app):
+        with app.app_context():
+            lead = _make_lead(app, '10 Overdue Mail St', up_next_to_mail=True)
+            _make_task(
+                app,
+                lead.id,
+                task_type='call_owner_today',
+                title='Call owner',
+                due_date=date.today() - timedelta(days=5),
+            )
+
+            svc = QueueService()
+            rows, _total = svc.get_follow_up_overdue()
+            ids = [r['id'] for r in rows]
+            assert lead.id not in ids
+
+
+class TestFindMailAwaitingLeadIds:
+    def test_finds_up_next_to_mail_leads(self, app):
+        with app.app_context():
+            lead = _make_lead(app, '11 Awaiting St', up_next_to_mail=True)
+            ids = find_mail_awaiting_lead_ids()
+            assert lead.id in ids
+
+
 class TestEnqueueCompletesMailPrepTasks:
     def test_enqueue_completes_add_to_mail_batch_task(self, app):
         with app.app_context():
@@ -98,12 +278,31 @@ class TestEnqueueCompletesMailPrepTasks:
             task = _make_task(app, lead.id)
 
             with patch('app.services.mail_queue_service.refresh_leads_after_mail_task_changes'):
-                result = MailQueueService().enqueue_leads([lead.id], USER_ID)
+                with patch('app.services.mail_queue_service.sync_pending_hubspot_completions'):
+                    result = MailQueueService().enqueue_leads([lead.id], USER_ID)
 
             assert result['added'] == 1
             db_task = LeadTask.query.get(task.id)
             assert db_task.status == 'completed'
             assert Lead.query.get(lead.id).up_next_to_mail is True
+
+    def test_enqueue_completes_overdue_call_task(self, app):
+        with app.app_context():
+            lead = _make_lead(app, '2b Enqueue Call St')
+            task = _make_task(
+                app,
+                lead.id,
+                task_type='call_owner_today',
+                title='Call owner',
+                due_date=date.today() - timedelta(days=20),
+            )
+
+            with patch('app.services.mail_queue_service.refresh_leads_after_mail_task_changes'):
+                with patch('app.services.mail_queue_service.sync_pending_hubspot_completions'):
+                    result = MailQueueService().enqueue_leads([lead.id], USER_ID)
+
+            assert result['added'] == 1
+            assert LeadTask.query.get(task.id).status == 'completed'
 
 
 class TestTodaysActionMailAwaitingExclusion:
