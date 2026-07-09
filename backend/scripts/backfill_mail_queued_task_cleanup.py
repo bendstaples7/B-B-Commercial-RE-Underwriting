@@ -54,6 +54,7 @@ def main() -> None:
             lead_ids = lead_ids[: args.limit]
 
         logger.info('Found %s mail-awaiting lead(s)', len(lead_ids))
+        print(f'Found {len(lead_ids)} mail-awaiting lead(s)', flush=True)
 
         total_completed = 0
         hubspot_sync_ids: list[str] = []
@@ -71,6 +72,7 @@ def main() -> None:
                     total_completed += count
                     hubspot_sync_ids.extend(pending)
                     logger.info('Lead %s: completed %s superseded task(s)', lead_id, count)
+                    print(f'Lead {lead_id}: completed {count} superseded task(s)', flush=True)
             else:
                 from app.models import LeadTask
                 from app.utils.call_completable_task import is_superseded_by_mail_task
@@ -101,6 +103,11 @@ def main() -> None:
             mode,
             len(affected_leads),
             total_completed,
+        )
+        print(
+            f'{mode} complete: {len(affected_leads)} lead(s) affected, '
+            f'{total_completed} task completion(s)',
+            flush=True,
         )
 
 

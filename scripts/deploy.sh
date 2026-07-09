@@ -313,8 +313,16 @@ else
 fi
 
 FLASK_ENV=production flask db upgrade head || { echo "FAILED: flask db upgrade"; exit 1; }
-cd ..
 echo "    Migrations applied"
+
+echo "==> (4b) Mail batch stale task cleanup"
+FLASK_ENV=production python3.11 scripts/backfill_mail_queued_task_cleanup.py --apply || {
+    echo "FAILED: backfill_mail_queued_task_cleanup.py"
+    exit 1
+}
+echo "    Mail batch stale task cleanup complete"
+
+cd ..
 
 echo "==> (5) Reload Gunicorn (zero-downtime)"
 if ! sudo -n systemctl reload gunicorn; then

@@ -145,6 +145,10 @@ def main() -> int:
             "deploy.sh step 8 must log non-blocking dispatch "
             "(Post-deploy HubSpot sync dispatched)"
         )
+    if "backfill_mail_queued_task_cleanup.py" not in deploy_text:
+        errors.append(
+            "deploy.sh must run backfill_mail_queued_task_cleanup.py after migrations"
+        )
 
     if errors:
         print("Deploy contract validation FAILED:", file=sys.stderr)

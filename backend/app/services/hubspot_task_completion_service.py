@@ -38,6 +38,7 @@ def _update_hubspot_task_completed(
                 completion_timestamp = :now
             WHERE id = :task_id
               AND status IN ('open', 'overdue')
+              AND source = 'hubspot_import'
               AND (
                 lead_id = :lead_id
                 OR EXISTS (
@@ -74,6 +75,9 @@ def _append_hubspot_task_timeline(
     if hubspot_synced:
         summary = f'HubSpot task completed: {local.title}'
         metadata_note = 'Marked done in HubSpot and locally'
+    elif reason == 'mail_queued':
+        summary = f'HubSpot task marked done locally: {local.title} (HubSpot sync pending)'
+        metadata_note = 'Local completion — HubSpot sync pending after mail queue'
     elif local.hubspot_task_id:
         summary = f'HubSpot task marked done locally: {local.title} (HubSpot sync failed)'
         metadata_note = 'Local only — HubSpot sync failed'
