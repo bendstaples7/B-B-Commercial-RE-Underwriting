@@ -224,11 +224,36 @@ def run_checks() -> bool:
         if current_heads == expected_heads:
             print(f"  ✓ Database is at migration head ({', '.join(expected_heads)})")
         else:
-            print(f"  ✗ Database schema is out of date")
-            print(f"    Current : {current_heads or '(none — fresh DB)' }")
+            print("  ⚙ Database schema is out of date — running flask db upgrade head...")
+            print(f"    Current : {current_heads or '(none — fresh DB)'}")
             print(f"    Expected: {expected_heads}")
-            print("    Fix: cd backend && flask db upgrade head")
-            passed = False
+            try:
+                upgrade_env = {
+                    **os.environ,
+                    "FLASK_APP": "app",
+                    "FLASK_ENV": "development",
+                    "PYTHONIOENCODING": "utf-8",
+                }
+                subprocess.run(
+                    [sys.executable, "-m", "flask", "db", "upgrade", "head"],
+                    cwd=BACKEND_DIR,
+                    env=upgrade_env,
+                    check=True,
+                )
+                with engine.connect() as conn:
+                    ctx = MigrationContext.configure(conn)
+                    current_heads = set(ctx.get_current_heads())
+                if current_heads == expected_heads:
+                    print(f"  ✓ Database upgraded to migration head ({', '.join(expected_heads)})")
+                else:
+                    print(f"  ✗ Upgrade did not reach head (now at {current_heads})")
+                    passed = False
+            except subprocess.CalledProcessError as upgrade_err:
+                print(f"  ✗ flask db upgrade failed (exit {upgrade_err.returncode})")
+                passed = False
+            except Exception as upgrade_err:
+                print(f"  ✗ flask db upgrade failed: {upgrade_err}")
+                passed = False
     except Exception as e:
         print(f"  ✗ Could not verify database migration head: {e}")
         passed = False
