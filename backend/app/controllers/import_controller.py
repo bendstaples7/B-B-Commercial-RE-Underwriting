@@ -548,7 +548,14 @@ def list_import_jobs():
 
     query = ImportJob.query
 
-    user_id = args.get('user_id') or getattr(g, 'user_id', None)
+    from app.controllers.property_controller import _current_user_is_admin
+
+    auth_user = getattr(g, 'user_id', None)
+    requested_user = args.get('user_id')
+    if _current_user_is_admin() and requested_user:
+        user_id = requested_user
+    else:
+        user_id = auth_user
     if user_id and user_id != 'anonymous':
         user_ids = DataSourceStatusService()._resolve_import_user_ids(user_id)
         query = query.filter(ImportJob.user_id.in_(user_ids))

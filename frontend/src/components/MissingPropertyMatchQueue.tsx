@@ -1,7 +1,7 @@
 /**
  * MissingPropertyMatchQueue — card-based property match review.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Box, Snackbar, Typography } from '@mui/material'
 import { useSearchParams } from 'react-router-dom'
@@ -41,10 +41,19 @@ export function MissingPropertyMatchQueue() {
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
 
+  const focusAppliedRef = useRef(false)
+
   useEffect(() => {
-    if (!focusLeadId || rows.length === 0) return
+    focusAppliedRef.current = false
+  }, [focusLeadId])
+
+  useEffect(() => {
+    if (!focusLeadId || rows.length === 0 || focusAppliedRef.current) return
     const idx = rows.findIndex((r) => String(r.id) === focusLeadId)
-    if (idx >= 0) setCardIndex(idx)
+    if (idx >= 0) {
+      setCardIndex(idx)
+      focusAppliedRef.current = true
+    }
   }, [focusLeadId, rows])
 
   const currentRow = rows[cardIndex] ?? null
@@ -98,6 +107,9 @@ export function MissingPropertyMatchQueue() {
       await propertyMatchService.reject(currentRow.id, action)
       setSnackbar('Match rejected')
       advanceAfterAction()
+    } catch (err) {
+      console.error('[MissingPropertyMatchQueue] Reject failed:', err)
+      setSnackbar(err instanceof Error ? err.message : 'Reject failed. Please try again.')
     } finally {
       setActionPending(false)
     }

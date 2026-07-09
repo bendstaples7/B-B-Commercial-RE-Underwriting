@@ -50,14 +50,24 @@ export function PropertyAddressEditDialog({
       setError('Street address is required.')
       return
     }
+    const normalizedState = state.trim().toUpperCase()
+    if (!/^[A-Z]{2}$/.test(normalizedState)) {
+      setError('State must be a two-letter code (e.g. IL).')
+      return
+    }
+    const normalizedZip = zip.trim()
+    if (normalizedZip && !/^\d{5}(-\d{4})?$/.test(normalizedZip)) {
+      setError('ZIP must be 5 digits or ZIP+4 (12345 or 12345-6789).')
+      return
+    }
     setSaving(true)
     setError(null)
     try {
       await onSave({
         property_street: street.trim(),
         property_city: city.trim(),
-        property_state: state.trim(),
-        property_zip: zip.trim(),
+        property_state: normalizedState,
+        property_zip: normalizedZip,
       })
       onClose()
     } catch (err) {
@@ -88,16 +98,18 @@ export function PropertyAddressEditDialog({
         <TextField
           label="State"
           value={state}
-          onChange={(e) => setState(e.target.value)}
+          onChange={(e) => setState(e.target.value.toUpperCase())}
           fullWidth
           margin="dense"
+          inputProps={{ maxLength: 2 }}
         />
         <TextField
           label="ZIP"
           value={zip}
-          onChange={(e) => setZip(e.target.value)}
+          onChange={(e) => setZip(e.target.value.replace(/[^\d-]/g, ''))}
           fullWidth
           margin="dense"
+          inputProps={{ maxLength: 10 }}
         />
         {error && <Alert severity="error" sx={{ mt: 1 }}>{error}</Alert>}
       </DialogContent>

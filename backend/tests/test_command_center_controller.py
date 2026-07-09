@@ -59,6 +59,7 @@ def _make_lead(app, street, **kwargs):
         recommended_action=None,
         review_required=False,
         unanswered_call_count=0,
+        owner_user_id='test-user',
     )
     defaults.update(kwargs)
     lead = Lead(property_street=street, **defaults)
@@ -139,20 +140,20 @@ class TestGetCommandCenter:
         """GET /api/leads/<id>/command-center returns 200 for a valid lead."""
         with app.app_context():
             lead = _make_lead(app, '1 CC St')
-            response = client.get(f'/api/leads/{lead.id}/command-center')
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
             assert response.status_code == 200
 
     def test_returns_404_for_missing_lead(self, client, app):
         """GET /api/leads/99999/command-center returns 404."""
         with app.app_context():
-            response = client.get('/api/leads/99999/command-center')
+            response = client.get('/api/leads/99999/command-center', headers=_AUTH_HEADERS)
             assert response.status_code == 404
 
     def test_response_contains_all_sections(self, client, app):
         """Response contains id, recommended_action, open_tasks, and timeline sections."""
         with app.app_context():
             lead = _make_lead(app, '2 CC St')
-            response = client.get(f'/api/leads/{lead.id}/command-center')
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
             data = json.loads(response.data)
             assert 'id' in data
             assert 'recommended_action' in data
@@ -165,7 +166,7 @@ class TestGetCommandCenter:
         with app.app_context():
             lead = _make_lead(app, '3 CC St')
             task = _make_task(app, lead.id, title='Call owner')
-            response = client.get(f'/api/leads/{lead.id}/command-center')
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
             data = json.loads(response.data)
             task_ids = [t['id'] for t in data['open_tasks']]
             assert task.id in task_ids
@@ -174,7 +175,7 @@ class TestGetCommandCenter:
         """Opening command center clears review_required flag."""
         with app.app_context():
             lead = _make_lead(app, '4 CC St', review_required=True)
-            client.get(f'/api/leads/{lead.id}/command-center')
+            client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
             db.session.refresh(lead)
             assert lead.review_required is False
 
@@ -182,7 +183,7 @@ class TestGetCommandCenter:
         """Timeline section contains entries list and total."""
         with app.app_context():
             lead = _make_lead(app, '5 CC St')
-            response = client.get(f'/api/leads/{lead.id}/command-center')
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
             data = json.loads(response.data)
             assert 'entries' in data['timeline']
             assert 'total' in data['timeline']
@@ -193,7 +194,7 @@ class TestGetCommandCenter:
         with app.app_context():
             lead = _make_lead(app, '6 Auto Sync St')
             mock_auto_sync.return_value = True
-            response = client.get(f'/api/leads/{lead.id}/command-center')
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
             assert response.status_code == 200
             mock_auto_sync.assert_called_once_with(lead.id)
 

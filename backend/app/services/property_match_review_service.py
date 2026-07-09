@@ -102,7 +102,7 @@ class PropertyMatchReviewService:
         if connector is None:
             raise ValueError('No GIS connector available')
 
-        outcome = self._ingestion_service()._enrich_with_gis(lead, connector, import_job_id=0)
+        outcome = self._ingestion_service()._enrich_with_gis(lead, connector, import_job_id=None)
         if not outcome.get('match_found'):
             raise ValueError('GIS match could not be applied')
 

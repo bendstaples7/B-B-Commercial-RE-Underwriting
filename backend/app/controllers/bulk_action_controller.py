@@ -19,6 +19,17 @@ bulk_action_bp = Blueprint('bulk_action', __name__)
 _lead_task_service = LeadTaskService()
 
 
+def _user_can_access_lead(lead: Lead) -> bool:
+    from app.controllers.property_controller import _current_user_is_admin
+
+    if _current_user_is_admin():
+        return True
+    current_user_id = getattr(g, 'user_id', None)
+    if not current_user_id or current_user_id == 'anonymous':
+        return False
+    return lead.owner_user_id == current_user_id
+
+
 def handle_errors(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -161,7 +172,7 @@ def bulk_update_status():
     for lead_id in lead_ids:
         try:
             lead = db.session.get(Lead, lead_id)
-            if lead is None:
+            if lead is None or not _user_can_access_lead(lead):
                 failures += 1
                 failed_ids.append(lead_id)
                 continue

@@ -17,6 +17,9 @@ def apply_lead_status_change(
 ) -> None:
     """Update lead status with DNC/suppress side effects and timeline entry."""
     old_status = lead.lead_status
+    if new_status == old_status:
+        return
+
     lead.lead_status = new_status
 
     if new_status == 'do_not_contact':
@@ -24,6 +27,7 @@ def apply_lead_status_change(
         LeadTask.query.filter_by(lead_id=lead.id, status='open').update({'status': 'cancelled'})
     elif new_status == 'suppressed':
         lead.recommended_action = None
+        LeadTask.query.filter_by(lead_id=lead.id, status='open').update({'status': 'cancelled'})
 
     if reason:
         summary = f"Status changed from '{old_status}' to '{new_status}'. {reason}"

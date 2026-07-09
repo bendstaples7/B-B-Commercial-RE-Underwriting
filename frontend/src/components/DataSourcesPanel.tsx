@@ -549,7 +549,7 @@ export function ImportSourceCard({ source }: { source: ImportSourceStatus }) {
               </Typography>
             )}
             <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.5 }}>
-              <Link href="/leads/import" underline="hover">View import history</Link>
+              <Link href="/import" underline="hover">View import history</Link>
             </Typography>
           </>
         ) : (

@@ -462,12 +462,12 @@ class TestListImportJobs:
         assert data['jobs'][0]['status'] == 'completed'
 
     def test_list_jobs_filter_by_user(self, client, app):
-        """Filter by user_id."""
+        """Authenticated user sees only their own import jobs."""
         with app.app_context():
             _create_import_job(user_id='user1', spreadsheet_id='s1')
             _create_import_job(user_id='user2', spreadsheet_id='s2')
 
-        resp = client.get('/api/leads/import/jobs?user_id=user1', headers=self._headers)
+        resp = client.get('/api/leads/import/jobs', headers={'X-User-Id': 'user1'})
         data = json.loads(resp.data)
         assert data['total'] == 1
         assert data['jobs'][0]['user_id'] == 'user1'

@@ -8,7 +8,7 @@ from app import db
 from app.models.address_group_analysis import AddressGroupAnalysis
 from app.models.lead import Lead
 from app.services.building_ownership_service import BuildingOwnershipService
-from app.services.gis.routing import _resolve_market
+from app.services.gis.routing import _resolve_market, _COOK_COUNTY_CITIES
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,8 @@ def query_lead_ids_for_building_ownership_backfill(
     last_id: int = 0,
     limit: int = 200,
 ) -> list[int]:
-    """Return commercial lead ids after *last_id* that may need ownership analysis."""
+    """Return commercial Cook County lead ids after *last_id* that may need ownership analysis."""
+    cook_cities = {city.upper() for city in _COOK_COUNTY_CITIES} | {'CHICAGO'}
     rows = (
         db.session.query(Lead.id)
         .filter(
@@ -100,6 +101,8 @@ def query_lead_ids_for_building_ownership_backfill(
             Lead.lead_category == 'commercial',
             Lead.property_street.isnot(None),
             Lead.property_street != '',
+            Lead.property_city.isnot(None),
+            db.func.upper(Lead.property_city).in_(cook_cities),
             ~Lead.lead_status.in_(TERMINAL_STATUSES),
         )
         .order_by(Lead.id)

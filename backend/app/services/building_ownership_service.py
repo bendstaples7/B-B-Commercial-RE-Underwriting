@@ -160,13 +160,21 @@ class BuildingOwnershipService:
         missing_pin = 0 if pins else 1
 
         owners = set()
-        owner_parts = []
-        for attr in ('owner_first_name', 'owner_last_name', 'owner_2_first_name', 'owner_2_last_name'):
+        owner1_parts = []
+        for attr in ('owner_first_name', 'owner_last_name'):
             val = getattr(lead, attr, None)
             if val:
-                owner_parts.append(str(val).strip().lower())
-        if owner_parts:
-            owners.add(tuple(sorted(owner_parts)))
+                owner1_parts.append(str(val).strip().lower())
+        if owner1_parts:
+            owners.add(tuple(sorted(owner1_parts)))
+
+        owner2_parts = []
+        for attr in ('owner_2_first_name', 'owner_2_last_name'):
+            val = getattr(lead, attr, None)
+            if val:
+                owner2_parts.append(str(val).strip().lower())
+        if owner2_parts:
+            owners.add(tuple(sorted(owner2_parts)))
         missing_owner = 0 if owners else 1
 
         assessor_class = getattr(lead, 'assessor_class', None)

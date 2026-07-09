@@ -445,36 +445,7 @@ class QueueService:
         sort_order: str = 'desc',
     ) -> tuple[list[dict], int]:
         """No Next Action: active/new leads with no recommended action and no open tasks."""
-        has_open_lead_task = exists().where(
-            and_(
-                LeadTask.lead_id == Lead.id,
-                LeadTask.status == 'open',
-            )
-        )
-        has_open_hubspot_task = exists().where(
-            and_(
-                TaskAssociation.target_type == 'lead',
-                TaskAssociation.target_id == Lead.id,
-                TaskAssociation.task_id == Task.id,
-                Task.status.in_(['open', 'overdue']),
-            )
-        )
-        has_open_direct_task = exists().where(
-            and_(
-                Task.lead_id == Lead.id,
-                Task.status.in_(['open', 'overdue']),
-            )
-        )
-        query = self._base_query().filter(
-            Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
-            or_(
-                Lead.recommended_action.is_(None),
-                Lead.recommended_action.in_(['create_task', 'ready_for_outreach', 'add_contact_info']),
-            ),
-            ~has_open_lead_task,
-            ~has_open_hubspot_task,
-            ~has_open_direct_task,
-        )
+        query = self._no_next_action_query()
         total = query.count()
         status_order = case((Lead.lead_status == 'awaiting_skip_trace', 0), else_=1)
         sort_col = getattr(Lead, sort_by, Lead.lead_score)
@@ -564,11 +535,15 @@ class QueueService:
         from app.services.lead_status_service import apply_lead_status_change
 
         lead_ids = self.get_no_next_action_lead_ids_by_status(source_status)
+        leads_by_id = {
+            lead.id: lead
+            for lead in Lead.query.filter(Lead.id.in_(lead_ids)).all()
+        } if lead_ids else {}
         successes = 0
         failures = 0
         for lead_id in lead_ids:
             try:
-                lead = Lead.query.get(lead_id)
+                lead = leads_by_id.get(lead_id)
                 if lead is None:
                     failures += 1
                     continue

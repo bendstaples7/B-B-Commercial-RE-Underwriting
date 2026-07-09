@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Alert,
   Box,
@@ -88,12 +88,16 @@ export function BuildingOwnershipReviewDrawer({
     retry: false,
   })
 
+  const wasOpenRef = useRef(false)
+
   useEffect(() => {
-    if (!open) return
-    setOverrideStatus(commandCenterData.condo_risk_status ?? 'needs_review')
-    setOverrideBuildingSale(commandCenterData.building_sale_possible ?? 'unknown')
-    setOverrideReason('')
-    setFormError(null)
+    if (open && !wasOpenRef.current) {
+      setOverrideStatus(commandCenterData.condo_risk_status ?? 'needs_review')
+      setOverrideBuildingSale(commandCenterData.building_sale_possible ?? 'unknown')
+      setOverrideReason('')
+      setFormError(null)
+    }
+    wasOpenRef.current = open
   }, [open, commandCenterData.condo_risk_status, commandCenterData.building_sale_possible])
 
   const invalidate = () => {
