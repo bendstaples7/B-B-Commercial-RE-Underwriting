@@ -1191,31 +1191,15 @@ def create_app(config_name='development'):
         # Skip in Celery worker/beat: create_app() runs there too and would
         # recursively enqueue another backfill task.
         # ---------------------------------------------------------------------------
-        _BUILDING_OWNERSHIP_STARTUP_LOCK_KEY = 8242002
-
-        def _try_claim_building_ownership_startup() -> bool:
-            try:
-                acquired = db.session.execute(
-                    db.text('SELECT pg_try_advisory_lock(:key)'),
-                    {'key': _BUILDING_OWNERSHIP_STARTUP_LOCK_KEY},
-                ).scalar()
-                return bool(acquired)
-            except Exception:
-                return True
-
-        def _release_building_ownership_startup_lock() -> None:
-            try:
-                db.session.execute(
-                    db.text('SELECT pg_advisory_unlock(:key)'),
-                    {'key': _BUILDING_OWNERSHIP_STARTUP_LOCK_KEY},
-                )
-            except Exception:
-                pass
-
-        if not _is_celery:
+        if not _is_celery and not _is_migration_context():
             with app.app_context():
                 try:
-                    if not _try_claim_building_ownership_startup():
+                    from app.services.building_ownership_backfill import (
+                        release_startup_backfill_advisory_lock,
+                        try_claim_startup_backfill_dispatch,
+                    )
+
+                    if not try_claim_startup_backfill_dispatch():
                         app.logger.info(
                             "Building ownership startup backfill already claimed by another worker"
                         )
@@ -1242,31 +1226,14 @@ def create_app(config_name='development'):
                                     "enqueueing backfill task.",
                                     pending_count,
                                 )
-                                import threading as _ownership_threading
-
-                                def _ownership_startup_backfill(flask_app):
-                                    with flask_app.app_context():
-                                        try:
-                                            from celery_worker import (
-                                                building_ownership_backfill_commercial_task,
-                                            )
-                                            building_ownership_backfill_commercial_task.apply_async(
-                                                ignore_result=True,
-                                            )
-                                        except Exception as exc:
-                                            flask_app.logger.warning(
-                                                "Building ownership startup backfill dispatch failed: %s",
-                                                exc,
-                                            )
-
-                                _ownership_threading.Thread(
-                                    target=_ownership_startup_backfill,
-                                    args=(app,),
-                                    daemon=True,
-                                    name="building-ownership-startup-backfill",
-                                ).start()
+                                from celery_worker import (
+                                    building_ownership_backfill_commercial_task,
+                                )
+                                building_ownership_backfill_commercial_task.apply_async(
+                                    ignore_result=True,
+                                )
                         finally:
-                            _release_building_ownership_startup_lock()
+                            release_startup_backfill_advisory_lock()
                 except Exception as e:
                     app.logger.warning("Building ownership startup check skipped: %s", e)
 

@@ -22,15 +22,17 @@ Determine what to review:
 | Specific PR or branch | Check out that branch first, then branch diff |
 | Specific files | Read those files and their call sites |
 
-**Base branch:** infer the repo default (`main`, `master`, etc.) via `git symbolic-ref refs/remotes/origin/HEAD` or `git branch -r`. Only override when the user names a different base.
+**Base branch:** infer the repo default (`main`, `master`, etc.) via `git symbolic-ref refs/remotes/origin/HEAD` or `git branch -r`. When the user names a PR URL or number, fetch the PR's actual target branch first (`gh pr view <n> --json baseRefName`) and use that as `<base>` — do not assume `main`.
 
 If the user names a PR URL, number, or branch, ensure that branch is checked out locally before reviewing. If checkout is blocked by local changes, explain and ask before stashing.
 
 ## Review workflow
 
 1. **Gather context**
+   - Resolve `<base>` (see above).
    - Run `git log --oneline <base>...HEAD` for commit narrative.
-   - Run `git diff --stat` and full diff for changed files.
+   - Run `git diff --stat <base>...HEAD` for branch changes; also run `git diff --stat` and `git diff --stat --cached` when staged/unstaged changes must be included.
+   - Read the full diff (`git diff <base>...HEAD`, plus `git diff` / `git diff --cached` when applicable) for changed files.
    - Read each changed file plus immediate callers/callees when behavior is unclear.
 
 2. **Load project standards** (when present — skip silently if missing)

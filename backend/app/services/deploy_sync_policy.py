@@ -197,6 +197,18 @@ def set_redis_value(key: str, value: str) -> None:
         logger.warning('Redis set failed for key=%s: %s', key, exc)
 
 
+def try_claim_redis_key(key: str, *, ttl_seconds: int = 3600) -> bool:
+    """SET NX with TTL — returns True when this caller claimed the key."""
+    client = _redis_client()
+    if client is None:
+        return False
+    try:
+        return bool(client.set(key, '1', nx=True, ex=ttl_seconds))
+    except Exception as exc:
+        logger.warning('Redis claim failed for key=%s: %s', key, exc)
+        return False
+
+
 def pipeline_completed_within_cooldown() -> bool:
     """Return True when a pipeline completed within the cooldown window."""
     last_completed = get_redis_value('deploy:last_pipeline_completed_at')

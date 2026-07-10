@@ -14,6 +14,7 @@ All processes are cleaned up on Ctrl+C.
 """
 
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -33,12 +34,12 @@ FLASK_PORT = 5000
 def _is_local_database_url(url: str) -> bool:
     """True when DATABASE_URL points at a local dev database (safe to auto-migrate)."""
     lower = url.lower()
-    return (
-        'localhost' in lower
-        or '127.0.0.1' in lower
-        or lower.startswith('postgresql:///@')
-        or 'host=/var/run/postgresql' in lower
-    )
+    if 'localhost' in lower or '127.0.0.1' in lower:
+        return True
+    if 'host=/var/run/postgresql' in lower:
+        return True
+    # Hostless local socket URL: postgresql:///dbname
+    return re.match(r'^postgresql:///[^@]', lower) is not None
 
 # Processes we start (so we can clean them up)
 _processes: list[subprocess.Popen] = []

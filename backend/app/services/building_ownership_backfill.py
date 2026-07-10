@@ -19,6 +19,9 @@ BACKFILL_BATCH_SIZE = 50
 BACKFILL_PER_RUN_CAP = 100
 BACKFILL_STALE_DAYS = 30
 TERMINAL_STATUSES = frozenset({'suppressed', 'do_not_contact', 'deal_won', 'deal_lost'})
+_STARTUP_BACKFILL_GUARD_KEY = 'building_ownership:startup_backfill_dispatched'
+_STARTUP_BACKFILL_GUARD_TTL_SECONDS = 3600
+_STARTUP_BACKFILL_ADVISORY_LOCK_KEY = 8242002
 
 
 def enqueue_building_ownership_analysis(lead_id: int) -> bool:
@@ -89,6 +92,37 @@ def maybe_schedule_building_ownership_after_commit(lead: Lead) -> None:
     if not lead_needs_building_ownership_analysis(lead):
         return
     schedule_building_ownership_after_commit(lead.id)
+
+
+def try_claim_startup_backfill_dispatch() -> bool:
+    """Single-flight guard so staggered web workers enqueue one startup sweep."""
+    from app.services.deploy_sync_policy import try_claim_redis_key
+
+    if try_claim_redis_key(
+        _STARTUP_BACKFILL_GUARD_KEY,
+        ttl_seconds=_STARTUP_BACKFILL_GUARD_TTL_SECONDS,
+    ):
+        return True
+
+    try:
+        acquired = db.session.execute(
+            db.text('SELECT pg_try_advisory_lock(:key)'),
+            {'key': _STARTUP_BACKFILL_ADVISORY_LOCK_KEY},
+        ).scalar()
+        return bool(acquired)
+    except Exception:
+        return True
+
+
+def release_startup_backfill_advisory_lock() -> None:
+    """Release PostgreSQL fallback lock (no-op when Redis guard was used)."""
+    try:
+        db.session.execute(
+            db.text('SELECT pg_advisory_unlock(:key)'),
+            {'key': _STARTUP_BACKFILL_ADVISORY_LOCK_KEY},
+        )
+    except Exception:
+        pass
 
 
 def is_commercial_cook_county_lead(lead: Lead) -> bool:

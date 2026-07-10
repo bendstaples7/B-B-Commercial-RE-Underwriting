@@ -18,6 +18,13 @@ $EnvFile = Join-Path $ProjectRoot ".env"
 $TargetKey = "$env:USERPROFILE\.ssh\bbanalyzer_deploy"
 $ExpectedPubFragment = "AAAAC3NzaC1lZDI1NTE5AAAAIHJY8BtrSPEkCU2aoDnAz46f2RXovrbkhsn86e5mh7zP"
 
+function Convert-CommandOutputToString {
+    param($Output)
+    if ($null -eq $Output) { return '' }
+    if ($Output -is [array]) { return ($Output -join "`n") }
+    return [string]$Output
+}
+
 if (-not $KeyFile -and (Test-Path $EnvFile)) {
     Get-Content $EnvFile | ForEach-Object {
         $line = $_.Trim()
@@ -36,7 +43,7 @@ if (-not $ValidateOnly) {
     }
     New-Item -ItemType Directory -Force -Path (Split-Path $TargetKey) | Out-Null
 
-    $pubPreview = & ssh-keygen -y -f $KeyFile 2>&1
+    $pubPreview = Convert-CommandOutputToString (& ssh-keygen -y -f $KeyFile 2>&1)
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: Could not read public key from $KeyFile" -ForegroundColor Red
         Write-Host $pubPreview
@@ -57,7 +64,7 @@ if (-not (Test-Path $TargetKey)) {
     exit 1
 }
 
-$pub = & ssh-keygen -y -f $TargetKey 2>&1
+$pub = Convert-CommandOutputToString (& ssh-keygen -y -f $TargetKey 2>&1)
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Could not read public key from $TargetKey" -ForegroundColor Red
     Write-Host $pub

@@ -69,8 +69,8 @@ class PropertyDataService:
         self.tax_assessor_api_key = os.getenv('TAX_ASSESSOR_API_KEY')
         self.chicago_data_api_key = os.getenv('CHICAGO_DATA_API_KEY')
 
-        redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-        self.redis_client = redis.from_url(redis_url, decode_responses=True)
+        self._redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+        self._redis_client = None
 
         self.property_cache_ttl  = 86400  # 24 hours
         self.geocoding_cache_ttl = None   # permanent
@@ -495,6 +495,13 @@ class PropertyDataService:
     # ------------------------------------------------------------------
     # Cache helpers
     # ------------------------------------------------------------------
+
+    @property
+    def redis_client(self):
+        """Lazy Redis client — avoids connecting during app import / migration context."""
+        if self._redis_client is None:
+            self._redis_client = redis.from_url(self._redis_url, decode_responses=True)
+        return self._redis_client
 
     def _get_from_cache(self, key: str) -> Optional[Dict[str, Any]]:
         try:

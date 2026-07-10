@@ -2,7 +2,7 @@
 from flask import Blueprint, g, jsonify, request
 from marshmallow import Schema, fields, validate
 
-from app.api_utils import require_auth
+from app.api_utils import require_auth, require_admin
 from app.controllers.decorators import handle_errors
 from app.schemas import VALID_BUILDING_SALE_POSSIBLE, VALID_CONDO_RISK_STATUSES
 from app.services.building_ownership_service import BuildingOwnershipService
@@ -81,8 +81,9 @@ def update_property_address(lead_id: int):
 
 
 @property_match_bp.route('/building-ownership/backfill', methods=['POST'])
-@require_auth
 @handle_errors
+@require_auth
+@require_admin
 def backfill_building_ownership():
     """POST /api/leads/building-ownership/backfill — run or enqueue commercial backfill."""
     from app.services.building_ownership_backfill import backfill_building_ownership_analysis

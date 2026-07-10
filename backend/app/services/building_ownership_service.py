@@ -33,6 +33,17 @@ class BuildingOwnershipService:
         if lead is None:
             raise ValueError(f'Lead {lead_id} not found')
 
+        from app.services.building_ownership_backfill import lead_needs_building_ownership_analysis
+
+        if not lead_needs_building_ownership_analysis(lead):
+            existing = self.get_for_lead(lead_id)
+            if existing is not None:
+                return {
+                    **existing,
+                    'skipped': True,
+                    'skip_reason': 'analysis_current',
+                }
+
         assessor_pins = self._collect_assessor_pins(lead)
         metrics = self._compute_metrics_for_lead(lead, assessor_pins)
         result = classify(metrics)
