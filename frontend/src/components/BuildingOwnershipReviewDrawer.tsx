@@ -89,16 +89,19 @@ export function BuildingOwnershipReviewDrawer({
   })
 
   const wasOpenRef = useRef(false)
+  const lastLeadIdRef = useRef(leadId)
 
   useEffect(() => {
-    if (open && !wasOpenRef.current) {
+    const leadChanged = lastLeadIdRef.current !== leadId
+    lastLeadIdRef.current = leadId
+    if ((open && !wasOpenRef.current) || (open && leadChanged)) {
       setOverrideStatus(commandCenterData.condo_risk_status ?? 'needs_review')
       setOverrideBuildingSale(commandCenterData.building_sale_possible ?? 'unknown')
       setOverrideReason('')
       setFormError(null)
     }
     wasOpenRef.current = open
-  }, [open, commandCenterData.condo_risk_status, commandCenterData.building_sale_possible])
+  }, [open, leadId, commandCenterData.condo_risk_status, commandCenterData.building_sale_possible])
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
@@ -108,7 +111,15 @@ export function BuildingOwnershipReviewDrawer({
 
   const analyzeMutation = useMutation({
     mutationFn: () => buildingOwnershipService.analyze(leadId),
-    onSuccess: () => {
+    onSuccess: (result) => {
+      setOverrideStatus(
+        (result?.condo_risk_status as CondoRiskStatus) ?? 'needs_review',
+      )
+      setOverrideBuildingSale(
+        (result?.building_sale_possible as BuildingSalePossible) ?? 'unknown',
+      )
+      setOverrideReason('')
+      setFormError(null)
       invalidate()
       refetch()
     },

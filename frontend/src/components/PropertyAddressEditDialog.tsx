@@ -55,7 +55,10 @@ export function PropertyAddressEditDialog({
       setError('State must be a two-letter code (e.g. IL).')
       return
     }
-    const normalizedZip = zip.trim()
+    let normalizedZip = zip.trim()
+    if (/^\d{9}$/.test(normalizedZip)) {
+      normalizedZip = `${normalizedZip.slice(0, 5)}-${normalizedZip.slice(5)}`
+    }
     if (normalizedZip && !/^\d{5}(-\d{4})?$/.test(normalizedZip)) {
       setError('ZIP must be 5 digits or ZIP+4 (12345 or 12345-6789).')
       return
