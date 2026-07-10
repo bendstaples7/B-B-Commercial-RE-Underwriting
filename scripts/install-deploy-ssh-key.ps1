@@ -57,6 +57,10 @@ if (-not $ValidateOnly) {
 
     Copy-Item -Path $KeyFile -Destination $TargetKey -Force
     icacls $TargetKey /inheritance:r /grant:r "$env:USERNAME`:F" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Failed to set restrictive permissions on $TargetKey" -ForegroundColor Red
+        exit 1
+    }
 }
 
 if (-not (Test-Path $TargetKey)) {

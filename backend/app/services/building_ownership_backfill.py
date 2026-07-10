@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from sqlalchemy import event
 
@@ -94,15 +95,37 @@ def maybe_schedule_building_ownership_after_commit(lead: Lead) -> None:
     schedule_building_ownership_after_commit(lead.id)
 
 
-def try_claim_startup_backfill_dispatch() -> bool:
-    """Single-flight guard so staggered web workers enqueue one startup sweep."""
-    from app.services.deploy_sync_policy import try_claim_redis_key
+def _redis_startup_claim_status() -> Optional[bool]:
+    """True when this caller claimed Redis; False when held elsewhere; None if unavailable."""
+    from app.services.deploy_sync_policy import _redis_client
 
-    if try_claim_redis_key(
-        _STARTUP_BACKFILL_GUARD_KEY,
-        ttl_seconds=_STARTUP_BACKFILL_GUARD_TTL_SECONDS,
-    ):
-        return True
+    client = _redis_client()
+    if client is None:
+        return None
+    try:
+        return bool(
+            client.set(
+                _STARTUP_BACKFILL_GUARD_KEY,
+                '1',
+                nx=True,
+                ex=_STARTUP_BACKFILL_GUARD_TTL_SECONDS,
+            )
+        )
+    except Exception as exc:
+        logger.warning('Redis startup backfill claim failed: %s', exc)
+        return None
+
+
+def try_claim_startup_backfill_dispatch() -> bool:
+    """Single-flight guard so staggered web workers enqueue one startup sweep.
+
+    PostgreSQL advisory lock is authoritative. Redis is an optimization only:
+    when Redis reports another worker already claimed the key, do not fall through
+    to PostgreSQL (that would allow duplicate dispatches).
+    """
+    redis_status = _redis_startup_claim_status()
+    if redis_status is False:
+        return False
 
     try:
         acquired = db.session.execute(
@@ -110,8 +133,9 @@ def try_claim_startup_backfill_dispatch() -> bool:
             {'key': _STARTUP_BACKFILL_ADVISORY_LOCK_KEY},
         ).scalar()
         return bool(acquired)
-    except Exception:
-        return True
+    except Exception as exc:
+        logger.warning('PostgreSQL startup backfill claim failed: %s', exc)
+        return False
 
 
 def release_startup_backfill_advisory_lock() -> None:

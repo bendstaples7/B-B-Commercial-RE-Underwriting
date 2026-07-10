@@ -712,17 +712,17 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         return
       case 'run_analysis': {
         navigate(`${location.pathname}?tab=analysis`, { replace: true })
-        if (leadLoading || leadData == null) {
+        if (leadLoading) {
           setActivitySnackbar({
             open: true,
             message: 'Loading lead details before starting analysis…',
           })
           return
         }
-        const units = leadData.units
+        const units = leadData?.units
         if (units != null && units >= 5) {
           const deal = await multifamilyService.createDeal({
-            property_address: leadData.property_street ?? '',
+            property_address: leadData?.property_street ?? '',
             unit_count: units,
             purchase_price: 0,
             close_date: new Date().toISOString().split('T')[0],

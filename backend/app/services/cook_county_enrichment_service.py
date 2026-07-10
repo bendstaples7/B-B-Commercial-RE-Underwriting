@@ -13,6 +13,7 @@ from app.models.lead import Lead
 from app.services.data_source_connector import DataSourceConnector
 from app.services.gis.routing import _resolve_market
 from app.services.building_ownership_backfill import (
+    maybe_schedule_building_ownership_after_commit,
     maybe_schedule_building_ownership_analysis,
 )
 from app.services.lead_refresh import refresh_lead_scoring
@@ -226,7 +227,10 @@ def maybe_dispatch_after_gis_match(lead: Lead, connector) -> None:
     if market != COOK_COUNTY_MARKET:
         return
     schedule_cook_county_enrichment_after_commit(lead.id)
-    # Building ownership runs after Cook County enrichment completes (see enrich_cook_county_lead).
+    # Leads ineligible for enrichment (no PIN, not Chicago) still need building ownership
+    # after GIS match; enriched leads are scheduled at the end of enrich_cook_county_lead.
+    if not plugins_for_lead(lead):
+        maybe_schedule_building_ownership_after_commit(lead)
 
 
 def _commercial_valuation_source_id() -> Optional[int]:

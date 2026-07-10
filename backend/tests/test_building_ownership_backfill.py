@@ -2,6 +2,7 @@
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
 
 from app import db
 from app.models.address_group_analysis import AddressGroupAnalysis
@@ -12,6 +13,7 @@ from app.services.building_ownership_backfill import (
     is_commercial_cook_county_lead,
     lead_needs_building_ownership_analysis,
     query_lead_ids_for_building_ownership_backfill,
+    try_claim_startup_backfill_dispatch,
 )
 from app.services.building_ownership_service import BuildingOwnershipService
 
@@ -148,3 +150,35 @@ class TestBuildingOwnershipBackfill:
         assert resp.status_code == 200
         data = json.loads(resp.data)
         assert 'processed' in data
+
+
+class TestStartupBackfillDispatchGuard:
+    def test_redis_held_elsewhere_skips_pg_lock(self, app):
+        with app.app_context():
+            with patch(
+                'app.services.building_ownership_backfill._redis_startup_claim_status',
+                return_value=False,
+            ):
+                with patch.object(db.session, 'execute') as mock_execute:
+                    assert try_claim_startup_backfill_dispatch() is False
+                    mock_execute.assert_not_called()
+
+    def test_pg_lock_authoritative_when_redis_unavailable(self, app):
+        with app.app_context():
+            with patch(
+                'app.services.building_ownership_backfill._redis_startup_claim_status',
+                return_value=None,
+            ):
+                mock_result = MagicMock()
+                mock_result.scalar.return_value = True
+                with patch.object(db.session, 'execute', return_value=mock_result):
+                    assert try_claim_startup_backfill_dispatch() is True
+
+    def test_pg_failure_fails_closed(self, app):
+        with app.app_context():
+            with patch(
+                'app.services.building_ownership_backfill._redis_startup_claim_status',
+                return_value=True,
+            ):
+                with patch.object(db.session, 'execute', side_effect=RuntimeError('db down')):
+                    assert try_claim_startup_backfill_dispatch() is False
