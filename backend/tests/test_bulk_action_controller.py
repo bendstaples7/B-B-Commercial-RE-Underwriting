@@ -439,6 +439,8 @@ class TestBulkUpdateStatus:
             assert data['successes'] == 1
             assert data['failures'] == 1
             assert other_lead.id in data['failed_ids']
+            db.session.refresh(own_lead)
+            assert own_lead.lead_status == 'awaiting_skip_trace'
 
     def test_bulk_update_status_missing_lead_ids_returns_400(self, client, app):
         with app.app_context():

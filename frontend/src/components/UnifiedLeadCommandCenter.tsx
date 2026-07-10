@@ -567,6 +567,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const {
     data: leadData,
     isLoading: leadLoading,
+    isError: leadDetailError,
   } = useQuery<PropertyDetail, Error>({
     queryKey: ['lead', leadId],
     queryFn: () => leadService.getLeadDetail(leadId),
@@ -719,10 +720,17 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           })
           return
         }
-        const units = leadData?.units
+        if (leadDetailError || leadData == null) {
+          setActivitySnackbar({
+            open: true,
+            message: 'Could not load lead details — refresh and try again before starting analysis.',
+          })
+          return
+        }
+        const units = leadData.units
         if (units != null && units >= 5) {
           const deal = await multifamilyService.createDeal({
-            property_address: leadData?.property_street ?? '',
+            property_address: leadData.property_street ?? '',
             unit_count: units,
             purchase_price: 0,
             close_date: new Date().toISOString().split('T')[0],
@@ -771,7 +779,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       default:
         await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
     }
-  }, [queryClient, leadId, navigate, location.pathname, leadData, leadLoading])
+  }, [queryClient, leadId, navigate, location.pathname, leadData, leadLoading, leadDetailError])
 
   const handleCreateTask = useCallback(() => {
     tasksPanelRef.current?.scrollIntoView()

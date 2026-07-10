@@ -116,6 +116,19 @@ def _redis_startup_claim_status() -> Optional[bool]:
         return None
 
 
+def _release_redis_startup_claim() -> None:
+    """Drop the Redis optimization key when PostgreSQL claim fails."""
+    from app.services.deploy_sync_policy import _redis_client
+
+    client = _redis_client()
+    if client is None:
+        return
+    try:
+        client.delete(_STARTUP_BACKFILL_GUARD_KEY)
+    except Exception as exc:
+        logger.warning('Failed to release Redis startup backfill claim: %s', exc)
+
+
 def try_claim_startup_backfill_dispatch() -> bool:
     """Single-flight guard so staggered web workers enqueue one startup sweep.
 
@@ -132,9 +145,16 @@ def try_claim_startup_backfill_dispatch() -> bool:
             db.text('SELECT pg_try_advisory_lock(:key)'),
             {'key': _STARTUP_BACKFILL_ADVISORY_LOCK_KEY},
         ).scalar()
-        return bool(acquired)
+        if not acquired:
+            if redis_status is True:
+                _release_redis_startup_claim()
+            return False
+        return True
     except Exception as exc:
         logger.warning('PostgreSQL startup backfill claim failed: %s', exc)
+        db.session.rollback()
+        if redis_status is True:
+            _release_redis_startup_claim()
         return False
 
 

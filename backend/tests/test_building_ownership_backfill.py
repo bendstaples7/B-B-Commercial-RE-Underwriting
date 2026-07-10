@@ -181,4 +181,23 @@ class TestStartupBackfillDispatchGuard:
                 return_value=True,
             ):
                 with patch.object(db.session, 'execute', side_effect=RuntimeError('db down')):
-                    assert try_claim_startup_backfill_dispatch() is False
+                    with patch(
+                        'app.services.building_ownership_backfill._release_redis_startup_claim',
+                    ) as mock_release:
+                        assert try_claim_startup_backfill_dispatch() is False
+                        mock_release.assert_called_once()
+
+    def test_pg_lock_not_acquired_releases_redis_claim(self, app):
+        with app.app_context():
+            with patch(
+                'app.services.building_ownership_backfill._redis_startup_claim_status',
+                return_value=True,
+            ):
+                mock_result = MagicMock()
+                mock_result.scalar.return_value = False
+                with patch.object(db.session, 'execute', return_value=mock_result):
+                    with patch(
+                        'app.services.building_ownership_backfill._release_redis_startup_claim',
+                    ) as mock_release:
+                        assert try_claim_startup_backfill_dispatch() is False
+                        mock_release.assert_called_once()
