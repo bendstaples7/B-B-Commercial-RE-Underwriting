@@ -12,7 +12,10 @@ from app.models.enrichment import DataSource, EnrichmentRecord
 from app.models.lead import Lead
 from app.services.data_source_connector import DataSourceConnector
 from app.services.gis.routing import _resolve_market
-from app.services.building_ownership_backfill import maybe_schedule_building_ownership_analysis
+from app.services.building_ownership_backfill import (
+    maybe_schedule_building_ownership_after_commit,
+    maybe_schedule_building_ownership_analysis,
+)
 from app.services.lead_refresh import refresh_lead_scoring
 from app.services.plugins.address_utils import is_chicago_address
 
@@ -217,7 +220,8 @@ def maybe_dispatch_after_gis_match(lead: Lead, connector) -> None:
     if market != COOK_COUNTY_MARKET:
         return
     schedule_cook_county_enrichment_after_commit(lead.id)
-    maybe_schedule_building_ownership_analysis(lead)
+    # Defer until after commit so the worker sees committed GIS match data.
+    maybe_schedule_building_ownership_after_commit(lead)
 
 
 def _commercial_valuation_source_id() -> Optional[int]:

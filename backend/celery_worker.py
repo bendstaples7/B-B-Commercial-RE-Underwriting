@@ -1414,6 +1414,10 @@ REQUIRED_TASKS = {
     'process_csv_ingestion',
     'dupage.enrich_acquisition_dates',
     'dupage.pull_absentee_leads',
+    'building_ownership.analyze_lead',
+    'building_ownership.backfill_commercial',
+    'cook_county.enrich_lead',
+    'cook_county.backfill_enrichment',
 }
 
 

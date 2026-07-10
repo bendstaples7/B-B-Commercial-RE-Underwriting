@@ -91,18 +91,6 @@ export function BuildingOwnershipReviewDrawer({
   const wasOpenRef = useRef(false)
   const lastLeadIdRef = useRef(leadId)
 
-  useEffect(() => {
-    const leadChanged = lastLeadIdRef.current !== leadId
-    lastLeadIdRef.current = leadId
-    if ((open && !wasOpenRef.current) || (open && leadChanged)) {
-      setOverrideStatus(commandCenterData.condo_risk_status ?? 'needs_review')
-      setOverrideBuildingSale(commandCenterData.building_sale_possible ?? 'unknown')
-      setOverrideReason('')
-      setFormError(null)
-    }
-    wasOpenRef.current = open
-  }, [open, leadId, commandCenterData.condo_risk_status, commandCenterData.building_sale_possible])
-
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
     queryClient.invalidateQueries({ queryKey: ['buildingOwnership', leadId] })
@@ -110,8 +98,14 @@ export function BuildingOwnershipReviewDrawer({
   }
 
   const analyzeMutation = useMutation({
-    mutationFn: () => buildingOwnershipService.analyze(leadId),
-    onSuccess: (result) => {
+    mutationFn: async () => {
+      const requestedLeadId = leadId
+      const result = await buildingOwnershipService.analyze(requestedLeadId)
+      return { requestedLeadId, result }
+    },
+    onSuccess: ({ requestedLeadId, result }) => {
+      // Ignore stale responses if the drawer switched leads mid-flight.
+      if (requestedLeadId !== leadId) return
       setOverrideStatus(
         (result?.condo_risk_status as CondoRiskStatus) ?? 'needs_review',
       )
@@ -148,7 +142,27 @@ export function BuildingOwnershipReviewDrawer({
         task_type: 'confirm_building_ownership',
       }),
     onSuccess: invalidate,
+    onError: (err: Error) => setFormError(err.message || 'Failed to create task'),
   })
+
+  useEffect(() => {
+    const leadChanged = lastLeadIdRef.current !== leadId
+    lastLeadIdRef.current = leadId
+    if ((open && !wasOpenRef.current) || (open && leadChanged)) {
+      setOverrideStatus(commandCenterData.condo_risk_status ?? 'needs_review')
+      setOverrideBuildingSale(commandCenterData.building_sale_possible ?? 'unknown')
+      setOverrideReason('')
+      setFormError(null)
+    }
+    if (leadChanged) {
+      analyzeMutation.reset()
+      overrideMutation.reset()
+      createTaskMutation.reset()
+    }
+    wasOpenRef.current = open
+    // Intentionally omit mutation objects from deps — reset only on lead/open changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, leadId, commandCenterData.condo_risk_status, commandCenterData.building_sale_possible])
 
   const assessorPins = (detail?.analysis_details?.assessor_pins ?? []) as Array<{
     pin?: string
@@ -349,6 +363,13 @@ export function BuildingOwnershipReviewDrawer({
         >
           Create confirm ownership task
         </Button>
+        {createTaskMutation.isError && (
+          <Alert severity="error" sx={{ mt: 1 }}>
+            {createTaskMutation.error instanceof Error
+              ? createTaskMutation.error.message
+              : 'Failed to create task'}
+          </Alert>
+        )}
       </Box>
     </Drawer>
   )

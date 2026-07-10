@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import event
+
 from app import db
 from app.models.address_group_analysis import AddressGroupAnalysis
 from app.models.lead import Lead
@@ -44,11 +46,41 @@ def dispatch_building_ownership_analysis(lead_id: int) -> bool:
             return False
 
 
+def schedule_building_ownership_after_commit(lead_id: int) -> None:
+    """Dispatch building ownership analysis only after the current DB transaction commits."""
+    session = db.session
+    pending: set[int] = session.info.setdefault('building_ownership_pending', set())
+    pending.add(lead_id)
+
+    if session.info.get('building_ownership_listener'):
+        return
+    session.info['building_ownership_listener'] = True
+
+    @event.listens_for(session, 'after_commit', once=True)
+    def _dispatch_after_commit(sess) -> None:
+        lead_ids = sess.info.pop('building_ownership_pending', set())
+        sess.info.pop('building_ownership_listener', None)
+        for lid in lead_ids:
+            dispatch_building_ownership_analysis(lid)
+
+    @event.listens_for(session, 'after_rollback', once=True)
+    def _clear_after_rollback(sess) -> None:
+        sess.info.pop('building_ownership_pending', None)
+        sess.info.pop('building_ownership_listener', None)
+
+
 def maybe_schedule_building_ownership_analysis(lead: Lead) -> None:
     """Enqueue building ownership analysis when a commercial Cook County lead needs it."""
     if not lead_needs_building_ownership_analysis(lead):
         return
     dispatch_building_ownership_analysis(lead.id)
+
+
+def maybe_schedule_building_ownership_after_commit(lead: Lead) -> None:
+    """Like maybe_schedule_building_ownership_analysis, but only after DB commit."""
+    if not lead_needs_building_ownership_analysis(lead):
+        return
+    schedule_building_ownership_after_commit(lead.id)
 
 
 def is_commercial_cook_county_lead(lead: Lead) -> bool:
