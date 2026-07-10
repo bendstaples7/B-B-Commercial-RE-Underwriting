@@ -4,6 +4,7 @@ from marshmallow import Schema, fields, validate
 
 from app.api_utils import require_auth
 from app.controllers.decorators import handle_errors
+from app.schemas import VALID_BUILDING_SALE_POSSIBLE, VALID_CONDO_RISK_STATUSES
 from app.services.building_ownership_service import BuildingOwnershipService
 from app.services.property_match_review_service import PropertyMatchReviewService
 
@@ -27,8 +28,14 @@ class AddressUpdateSchema(Schema):
 
 
 class OverrideSchema(Schema):
-    condo_risk_status = fields.Str(required=True)
-    building_sale_possible = fields.Str(required=True)
+    condo_risk_status = fields.Str(
+        required=True,
+        validate=validate.OneOf(VALID_CONDO_RISK_STATUSES),
+    )
+    building_sale_possible = fields.Str(
+        required=True,
+        validate=validate.OneOf(VALID_BUILDING_SALE_POSSIBLE),
+    )
     reason = fields.Str(required=True)
 
 

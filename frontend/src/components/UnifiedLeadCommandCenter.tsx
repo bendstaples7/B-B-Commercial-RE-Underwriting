@@ -618,6 +618,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const [suppressDialogOpen, setSuppressDialogOpen] = useState(false)
   const [dncDialogOpen, setDncDialogOpen] = useState(false)
   const [dncPending, setDncPending] = useState(false)
+  const [dncError, setDncError] = useState<string | null>(null)
 
   const advanceInQueue = useCallback(
     (nextLeadId: number) => {
@@ -711,10 +712,17 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         return
       case 'run_analysis': {
         navigate(`${location.pathname}?tab=analysis`, { replace: true })
-        const units = leadData?.units
+        if (leadLoading || leadData == null) {
+          setActivitySnackbar({
+            open: true,
+            message: 'Loading lead details before starting analysis…',
+          })
+          return
+        }
+        const units = leadData.units
         if (units != null && units >= 5) {
           const deal = await multifamilyService.createDeal({
-            property_address: leadData?.property_street ?? '',
+            property_address: leadData.property_street ?? '',
             unit_count: units,
             purchase_price: 0,
             close_date: new Date().toISOString().split('T')[0],
@@ -763,7 +771,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       default:
         await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
     }
-  }, [queryClient, leadId, navigate, location.pathname, leadData])
+  }, [queryClient, leadId, navigate, location.pathname, leadData, leadLoading])
 
   const handleCreateTask = useCallback(() => {
     tasksPanelRef.current?.scrollIntoView()
@@ -953,12 +961,23 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         }}
       />
 
-      <Dialog open={dncDialogOpen} onClose={dncPending ? undefined : () => setDncDialogOpen(false)}>
+      <Dialog
+        open={dncDialogOpen}
+        onClose={dncPending ? undefined : () => {
+          setDncDialogOpen(false)
+          setDncError(null)
+        }}
+      >
         <DialogTitle>Mark as Do Not Contact?</DialogTitle>
         <DialogContent>
           <DialogContentText>
             This lead will be removed from active outreach queues and marked do not contact.
           </DialogContentText>
+          {dncError && (
+            <DialogContentText color="error" sx={{ mt: 1 }} data-testid="dnc-error">
+              {dncError}
+            </DialogContentText>
+          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDncDialogOpen(false)} disabled={dncPending}>Cancel</Button>
@@ -968,12 +987,16 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             disabled={dncPending}
             onClick={async () => {
               setDncPending(true)
+              setDncError(null)
               try {
                 await commandCenterService.doNotContact(leadId)
                 setDncDialogOpen(false)
                 setActivitySnackbar({ open: true, message: 'Lead marked do not contact' })
                 await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
                 await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+              } catch (err) {
+                console.error('[UnifiedLeadCommandCenter] DNC failed:', err)
+                setDncError(err instanceof Error ? err.message : 'Failed to mark do not contact. Please try again.')
               } finally {
                 setDncPending(false)
               }

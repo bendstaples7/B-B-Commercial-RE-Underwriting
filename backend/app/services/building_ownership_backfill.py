@@ -21,8 +21,8 @@ BACKFILL_STALE_DAYS = 30
 TERMINAL_STATUSES = frozenset({'suppressed', 'do_not_contact', 'deal_won', 'deal_lost'})
 
 
-def dispatch_building_ownership_analysis(lead_id: int) -> bool:
-    """Enqueue async building ownership analysis; fall back to sync if broker unavailable."""
+def enqueue_building_ownership_analysis(lead_id: int) -> bool:
+    """Enqueue async building ownership analysis (no sync fallback)."""
     try:
         from celery_worker import building_ownership_analyze_lead_task
         building_ownership_analyze_lead_task.apply_async(args=[lead_id], ignore_result=True)
@@ -30,25 +30,32 @@ def dispatch_building_ownership_analysis(lead_id: int) -> bool:
         return True
     except Exception as exc:
         logger.warning(
-            'Could not enqueue building_ownership.analyze_lead for lead %s, running sync: %s',
+            'Could not enqueue building_ownership.analyze_lead for lead %s: %s',
             lead_id,
             exc,
         )
-        try:
-            BuildingOwnershipService().analyze_lead(lead_id)
-            return True
-        except Exception as sync_exc:
-            logger.error(
-                'Sync building ownership analysis failed for lead %s: %s',
-                lead_id,
-                sync_exc,
-            )
-            return False
+        return False
+
+
+def dispatch_building_ownership_analysis(lead_id: int) -> bool:
+    """Enqueue async building ownership analysis; fall back to sync if broker unavailable."""
+    if enqueue_building_ownership_analysis(lead_id):
+        return True
+    try:
+        BuildingOwnershipService().analyze_lead(lead_id)
+        return True
+    except Exception as sync_exc:
+        logger.error(
+            'Sync building ownership analysis failed for lead %s: %s',
+            lead_id,
+            sync_exc,
+        )
+        return False
 
 
 def schedule_building_ownership_after_commit(lead_id: int) -> None:
     """Dispatch building ownership analysis only after the current DB transaction commits."""
-    session = db.session
+    session = db.session()
     pending: set[int] = session.info.setdefault('building_ownership_pending', set())
     pending.add(lead_id)
 
@@ -61,7 +68,8 @@ def schedule_building_ownership_after_commit(lead_id: int) -> None:
         lead_ids = sess.info.pop('building_ownership_pending', set())
         sess.info.pop('building_ownership_listener', None)
         for lid in lead_ids:
-            dispatch_building_ownership_analysis(lid)
+            # After-commit: enqueue only; sync fallback needs an active session.
+            enqueue_building_ownership_analysis(lid)
 
     @event.listens_for(session, 'after_rollback', once=True)
     def _clear_after_rollback(sess) -> None:

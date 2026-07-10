@@ -43,6 +43,7 @@ export function NoNextActionQueue() {
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [suppressTarget, setSuppressTarget] = useState<QueueRow | null>(null)
   const [suppressError, setSuppressError] = useState<string | null>(null)
+  const [selectError, setSelectError] = useState<string | null>(null)
   const [statusDialogOpen, setStatusDialogOpen] = useState(false)
   const [queueWideSourceStatus, setQueueWideSourceStatus] = useState<LeadStatus | null>(null)
 
@@ -100,8 +101,16 @@ export function NoNextActionQueue() {
   }
 
   const selectAllInQueueForStatus = async (status: string) => {
-    const result = await queueService.getNoNextActionLeadIds(status)
-    setSelectedIds(result.lead_ids)
+    try {
+      const result = await queueService.getNoNextActionLeadIds(status)
+      setSelectedIds(result.lead_ids)
+      setSelectError(null)
+    } catch (err) {
+      console.error('[NoNextActionQueue] Failed to load queue lead IDs:', err)
+      setSelectError(
+        err instanceof Error ? err.message : 'Failed to select leads in queue. Please try again.',
+      )
+    }
   }
 
   const extraColumns: ExtraColumn[] = [
@@ -182,6 +191,11 @@ export function NoNextActionQueue() {
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
             Select all by status
           </Typography>
+          {selectError && (
+            <Typography variant="caption" color="error" display="block" sx={{ mb: 1 }} data-testid="select-queue-error">
+              {selectError}
+            </Typography>
+          )}
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
             {statusChips.map(([status, count]) => (
               <Stack key={status} direction="row" spacing={0.5} alignItems="center">

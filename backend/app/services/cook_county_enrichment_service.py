@@ -166,8 +166,8 @@ def enrich_cook_county_lead(lead_id: int) -> dict:
     return summary
 
 
-def dispatch_cook_county_enrichment(lead_id: int) -> bool:
-    """Enqueue async Cook County enrichment; fall back to sync if broker unavailable."""
+def enqueue_cook_county_enrichment(lead_id: int) -> bool:
+    """Enqueue async Cook County enrichment (no sync fallback)."""
     try:
         from celery_worker import cook_county_enrich_lead_task
         cook_county_enrich_lead_task.apply_async(args=[lead_id], ignore_result=True)
@@ -175,25 +175,32 @@ def dispatch_cook_county_enrichment(lead_id: int) -> bool:
         return True
     except Exception as exc:
         logger.warning(
-            "Could not enqueue cook_county.enrich_lead for lead %s, running sync: %s",
+            "Could not enqueue cook_county.enrich_lead for lead %s: %s",
             lead_id,
             exc,
         )
-        try:
-            enrich_cook_county_lead(lead_id)
-            return True
-        except Exception as sync_exc:
-            logger.error(
-                "Sync Cook County enrichment failed for lead %s: %s",
-                lead_id,
-                sync_exc,
-            )
-            return False
+        return False
+
+
+def dispatch_cook_county_enrichment(lead_id: int) -> bool:
+    """Enqueue async Cook County enrichment; fall back to sync if broker unavailable."""
+    if enqueue_cook_county_enrichment(lead_id):
+        return True
+    try:
+        enrich_cook_county_lead(lead_id)
+        return True
+    except Exception as sync_exc:
+        logger.error(
+            "Sync Cook County enrichment failed for lead %s: %s",
+            lead_id,
+            sync_exc,
+        )
+        return False
 
 
 def schedule_cook_county_enrichment_after_commit(lead_id: int) -> None:
     """Dispatch enrichment only after the current DB transaction commits."""
-    session = db.session
+    session = db.session()
     pending: set[int] = session.info.setdefault("cook_county_enrichment_pending", set())
     pending.add(lead_id)
 
@@ -206,7 +213,7 @@ def schedule_cook_county_enrichment_after_commit(lead_id: int) -> None:
         lead_ids = sess.info.pop("cook_county_enrichment_pending", set())
         sess.info.pop("cook_county_enrichment_listener", None)
         for lid in lead_ids:
-            dispatch_cook_county_enrichment(lid)
+            enqueue_cook_county_enrichment(lid)
 
     @event.listens_for(session, "after_rollback", once=True)
     def _clear_after_rollback(sess) -> None:

@@ -345,7 +345,16 @@ def main():
             print("\n  Continuing without Redis — Celery tasks will fail.\n")
 
     # ------------------------------------------------------------------
-    # 2. Celery worker
+    # 2. Production data + pre-flight checks (includes DB migration)
+    # ------------------------------------------------------------------
+    if not ensure_local_prod_data():
+        sys.exit(1)
+
+    if not run_checks():
+        sys.exit(1)
+
+    # ------------------------------------------------------------------
+    # 3. Celery worker (after schema is at migration head)
     # ------------------------------------------------------------------
     celery_env = {"PYTHONPATH": BACKEND_DIR, "CELERY_WORKER_RUNNING": "1"}
     _start(
@@ -362,15 +371,6 @@ def main():
         env=celery_env,
     )
     time.sleep(1)  # let Celery connect to Redis before Flask starts
-
-    # ------------------------------------------------------------------
-    # 3. Production data + pre-flight checks
-    # ------------------------------------------------------------------
-    if not ensure_local_prod_data():
-        sys.exit(1)
-
-    if not run_checks():
-        sys.exit(1)
 
     # ------------------------------------------------------------------
     # 4. Flask dev server (foreground — blocks until Ctrl+C)

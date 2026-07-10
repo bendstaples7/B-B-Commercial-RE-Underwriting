@@ -158,6 +158,7 @@ def _lookup_pin_from_address(address: str, parcel_addresses_url: str) -> Optiona
 
 def _try_lookup(normalised: str, parcel_addresses_url: str) -> Optional[str]:
     """Attempt exact then LIKE-prefix lookup for a single normalised address string."""
+    from app.services.gis.utils import escape_like
     from app.services.plugins.socrata_client import escape_soql_literal, socrata_get
 
     safe = escape_soql_literal(normalised)
@@ -171,7 +172,7 @@ def _try_lookup(normalised: str, parcel_addresses_url: str) -> Optional[str]:
         tokens = normalised.split()
         if len(tokens) >= 2:
             prefix = ' '.join(tokens[:3]) if len(tokens) >= 3 else ' '.join(tokens[:2])
-            safe_prefix = escape_soql_literal(prefix)
+            safe_prefix = escape_soql_literal(escape_like(prefix))
             results = socrata_get(
                 'c49d-89sn',
                 params={'$where': f"property_address like '{safe_prefix}%'", '$limit': 10},
@@ -190,8 +191,9 @@ def _try_lookup(normalised: str, parcel_addresses_url: str) -> Optional[str]:
     return pin
 
 
-def _lookup_all_pins_from_address(address: str, parcel_addresses_url: str, limit: int = 25) -> list[dict]:
+def _lookup_all_pins_from_address(address: str, _parcel_addresses_url: str, limit: int = 25) -> list[dict]:
     """Return all parcel address rows matching an address (deduped by PIN)."""
+    from app.services.gis.utils import escape_like
     from app.services.plugins.socrata_client import escape_soql_literal, socrata_get
 
     normalised = _normalise_address(address)
@@ -218,7 +220,7 @@ def _lookup_all_pins_from_address(address: str, parcel_addresses_url: str, limit
             tokens = addr.split()
             if len(tokens) >= 2:
                 prefix = ' '.join(tokens[:3]) if len(tokens) >= 3 else ' '.join(tokens[:2])
-                safe_prefix = escape_soql_literal(prefix)
+                safe_prefix = escape_soql_literal(escape_like(prefix))
                 results = socrata_get(
                     'c49d-89sn',
                     params={'$where': f"property_address like '{safe_prefix}%'", '$limit': limit},

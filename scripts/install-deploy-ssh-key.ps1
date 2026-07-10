@@ -35,6 +35,19 @@ if (-not $ValidateOnly) {
         exit 1
     }
     New-Item -ItemType Directory -Force -Path (Split-Path $TargetKey) | Out-Null
+
+    $pubPreview = & ssh-keygen -y -f $KeyFile 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Could not read public key from $KeyFile" -ForegroundColor Red
+        Write-Host $pubPreview
+        exit 1
+    }
+    if ($pubPreview -notmatch [regex]::Escape($ExpectedPubFragment)) {
+        Write-Host "ERROR: Key file does not match the deploy key authorized on the VPS."
+        Write-Host "Use the private key from Hetzner setup — do not run ssh-keygen for a new pair."
+        exit 1
+    }
+
     Copy-Item -Path $KeyFile -Destination $TargetKey -Force
     icacls $TargetKey /inheritance:r /grant:r "$env:USERNAME`:F" | Out-Null
 }
