@@ -39,6 +39,12 @@ class OverrideSchema(Schema):
     reason = fields.Str(required=True)
 
 
+class BackfillSchema(Schema):
+    enqueue_async = fields.Boolean(load_default=False)
+    per_run_cap = fields.Int(load_default=100, validate=validate.Range(min=1, max=500))
+    last_id = fields.Int(load_default=0, validate=validate.Range(min=0))
+
+
 @property_match_bp.route('/<int:lead_id>/property-match/preview', methods=['GET'])
 @require_auth
 @handle_errors
@@ -82,14 +88,12 @@ def backfill_building_ownership():
     from app.services.building_ownership_backfill import backfill_building_ownership_analysis
 
     body = request.get_json(silent=True) or {}
-    enqueue_async = bool(body.get('enqueue_async', False))
-    per_run_cap = int(body.get('per_run_cap', 100))
-    last_id = int(body.get('last_id', 0))
+    data = BackfillSchema().load(body)
 
     summary = backfill_building_ownership_analysis(
-        per_run_cap=min(per_run_cap, 500),
-        last_id=last_id,
-        enqueue_async=enqueue_async,
+        per_run_cap=data['per_run_cap'],
+        last_id=data['last_id'],
+        enqueue_async=data['enqueue_async'],
     )
     return jsonify(summary), 200
 

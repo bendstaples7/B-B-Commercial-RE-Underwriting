@@ -440,11 +440,13 @@ class TestStartImport:
 class TestListImportJobs:
     """Tests for the import job listing endpoint."""
 
-    _headers = {'X-User-Id': 'default'}
+    @staticmethod
+    def _headers(user_id: str = 'default') -> dict[str, str]:
+        return {'X-User-Id': user_id}
 
     def test_list_jobs_empty(self, client, app):
         """Empty database returns empty list."""
-        resp = client.get('/api/leads/import/jobs', headers=self._headers)
+        resp = client.get('/api/leads/import/jobs', headers=self._headers())
         assert resp.status_code == 200
         data = json.loads(resp.data)
         assert data['jobs'] == []
@@ -455,7 +457,7 @@ class TestListImportJobs:
         with app.app_context():
             _create_import_job()
 
-        resp = client.get('/api/leads/import/jobs', headers=self._headers)
+        resp = client.get('/api/leads/import/jobs', headers=self._headers())
         assert resp.status_code == 200
         data = json.loads(resp.data)
         assert data['total'] == 1
@@ -478,7 +480,7 @@ class TestListImportJobs:
             _create_import_job(spreadsheet_id='s1', status='completed')
             _create_import_job(spreadsheet_id='s2', status='failed')
 
-        resp = client.get('/api/leads/import/jobs?status=failed', headers=self._headers)
+        resp = client.get('/api/leads/import/jobs?status=failed', headers=self._headers())
         data = json.loads(resp.data)
         assert data['total'] == 1
         assert data['jobs'][0]['status'] == 'failed'
@@ -489,7 +491,7 @@ class TestListImportJobs:
             for i in range(15):
                 _create_import_job(spreadsheet_id=f's{i}')
 
-        resp = client.get('/api/leads/import/jobs?page=1&per_page=10', headers=self._headers)
+        resp = client.get('/api/leads/import/jobs?page=1&per_page=10', headers=self._headers())
         data = json.loads(resp.data)
         assert len(data['jobs']) == 10
         assert data['total'] == 15

@@ -45,6 +45,7 @@ def handle_errors(f):
 
 @bulk_action_bp.route('/suppress', methods=['POST'])
 @handle_errors
+@require_auth
 def bulk_suppress():
     """POST /api/leads/bulk/suppress — suppress multiple leads."""
     data = BulkActionRequestSchema().load(request.get_json() or {})
@@ -57,7 +58,7 @@ def bulk_suppress():
     for lead_id in lead_ids:
         try:
             lead = db.session.get(Lead, lead_id)
-            if lead is None:
+            if lead is None or not _user_can_access_lead(lead):
                 failures += 1
                 continue
             old_status = lead.lead_status
@@ -85,6 +86,7 @@ def bulk_suppress():
 
 @bulk_action_bp.route('/create-task', methods=['POST'])
 @handle_errors
+@require_auth
 def bulk_create_task():
     """POST /api/leads/bulk/create-task — create a task for multiple leads."""
     body = request.get_json() or {}
@@ -100,6 +102,10 @@ def bulk_create_task():
 
     for lead_id in lead_ids:
         try:
+            lead = db.session.get(Lead, lead_id)
+            if lead is None or not _user_can_access_lead(lead):
+                failures += 1
+                continue
             _lead_task_service.create(lead_id, task_data, actor=actor)
             successes += 1
         except Exception:
@@ -111,6 +117,7 @@ def bulk_create_task():
 
 @bulk_action_bp.route('/do-not-contact', methods=['POST'])
 @handle_errors
+@require_auth
 def bulk_do_not_contact():
     """POST /api/leads/bulk/do-not-contact — mark multiple leads as DNC."""
     data = BulkActionRequestSchema().load(request.get_json() or {})
@@ -123,7 +130,7 @@ def bulk_do_not_contact():
     for lead_id in lead_ids:
         try:
             lead = db.session.get(Lead, lead_id)
-            if lead is None:
+            if lead is None or not _user_can_access_lead(lead):
                 failures += 1
                 continue
             old_status = lead.lead_status

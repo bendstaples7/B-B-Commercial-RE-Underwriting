@@ -93,8 +93,8 @@ def _apply_queue_sort(query, sort_by: str, sort_order: str, default_col=None):
     else:
         primary = sort_col.asc()
     if sort_by == 'lead_score' or sort_col is Lead.lead_score:
-        return query.order_by(primary, Lead.motivation_score.desc())
-    return query.order_by(primary)
+        return query.order_by(primary, Lead.motivation_score.desc(), Lead.id.asc())
+    return query.order_by(primary, Lead.id.asc())
 
 
 def _hubspot_task_overdue_subquery(cutoff_date):
@@ -454,11 +454,13 @@ class QueueService:
                 status_order.asc(),
                 sort_col.desc() if sort_order == 'desc' else sort_col.asc(),
                 Lead.motivation_score.desc(),
+                Lead.id.asc(),
             )
         else:
             query = query.order_by(
                 status_order.asc(),
                 sort_col.desc() if sort_order == 'desc' else sort_col.asc(),
+                Lead.id.asc(),
             )
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
         return [_leads_to_queue_rows(leads), total]

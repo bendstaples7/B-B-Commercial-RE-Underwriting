@@ -284,8 +284,8 @@ export function BuildingOwnershipReviewDrawer({
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {assessorPins.map((row) => (
-                        <TableRow key={row.pin}>
+                      {assessorPins.map((row, index) => (
+                        <TableRow key={row.pin ?? `pin-row-${index}`}>
                           <TableCell>{row.pin ?? '—'}</TableCell>
                           <TableCell>{row.property_class ?? '—'}</TableCell>
                           <TableCell>{row.is_condo_class ? 'Yes' : 'No'}</TableCell>

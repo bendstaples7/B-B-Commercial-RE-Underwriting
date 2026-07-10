@@ -65,22 +65,29 @@ export function MissingPropertyMatchQueue() {
     enabled: currentLeadId != null,
   })
 
+  useEffect(() => {
+    if (rows.length === 0) return
+    if (cardIndex >= rows.length) {
+      setCardIndex(Math.max(0, rows.length - 1))
+    }
+  }, [rows.length, cardIndex])
+
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['queue-missing-property-match'] })
     queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
   }
 
   const advanceAfterAction = () => {
-    if (cardIndex < rows.length - 1) {
-      setCardIndex((i) => i + 1)
-    } else if (page < totalPages) {
-      setPage((p) => p + 1)
-      setCardIndex(0)
-    } else {
-      setCardIndex(0)
-      setPage(1)
-    }
+    const wasLastOnPage = cardIndex >= rows.length - 1
     invalidate()
+    if (wasLastOnPage) {
+      if (page < totalPages) {
+        setPage((p) => p + 1)
+        setCardIndex(0)
+      } else if (cardIndex > 0) {
+        setCardIndex((i) => i - 1)
+      }
+    }
   }
 
   const handleApprove = async () => {
@@ -94,6 +101,9 @@ export function MissingPropertyMatchQueue() {
           : 'Match confirmed',
       )
       advanceAfterAction()
+    } catch (err) {
+      console.error('[MissingPropertyMatchQueue] Approve failed:', err)
+      setSnackbar(err instanceof Error ? err.message : 'Approve failed. Please try again.')
     } finally {
       setActionPending(false)
     }

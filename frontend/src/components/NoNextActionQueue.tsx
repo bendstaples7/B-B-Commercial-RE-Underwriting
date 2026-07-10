@@ -46,6 +46,7 @@ export function NoNextActionQueue() {
   const [selectError, setSelectError] = useState<string | null>(null)
   const [statusDialogOpen, setStatusDialogOpen] = useState(false)
   const [queueWideSourceStatus, setQueueWideSourceStatus] = useState<LeadStatus | null>(null)
+  const [bulkError, setBulkError] = useState<string | null>(null)
 
   const { data } = useQuery({
     queryKey: ['queue-no-next-action', page],
@@ -87,6 +88,7 @@ export function NoNextActionQueue() {
     } catch (err) {
       console.error('[NoNextActionQueue] Suppress failed:', err)
       setSuppressError(err instanceof Error ? err.message : 'Suppress failed. Please try again.')
+      throw err
     }
   }
 
@@ -151,30 +153,48 @@ export function NoNextActionQueue() {
       label: 'Suppress',
       testId: 'bulk-suppress',
       onClick: async (ids) => {
-        const result = await bulkActionService.bulkSuppress(ids)
-        invalidate()
-        setSelectedIds([])
-        setPage(1)
-        return result
+        setBulkError(null)
+        try {
+          const result = await bulkActionService.bulkSuppress(ids)
+          invalidate()
+          setSelectedIds([])
+          setPage(1)
+          return result
+        } catch (err) {
+          console.error('[NoNextActionQueue] Bulk suppress failed:', err)
+          setBulkError(
+            err instanceof Error ? err.message : 'Bulk suppress failed. Please try again.',
+          )
+          throw err
+        }
       },
     },
   ]
 
   const handleBulkStatusConfirm = async (status: LeadStatus, reason: string) => {
-    if (queueWideSourceStatus) {
-      await queueService.bulkUpdateNoNextActionStatus({
-        source_status: queueWideSourceStatus,
-        status,
-        reason,
-      })
-    } else if (selectedIds.length > 0) {
-      await bulkActionService.bulkUpdateStatus(selectedIds, status, reason)
+    setBulkError(null)
+    try {
+      if (queueWideSourceStatus) {
+        await queueService.bulkUpdateNoNextActionStatus({
+          source_status: queueWideSourceStatus,
+          status,
+          reason,
+        })
+      } else if (selectedIds.length > 0) {
+        await bulkActionService.bulkUpdateStatus(selectedIds, status, reason)
+      }
+      invalidate()
+      setSelectedIds([])
+      setPage(1)
+      setQueueWideSourceStatus(null)
+      setStatusDialogOpen(false)
+    } catch (err) {
+      console.error('[NoNextActionQueue] Bulk status update failed:', err)
+      setBulkError(
+        err instanceof Error ? err.message : 'Bulk status update failed. Please try again.',
+      )
+      throw err
     }
-    invalidate()
-    setSelectedIds([])
-    setPage(1)
-    setQueueWideSourceStatus(null)
-    setStatusDialogOpen(false)
   }
 
   return (
@@ -185,6 +205,12 @@ export function NoNextActionQueue() {
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         Total: <strong>{total}</strong>
       </Typography>
+
+      {bulkError && (
+        <Typography variant="caption" color="error" display="block" sx={{ mb: 1 }} data-testid="bulk-action-error">
+          {bulkError}
+        </Typography>
+      )}
 
       {statusChips.length > 0 && (
         <Box sx={{ mb: 2 }} data-testid="status-shortcuts-toolbar">

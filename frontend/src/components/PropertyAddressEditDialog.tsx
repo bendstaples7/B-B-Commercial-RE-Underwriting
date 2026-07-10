@@ -43,7 +43,7 @@ export function PropertyAddressEditDialog({
     setZip(row.property_zip ?? '')
     setError(null)
     setSaving(false)
-  }, [open, row])
+  }, [open, row?.id])
 
   const handleSave = async () => {
     if (!street.trim()) {

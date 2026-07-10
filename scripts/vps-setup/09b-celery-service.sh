@@ -45,6 +45,7 @@ Group=deploy
 WorkingDirectory=/home/deploy/app/backend
 EnvironmentFile=/home/deploy/app/backend/.env
 Environment=FLASK_ENV=production
+Environment=CELERY_WORKER_RUNNING=1
 ExecStart=/home/deploy/.local/bin/celery -A celery_worker.celery worker \
     --loglevel=info --concurrency=1 --pool=prefork
 Restart=on-failure
@@ -69,6 +70,7 @@ Group=deploy
 WorkingDirectory=/home/deploy/app/backend
 EnvironmentFile=/home/deploy/app/backend/.env
 Environment=FLASK_ENV=production
+Environment=CELERY_WORKER_RUNNING=1
 ExecStart=/home/deploy/.local/bin/celery -A celery_worker.celery beat \
     --loglevel=info --pidfile=/home/deploy/celerybeat.pid \
     --schedule=/home/deploy/celerybeat-schedule

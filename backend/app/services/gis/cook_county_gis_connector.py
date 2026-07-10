@@ -43,6 +43,13 @@ logger = logging.getLogger(__name__)
 _DEFAULT_PARCEL_ADDRESSES_URL = (
     "https://datacatalog.cookcountyil.gov/resource/c49d-89sn.json"
 )
+_DEFAULT_PARCEL_DATASET_ID = "c49d-89sn"
+
+
+def _dataset_id_from_url(url: str) -> str:
+    """Extract Socrata dataset id (e.g. c49d-89sn) from a parcel addresses URL."""
+    match = re.search(r"([a-z0-9]{4}-[a-z0-9]{4})", url.lower())
+    return match.group(1) if match else _DEFAULT_PARCEL_DATASET_ID
 _DEFAULT_IMPROVEMENT_CHARS_URL = (
     "https://datacatalog.cookcountyil.gov/resource/bcnq-qi2z.json"
 )
@@ -161,9 +168,10 @@ def _try_lookup(normalised: str, parcel_addresses_url: str) -> Optional[str]:
     from app.services.gis.utils import escape_like
     from app.services.plugins.socrata_client import escape_soql_literal, socrata_get
 
+    dataset_id = _dataset_id_from_url(parcel_addresses_url)
     safe = escape_soql_literal(normalised)
     results = socrata_get(
-        'c49d-89sn',
+        dataset_id,
         params={'$where': f"property_address='{safe}'", '$limit': 5},
         portal='cook_county',
     )
@@ -174,7 +182,7 @@ def _try_lookup(normalised: str, parcel_addresses_url: str) -> Optional[str]:
             prefix = ' '.join(tokens[:3]) if len(tokens) >= 3 else ' '.join(tokens[:2])
             safe_prefix = escape_soql_literal(escape_like(prefix))
             results = socrata_get(
-                'c49d-89sn',
+                dataset_id,
                 params={'$where': f"property_address like '{safe_prefix}%'", '$limit': 10},
                 portal='cook_county',
             )
@@ -191,11 +199,12 @@ def _try_lookup(normalised: str, parcel_addresses_url: str) -> Optional[str]:
     return pin
 
 
-def _lookup_all_pins_from_address(address: str, _parcel_addresses_url: str, limit: int = 25) -> list[dict]:
+def _lookup_all_pins_from_address(address: str, parcel_addresses_url: str, limit: int = 25) -> list[dict]:
     """Return all parcel address rows matching an address (deduped by PIN)."""
     from app.services.gis.utils import escape_like
     from app.services.plugins.socrata_client import escape_soql_literal, socrata_get
 
+    dataset_id = _dataset_id_from_url(parcel_addresses_url)
     normalised = _normalise_address(address)
     if not normalised:
         return []
@@ -212,7 +221,7 @@ def _lookup_all_pins_from_address(address: str, _parcel_addresses_url: str, limi
     for addr in addresses_to_try:
         safe = escape_soql_literal(addr)
         results = socrata_get(
-            'c49d-89sn',
+            dataset_id,
             params={'$where': f"property_address='{safe}'", '$limit': limit},
             portal='cook_county',
         )
@@ -222,7 +231,7 @@ def _lookup_all_pins_from_address(address: str, _parcel_addresses_url: str, limi
                 prefix = ' '.join(tokens[:3]) if len(tokens) >= 3 else ' '.join(tokens[:2])
                 safe_prefix = escape_soql_literal(escape_like(prefix))
                 results = socrata_get(
-                    'c49d-89sn',
+                    dataset_id,
                     params={'$where': f"property_address like '{safe_prefix}%'", '$limit': limit},
                     portal='cook_county',
                 )
@@ -284,7 +293,7 @@ def _lookup_address_from_pin(pin: str, parcel_addresses_url: str) -> Optional[di
     for variant in variants:
         where = f"pin='{escape_soql_literal(variant)}'"
         results = socrata_get(
-            'c49d-89sn',
+            _dataset_id_from_url(parcel_addresses_url),
             params={'$where': where, '$limit': 10},
             portal='cook_county',
         )

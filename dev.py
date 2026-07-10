@@ -29,6 +29,17 @@ BACKEND_DIR = os.path.join(os.path.dirname(__file__), "backend")
 REDIS_PORT = 6379
 FLASK_PORT = 5000
 
+
+def _is_local_database_url(url: str) -> bool:
+    """True when DATABASE_URL points at a local dev database (safe to auto-migrate)."""
+    lower = url.lower()
+    return (
+        'localhost' in lower
+        or '127.0.0.1' in lower
+        or lower.startswith('postgresql:///@')
+        or 'host=/var/run/postgresql' in lower
+    )
+
 # Processes we start (so we can clean them up)
 _processes: list[subprocess.Popen] = []
 
@@ -223,6 +234,12 @@ def run_checks() -> bool:
 
         if current_heads == expected_heads:
             print(f"  ✓ Database is at migration head ({', '.join(expected_heads)})")
+        elif not _is_local_database_url(db_url):
+            print("  ✗ Database schema is out of date but DATABASE_URL is not local")
+            print(f"    Current : {current_heads or '(none — fresh DB)'}")
+            print(f"    Expected: {expected_heads}")
+            print("    Fix: run `cd backend && flask db upgrade head` against your local database")
+            passed = False
         else:
             print("  ⚙ Database schema is out of date — running flask db upgrade head...")
             print(f"    Current : {current_heads or '(none — fresh DB)'}")

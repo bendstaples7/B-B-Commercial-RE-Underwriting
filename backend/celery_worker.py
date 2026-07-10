@@ -1418,6 +1418,9 @@ REQUIRED_TASKS = {
     'building_ownership.backfill_commercial',
     'cook_county.enrich_lead',
     'cook_county.backfill_enrichment',
+    'motivation.backfill_signals',
+    'gis.backfill_property_matches',
+    'cook_county.prospect_feed_sync',
 }
 
 

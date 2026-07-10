@@ -1191,53 +1191,82 @@ def create_app(config_name='development'):
         # Skip in Celery worker/beat: create_app() runs there too and would
         # recursively enqueue another backfill task.
         # ---------------------------------------------------------------------------
+        _BUILDING_OWNERSHIP_STARTUP_LOCK_KEY = 8242002
+
+        def _try_claim_building_ownership_startup() -> bool:
+            try:
+                acquired = db.session.execute(
+                    db.text('SELECT pg_try_advisory_lock(:key)'),
+                    {'key': _BUILDING_OWNERSHIP_STARTUP_LOCK_KEY},
+                ).scalar()
+                return bool(acquired)
+            except Exception:
+                return True
+
+        def _release_building_ownership_startup_lock() -> None:
+            try:
+                db.session.execute(
+                    db.text('SELECT pg_advisory_unlock(:key)'),
+                    {'key': _BUILDING_OWNERSHIP_STARTUP_LOCK_KEY},
+                )
+            except Exception:
+                pass
+
         if not _is_celery:
             with app.app_context():
                 try:
-                    pending_count = db.session.execute(
-                        db.text(
-                            """
-                            SELECT COUNT(*) FROM leads
-                            WHERE lead_category = 'commercial'
-                              AND property_street IS NOT NULL
-                              AND TRIM(property_street) != ''
-                              AND condo_analysis_id IS NULL
-                              AND lead_status NOT IN (
-                                'suppressed', 'do_not_contact', 'deal_won', 'deal_lost'
-                              )
-                            """
-                        )
-                    ).scalar()
-
-                    if pending_count and pending_count > 0:
+                    if not _try_claim_building_ownership_startup():
                         app.logger.info(
-                            "Startup: %d commercial leads lack building ownership analysis; "
-                            "enqueueing backfill task.",
-                            pending_count,
+                            "Building ownership startup backfill already claimed by another worker"
                         )
-                        import threading as _ownership_threading
+                    else:
+                        try:
+                            pending_count = db.session.execute(
+                                db.text(
+                                    """
+                                    SELECT COUNT(*) FROM leads
+                                    WHERE lead_category = 'commercial'
+                                      AND property_street IS NOT NULL
+                                      AND TRIM(property_street) != ''
+                                      AND condo_analysis_id IS NULL
+                                      AND lead_status NOT IN (
+                                        'suppressed', 'do_not_contact', 'deal_won', 'deal_lost'
+                                      )
+                                    """
+                                )
+                            ).scalar()
 
-                        def _ownership_startup_backfill(flask_app):
-                            with flask_app.app_context():
-                                try:
-                                    from celery_worker import (
-                                        building_ownership_backfill_commercial_task,
-                                    )
-                                    building_ownership_backfill_commercial_task.apply_async(
-                                        ignore_result=True,
-                                    )
-                                except Exception as exc:
-                                    flask_app.logger.warning(
-                                        "Building ownership startup backfill dispatch failed: %s",
-                                        exc,
-                                    )
+                            if pending_count and pending_count > 0:
+                                app.logger.info(
+                                    "Startup: %d commercial leads lack building ownership analysis; "
+                                    "enqueueing backfill task.",
+                                    pending_count,
+                                )
+                                import threading as _ownership_threading
 
-                        _ownership_threading.Thread(
-                            target=_ownership_startup_backfill,
-                            args=(app,),
-                            daemon=True,
-                            name="building-ownership-startup-backfill",
-                        ).start()
+                                def _ownership_startup_backfill(flask_app):
+                                    with flask_app.app_context():
+                                        try:
+                                            from celery_worker import (
+                                                building_ownership_backfill_commercial_task,
+                                            )
+                                            building_ownership_backfill_commercial_task.apply_async(
+                                                ignore_result=True,
+                                            )
+                                        except Exception as exc:
+                                            flask_app.logger.warning(
+                                                "Building ownership startup backfill dispatch failed: %s",
+                                                exc,
+                                            )
+
+                                _ownership_threading.Thread(
+                                    target=_ownership_startup_backfill,
+                                    args=(app,),
+                                    daemon=True,
+                                    name="building-ownership-startup-backfill",
+                                ).start()
+                        finally:
+                            _release_building_ownership_startup_lock()
                 except Exception as e:
                     app.logger.warning("Building ownership startup check skipped: %s", e)
 
