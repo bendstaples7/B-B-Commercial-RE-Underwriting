@@ -136,11 +136,15 @@ class TestPostDeploySyncDispatch:
                     'app.services.hubspot_pipeline_runner.count_dangling_confirmed_lead_matches',
                     return_value=3,
                 ):
-                    with patch.dict(
-                        'os.environ',
-                        {'DEPLOY_CHANGED_PATHS_FILE': str(paths_file)},
+                    with patch(
+                        'app.services.deploy_sync_policy.should_upgrade_dangling_to_full_pipeline',
+                        return_value=True,
                     ):
-                        mode = dispatch_post_deploy_sync(app)
+                        with patch.dict(
+                            'os.environ',
+                            {'DEPLOY_CHANGED_PATHS_FILE': str(paths_file)},
+                        ):
+                            mode = dispatch_post_deploy_sync(app)
 
         assert mode == 'celery'
         mock_dispatch.assert_called_once_with(app, 'full_pipeline')
@@ -164,11 +168,15 @@ class TestPostDeploySyncDispatch:
                     'app.services.hubspot_pipeline_runner.count_dangling_confirmed_lead_matches',
                     return_value=2,
                 ):
-                    with patch.dict(
-                        'os.environ',
-                        {'DEPLOY_CHANGED_PATHS_FILE': str(paths_file)},
+                    with patch(
+                        'app.services.deploy_sync_policy.should_upgrade_dangling_to_full_pipeline',
+                        return_value=True,
                     ):
-                        mode = dispatch_post_deploy_sync(app)
+                        with patch.dict(
+                            'os.environ',
+                            {'DEPLOY_CHANGED_PATHS_FILE': str(paths_file)},
+                        ):
+                            mode = dispatch_post_deploy_sync(app)
 
         assert mode == 'celery'
         mock_dispatch.assert_called_once_with(app, 'full_pipeline')

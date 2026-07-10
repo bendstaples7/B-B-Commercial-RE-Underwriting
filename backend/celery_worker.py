@@ -175,6 +175,12 @@ celery.conf.update(
             'schedule': crontab(hour=5, minute=0),
             'options': {'expires': 7200},
         },
+        # Commercial building ownership / condo check — after Cook County enrichment
+        'building-ownership-backfill-commercial': {
+            'task': 'building_ownership.backfill_commercial',
+            'schedule': crontab(hour='4,10,16,22', minute=0),
+            'options': {'expires': 3600},
+        },
         # Cook County prospect feeders — review queue candidates (no auto-import)
         'cook-county-prospect-feed-sync': {
             'task': 'cook_county.prospect_feed_sync',
@@ -515,6 +521,44 @@ def cook_county_enrich_lead_task(lead_id: int) -> dict:
             return enrich_cook_county_lead(lead_id)
     except Exception as exc:
         _logger.error("cook_county.enrich_lead failed for lead %s: %s", lead_id, exc)
+        raise
+
+
+@celery.task(name='building_ownership.analyze_lead')
+def building_ownership_analyze_lead_task(lead_id: int) -> dict:
+    """Run building ownership / condo classification for one commercial lead."""
+    import logging
+    _logger = logging.getLogger('celery.building_ownership.analyze_lead')
+
+    try:
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            from app.services.building_ownership_service import BuildingOwnershipService
+            return BuildingOwnershipService().analyze_lead(lead_id)
+    except Exception as exc:
+        _logger.error("building_ownership.analyze_lead failed for lead %s: %s", lead_id, exc)
+        raise
+
+
+@celery.task(bind=True, name='building_ownership.backfill_commercial')
+def building_ownership_backfill_commercial_task(self):
+    """Periodic task: analyze commercial Cook County leads missing building ownership data."""
+    import logging
+    _logger = logging.getLogger('celery.building_ownership.backfill_commercial')
+
+    try:
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            from app.services.building_ownership_backfill import (
+                backfill_building_ownership_analysis,
+            )
+            summary = backfill_building_ownership_analysis()
+            _logger.info('building_ownership.backfill_commercial: %s', summary)
+            return summary
+    except Exception as exc:
+        _logger.error('building_ownership.backfill_commercial failed: %s', exc)
         raise
 
 
@@ -1370,6 +1414,13 @@ REQUIRED_TASKS = {
     'process_csv_ingestion',
     'dupage.enrich_acquisition_dates',
     'dupage.pull_absentee_leads',
+    'building_ownership.analyze_lead',
+    'building_ownership.backfill_commercial',
+    'cook_county.enrich_lead',
+    'cook_county.backfill_enrichment',
+    'motivation.backfill_signals',
+    'gis.backfill_property_matches',
+    'cook_county.prospect_feed_sync',
 }
 
 

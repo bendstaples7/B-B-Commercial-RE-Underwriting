@@ -20,7 +20,7 @@
  */
 
 import React from 'react'
-import { Alert, Box, Button, Card, CardContent, Chip, LinearProgress, Skeleton, Typography } from '@mui/material'
+import { Alert, Box, Button, Card, CardContent, Chip, LinearProgress, Link, Skeleton, Typography } from '@mui/material'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import ErrorIcon from '@mui/icons-material/Error'
@@ -538,12 +538,19 @@ export function ImportSourceCard({ source }: { source: ImportSourceStatus }) {
           <>
             <Typography variant="body2">
               Last import: {formatTimestamp(source.last_refreshed_at)}
+              {source.scope === 'org' ? ' (team import)' : source.scope === 'user' ? ' (your import)' : ''}
             </Typography>
             {source.rows_imported !== null && (
               <Typography variant="body2" color="text.secondary">
                 {source.rows_imported} rows imported
+                {(source.completed_import_count ?? 0) > 1
+                  ? ` · ${source.completed_import_count} successful imports`
+                  : ''}
               </Typography>
             )}
+            <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.5 }}>
+              <Link href="/import" underline="hover">View import history</Link>
+            </Typography>
           </>
         ) : (
           <Typography variant="body2" color="text.secondary">

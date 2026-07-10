@@ -24,6 +24,11 @@ import {
   Paper,
   Snackbar,
   Tooltip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
 } from '@mui/material'
 import { Link as RouterLink, useNavigate, useSearchParams, useLocation } from 'react-router-dom'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
@@ -32,6 +37,7 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import BarChartIcon from '@mui/icons-material/BarChart'
 import { commandCenterService, leadTaskService, leadScoreService, queueService } from '@/services/api'
 import { leadService } from '@/services/leadApi'
+import { multifamilyService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
 import { deriveQueueContext } from '@/utils/deriveQueueContext'
 import { parseLogActivityParam, buildLeadUrl } from '@/utils/queueLogNavigation'
@@ -56,6 +62,8 @@ import { resolveOutreachContactFromCommandCenter } from '@/utils/outreachContact
 import { outreachContactPlacement } from '@/utils/outreachContactPlacement'
 import { LeadDetailTabPanel } from '@/components/lead-detail/LeadDetailTabPanel'
 import { PropertySidebar } from '@/components/lead-detail/PropertySidebar'
+import { BuildingOwnershipReviewDrawer } from '@/components/BuildingOwnershipReviewDrawer'
+import { SuppressLeadDialog } from '@/components/SuppressLeadDialog'
 
 export { ALL_LEAD_STATUSES } from '@/constants/leadStatuses'
 export { tabParamToIndex } from '@/components/lead-detail/LeadDetailTabPanel'
@@ -559,6 +567,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const {
     data: leadData,
     isLoading: leadLoading,
+    isError: leadDetailError,
   } = useQuery<PropertyDetail, Error>({
     queryKey: ['lead', leadId],
     queryFn: () => leadService.getLeadDetail(leadId),
@@ -606,6 +615,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     open: false,
     message: '',
   })
+  const [buildingOwnershipOpen, setBuildingOwnershipOpen] = useState(false)
+  const [suppressDialogOpen, setSuppressDialogOpen] = useState(false)
+  const [dncDialogOpen, setDncDialogOpen] = useState(false)
+  const [dncPending, setDncPending] = useState(false)
+  const [dncError, setDncError] = useState<string | null>(null)
 
   const advanceInQueue = useCallback(
     (nextLeadId: number) => {
@@ -706,10 +720,78 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
         return
       }
+      case 'research_property':
+        setBuildingOwnershipOpen(true)
+        return
+      case 'run_analysis': {
+        navigate(`${location.pathname}?tab=analysis`, { replace: true })
+        if (leadLoading) {
+          setActivitySnackbar({
+            open: true,
+            message: 'Loading lead details before starting analysis…',
+          })
+          return
+        }
+        if (leadDetailError || leadData == null) {
+          setActivitySnackbar({
+            open: true,
+            message: 'Could not load lead details — refresh and try again before starting analysis.',
+          })
+          return
+        }
+        const units = leadData.units
+        if (units != null && units >= 5) {
+          const deal = await multifamilyService.createDeal({
+            property_address: leadData.property_street ?? '',
+            unit_count: units,
+            purchase_price: 0,
+            close_date: new Date().toISOString().split('T')[0],
+          })
+          await multifamilyService.linkDealToLead(deal.id, leadId)
+          navigate(`/multifamily/deals/${deal.id}`)
+        } else {
+          const result = await leadService.analyzeLead(leadId)
+          navigate(`/analysis/${result.session_id}`)
+        }
+        return
+      }
+      case 'skip_trace':
+        await leadTaskService.createTask(leadId, {
+          title: 'Run skip trace on owner',
+          task_type: 'skip_trace_owner',
+        })
+        tasksPanelRef.current?.scrollIntoView()
+        setActivitySnackbar({ open: true, message: 'Skip trace task created' })
+        await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+        return
+      case 'add_contact_info':
+        navigate(`${location.pathname}?tab=contacts`, { replace: true })
+        window.setTimeout(() => {
+          document.querySelector('[data-testid="tab-panel"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        }, 100)
+        return
+      case 'search_property':
+        navigate(`/queues/missing-property-match?leadId=${leadId}`)
+        return
+      case 'research_pin':
+        await leadTaskService.createTask(leadId, {
+          title: 'Research missing PIN',
+          task_type: 'research_missing_pin',
+        })
+        tasksPanelRef.current?.scrollIntoView()
+        setActivitySnackbar({ open: true, message: 'Research PIN task created' })
+        await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+        return
+      case 'suppress':
+        setSuppressDialogOpen(true)
+        return
+      case 'do_not_contact':
+        setDncDialogOpen(true)
+        return
       default:
         await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
     }
-  }, [queryClient, leadId])
+  }, [queryClient, leadId, navigate, location.pathname, leadData, leadLoading, leadDetailError])
 
   const handleCreateTask = useCallback(() => {
     tasksPanelRef.current?.scrollIntoView()
@@ -822,6 +904,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               mailQueueStatus={commandCenterData!.mail_queue_status ?? null}
               isMailable={commandCenterData!.is_mailable ?? false}
               showOutreachContact={placement === 'recommended_action'}
+              condoRiskStatus={commandCenterData!.condo_risk_status ?? null}
               onAction={handleRaAction}
               onCreateTask={handleCreateTask}
             />
@@ -878,6 +961,72 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         onClose={() => setActivityModal(null)}
         onSaved={handleActivitySaved}
       />
+
+      <BuildingOwnershipReviewDrawer
+        leadId={leadId}
+        commandCenterData={commandCenterData!}
+        open={buildingOwnershipOpen}
+        onClose={() => setBuildingOwnershipOpen(false)}
+        onUpdated={() => queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })}
+      />
+
+      <SuppressLeadDialog
+        open={suppressDialogOpen}
+        onClose={() => setSuppressDialogOpen(false)}
+        onConfirm={async () => {
+          await commandCenterService.suppress(leadId)
+          setSuppressDialogOpen(false)
+          setActivitySnackbar({ open: true, message: 'Lead suppressed' })
+          await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+          await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+        }}
+      />
+
+      <Dialog
+        open={dncDialogOpen}
+        onClose={dncPending ? undefined : () => {
+          setDncDialogOpen(false)
+          setDncError(null)
+        }}
+      >
+        <DialogTitle>Mark as Do Not Contact?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            This lead will be removed from active outreach queues and marked do not contact.
+          </DialogContentText>
+          {dncError && (
+            <DialogContentText color="error" sx={{ mt: 1 }} data-testid="dnc-error">
+              {dncError}
+            </DialogContentText>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDncDialogOpen(false)} disabled={dncPending}>Cancel</Button>
+          <Button
+            color="error"
+            variant="contained"
+            disabled={dncPending}
+            onClick={async () => {
+              setDncPending(true)
+              setDncError(null)
+              try {
+                await commandCenterService.doNotContact(leadId)
+                setDncDialogOpen(false)
+                setActivitySnackbar({ open: true, message: 'Lead marked do not contact' })
+                await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+                await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+              } catch (err) {
+                console.error('[UnifiedLeadCommandCenter] DNC failed:', err)
+                setDncError(err instanceof Error ? err.message : 'Failed to mark do not contact. Please try again.')
+              } finally {
+                setDncPending(false)
+              }
+            }}
+          >
+            {dncPending ? 'Updating…' : 'Mark DNC'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Snackbar
         open={activitySnackbar.open}

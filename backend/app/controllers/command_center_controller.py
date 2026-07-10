@@ -192,6 +192,22 @@ _lead_timeline_service = LeadTimelineService()
 _call_log_service = CallLogService()
 
 
+def _require_lead_read_access(lead: Lead):
+    """Return a 404 response when the caller cannot read this lead."""
+    from app.controllers.property_controller import _current_user_is_admin
+
+    if _current_user_is_admin():
+        return None
+    current_user_id = getattr(g, 'user_id', None)
+    is_authenticated = current_user_id and current_user_id != 'anonymous'
+    if not is_authenticated or lead.owner_user_id != current_user_id:
+        return jsonify({
+            'error': 'Not found',
+            'message': f'Lead {lead.id} not found',
+        }), 404
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Error handling decorator (mirrors property_controller.py pattern)
 # ---------------------------------------------------------------------------
@@ -291,6 +307,7 @@ def get_recommended_action(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/command-center', methods=['GET'])
 @handle_errors
+@require_auth
 def get_command_center(lead_id: int):
     """
     GET /api/leads/<lead_id>/command-center
@@ -302,6 +319,10 @@ def get_command_center(lead_id: int):
     lead = Lead.query.get(lead_id)
     if lead is None:
         return jsonify({'error': 'Not found', 'message': f'Lead {lead_id} not found'}), 404
+
+    denied = _require_lead_read_access(lead)
+    if denied is not None:
+        return denied
 
     # Clear review_required flag when command center is opened
     if lead.review_required:
@@ -587,6 +608,10 @@ def get_command_center(lead_id: int):
         'is_warm': lead.is_warm,
         'follow_up_overdue': lead.follow_up_overdue,
         'analysis_complete': lead.analysis_complete,
+        'condo_risk_status': getattr(lead, 'condo_risk_status', None),
+        'building_sale_possible': getattr(lead, 'building_sale_possible', None),
+        'condo_analysis_id': getattr(lead, 'condo_analysis_id', None),
+        'assessor_class': getattr(lead, 'assessor_class', None),
         'data_completeness_score': lead.data_completeness_score,
         'analysis_session_id': lead.analysis_session_id,
         'last_contact_date': lead.last_contact_date.isoformat() if lead.last_contact_date else None,

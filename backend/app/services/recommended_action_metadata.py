@@ -75,6 +75,7 @@ TASK_TYPE_TO_RECOMMENDED_ACTION = {
     'add_to_mail_batch': 'ready_for_outreach',
     'call_owner_today': 'follow_up_now',
     'research_missing_pin': 'resolve_match',
+    'confirm_building_ownership': 'needs_manual_review',
 }
 
 

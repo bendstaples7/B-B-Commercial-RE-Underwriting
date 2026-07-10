@@ -1986,6 +1986,8 @@ class ImportSourceStatusSchema(Schema):
     last_refreshed_at = fields.Str(allow_none=True)
     rows_imported = fields.Int(allow_none=True)
     import_status = fields.Str(allow_none=True)
+    completed_import_count = fields.Int(load_default=0)
+    scope = fields.Str(allow_none=True)
 
 
 class HubSpotSourceStatusSchema(Schema):

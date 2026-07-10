@@ -1357,6 +1357,16 @@ export const queueService = {
     api.get('/queues/follow-up-overdue', { params: { page, per_page: perPage } }).then(r => r.data),
   getNoNextAction: (page = 1, perPage = 20): Promise<QueuePage> =>
     api.get('/queues/no-next-action', { params: { page, per_page: perPage } }).then(r => r.data),
+  getNoNextActionStatusCounts: (): Promise<Record<string, number>> =>
+    api.get('/queues/no-next-action/status-counts').then(r => r.data),
+  getNoNextActionLeadIds: (leadStatus: string): Promise<{ lead_ids: number[]; total: number }> =>
+    api.get('/queues/no-next-action/lead-ids', { params: { lead_status: leadStatus } }).then(r => r.data),
+  bulkUpdateNoNextActionStatus: (payload: {
+    source_status: string
+    status: string
+    reason?: string
+  }): Promise<BulkActionResult & { total_matched?: number }> =>
+    api.post('/queues/no-next-action/bulk-update-status', payload).then(r => r.data),
   getNeedsReview: (page = 1, perPage = 20): Promise<QueuePage> =>
     api.get('/queues/needs-review', { params: { page, per_page: perPage } }).then(r => r.data),
   getDoNotContact: (page = 1, perPage = 20): Promise<QueuePage> =>
@@ -1460,11 +1470,16 @@ export const bulkActionService = {
     api.post('/leads/bulk/create-task', { lead_ids: leadIds, task_data: taskData }).then(r => r.data),
   bulkDoNotContact: (leadIds: number[]): Promise<BulkActionResult> =>
     api.post('/leads/bulk/do-not-contact', { lead_ids: leadIds }).then(r => r.data),
+  bulkUpdateStatus: (
+    leadIds: number[],
+    status: LeadStatus,
+    reason?: string,
+  ): Promise<BulkActionResult> =>
+    api.post('/leads/bulk/update-status', { lead_ids: leadIds, status, reason }).then(r => r.data),
 }
 
-// ---------------------------------------------------------------------------
-// Admin Panel API Service
-// ---------------------------------------------------------------------------
+export { propertyMatchService, buildingOwnershipService } from '@/services/propertyMatchApi'
+export { dataSourcesService } from '@/services/dataSourcesApi'
 import type {
   AdminUserSummary,
   AdminLeadParams,
@@ -1572,13 +1587,5 @@ export const searchService = {
 }
 
 // ---------------------------------------------------------------------------
-// Data Sources Panel API Service
+// Admin Panel API Service
 // ---------------------------------------------------------------------------
-import type { DataSourceStatus } from '@/types'
-
-export const dataSourcesService = {
-  getStatus: async (): Promise<DataSourceStatus> => {
-    const response = await api.get<DataSourceStatus>('/data-sources/status')
-    return response.data
-  },
-}

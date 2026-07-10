@@ -17,7 +17,7 @@ import {
 } from '@mui/material'
 import BlockIcon from '@mui/icons-material/Block'
 import AddTaskIcon from '@mui/icons-material/AddTask'
-import type { RecommendedActionMeta, LeadStatus, LeadTask, CRMRecommendedAction, OutreachContact } from '@/types'
+import type { RecommendedActionMeta, LeadStatus, LeadTask, CRMRecommendedAction, OutreachContact, CondoRiskStatus } from '@/types'
 import { outreachDisplayLabel } from '@/constants/scoringRecommendedActions'
 import { OutreachContactInline, OutreachContactMissingHint } from '@/components/OutreachContactCallout'
 
@@ -84,7 +84,7 @@ const ACTION_BUTTONS: Record<CRMRecommendedAction, ActionButton[]> = {
     { label: 'Research Property', action: 'research_property' },
   ],
   needs_manual_review: [
-    { label: 'Research Property', action: 'research_property' },
+    { label: 'Confirm Building Ownership', action: 'research_property' },
     { label: 'Log Note', action: 'log_note' },
     { label: 'Create Task', action: 'create_task' },
   ],
@@ -139,6 +139,7 @@ export interface RecommendedActionPanelProps {
   isMailable?: boolean
   /** When true, show outreach contact inline under the action label */
   showOutreachContact?: boolean
+  condoRiskStatus?: CondoRiskStatus | null
   onAction: (action: string) => Promise<void>
   onCreateTask?: () => void
 }
@@ -163,6 +164,7 @@ export function RecommendedActionPanel({
   mailQueueStatus = null,
   isMailable = false,
   showOutreachContact = false,
+  condoRiskStatus = null,
   onAction,
   onCreateTask,
 }: RecommendedActionPanelProps) {
@@ -287,6 +289,17 @@ export function RecommendedActionPanel({
           size="small"
           sx={{ mb: 1.5 }}
           data-testid="dnc-badge"
+        />
+      )}
+
+      {condoRiskStatus && (
+        <Chip
+          size="small"
+          variant="outlined"
+          color={condoRiskStatus === 'likely_condo' ? 'warning' : 'default'}
+          label={`Condo: ${condoRiskStatus.replace(/_/g, ' ')}`}
+          sx={{ mb: 1.5, ml: isDNC ? 1 : 0 }}
+          data-testid="condo-status-chip"
         />
       )}
 

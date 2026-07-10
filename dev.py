@@ -14,6 +14,7 @@ All processes are cleaned up on Ctrl+C.
 """
 
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -28,6 +29,17 @@ import atexit
 BACKEND_DIR = os.path.join(os.path.dirname(__file__), "backend")
 REDIS_PORT = 6379
 FLASK_PORT = 5000
+
+
+def _is_local_database_url(url: str) -> bool:
+    """True when DATABASE_URL points at a local dev database (safe to auto-migrate)."""
+    lower = url.lower()
+    if 'localhost' in lower or '127.0.0.1' in lower:
+        return True
+    if 'host=/var/run/postgresql' in lower:
+        return True
+    # Hostless local socket URL: postgresql:///dbname
+    return re.match(r'^postgresql:///[^@]', lower) is not None
 
 # Processes we start (so we can clean them up)
 _processes: list[subprocess.Popen] = []
@@ -223,12 +235,43 @@ def run_checks() -> bool:
 
         if current_heads == expected_heads:
             print(f"  ✓ Database is at migration head ({', '.join(expected_heads)})")
-        else:
-            print(f"  ✗ Database schema is out of date")
-            print(f"    Current : {current_heads or '(none — fresh DB)' }")
+        elif not _is_local_database_url(db_url):
+            print("  ✗ Database schema is out of date but DATABASE_URL is not local")
+            print(f"    Current : {current_heads or '(none — fresh DB)'}")
             print(f"    Expected: {expected_heads}")
-            print("    Fix: cd backend && flask db upgrade head")
+            print("    Fix: run `cd backend && flask db upgrade head` against your local database")
             passed = False
+        else:
+            print("  ⚙ Database schema is out of date — running flask db upgrade head...")
+            print(f"    Current : {current_heads or '(none — fresh DB)'}")
+            print(f"    Expected: {expected_heads}")
+            try:
+                upgrade_env = {
+                    **os.environ,
+                    "FLASK_APP": "app",
+                    "FLASK_ENV": "development",
+                    "PYTHONIOENCODING": "utf-8",
+                }
+                subprocess.run(
+                    [sys.executable, "-m", "flask", "db", "upgrade", "head"],
+                    cwd=BACKEND_DIR,
+                    env=upgrade_env,
+                    check=True,
+                )
+                with engine.connect() as conn:
+                    ctx = MigrationContext.configure(conn)
+                    current_heads = set(ctx.get_current_heads())
+                if current_heads == expected_heads:
+                    print(f"  ✓ Database upgraded to migration head ({', '.join(expected_heads)})")
+                else:
+                    print(f"  ✗ Upgrade did not reach head (now at {current_heads})")
+                    passed = False
+            except subprocess.CalledProcessError as upgrade_err:
+                print(f"  ✗ flask db upgrade failed (exit {upgrade_err.returncode})")
+                passed = False
+            except Exception as upgrade_err:
+                print(f"  ✗ flask db upgrade failed: {upgrade_err}")
+                passed = False
     except Exception as e:
         print(f"  ✗ Could not verify database migration head: {e}")
         passed = False
@@ -320,7 +363,16 @@ def main():
             print("\n  Continuing without Redis — Celery tasks will fail.\n")
 
     # ------------------------------------------------------------------
-    # 2. Celery worker
+    # 2. Production data + pre-flight checks (includes DB migration)
+    # ------------------------------------------------------------------
+    if not ensure_local_prod_data():
+        sys.exit(1)
+
+    if not run_checks():
+        sys.exit(1)
+
+    # ------------------------------------------------------------------
+    # 3. Celery worker (after schema is at migration head)
     # ------------------------------------------------------------------
     celery_env = {"PYTHONPATH": BACKEND_DIR, "CELERY_WORKER_RUNNING": "1"}
     _start(
@@ -337,15 +389,6 @@ def main():
         env=celery_env,
     )
     time.sleep(1)  # let Celery connect to Redis before Flask starts
-
-    # ------------------------------------------------------------------
-    # 3. Production data + pre-flight checks
-    # ------------------------------------------------------------------
-    if not ensure_local_prod_data():
-        sys.exit(1)
-
-    if not run_checks():
-        sys.exit(1)
 
     # ------------------------------------------------------------------
     # 4. Flask dev server (foreground — blocks until Ctrl+C)

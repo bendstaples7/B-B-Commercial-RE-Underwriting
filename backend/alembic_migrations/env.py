@@ -88,6 +88,8 @@ _KNOWN_REVISIONS = frozenset({
     'g6a7b8c9d0e1',
     # Motivation signal pipeline — signals, prospect candidates, lead denorm
     'h7i8j9k0l1m2',
+    # RA actions + condo automation — assessor_class, timeline/task enum values
+    'i8j9k0l1m2n3',
 })
 
 

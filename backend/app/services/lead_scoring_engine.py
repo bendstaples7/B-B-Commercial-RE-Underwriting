@@ -290,6 +290,8 @@ class LeadScoringEngine:
                     return 'suppress', 'likely_condo', {'condo_risk_status': condo_status}
                 if condo_lower == "needs_review":
                     return 'needs_manual_review', 'condo_needs_review', {'condo_risk_status': condo_status}
+                if condo_lower == "partial_condo_possible":
+                    return 'needs_manual_review', 'condo_partial_ambiguous', {'condo_risk_status': condo_status}
 
         if getattr(lead, "do_not_contact", False) is True:
             return 'suppress', 'do_not_contact_flag', {'do_not_contact': True}

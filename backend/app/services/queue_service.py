@@ -93,8 +93,8 @@ def _apply_queue_sort(query, sort_by: str, sort_order: str, default_col=None):
     else:
         primary = sort_col.asc()
     if sort_by == 'lead_score' or sort_col is Lead.lead_score:
-        return query.order_by(primary, Lead.motivation_score.desc())
-    return query.order_by(primary)
+        return query.order_by(primary, Lead.motivation_score.desc(), Lead.id.asc())
+    return query.order_by(primary, Lead.id.asc())
 
 
 def _hubspot_task_overdue_subquery(cutoff_date):
@@ -457,6 +457,33 @@ class QueueService:
         sort_order: str = 'desc',
     ) -> tuple[list[dict], int]:
         """No Next Action: active/new leads with no recommended action and no open tasks."""
+        query = self._no_next_action_query()
+        total = query.count()
+        status_order = case((Lead.lead_status == 'awaiting_skip_trace', 0), else_=1)
+        sort_col = getattr(Lead, sort_by, Lead.lead_score)
+        if sort_by == 'lead_score':
+            query = query.order_by(
+                status_order.asc(),
+                sort_col.desc() if sort_order == 'desc' else sort_col.asc(),
+                Lead.motivation_score.desc(),
+                Lead.id.asc(),
+            )
+        else:
+            query = query.order_by(
+                status_order.asc(),
+                sort_col.desc() if sort_order == 'desc' else sort_col.asc(),
+                Lead.id.asc(),
+            )
+        leads = query.offset((page - 1) * per_page).limit(per_page).all()
+        return [_leads_to_queue_rows(leads), total]
+
+    def _no_next_action_query(self):
+        """Base query for No Next Action queue membership."""
+        from sqlalchemy import and_, exists, or_
+        from app.models.lead_task import LeadTask
+        from app.models.task import Task
+        from app.models.task_association import TaskAssociation
+
         has_open_lead_task = exists().where(
             and_(
                 LeadTask.lead_id == Lead.id,
@@ -477,7 +504,7 @@ class QueueService:
                 Task.status.in_(['open', 'overdue']),
             )
         )
-        query = self._base_query().filter(
+        return self._base_query().filter(
             Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
             or_(
                 Lead.recommended_action.is_(None),
@@ -487,22 +514,65 @@ class QueueService:
             ~has_open_hubspot_task,
             ~has_open_direct_task,
         )
-        total = query.count()
-        status_order = case((Lead.lead_status == 'awaiting_skip_trace', 0), else_=1)
-        sort_col = getattr(Lead, sort_by, Lead.lead_score)
-        if sort_by == 'lead_score':
-            query = query.order_by(
-                status_order.asc(),
-                sort_col.desc() if sort_order == 'desc' else sort_col.asc(),
-                Lead.motivation_score.desc(),
-            )
-        else:
-            query = query.order_by(
-                status_order.asc(),
-                sort_col.desc() if sort_order == 'desc' else sort_col.asc(),
-            )
-        leads = query.offset((page - 1) * per_page).limit(per_page).all()
-        return [_leads_to_queue_rows(leads), total]
+
+    def get_no_next_action_status_counts(self) -> dict[str, int]:
+        """Count leads in No Next Action queue grouped by lead_status."""
+        from sqlalchemy import func
+
+        rows = (
+            self._no_next_action_query()
+            .with_entities(Lead.lead_status, func.count(Lead.id))
+            .group_by(Lead.lead_status)
+            .all()
+        )
+        return {str(status): count for status, count in rows}
+
+    def get_no_next_action_lead_ids_by_status(self, lead_status: str) -> list[int]:
+        """All lead ids in No Next Action queue with the given status."""
+        leads = (
+            self._no_next_action_query()
+            .filter(Lead.lead_status == lead_status)
+            .with_entities(Lead.id)
+            .all()
+        )
+        return [row[0] for row in leads]
+
+    def bulk_update_no_next_action_status(
+        self,
+        source_status: str,
+        target_status: str,
+        *,
+        reason: str = '',
+        actor: str = 'anonymous',
+    ) -> dict:
+        """Update all No Next Action leads with source_status to target_status."""
+        from app.services.lead_status_service import apply_lead_status_change
+
+        lead_ids = self.get_no_next_action_lead_ids_by_status(source_status)
+        leads_by_id = {
+            lead.id: lead
+            for lead in Lead.query.filter(Lead.id.in_(lead_ids)).all()
+        } if lead_ids else {}
+        successes = 0
+        failures = 0
+        for lead_id in lead_ids:
+            try:
+                lead = leads_by_id.get(lead_id)
+                if lead is None:
+                    failures += 1
+                    continue
+                apply_lead_status_change(
+                    lead, target_status, reason=reason, actor=actor, recompute_action=True,
+                )
+                successes += 1
+            except Exception:
+                db.session.rollback()
+                failures += 1
+        return {
+            'successes': successes,
+            'failures': failures,
+            'total_matched': len(lead_ids),
+        }
 
     def get_needs_review(
         self,

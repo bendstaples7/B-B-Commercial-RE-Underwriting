@@ -203,7 +203,7 @@ class LeadIngestionService:
         self,
         lead,
         connector: GISConnector,
-        import_job_id: int,
+        import_job_id: int | None = None,
     ) -> dict:
         """Attempt a GIS parcel lookup and populate null fields on the lead.
 

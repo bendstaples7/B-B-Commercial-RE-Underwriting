@@ -18,6 +18,7 @@ class Property(db.Model):
     property_state = db.Column(db.String(50), nullable=True)
     property_zip = db.Column(db.String(20), nullable=True)
     property_type = db.Column(db.String(50), nullable=True)
+    assessor_class = db.Column(db.String(10), nullable=True)
     bedrooms = db.Column(db.Integer, nullable=True)
     bathrooms = db.Column(db.Float, nullable=True)
     square_footage = db.Column(db.Integer, nullable=True)

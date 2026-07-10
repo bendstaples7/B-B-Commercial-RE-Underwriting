@@ -13,6 +13,9 @@ from app.models import Lead, LeadTask, LeadTimelineEntry
 from app.services.action_engine_service import ActionEngineService
 
 
+_AUTH_HEADERS = {'X-User-Id': 'test-user'}
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -32,6 +35,7 @@ def _make_lead(app, street, **kwargs):
         recommended_action=None,
         review_required=False,
         unanswered_call_count=0,
+        owner_user_id='test-user',
     )
     defaults.update(kwargs)
     lead = Lead(property_street=street, **defaults)
@@ -75,6 +79,7 @@ class TestBulkSuppress:
                 '/api/leads/bulk/suppress',
                 data=json.dumps({'lead_ids': [lead.id for lead in leads]}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 200
 
@@ -87,6 +92,7 @@ class TestBulkSuppress:
                 '/api/leads/bulk/suppress',
                 data=json.dumps({'lead_ids': lead_ids}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             for lead in leads:
                 db.session.refresh(lead)
@@ -102,6 +108,7 @@ class TestBulkSuppress:
                 '/api/leads/bulk/suppress',
                 data=json.dumps({'lead_ids': lead_ids}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             for lead in leads:
                 db.session.refresh(lead)
@@ -115,6 +122,7 @@ class TestBulkSuppress:
                 '/api/leads/bulk/suppress',
                 data=json.dumps({'lead_ids': [lead.id for lead in leads]}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             data = json.loads(response.data)
             assert data['successes'] == 4
@@ -129,6 +137,7 @@ class TestBulkSuppress:
                 '/api/leads/bulk/suppress',
                 data=json.dumps({'lead_ids': [lead.id, 99991, 99992]}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             data = json.loads(response.data)
             assert data['successes'] == 1
@@ -143,6 +152,7 @@ class TestBulkSuppress:
                 '/api/leads/bulk/suppress',
                 data=json.dumps({'lead_ids': lead_ids}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             for lead in leads:
                 entry = LeadTimelineEntry.query.filter_by(
@@ -157,6 +167,7 @@ class TestBulkSuppress:
                 '/api/leads/bulk/suppress',
                 data=json.dumps({'lead_ids': []}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 400
 
@@ -177,6 +188,7 @@ class TestBulkCreateTask:
                     'task_data': {'title': 'Bulk task', 'task_type': 'custom'},
                 }),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 200
 
@@ -192,6 +204,7 @@ class TestBulkCreateTask:
                     'task_data': {'title': 'Follow up', 'task_type': 'custom'},
                 }),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             for lead in leads:
                 task = LeadTask.query.filter_by(
@@ -211,6 +224,7 @@ class TestBulkCreateTask:
                     'task_data': {'title': 'Outreach', 'task_type': 'custom'},
                 }),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             data = json.loads(response.data)
             assert data['successes'] == 5
@@ -223,6 +237,7 @@ class TestBulkCreateTask:
                 '/api/leads/bulk/create-task',
                 data=json.dumps({'task_data': {'title': 'Test', 'task_type': 'custom'}}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 400
 
@@ -237,6 +252,7 @@ class TestBulkCreateTask:
                     'task_data': {'title': 'Test task', 'task_type': 'custom'},
                 }),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             data = json.loads(response.data)
             assert data['successes'] == 1
@@ -256,6 +272,7 @@ class TestBulkDoNotContact:
                 '/api/leads/bulk/do-not-contact',
                 data=json.dumps({'lead_ids': [lead.id for lead in leads]}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             assert response.status_code == 200
 
@@ -268,6 +285,7 @@ class TestBulkDoNotContact:
                 '/api/leads/bulk/do-not-contact',
                 data=json.dumps({'lead_ids': lead_ids}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             for lead in leads:
                 db.session.refresh(lead)
@@ -283,6 +301,7 @@ class TestBulkDoNotContact:
                 '/api/leads/bulk/do-not-contact',
                 data=json.dumps({'lead_ids': lead_ids}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             for lead in leads:
                 db.session.refresh(lead)
@@ -298,6 +317,7 @@ class TestBulkDoNotContact:
                 '/api/leads/bulk/do-not-contact',
                 data=json.dumps({'lead_ids': lead_ids}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             for task in tasks:
                 db.session.refresh(task)
@@ -311,6 +331,7 @@ class TestBulkDoNotContact:
                 '/api/leads/bulk/do-not-contact',
                 data=json.dumps({'lead_ids': [lead.id for lead in leads]}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             data = json.loads(response.data)
             assert data['successes'] == 4
@@ -324,6 +345,7 @@ class TestBulkDoNotContact:
                 '/api/leads/bulk/do-not-contact',
                 data=json.dumps({'lead_ids': [lead.id, 99995, 99996]}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             data = json.loads(response.data)
             assert data['successes'] == 1
@@ -338,12 +360,108 @@ class TestBulkDoNotContact:
                 '/api/leads/bulk/do-not-contact',
                 data=json.dumps({'lead_ids': lead_ids}),
                 content_type='application/json',
+                headers=_AUTH_HEADERS,
             )
             for lead in leads:
                 entry = LeadTimelineEntry.query.filter_by(
                     lead_id=lead.id, event_type='status_changed'
                 ).first()
                 assert entry is not None
+
+
+# ---------------------------------------------------------------------------
+# POST /api/leads/bulk/update-status
+# ---------------------------------------------------------------------------
+
+class TestBulkUpdateStatus:
+    def test_bulk_update_status_returns_200(self, client, app):
+        with app.app_context():
+            leads = _make_leads_batch(app, 2, base_street='BulkStatus St')
+            response = client.post(
+                '/api/leads/bulk/update-status',
+                data=json.dumps({
+                    'lead_ids': [lead.id for lead in leads],
+                    'status': 'awaiting_skip_trace',
+                }),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+
+    def test_bulk_update_status_updates_leads(self, client, app):
+        with app.app_context():
+            leads = _make_leads_batch(app, 2, base_street='BulkStatus2 St')
+            lead_ids = [lead.id for lead in leads]
+            client.post(
+                '/api/leads/bulk/update-status',
+                data=json.dumps({
+                    'lead_ids': lead_ids,
+                    'status': 'awaiting_skip_trace',
+                }),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            for lead in leads:
+                db.session.refresh(lead)
+                assert lead.lead_status == 'awaiting_skip_trace'
+
+    def test_bulk_update_status_partial_failure_counts(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '1 PartialStatus St')
+            response = client.post(
+                '/api/leads/bulk/update-status',
+                data=json.dumps({
+                    'lead_ids': [lead.id, 99991, 99992],
+                    'status': 'awaiting_skip_trace',
+                }),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            data = json.loads(response.data)
+            assert data['successes'] == 1
+            assert data['failures'] == 2
+            assert 99991 in data['failed_ids']
+
+    def test_bulk_update_status_rejects_other_users_leads(self, client, app):
+        with app.app_context():
+            own_lead = _make_lead(app, '1 OwnStatus St', owner_user_id='test-user')
+            other_lead = _make_lead(app, '2 OtherStatus St', owner_user_id='other-user')
+            response = client.post(
+                '/api/leads/bulk/update-status',
+                data=json.dumps({
+                    'lead_ids': [own_lead.id, other_lead.id],
+                    'status': 'awaiting_skip_trace',
+                }),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            data = json.loads(response.data)
+            assert data['successes'] == 1
+            assert data['failures'] == 1
+            assert other_lead.id in data['failed_ids']
+            db.session.refresh(own_lead)
+            assert own_lead.lead_status == 'awaiting_skip_trace'
+
+    def test_bulk_update_status_missing_lead_ids_returns_400(self, client, app):
+        with app.app_context():
+            response = client.post(
+                '/api/leads/bulk/update-status',
+                data=json.dumps({'status': 'awaiting_skip_trace'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 400
+
+    def test_bulk_update_status_missing_status_returns_400(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '1 MissingStatus St')
+            response = client.post(
+                '/api/leads/bulk/update-status',
+                data=json.dumps({'lead_ids': [lead.id]}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 400
 
 
 # ---------------------------------------------------------------------------

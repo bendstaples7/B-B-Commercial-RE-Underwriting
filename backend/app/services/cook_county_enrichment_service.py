@@ -12,6 +12,10 @@ from app.models.enrichment import DataSource, EnrichmentRecord
 from app.models.lead import Lead
 from app.services.data_source_connector import DataSourceConnector
 from app.services.gis.routing import _resolve_market
+from app.services.building_ownership_backfill import (
+    maybe_schedule_building_ownership_after_commit,
+    maybe_schedule_building_ownership_analysis,
+)
 from app.services.lead_refresh import refresh_lead_scoring
 from app.services.plugins.address_utils import is_chicago_address
 
@@ -158,11 +162,12 @@ def enrich_cook_county_lead(lead_id: int) -> dict:
         lead_id,
         summary,
     )
+    maybe_schedule_building_ownership_analysis(lead)
     return summary
 
 
-def dispatch_cook_county_enrichment(lead_id: int) -> bool:
-    """Enqueue async Cook County enrichment; fall back to sync if broker unavailable."""
+def enqueue_cook_county_enrichment(lead_id: int) -> bool:
+    """Enqueue async Cook County enrichment (no sync fallback)."""
     try:
         from celery_worker import cook_county_enrich_lead_task
         cook_county_enrich_lead_task.apply_async(args=[lead_id], ignore_result=True)
@@ -170,25 +175,32 @@ def dispatch_cook_county_enrichment(lead_id: int) -> bool:
         return True
     except Exception as exc:
         logger.warning(
-            "Could not enqueue cook_county.enrich_lead for lead %s, running sync: %s",
+            "Could not enqueue cook_county.enrich_lead for lead %s: %s",
             lead_id,
             exc,
         )
-        try:
-            enrich_cook_county_lead(lead_id)
-            return True
-        except Exception as sync_exc:
-            logger.error(
-                "Sync Cook County enrichment failed for lead %s: %s",
-                lead_id,
-                sync_exc,
-            )
-            return False
+        return False
+
+
+def dispatch_cook_county_enrichment(lead_id: int) -> bool:
+    """Enqueue async Cook County enrichment; fall back to sync if broker unavailable."""
+    if enqueue_cook_county_enrichment(lead_id):
+        return True
+    try:
+        enrich_cook_county_lead(lead_id)
+        return True
+    except Exception as sync_exc:
+        logger.error(
+            "Sync Cook County enrichment failed for lead %s: %s",
+            lead_id,
+            sync_exc,
+        )
+        return False
 
 
 def schedule_cook_county_enrichment_after_commit(lead_id: int) -> None:
     """Dispatch enrichment only after the current DB transaction commits."""
-    session = db.session
+    session = db.session()
     pending: set[int] = session.info.setdefault("cook_county_enrichment_pending", set())
     pending.add(lead_id)
 
@@ -201,7 +213,7 @@ def schedule_cook_county_enrichment_after_commit(lead_id: int) -> None:
         lead_ids = sess.info.pop("cook_county_enrichment_pending", set())
         sess.info.pop("cook_county_enrichment_listener", None)
         for lid in lead_ids:
-            dispatch_cook_county_enrichment(lid)
+            enqueue_cook_county_enrichment(lid)
 
     @event.listens_for(session, "after_rollback", once=True)
     def _clear_after_rollback(sess) -> None:
@@ -215,6 +227,10 @@ def maybe_dispatch_after_gis_match(lead: Lead, connector) -> None:
     if market != COOK_COUNTY_MARKET:
         return
     schedule_cook_county_enrichment_after_commit(lead.id)
+    # Leads ineligible for enrichment (no PIN, not Chicago) still need building ownership
+    # after GIS match; enriched leads are scheduled at the end of enrich_cook_county_lead.
+    if not plugins_for_lead(lead):
+        maybe_schedule_building_ownership_after_commit(lead)
 
 
 def _commercial_valuation_source_id() -> Optional[int]:

@@ -218,9 +218,9 @@ class CondoFilterService:
             if lead.property_street
         )
 
-        # Condo language detection (assessor_class not on Lead model, pass None)
+        # Condo language detection
         has_condo_lang = any(
-            has_condo_language(lead.property_type, None)
+            has_condo_language(lead.property_type, getattr(lead, 'assessor_class', None))
             for lead in group_leads
         )
 
@@ -316,7 +316,7 @@ class CondoFilterService:
                 'owner_2_first_name': lead.owner_2_first_name,
                 'owner_2_last_name': lead.owner_2_last_name,
                 'property_type': lead.property_type,
-                'assessor_class': None,
+                'assessor_class': getattr(lead, 'assessor_class', None),
             }
             for lead in analysis.leads.all()
         ]
