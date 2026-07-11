@@ -18,6 +18,11 @@ import {
   createLogCallRowAction,
   createLogNoteRowAction,
 } from './queueRowActions'
+import {
+  createAddToMailBatchRowAction,
+  resolveBulkActions,
+} from './queueBulkActions'
+import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 
 export interface TodaysActionQueueProps {
@@ -28,6 +33,8 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [page, setPage] = useState(1)
+  const { selectedIds, onSelectionChange, onPageChangeWithClear, clearSelection } =
+    useQueueSelection()
 
   const { data } = useQuery({
     queryKey: ['queue-todays-action', page],
@@ -39,9 +46,9 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
-  const handlePageChange = (newPage: number) => {
+  const handlePageChange = onPageChangeWithClear((newPage) => {
     setPage(clampPage(newPage, totalPages))
-  }
+  })
 
   const overdueCount = rows.filter((r) => r.follow_up_overdue).length
   const callCount = rows.filter(
@@ -57,6 +64,15 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
 
   const fromQueue = { key: 'todays-action', label: "Today's Action" }
   const navigateOptions = { navigate, fromQueue }
+  const bulkCtx = {
+    queryClient,
+    queryKey: 'queue-todays-action',
+    extraQueryKeys,
+    onAfterAction: () => {
+      clearSelection()
+      setPage(1)
+    },
+  }
   const taskOptions = {
     queryClient,
     queryKey: 'queue-todays-action',
@@ -65,10 +81,13 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
   }
 
   const rowActions: RowAction[] = [
+    createAddToMailBatchRowAction(bulkCtx),
     createLogCallRowAction(navigateOptions),
     createLogNoteRowAction(navigateOptions),
     createCreateTaskRowAction(taskOptions),
   ]
+
+  const bulkActions = resolveBulkActions(['add_to_mail_batch', 'create_task'], bulkCtx)
 
   return (
     <Box data-testid="todays-action-queue">
@@ -105,7 +124,10 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
           rows={rows}
           total={total}
           fromQueue={fromQueue}
+          selectedIds={selectedIds}
+          onSelectionChange={onSelectionChange}
           rowActions={rowActions}
+          bulkActions={bulkActions}
           {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
         />
       )}

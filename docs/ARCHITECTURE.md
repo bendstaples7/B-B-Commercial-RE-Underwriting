@@ -12,6 +12,7 @@ Update this doc when ownership changes.
 | Activity logging UI | [`LogActivityModal.tsx`](../frontend/src/components/LogActivityModal.tsx) + [`LogNoteForm`](../frontend/src/components/LogNoteForm.tsx) / [`LogCallForm`](../frontend/src/components/LogCallForm.tsx) / [`LogEmailForm`](../frontend/src/components/LogEmailForm.tsx) | Inline log forms, `window.prompt`, direct `callLogService` from queue row actions |
 | Activity timeline (UI) | [`LeadTimeline.tsx`](../frontend/src/components/LeadTimeline.tsx) via `commandCenterService.getTimeline` | New timeline components on alternate APIs |
 | Work queues (UI) | [`*Queue.tsx`](../frontend/src/components/) components + `queueService` | `HubSpotLeadViews`, embedded queue copies in pages |
+| Queue bulk actions / multi-select | [`queueBulkActions.tsx`](../frontend/src/components/queueBulkActions.tsx) + [`useQueueSelection.ts`](../frontend/src/hooks/useQueueSelection.ts) + [`QueueTable.tsx`](../frontend/src/components/QueueTable.tsx) | Per-queue parallel bulk handlers or selection state |
 | Queue pagination | [`pagination.ts`](../frontend/src/utils/pagination.ts) | Local page math in queue components |
 | Queue context banners | [`deriveQueueContext.ts`](../frontend/src/utils/deriveQueueContext.ts) | Inline banner logic in detail pages |
 | Lead status UI | [`LeadStatusSelector.tsx`](../frontend/src/components/LeadStatusSelector.tsx) | Inline status Select + reason fields |

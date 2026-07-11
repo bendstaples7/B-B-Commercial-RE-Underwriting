@@ -16,6 +16,11 @@ import {
   createLogCallRowAction,
   createLogNoteRowAction,
 } from './queueRowActions'
+import {
+  createAddToMailBatchRowAction,
+  resolveBulkActions,
+} from './queueBulkActions'
+import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { SuppressLeadDialog } from './SuppressLeadDialog'
 
 export function PreviouslyWarmQueue() {
@@ -23,6 +28,8 @@ export function PreviouslyWarmQueue() {
   const navigate = useNavigate()
   const [suppressTarget, setSuppressTarget] = useState<QueueRow | null>(null)
   const [page, setPage] = useState(1)
+  const { selectedIds, onSelectionChange, onPageChangeWithClear, clearSelection } =
+    useQueueSelection()
 
   const { data } = useQuery({
     queryKey: ['queue-previously-warm', page],
@@ -34,14 +41,15 @@ export function PreviouslyWarmQueue() {
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
-  const handlePageChange = (newPage: number) => {
+  const handlePageChange = onPageChangeWithClear((newPage) => {
     setPage(clampPage(newPage, totalPages))
-  }
+  })
 
   const handleSuppressConfirm = async () => {
     if (!suppressTarget) return
     await commandCenterService.suppress(suppressTarget.id)
     queryClient.invalidateQueries({ queryKey: ['queue-previously-warm'] })
+    clearSelection()
     setPage(1)
     setSuppressTarget(null)
   }
@@ -64,8 +72,17 @@ export function PreviouslyWarmQueue() {
 
   const fromQueue = { key: 'previously-warm', label: 'Previously Warm' }
   const navigateOptions = { navigate, fromQueue }
+  const bulkCtx = {
+    queryClient,
+    queryKey: 'queue-previously-warm',
+    onAfterAction: () => {
+      clearSelection()
+      setPage(1)
+    },
+  }
 
   const rowActions: RowAction[] = [
+    createAddToMailBatchRowAction(bulkCtx),
     createLogCallRowAction(navigateOptions),
     createLogNoteRowAction(navigateOptions),
     createCreateTaskRowAction({
@@ -83,6 +100,11 @@ export function PreviouslyWarmQueue() {
     },
   ]
 
+  const bulkActions = resolveBulkActions(
+    ['add_to_mail_batch', 'create_task', 'suppress'],
+    bulkCtx,
+  )
+
   return (
     <Box data-testid="previously-warm-queue">
       <Typography variant="h6" gutterBottom>
@@ -96,7 +118,10 @@ export function PreviouslyWarmQueue() {
         rows={rows}
         total={total}
         fromQueue={fromQueue}
+        selectedIds={selectedIds}
+        onSelectionChange={onSelectionChange}
         rowActions={rowActions}
+        bulkActions={bulkActions}
         extraColumns={extraColumns}
         {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
       />

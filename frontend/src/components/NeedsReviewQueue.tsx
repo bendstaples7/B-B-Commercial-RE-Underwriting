@@ -7,7 +7,7 @@
  * Requirements: 6.7, 18.1
  */
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Box, Typography } from '@mui/material'
 import AnalyticsIcon from '@mui/icons-material/Analytics'
 import HistoryIcon from '@mui/icons-material/History'
@@ -16,11 +16,16 @@ import { QueueTable } from './QueueTable'
 import type { RowAction, ExtraColumn } from './QueueTable'
 import { queueService } from '@/services/api'
 import type { QueueRow } from '@/types'
+import { resolveBulkActions } from './queueBulkActions'
+import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 
 export function NeedsReviewQueue() {
   const [page, setPage] = useState(1)
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const { selectedIds, onSelectionChange, onPageChangeWithClear, clearSelection } =
+    useQueueSelection()
 
   const { data } = useQuery({
     queryKey: ['queue-needs-review', page],
@@ -32,9 +37,9 @@ export function NeedsReviewQueue() {
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
-  const handlePageChange = (newPage: number) => {
+  const handlePageChange = onPageChangeWithClear((newPage) => {
     setPage(clampPage(newPage, totalPages))
-  }
+  })
 
   const extraColumns: ExtraColumn[] = [
     {
@@ -54,13 +59,21 @@ export function NeedsReviewQueue() {
 
   const fromQueue = { key: 'needs-review', label: 'Needs Review' }
 
+  const bulkCtx = {
+    queryClient,
+    queryKey: 'queue-needs-review',
+    onAfterAction: () => {
+      clearSelection()
+      setPage(1)
+    },
+  }
+
   const rowActions: RowAction[] = [
     {
       label: 'View Analysis',
       icon: <AnalyticsIcon fontSize="small" />,
       testId: 'action-view-analysis',
       onClick: async (row: QueueRow) => {
-        // Navigate to lead detail — analysis tab
         navigate(`/leads/${row.id}?tab=analysis`)
       },
     },
@@ -69,11 +82,12 @@ export function NeedsReviewQueue() {
       icon: <HistoryIcon fontSize="small" />,
       testId: 'action-view-activity',
       onClick: async (row: QueueRow) => {
-        // Navigate to lead detail — timeline tab
         navigate(`/leads/${row.id}?tab=timeline`)
       },
     },
   ]
+
+  const bulkActions = resolveBulkActions(['create_task'], bulkCtx)
 
   return (
     <Box data-testid="needs-review-queue">
@@ -88,7 +102,10 @@ export function NeedsReviewQueue() {
         rows={rows}
         total={total}
         fromQueue={fromQueue}
+        selectedIds={selectedIds}
+        onSelectionChange={onSelectionChange}
         rowActions={rowActions}
+        bulkActions={bulkActions}
         extraColumns={extraColumns}
         {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
       />

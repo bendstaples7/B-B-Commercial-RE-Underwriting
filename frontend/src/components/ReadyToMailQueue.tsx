@@ -22,7 +22,7 @@ import { MailBatchSummary } from './MailBatchSummary'
 import { MailQueueStagedAccordion } from './MailQueueStagedAccordion'
 import { MailCampaignsPanel } from './MailCampaignsPanel'
 import { QueueTable } from './QueueTable'
-import type { BulkAction, RowAction, ExtraColumn } from './QueueTable'
+import type { ExtraColumn, RowAction } from './QueueTable'
 import { queueService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
@@ -32,20 +32,19 @@ import {
   formatEnqueueSummary,
   type EnqueueCounts,
 } from '@/utils/formatEnqueueSummary'
-import type { QueueRow } from '@/types'
-import PostAddIcon from '@mui/icons-material/PostAdd'
 import type { EnqueuePreviewResult } from '@/services/openLetterApi'
-
-function invalidateMailQueries(queryClient: ReturnType<typeof useQueryClient>) {
-  queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
-  queryClient.invalidateQueries({ queryKey: ['queue-mail-candidates'] })
-  queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
-}
+import {
+  createAddToMailBatchRowAction,
+  invalidateMailQueries,
+  resolveBulkActions,
+} from './queueBulkActions'
+import { useQueueSelection } from '@/hooks/useQueueSelection'
 
 export function ReadyToMailQueue() {
   const queryClient = useQueryClient()
   const [candidatesPage, setCandidatesPage] = useState(1)
-  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const { selectedIds, onSelectionChange, onPageChangeWithClear, clearSelection } =
+    useQueueSelection()
   const [snackbarMessage, setSnackbarMessage] = useState<string | null>(null)
   const [snackbarSeverity, setSnackbarSeverity] = useState<'success' | 'error'>('success')
   const [confirmAdd, setConfirmAdd] = useState<{
@@ -78,21 +77,11 @@ export function ReadyToMailQueue() {
     )
   }
 
-  const enqueueMutation = useMutation({
-    mutationFn: (leadIds: number[]) => openLetterService.enqueue(leadIds),
-    onSuccess: (result) => {
-      invalidateMailQueries(queryClient)
-      setSelectedIds([])
-      showEnqueueFeedback(result)
-    },
-    onError: showEnqueueError,
-  })
-
   const enqueueCandidatesMutation = useMutation({
     mutationFn: (limit?: number) => openLetterService.enqueueCandidates(limit),
     onSuccess: (result) => {
       invalidateMailQueries(queryClient)
-      setSelectedIds([])
+      clearSelection()
       setCandidatesPage(1)
       showEnqueueFeedback(result)
     },
@@ -111,21 +100,9 @@ export function ReadyToMailQueue() {
   const batchMinimum = queueData?.batch_minimum ?? 50
   const neededForMinimum = batchMinimum - queuedCount
 
-  const handleCandidatesPageChange = (newPage: number) => {
+  const handleCandidatesPageChange = onPageChangeWithClear((newPage) => {
     setCandidatesPage(clampPage(newPage, candidateTotalPages))
-    setSelectedIds([])
-  }
-
-  const buildBulkResult = (result: EnqueueCounts) => ({
-    successes: result.added,
-    failures: result.skipped + result.invalid,
-    message: formatEnqueueSummary(result),
   })
-
-  const handleAddToBatch = async (leadIds: number[]) => {
-    const result = await enqueueMutation.mutateAsync(leadIds)
-    return buildBulkResult(result)
-  }
 
   const runEnqueueCandidates = async (limit?: number) => {
     setConfirmAdd(null)
@@ -151,30 +128,22 @@ export function ReadyToMailQueue() {
   }
 
   const isEnqueueing =
-    enqueueMutation.isPending
-    || enqueueCandidatesMutation.isPending
+    enqueueCandidatesMutation.isPending
     || previewMutation.isPending
 
   const fromQueue = { key: 'mail-candidates', label: 'Ready to Mail' }
 
-  const rowActions: RowAction[] = [
-    {
-      label: 'Add to batch',
-      icon: <PostAddIcon fontSize="small" />,
-      testId: 'add-to-batch-row-action',
-      onClick: async (row: QueueRow) => {
-        await handleAddToBatch([row.id])
-      },
-    },
-  ]
+  const bulkCtx = {
+    queryClient,
+    queryKey: 'queue-mail-candidates',
+    extraQueryKeys: ['mail-queue', 'queue-counts'],
+    onAfterAction: clearSelection,
+    onEnqueueResult: showEnqueueFeedback,
+    onEnqueueError: showEnqueueError,
+  }
 
-  const bulkActions: BulkAction[] = [
-    {
-      label: 'Add to batch',
-      testId: 'add-to-batch-bulk-action',
-      onClick: handleAddToBatch,
-    },
-  ]
+  const rowActions: RowAction[] = [createAddToMailBatchRowAction(bulkCtx)]
+  const bulkActions = resolveBulkActions(['add_to_mail_batch'], bulkCtx)
 
   const lastMailedColumn: ExtraColumn = {
     key: 'last_mailed_at',
@@ -274,7 +243,7 @@ export function ReadyToMailQueue() {
           total={candidateTotal}
           fromQueue={fromQueue}
           selectedIds={selectedIds}
-          onSelectionChange={setSelectedIds}
+          onSelectionChange={onSelectionChange}
           rowActions={rowActions}
           bulkActions={bulkActions}
           extraColumns={[lastMailedColumn, lastSaleColumn]}

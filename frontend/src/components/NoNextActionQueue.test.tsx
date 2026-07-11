@@ -21,8 +21,17 @@ import { queueService, commandCenterService } from '@/services/api'
 import type { LeadStatus } from '@/types'
 
 vi.mock('@/services/api', () => ({
-  queueService: { getNoNextAction: vi.fn() },
+  queueService: {
+    getNoNextAction: vi.fn(),
+    getNoNextActionStatusCounts: vi.fn().mockResolvedValue({}),
+    getNoNextActionLeadIds: vi.fn(),
+    bulkUpdateNoNextActionStatus: vi.fn(),
+  },
   commandCenterService: { suppress: vi.fn() },
+  bulkActionService: {
+    bulkSuppress: vi.fn(),
+    bulkUpdateStatus: vi.fn(),
+  },
 }))
 
 const mockNavigate = vi.hoisted(() => vi.fn())
