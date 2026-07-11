@@ -136,8 +136,10 @@ export function ReadyToMailQueue() {
   const bulkCtx = {
     queryClient,
     queryKey: 'queue-mail-candidates',
-    extraQueryKeys: ['mail-queue', 'queue-counts'],
-    onAfterAction: clearSelection,
+    onAfterAction: () => {
+      clearSelection()
+      setCandidatesPage(1)
+    },
     onEnqueueResult: showEnqueueFeedback,
     onEnqueueError: showEnqueueError,
   }

@@ -130,16 +130,11 @@ export function createReactivateBulkAction(ctx: QueueBulkActionContext): BulkAct
     label: 'Reactivate',
     testId: 'bulk-reactivate',
     onClick: async (ids) => {
-      let successes = 0
-      let failures = 0
-      for (const id of ids) {
-        try {
-          await commandCenterService.reactivate(id)
-          successes += 1
-        } catch {
-          failures += 1
-        }
-      }
+      const results = await Promise.allSettled(
+        ids.map((id) => commandCenterService.reactivate(id)),
+      )
+      const successes = results.filter((r) => r.status === 'fulfilled').length
+      const failures = results.length - successes
       invalidateAfterQueueAction(ctx)
       return { successes, failures }
     },

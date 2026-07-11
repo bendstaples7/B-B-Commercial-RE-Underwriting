@@ -88,7 +88,10 @@ export function PreviouslyWarmQueue() {
     createCreateTaskRowAction({
       queryClient,
       queryKey: 'queue-previously-warm',
-      onAfterAction: () => setPage(1),
+      onAfterAction: () => {
+        clearSelection()
+        setPage(1)
+      },
     }),
     {
       label: 'Suppress',

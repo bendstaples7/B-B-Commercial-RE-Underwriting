@@ -77,7 +77,10 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
     queryClient,
     queryKey: 'queue-todays-action',
     extraQueryKeys,
-    onAfterAction: () => setPage(1),
+    onAfterAction: () => {
+      clearSelection()
+      setPage(1)
+    },
   }
 
   const rowActions: RowAction[] = [

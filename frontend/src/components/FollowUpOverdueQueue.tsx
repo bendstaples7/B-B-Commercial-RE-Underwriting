@@ -96,7 +96,10 @@ export function FollowUpOverdueQueue() {
     createCreateTaskRowAction({
       queryClient,
       queryKey: 'queue-follow-up-overdue',
-      onAfterAction: () => setPage(1),
+      onAfterAction: () => {
+        clearSelection()
+        setPage(1)
+      },
     }),
   ]
 
