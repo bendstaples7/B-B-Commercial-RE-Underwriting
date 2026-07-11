@@ -491,7 +491,9 @@ describe('LogCallForm', () => {
 
       await waitFor(() => {
         expect(mockLogCall).toHaveBeenCalled()
-        expect(mockMarkHubSpotTaskDone).toHaveBeenCalledWith(1, 42)
+        expect(mockMarkHubSpotTaskDone).toHaveBeenCalledWith(1, 42, {
+          idNamespace: 'crm_task',
+        })
         expect(onSaved).toHaveBeenCalledWith(
           expect.objectContaining({ event_type: 'call_logged' }),
           { completedHubSpotTaskId: 42 },

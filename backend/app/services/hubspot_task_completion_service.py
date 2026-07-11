@@ -113,24 +113,36 @@ def _complete_lead_task_by_id(
     task_id: int,
     now: datetime,
 ) -> HubSpotTaskLocalCompletion | None:
-    lead_task = (
-        LeadTask.query
-        .filter_by(id=task_id, lead_id=lead_id)
-        .filter(LeadTask.hubspot_task_id.isnot(None))
-        .first()
-    )
-    if lead_task is None:
+    """Atomically complete an open HubSpot-linked LeadTask by id.
+
+    Uses ``UPDATE ... WHERE status='open' RETURNING`` so concurrent completers
+    cannot both succeed (avoids duplicate timeline / HubSpot sync).
+    """
+    from sqlalchemy import text as sa_text
+
+    result = db.session.execute(
+        sa_text("""
+            UPDATE lead_tasks
+            SET status = 'completed',
+                completed_at = :now
+            WHERE id = :task_id
+              AND lead_id = :lead_id
+              AND status = 'open'
+              AND hubspot_task_id IS NOT NULL
+            RETURNING id, title, hubspot_task_id
+        """),
+        {'task_id': task_id, 'lead_id': lead_id, 'now': now},
+    ).fetchone()
+
+    if result is None:
         return None
-    if lead_task.status != 'open':
-        return None
-    lead_task.status = 'completed'
-    lead_task.completed_at = now
-    db.session.add(lead_task)
-    _complete_crm_task_by_hubspot_id(lead_task.hubspot_task_id, now)
+
+    hs_id = result[2]
+    _complete_crm_task_by_hubspot_id(hs_id, now)
     return HubSpotTaskLocalCompletion(
-        task_id=lead_task.id,
-        title=lead_task.title,
-        hubspot_task_id=lead_task.hubspot_task_id,
+        task_id=result[0],
+        title=result[1],
+        hubspot_task_id=hs_id,
     )
 
 
