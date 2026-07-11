@@ -157,15 +157,7 @@ def _update_hubspot_task_completed(
             return None
         return _complete_legacy_crm_task(lead_id, task_id, now)
 
-    completed = _complete_lead_task_by_id(lead_id, task_id, now)
-    if completed is not None:
-        return completed
-
-    # Migration fallback: unprefixed CRM ids when no LeadTask row matches.
-    crm_match = Task.query.filter_by(id=task_id, source='hubspot_import').first()
-    if crm_match is not None and _crm_task_linked_to_lead(crm_match, lead_id):
-        return _complete_legacy_crm_task(lead_id, task_id, now)
-    return None
+    return _complete_lead_task_by_id(lead_id, task_id, now)
 
 
 def _append_hubspot_task_timeline(

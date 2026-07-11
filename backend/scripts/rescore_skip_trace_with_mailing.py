@@ -53,7 +53,7 @@ def main() -> int:
                 logger.info('would rescore lead_id=%s status=%s', lead.id, lead.lead_status)
                 continue
             try:
-                LeadScoringEngine.score_and_persist(lead.id)
+                LeadScoringEngine().score_and_persist(lead.id)
                 db.session.refresh(lead)
                 logger.info(
                     'rescored lead_id=%s status=%s action=%s',

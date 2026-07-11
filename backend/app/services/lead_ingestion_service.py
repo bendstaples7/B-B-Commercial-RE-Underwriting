@@ -275,6 +275,7 @@ class LeadIngestionService:
 
             if outcome['match_found'] and getattr(lead, 'id', None):
                 try:
+                    from app import db
                     from app.services.contact_service import ContactService
                     with db.session.begin_nested():
                         ContactService().upsert_owners_from_lead(lead, commit=False)
