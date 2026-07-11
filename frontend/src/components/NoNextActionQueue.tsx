@@ -14,7 +14,7 @@ import BlockIcon from '@mui/icons-material/Block'
 import EditIcon from '@mui/icons-material/Edit'
 import { useNavigate } from 'react-router-dom'
 import { QueueTable } from './QueueTable'
-import type { BulkAction, RowAction, ExtraColumn } from './QueueTable'
+import type { RowAction, ExtraColumn } from './QueueTable'
 import {
   queueService,
   commandCenterService,
@@ -22,6 +22,8 @@ import {
 } from '@/services/api'
 import type { LeadStatus, QueueRow } from '@/types'
 import { createLogNoteRowAction } from './queueRowActions'
+import { resolveBulkActions } from './queueBulkActions'
+import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { SuppressLeadDialog } from './SuppressLeadDialog'
 import { BulkStatusUpdateDialog } from './BulkStatusUpdateDialog'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
@@ -40,7 +42,8 @@ export function NoNextActionQueue() {
   const [page, setPage] = useState(1)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const { selectedIds, onSelectionChange, onPageChangeWithClear, clearSelection } =
+    useQueueSelection()
   const [suppressTarget, setSuppressTarget] = useState<QueueRow | null>(null)
   const [suppressError, setSuppressError] = useState<string | null>(null)
   const [selectError, setSelectError] = useState<string | null>(null)
@@ -65,10 +68,9 @@ export function NoNextActionQueue() {
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
-  const handlePageChange = (newPage: number) => {
+  const handlePageChange = onPageChangeWithClear((newPage) => {
     setPage(clampPage(newPage, totalPages))
-    setSelectedIds([])
-  }
+  })
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['queue-no-next-action'] })
@@ -83,7 +85,7 @@ export function NoNextActionQueue() {
       await commandCenterService.suppress(suppressTarget.id)
       invalidate()
       setPage(1)
-      setSelectedIds([])
+      clearSelection()
       setSuppressTarget(null)
     } catch (err) {
       console.error('[NoNextActionQueue] Suppress failed:', err)
@@ -99,13 +101,13 @@ export function NoNextActionQueue() {
 
   const selectAllOnPageForStatus = (status: string) => {
     const ids = rows.filter((r) => r.lead_status === status).map((r) => r.id)
-    setSelectedIds(ids)
+    onSelectionChange(ids)
   }
 
   const selectAllInQueueForStatus = async (status: string) => {
     try {
       const result = await queueService.getNoNextActionLeadIds(status)
-      setSelectedIds(result.lead_ids)
+      onSelectionChange(result.lead_ids)
       setSelectError(null)
     } catch (err) {
       console.error('[NoNextActionQueue] Failed to load queue lead IDs:', err)
@@ -148,28 +150,32 @@ export function NoNextActionQueue() {
     },
   ]
 
-  const bulkActions: BulkAction[] = [
-    {
-      label: 'Suppress',
-      testId: 'bulk-suppress',
-      onClick: async (ids) => {
-        setBulkError(null)
-        try {
-          const result = await bulkActionService.bulkSuppress(ids)
-          invalidate()
-          setSelectedIds([])
-          setPage(1)
-          return result
-        } catch (err) {
-          console.error('[NoNextActionQueue] Bulk suppress failed:', err)
-          setBulkError(
-            err instanceof Error ? err.message : 'Bulk suppress failed. Please try again.',
-          )
-          throw err
-        }
-      },
+  const bulkCtx = {
+    queryClient,
+    queryKey: 'queue-no-next-action',
+    extraQueryKeys: ['queue-no-next-action-status-counts', 'queue-counts'],
+    onAfterAction: () => {
+      clearSelection()
+      setPage(1)
+      setBulkError(null)
     },
-  ]
+  }
+
+  const bulkActions = resolveBulkActions(['suppress'], bulkCtx).map((action) => ({
+    ...action,
+    onClick: async (ids: number[]) => {
+      setBulkError(null)
+      try {
+        return await action.onClick(ids)
+      } catch (err) {
+        console.error('[NoNextActionQueue] Bulk suppress failed:', err)
+        setBulkError(
+          err instanceof Error ? err.message : 'Bulk suppress failed. Please try again.',
+        )
+        throw err
+      }
+    },
+  }))
 
   const handleBulkStatusConfirm = async (status: LeadStatus, reason: string) => {
     setBulkError(null)
@@ -184,7 +190,7 @@ export function NoNextActionQueue() {
         await bulkActionService.bulkUpdateStatus(selectedIds, status, reason)
       }
       invalidate()
-      setSelectedIds([])
+      clearSelection()
       setPage(1)
       setQueueWideSourceStatus(null)
       setStatusDialogOpen(false)
@@ -279,7 +285,7 @@ export function NoNextActionQueue() {
         rowActions={rowActions}
         extraColumns={extraColumns}
         selectedIds={selectedIds}
-        onSelectionChange={setSelectedIds}
+        onSelectionChange={onSelectionChange}
         bulkActions={bulkActions}
         {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
       />

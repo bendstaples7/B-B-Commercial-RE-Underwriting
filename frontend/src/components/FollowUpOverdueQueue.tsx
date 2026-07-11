@@ -2,14 +2,23 @@
  * FollowUpOverdueQueue — Follow-Up Overdue queue view.
  */
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Box, Chip, Typography } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
 import { QueueTable } from './QueueTable'
 import type { RowAction, ExtraColumn } from './QueueTable'
 import { queueService } from '@/services/api'
 import type { QueueRow } from '@/types'
-import { createLogCallRowAction, createLogNoteRowAction } from './queueRowActions'
+import {
+  createCreateTaskRowAction,
+  createLogCallRowAction,
+  createLogNoteRowAction,
+} from './queueRowActions'
+import {
+  createAddToMailBatchRowAction,
+  resolveBulkActions,
+} from './queueBulkActions'
+import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 
 function computeDaysOverdue(lastContactDate: string | null): number | null {
@@ -23,6 +32,9 @@ function computeDaysOverdue(lastContactDate: string | null): number | null {
 export function FollowUpOverdueQueue() {
   const [page, setPage] = useState(1)
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const { selectedIds, onSelectionChange, onPageChangeWithClear, clearSelection } =
+    useQueueSelection()
 
   const { data } = useQuery({
     queryKey: ['queue-follow-up-overdue', page],
@@ -34,9 +46,9 @@ export function FollowUpOverdueQueue() {
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
-  const handlePageChange = (newPage: number) => {
+  const handlePageChange = onPageChangeWithClear((newPage) => {
     setPage(clampPage(newPage, totalPages))
-  }
+  })
 
   const extraColumns: ExtraColumn[] = [
     {
@@ -68,11 +80,30 @@ export function FollowUpOverdueQueue() {
 
   const fromQueue = { key: 'follow-up-overdue', label: 'Follow-Up Overdue' }
   const navigateOptions = { navigate, fromQueue }
+  const bulkCtx = {
+    queryClient,
+    queryKey: 'queue-follow-up-overdue',
+    onAfterAction: () => {
+      clearSelection()
+      setPage(1)
+    },
+  }
 
   const rowActions: RowAction[] = [
+    createAddToMailBatchRowAction(bulkCtx),
     createLogCallRowAction(navigateOptions),
     createLogNoteRowAction(navigateOptions),
+    createCreateTaskRowAction({
+      queryClient,
+      queryKey: 'queue-follow-up-overdue',
+      onAfterAction: () => {
+        clearSelection()
+        setPage(1)
+      },
+    }),
   ]
+
+  const bulkActions = resolveBulkActions(['add_to_mail_batch', 'create_task'], bulkCtx)
 
   return (
     <Box data-testid="follow-up-overdue-queue">
@@ -87,7 +118,10 @@ export function FollowUpOverdueQueue() {
         rows={rows}
         total={total}
         fromQueue={fromQueue}
+        selectedIds={selectedIds}
+        onSelectionChange={onSelectionChange}
         rowActions={rowActions}
+        bulkActions={bulkActions}
         extraColumns={extraColumns}
         {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
       />

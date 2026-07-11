@@ -5,11 +5,20 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { TodaysActionQueue } from './TodaysActionQueue'
 import { queueService, leadTaskService } from '@/services/api'
+import openLetterService from '@/services/openLetterApi'
 import type { LeadStatus } from '@/types'
 
 vi.mock('@/services/api', () => ({
   queueService: { getTodaysAction: vi.fn() },
   leadTaskService: { createTask: vi.fn() },
+  bulkActionService: { bulkCreateTask: vi.fn() },
+  commandCenterService: { reactivate: vi.fn(), suppress: vi.fn() },
+}))
+
+vi.mock('@/services/openLetterApi', () => ({
+  default: {
+    enqueue: vi.fn(),
+  },
 }))
 
 const mockNavigate = vi.hoisted(() => vi.fn())
@@ -22,31 +31,36 @@ vi.mock('react-router-dom', async () => {
   }
 })
 
-function makeQueuePage(total: number, perPage = 20, page = 1) {
+function makeQueuePage(total: number, perPage = 20, page = 1, rowCount = 1) {
+  const baseRow = {
+    owner_first_name: 'A',
+    owner_last_name: 'B',
+    property_street: '1 St',
+    property_city: 'C',
+    property_state: 'IL',
+    lead_score: 50,
+    lead_status: 'mailing_no_contact_made' as LeadStatus,
+    recommended_action: 'mail_ready' as const,
+    recommended_contact_method: 'direct_mail' as const,
+    has_property_match: true,
+    last_contact_date: null,
+    last_hubspot_sync_at: null,
+    hubspot_deal_stage: null,
+    follow_up_overdue: false,
+    review_required: false,
+    review_reason: null,
+    review_triggered_at: null,
+    unanswered_call_count: 0,
+    is_warm: false,
+  }
+  const rows = Array.from({ length: rowCount }, (_, i) => ({
+    ...baseRow,
+    id: i + 1,
+    owner_first_name: String.fromCharCode(65 + i),
+    property_street: `${i + 1} St`,
+  }))
   return {
-    rows: [
-      {
-        id: 1,
-        owner_first_name: 'A',
-        owner_last_name: 'B',
-        property_street: '1 St',
-        property_city: 'C',
-        property_state: 'IL',
-        lead_score: 50,
-        lead_status: 'mailing_no_contact_made' as LeadStatus,
-        recommended_action: null,
-        has_property_match: true,
-        last_contact_date: null,
-        last_hubspot_sync_at: null,
-        hubspot_deal_stage: null,
-        follow_up_overdue: false,
-        review_required: false,
-        review_reason: null,
-        review_triggered_at: null,
-        unanswered_call_count: 0,
-        is_warm: false,
-      },
-    ],
+    rows,
     total,
     page,
     per_page: perPage,
@@ -121,6 +135,41 @@ describe('TodaysActionQueue', () => {
     expect(screen.queryByTestId('queue-table')).not.toBeInTheDocument()
   })
 
+  it('renders selection checkboxes and bulk add-to-mail-batch action', async () => {
+    const user = userEvent.setup()
+    vi.mocked(queueService.getTodaysAction).mockResolvedValue(makeQueuePage(5, 20, 1, 2))
+    vi.mocked(openLetterService.enqueue).mockResolvedValue({
+      added: 2,
+      skipped: 0,
+      invalid: 0,
+      queued_count: 2,
+      batch_minimum: 50,
+      allow_send_below_minimum: false,
+      can_send: false,
+      items: [],
+    })
+
+    renderComponent()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('queue-table')).toBeInTheDocument()
+    })
+
+    expect(screen.getByTestId('select-all-checkbox')).toBeInTheDocument()
+
+    await user.click(screen.getByTestId('select-all-checkbox'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('bulk-action-bar')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByTestId('add-to-batch-bulk-action'))
+
+    await waitFor(() => {
+      expect(openLetterService.enqueue).toHaveBeenCalledWith([1, 2])
+    })
+  })
+
   it('Log Call navigates to lead detail with log=call deep link', async () => {
     const user = userEvent.setup()
     vi.mocked(queueService.getTodaysAction).mockResolvedValue(makeQueuePage(5))
@@ -174,7 +223,7 @@ describe('TodaysActionQueue', () => {
     await waitFor(() => {
       expect(leadTaskService.createTask).toHaveBeenCalledWith(1, {
         title: 'Follow up',
-        task_type: 'call_owner_today',
+        task_type: 'add_to_mail_batch',
       })
       expect(queueService.getTodaysAction).toHaveBeenCalledWith(1, 20)
     })
