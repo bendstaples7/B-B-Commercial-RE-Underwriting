@@ -573,9 +573,14 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
   return (
     <Box component="section" aria-labelledby="marketing-lists-heading" sx={{ px: embedded ? 0 : { xs: 1, sm: 2 } }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h5" id="marketing-lists-heading" component="h2">
-          {embedded ? 'Marketing Lists' : 'Outreach Lists'}
-        </Typography>
+        <Box>
+          <Typography variant="h5" id="marketing-lists-heading" component="h2">
+            {embedded ? 'Marketing Lists' : 'Outreach Lists'}
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Audience membership only. Ready to Mail is the batch queue for Open Letter sends.
+          </Typography>
+        </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Button
             variant="outlined"

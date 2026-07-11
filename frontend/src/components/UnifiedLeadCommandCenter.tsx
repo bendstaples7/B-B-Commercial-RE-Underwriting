@@ -42,6 +42,7 @@ import openLetterService from '@/services/openLetterApi'
 import { deriveQueueContext } from '@/utils/deriveQueueContext'
 import { parseLogActivityParam, buildLeadUrl } from '@/utils/queueLogNavigation'
 import { isFromQueueState, fromQueueFromKey, queuePath, type FromQueueState } from '@/utils/fromQueue'
+import { primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import {
   LEAD_WORKSPACE_STALE_MS,
   prefetchAdjacentQueueLeads,
@@ -112,9 +113,11 @@ function StickyHeader({
   const navigate = useNavigate()
 
   const ownerName =
-    [commandCenterData.owner_first_name, commandCenterData.owner_last_name]
-      .filter(Boolean)
-      .join(' ') || 'Unknown Owner'
+    primaryOwnerDisplayName(
+      commandCenterData.contacts,
+      commandCenterData.owner_first_name,
+      commandCenterData.owner_last_name,
+    ) || 'Unknown Owner'
 
   const address = [
     commandCenterData.property_street,

@@ -436,6 +436,30 @@ def compute_structured_motivation_score(lead, *, signals: Optional[list[Extracte
     return _cap_score(sum(s.points for s in extracted), category)
 
 
+def notes_keywords_points(signals: list[ExtractedSignal]) -> float:
+    """Attribution-only: NOTES_KEYWORD contribution already inside structured_motivation."""
+    return sum(s.points for s in signals if s.signal_type == 'NOTES_KEYWORD')
+
+
+def motivation_component_attribution(
+    lead,
+    *,
+    signals: Optional[list[ExtractedSignal]] = None,
+) -> dict[str, float]:
+    """Named components for score_details / MotivationSignalsPanel.
+
+    ``structured_motivation`` is the capped product score (``lead.motivation_score``).
+    ``notes_keywords`` is a slice of that same total for attribution — do not add
+    it again into lead_score. HubSpot engagement is attributed separately by
+    LeadScoringEngine as ``hubspot_engagement`` on lead_score, not here.
+    """
+    extracted = signals if signals is not None else extract_signals_from_lead(lead)
+    return {
+        'structured_motivation': compute_structured_motivation_score(lead, signals=extracted),
+        'notes_keywords': notes_keywords_points(extracted),
+    }
+
+
 def extracted_signals_from_candidate_payload(items: list[dict]) -> list[ExtractedSignal]:
     """Rebuild ExtractedSignal rows from prospect candidate JSON payload."""
     extracted: list[ExtractedSignal] = []
@@ -482,7 +506,12 @@ def primary_signal_label(lead) -> Optional[str]:
 
 
 class MotivationSignalService:
-    """Sync motivation signals for a lead and update denormalized score fields."""
+    """Sync motivation signals for a lead and update denormalized score fields.
+
+    ``lead.motivation_score`` is the product motivation number (structured signals
+    only). HubSpot ``SIGNAL_ADJUSTMENTS`` in LeadScoringEngine modify
+    ``lead_score`` engagement — they are not a second motivation_score.
+    """
 
     def sync_from_lead(self, lead, *, commit: bool = True) -> float:
         lead_id = getattr(lead, 'id', None)
@@ -521,9 +550,13 @@ class MotivationSignalService:
                 row.detected_at = datetime.utcnow()
                 row.is_active = True
 
+        # Product motivation number — structured MotivationSignal attribution only.
         score = compute_structured_motivation_score(lead, signals=extracted)
         lead.motivation_score = score
         lead.motivation_signal_summary = build_signal_summary(extracted)
+        # Stash last extracted signals for score_details attribution in the same
+        # scoring pass (notes_keywords is already inside structured_motivation).
+        lead._motivation_extracted_signals = extracted  # type: ignore[attr-defined]
 
         if commit and isinstance(lead_id, int):
             db.session.add(lead)

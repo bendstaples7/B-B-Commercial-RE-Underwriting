@@ -35,6 +35,11 @@ def _mock_action_engine_db(monkeypatch):
         'app.services.lead_scoring_engine.is_mailable_lead',
         lambda _lead: False,
     )
+    monkeypatch.setattr(
+        'app.services.lead_scoring_engine._has_mailing_address',
+        lambda lead: isinstance(getattr(lead, 'mailing_address', None), str)
+        and bool(str(lead.mailing_address).strip()),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +93,9 @@ def make_mock_lead(
     lead.unanswered_call_count = 0
     lead.acquisition_date = None
     lead.most_recent_sale = None
+    lead.mailing_address = None
+    lead.condo_risk_status = None
+    lead.motivation_score = 0
     return lead
 
 

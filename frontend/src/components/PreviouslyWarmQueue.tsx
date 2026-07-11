@@ -57,8 +57,12 @@ export function PreviouslyWarmQueue() {
   const extraColumns: ExtraColumn[] = [
     {
       key: 'hubspot_deal_stage',
-      label: 'Last HubSpot Activity',
-      render: (row: QueueRow) => row.hubspot_deal_stage ?? '—',
+      label: 'HubSpot stage',
+      render: (row: QueueRow) => (
+        <Typography variant="body2" color="text.secondary">
+          {row.hubspot_deal_stage ?? '—'}
+        </Typography>
+      ),
     },
     {
       key: 'last_hubspot_sync_at',

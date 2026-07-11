@@ -159,10 +159,67 @@ def _resolve_crm_flags(lead: Lead) -> tuple[bool, bool, bool]:
     return lead.has_phone, lead.has_email, lead.has_property_match
 
 
+def _has_mailing_address(lead: Lead) -> bool:
+    """True when the lead has a non-empty owner mailing street (data-quality bar)."""
+    addr = getattr(lead, 'mailing_address', None)
+    return bool(addr and str(addr).strip())
+
+
+def _is_commercial_lead(lead: Lead) -> bool:
+    return (getattr(lead, 'lead_category', 'residential') or 'residential') == 'commercial'
+
+
+def _maybe_promote_skip_trace_to_mailing(lead: Lead) -> str | None:
+    """Promote residential skip-trace leads with a mailing address to mailing stage.
+
+    Returns the previous status when a promotion occurred, else None.
+    """
+    if _is_commercial_lead(lead):
+        return None
+    if lead.lead_status not in ('skip_trace', 'awaiting_skip_trace'):
+        return None
+    if not _has_mailing_address(lead):
+        return None
+    previous = lead.lead_status
+    lead.lead_status = 'mailing_no_contact_made'
+    return previous
+
+
 def _timeline_signals(signals: dict) -> dict:
     safe = dict(signals)
     safe.pop('property_street', None)
     return safe
+
+
+def _should_skip_duplicate_ra_timeline(
+    lead_id: int,
+    previous_action,
+    new_action,
+    previous_method,
+    new_method,
+) -> bool:
+    """True when the latest RA timeline entry already records this transition."""
+    try:
+        latest = (
+            LeadTimelineEntry.query
+            .filter_by(lead_id=lead_id, event_type='recommended_action_changed')
+            .order_by(LeadTimelineEntry.occurred_at.desc(), LeadTimelineEntry.id.desc())
+            .first()
+        )
+    except Exception as exc:
+        logger.debug(
+            "RA timeline dedupe query skipped for lead_id=%s: %s", lead_id, exc,
+        )
+        return False
+    if latest is None or not latest.event_metadata:
+        return False
+    meta = latest.event_metadata
+    return (
+        meta.get('previous_action') == previous_action
+        and meta.get('new_action') == new_action
+        and meta.get('previous_contact_method') == previous_method
+        and meta.get('new_contact_method') == new_method
+    )
 
 
 class LeadScoringEngine:
@@ -172,6 +229,9 @@ class LeadScoringEngine:
     ACTIVE_OUTREACH_THRESHOLD: float = 30.0
 
     SIGNAL_ADJUSTMENTS: dict = {
+        # HubSpot CRM engagement modifiers applied to lead_score only.
+        # These are NOT a second motivation_score — product motivation lives on
+        # lead.motivation_score via MotivationSignalService / MotivationSignal rows.
         "PRIOR_WARM_CONVERSATION": +15.0,
         "APPOINTMENT_OCCURRED": +20.0,
         "OFFER_PREVIOUSLY_SENT": +10.0,
@@ -219,13 +279,41 @@ class LeadScoringEngine:
             + buckets["data_enrichment"] * weights.data_enrichment_weight
         )
 
+        previous_status = _maybe_promote_skip_trace_to_mailing(lead)
+        if previous_status and isinstance(getattr(lead, 'id', None), int):
+            db.session.add(LeadTimelineEntry(
+                lead_id=lead.id,
+                event_type='status_changed',
+                occurred_at=datetime.now(timezone.utc),
+                source='system',
+                actor='System',
+                summary=(
+                    f"Status changed from '{previous_status}' to 'mailing_no_contact_made' "
+                    f"(residential lead has mailing address)."
+                ),
+                event_metadata={
+                    'previous_status': previous_status,
+                    'new_status': 'mailing_no_contact_made',
+                    'reason': 'residential_mailing_address_present',
+                },
+            ))
+
         pipeline_bonus = self._pipeline_stage_bonus(lead)
         engagement_mod = self._score_engagement(lead)
+        # HubSpot SIGNAL_ADJUSTMENTS → lead_score engagement, not motivation_score.
         hubspot_mod = self._hubspot_signal_adjustment(signals)
+
+        from app.services.motivation_signal_service import notes_keywords_points
+        extracted = getattr(lead, '_motivation_extracted_signals', None)
+        notes_kw = notes_keywords_points(extracted) if extracted else 0.0
 
         score_details["pipeline_stage_bonus"] = pipeline_bonus
         score_details["timeline_engagement"] = engagement_mod
-        score_details["hubspot_signals"] = hubspot_mod
+        # Named attribution: hubspot_engagement (lead_score modifier) and
+        # notes_keywords (slice of structured_motivation — already in the rubric
+        # total via structured_motivation; do not add notes_keywords into total).
+        score_details["hubspot_engagement"] = hubspot_mod
+        score_details["notes_keywords"] = notes_kw
 
         total = base_score + pipeline_bonus + engagement_mod + hubspot_mod
         if getattr(lead, "suppression_flag", False):
@@ -297,14 +385,20 @@ class LeadScoringEngine:
             return 'suppress', 'do_not_contact_flag', {'do_not_contact': True}
 
         if lead.lead_status in ('skip_trace', 'awaiting_skip_trace'):
-            return (
-                'add_contact_info', 'skip_trace_status',
-                {'lead_status': lead.lead_status, 'requires_skip_trace': True},
-            )
+            # Residential leads with a mailing address fall through to score/mail
+            # rules; commercial and address-less skip-trace still need contact work.
+            if _is_commercial_lead(lead) or not _has_mailing_address(lead):
+                return (
+                    'add_contact_info', 'skip_trace_status',
+                    {'lead_status': lead.lead_status, 'requires_skip_trace': True},
+                )
 
         has_phone, has_email, has_property_match = _resolve_crm_flags(lead)
         if not has_phone and not has_email:
-            if is_mailable_lead(lead):
+            residential_with_mail = (
+                not _is_commercial_lead(lead) and _has_mailing_address(lead)
+            )
+            if is_mailable_lead(lead) or residential_with_mail:
                 if rubric.is_recently_sold(lead):
                     sale = rubric.effective_acquisition_date(lead)
                     days_since = (date.today() - sale).days if sale else None
@@ -312,6 +406,7 @@ class LeadScoringEngine:
                         'has_phone': False,
                         'has_email': False,
                         'is_mailable': True,
+                        'has_mailing_address': True,
                         'most_recent_sale': getattr(lead, 'most_recent_sale', None),
                         'days_since_sale': days_since,
                     }
@@ -319,6 +414,7 @@ class LeadScoringEngine:
                     'has_phone': False,
                     'has_email': False,
                     'is_mailable': True,
+                    'has_mailing_address': True,
                 }
             return 'add_contact_info', 'no_contact_info', {'has_phone': False, 'has_email': False}
 
@@ -436,51 +532,65 @@ class LeadScoringEngine:
             db.session.add(lead_score)
 
         if result.recommended_action != previous_action:
-            entry = LeadTimelineEntry(
-                lead_id=lead.id,
-                event_type='recommended_action_changed',
-                occurred_at=datetime.now(timezone.utc),
-                source='system',
-                actor='System',
-                summary=(
-                    f"Recommended action changed from '{previous_action}' "
-                    f"to '{result.recommended_action}'."
-                ),
-                event_metadata={
-                    'previous_action': previous_action,
-                    'new_action': result.recommended_action,
-                    'previous_contact_method': previous_method,
-                    'new_contact_method': result.recommended_contact_method,
-                    'winning_rule': result.winning_rule,
-                    'lead_score': result.total_score,
-                    'is_warm': lead.is_warm,
-                    'signals': _timeline_signals(result.action_signals),
-                },
-            )
-            db.session.add(entry)
+            if not _should_skip_duplicate_ra_timeline(
+                lead.id,
+                previous_action,
+                result.recommended_action,
+                previous_method,
+                result.recommended_contact_method,
+            ):
+                entry = LeadTimelineEntry(
+                    lead_id=lead.id,
+                    event_type='recommended_action_changed',
+                    occurred_at=datetime.now(timezone.utc),
+                    source='system',
+                    actor='System',
+                    summary=(
+                        f"Recommended action changed from '{previous_action}' "
+                        f"to '{result.recommended_action}'."
+                    ),
+                    event_metadata={
+                        'previous_action': previous_action,
+                        'new_action': result.recommended_action,
+                        'previous_contact_method': previous_method,
+                        'new_contact_method': result.recommended_contact_method,
+                        'winning_rule': result.winning_rule,
+                        'lead_score': result.total_score,
+                        'is_warm': lead.is_warm,
+                        'signals': _timeline_signals(result.action_signals),
+                    },
+                )
+                db.session.add(entry)
         elif result.recommended_contact_method != previous_method:
-            entry = LeadTimelineEntry(
-                lead_id=lead.id,
-                event_type='recommended_action_changed',
-                occurred_at=datetime.now(timezone.utc),
-                source='system',
-                actor='System',
-                summary=(
-                    f"Recommended contact method changed from '{previous_method}' "
-                    f"to '{result.recommended_contact_method}'."
-                ),
-                event_metadata={
-                    'previous_action': previous_action,
-                    'new_action': result.recommended_action,
-                    'previous_contact_method': previous_method,
-                    'new_contact_method': result.recommended_contact_method,
-                    'winning_rule': result.winning_rule,
-                    'lead_score': result.total_score,
-                    'is_warm': lead.is_warm,
-                    'signals': _timeline_signals(result.action_signals),
-                },
-            )
-            db.session.add(entry)
+            if not _should_skip_duplicate_ra_timeline(
+                lead.id,
+                previous_action,
+                result.recommended_action,
+                previous_method,
+                result.recommended_contact_method,
+            ):
+                entry = LeadTimelineEntry(
+                    lead_id=lead.id,
+                    event_type='recommended_action_changed',
+                    occurred_at=datetime.now(timezone.utc),
+                    source='system',
+                    actor='System',
+                    summary=(
+                        f"Recommended contact method changed from '{previous_method}' "
+                        f"to '{result.recommended_contact_method}'."
+                    ),
+                    event_metadata={
+                        'previous_action': previous_action,
+                        'new_action': result.recommended_action,
+                        'previous_contact_method': previous_method,
+                        'new_contact_method': result.recommended_contact_method,
+                        'winning_rule': result.winning_rule,
+                        'lead_score': result.total_score,
+                        'is_warm': lead.is_warm,
+                        'signals': _timeline_signals(result.action_signals),
+                    },
+                )
+                db.session.add(entry)
 
         if commit:
             db.session.commit()
@@ -492,7 +602,12 @@ class LeadScoringEngine:
         return lead_score
 
     def score_and_persist(self, lead_id: int, *, commit: bool = True) -> LeadScore | None:
-        lead = db.session.get(Lead, lead_id)
+        lead = (
+            db.session.query(Lead)
+            .filter_by(id=lead_id)
+            .with_for_update()
+            .one_or_none()
+        )
         if lead is None:
             return None
         weights = self.get_weights(lead.owner_user_id or 'default')

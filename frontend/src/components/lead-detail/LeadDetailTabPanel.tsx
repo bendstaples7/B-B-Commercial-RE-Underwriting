@@ -42,6 +42,7 @@ import { ScoreHistoryTimeline } from '@/components/ScoreHistoryTimeline'
 import { ScoreLegend } from '@/components/ScoreLegend'
 import { MotivationSignalsPanel } from '@/components/lead-detail/MotivationSignalsPanel'
 import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
+import { contactDisplayName } from '@/utils/propertyContacts'
 import { formatImportedSource } from './leadDetailFormatters'
 
 const DEFAULT_TAB_INDEX = 0
@@ -206,6 +207,9 @@ export function LeadDetailTabPanel({
   const showMultifamily = units !== null && units >= 5
   const showSingleFamily = units === null || units < 5
   const showBoth = units === null
+  const infoContacts =
+    (commandCenterData.contacts?.length ? commandCenterData.contacts : null) ??
+    (leadData.contacts?.length ? leadData.contacts : null)
 
   return (
     <Box data-testid="tab-panel">
@@ -227,12 +231,54 @@ export function LeadDetailTabPanel({
 
       {activeTab === 0 && (
         <Box sx={{ p: 2 }}>
-          {fieldGroup('Owner', [
-            ['First Name', leadData.owner_first_name],
-            ['Last Name', leadData.owner_last_name],
-            ['Owner 2', [leadData.owner_2_first_name, leadData.owner_2_last_name].filter(Boolean).join(' ') || null],
-            ['Ownership Type', leadData.ownership_type],
-          ])}
+          {infoContacts ? (
+            <>
+              {infoContacts.map((contact, idx) => {
+                const name = contactDisplayName(contact)
+                const phoneRows = (contact.phones ?? []).map((p, i) => [
+                  `Phone${(contact.phones?.length ?? 0) > 1 ? ` ${i + 1}` : ''}`,
+                  formatPhoneNumber(p.value),
+                ] as [string, string | null])
+                const emailRows = (contact.emails ?? []).map((e, i) => [
+                  `Email${(contact.emails?.length ?? 0) > 1 ? ` ${i + 1}` : ''}`,
+                  e.value,
+                ] as [string, string | null])
+                return (
+                  <Box key={contact.id}>
+                    {fieldGroup(
+                      `Owner ${idx + 1}${contact.is_primary ? ' (Primary)' : ''}${
+                        contact.role && contact.role !== 'owner' ? ` — ${contact.role}` : ''
+                      }`,
+                      [
+                        ['Name', name || null],
+                        ...phoneRows,
+                        ...emailRows,
+                      ],
+                    )}
+                  </Box>
+                )
+              })}
+              {fieldGroup('Ownership', [
+                ['Ownership Type', leadData.ownership_type],
+              ])}
+            </>
+          ) : (
+            <>
+              {fieldGroup('Owner', [
+                ['First Name', leadData.owner_first_name],
+                ['Last Name', leadData.owner_last_name],
+                ['Owner 2', [leadData.owner_2_first_name, leadData.owner_2_last_name].filter(Boolean).join(' ') || null],
+                ['Ownership Type', leadData.ownership_type],
+              ])}
+              {fieldGroup('Contact Information', [
+                ['Phone 1', leadData.phone_1 ? formatPhoneNumber(leadData.phone_1) : null],
+                ['Phone 2', leadData.phone_2 ? formatPhoneNumber(leadData.phone_2) : null],
+                ['Phone 3', leadData.phone_3 ? formatPhoneNumber(leadData.phone_3) : null],
+                ['Email 1', leadData.email_1],
+                ['Email 2', leadData.email_2],
+              ])}
+            </>
+          )}
           {fieldGroup('Property Details', [
             ['Street', leadData.property_street],
             ['City', leadData.property_city],
@@ -261,13 +307,6 @@ export function LeadDetailTabPanel({
               {formatSaleDateFreshness(commandCenterData.sale_date_meta)}
             </Typography>
           )}
-          {fieldGroup('Contact Information', [
-            ['Phone 1', leadData.phone_1 ? formatPhoneNumber(leadData.phone_1) : null],
-            ['Phone 2', leadData.phone_2 ? formatPhoneNumber(leadData.phone_2) : null],
-            ['Phone 3', leadData.phone_3 ? formatPhoneNumber(leadData.phone_3) : null],
-            ['Email 1', leadData.email_1],
-            ['Email 2', leadData.email_2],
-          ])}
           {fieldGroup('Mailing Information', [
             ['Mailing Address', leadData.mailing_address],
             ['City', leadData.mailing_city],
@@ -319,7 +358,7 @@ export function LeadDetailTabPanel({
                 Motivation signals
               </Typography>
               <Box sx={{ mb: 2 }}>
-                <MotivationSignalsPanel lead={leadData} />
+                <MotivationSignalsPanel lead={leadData} score={scoreData.latest} />
               </Box>
               <ScoreHistoryTimeline history={scoreData.history} />
             </>

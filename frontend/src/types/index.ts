@@ -1793,6 +1793,8 @@ export interface LeadTask {
   created_by: string;
   /** 'native' for tasks created in the platform, 'hubspot' for tasks imported from HubSpot */
   source?: 'native' | 'hubspot';
+  /** HubSpot engagement/task id when source is hubspot */
+  hubspot_task_id?: string | null;
 }
 
 export interface LeadTimelineEntry {
@@ -1822,6 +1824,12 @@ export interface QueueRow {
   id: number;
   owner_first_name: string | null;
   owner_last_name: string | null;
+  /** Prefer over flat owner_* when present — derived from primary PropertyContact. */
+  owner_display_name?: string | null;
+  /** Best phone from primary-then-next contacts, else flat phone_1. */
+  best_phone?: string | null;
+  /** Best email from primary-then-next contacts, else flat email_1. */
+  best_email?: string | null;
   property_street: string | null;
   property_city: string | null;
   property_state: string | null;
@@ -1957,6 +1965,8 @@ export interface CommandCenterPayload {
   owner_last_name: string | null;
   owner_2_first_name?: string | null;
   owner_2_last_name?: string | null;
+  /** Relational contacts — prefer over flat owner/phone/email fields when present. */
+  contacts?: PropertyContactSummary[];
   property_street: string | null;
   property_city: string | null;
   property_state: string | null;

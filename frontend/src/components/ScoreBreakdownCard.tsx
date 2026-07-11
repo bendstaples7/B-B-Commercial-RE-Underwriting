@@ -18,6 +18,9 @@ import { humanize } from '@/utils/formatters'
 import { LeadScoreBadge } from './LeadScoreBadge'
 import { getDimensionMeta, getScoreVersionMeta } from '@/utils/scoreDimensionMeta'
 
+/** Keys that attribute a slice already counted in another dimension (do not look additive). */
+const ATTRIBUTION_ONLY_KEYS = new Set(['notes_keywords'])
+
 export interface ScoreBreakdownCardProps {
   score: PropertyScoreRecord
   className?: string
@@ -228,7 +231,8 @@ export function ScoreBreakdownCard({ score, className, compact = false }: ScoreB
                       whiteSpace: 'nowrap',
                     }}
                   >
-                    +{formatPoints(points)}
+                    {ATTRIBUTION_ONLY_KEYS.has(dimension) ? '' : '+'}
+                    {formatPoints(points)}
                     {meta.maxPoints > 0 && (
                       <Typography
                         component="span"
@@ -241,6 +245,15 @@ export function ScoreBreakdownCard({ score, className, compact = false }: ScoreB
                       </Typography>
                     )}
                   </Typography>
+                  {ATTRIBUTION_ONLY_KEYS.has(dimension) && (
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ gridColumn: '1 / -1' }}
+                    >
+                      Included in Structured Motivation (not added again)
+                    </Typography>
+                  )}
                 </Box>
               )
             })}

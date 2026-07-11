@@ -111,10 +111,16 @@ def _open_mirrored_tasks_for_lead(lead_id: int) -> list[Task]:
 def count_superseded_tasks_for_lead(lead_id: int) -> int:
     """Count outreach tasks that would be completed when a lead enters the mail batch."""
     count = 0
+    counted_hubspot_ids: set[str] = set()
     for task in LeadTask.query.filter_by(lead_id=lead_id, status='open').all():
         if is_superseded_by_mail_task(task.task_type, task.title):
             count += 1
+            if task.hubspot_task_id:
+                counted_hubspot_ids.add(str(task.hubspot_task_id))
     for task in _open_hubspot_tasks_for_lead(lead_id):
+        # Skip CRM Task rows already represented by a LeadTask with same hubspot_task_id
+        if task.hubspot_task_id and str(task.hubspot_task_id) in counted_hubspot_ids:
+            continue
         if is_superseded_by_mail_task(task.task_type, task.title):
             count += 1
     for task in _open_mirrored_tasks_for_lead(lead_id):
@@ -136,10 +142,26 @@ def complete_tasks_superseded_by_mail(
     now = datetime.now(timezone.utc)
     completed = 0
     hubspot_ids_to_sync: list[str] = []
+    completed_hubspot_ids: set[str] = set()
+
+    from app.services.hubspot_task_completion_service import mark_hubspot_task_completed_local
 
     native_tasks = LeadTask.query.filter_by(lead_id=lead_id, status='open').all()
     for task in native_tasks:
         if not is_superseded_by_mail_task(task.task_type, task.title):
+            continue
+        if task.hubspot_task_id:
+            local = mark_hubspot_task_completed_local(
+                lead_id,
+                task.id,
+                actor=actor,
+                reason='mail_queued',
+            )
+            if local:
+                completed += 1
+                if local.hubspot_task_id:
+                    hubspot_ids_to_sync.append(local.hubspot_task_id)
+                    completed_hubspot_ids.add(str(local.hubspot_task_id))
             continue
         task.status = 'completed'
         task.completed_at = now
@@ -147,10 +169,10 @@ def complete_tasks_superseded_by_mail(
         _append_native_task_completed_timeline(lead_id, task, actor, now)
         completed += 1
 
-    from app.services.hubspot_task_completion_service import mark_hubspot_task_completed_local
-
     hubspot_tasks = _open_hubspot_tasks_for_lead(lead_id)
     for hs_task in hubspot_tasks:
+        if hs_task.hubspot_task_id and str(hs_task.hubspot_task_id) in completed_hubspot_ids:
+            continue
         if not is_superseded_by_mail_task(hs_task.task_type, hs_task.title):
             continue
         local = mark_hubspot_task_completed_local(
@@ -163,6 +185,7 @@ def complete_tasks_superseded_by_mail(
             completed += 1
             if local.hubspot_task_id:
                 hubspot_ids_to_sync.append(local.hubspot_task_id)
+                completed_hubspot_ids.add(str(local.hubspot_task_id))
 
     mirrored = _open_mirrored_tasks_for_lead(lead_id)
     for mirror in mirrored:
@@ -192,13 +215,13 @@ def complete_mail_prep_tasks(
 
 
 def find_mail_awaiting_lead_ids() -> list[int]:
-    """Lead IDs staged in a mail batch (queued item or up_next_to_mail flag)."""
+    """Lead IDs staged in a mail batch (MailQueueItem queued; legacy up_next_to_mail)."""
     queued_lead_ids = db.session.query(MailQueueItem.lead_id).filter(
         MailQueueItem.status == 'queued',
     ).distinct()
     rows = Lead.query.filter(
         or_(
-            Lead.up_next_to_mail.is_(True),
+            Lead.up_next_to_mail.is_(True),  # legacy rows until flag cleared
             Lead.id.in_(queued_lead_ids),
         )
     ).with_entities(Lead.id).all()
@@ -225,14 +248,18 @@ def _parse_sent_at(value) -> datetime | None:
 
 
 def resolve_mail_queue_status(lead: Lead) -> str | None:
-    """Return queued, sent_recently, or None for command-center display."""
+    """Return queued, sent_recently, or None for command-center display.
+
+    Canonical: MailQueueItem membership. Legacy up_next_to_mail still maps to
+    queued until stale flags are cleared.
+    """
     if lead.owner_user_id and MailQueueItem.query.filter_by(
         lead_id=lead.id,
         status='queued',
         user_id=lead.owner_user_id,
     ).first():
         return 'queued'
-    if lead.up_next_to_mail:
+    if lead.up_next_to_mail:  # legacy
         return 'queued'
 
     history = lead.mailer_history

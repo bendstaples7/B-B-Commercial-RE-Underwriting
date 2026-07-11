@@ -110,6 +110,7 @@ class HubSpotTimelineImportService:
         # Update lead signals
         lead.last_hubspot_sync_at = datetime.now(timezone.utc)
         if latest_deal_stage:
+            # Read-only HubSpot stage mirror; primary pipeline status is lead_status.
             lead.hubspot_deal_stage = latest_deal_stage
         if new_entries_count > 0:
             lead.review_required = True

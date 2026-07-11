@@ -21,6 +21,8 @@ import type { PropertyScoreRecord } from '@/types'
 import { LeadScoreBadge } from './LeadScoreBadge'
 import { getDimensionMeta, getScoreVersionMeta } from '@/utils/scoreDimensionMeta'
 
+const ATTRIBUTION_ONLY_KEYS = new Set(['notes_keywords'])
+
 export interface ScoreBreakdownDialogProps {
   score: PropertyScoreRecord
   open: boolean
@@ -159,7 +161,8 @@ export function ScoreBreakdownDialog({
                       fontWeight={700}
                       sx={{ fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}
                     >
-                      +{formatPoints(points)}
+                      {ATTRIBUTION_ONLY_KEYS.has(dimension) ? '' : '+'}
+                      {formatPoints(points)}
                       {meta.maxPoints > 0 && (
                         <Typography
                           component="span"
@@ -176,6 +179,11 @@ export function ScoreBreakdownDialog({
                   <Typography variant="caption" color="text.secondary" display="block">
                     {meta.description}
                   </Typography>
+                  {ATTRIBUTION_ONLY_KEYS.has(dimension) && (
+                    <Typography variant="caption" color="text.secondary" display="block">
+                      Included in Structured Motivation (not added again)
+                    </Typography>
+                  )}
                   <Typography variant="caption" color="text.disabled" display="block">
                     Data: {meta.dataSource}
                   </Typography>

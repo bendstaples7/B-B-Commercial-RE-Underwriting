@@ -41,6 +41,7 @@ def _lead_to_queue_row(
     outreach_contacts: dict[int, dict | None] | None = None,
     *,
     last_mailed_at=None,
+    owner_displays: dict[int, dict] | None = None,
 ) -> dict:
     """Convert a Lead model instance to a queue row dict."""
     contact_method = lead.recommended_contact_method
@@ -51,10 +52,26 @@ def _lead_to_queue_row(
     else:
         from app.services.outreach_method_service import resolve_outreach_contact
         outreach_contact = resolve_outreach_contact(lead, contact_method)
+
+    display = {}
+    if owner_displays is not None and isinstance(lead_id, int):
+        display = owner_displays.get(lead_id) or {}
+    owner_first = display.get('first_name') or lead.owner_first_name
+    owner_last = display.get('last_name') or lead.owner_last_name
+    flat_display = ' '.join(
+        part for part in (lead.owner_first_name, lead.owner_last_name) if part
+    ) or None
+    owner_display_name = display.get('owner_display_name') or flat_display
+    best_phone = display.get('best_phone') or getattr(lead, 'phone_1', None)
+    best_email = display.get('best_email') or getattr(lead, 'email_1', None)
+
     return {
         'id': lead.id,
-        'owner_first_name': lead.owner_first_name,
-        'owner_last_name': lead.owner_last_name,
+        'owner_first_name': owner_first,
+        'owner_last_name': owner_last,
+        'owner_display_name': owner_display_name,
+        'best_phone': best_phone,
+        'best_email': best_email,
         'property_street': lead.property_street,
         'property_city': lead.property_city,
         'property_state': lead.property_state,
@@ -80,9 +97,17 @@ def _lead_to_queue_row(
 
 
 def _leads_to_queue_rows(leads: list) -> list[dict]:
-    """Build queue rows with batched outreach contact resolution (avoids N+1)."""
+    """Build queue rows with batched outreach + owner-display resolution (avoids N+1)."""
+    from app.services.contact_service import batch_owner_display_for_leads
+
     contacts = resolve_outreach_contacts_for_leads(leads)
-    return [_lead_to_queue_row(lead, contacts) for lead in leads]
+    owner_displays = batch_owner_display_for_leads(
+        [lead.id for lead in leads if isinstance(getattr(lead, 'id', None), int)]
+    )
+    return [
+        _lead_to_queue_row(lead, contacts, owner_displays=owner_displays)
+        for lead in leads
+    ]
 
 
 def _apply_queue_sort(query, sort_by: str, sort_order: str, default_col=None):
@@ -133,7 +158,10 @@ def _hubspot_task_overdue_subquery(cutoff_date):
 
 
 def _lead_awaiting_mail_subquery():
-    """Lead is staged in a mail batch and should not surface as a due native task."""
+    """Lead is staged in a mail batch and should not surface as a due native task.
+
+    Prefer MailQueueItem; keep legacy up_next_to_mail for uncleared rows.
+    """
     queued_item = exists().where(
         and_(
             MailQueueItem.lead_id == Lead.id,
@@ -683,13 +711,17 @@ class QueueService:
         total = len(eligible)
         start = (page - 1) * per_page
         leads = eligible[start:start + per_page]
+        from app.services.contact_service import batch_owner_display_for_leads
+
         contacts = resolve_outreach_contacts_for_leads(leads)
+        owner_displays = batch_owner_display_for_leads([lead.id for lead in leads])
         last_mailed = get_last_mailed_at_by_lead_ids([lead.id for lead in leads])
         return [
             _lead_to_queue_row(
                 lead,
                 contacts,
                 last_mailed_at=format_last_mailed_at(last_mailed.get(lead.id)),
+                owner_displays=owner_displays,
             )
             for lead in leads
         ], total

@@ -28,7 +28,10 @@ RECOMMENDED_ACTION_METADATA = {
     },
     'add_contact_info': {
         'label': 'Add Contact Info',
-        'explanation': 'No phone or email is on file for this lead. Add contact information or run a skip trace before attempting outreach.',
+        'explanation': (
+            'No reachable contact method is on file for this lead. '
+            'Add a phone, email, or mailing address, or finish skip trace before outreach.'
+        ),
     },
     'create_task': {
         'label': 'Create a Task',

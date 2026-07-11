@@ -120,7 +120,8 @@ class MailQueueService:
                             )
                             db.session.add(item)
                             db.session.flush()
-                            lead.up_next_to_mail = True
+                            # Canonical readiness: recommended_action == mail_ready +
+                            # MailQueueItem. Do not set legacy up_next_to_mail.
                             self._timeline.append(
                                 lead_id=lead_id,
                                 event_type='mail_queued',
@@ -266,6 +267,7 @@ class MailQueueService:
         item.status = 'removed'
         item.updated_at = datetime.utcnow()
         lead = Lead.query.get(item.lead_id)
+        # Clear legacy flag when no queued items remain.
         if lead and not MailQueueItem.query.filter_by(lead_id=lead.id, status='queued').count():
             lead.up_next_to_mail = False
         db.session.commit()

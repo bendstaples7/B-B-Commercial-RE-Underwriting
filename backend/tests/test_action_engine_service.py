@@ -67,6 +67,14 @@ def make_lead(
     lead.suppression_flag = False
     lead.lead_category = lead_category
     lead.unanswered_call_count = unanswered_call_count
+    lead.mailing_address = None
+    lead.mailing_city = None
+    lead.mailing_state = None
+    lead.mailing_zip = None
+    lead.condo_risk_status = None
+    lead.motivation_score = 0
+    lead.acquisition_date = None
+    lead.most_recent_sale = None
     return lead
 
 
@@ -111,24 +119,53 @@ def test_priority_2_deal_won_returns_none():
 # ---------------------------------------------------------------------------
 
 def test_priority_2_5_skip_trace_returns_add_contact_info_even_with_phone_email():
-    """skip_trace status always returns add_contact_info regardless of has_phone/has_email."""
+    """Commercial / no-mailing skip_trace still returns add_contact_info."""
     lead = make_lead(lead_status='skip_trace', has_phone=True, has_email=True)
+    lead.mailing_address = None
     with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'add_contact_info'
 
 
 def test_priority_2_5_awaiting_skip_trace_returns_add_contact_info():
-    """awaiting_skip_trace status always returns add_contact_info."""
+    """awaiting_skip_trace without mailing address returns add_contact_info."""
     lead = make_lead(lead_status='awaiting_skip_trace', has_phone=True, has_email=True, is_warm=True)
+    lead.mailing_address = None
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
+        result = ActionEngineService.compute_recommended_action(lead)
+    assert result == 'add_contact_info'
+
+
+def test_priority_2_5_residential_with_mailing_does_not_force_add_contact_info():
+    """Residential skip_trace with mailing address falls through (not forced add_contact_info)."""
+    lead = make_lead(
+        lead_status='awaiting_skip_trace',
+        has_phone=True,
+        has_email=True,
+        has_property_match=True,
+        is_warm=True,
+    )
+    lead.lead_category = 'residential'
+    lead.mailing_address = '1014 N Paulina St'
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
+        result = ActionEngineService.compute_recommended_action(lead)
+    assert result != 'add_contact_info'
+    assert result in ('follow_up_now', 'call_ready')
+
+
+def test_priority_2_5_commercial_skip_trace_still_add_contact_info_with_mailing():
+    lead = make_lead(lead_status='skip_trace', has_phone=True, has_email=True)
+    lead.lead_category = 'commercial'
+    lead.mailing_address = '1014 N Paulina St'
     with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'add_contact_info'
 
 
 def test_priority_2_5_fires_before_follow_up_overdue():
-    """skip_trace status intercepts before follow_up_overdue check."""
+    """skip_trace without mailing intercepts before follow_up_overdue check."""
     lead = make_lead(lead_status='skip_trace', follow_up_overdue=True, is_warm=True)
+    lead.mailing_address = None
     with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'add_contact_info'
@@ -140,8 +177,10 @@ def test_priority_2_5_fires_before_follow_up_overdue():
 
 def test_priority_3_no_phone_no_email_returns_add_contact_info():
     lead = make_lead(has_phone=False, has_email=False)
+    lead.mailing_address = None
     with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
-         patch('app.services.lead_scoring_engine.is_mailable_lead', return_value=False):
+         patch('app.services.lead_scoring_engine.is_mailable_lead', return_value=False), \
+         patch('app.services.lead_scoring_engine._has_mailing_address', return_value=False):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'add_contact_info'
 
@@ -167,8 +206,10 @@ def test_priority_3_mailable_recently_sold_returns_nurture():
 def test_priority_3_fires_before_priority_4():
     """Priority 3 (no contact info) fires before Priority 4 (no property match)."""
     lead = make_lead(has_phone=False, has_email=False, has_property_match=False)
+    lead.mailing_address = None
     with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
-         patch('app.services.lead_scoring_engine.is_mailable_lead', return_value=False):
+         patch('app.services.lead_scoring_engine.is_mailable_lead', return_value=False), \
+         patch('app.services.lead_scoring_engine._has_mailing_address', return_value=False):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'add_contact_info'
 

@@ -23,6 +23,7 @@ export interface LeadScoreSummaryCardProps {
 
 export function LeadScoreSummaryCard({ score, onViewFullBreakdown }: LeadScoreSummaryCardProps) {
   const breakdownEntries = Object.entries(score.score_details ?? {})
+    .filter(([key]) => key !== 'notes_keywords')
     .sort(([, a], [, b]) => b - a)
     .slice(0, 5)
 

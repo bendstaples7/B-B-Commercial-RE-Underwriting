@@ -80,6 +80,7 @@ export interface QueueTableProps {
 // ---------------------------------------------------------------------------
 
 function getOwnerName(row: QueueRow): string {
+  if (row.owner_display_name?.trim()) return row.owner_display_name.trim()
   return [row.owner_first_name, row.owner_last_name].filter(Boolean).join(' ') || '—'
 }
 

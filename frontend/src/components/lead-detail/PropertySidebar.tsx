@@ -12,8 +12,9 @@ import PhoneIcon from '@mui/icons-material/Phone'
 import EmailIcon from '@mui/icons-material/Email'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import { formatPhoneNumber, phoneCopyText, phoneTelHref } from '@/utils/phone'
-import type { CommandCenterPayload, LeadPhone } from '@/types'
+import type { CommandCenterPayload, LeadPhone, PropertyContactSummary } from '@/types'
 import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
+import { contactDisplayName, primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import { formatImportedSource } from './leadDetailFormatters'
 import { formatPhoneConfidence } from '@/utils/helpers'
 
@@ -141,6 +142,7 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
     date_skip_traced?: string | null
     mailer_history?: string | Record<string, unknown> | null
     up_next_to_mail?: boolean
+    mail_queue_status?: string | null
     marketing_memberships?: Array<{
       list_name: string
       outreach_status: string
@@ -154,39 +156,49 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
   }
 
   const data = commandCenterData as CommandCenterPayload & SidebarExtras
+  const contacts: PropertyContactSummary[] = commandCenterData.contacts ?? []
+  const useContacts = contacts.length > 0
 
-  const ownerName =
-    [commandCenterData.owner_first_name, commandCenterData.owner_last_name]
-      .filter(Boolean)
-      .join(' ') || ''
-  const owner2Name =
-    [commandCenterData.owner_2_first_name, commandCenterData.owner_2_last_name]
-      .filter(Boolean)
-      .join(' ') || ''
-
-  const phones: LeadPhone[] = data.phones?.length
-    ? data.phones
+  const flatOwnerName = primaryOwnerDisplayName(
+    null,
+    commandCenterData.owner_first_name,
+    commandCenterData.owner_last_name,
+  )
+  const secondaryOwners = useContacts
+    ? []
     : [
-        commandCenterData.phone_1,
-        commandCenterData.phone_2,
-        commandCenterData.phone_3,
-        commandCenterData.phone_4,
-        commandCenterData.phone_5,
-        commandCenterData.phone_6,
-        commandCenterData.phone_7,
-      ]
-        .filter(Boolean)
-        .map((value) => ({ value: value as string, confidence_score: 50 }))
+        [commandCenterData.owner_2_first_name, commandCenterData.owner_2_last_name]
+          .filter(Boolean)
+          .join(' '),
+      ].filter(Boolean)
 
-  const emails: string[] = data.emails?.length
-    ? data.emails
-    : [
-        commandCenterData.email_1,
-        commandCenterData.email_2,
-        commandCenterData.email_3,
-        commandCenterData.email_4,
-        commandCenterData.email_5,
-      ].filter(Boolean) as string[]
+  const phones: LeadPhone[] = useContacts
+    ? []
+    : data.phones?.length
+      ? data.phones
+      : [
+          commandCenterData.phone_1,
+          commandCenterData.phone_2,
+          commandCenterData.phone_3,
+          commandCenterData.phone_4,
+          commandCenterData.phone_5,
+          commandCenterData.phone_6,
+          commandCenterData.phone_7,
+        ]
+          .filter(Boolean)
+          .map((value) => ({ value: value as string, confidence_score: 50 }))
+
+  const emails: string[] = useContacts
+    ? []
+    : data.emails?.length
+      ? data.emails
+      : [
+          commandCenterData.email_1,
+          commandCenterData.email_2,
+          commandCenterData.email_3,
+          commandCenterData.email_4,
+          commandCenterData.email_5,
+        ].filter(Boolean) as string[]
 
   const marketingMemberships = data.marketing_memberships
 
@@ -207,28 +219,67 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
       }}
     >
       <SidebarSection title="Contact Info">
-        {ownerName && (
-          <Typography variant="caption" fontWeight={600} display="block" sx={{ mb: 0.75 }}>
-            {ownerName}
-          </Typography>
+        {useContacts ? (
+          contacts.map((contact, idx) => {
+            const name = contactDisplayName(contact)
+            if (!name && !(contact.phones?.length) && !(contact.emails?.length)) return null
+            return (
+              <Box key={contact.id} sx={{ mb: idx < contacts.length - 1 ? 1.5 : 0.5 }}>
+                {name && (
+                  <Typography
+                    variant="caption"
+                    fontWeight={contact.is_primary || idx === 0 ? 600 : 500}
+                    display="block"
+                    sx={{ mb: 0.5 }}
+                  >
+                    {name}
+                    {contact.role && contact.role !== 'owner' ? ` (${contact.role})` : ''}
+                  </Typography>
+                )}
+                {(contact.phones ?? []).map((p) => (
+                  <CopyablePhone key={p.id} phone={{ id: p.id, value: p.value, confidence_score: 50 }} />
+                ))}
+                {(contact.emails ?? []).map((e) => (
+                  <CopyableEmail key={e.id} email={e.value} />
+                ))}
+              </Box>
+            )
+          })
+        ) : (
+          <>
+            {flatOwnerName && (
+              <Typography variant="caption" fontWeight={600} display="block" sx={{ mb: 0.75 }}>
+                {flatOwnerName}
+              </Typography>
+            )}
+            {secondaryOwners.map((name) => (
+              <Typography
+                key={name}
+                variant="caption"
+                color="text.secondary"
+                display="block"
+                sx={{ mb: 0.5 }}
+              >
+                {name}
+              </Typography>
+            ))}
+            {phones.map((p, i) => (
+              <CopyablePhone key={p.id ?? `${p.value}-${i}`} phone={p} />
+            ))}
+            {emails.map((e, i) => (
+              <CopyableEmail key={i} email={e} />
+            ))}
+          </>
         )}
-        {owner2Name && (
-          <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
-            {owner2Name}
-          </Typography>
-        )}
-        {phones.map((p, i) => (
-          <CopyablePhone key={p.id ?? `${p.value}-${i}`} phone={p} />
-        ))}
-        {emails.map((e, i) => (
-          <CopyableEmail key={i} email={e} />
-        ))}
         {data.socials && <SidebarRow label="Socials" value={data.socials} />}
       </SidebarSection>
 
-      {(owner2Name || commandCenterData.ownership_type) && (
+      {((!useContacts && secondaryOwners.length > 0) || commandCenterData.ownership_type) && (
         <SidebarSection title="Owner">
-          {owner2Name && <SidebarRow label="Owner 2" value={owner2Name} />}
+          {!useContacts &&
+            secondaryOwners.map((name) => (
+              <SidebarRow key={name} label="Owner 2" value={name} />
+            ))}
           <SidebarRow label="Type" value={commandCenterData.ownership_type} />
         </SidebarSection>
       )}
@@ -345,10 +396,19 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
         </SidebarSection>
       )}
 
-      {(data.mailer_history != null || data.up_next_to_mail) && (
+      {(data.mailer_history != null || data.up_next_to_mail || data.mail_queue_status === 'queued') && (
         <SidebarSection title="Mailer History">
-          {Boolean(data.up_next_to_mail) && (
-            <Chip label="Up Next to Mail" size="small" color="primary" sx={{ mb: 0.5 }} />
+          {data.mail_queue_status === 'queued' && (
+            <Chip label="In mail queue" size="small" color="primary" sx={{ mb: 0.5 }} />
+          )}
+          {Boolean(data.up_next_to_mail) && data.mail_queue_status !== 'queued' && (
+            <Chip
+              label="Up Next to Mail (legacy)"
+              size="small"
+              color="default"
+              sx={{ mb: 0.5 }}
+              title="Legacy flag — prefer mail_ready + mail queue membership"
+            />
           )}
           {data.mailer_history != null && (
             <Typography

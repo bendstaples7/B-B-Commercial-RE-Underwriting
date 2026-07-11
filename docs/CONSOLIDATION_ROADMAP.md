@@ -47,10 +47,14 @@ Follow-up work from the [architecture audit](ARCHITECTURE.md). Prefer **one focu
 
 - [x] Decide canonical scoring engine long-term — unified `LeadScoringEngine` (scoring + recommended action)
 - [x] Extract shared rule helpers → `scoring_rubric.py`, `enrichment_scoring.py`
+- [x] Contacts as sole people store for CC/queues (`ContactService.upsert_owners_from_lead`)
+- [x] LeadTask + `hubspot_task_id` for CC open tasks (CRM `tasks` dual-write until cleanup)
+- [x] LeadTimelineEntry sole CC activity store; Interaction frozen for product
+- [x] Motivation attribution (`structured` / `notes_keywords` / `hubspot_engagement`); `lead_status` primary; mail_ready + MailQueue
 - [ ] `ActionEngineService.explain_recommended_action` — remove controller mirror
 - [ ] Shared `handle_errors` in `app/controllers/decorators.py`
-- [ ] Single activity store (Interaction model) with unified HubSpot import
-- [ ] Task model collapse (`LeadTask` → `Task`) or formalized sync layer
+- [ ] Stop dual-writing CRM `tasks` / drop Interaction product path after cutover
+- [ ] Drop flat owner/phone/email columns after readers migrate
 
 ## How to use this doc
 

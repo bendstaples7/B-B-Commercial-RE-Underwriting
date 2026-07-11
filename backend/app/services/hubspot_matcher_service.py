@@ -226,6 +226,8 @@ class HubSpotMatcherService:
                 )
             else:
                 if lead.hubspot_deal_stage != stage_label:
+                    # Read-only mirror of HubSpot deal stage for audit/display.
+                    # Canonical pipeline status is lead.lead_status (updated below).
                     lead.hubspot_deal_stage = stage_label
                     updated_fields.append("hubspot_deal_stage")
 
@@ -397,48 +399,50 @@ class HubSpotMatcherService:
         hs_first = (props.get("firstname") or "").strip() or None
         hs_last  = (props.get("lastname") or "").strip() or None
         if hs_first or hs_last:
-            # Check if ANY contact with this name is already linked to this property.
-            # This prevents duplicates when multiple HubSpot contact records for the
-            # same person (e.g. two "Luke" records) enrich the same lead.
-            already_linked = db.session.query(PropertyContact).join(Contact).filter(
-                PropertyContact.property_id == lead.id,
-                db.func.lower(Contact.first_name) == (hs_first or "").lower(),
-                db.func.lower(db.func.coalesce(Contact.last_name, "")) == (hs_last or "").lower(),
-            ).first()
-
-            if already_linked is None:
-                # No contact with this name is linked to the property yet.
-                # always create a new Contact — we don't reuse contacts from
-                # other properties to avoid cross-property data contamination.
-                existing_contact = Contact(
-                    first_name=hs_first,
-                    last_name=hs_last,
-                    role="owner",
+            # Prefer ContactService upsert for name-deduped PropertyContact links.
+            try:
+                from app.services.contact_service import ContactService
+                # Temporarily set flat owner if empty so upsert can create primary.
+                if not lead.owner_first_name and not lead.owner_last_name:
+                    if hs_first:
+                        lead.owner_first_name = hs_first
+                    if hs_last:
+                        lead.owner_last_name = hs_last
+                ContactService()._upsert_named_owner(
+                    lead.id, hs_first, hs_last, is_primary=False,
                 )
-                db.session.add(existing_contact)
-                db.session.flush()
-                logger.debug(
-                    "enrich_lead_from_contact: created Contact id=%d for '%s %s'",
-                    existing_contact.id, hs_first, hs_last,
-                )
-
-                has_primary = PropertyContact.query.filter_by(
-                    property_id=lead.id, is_primary=True
-                ).first() is not None
-
-                new_pc = PropertyContact(
-                    property_id=lead.id,
-                    contact_id=existing_contact.id,
-                    role="owner",
-                    is_primary=not has_primary,
-                )
-                db.session.add(new_pc)
-                db.session.flush()
                 updated_fields.append("property_contact_linked")
-                logger.debug(
-                    "enrich_lead_from_contact: linked Contact id=%d to lead id=%d (is_primary=%s)",
-                    existing_contact.id, lead.id, new_pc.is_primary,
+            except Exception as exc:
+                logger.warning(
+                    "enrich_lead_from_contact: ContactService upsert failed lead_id=%s: %s",
+                    lead.id, exc,
                 )
+                already_linked = db.session.query(PropertyContact).join(Contact).filter(
+                    PropertyContact.property_id == lead.id,
+                    db.func.lower(Contact.first_name) == (hs_first or "").lower(),
+                    db.func.lower(db.func.coalesce(Contact.last_name, "")) == (hs_last or "").lower(),
+                ).first()
+
+                if already_linked is None:
+                    existing_contact = Contact(
+                        first_name=hs_first,
+                        last_name=hs_last,
+                        role="owner",
+                    )
+                    db.session.add(existing_contact)
+                    db.session.flush()
+                    has_primary = PropertyContact.query.filter_by(
+                        property_id=lead.id, is_primary=True
+                    ).first() is not None
+                    new_pc = PropertyContact(
+                        property_id=lead.id,
+                        contact_id=existing_contact.id,
+                        role="owner",
+                        is_primary=not has_primary,
+                    )
+                    db.session.add(new_pc)
+                    db.session.flush()
+                    updated_fields.append("property_contact_linked")
 
         contact_id = PhoneConfidenceService.get_primary_contact_id(lead.id)
         if contact_id is not None and parsed_phones:

@@ -1592,6 +1592,7 @@ class LeadTaskSchema(Schema):
     created_at = fields.DateTime(dump_only=True)
     completed_at = fields.DateTime(dump_only=True, allow_none=True)
     created_by = fields.String(dump_only=True)
+    hubspot_task_id = fields.String(dump_only=True, allow_none=True)
 
 
 class LeadTaskCreateSchema(RequestSchema):
