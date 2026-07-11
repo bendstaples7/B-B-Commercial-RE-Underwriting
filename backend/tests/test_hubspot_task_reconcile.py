@@ -37,6 +37,8 @@ def lead(app):
         lead_id = row.id
     yield lead_id
     with app.app_context():
+        from app.models import LeadTask
+        LeadTask.query.filter_by(hubspot_task_id='hs-reconcile-1').delete()
         TaskAssociation.query.filter_by(target_id=lead_id).delete()
         Task.query.filter_by(hubspot_task_id='hs-reconcile-1').delete()
         HubSpotEngagement.query.filter_by(hubspot_id='hs-reconcile-1').delete()
@@ -80,6 +82,12 @@ def test_reconcile_completes_existing_open_task(app, lead):
         assert refreshed.status == 'completed'
         assert refreshed.completion_timestamp is not None
 
+        from app.models import LeadTask
+        lt = LeadTask.query.filter_by(hubspot_task_id='hs-reconcile-1').first()
+        assert lt is not None
+        assert lt.status == 'completed'
+        assert lt.lead_id == lead
+
 
 def test_reconcile_skips_completed_to_open_downgrade(app, lead):
     """Stale engagement payload must not re-open a locally completed task."""
@@ -104,6 +112,50 @@ def test_reconcile_skips_completed_to_open_downgrade(app, lead):
 
         refreshed = Task.query.filter_by(hubspot_task_id='hs-reconcile-1').first()
         assert refreshed.status == 'completed'
+
+
+def test_convert_task_creates_lead_task_for_lead_association(app, lead):
+    """convert_task upserts a LeadTask when the HubSpot task is lead-linked."""
+    with app.app_context():
+        from app.models import LeadTask
+        from app.models.hubspot_match import HubSpotMatch
+
+        engagement = HubSpotEngagement(
+            hubspot_id='hs-convert-lead-task-1',
+            engagement_type='TASK',
+            raw_payload={
+                'metadata': {'subject': 'Call seller', 'status': 'NOT_STARTED'},
+                'engagement': {'timestamp': 1700000000000},
+                'associations': {'dealIds': ['deal-convert-1']},
+            },
+        )
+        db.session.add(engagement)
+        db.session.add(HubSpotMatch(
+            hubspot_record_type='deal',
+            hubspot_id='deal-convert-1',
+            internal_record_type='lead',
+            internal_record_id=lead,
+            confidence='HIGH',
+            status='confirmed',
+        ))
+        db.session.commit()
+
+        svc = HubSpotActivityConverterService()
+        created = svc.convert_task(engagement)
+        assert created is not None
+
+        lt = LeadTask.query.filter_by(hubspot_task_id='hs-convert-lead-task-1').first()
+        assert lt is not None
+        assert lt.lead_id == lead
+        assert lt.title == 'Call seller'
+        assert lt.status == 'open'
+
+        LeadTask.query.filter_by(hubspot_task_id='hs-convert-lead-task-1').delete()
+        TaskAssociation.query.filter_by(target_id=lead).delete()
+        Task.query.filter_by(hubspot_task_id='hs-convert-lead-task-1').delete()
+        HubSpotEngagement.query.filter_by(hubspot_id='hs-convert-lead-task-1').delete()
+        HubSpotMatch.query.filter_by(hubspot_id='deal-convert-1').delete()
+        db.session.commit()
 
 
 def test_convert_task_reconciles_when_already_exists(app, lead):

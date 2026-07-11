@@ -16,8 +16,93 @@ from app.exceptions import (
 logger = logging.getLogger(__name__)
 
 
+def _coerce_due_date(value) -> date | None:
+    """Normalize HubSpot/Task due timestamps to a Date for LeadTask."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return None
+
+
+def _map_hubspot_status_to_lead_task(status: str | None) -> str:
+    """Map CRM Task statuses onto LeadTask's open/completed/cancelled enum."""
+    if (status or '').lower() == 'completed':
+        return 'completed'
+    if (status or '').lower() == 'cancelled':
+        return 'cancelled'
+    return 'open'
+
+
 class LeadTaskService:
     """Manages the lifecycle of LeadTask records."""
+
+    def upsert_from_hubspot(
+        self,
+        *,
+        lead_id: int,
+        hubspot_task_id: str,
+        title: str,
+        status: str = 'open',
+        due_date=None,
+        created_by: str = 'HubSpot',
+        commit: bool = False,
+    ) -> LeadTask:
+        """Create or update a LeadTask keyed by hubspot_task_id for a lead.
+
+        Canonical write path for HubSpot-imported lead tasks. Does not delete
+        the parallel ``tasks`` row — Command Center reads LeadTask only.
+        """
+        hs_id = str(hubspot_task_id).strip()
+        if not hs_id:
+            raise LeadTaskValidationError('hubspot_task_id is required', field='hubspot_task_id')
+
+        lead = Lead.query.get(lead_id)
+        if lead is None:
+            raise ValueError(f'Lead {lead_id} not found')
+
+        clean_title = (title or '').strip() or '(No Subject)'
+        if len(clean_title) > 255:
+            clean_title = clean_title[:255]
+
+        mapped_status = _map_hubspot_status_to_lead_task(status)
+        due = _coerce_due_date(due_date)
+
+        task = LeadTask.query.filter_by(hubspot_task_id=hs_id, lead_id=lead_id).first()
+        if task is None:
+            task = LeadTask(
+                lead_id=lead_id,
+                task_type='custom',
+                title=clean_title,
+                status=mapped_status,
+                due_date=due,
+                created_by=created_by,
+                hubspot_task_id=hs_id,
+                completed_at=datetime.now(timezone.utc) if mapped_status == 'completed' else None,
+            )
+            db.session.add(task)
+        else:
+            task.title = clean_title
+            task.due_date = due
+            # Never reopen a locally completed HubSpot LeadTask from stale sync.
+            if task.status == 'completed' and mapped_status != 'completed':
+                pass
+            else:
+                task.status = mapped_status
+                if mapped_status == 'completed' and task.completed_at is None:
+                    task.completed_at = datetime.now(timezone.utc)
+                elif mapped_status != 'completed':
+                    task.completed_at = None
+            db.session.add(task)
+
+        if commit:
+            db.session.commit()
+        else:
+            db.session.flush()
+
+        return task
 
     def create(self, lead_id: int, data: dict, actor: str = 'anonymous',
                recompute_action: bool = True) -> LeadTask:

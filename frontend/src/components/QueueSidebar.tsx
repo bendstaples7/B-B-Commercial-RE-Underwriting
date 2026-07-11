@@ -41,7 +41,7 @@ const WORK_QUEUE_SUBGROUPS: QueueSubgroup[] = [
   },
   {
     label: 'Pipeline views',
-    description: 'Visual deal stage',
+    description: 'Lead status columns',
     links: [
       { label: 'Kanban', path: '/kanban', badgeKey: null },
     ],

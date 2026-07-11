@@ -181,7 +181,9 @@ export function ReadyToMailQueue() {
         Ready to Mail
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Stage leads for your next Open Letter batch, send when you hit your minimum, and review recent sends.
+        Batch queue for your next Open Letter send. Marketing / outreach lists are audience membership
+        only — add members here (or via &quot;Add to mail queue&quot;) when they are ready to mail.
+        Stage leads, send when you hit your minimum, and review recent sends.
       </Typography>
 
       {queueError ? (

@@ -6,7 +6,6 @@ including recommended action retrieval with signal breakdown.
 Blueprint: command_center_bp, prefix /api/leads
 """
 import logging
-import re
 from functools import wraps
 
 from flask import Blueprint, jsonify, g, request
@@ -358,28 +357,8 @@ def get_command_center(lead_id: int):
 
     all_phones = PhoneConfidenceService.build_phones_payload(lead_id, lead)
 
-    # ------------------------------------------------------------------
-    # Fetch HubSpot tasks linked to this lead (via task_associations or
-    # direct lead_id FK) so they appear alongside native tasks in the UI.
-    # Only tasks with source='hubspot_import' are shown as HubSpot tasks.
-    # These are read-only — the user cannot complete/snooze them here.
-    # ------------------------------------------------------------------
-    hubspot_task_rows = _db.session.execute(_text("""
-        SELECT t.id, t.title, t.status, t.due_date, t.created_at
-        FROM tasks t
-        JOIN task_associations ta ON ta.task_id = t.id
-        WHERE ta.target_type = 'lead' AND ta.target_id = :lead_id
-          AND t.status IN ('open', 'overdue')
-          AND t.source = 'hubspot_import'
-        UNION
-        SELECT id, title, status, due_date, created_at
-        FROM tasks
-        WHERE lead_id = :lead_id
-          AND status IN ('open', 'overdue')
-          AND source = 'hubspot_import'
-        ORDER BY due_date ASC NULLS LAST
-    """), {'lead_id': lead_id}).fetchall()
-
+    # Open Tasks are LeadTask-only (including HubSpot-imported rows with
+    # hubspot_task_id). The CRM ``tasks`` UNION was removed in Phase 3.
     # ------------------------------------------------------------------
     # Collect emails: flat columns + relational contact_emails table
     # ------------------------------------------------------------------
@@ -406,29 +385,25 @@ def get_command_center(lead_id: int):
 
     # ------------------------------------------------------------------
     # Determine if this lead is in Today's Action queue
-    # (has an overdue HubSpot task via task_associations or direct lead_id)
+    # (has an overdue HubSpot-imported LeadTask)
     # ------------------------------------------------------------------
-    from datetime import datetime as _datetime_cls
-    from datetime import datetime as _dt_cls
-    _now = _dt_cls.utcnow()
-    overdue_task_row = _db.session.execute(_text("""
-        SELECT t.id, t.title, t.due_date
-        FROM tasks t
-        JOIN task_associations ta ON ta.task_id = t.id
-        WHERE ta.target_type = 'lead' AND ta.target_id = :lead_id
-          AND t.status IN ('open', 'overdue')
-          AND t.due_date <= :now
-        LIMIT 1
-    """), {'lead_id': lead_id, 'now': _now}).fetchone()
-    if not overdue_task_row:
-        overdue_task_row = _db.session.execute(_text("""
-            SELECT id, title, due_date FROM tasks
-            WHERE lead_id = :lead_id AND status IN ('open', 'overdue') AND due_date <= :now
-            LIMIT 1
-        """), {'lead_id': lead_id, 'now': _now}).fetchone()
-    has_overdue_hubspot_task = overdue_task_row is not None
-    overdue_task_title = overdue_task_row[1] if overdue_task_row else None
-    overdue_task_due = overdue_task_row[2].isoformat() if overdue_task_row and overdue_task_row[2] else None
+    from datetime import date as _date_cls
+    _today = _date_cls.today()
+    overdue_task = (
+        LeadTask.query
+        .filter(
+            LeadTask.lead_id == lead_id,
+            LeadTask.status == 'open',
+            LeadTask.hubspot_task_id.isnot(None),
+            LeadTask.due_date.isnot(None),
+            LeadTask.due_date <= _today,
+        )
+        .order_by(LeadTask.due_date.asc())
+        .first()
+    )
+    has_overdue_hubspot_task = overdue_task is not None
+    overdue_task_title = overdue_task.title if overdue_task else None
+    overdue_task_due = overdue_task.due_date.isoformat() if overdue_task and overdue_task.due_date else None
     source = lead.source
     hubspot_deal_name = None
     # Look up live deal data for ANY lead that has a confirmed HubSpot deal
@@ -468,6 +443,7 @@ def get_command_center(lead_id: int):
             # ID would overwrite a previously stored human-readable label.
             if live_deal_stage and live_deal_stage != raw_stage_id:
                 if lead.hubspot_deal_stage != live_deal_stage:
+                    # Read-only HubSpot stage mirror; editable status is lead_status.
                     lead.hubspot_deal_stage = live_deal_stage
                     _db.session.add(lead)
                     _db.session.commit()
@@ -491,17 +467,9 @@ def get_command_center(lead_id: int):
             _db.session.add(lead)
             _db.session.commit()
 
-    # ------------------------------------------------------------------
-    # HubSpot interactions (calls, emails, notes from HubSpot import)
-    # ------------------------------------------------------------------
-    hs_interactions = _db.session.execute(_text("""
-        SELECT i.interaction_type, i.occurred_at, i.body, i.source
-        FROM interactions i
-        JOIN interaction_associations ia ON ia.interaction_id = i.id
-        WHERE ia.target_type = 'lead' AND ia.target_id = :lead_id
-        ORDER BY i.occurred_at DESC
-        LIMIT 50
-    """), {'lead_id': lead_id}).fetchall()
+    # Interaction table is frozen for Command Center — HubSpot activity history
+    # lives on LeadTimelineEntry via HubSpotTimelineImportService. Do not UNION
+    # or inject Interaction rows into the CC timeline payload.
 
     # ------------------------------------------------------------------
     # Marketing list membership
@@ -516,12 +484,18 @@ def get_command_center(lead_id: int):
 
     hubspot_sync = HubSpotDealSyncService.get_lead_sync_health(lead_id)
 
+    # Relational contacts (primary first) — authoritative for owner display;
+    # flat owner/phone/email columns remain for transition consumers.
+    from app.services.contact_service import ContactService
+    contacts_payload = ContactService().get_ordered_contacts_payload(lead_id)
+
     return jsonify({
         'id': lead.id,
         'owner_first_name': lead.owner_first_name,
         'owner_last_name': lead.owner_last_name,
         'owner_2_first_name': lead.owner_2_first_name,
         'owner_2_last_name': lead.owner_2_last_name,
+        'contacts': contacts_payload,
         # Property details
         'property_street': lead.property_street,
         'property_city': lead.property_city,
@@ -643,22 +617,10 @@ def get_command_center(lead_id: int):
                 'created_at': t.created_at.isoformat(),
                 'completed_at': t.completed_at.isoformat() if t.completed_at else None,
                 'created_by': t.created_by,
-                'source': 'native',
+                'source': 'hubspot' if t.hubspot_task_id else 'native',
+                'hubspot_task_id': t.hubspot_task_id,
             }
             for t in open_tasks
-        ] + [
-            {
-                'id': f'hs-{row[0]}',  # prefix to avoid ID collision with native tasks
-                'task_type': 'custom',
-                'title': row[1] or 'HubSpot Task',
-                'status': row[2],
-                'due_date': row[3].strftime('%Y-%m-%d') if row[3] else None,
-                'created_at': row[4].isoformat() if row[4] else None,
-                'completed_at': None,
-                'created_by': 'HubSpot',
-                'source': 'hubspot',
-            }
-            for row in hubspot_task_rows
         ],
         'timeline': {
             'entries': sorted(
@@ -681,20 +643,7 @@ def get_command_center(lead_id: int):
                 ])(
                     # Build the actor cache once for the whole page
                     _resolve_actors_batch([e.actor for e in timeline_entries if e.actor])
-                ) + [
-                    # Inject HubSpot interactions as synthetic timeline entries
-                    {
-                        'id': -(i + 1),  # negative IDs to avoid collision
-                        'event_type': row[0] or 'hubspot_activity',
-                        'occurred_at': row[1].isoformat() if row[1] else '',
-                        'source': 'hubspot_import',
-                        'actor': 'HubSpot',
-                        'summary': re.sub(r'<[^>]+>', ' ', row[2] or '').strip()[:500] if row[2] else '',
-                        'metadata': None,
-                        'hubspot_activity_id': None,
-                    }
-                    for i, row in enumerate(hs_interactions)
-                ] + (
+                ) + (
                     # Inject mailer history as a single timeline entry if present
                     [{
                         'id': -9999,
@@ -710,20 +659,13 @@ def get_command_center(lead_id: int):
                 key=lambda e: e['occurred_at'],
                 reverse=True,
             ),
-            'total': timeline_total + len(hs_interactions) + (1 if lead.mailer_history else 0),
+            'total': timeline_total + (1 if lead.mailer_history else 0),
             'page': 1,
             'per_page': 25,
         },
-        # HubSpot interaction history (calls, emails, notes)
-        'hubspot_interactions': [
-            {
-                'type': row[0],
-                'occurred_at': row[1].isoformat() if row[1] else None,
-                'body': row[2],
-                'source': row[3],
-            }
-            for row in hs_interactions
-        ],
+        # Interaction is frozen for CC — HubSpot activities use LeadTimelineEntry.
+        # Kept empty for backward-compatible clients that still read the key.
+        'hubspot_interactions': [],
         # Marketing list membership
         'marketing_memberships': [
             {
@@ -1216,7 +1158,9 @@ def mark_hubspot_task_done(lead_id: int, task_id: int):
     """
     POST /api/leads/<lead_id>/hubspot-tasks/<task_id>/done
 
-    Mark a HubSpot-imported task as completed — both locally and in HubSpot.
+    Mark a HubSpot-imported LeadTask completed locally and best-effort in HubSpot.
+    ``task_id`` is the LeadTask id by default. Pass ``id_namespace=crm_task``
+    (query or JSON body) for legacy CRM ``tasks.id`` / ``hs-{id}`` clients.
     """
     from app.controllers.property_controller import _current_user_is_admin
     from app.services.hubspot_task_completion_service import complete_hubspot_task
@@ -1230,8 +1174,16 @@ def mark_hubspot_task_done(lead_id: int, task_id: int):
         if not current_user_id or current_user_id == 'anonymous' or lead.owner_user_id != current_user_id:
             return jsonify({'error': 'Not found'}), 404
 
+    body = request.get_json(silent=True) or {}
+    id_namespace = (
+        request.args.get('id_namespace')
+        or body.get('id_namespace')
+        or 'lead_task'
+    )
     actor = getattr(g, 'user_id', 'anonymous')
-    result = complete_hubspot_task(lead_id, task_id, actor=actor)
+    result = complete_hubspot_task(
+        lead_id, task_id, actor=actor, id_namespace=str(id_namespace),
+    )
     if not result.completed:
         return jsonify({
             'error': 'Not found',

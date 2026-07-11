@@ -83,13 +83,37 @@ const DIMENSION_COPY: Record<string, Omit<ScoreDimensionMeta, 'maxPoints'>> = {
   structured_motivation: {
     label: 'Structured Motivation',
     description:
-      'Distress signals from Cook County enrichment (tax sales, scofflaw, violations), source type, notes keywords, and manual priority — unified and capped to avoid double-counting.',
+      'Product motivation score from MotivationSignal rows (tax/violation distress, source type, notes keywords, manual priority), capped. This is lead.motivation_score — not HubSpot engagement.',
     dataSource: 'motivation_signals table (synced from enrichment JSON and ingestion fields)',
+  },
+  notes_keywords: {
+    label: 'Notes Keywords (attribution)',
+    description:
+      'Portion of structured motivation from notes keywords. Already included in Structured Motivation — shown for transparency, not added again.',
+    dataSource: 'Lead notes field keywords (probate, vacant, tired landlord, etc.)',
+  },
+  hubspot_engagement: {
+    label: 'HubSpot Engagement',
+    description:
+      'CRM signal adjustments (warm conversation, appointment, offer sent, not interested, etc.) applied to lead_score only. Not a second motivation_score.',
+    dataSource: 'HubSpot SIGNAL_ADJUSTMENTS on extracted CRM signals',
+  },
+  timeline_engagement: {
+    label: 'Timeline Engagement',
+    description:
+      'Recent manual call/email/note activity modifiers on lead_score.',
+    dataSource: 'Lead timeline entries (manual source, lookback window)',
+  },
+  pipeline_stage_bonus: {
+    label: 'Pipeline Stage Bonus',
+    description:
+      'Bonus or penalty from lead_status pipeline stage on lead_score.',
+    dataSource: 'lead.lead_status',
   },
   existing_notes_motivation: {
     label: 'Motivation in Notes',
     description:
-      'Lead notes containing motivation keywords (e.g. probate, vacant, tired landlord) score highest. Any notes without keywords earn a small partial score.',
+      'Legacy rubric dimension; current unified scoring folds notes keywords into Structured Motivation (see notes_keywords attribution).',
     dataSource: 'Lead notes field (manual, HubSpot, or import)',
   },
   manual_priority: {

@@ -159,7 +159,41 @@ class TestGetCommandCenter:
             assert 'recommended_action' in data
             assert 'open_tasks' in data
             assert 'timeline' in data
+            assert 'contacts' in data
+            assert isinstance(data['contacts'], list)
             assert data['id'] == lead.id
+
+    def test_contacts_ordered_primary_first(self, client, app):
+        """contacts[] is primary-first with nested phones/emails; flat fields remain."""
+        with app.app_context():
+            from app.services.contact_service import ContactService
+            lead = _make_lead(app, '2b Contacts St', owner_first_name='Flat', owner_last_name='Owner')
+            svc = ContactService()
+            secondary = svc.create_contact({
+                'first_name': 'Second',
+                'last_name': 'Owner',
+                'phones': [{'value': '555-0002', 'label': 'mobile'}],
+            })
+            primary = svc.create_contact({
+                'first_name': 'Primary',
+                'last_name': 'Contact',
+                'phones': [{'value': '555-0001', 'label': 'mobile'}],
+                'emails': [{'value': 'p@example.com', 'label': 'personal'}],
+            })
+            svc.link_contact_to_property(lead.id, secondary.id, role='owner', is_primary=False)
+            svc.link_contact_to_property(lead.id, primary.id, role='owner', is_primary=True)
+
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
+            data = json.loads(response.data)
+            assert response.status_code == 200
+            assert data['owner_first_name'] == 'Flat'
+            assert len(data['contacts']) == 2
+            assert data['contacts'][0]['first_name'] == 'Primary'
+            assert data['contacts'][0]['is_primary'] is True
+            assert data['contacts'][0]['phones'][0]['value'] == '555-0001'
+            assert data['contacts'][0]['emails'][0]['value'] == 'p@example.com'
+            assert data['contacts'][1]['first_name'] == 'Second'
+            assert data['contacts'][1]['is_primary'] is False
 
     def test_open_tasks_included_in_response(self, client, app):
         """Open tasks are included in the command center response."""
@@ -170,6 +204,54 @@ class TestGetCommandCenter:
             data = json.loads(response.data)
             task_ids = [t['id'] for t in data['open_tasks']]
             assert task.id in task_ids
+
+    def test_open_tasks_are_lead_task_only_not_crm_tasks_union(self, client, app):
+        """CC open_tasks comes from LeadTask only — CRM Task rows are not UNION'd in."""
+        with app.app_context():
+            from app.models.task import Task
+            from app.models.task_association import TaskAssociation
+
+            lead = _make_lead(app, '3b CC HubSpot St')
+            native = _make_task(app, lead.id, title='Native call')
+            hs_lead_task = LeadTask(
+                lead_id=lead.id,
+                task_type='custom',
+                title='HubSpot follow up',
+                status='open',
+                created_by='HubSpot',
+                hubspot_task_id='hs-cc-open-1',
+            )
+            db.session.add(hs_lead_task)
+
+            crm_only = Task(
+                title='CRM-only HubSpot task (should not appear)',
+                status='open',
+                source='hubspot_import',
+                hubspot_task_id='hs-cc-crm-only',
+            )
+            db.session.add(crm_only)
+            db.session.flush()
+            db.session.add(TaskAssociation(
+                task_id=crm_only.id,
+                target_type='lead',
+                target_id=lead.id,
+            ))
+            db.session.commit()
+
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
+            data = json.loads(response.data)
+            assert data['hubspot_interactions'] == []
+            by_id = {t['id']: t for t in data['open_tasks']}
+            titles = {t['title'] for t in data['open_tasks']}
+            assert native.id in by_id
+            assert by_id[native.id]['source'] == 'native'
+            assert hs_lead_task.id in by_id
+            assert by_id[hs_lead_task.id]['source'] == 'hubspot'
+            assert by_id[hs_lead_task.id]['hubspot_task_id'] == 'hs-cc-open-1'
+            assert 'CRM-only HubSpot task (should not appear)' not in titles
+            assert not any(
+                t.get('hubspot_task_id') == 'hs-cc-crm-only' for t in data['open_tasks']
+            )
 
     def test_clears_review_required_flag(self, client, app):
         """Opening command center clears review_required flag."""

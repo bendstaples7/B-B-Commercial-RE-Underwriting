@@ -255,8 +255,13 @@ def delete_interaction(interaction_id):
 def get_lead_interaction_timeline(lead_id):
     """Return the CRM interaction timeline for a lead (Interactions + Tasks).
 
-    Namespaced separately from command-center ``GET /api/leads/<id>/timeline``
-    which serves paginated ``LeadTimelineEntry`` records.
+    **Frozen for product / Command Center use.** Command Center reads and writes
+    ``LeadTimelineEntry`` via ``GET/POST /api/leads/<id>/timeline`` (and related
+    log endpoints). HubSpot activities are imported by
+    ``HubSpotTimelineImportService`` into ``LeadTimelineEntry``.
+
+    This endpoint remains for CRM/admin consumers and still returns data, but
+    new product UI must not depend on it. Response includes a Deprecation header.
 
     Query parameters
     ----------------
@@ -281,7 +286,12 @@ def get_lead_interaction_timeline(lead_id):
         target_id=lead_id,
         filters=filters,
     )
-    return jsonify({'timeline': entries, 'lead_id': lead_id}), 200
+    response = jsonify({'timeline': entries, 'lead_id': lead_id})
+    response.headers['Deprecation'] = 'Sat, 11 Jul 2026 00:00:00 GMT'
+    response.headers['Link'] = (
+        f'</api/leads/{lead_id}/timeline>; rel="successor-version"'
+    )
+    return response, 200
 
 
 @timeline_bp.route('/api/organizations/<int:org_id>/timeline', methods=['GET'])

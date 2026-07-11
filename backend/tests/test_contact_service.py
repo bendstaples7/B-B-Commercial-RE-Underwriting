@@ -437,3 +437,42 @@ class TestGetContactsForProperty:
             service = ContactService()
             with pytest.raises(ResourceNotFoundError):
                 service.get_contacts_for_property(99999)
+
+
+# ---------------------------------------------------------------------------
+# get_ordered_contacts_payload / batch_owner_display_for_leads
+# ---------------------------------------------------------------------------
+
+class TestOrderedContactsPayload:
+    def test_payload_primary_first_with_nested_channels(self, app):
+        """get_ordered_contacts_payload orders primary first and nests phones/emails."""
+        with app.app_context():
+            from app.services.contact_service import batch_owner_display_for_leads
+
+            service = ContactService()
+            prop = _make_property("707 Payload Ave")
+            secondary = service.create_contact({
+                'first_name': 'Sec',
+                'last_name': 'Ond',
+                'phones': [{'value': '111', 'label': 'other'}],
+            })
+            primary = service.create_contact({
+                'first_name': 'Pri',
+                'last_name': 'Mary',
+                'emails': [{'value': 'pri@ex.com', 'label': 'other'}],
+            })
+            service.link_contact_to_property(prop.id, secondary.id, role='owner', is_primary=False)
+            service.link_contact_to_property(prop.id, primary.id, role='owner', is_primary=True)
+
+            payload = service.get_ordered_contacts_payload(prop.id)
+            assert [c['first_name'] for c in payload] == ['Pri', 'Sec']
+            assert payload[0]['is_primary'] is True
+            assert payload[0]['emails'][0]['value'] == 'pri@ex.com'
+            assert set(payload[0].keys()) >= {
+                'id', 'first_name', 'last_name', 'role', 'is_primary', 'phones', 'emails',
+            }
+
+            display = batch_owner_display_for_leads([prop.id])
+            assert display[prop.id]['owner_display_name'] == 'Pri Mary'
+            assert display[prop.id]['best_email'] == 'pri@ex.com'
+            assert display[prop.id]['best_phone'] == '111'

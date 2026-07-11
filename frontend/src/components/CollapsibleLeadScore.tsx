@@ -28,6 +28,7 @@ export function CollapsibleLeadScore({ score, onViewFullBreakdown }: Collapsible
   const tierTooltip = `Tier ${score.score_tier}: ${TIER_RANGE_LABELS[score.score_tier]} — letter grade from total score (0–100)`
 
   const topDrivers = Object.entries(score.score_details ?? {})
+    .filter(([key]) => key !== 'notes_keywords')
     .sort(([, a], [, b]) => b - a)
     .slice(0, 3)
 

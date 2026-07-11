@@ -94,6 +94,8 @@ class Property(db.Model):
     socials = db.Column(db.Text, nullable=True)
 
     # Mailing tracking
+    # Legacy flag — prefer recommended_action == 'mail_ready' + MailQueueItem membership.
+    # Still cleared on send/remove for stale rows; new enqueue paths should not set True.
     up_next_to_mail = db.Column(db.Boolean, nullable=True, default=False)
     mailer_history = db.Column(db.JSON, nullable=True)  # JSONB for flexible mailer tracking
 
@@ -149,7 +151,7 @@ class Property(db.Model):
     data_completeness_score = db.Column(db.Float, nullable=False, default=0.0)
     last_contact_date = db.Column(db.Date, nullable=True)
     unanswered_call_count = db.Column(db.Integer, nullable=False, default=0)
-    hubspot_deal_stage = db.Column(db.String(100), nullable=True)
+    hubspot_deal_stage = db.Column(db.String(100), nullable=True)  # read-only HubSpot mirror; pipeline status is lead_status
     last_hubspot_sync_at = db.Column(db.DateTime, nullable=True)
     follow_up_date = db.Column(db.Date, nullable=True)
 

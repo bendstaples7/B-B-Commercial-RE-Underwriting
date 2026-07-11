@@ -234,6 +234,7 @@ class HubSpotWriteBackService:
                 match.updated_at = datetime.utcnow()
 
             if action == 'created':
+                # Mirror HubSpot default stage; canonical status remains lead_status.
                 lead.hubspot_deal_stage = DEFAULT_DEAL_STAGE_LABEL
             lead.last_hubspot_sync_at = datetime.utcnow()
             db.session.commit()
@@ -366,7 +367,7 @@ class HubSpotWriteBackService:
                 raw_payload=raw_payload,
                 run_id=None,
             )
-            lead.hubspot_deal_stage = stage_label
+            lead.hubspot_deal_stage = stage_label  # read-only HubSpot mirror
             lead.last_hubspot_sync_at = datetime.utcnow()
             db.session.add(lead)
             db.session.commit()

@@ -16,6 +16,9 @@ Update this doc when ownership changes.
 | Queue pagination | [`pagination.ts`](../frontend/src/utils/pagination.ts) | Local page math in queue components |
 | Queue context banners | [`deriveQueueContext.ts`](../frontend/src/utils/deriveQueueContext.ts) | Inline banner logic in detail pages |
 | Lead status UI | [`LeadStatusSelector.tsx`](../frontend/src/components/LeadStatusSelector.tsx) | Inline status Select + reason fields |
+| Motivation score (product) | [`MotivationSignalService`](../backend/app/services/motivation_signal_service.py) → `lead.motivation_score` + MotivationSignalsPanel | Second motivation formula; treating HubSpot SIGNAL_ADJUSTMENTS as motivation_score |
+| Owners / phones / emails (CC + queues) | [`Contact`](../backend/app/models/contact.py) + [`PropertyContact`](../backend/app/models/property_contact.py) via [`ContactService`](../backend/app/services/contact_service.py) | Dual Info-tab flat owner/phone editor; queue rows reading only `owner_first_name`/`phone_1` when contacts exist |
+| Mail readiness | `recommended_action == 'mail_ready'` + [`MailQueueItem`](../backend/app/models/mail_queue_item.py) / Ready to Mail | Competing `up_next_to_mail` as mailer status; lists as batch queue |
 | API client pattern | Domain modules like [`condoFilterApi.ts`](../frontend/src/services/condoFilterApi.ts), [`leadApi.ts`](../frontend/src/services/leadApi.ts) | New exports appended to monolithic [`api.ts`](../frontend/src/services/api.ts) |
 | Shared formatters | [`helpers.ts`](../frontend/src/utils/helpers.ts) (extend as needed) | Local `formatDate` / `humanize` copies in components |
 
@@ -24,13 +27,16 @@ Update this doc when ownership changes.
 | Domain | Canonical | Do not add |
 |--------|-----------|------------|
 | Unified scoring + recommended action | [`LeadScoringEngine`](../backend/app/services/lead_scoring_engine.py) + [`scoring_rubric.py`](../backend/app/services/scoring_rubric.py) via [`refresh_lead_scoring`](../backend/app/services/lead_refresh.py) | `DeterministicScoringEngine`, `ActionEngineService`, or second writers to `leads.lead_score` / `leads.recommended_action` |
+| Pipeline status | `lead.lead_status` via lead_status_service / LeadStatusSelector | Treating `hubspot_deal_stage` as editable pipeline status (it is a read-only HubSpot mirror) |
 | Live `leads.lead_score` | [`LeadScoringEngine.persist()`](../backend/app/services/lead_scoring_engine.py) — same value as latest `lead_scores.total_score` | Second writer to `leads.lead_score` |
 | Per-phone confidence | [`PhoneConfidenceService`](../backend/app/services/phone_confidence_service.py) → `contact_phones.confidence_score` | Parallel phone tracking tables |
 | HubSpot contact refresh | [`HubSpotContactSyncService`](../backend/app/services/hubspot_contact_sync_service.py) | Ad-hoc contact API fetch outside enrich/backfill |
 | Score history / audit API | [`LeadScoringEngine`](../backend/app/services/lead_scoring_engine.py) → `lead_scores` table (append-only) | Separate scoring engine writing different scores |
 | Recommended action (live) | [`LeadScoringEngine`](../backend/app/services/lead_scoring_engine.py) → `leads.recommended_action` (same as `lead_scores.recommended_action`) | Parallel action engines or unmapped RA enums |
-| Lead timeline (read/write) | [`command_center_controller.py`](../backend/app/controllers/command_center_controller.py) + [`CallLogService`](../backend/app/services/call_log_service.py) → `LeadTimelineEntry` | Duplicate `GET /api/leads/:id/timeline` handlers |
-| Interaction timeline (CRM) | `GET /api/leads/:id/interaction-timeline` in [`interaction_controller.py`](../backend/app/controllers/interaction_controller.py) | Overlapping URL with command-center timeline |
+| Lead timeline (read/write) | [`command_center_controller.py`](../backend/app/controllers/command_center_controller.py) + [`CallLogService`](../backend/app/services/call_log_service.py) → `LeadTimelineEntry` | Duplicate `GET /api/leads/:id/timeline` handlers; injecting Interaction rows into CC |
+| HubSpot activity → CC timeline | [`HubSpotTimelineImportService`](../backend/app/services/hubspot_timeline_import_service.py) → `LeadTimelineEntry` | Writing HubSpot activities only to `Interaction` for product UI |
+| Lead open tasks (CC) | [`LeadTask`](../backend/app/models/lead_task.py) via [`LeadTaskService`](../backend/app/services/lead_task_service.py) (incl. `hubspot_task_id`) | UNION of CRM `tasks` into CC `open_tasks` |
+| Interaction timeline (CRM) | `GET /api/leads/:id/interaction-timeline` in [`interaction_controller.py`](../backend/app/controllers/interaction_controller.py) — **frozen for CC/product** | Overlapping URL with command-center timeline; new product consumers |
 | Work queues (API) | [`queue_service.py`](../backend/app/services/queue_service.py) at `/api/queues/*` | `/api/properties/views/*` (301 → queues; legacy only) |
 | Lead list/detail API | [`property_controller.py`](../backend/app/controllers/property_controller.py) at `/api/properties/*` | Logic in stub [`lead_controller.py`](../backend/app/controllers/lead_controller.py) |
 | Controller error handling | Shared decorator in `app/controllers/decorators.py` (target) | Per-file `handle_errors` copies |

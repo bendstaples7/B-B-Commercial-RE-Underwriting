@@ -209,7 +209,7 @@ FIELD_SYNONYMS: dict[str, list[str]] = {
     "email_4": ["email 4", "email_4", "email4"],
     "email_5": ["email 5", "email_5", "email5"],
     "socials": ["socials", "social media", "linkedin", "facebook", "social links"],
-    "up_next_to_mail": ["up next to mail", "up_next_to_mail", "next to mail", "mail target"],
+    "up_next_to_mail": ["up next to mail", "up_next_to_mail", "next to mail", "mail target"],  # legacy; prefer mail_ready + MailQueueItem
     "mailer_history": ["mailer history", "mailer_history", "mailers", "mailer"],
     "lead_category": [
         "lead category", "lead_category", "category", "lead type",
@@ -885,6 +885,15 @@ class GoogleSheetsImporter:
                     existing.last_import_job_id = import_job_id
                 existing.updated_at = datetime.utcnow()
                 return existing
+            try:
+                from app.services.contact_service import ContactService
+                with db.session.begin_nested():
+                    ContactService().upsert_owners_from_lead(lead, commit=False)
+            except Exception as exc:
+                logger.warning(
+                    "Contact upsert after sheets create failed for lead_id=%s: %s",
+                    getattr(lead, 'id', None), exc,
+                )
             return lead
 
     # ------------------------------------------------------------------
@@ -953,6 +962,17 @@ class GoogleSheetsImporter:
                 )
                 db.session.add(audit)
                 lead.property_type = inferred
+
+        # Keep relational contacts in sync with flat owner / phone / email fields.
+        try:
+            from app.services.contact_service import ContactService
+            with db.session.begin_nested():
+                ContactService().upsert_owners_from_lead(lead, commit=False)
+        except Exception as exc:
+            logger.warning(
+                "Contact upsert after sheets update failed for lead_id=%s: %s",
+                getattr(lead, 'id', None), exc,
+            )
 
     @staticmethod
     def _infer_property_type_from_units(units: Optional[int]) -> Optional[str]:

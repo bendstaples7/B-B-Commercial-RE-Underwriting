@@ -31,6 +31,9 @@ class LeadTask(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     completed_at = db.Column(db.DateTime, nullable=True)
     created_by = db.Column(db.String(100), nullable=False, default='anonymous')
+    # HubSpot engagement/task id when this LeadTask was imported or synced from HubSpot.
+    # Partial unique index on (hubspot_task_id, lead_id) — one row per lead per HubSpot task.
+    hubspot_task_id = db.Column(db.String(50), nullable=True)
 
     # Relationship — use 'Property' because the SQLAlchemy class is named Property
     # (Lead is a Python alias, not the registered mapper name)
@@ -39,6 +42,13 @@ class LeadTask(db.Model):
     __table_args__ = (
         db.Index('ix_lead_tasks_lead_status', 'lead_id', 'status'),
         db.Index('ix_lead_tasks_status_due_date', 'status', 'due_date'),
+        db.Index(
+            'ix_lead_tasks_hubspot_task_id_lead_id',
+            'hubspot_task_id',
+            'lead_id',
+            unique=True,
+            postgresql_where=db.text('hubspot_task_id IS NOT NULL'),
+        ),
     )
 
     def __repr__(self):

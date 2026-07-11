@@ -505,6 +505,37 @@ class TestOutreachContactMethod:
         assert result.recommended_action == 'call_ready'
 
 
+class TestMotivationScoreAttribution:
+    """score_details names structured_motivation / notes_keywords / hubspot_engagement."""
+
+    def test_compute_attributes_notes_and_hubspot_without_double_add(self, app):
+        lead = _make_lead(has_phone=True, has_email=False)
+        lead.notes = 'Owner mentioned probate and wants to sell'
+        lead.lead_status = 'mailing_no_contact_made'
+
+        engine = LeadScoringEngine()
+        weights = _default_mock_weights()
+        signals = ['PRIOR_WARM_CONVERSATION']
+
+        with app.app_context(), \
+             patch.object(engine, 'get_weights', return_value=weights), \
+             patch.object(LeadScoringEngine, '_has_recent_email', return_value=False), \
+             patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
+             patch('app.services.lead_scoring_engine._has_overdue_hubspot_task', return_value=False), \
+             patch('app.services.lead_scoring_engine._resolve_crm_flags', return_value=(True, False, True)), \
+             patch.object(LeadScoringEngine, '_score_engagement', return_value=0.0):
+            result = engine.compute(lead, weights, signals=signals)
+
+        details = result.score_details
+        assert 'structured_motivation' in details
+        assert details.get('notes_keywords', 0) > 0
+        assert details.get('hubspot_engagement') == LeadScoringEngine.SIGNAL_ADJUSTMENTS['PRIOR_WARM_CONVERSATION']
+        # notes_keywords is attribution only — structured already includes it
+        assert details['notes_keywords'] <= details['structured_motivation']
+        # HubSpot mods are engagement on lead_score, not a second motivation_score
+        assert lead.motivation_score == details['structured_motivation']
+
+
 class TestRecentlySoldMailGuard:
     def test_recent_sale_suppresses_mail_ready(self, monkeypatch):
         from unittest.mock import MagicMock

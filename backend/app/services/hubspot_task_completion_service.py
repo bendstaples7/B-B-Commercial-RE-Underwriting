@@ -1,4 +1,9 @@
-"""Complete HubSpot-imported tasks locally with best-effort HubSpot API sync."""
+"""Complete HubSpot-imported tasks locally with best-effort HubSpot API sync.
+
+Canonical local store is ``LeadTask`` (keyed by ``hubspot_task_id``). The
+parallel CRM ``tasks`` row is updated when present so queue/association
+consumers stay consistent until they migrate fully to LeadTask.
+"""
 from __future__ import annotations
 
 import logging
@@ -6,7 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app import db
-from app.models import LeadTimelineEntry
+from app.models import LeadTask, LeadTimelineEntry
+from app.models.task import Task
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +31,30 @@ class HubSpotTaskLocalCompletion:
     hubspot_task_id: str | None
 
 
-def _update_hubspot_task_completed(
+def _complete_crm_task_by_hubspot_id(hubspot_task_id: str, now: datetime) -> None:
+    """Best-effort mirror completion onto the parallel CRM ``tasks`` row."""
+    if not hubspot_task_id:
+        return
+    crm_task = Task.query.filter_by(hubspot_task_id=str(hubspot_task_id)).first()
+    if crm_task is None:
+        return
+    if crm_task.status in ('open', 'overdue'):
+        crm_task.status = 'completed'
+        crm_task.completion_timestamp = now
+        crm_task.updated_at = now
+        db.session.add(crm_task)
+
+
+def _complete_legacy_crm_task(
     lead_id: int,
     task_id: int,
+    now: datetime,
 ) -> HubSpotTaskLocalCompletion | None:
-    now = datetime.now(timezone.utc)
+    """Complete by CRM ``tasks.id`` (legacy ``hs-{id}`` clients)."""
+    from sqlalchemy import text as sa_text
+
     result = db.session.execute(
-        db.text("""
+        sa_text("""
             UPDATE tasks
             SET status = 'completed',
                 updated_at = :now,
@@ -56,11 +79,97 @@ def _update_hubspot_task_completed(
     if result is None:
         return None
 
+    hs_id = result[2]
+    if hs_id:
+        lt = LeadTask.query.filter_by(hubspot_task_id=str(hs_id), lead_id=lead_id).first()
+        if lt is not None and lt.status == 'open':
+            lt.status = 'completed'
+            lt.completed_at = now
+            db.session.add(lt)
+
     return HubSpotTaskLocalCompletion(
         task_id=result[0],
         title=result[1],
-        hubspot_task_id=result[2],
+        hubspot_task_id=hs_id,
     )
+
+
+def _crm_task_linked_to_lead(crm_task: Task, lead_id: int) -> bool:
+    if crm_task.lead_id == lead_id:
+        return True
+    from app.models.task_association import TaskAssociation
+    return (
+        TaskAssociation.query.filter_by(
+            task_id=crm_task.id,
+            target_type='lead',
+            target_id=lead_id,
+        ).first()
+        is not None
+    )
+
+
+def _complete_lead_task_by_id(
+    lead_id: int,
+    task_id: int,
+    now: datetime,
+) -> HubSpotTaskLocalCompletion | None:
+    """Atomically complete an open HubSpot-linked LeadTask by id.
+
+    Uses ``UPDATE ... WHERE status='open' RETURNING`` so concurrent completers
+    cannot both succeed (avoids duplicate timeline / HubSpot sync).
+    """
+    from sqlalchemy import text as sa_text
+
+    result = db.session.execute(
+        sa_text("""
+            UPDATE lead_tasks
+            SET status = 'completed',
+                completed_at = :now
+            WHERE id = :task_id
+              AND lead_id = :lead_id
+              AND status = 'open'
+              AND hubspot_task_id IS NOT NULL
+            RETURNING id, title, hubspot_task_id
+        """),
+        {'task_id': task_id, 'lead_id': lead_id, 'now': now},
+    ).fetchone()
+
+    if result is None:
+        return None
+
+    hs_id = result[2]
+    _complete_crm_task_by_hubspot_id(hs_id, now)
+    return HubSpotTaskLocalCompletion(
+        task_id=result[0],
+        title=result[1],
+        hubspot_task_id=hs_id,
+    )
+
+
+def _update_hubspot_task_completed(
+    lead_id: int,
+    task_id: int,
+    *,
+    id_namespace: str = 'lead_task',
+) -> HubSpotTaskLocalCompletion | None:
+    """Complete a HubSpot-linked task for a lead.
+
+    ``id_namespace`` must be ``lead_task`` (Command Center / LeadTask PK) or
+    ``crm_task`` (legacy CRM ``tasks.id`` / ``hs-{id}``). The two tables use
+    independent sequences, so the caller must disambiguate.
+    """
+    now = datetime.now(timezone.utc)
+    namespace = (id_namespace or 'lead_task').strip().lower()
+    if namespace not in ('lead_task', 'crm_task'):
+        namespace = 'lead_task'
+
+    if namespace == 'crm_task':
+        crm_match = Task.query.filter_by(id=task_id, source='hubspot_import').first()
+        if crm_match is None or not _crm_task_linked_to_lead(crm_match, lead_id):
+            return None
+        return _complete_legacy_crm_task(lead_id, task_id, now)
+
+    return _complete_lead_task_by_id(lead_id, task_id, now)
 
 
 def _append_hubspot_task_timeline(
@@ -114,9 +223,12 @@ def mark_hubspot_task_completed_local(
     actor: str = 'system',
     *,
     reason: str | None = None,
+    id_namespace: str = 'lead_task',
 ) -> HubSpotTaskLocalCompletion | None:
     """Mark a HubSpot task completed in the current session without committing."""
-    local = _update_hubspot_task_completed(lead_id, task_id)
+    local = _update_hubspot_task_completed(
+        lead_id, task_id, id_namespace=id_namespace,
+    )
     if local is None:
         return None
 
@@ -165,9 +277,12 @@ def complete_hubspot_task(
     *,
     reason: str | None = None,
     skip_scoring_refresh: bool = False,
+    id_namespace: str = 'lead_task',
 ) -> HubSpotCompletionResult:
     """Mark a HubSpot-imported task completed locally; sync to HubSpot when possible."""
-    local = _update_hubspot_task_completed(lead_id, task_id)
+    local = _update_hubspot_task_completed(
+        lead_id, task_id, id_namespace=id_namespace,
+    )
     if local is None:
         db.session.rollback()
         return HubSpotCompletionResult(completed=False)

@@ -40,6 +40,12 @@ TAX_DISTRESS_FORBIDDEN_TERMS = frozenset({
     "tax_delinquency", "tax_sale", "delinquent", "tax delinquency", "tax sale",
 })
 
+# Present in score_details for UI attribution only — already counted elsewhere
+# (notes_keywords ⊂ structured_motivation; do not treat as a second additive).
+SCORE_ATTRIBUTION_ONLY_KEYS = frozenset({
+    "notes_keywords",
+})
+
 RESIDENTIAL_MAX_POINTS = {
     "property_type_fit": 20,
     "neighborhood_fit": 15,
@@ -655,6 +661,8 @@ def extract_top_signals(score_details: dict, lead=None) -> list:
                         'points': pts,
                     })
     for dim, pts in score_details.items():
+        if dim in SCORE_ATTRIBUTION_ONLY_KEYS:
+            continue
         if pts <= 0:
             continue
         dim_lower = dim.lower().replace("_", " ")

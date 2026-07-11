@@ -291,6 +291,7 @@ class HubSpotActivityConverterService:
                     target_id=assoc['target_id'],
                 ))
 
+        self._upsert_lead_tasks_for_task(task, associations)
         db.session.commit()
         logger.info(
             "Created Task(id=%s) from HubSpot engagement %s (status=%s).",
@@ -334,6 +335,7 @@ class HubSpotActivityConverterService:
             task.completion_timestamp = None
             changed = True
 
+        self._upsert_lead_tasks_for_task(task)
         db.session.commit()
 
         if changed:
@@ -386,6 +388,10 @@ class HubSpotActivityConverterService:
             ))
             if new_status == 'completed':
                 task.completion_timestamp = datetime.utcnow()
+            self._upsert_lead_tasks_for_task(
+                task,
+                [{'target_type': 'lead', 'target_id': lead_id}],
+            )
             db.session.commit()
             logger.info(
                 'Created Task(id=%s) from live HubSpot CRM task %s (status=%s).',
@@ -428,7 +434,13 @@ class HubSpotActivityConverterService:
             task.completion_timestamp = None
             changed = True
 
+        self._upsert_lead_tasks_for_task(
+            task,
+            [{'target_type': 'lead', 'target_id': lead_id}],
+        )
+
         if not changed:
+            db.session.commit()
             return 'unchanged'
 
         db.session.commit()
@@ -442,6 +454,54 @@ class HubSpotActivityConverterService:
     # ------------------------------------------------------------------ #
     # Private helpers                                                      #
     # ------------------------------------------------------------------ #
+
+    def _upsert_lead_tasks_for_task(self, task: Task, associations: list | None = None) -> None:
+        """Mirror lead-linked HubSpot Task rows into canonical LeadTask.
+
+        Prefer LeadTask for Command Center Open Tasks; keep ``tasks`` for CRM
+        association/queue consumers until those paths are migrated.
+        """
+        if not task.hubspot_task_id:
+            return
+
+        from app.services.lead_task_service import LeadTaskService
+
+        lead_ids: set[int] = set()
+        if associations:
+            for assoc in associations:
+                if assoc.get('target_type') == 'lead' and assoc.get('target_id') is not None:
+                    lead_ids.add(int(assoc['target_id']))
+        else:
+            for row in TaskAssociation.query.filter_by(
+                task_id=task.id,
+                target_type='lead',
+            ).all():
+                lead_ids.add(int(row.target_id))
+            if task.lead_id is not None:
+                lead_ids.add(int(task.lead_id))
+
+        if not lead_ids:
+            return
+
+        svc = LeadTaskService()
+        for lead_id in lead_ids:
+            try:
+                with db.session.begin_nested():
+                    svc.upsert_from_hubspot(
+                        lead_id=lead_id,
+                        hubspot_task_id=str(task.hubspot_task_id),
+                        title=task.title or '(No Subject)',
+                        status=task.status or 'open',
+                        due_date=task.due_date,
+                        commit=False,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    'LeadTask upsert failed for hubspot_task_id=%s lead_id=%s: %s',
+                    task.hubspot_task_id,
+                    lead_id,
+                    exc,
+                )
 
     @staticmethod
     def _map_crm_v3_task_status(props: dict) -> str:

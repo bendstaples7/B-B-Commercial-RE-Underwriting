@@ -926,7 +926,6 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
         from app import db
         from app.models import Lead, HubSpotDeal, HubSpotContact, HubSpotMatch
         from app.services.hubspot_matcher_service import HubSpotMatcherService
-        from app.services.action_engine_service import ActionEngineService
 
         matcher = HubSpotMatcherService()
 
@@ -1200,22 +1199,15 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
                 )
                 db.session.rollback()
 
-        # --- Recompute recommended_action for all touched leads ------------
+        # Final pipeline bulk_rescore owns recommended_action for this run.
+        # Touch affected leads so rescore includes them; do not recompute here.
         touched_lead_ids = {
             m.internal_record_id
             for m in confirmed_deal_matches + confirmed_contact_matches
             if m.internal_record_id
         }
-        for lead_id in touched_lead_ids:
-            try:
-                ActionEngineService.recompute_and_persist(lead_id)
-                action_recomputed += 1
-            except Exception as exc:
-                logger.warning(
-                    "run_enrich_leads_from_hubspot: recompute failed for lead_id=%d: %s",
-                    lead_id, exc,
-                )
-                db.session.rollback()
+        enriched_lead_ids.update(touched_lead_ids)
+        action_recomputed = 0
 
         from app.services.hubspot_pipeline_runner import note_pipeline_affected_leads
 
