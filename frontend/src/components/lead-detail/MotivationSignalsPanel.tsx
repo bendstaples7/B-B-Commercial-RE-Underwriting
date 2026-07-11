@@ -32,7 +32,8 @@ export function MotivationSignalsPanel({ lead, score }: MotivationSignalsPanelPr
     !summary.length &&
     !lead.motivation_score &&
     !hubspotEngagement &&
-    !timelineEngagement
+    !timelineEngagement &&
+    !notesKeywords
   ) {
     return (
       <Typography variant="body2" color="text.secondary">

@@ -9,8 +9,9 @@ export function contactDisplayName(
 }
 
 /**
- * Prefer command-center / property ``contacts[]`` (already primary-first).
- * Falls back to flat owner first/last when contacts are absent or unnamed.
+ * Prefer command-center / property ``contacts[]`` owner-role entries
+ * (already primary-first). Falls back to flat owner first/last when owner
+ * contacts are absent or unnamed.
  */
 export function primaryOwnerDisplayName(
   contacts: PropertyContactSummary[] | undefined | null,
@@ -18,7 +19,11 @@ export function primaryOwnerDisplayName(
   fallbackLast?: string | null,
 ): string {
   if (contacts?.length) {
-    for (const contact of contacts) {
+    const owners = contacts.filter(
+      (c) => !c.role || c.role === 'owner',
+    )
+    const ordered = owners.length ? owners : contacts
+    for (const contact of ordered) {
       const name = contactDisplayName(contact)
       if (name) return name
     }

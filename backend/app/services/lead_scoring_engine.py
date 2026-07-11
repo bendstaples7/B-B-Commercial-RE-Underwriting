@@ -89,21 +89,30 @@ def _count_open_tasks(lead_id: int) -> int:
     from sqlalchemy import text as _text
     try:
         native = LeadTask.query.filter_by(lead_id=lead_id, status='open').count()
+        # Count HubSpot CRM tasks not already mirrored onto LeadTask for this lead.
         hs = db.session.execute(_text("""
-            SELECT COUNT(*) FROM tasks t
-            JOIN task_associations ta ON ta.task_id = t.id
-            WHERE ta.target_type = 'lead' AND ta.target_id = :lid
-              AND t.status IN ('open', 'overdue')
-              AND t.source = 'hubspot_import'
-            UNION ALL
-            SELECT COUNT(*) FROM tasks
-            WHERE lead_id = :lid
-              AND status IN ('open', 'overdue')
-              AND source = 'hubspot_import'
-        """), {'lid': lead_id}).fetchall()
-        hs_counts = [r[0] for r in hs]
-        hs_total = max(hs_counts) if hs_counts else 0
-        return native + hs_total
+            SELECT COUNT(DISTINCT t.id) FROM (
+              SELECT t.id, t.hubspot_task_id
+              FROM tasks t
+              JOIN task_associations ta ON ta.task_id = t.id
+              WHERE ta.target_type = 'lead' AND ta.target_id = :lid
+                AND t.status IN ('open', 'overdue')
+                AND t.source = 'hubspot_import'
+              UNION
+              SELECT t.id, t.hubspot_task_id
+              FROM tasks t
+              WHERE t.lead_id = :lid
+                AND t.status IN ('open', 'overdue')
+                AND t.source = 'hubspot_import'
+            ) t
+            WHERE t.hubspot_task_id IS NULL
+               OR NOT EXISTS (
+                 SELECT 1 FROM lead_tasks lt
+                 WHERE lt.lead_id = :lid
+                   AND lt.hubspot_task_id = t.hubspot_task_id
+               )
+        """), {'lid': lead_id}).scalar() or 0
+        return native + int(hs)
     except Exception as exc:
         logger.warning("open task count query failed for lead_id=%s: %s", lead_id, exc)
         return 0
@@ -203,6 +212,7 @@ def _should_skip_duplicate_ra_timeline(
         latest = (
             LeadTimelineEntry.query
             .filter_by(lead_id=lead_id, event_type='recommended_action_changed')
+            .filter(LeadTimelineEntry.is_deleted.is_(False))
             .order_by(LeadTimelineEntry.occurred_at.desc(), LeadTimelineEntry.id.desc())
             .first()
         )

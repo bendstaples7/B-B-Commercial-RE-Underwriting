@@ -1159,8 +1159,8 @@ def mark_hubspot_task_done(lead_id: int, task_id: int):
     POST /api/leads/<lead_id>/hubspot-tasks/<task_id>/done
 
     Mark a HubSpot-imported LeadTask completed locally and best-effort in HubSpot.
-    ``task_id`` is the LeadTask id (preferred). Legacy CRM ``tasks.id`` still
-    works as a fallback during migration.
+    ``task_id`` is the LeadTask id by default. Pass ``id_namespace=crm_task``
+    (query or JSON body) for legacy CRM ``tasks.id`` / ``hs-{id}`` clients.
     """
     from app.controllers.property_controller import _current_user_is_admin
     from app.services.hubspot_task_completion_service import complete_hubspot_task
@@ -1174,8 +1174,16 @@ def mark_hubspot_task_done(lead_id: int, task_id: int):
         if not current_user_id or current_user_id == 'anonymous' or lead.owner_user_id != current_user_id:
             return jsonify({'error': 'Not found'}), 404
 
+    body = request.get_json(silent=True) or {}
+    id_namespace = (
+        request.args.get('id_namespace')
+        or body.get('id_namespace')
+        or 'lead_task'
+    )
     actor = getattr(g, 'user_id', 'anonymous')
-    result = complete_hubspot_task(lead_id, task_id, actor=actor)
+    result = complete_hubspot_task(
+        lead_id, task_id, actor=actor, id_namespace=str(id_namespace),
+    )
     if not result.completed:
         return jsonify({
             'error': 'Not found',

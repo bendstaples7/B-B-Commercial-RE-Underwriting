@@ -249,7 +249,9 @@ class TestGetCommandCenter:
             assert by_id[hs_lead_task.id]['source'] == 'hubspot'
             assert by_id[hs_lead_task.id]['hubspot_task_id'] == 'hs-cc-open-1'
             assert 'CRM-only HubSpot task (should not appear)' not in titles
-            assert f'hs-{crm_only.id}' not in by_id
+            assert not any(
+                t.get('hubspot_task_id') == 'hs-cc-crm-only' for t in data['open_tasks']
+            )
 
     def test_clears_review_required_flag(self, client, app):
         """Opening command center clears review_required flag."""

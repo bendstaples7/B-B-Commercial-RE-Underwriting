@@ -22,14 +22,17 @@ def upgrade():
         ALTER TABLE lead_tasks
         ADD COLUMN IF NOT EXISTS hubspot_task_id VARCHAR(50)
     """)
-    # Partial unique index: multiple NULLs allowed; non-null values unique.
+    # Drop legacy single-column unique if a prior revision of this migration applied it.
+    op.execute("DROP INDEX IF EXISTS ix_lead_tasks_hubspot_task_id")
+    # Partial unique: one LeadTask per (hubspot_task_id, lead_id); multiple NULLs OK.
     op.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS ix_lead_tasks_hubspot_task_id
-        ON lead_tasks (hubspot_task_id)
+        CREATE UNIQUE INDEX IF NOT EXISTS ix_lead_tasks_hubspot_task_id_lead_id
+        ON lead_tasks (hubspot_task_id, lead_id)
         WHERE hubspot_task_id IS NOT NULL
     """)
 
 
 def downgrade():
+    op.execute("DROP INDEX IF EXISTS ix_lead_tasks_hubspot_task_id_lead_id")
     op.execute("DROP INDEX IF EXISTS ix_lead_tasks_hubspot_task_id")
     op.execute("ALTER TABLE lead_tasks DROP COLUMN IF EXISTS hubspot_task_id")

@@ -286,7 +286,9 @@ class TestEnqueueCompletesMailPrepTasks:
             assert db_task.status == 'completed'
             # Canonical readiness is MailQueueItem membership, not up_next_to_mail.
             assert Lead.query.get(lead.id).up_next_to_mail is not True
-            assert MailQueueItem.query.filter_by(lead_id=lead.id, status='queued').count() == 1
+            assert MailQueueItem.query.filter_by(
+                lead_id=lead.id, user_id=USER_ID, status='queued',
+            ).count() == 1
 
     def test_enqueue_completes_overdue_call_task(self, app):
         with app.app_context():

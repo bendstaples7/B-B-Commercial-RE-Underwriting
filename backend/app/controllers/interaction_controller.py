@@ -287,7 +287,7 @@ def get_lead_interaction_timeline(lead_id):
         filters=filters,
     )
     response = jsonify({'timeline': entries, 'lead_id': lead_id})
-    response.headers['Deprecation'] = 'true'
+    response.headers['Deprecation'] = 'Sat, 11 Jul 2026 00:00:00 GMT'
     response.headers['Link'] = (
         f'</api/leads/{lead_id}/timeline>; rel="successor-version"'
     )

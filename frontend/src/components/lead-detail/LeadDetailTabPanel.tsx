@@ -246,9 +246,11 @@ export function LeadDetailTabPanel({
                 return (
                   <Box key={contact.id}>
                     {fieldGroup(
-                      `Owner ${idx + 1}${contact.is_primary ? ' (Primary)' : ''}${
-                        contact.role && contact.role !== 'owner' ? ` — ${contact.role}` : ''
-                      }`,
+                      `${
+                        contact.role && contact.role !== 'owner'
+                          ? contact.role.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+                          : 'Owner'
+                      } ${idx + 1}${contact.is_primary ? ' (Primary)' : ''}`,
                       [
                         ['Name', name || null],
                         ...phoneRows,

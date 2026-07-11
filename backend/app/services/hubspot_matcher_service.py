@@ -402,16 +402,17 @@ class HubSpotMatcherService:
             # Prefer ContactService upsert for name-deduped PropertyContact links.
             try:
                 from app.services.contact_service import ContactService
-                # Temporarily set flat owner if empty so upsert can create primary.
-                if not lead.owner_first_name and not lead.owner_last_name:
-                    if hs_first:
-                        lead.owner_first_name = hs_first
-                    if hs_last:
-                        lead.owner_last_name = hs_last
-                ContactService()._upsert_named_owner(
-                    lead.id, hs_first, hs_last, is_primary=False,
-                )
-                updated_fields.append("property_contact_linked")
+                already_linked = db.session.query(PropertyContact).join(Contact).filter(
+                    PropertyContact.property_id == lead.id,
+                    db.func.lower(Contact.first_name) == (hs_first or "").lower(),
+                    db.func.lower(db.func.coalesce(Contact.last_name, "")) == (hs_last or "").lower(),
+                ).first()
+                with db.session.begin_nested():
+                    ContactService()._upsert_named_owner(
+                        lead.id, hs_first, hs_last, is_primary=False,
+                    )
+                if already_linked is None:
+                    updated_fields.append("property_contact_linked")
             except Exception as exc:
                 logger.warning(
                     "enrich_lead_from_contact: ContactService upsert failed lead_id=%s: %s",

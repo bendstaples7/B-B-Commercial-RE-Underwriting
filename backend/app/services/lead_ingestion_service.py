@@ -273,10 +273,11 @@ class LeadIngestionService:
             outcome['match_found'] = True
             outcome['fields_populated'] = fields_populated
 
-            if fields_populated and getattr(lead, 'id', None):
+            if outcome['match_found'] and getattr(lead, 'id', None):
                 try:
                     from app.services.contact_service import ContactService
-                    ContactService().upsert_owners_from_lead(lead, commit=False)
+                    with db.session.begin_nested():
+                        ContactService().upsert_owners_from_lead(lead, commit=False)
                 except Exception as contact_exc:
                     logger.warning(
                         "Contact upsert after GIS enrich failed for lead_id=%s: %s",

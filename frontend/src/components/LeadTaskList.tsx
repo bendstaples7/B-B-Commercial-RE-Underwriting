@@ -339,10 +339,14 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
                             edge="end"
                             aria-label={`Mark HubSpot task done: ${task.title}`}
                             onClick={async () => {
-                              const numericId = parseInt(String(task.id).replace('hs-', ''), 10)
+                              const rawId = String(task.id)
+                              const isLegacyCrm = rawId.startsWith('hs-')
+                              const numericId = parseInt(rawId.replace(/^hs-/, ''), 10)
                               setMarkingDone(numericId)
                               try {
-                                await callLogService.markHubSpotTaskDone(leadId, numericId)
+                                await callLogService.markHubSpotTaskDone(leadId, numericId, {
+                                  idNamespace: isLegacyCrm ? 'crm_task' : 'lead_task',
+                                })
                                 if (onHubSpotTaskDone) onHubSpotTaskDone(numericId)
                                 if (onTaskCompleted) onTaskCompleted(task.id)
                               } finally {

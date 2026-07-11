@@ -18,6 +18,9 @@ from app.models.contact_email import ContactEmail
 from app.models.property_contact import PropertyContact
 from app.models.lead import Property
 from app.exceptions import ResourceNotFoundError, ConflictError, ValidationException
+from app.services.contact_backfill import split_phone_field, split_email_field
+
+from sqlalchemy.orm import selectinload
 
 logger = logging.getLogger(__name__)
 
@@ -345,6 +348,10 @@ class ContactService:
 
         rows = (
             db.session.query(Contact, PropertyContact)
+            .options(
+                selectinload(Contact.phones),
+                selectinload(Contact.emails),
+            )
             .join(PropertyContact, PropertyContact.contact_id == Contact.id)
             .filter(PropertyContact.property_id == property_id)
             .all()
@@ -409,7 +416,8 @@ class ContactService:
         o2_first = (getattr(lead, 'owner_2_first_name', None) or '').strip() or None
         o2_last = (getattr(lead, 'owner_2_last_name', None) or '').strip() or None
         if o2_first or o2_last:
-            owners.append((o2_first, o2_last, False))
+            # Owner 2 is primary when Owner 1 was absent.
+            owners.append((o2_first, o2_last, not owners))
 
         results: list[tuple[Contact, PropertyContact]] = []
         primary_contact: Contact | None = None
@@ -525,33 +533,33 @@ class ContactService:
             raw = getattr(lead, f'phone_{i}', None)
             if not raw or not str(raw).strip():
                 continue
-            value = str(raw).strip()[:50]
-            digits = ''.join(ch for ch in value if ch.isdigit())
-            if digits and digits in existing_phones:
-                continue
-            if digits:
-                existing_phones.add(digits)
-            db.session.add(ContactPhone(
-                contact_id=contact.id,
-                value=value,
-                label='other',
-                source=phone_source,
-            ))
+            for value in split_phone_field(raw):
+                digits = ''.join(ch for ch in value if ch.isdigit())
+                if digits and digits in existing_phones:
+                    continue
+                if digits:
+                    existing_phones.add(digits)
+                db.session.add(ContactPhone(
+                    contact_id=contact.id,
+                    value=value[:50],
+                    label='other',
+                    source=phone_source,
+                ))
 
         for i in range(1, 6):
             raw = getattr(lead, f'email_{i}', None)
             if not raw or not str(raw).strip():
                 continue
-            value = str(raw).strip()[:255]
-            normalized = value.lower()
-            if normalized in existing_emails:
-                continue
-            existing_emails.add(normalized)
-            db.session.add(ContactEmail(
-                contact_id=contact.id,
-                value=value,
-                label='other',
-            ))
+            for value in split_email_field(raw):
+                normalized = value.lower()
+                if normalized in existing_emails:
+                    continue
+                existing_emails.add(normalized)
+                db.session.add(ContactEmail(
+                    contact_id=contact.id,
+                    value=value[:255],
+                    label='other',
+                ))
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -592,23 +600,33 @@ class ContactService:
 def batch_owner_display_for_leads(lead_ids: list[int]) -> dict[int, dict]:
     """Batch-resolve owner display fields from PropertyContacts.
 
-    For each lead, walks linked contacts primary-first then by join id and
-    takes the first non-empty name, phone, and email (phone/email may come
-    from a later contact if the primary has none).
+    For each lead, walks linked **owner-role** contacts primary-first then by
+    join id and takes the first non-empty name, phone, and email (phone/email
+    may come from a later owner contact if the primary has none).
 
     Returns
     -------
     dict[int, dict]
         ``lead_id -> {first_name, last_name, owner_display_name, best_phone,
-        best_email}``. Leads with no linked contacts are omitted.
+        best_email}``. Leads with no linked owner contacts are omitted.
     """
     if not lead_ids:
         return {}
 
     rows = (
         db.session.query(PropertyContact, Contact)
+        .options(
+            selectinload(Contact.phones),
+            selectinload(Contact.emails),
+        )
         .join(Contact, Contact.id == PropertyContact.contact_id)
         .filter(PropertyContact.property_id.in_(lead_ids))
+        .filter(
+            db.or_(
+                PropertyContact.role == 'owner',
+                PropertyContact.role.is_(None),
+            )
+        )
         .order_by(
             PropertyContact.property_id.asc(),
             PropertyContact.is_primary.desc(),

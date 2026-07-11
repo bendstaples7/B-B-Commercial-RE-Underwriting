@@ -486,14 +486,15 @@ class HubSpotActivityConverterService:
         svc = LeadTaskService()
         for lead_id in lead_ids:
             try:
-                svc.upsert_from_hubspot(
-                    lead_id=lead_id,
-                    hubspot_task_id=str(task.hubspot_task_id),
-                    title=task.title or '(No Subject)',
-                    status=task.status or 'open',
-                    due_date=task.due_date,
-                    commit=False,
-                )
+                with db.session.begin_nested():
+                    svc.upsert_from_hubspot(
+                        lead_id=lead_id,
+                        hubspot_task_id=str(task.hubspot_task_id),
+                        title=task.title or '(No Subject)',
+                        status=task.status or 'open',
+                        due_date=task.due_date,
+                        commit=False,
+                    )
             except Exception as exc:
                 logger.warning(
                     'LeadTask upsert failed for hubspot_task_id=%s lead_id=%s: %s',

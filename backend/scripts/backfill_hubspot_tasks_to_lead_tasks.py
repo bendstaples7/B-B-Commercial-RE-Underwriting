@@ -36,7 +36,10 @@ from app.services.lead_task_service import LeadTaskService
 
 def _candidate_rows(limit: int | None) -> list[tuple[Task, int]]:
     """Return (Task, lead_id) pairs for open HubSpot tasks linked to a lead."""
-    via_assoc = (
+    # Bound each query at SQL level so --limit does not materialize the full table.
+    per_query_limit = limit
+
+    via_assoc_q = (
         db.session.query(Task, TaskAssociation.target_id)
         .join(TaskAssociation, TaskAssociation.task_id == Task.id)
         .filter(
@@ -45,9 +48,13 @@ def _candidate_rows(limit: int | None) -> list[tuple[Task, int]]:
             Task.source == 'hubspot_import',
             Task.hubspot_task_id.isnot(None),
         )
-        .all()
+        .order_by(Task.id.asc())
     )
-    via_direct = (
+    if per_query_limit is not None:
+        via_assoc_q = via_assoc_q.limit(per_query_limit)
+    via_assoc = via_assoc_q.all()
+
+    via_direct_q = (
         db.session.query(Task, Task.lead_id)
         .filter(
             Task.lead_id.isnot(None),
@@ -55,8 +62,11 @@ def _candidate_rows(limit: int | None) -> list[tuple[Task, int]]:
             Task.source == 'hubspot_import',
             Task.hubspot_task_id.isnot(None),
         )
-        .all()
+        .order_by(Task.id.asc())
     )
+    if per_query_limit is not None:
+        via_direct_q = via_direct_q.limit(per_query_limit)
+    via_direct = via_direct_q.all()
 
     seen_keys: set[tuple[str, int]] = set()
     rows: list[tuple[Task, int]] = []
@@ -103,7 +113,9 @@ def main() -> None:
 
         for task, lead_id in candidates:
             hs_id = str(task.hubspot_task_id)
-            existing = LeadTask.query.filter_by(hubspot_task_id=hs_id).first()
+            existing = LeadTask.query.filter_by(
+                hubspot_task_id=hs_id, lead_id=lead_id,
+            ).first()
             if existing is not None:
                 skipped += 1
                 continue

@@ -92,6 +92,8 @@ _KNOWN_REVISIONS = frozenset({
     'i8j9k0l1m2n3',
     # LeadTask.hubspot_task_id — HubSpot tasks consolidate onto LeadTask for CC
     'j9k0l1m2n3o4',
+    # LeadTask unique on (hubspot_task_id, lead_id) for multi-lead HubSpot tasks
+    'k0l1m2n3o4p5',
 })
 
 

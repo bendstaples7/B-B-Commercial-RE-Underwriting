@@ -26,6 +26,8 @@ def main() -> int:
     parser.add_argument('--apply', action='store_true', help='Write changes')
     parser.add_argument('--lead-id', type=int, action='append', dest='lead_ids')
     args = parser.parse_args()
+    if args.apply and args.dry_run:
+        parser.error('--dry-run and --apply are mutually exclusive')
     apply = bool(args.apply)
     if not apply:
         args.dry_run = True
@@ -33,6 +35,9 @@ def main() -> int:
     from app import create_app, db
     from app.models.lead import Lead
     from app.services.contact_service import ContactService
+
+    phone_cols = [getattr(Lead, f'phone_{i}') for i in range(1, 8)]
+    email_cols = [getattr(Lead, f'email_{i}') for i in range(1, 6)]
 
     app = create_app()
     with app.app_context():
@@ -46,8 +51,8 @@ def main() -> int:
                     Lead.owner_last_name.isnot(None),
                     Lead.owner_2_first_name.isnot(None),
                     Lead.owner_2_last_name.isnot(None),
-                    Lead.phone_1.isnot(None),
-                    Lead.email_1.isnot(None),
+                    *[col.isnot(None) for col in phone_cols],
+                    *[col.isnot(None) for col in email_cols],
                 )
             )
         leads = q.order_by(Lead.id).all()
@@ -55,7 +60,7 @@ def main() -> int:
         svc = ContactService()
         processed = 0
         for lead in leads:
-            if args.dry_run and not apply:
+            if not apply:
                 logger.info(
                     'would upsert lead_id=%s owners=%s %s / %s %s',
                     lead.id,

@@ -237,7 +237,7 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
                   </Typography>
                 )}
                 {(contact.phones ?? []).map((p) => (
-                  <CopyablePhone key={p.id} phone={{ id: p.id, value: p.value, confidence_score: 50 }} />
+                  <CopyablePhone key={p.id} phone={{ id: p.id, value: p.value }} />
                 ))}
                 {(contact.emails ?? []).map((e) => (
                   <CopyableEmail key={e.id} email={e.value} />

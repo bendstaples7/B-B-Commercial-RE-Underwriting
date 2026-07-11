@@ -176,11 +176,12 @@ def complete_tasks_superseded_by_mail(
         if not is_superseded_by_mail_task(hs_task.task_type, hs_task.title):
             continue
         local = mark_hubspot_task_completed_local(
-            lead_id,
-            hs_task.id,
-            actor=actor,
-            reason='mail_queued',
-        )
+                lead_id,
+                hs_task.id,
+                actor=actor,
+                reason='mail_queued',
+                id_namespace='crm_task',
+            )
         if local:
             completed += 1
             if local.hubspot_task_id:

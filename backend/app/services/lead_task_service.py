@@ -70,7 +70,7 @@ class LeadTaskService:
         mapped_status = _map_hubspot_status_to_lead_task(status)
         due = _coerce_due_date(due_date)
 
-        task = LeadTask.query.filter_by(hubspot_task_id=hs_id).first()
+        task = LeadTask.query.filter_by(hubspot_task_id=hs_id, lead_id=lead_id).first()
         if task is None:
             task = LeadTask(
                 lead_id=lead_id,
@@ -84,7 +84,6 @@ class LeadTaskService:
             )
             db.session.add(task)
         else:
-            task.lead_id = lead_id
             task.title = clean_title
             task.due_date = due
             # Never reopen a locally completed HubSpot LeadTask from stale sync.
