@@ -13,6 +13,7 @@ from app.services.open_letter_contact_mapper import is_mailable_lead
 from app.services.recommended_action_metadata import get_recommended_action_display
 from app.services.outreach_method_service import resolve_outreach_contacts_for_leads
 from app.services.scoring_rubric import format_last_sale_at, is_recently_sold
+from app.services.entity_owner_policy import cold_mail_block_reasons_for_leads
 
 # Statuses that represent active outreach pipeline (not terminal or suppressed)
 ACTIVE_PIPELINE_STATUSES = [
@@ -255,6 +256,19 @@ def normalize_todays_outreach_filter(outreach: str | None) -> str | None:
     return key if key in TODAYS_ACTION_OUTREACH_FILTERS else None
 
 
+def _filter_mail_eligible_leads(leads: list) -> list:
+    """Filter mail candidates without per-lead owner-policy SQL lookups."""
+    blocked = cold_mail_block_reasons_for_leads(leads)
+    return [
+        lead for lead in leads
+        if (
+            not is_recently_sold(lead)
+            and is_mailable_lead(lead)
+            and lead.id not in blocked
+        )
+    ]
+
+
 class QueueService:
     """Computes badge counts and paginated rows for the 7 Actionable Lead Command Center queues."""
 
@@ -300,10 +314,7 @@ class QueueService:
     def count_mail_candidates(self, mail_user_id: str) -> int:
         """Leads recommended for mail that are not already queued by this user."""
         query = self._mail_candidates_query(mail_user_id)
-        return sum(
-            1 for lead in query.all()
-            if not is_recently_sold(lead) and is_mailable_lead(lead)
-        )
+        return len(_filter_mail_eligible_leads(query.all()))
 
     # ------------------------------------------------------------------
     # Private count helpers
@@ -738,10 +749,7 @@ class QueueService:
         else:
             order = (sort_col.asc(), Lead.motivation_score.desc())
         ordered = query.order_by(*order).all()
-        eligible = [
-            lead for lead in ordered
-            if not is_recently_sold(lead) and is_mailable_lead(lead)
-        ]
+        eligible = _filter_mail_eligible_leads(ordered)
         total = len(eligible)
         start = (page - 1) * per_page
         leads = eligible[start:start + per_page]
@@ -774,10 +782,7 @@ class QueueService:
         else:
             order = (sort_col.asc(), Lead.motivation_score.desc())
         ordered = query.order_by(*order).all()
-        return [
-            lead.id for lead in ordered
-            if not is_recently_sold(lead) and is_mailable_lead(lead)
-        ]
+        return [lead.id for lead in _filter_mail_eligible_leads(ordered)]
 
     # Cap for prev/next neighbor lookup (same order as list endpoints).
     QUEUE_NAV_CAP = 500

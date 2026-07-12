@@ -11,7 +11,7 @@ class Organization(db.Model):
     name = db.Column(db.String(500), nullable=False)
     org_type = db.Column(db.Enum(
         'llc', 'trust', 'corporation', 'brokerage',
-        'law_firm', 'property_management', 'unknown',
+        'law_firm', 'property_management', 'nonprofit', 'unknown',
         name='org_type_enum'
     ), nullable=False, default='unknown')
     status = db.Column(db.Enum(

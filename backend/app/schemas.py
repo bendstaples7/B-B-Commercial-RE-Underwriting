@@ -1279,7 +1279,10 @@ class TaskAssociationSchema(Schema):
 # HubSpot CRM Migration Schemas — Organization
 # ---------------------------------------------------------------------------
 
-VALID_ORG_TYPES = ['llc', 'trust', 'corporation', 'brokerage', 'law_firm', 'property_management', 'unknown']
+VALID_ORG_TYPES = [
+    'llc', 'trust', 'corporation', 'brokerage', 'law_firm',
+    'property_management', 'nonprofit', 'unknown',
+]
 VALID_ORG_STATUSES = ['active', 'inactive', 'unknown']
 
 

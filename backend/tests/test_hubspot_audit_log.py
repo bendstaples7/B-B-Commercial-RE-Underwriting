@@ -39,7 +39,7 @@ _name_st = st.text(
 # Org types allowed by the model enum
 _org_type_st = st.sampled_from([
     "llc", "trust", "corporation", "brokerage",
-    "law_firm", "property_management", "unknown",
+    "law_firm", "property_management", "nonprofit", "unknown",
 ])
 
 # Status values

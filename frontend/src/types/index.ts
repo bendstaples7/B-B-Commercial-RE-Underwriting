@@ -1402,6 +1402,7 @@ export enum OrgType {
   BROKERAGE = 'brokerage',
   LAW_FIRM = 'law_firm',
   PROPERTY_MANAGEMENT = 'property_management',
+  NONPROFIT = 'nonprofit',
   UNKNOWN = 'unknown',
 }
 
@@ -1505,10 +1506,13 @@ export interface EntityResolutionStatus {
   lead_id: number
   primary_is_entity: boolean
   entity_name: string | null
+  is_institutional?: boolean
+  is_definite_institutional?: boolean
   jurisdiction_supported: boolean
   supported_jurisdiction: string
   organization_id: number | null
   organization_name: string | null
+  organization_org_type?: string | null
   entity_lookup_status: EntityLookupStatus | null
   entity_lookup_person_found: boolean
   entity_lookup_error: string | null
@@ -1517,6 +1521,12 @@ export interface EntityResolutionStatus {
   provider?: string | null
   provider_configured?: boolean
   dataset_imported_at?: string | null
+  nonprofit_provider?: string | null
+  nonprofit_provider_configured?: boolean
+  nonprofit_dataset_imported_at?: string | null
+  is_nonprofit?: boolean
+  can_mark_nonprofit?: boolean
+  can_research?: boolean
   limitations?: string[]
   can_resolve: boolean
 }

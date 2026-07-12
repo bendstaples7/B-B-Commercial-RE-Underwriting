@@ -28,7 +28,46 @@ from app.services.outreach_method_service import (
     refine_outreach_action,
     OUTREACH_ACTIONS,
 )
+from app.services.entity_owner_policy import cold_mail_block_reason
 logger = logging.getLogger(__name__)
+
+
+def _cold_mail_ready_outcome(lead: Lead) -> tuple[str, str, dict] | None:
+    """If cold mail should be blocked, return the replacement action tuple.
+
+    Applied only at ``mail_ready`` decision points so warm / follow-up leads
+    still surface as ``follow_up_now``.
+    """
+    mail_block = cold_mail_block_reason(lead)
+    if mail_block in (
+        'institutional_owner',
+        'nonprofit_organization',
+        'tax_exempt_owner',
+    ):
+        return 'nurture', mail_block, {'cold_mail_blocked': True}
+    if mail_block == 'unresolved_entity_owner':
+        return 'enrich_data', 'research_entity_owner', {
+            'cold_mail_blocked': True,
+            'requires_entity_research': True,
+        }
+    return None
+
+
+def _apply_cold_mail_block_to_action(
+    lead: Lead,
+    recommended_action: str | None,
+    winning_rule: str,
+    action_signals: dict,
+) -> tuple[str | None, str, dict]:
+    """Replace any final cold-mail action with the owner-policy outcome."""
+    if recommended_action != 'mail_ready':
+        return recommended_action, winning_rule, action_signals
+    blocked = _cold_mail_ready_outcome(lead)
+    if blocked is None:
+        return recommended_action, winning_rule, action_signals
+    blocked_action, blocked_rule, blocked_signals = blocked
+    return blocked_action, blocked_rule, blocked_signals
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -347,6 +386,12 @@ class LeadScoringEngine:
         recommended_action, recommended_contact_method = self._apply_outreach_method(
             lead, recommended_action, action_signals,
         )
+        pre_block_action = recommended_action
+        recommended_action, winning_rule, action_signals = _apply_cold_mail_block_to_action(
+            lead, recommended_action, winning_rule, action_signals,
+        )
+        if pre_block_action == 'mail_ready' and recommended_action != 'mail_ready':
+            recommended_contact_method = None
         if recommended_contact_method:
             action_signals['recommended_contact_method'] = recommended_contact_method
         top_signals = rubric.extract_top_signals(score_details, lead=lead)
@@ -437,6 +482,9 @@ class LeadScoringEngine:
                         'has_email': False,
                         'is_mailable': True,
                     }
+                blocked = _cold_mail_ready_outcome(lead)
+                if blocked is not None:
+                    return blocked
                 return 'mail_ready', 'mailable_no_digital_contact', {
                     'has_phone': False,
                     'has_email': False,
@@ -484,6 +532,9 @@ class LeadScoringEngine:
                     'most_recent_sale': getattr(lead, 'most_recent_sale', None),
                     'days_since_sale': days_since,
                 }
+            blocked = _cold_mail_ready_outcome(lead)
+            if blocked is not None:
+                return blocked
             return 'mail_ready', 'tier_a_high_quality', {
                 'score_tier': score_tier, 'data_quality_score': data_quality_score,
             }
@@ -1000,6 +1051,9 @@ class LeadScoringEngine:
             lead, total, data_quality, tier,
         )
         refined, _method = LeadScoringEngine()._apply_outreach_method(lead, action, signals)
+        refined, _, _signals = _apply_cold_mail_block_to_action(
+            lead, refined, '', signals,
+        )
         return refined
 
     @staticmethod
@@ -1011,8 +1065,13 @@ class LeadScoringEngine:
             lead, total, data_quality, tier,
         )
         _refined, method = LeadScoringEngine()._apply_outreach_method(lead, action, signals)
+        refined, _rule, signals = _apply_cold_mail_block_to_action(
+            lead, _refined, '', signals,
+        )
         if method:
             signals = {**signals, 'recommended_contact_method': method}
+        if refined != _refined:
+            signals.pop('recommended_contact_method', None)
         return signals
 
     # ------------------------------------------------------------------

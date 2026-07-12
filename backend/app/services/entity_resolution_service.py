@@ -30,10 +30,16 @@ from app.services.entity_lookup import (
     EntityPartyResult,
 )
 from app.services.entity_lookup.factory import get_entity_lookup_provider
+from app.services.entity_lookup.irs_eo import (
+    IrsEoNonprofitProvider,
+    NonprofitLookupResult,
+)
 from app.services.plugins.owner_name_utils import (
     contact_display_name,
+    is_definite_institutional_name,
     is_entity_contact,
     is_entity_name,
+    is_institutional_name,
 )
 from app.services.skip_trace_enqueue import SkipTraceEnqueue
 
@@ -48,6 +54,7 @@ FREE_BULK_LIMITATIONS = [
     "Corporate registered agents are not promoted to primary contact.",
     "Manager list may be incomplete or stale versus a live SOS File Detail Report.",
     "Foreign home LLCs (e.g. Delaware) may not appear in the Illinois dump.",
+    "IRS EO BMF research confirms tax-exempt orgs before LLC person resolution.",
 ]
 
 
@@ -88,10 +95,12 @@ class EntityResolutionService:
         self,
         provider: Optional[EntityLookupProvider] = None,
         *,
+        nonprofit_provider: Optional[IrsEoNonprofitProvider] = None,
         contact_service: Optional[ContactService] = None,
         skip_trace: Optional[SkipTraceEnqueue] = None,
     ) -> None:
         self._provider = provider
+        self._nonprofit_provider = nonprofit_provider
         self._contacts = contact_service or ContactService()
         self._skip_trace = skip_trace or SkipTraceEnqueue()
 
@@ -99,6 +108,11 @@ class EntityResolutionService:
         if self._provider is not None:
             return self._provider
         return get_entity_lookup_provider()
+
+    def _get_nonprofit_provider(self) -> IrsEoNonprofitProvider:
+        if self._nonprofit_provider is not None:
+            return self._nonprofit_provider
+        return IrsEoNonprofitProvider()
 
     # ------------------------------------------------------------------
     # Public API
@@ -114,23 +128,12 @@ class EntityResolutionService:
             )
 
         primary = self._get_primary_contact(lead_id)
-        entity_shaped = False
-        entity_name = None
+        primary_is_entity = False
         if primary is not None:
-            entity_shaped = is_entity_contact(primary.first_name, primary.last_name)
-            if entity_shaped:
-                entity_name = contact_display_name(primary.first_name, primary.last_name)
+            primary_is_entity = is_entity_contact(primary.first_name, primary.last_name)
 
+        entity_name = self._resolve_entity_name(lead_id, primary=primary)
         org = self._get_linked_owner_org(lead_id)
-        if entity_name is None:
-            linked_entity_contact = self._find_entity_contact(lead_id)
-            if linked_entity_contact is not None:
-                entity_name = contact_display_name(
-                    linked_entity_contact.first_name,
-                    linked_entity_contact.last_name,
-                )
-            elif org is not None and is_entity_name(org.name or ""):
-                entity_name = org.name
         jurisdiction_ok = self._lead_looks_illinois(lead)
         provider = self._get_provider()
         provider_name = getattr(provider, "name", None)
@@ -147,14 +150,38 @@ class EntityResolutionService:
             except Exception:  # noqa: BLE001
                 provider_configured = False
 
+        nonprofit_provider = self._get_nonprofit_provider()
+        nonprofit_configured = False
+        nonprofit_dataset_imported_at = None
+        try:
+            nonprofit_configured = bool(nonprofit_provider.is_configured())
+            nonprofit_dataset_imported_at = nonprofit_provider.dataset_imported_at()
+        except Exception:  # noqa: BLE001
+            nonprofit_configured = False
+
+        is_institutional = bool(
+            entity_name and is_institutional_name(entity_name)
+        )
+        is_definite_institutional = bool(
+            entity_name and is_definite_institutional_name(entity_name)
+        )
+        org_is_nonprofit = bool(org and (org.org_type or "") == "nonprofit")
+        can_mark_nonprofit = bool(entity_name) and not org_is_nonprofit
+        can_research = bool(
+            entity_name and jurisdiction_ok and nonprofit_configured and not org_is_nonprofit
+        )
+
         return {
             "lead_id": lead_id,
-            "primary_is_entity": entity_shaped,
+            "primary_is_entity": primary_is_entity,
             "entity_name": entity_name,
+            "is_institutional": is_institutional,
+            "is_definite_institutional": is_definite_institutional,
             "jurisdiction_supported": jurisdiction_ok,
             "supported_jurisdiction": SUPPORTED_JURISDICTION,
             "organization_id": org.id if org else None,
             "organization_name": org.name if org else None,
+            "organization_org_type": org.org_type if org else None,
             "entity_lookup_status": org.entity_lookup_status if org else None,
             "entity_lookup_person_found": (
                 bool(org.entity_lookup_person_found) if org else False
@@ -171,9 +198,19 @@ class EntityResolutionService:
             "provider": provider_name,
             "provider_configured": provider_configured,
             "dataset_imported_at": dataset_imported_at,
+            "nonprofit_provider": nonprofit_provider.name,
+            "nonprofit_provider_configured": nonprofit_configured,
+            "nonprofit_dataset_imported_at": nonprofit_dataset_imported_at,
+            "is_nonprofit": org_is_nonprofit,
+            "can_mark_nonprofit": can_mark_nonprofit,
+            "can_research": can_research,
             "limitations": list(FREE_BULK_LIMITATIONS),
             "can_resolve": bool(
-                entity_name and jurisdiction_ok and provider_configured
+                entity_name
+                and jurisdiction_ok
+                and provider_configured
+                and not org_is_nonprofit
+                and not is_definite_institutional
             ),
         }
 
@@ -193,35 +230,20 @@ class EntityResolutionService:
             )
 
         primary = self._get_primary_contact(lead_id)
-        entity_contact = None
-        if primary is not None and is_entity_contact(primary.first_name, primary.last_name):
-            entity_contact = primary
-        else:
-            # Re-resolve after a person was already promoted: find linked LLC contact
-            # or fall back to linked owner Organization name.
-            entity_contact = self._find_entity_contact(lead_id)
-            if entity_contact is None:
-                linked_org = self._get_linked_owner_org(lead_id)
-                if linked_org is not None and is_entity_name(linked_org.name or ""):
-                    entity_name = linked_org.name
-                else:
-                    if primary is None:
-                        return EntityResolutionResult(
-                            lead_id=lead_id,
-                            status="skipped",
-                            message="No primary contact on property",
-                            dry_run=dry_run,
-                        )
-                    return EntityResolutionResult(
-                        lead_id=lead_id,
-                        status="skipped",
-                        message="Primary contact is not an entity/LLC name",
-                        dry_run=dry_run,
-                    )
-
-        if entity_contact is not None:
-            entity_name = contact_display_name(
-                entity_contact.first_name, entity_contact.last_name,
+        entity_name = self._resolve_entity_name(lead_id, primary=primary)
+        if not entity_name:
+            if primary is None:
+                return EntityResolutionResult(
+                    lead_id=lead_id,
+                    status="skipped",
+                    message="No primary contact on property",
+                    dry_run=dry_run,
+                )
+            return EntityResolutionResult(
+                lead_id=lead_id,
+                status="skipped",
+                message="Primary contact is not an entity/LLC name",
+                dry_run=dry_run,
             )
 
         if not self._lead_looks_illinois(lead):
@@ -254,6 +276,33 @@ class EntityResolutionService:
                 entity_name=entity_name,
                 organization_id=org.id,
                 message="Non-Illinois jurisdiction — not supported yet",
+            )
+
+        # High-confidence institutional names → nonprofit; soft markers still
+        # go through IRS research then LLC resolve.
+        if is_definite_institutional_name(entity_name or ""):
+            return self._mark_nonprofit_result(
+                lead_id=lead_id,
+                entity_name=entity_name,
+                reason="institutional_name",
+                dry_run=dry_run,
+                actor=actor,
+            )
+
+        # Ambiguous Inc/Corp: research IRS EO before LLC manager lookup.
+        nonprofit_hit = self._research_nonprofit(
+            entity_name or "",
+            state=self._preferred_state(lead),
+        )
+        if nonprofit_hit.found:
+            return self._mark_nonprofit_result(
+                lead_id=lead_id,
+                entity_name=nonprofit_hit.name or entity_name,
+                reason="irs_eo_match",
+                dry_run=dry_run,
+                actor=actor,
+                ein=nonprofit_hit.ein,
+                provider_name=nonprofit_hit.provider_name,
             )
 
         provider = self._get_provider()
@@ -305,6 +354,232 @@ class EntityResolutionService:
             entity_name=entity_name,
             lookup=lookup,
             actor=actor,
+        )
+
+    def mark_as_nonprofit(
+        self,
+        lead_id: int,
+        *,
+        actor: str = "entity_resolution",
+        dry_run: bool = False,
+    ) -> EntityResolutionResult:
+        """Manually confirm an entity owner is a nonprofit (deprioritize mail)."""
+        lead = Lead.query.get(lead_id)
+        if lead is None:
+            raise ResourceNotFoundError(
+                f"Lead id={lead_id} not found.",
+                payload={"lead_id": lead_id},
+            )
+        entity_name = self._resolve_entity_name(lead_id)
+        if not entity_name:
+            return EntityResolutionResult(
+                lead_id=lead_id,
+                status="skipped",
+                message="No entity-shaped owner name to mark as nonprofit",
+                dry_run=dry_run,
+            )
+        return self._mark_nonprofit_result(
+            lead_id=lead_id,
+            entity_name=entity_name,
+            reason="manual_confirm",
+            dry_run=dry_run,
+            actor=actor,
+        )
+
+    def research_nonprofit(
+        self,
+        lead_id: int,
+        *,
+        actor: str = "entity_resolution",
+        dry_run: bool = False,
+    ) -> EntityResolutionResult:
+        """IRS EO research only — does not fall through to LLC resolution."""
+        lead = Lead.query.get(lead_id)
+        if lead is None:
+            raise ResourceNotFoundError(
+                f"Lead id={lead_id} not found.",
+                payload={"lead_id": lead_id},
+            )
+        entity_name = self._resolve_entity_name(lead_id)
+        if not entity_name:
+            return EntityResolutionResult(
+                lead_id=lead_id,
+                status="skipped",
+                message="No entity-shaped owner name to research",
+                dry_run=dry_run,
+            )
+        if is_definite_institutional_name(entity_name):
+            return self._mark_nonprofit_result(
+                lead_id=lead_id,
+                entity_name=entity_name,
+                reason="institutional_name",
+                dry_run=dry_run,
+                actor=actor,
+            )
+        hit = self._research_nonprofit(
+            entity_name,
+            state=self._preferred_state(lead),
+        )
+        if hit.found:
+            return self._mark_nonprofit_result(
+                lead_id=lead_id,
+                entity_name=hit.name or entity_name,
+                reason="irs_eo_match",
+                dry_run=dry_run,
+                actor=actor,
+                ein=hit.ein,
+                provider_name=hit.provider_name,
+            )
+        if dry_run:
+            return EntityResolutionResult(
+                lead_id=lead_id,
+                status="no_match",
+                entity_name=entity_name,
+                message=hit.error or "No IRS EO match — treat as for-profit entity",
+                dry_run=True,
+            )
+
+        # Do not demote nonprofit or clobber a successful LLC person resolve.
+        existing = self._get_linked_owner_org(lead_id)
+        if existing is not None and (
+            (existing.org_type or "") == "nonprofit"
+            or bool(existing.entity_lookup_person_found)
+            or (existing.entity_lookup_status or "") == "resolved"
+        ):
+            return EntityResolutionResult(
+                lead_id=lead_id,
+                status="no_match",
+                entity_name=entity_name,
+                organization_id=existing.id,
+                message=hit.error or (
+                    "No IRS EO match — existing organization resolution left unchanged"
+                ),
+            )
+
+        org = self._upsert_organization(
+            entity_name,
+            status="no_match",
+            error=hit.error or "No IRS EO nonprofit match",
+            provider_name=hit.provider_name,
+            # Leave org_type unchanged on research no-match.
+            org_type=None,
+        )
+        self._ensure_property_org_link(lead_id, org.id)
+        db.session.commit()
+        return EntityResolutionResult(
+            lead_id=lead_id,
+            status="no_match",
+            entity_name=entity_name,
+            organization_id=org.id,
+            message=hit.error or "No IRS EO match — use Resolve Illinois LLC for person lookup",
+        )
+
+    def _resolve_entity_name(
+        self,
+        lead_id: int,
+        *,
+        primary: Optional[Contact] = None,
+    ) -> Optional[str]:
+        if primary is None:
+            primary = self._get_primary_contact(lead_id)
+        if primary is not None and is_entity_contact(primary.first_name, primary.last_name):
+            return contact_display_name(primary.first_name, primary.last_name)
+        entity_contact = self._find_entity_contact(lead_id)
+        if entity_contact is not None:
+            return contact_display_name(
+                entity_contact.first_name, entity_contact.last_name,
+            )
+        org = self._get_linked_owner_org(lead_id)
+        if org is not None and is_entity_name(org.name or ""):
+            return org.name
+        return None
+
+    def _preferred_state(self, lead: Lead) -> str:
+        """State for IRS EO lookup — prefer property state; IL wins if either is IL."""
+        prop = self._normalize_state(getattr(lead, "property_state", None))
+        mail = self._normalize_state(getattr(lead, "mailing_state", None))
+        for code in (prop, mail):
+            if code in _IL_STATE_CODES or code == "IL":
+                return "IL"
+        if len(prop) == 2:
+            return prop
+        if len(mail) == 2:
+            return mail
+        return "IL"
+
+    def _research_nonprofit(
+        self,
+        entity_name: str,
+        *,
+        state: str = "IL",
+    ) -> NonprofitLookupResult:
+        provider = self._get_nonprofit_provider()
+        if not provider.is_configured():
+            return NonprofitLookupResult(
+                found=False,
+                error="IRS EO BMF data not loaded",
+                provider_name=provider.name,
+            )
+        return provider.lookup_nonprofit(entity_name, state=state)
+
+    def _mark_nonprofit_result(
+        self,
+        *,
+        lead_id: int,
+        entity_name: Optional[str],
+        reason: str,
+        dry_run: bool,
+        actor: str,
+        ein: Optional[str] = None,
+        provider_name: Optional[str] = None,
+    ) -> EntityResolutionResult:
+        message = {
+            "institutional_name": "Institutional / nonprofit name — deprioritize cold mail",
+            "irs_eo_match": (
+                f"IRS EO match (EIN {ein}) — marked nonprofit, skip LLC person resolve"
+                if ein else "IRS EO match — marked nonprofit, skip LLC person resolve"
+            ),
+            "manual_confirm": "Manually confirmed nonprofit — deprioritize cold mail",
+        }.get(reason, "Marked nonprofit — deprioritize cold mail")
+
+        if dry_run:
+            return EntityResolutionResult(
+                lead_id=lead_id,
+                status="nonprofit",
+                entity_name=entity_name,
+                message=message,
+                dry_run=True,
+            )
+
+        org = self._upsert_organization(
+            entity_name or "Unknown organization",
+            status="resolved",
+            error=None,
+            provider_name=provider_name or reason,
+            org_type="nonprofit",
+            org_status="active",
+            person_found=False,
+        )
+        if ein and not org.file_number:
+            org.file_number = ein
+        self._ensure_property_org_link(lead_id, org.id)
+        db.session.commit()
+
+        try:
+            from app.services.lead_refresh import refresh_lead_scoring
+            refresh_lead_scoring(lead_id)
+        except Exception:  # noqa: BLE001 — scoring refresh is best-effort
+            logger.exception(
+                "refresh_lead_scoring failed after nonprofit mark lead=%s", lead_id,
+            )
+
+        return EntityResolutionResult(
+            lead_id=lead_id,
+            status="nonprofit",
+            entity_name=entity_name,
+            organization_id=org.id,
+            person_found=False,
+            message=message,
         )
 
     # ------------------------------------------------------------------
@@ -472,6 +747,7 @@ class EntityResolutionService:
             .join(PropertyContact, PropertyContact.contact_id == Contact.id)
             .filter(
                 PropertyContact.property_id == lead_id,
+                PropertyContact.role == "owner",
                 PropertyContact.is_primary.is_(True),
             )
             .first()
@@ -483,7 +759,10 @@ class EntityResolutionService:
         rows = (
             db.session.query(Contact)
             .join(PropertyContact, PropertyContact.contact_id == Contact.id)
-            .filter(PropertyContact.property_id == lead_id)
+            .filter(
+                PropertyContact.property_id == lead_id,
+                PropertyContact.role == "owner",
+            )
             .all()
         )
         for contact in rows:
@@ -537,6 +816,7 @@ class EntityResolutionService:
         registered_office_address: Optional[str] = None,
         org_status: Optional[str] = None,
         person_found: bool = False,
+        org_type: Optional[str] = None,
     ) -> Organization:
         cleaned = " ".join((name or "").split())
         self._serialize_organization_upsert(cleaned)
@@ -548,14 +828,26 @@ class EntityResolutionService:
             .first()
         )
         if org is None:
+            if is_definite_institutional_name(cleaned):
+                default_type = "nonprofit"
+            elif is_entity_name(cleaned):
+                default_type = "llc"
+            else:
+                default_type = "unknown"
             org = Organization(
                 name=cleaned,
-                org_type="llc" if is_entity_name(cleaned) else "unknown",
+                org_type=org_type or default_type,
                 status="unknown",
                 source="entity_resolution",
             )
             db.session.add(org)
             db.session.flush()
+        elif org_type:
+            # Never demote a confirmed nonprofit without an explicit nonprofit write.
+            if (org.org_type or "") == "nonprofit" and org_type != "nonprofit":
+                pass
+            else:
+                org.org_type = org_type
 
         if org_status in ("active", "inactive", "unknown"):
             org.status = org_status
