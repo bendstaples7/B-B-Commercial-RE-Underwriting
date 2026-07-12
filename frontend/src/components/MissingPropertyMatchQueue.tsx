@@ -3,7 +3,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Box, Snackbar, Typography } from '@mui/material'
+import { Alert, Box, Button, Snackbar, Typography } from '@mui/material'
 import { useSearchParams } from 'react-router-dom'
 import {
   queueService,
@@ -32,7 +32,7 @@ export function MissingPropertyMatchQueue() {
   const [actionPending, setActionPending] = useState(false)
   const [snackbar, setSnackbar] = useState<string | null>(null)
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['queue-missing-property-match', page],
     queryFn: () => queueService.getMissingPropertyMatch(page, 20),
     // Card workflow mutates the current lead — do not keep previous page data
@@ -44,6 +44,7 @@ export function MissingPropertyMatchQueue() {
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
   const isInitialLoading = isLoading && !data
+  const loadFailed = !isInitialLoading && (isError || data == null)
 
   const focusAppliedRef = useRef(false)
 
@@ -149,14 +150,11 @@ export function MissingPropertyMatchQueue() {
   }
 
   const emptyMessage = useMemo(() => {
-    if (isInitialLoading) return null
-    if (data == null) {
-      return 'Unable to load leads waiting for property match review. Please try again.'
-    }
+    if (isInitialLoading || loadFailed) return null
     if (total === 0) return 'No leads waiting for property match review.'
     if (!currentRow) return 'Loading…'
     return null
-  }, [isInitialLoading, data, total, currentRow])
+  }, [isInitialLoading, loadFailed, total, currentRow])
 
   return (
     <Box data-testid="missing-property-match-queue">
@@ -170,8 +168,22 @@ export function MissingPropertyMatchQueue() {
 
       {isInitialLoading ? (
         <QueueLoadingState />
+      ) : loadFailed ? (
+        <Alert
+          severity="error"
+          data-testid="missing-property-match-error"
+          action={
+            <Button color="inherit" size="small" onClick={() => refetch()}>
+              Retry
+            </Button>
+          }
+        >
+          {error instanceof Error
+            ? error.message
+            : 'Unable to load leads waiting for property match review. Please try again.'}
+        </Alert>
       ) : emptyMessage ? (
-        <Alert severity={data == null ? 'error' : 'info'}>{emptyMessage}</Alert>
+        <Alert severity="info">{emptyMessage}</Alert>
       ) : currentRow ? (
         <PropertyMatchReviewCard
           row={currentRow}
