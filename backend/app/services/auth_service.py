@@ -15,7 +15,7 @@ from app.models.user import User
 class AuthService:
     """Handles user account creation, authentication, and JWT issuance/verification."""
 
-    TOKEN_LIFETIME_SECONDS = 8 * 3600  # 8 hours
+    TOKEN_LIFETIME_SECONDS = 30 * 24 * 3600  # 30 days
 
     # ------------------------------------------------------------------
     # User management
@@ -157,7 +157,7 @@ class AuthService:
         """Issue a signed HS256 JWT for the given user.
 
         Claims: ``sub``, ``email``, ``display_name``, ``iat``, ``exp``.
-        Lifetime: 8 hours from issuance.
+        Lifetime: 30 days from issuance.
 
         Args:
             user: The authenticated ``User`` instance.

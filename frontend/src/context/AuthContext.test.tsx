@@ -79,7 +79,7 @@ describe('AuthContext — unit tests', () => {
   it('restores session from a valid non-expired token on mount', async () => {
     const nowSeconds = Math.floor(Date.now() / 1000)
     const iat = nowSeconds - 60
-    const exp = nowSeconds + 3600 // 1 hour from now, well within 8-hour limit
+    const exp = nowSeconds + 3600 // 1 hour from now, well within 30-day limit
     const token = buildJwt({
       sub: 'user-123',
       email: 'test@example.com',
@@ -132,10 +132,10 @@ describe('AuthContext — unit tests', () => {
     expect(localStorage.getItem('session_token')).toBeNull()
   })
 
-  it('rejects a token where exp - iat > 28800 (exceeds 8-hour max lifetime)', async () => {
+  it('rejects a token where exp - iat > 2592000 (exceeds 30-day max lifetime)', async () => {
     const nowSeconds = Math.floor(Date.now() / 1000)
     const iat = nowSeconds - 100
-    const exp = nowSeconds + 28801 // 1 second over the 8-hour limit
+    const exp = nowSeconds + 2592001 // 1 second over the 30-day limit
     const token = buildJwt({
       sub: 'user-789',
       email: 'toolong@example.com',
@@ -354,7 +354,7 @@ describe('Property 17: Token expiry is validated on app load', () => {
         // Generate a past exp timestamp: anywhere from 1 second to 10 years ago
         fc.integer({ min: 1, max: 10 * 365 * 24 * 3600 }),
         // Generate a valid iat that is before exp (iat = exp - some positive delta)
-        fc.integer({ min: 1, max: 28800 }),
+        fc.integer({ min: 1, max: 30 * 24 * 3600 }),
         // Generate plausible user identity fields
         fc.string({ minLength: 1, maxLength: 36 }).filter(s => s.trim().length > 0),
         fc.emailAddress(),
