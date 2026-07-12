@@ -14,11 +14,13 @@ import HistoryIcon from '@mui/icons-material/History'
 import { useNavigate } from 'react-router-dom'
 import { QueueTable } from './QueueTable'
 import type { RowAction, ExtraColumn } from './QueueTable'
+import { QueueLoadingState } from './QueueLoadingState'
 import { queueService } from '@/services/api'
 import type { QueueRow } from '@/types'
 import { resolveBulkActions } from './queueBulkActions'
 import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
+import { queueListQueryDefaults, queuePlaceholderTableSx } from '@/utils/queueQueryDefaults'
 
 export function NeedsReviewQueue() {
   const [page, setPage] = useState(1)
@@ -27,16 +29,17 @@ export function NeedsReviewQueue() {
   const { selectedIds, onSelectionChange, onPageChangeWithClear, clearSelection } =
     useQueueSelection()
 
-  const { data } = useQuery({
+  const { data, isLoading, isFetching, isPlaceholderData } = useQuery({
     queryKey: ['queue-needs-review', page],
     queryFn: () => queueService.getNeedsReview(page, 20),
-    refetchInterval: 60_000,
-    refetchIntervalInBackground: false,
+    ...queueListQueryDefaults,
   })
 
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
+  const isInitialLoading = isLoading && !data
+  const showRefetchIndicator = isFetching && isPlaceholderData
   const handlePageChange = onPageChangeWithClear((newPage) => {
     setPage(clampPage(newPage, totalPages))
   })
@@ -95,20 +98,26 @@ export function NeedsReviewQueue() {
         Needs Review
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Total: <strong>{total}</strong>
+        Total: <strong>{data != null && !isPlaceholderData ? total : '—'}</strong>
       </Typography>
 
-      <QueueTable
-        rows={rows}
-        total={total}
-        fromQueue={fromQueue}
-        selectedIds={selectedIds}
-        onSelectionChange={onSelectionChange}
-        rowActions={rowActions}
-        bulkActions={bulkActions}
-        extraColumns={extraColumns}
-        {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
-      />
+      {isInitialLoading ? (
+        <QueueLoadingState />
+      ) : (
+        <Box sx={queuePlaceholderTableSx(showRefetchIndicator)}>
+          <QueueTable
+            rows={rows}
+            total={total}
+            fromQueue={fromQueue}
+            selectedIds={selectedIds}
+            onSelectionChange={onSelectionChange}
+            rowActions={rowActions}
+            bulkActions={bulkActions}
+            extraColumns={extraColumns}
+            {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
+          />
+        </Box>
+      )}
     </Box>
   )
 }

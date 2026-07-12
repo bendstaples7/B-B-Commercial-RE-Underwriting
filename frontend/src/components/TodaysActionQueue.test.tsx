@@ -102,6 +102,67 @@ beforeEach(() => {
 })
 
 describe('TodaysActionQueue', () => {
+  it('shows loading state instead of empty copy while the first fetch is in flight', async () => {
+    let resolveFetch: (value: ReturnType<typeof makeQueuePage>) => void = () => {}
+    vi.mocked(queueService.getTodaysAction).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve
+        }),
+    )
+
+    renderComponent()
+
+    expect(await screen.findByTestId('queue-loading')).toBeInTheDocument()
+    expect(screen.queryByTestId('todays-action-empty')).not.toBeInTheDocument()
+    expect(screen.getByTestId('todays-action-total')).toHaveTextContent('—')
+
+    resolveFetch(makeQueuePage(5))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('queue-table')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('queue-loading')).not.toBeInTheDocument()
+    expect(screen.getByTestId('todays-action-total')).toHaveTextContent('5')
+  })
+
+  it('keeps prior rows visible while next-action filter refetch is in flight', async () => {
+    const user = userEvent.setup()
+    vi.mocked(queueService.getTodaysAction).mockResolvedValue(makeQueuePage(2, 20, 1, 2))
+
+    renderComponent()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('queue-table')).toBeInTheDocument()
+    })
+
+    let resolveFilter: (value: ReturnType<typeof makeEmptyPage>) => void = () => {}
+    vi.mocked(queueService.getTodaysAction).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFilter = resolve
+        }),
+    )
+
+    await user.click(screen.getByLabelText('Next action'))
+    await user.click(await screen.findByText('Email Now (0)'))
+
+    await waitFor(() => {
+      expect(queueService.getTodaysAction).toHaveBeenCalledWith(1, 20, 'email_now')
+    })
+
+    expect(screen.getByTestId('queue-table')).toBeInTheDocument()
+    expect(screen.queryByTestId('todays-action-empty')).not.toBeInTheDocument()
+    expect(screen.getByTestId('todays-action-total')).toHaveTextContent('—')
+
+    resolveFilter(makeEmptyPage())
+
+    await waitFor(() => {
+      expect(screen.getByTestId('todays-action-empty')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('queue-table')).not.toBeInTheDocument()
+  })
+
   it('fetches with page=1 on mount', async () => {
     vi.mocked(queueService.getTodaysAction).mockResolvedValue(makeQueuePage(5))
 

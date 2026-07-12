@@ -9,6 +9,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Box,
   Button,
+  CircularProgress,
   FormControl,
   InputLabel,
   Link,
@@ -21,6 +22,7 @@ import type { SelectChangeEvent } from '@mui/material/Select'
 import { Link as RouterLink, useNavigate } from 'react-router-dom'
 import { QueueTable } from './QueueTable'
 import type { RowAction } from './QueueTable'
+import { QueueLoadingState } from './QueueLoadingState'
 import { queueService } from '@/services/api'
 import {
   createCreateTaskRowAction,
@@ -33,6 +35,7 @@ import {
 } from './queueBulkActions'
 import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
+import { queueListQueryDefaults, queuePlaceholderTableSx } from '@/utils/queueQueryDefaults'
 
 export interface TodaysActionQueueProps {
   extraQueryKeys?: string[]
@@ -59,11 +62,10 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
 
   const outreachParam = outreach || null
 
-  const { data } = useQuery({
+  const { data, isLoading, isFetching, isPlaceholderData } = useQuery({
     queryKey: ['queue-todays-action', page, outreach],
     queryFn: () => queueService.getTodaysAction(page, 20, outreachParam),
-    refetchInterval: 60_000,
-    refetchIntervalInBackground: false,
+    ...queueListQueryDefaults,
   })
 
   const { data: outreachCounts } = useQuery({
@@ -76,6 +78,10 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
+  const isInitialLoading = isLoading && !data
+  const showEmpty = data != null && rows.length === 0 && total === 0
+  const showRefetchIndicator = isFetching && isPlaceholderData
+
   const handlePageChange = onPageChangeWithClear((newPage) => {
     setPage(clampPage(newPage, totalPages))
   })
@@ -162,7 +168,13 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
         flexWrap="wrap"
       >
         <Typography variant="body2" color="text.secondary">
-          Total: <strong>{total}</strong>
+          Total:{' '}
+          <strong data-testid="todays-action-total">
+            {data != null && !isPlaceholderData ? total : '—'}
+          </strong>
+          {showRefetchIndicator && (
+            <CircularProgress size={14} sx={{ ml: 1, verticalAlign: 'middle' }} />
+          )}
         </Typography>
         <FormControl size="small" sx={{ minWidth: 220 }}>
           <InputLabel id="todays-action-outreach-label">Next action</InputLabel>
@@ -180,7 +192,7 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
             ))}
           </Select>
         </FormControl>
-        {outreach !== '' && total > 0 && (
+        {outreach !== '' && total > 0 && data != null && !isPlaceholderData && (
           <Button
             size="small"
             variant="outlined"
@@ -198,7 +210,9 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
         </Typography>
       )}
 
-      {rows.length === 0 && total === 0 ? (
+      {isInitialLoading ? (
+        <QueueLoadingState />
+      ) : showEmpty ? (
         <Box sx={{ py: 4, textAlign: 'center' }} data-testid="todays-action-empty">
           <Typography variant="body1" color="text.secondary" gutterBottom>
             {outreach
@@ -216,16 +230,18 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
           )}
         </Box>
       ) : (
-        <QueueTable
-          rows={rows}
-          total={total}
-          fromQueue={fromQueue}
-          selectedIds={selectedIds}
-          onSelectionChange={onSelectionChange}
-          rowActions={rowActions}
-          bulkActions={bulkActions}
-          {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
-        />
+        <Box sx={queuePlaceholderTableSx(showRefetchIndicator)}>
+          <QueueTable
+            rows={rows}
+            total={total}
+            fromQueue={fromQueue}
+            selectedIds={selectedIds}
+            onSelectionChange={onSelectionChange}
+            rowActions={rowActions}
+            bulkActions={bulkActions}
+            {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
+          />
+        </Box>
       )}
     </Box>
   )

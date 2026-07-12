@@ -240,6 +240,88 @@ def test_todays_action_filters_mail_now(app):
         assert call_lead.id not in svc.get_todays_action_lead_ids(outreach='mail_now')
 
 
+def test_todays_action_outreach_counts_buckets(app):
+    """Outreach facet counts match filtered list membership for each bucket."""
+    with app.app_context():
+        mail_lead = _make_lead(
+            app,
+            '50 Mail Bucket St',
+            recommended_action='mail_ready',
+            recommended_contact_method='direct_mail',
+            lead_score=90,
+        )
+        call_lead = _make_lead(
+            app,
+            '51 Call Bucket St',
+            recommended_action='call_ready',
+            recommended_contact_method='phone',
+            lead_score=80,
+        )
+        email_lead = _make_lead(
+            app,
+            '52 Email Bucket St',
+            recommended_action='follow_up_now',
+            recommended_contact_method='email',
+            lead_score=70,
+        )
+        text_lead = _make_lead(
+            app,
+            '53 Text Bucket St',
+            recommended_action='follow_up_now',
+            recommended_contact_method='text',
+            lead_score=60,
+        )
+        for lead in (mail_lead, call_lead, email_lead, text_lead):
+            _make_task(app, lead.id, due_date=date.today())
+
+        svc = QueueService()
+        counts = svc.get_todays_action_outreach_counts()
+        assert set(counts) == {'all', 'mail_now', 'call_now', 'email_now', 'text_now'}
+        assert counts['all'] >= 4
+        assert counts['mail_now'] >= 1
+        assert counts['call_now'] >= 1
+        assert counts['email_now'] >= 1
+        assert counts['text_now'] >= 1
+
+        assert counts['mail_now'] == svc._todays_action_query(outreach='mail_now').count()
+        assert counts['call_now'] == svc._todays_action_query(outreach='call_now').count()
+        assert counts['email_now'] == svc._todays_action_query(outreach='email_now').count()
+        assert counts['text_now'] == svc._todays_action_query(outreach='text_now').count()
+        assert counts['all'] == svc._todays_action_query().count()
+
+        mail_ids = set(svc.get_todays_action_lead_ids(outreach='mail_now'))
+        call_ids = set(svc.get_todays_action_lead_ids(outreach='call_now'))
+        email_ids = set(svc.get_todays_action_lead_ids(outreach='email_now'))
+        text_ids = set(svc.get_todays_action_lead_ids(outreach='text_now'))
+        assert mail_lead.id in mail_ids
+        assert call_lead.id in call_ids
+        assert email_lead.id in email_ids
+        assert text_lead.id in text_ids
+        assert call_lead.id not in mail_ids
+        assert mail_lead.id not in call_ids
+
+
+def test_todays_action_outreach_counts_empty(app):
+    """Aggregated outreach counts return zeros when no Today's Action members exist."""
+    with app.app_context():
+        from app import db
+        from app.models import Lead, LeadTask
+
+        LeadTask.query.delete()
+        Lead.query.delete()
+        db.session.commit()
+
+        svc = QueueService()
+        counts = svc.get_todays_action_outreach_counts()
+        assert counts == {
+            'all': 0,
+            'mail_now': 0,
+            'call_now': 0,
+            'email_now': 0,
+            'text_now': 0,
+        }
+
+
 # ---------------------------------------------------------------------------
 # Previously Warm queue
 # ---------------------------------------------------------------------------
