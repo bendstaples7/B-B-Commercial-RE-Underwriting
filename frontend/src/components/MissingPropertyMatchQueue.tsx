@@ -171,7 +171,7 @@ export function MissingPropertyMatchQueue() {
       {isInitialLoading ? (
         <QueueLoadingState />
       ) : emptyMessage ? (
-        <Alert severity="info">{emptyMessage}</Alert>
+        <Alert severity={data == null ? 'error' : 'info'}>{emptyMessage}</Alert>
       ) : currentRow ? (
         <PropertyMatchReviewCard
           row={currentRow}
