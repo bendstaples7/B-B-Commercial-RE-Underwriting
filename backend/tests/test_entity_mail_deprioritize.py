@@ -93,6 +93,11 @@ class TestIrsEoLookup:
             )
             assert result.found is False
 
+    def test_rejects_overlong_ein(self, app):
+        with app.app_context():
+            with pytest.raises(ValueError):
+                upsert_eo_row(ein="12-34567890", name="Bad EIN Charity", state="IL")
+
 
 @pytest.mark.usefixtures("app")
 class TestColdMailBlockReason:
@@ -149,6 +154,74 @@ class TestColdMailBlockReason:
             db.session.add(lead)
             db.session.commit()
             assert cold_mail_block_reason(lead) == "unresolved_entity_owner"
+
+    def test_ignores_non_owner_primary_contact(self, app):
+        with app.app_context():
+            from app import db
+            from app.models.contact import Contact
+            from app.models.lead import Lead
+            from app.models.property_contact import PropertyContact
+
+            lead = Lead(
+                property_street="100 Main",
+                property_city="Chicago",
+                property_state="IL",
+                property_zip="60601",
+                owner_first_name="Jane",
+                owner_last_name="Doe",
+                ownership_type="person",
+                lead_status="mailing_no_contact_made",
+            )
+            db.session.add(lead)
+            db.session.flush()
+            manager = Contact(first_name=None, last_name="North Lockwood LLC")
+            db.session.add(manager)
+            db.session.flush()
+            db.session.add(PropertyContact(
+                property_id=lead.id,
+                contact_id=manager.id,
+                role="property_manager",
+                is_primary=True,
+            ))
+            db.session.commit()
+
+            assert cold_mail_block_reason(lead) is None
+
+    def test_any_nonprofit_owner_org_blocks_mail(self, app):
+        with app.app_context():
+            from app import db
+            from app.models.lead import Lead
+            from app.models.organization import Organization
+            from app.models.property_organization_link import PropertyOrganizationLink
+
+            lead = Lead(
+                property_street="100 Main",
+                property_city="Chicago",
+                property_state="IL",
+                property_zip="60601",
+                owner_last_name="North Lockwood LLC",
+                ownership_type="entity",
+                lead_status="mailing_no_contact_made",
+            )
+            nonprofit = Organization(name="Neighborhood Foundation", org_type="nonprofit")
+            llc = Organization(name="North Lockwood LLC", org_type="llc")
+            db.session.add_all([lead, nonprofit, llc])
+            db.session.flush()
+            db.session.add_all([
+                PropertyOrganizationLink(
+                    property_id=lead.id,
+                    organization_id=nonprofit.id,
+                    role="owner",
+                ),
+                PropertyOrganizationLink(
+                    property_id=lead.id,
+                    organization_id=llc.id,
+                    role="owner",
+                ),
+            ])
+            db.session.commit()
+
+            assert cold_mail_block_reason(lead) == "nonprofit_organization"
 
 
 class TestScoringMailGate:
@@ -301,6 +374,52 @@ class TestScoringMailGate:
         assert action == 'mail_ready'
         assert reason == 'mailable_no_digital_contact'
 
+    def test_post_refinement_mail_ready_is_blocked(self, monkeypatch):
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine._resolve_crm_flags',
+            lambda lead: (True, False, True),
+        )
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine.cold_mail_block_reason',
+            lambda lead: 'institutional_owner',
+        )
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine._mail_work_in_flight',
+            lambda lead_id: False,
+        )
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine._has_overdue_hubspot_task',
+            lambda lead_id: False,
+        )
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine._count_open_tasks',
+            lambda lead_id: 0,
+        )
+        monkeypatch.setattr(
+            LeadScoringEngine,
+            '_has_recent_email',
+            staticmethod(lambda lead_id: False),
+        )
+        monkeypatch.setattr(
+            'app.services.scoring_rubric.is_recently_sold',
+            lambda lead: False,
+        )
+
+        lead = MagicMock()
+        lead.id = 102
+        lead.lead_score = 75.0
+        lead.data_completeness_score = 50.0
+        lead.motivation_score = 0.0
+        lead.lead_status = 'mailing_no_contact_made'
+        lead.lead_category = 'residential'
+        lead.do_not_contact = False
+        lead.follow_up_overdue = False
+        lead.is_warm = False
+        lead.property_street = '1 Main'
+        lead.unanswered_call_count = 0
+
+        assert LeadScoringEngine.compute_recommended_action(lead) == 'nurture'
+
 
 @pytest.mark.usefixtures("app")
 class TestEntityResolutionNonprofitPath:
@@ -412,3 +531,64 @@ class TestEntityResolutionNonprofitPath:
             result = svc.resolve_lead(lead.id)
             assert result.status == "nonprofit"
             assert "IRS EO" in (result.message or "")
+
+    def test_nonprofit_research_miss_preserves_resolved_llc(self, app):
+        with app.app_context():
+            from app import db
+            from app.models.contact import Contact
+            from app.models.lead import Lead
+            from app.models.organization import Organization
+            from app.models.property_contact import PropertyContact
+            from app.models.property_organization_link import PropertyOrganizationLink
+            from app.services.entity_lookup.irs_eo import NonprofitLookupResult
+            from app.services.entity_resolution_service import EntityResolutionService
+
+            lead = Lead(
+                property_street="300 Pine",
+                property_city="Chicago",
+                property_state="IL",
+                property_zip="60640",
+                owner_last_name="North Lockwood LLC",
+                ownership_type="entity",
+                lead_status="mailing_no_contact_made",
+            )
+            db.session.add(lead)
+            db.session.flush()
+            contact = Contact(first_name=None, last_name="North Lockwood LLC")
+            org = Organization(
+                name="North Lockwood LLC",
+                org_type="llc",
+                entity_lookup_status="resolved",
+                entity_lookup_person_found=False,
+            )
+            db.session.add_all([contact, org])
+            db.session.flush()
+            db.session.add_all([
+                PropertyContact(
+                    property_id=lead.id,
+                    contact_id=contact.id,
+                    role="owner",
+                    is_primary=True,
+                ),
+                PropertyOrganizationLink(
+                    property_id=lead.id,
+                    organization_id=org.id,
+                    role="owner",
+                ),
+            ])
+            db.session.commit()
+
+            class _NoHit:
+                def is_configured(self):
+                    return True
+
+                def lookup_nonprofit(self, *args, **kwargs):
+                    return NonprofitLookupResult(found=False, provider_name="stub")
+
+            svc = EntityResolutionService(nonprofit_provider=_NoHit())
+            result = svc.research_nonprofit(lead.id)
+            db.session.refresh(org)
+
+            assert result.status == "no_match"
+            assert result.organization_id == org.id
+            assert org.entity_lookup_status == "resolved"

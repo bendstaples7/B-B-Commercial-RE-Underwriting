@@ -128,23 +128,12 @@ class EntityResolutionService:
             )
 
         primary = self._get_primary_contact(lead_id)
-        entity_shaped = False
-        entity_name = None
+        primary_is_entity = False
         if primary is not None:
-            entity_shaped = is_entity_contact(primary.first_name, primary.last_name)
-            if entity_shaped:
-                entity_name = contact_display_name(primary.first_name, primary.last_name)
+            primary_is_entity = is_entity_contact(primary.first_name, primary.last_name)
 
+        entity_name = self._resolve_entity_name(lead_id, primary=primary)
         org = self._get_linked_owner_org(lead_id)
-        if entity_name is None:
-            linked_entity_contact = self._find_entity_contact(lead_id)
-            if linked_entity_contact is not None:
-                entity_name = contact_display_name(
-                    linked_entity_contact.first_name,
-                    linked_entity_contact.last_name,
-                )
-            elif org is not None and is_entity_name(org.name or ""):
-                entity_name = org.name
         jurisdiction_ok = self._lead_looks_illinois(lead)
         provider = self._get_provider()
         provider_name = getattr(provider, "name", None)
@@ -184,7 +173,7 @@ class EntityResolutionService:
 
         return {
             "lead_id": lead_id,
-            "primary_is_entity": entity_shaped,
+            "primary_is_entity": primary_is_entity,
             "entity_name": entity_name,
             "is_institutional": is_institutional,
             "is_definite_institutional": is_definite_institutional,
@@ -241,35 +230,20 @@ class EntityResolutionService:
             )
 
         primary = self._get_primary_contact(lead_id)
-        entity_contact = None
-        if primary is not None and is_entity_contact(primary.first_name, primary.last_name):
-            entity_contact = primary
-        else:
-            # Re-resolve after a person was already promoted: find linked LLC contact
-            # or fall back to linked owner Organization name.
-            entity_contact = self._find_entity_contact(lead_id)
-            if entity_contact is None:
-                linked_org = self._get_linked_owner_org(lead_id)
-                if linked_org is not None and is_entity_name(linked_org.name or ""):
-                    entity_name = linked_org.name
-                else:
-                    if primary is None:
-                        return EntityResolutionResult(
-                            lead_id=lead_id,
-                            status="skipped",
-                            message="No primary contact on property",
-                            dry_run=dry_run,
-                        )
-                    return EntityResolutionResult(
-                        lead_id=lead_id,
-                        status="skipped",
-                        message="Primary contact is not an entity/LLC name",
-                        dry_run=dry_run,
-                    )
-
-        if entity_contact is not None:
-            entity_name = contact_display_name(
-                entity_contact.first_name, entity_contact.last_name,
+        entity_name = self._resolve_entity_name(lead_id, primary=primary)
+        if not entity_name:
+            if primary is None:
+                return EntityResolutionResult(
+                    lead_id=lead_id,
+                    status="skipped",
+                    message="No primary contact on property",
+                    dry_run=dry_run,
+                )
+            return EntityResolutionResult(
+                lead_id=lead_id,
+                status="skipped",
+                message="Primary contact is not an entity/LLC name",
+                dry_run=dry_run,
             )
 
         if not self._lead_looks_illinois(lead):
@@ -470,6 +444,7 @@ class EntityResolutionService:
         if existing is not None and (
             (existing.org_type or "") == "nonprofit"
             or bool(existing.entity_lookup_person_found)
+            or (existing.entity_lookup_status or "") == "resolved"
         ):
             return EntityResolutionResult(
                 lead_id=lead_id,
@@ -499,8 +474,14 @@ class EntityResolutionService:
             message=hit.error or "No IRS EO match — use Resolve Illinois LLC for person lookup",
         )
 
-    def _resolve_entity_name(self, lead_id: int) -> Optional[str]:
-        primary = self._get_primary_contact(lead_id)
+    def _resolve_entity_name(
+        self,
+        lead_id: int,
+        *,
+        primary: Optional[Contact] = None,
+    ) -> Optional[str]:
+        if primary is None:
+            primary = self._get_primary_contact(lead_id)
         if primary is not None and is_entity_contact(primary.first_name, primary.last_name):
             return contact_display_name(primary.first_name, primary.last_name)
         entity_contact = self._find_entity_contact(lead_id)
@@ -766,6 +747,7 @@ class EntityResolutionService:
             .join(PropertyContact, PropertyContact.contact_id == Contact.id)
             .filter(
                 PropertyContact.property_id == lead_id,
+                PropertyContact.role == "owner",
                 PropertyContact.is_primary.is_(True),
             )
             .first()
@@ -777,7 +759,10 @@ class EntityResolutionService:
         rows = (
             db.session.query(Contact)
             .join(PropertyContact, PropertyContact.contact_id == Contact.id)
-            .filter(PropertyContact.property_id == lead_id)
+            .filter(
+                PropertyContact.property_id == lead_id,
+                PropertyContact.role == "owner",
+            )
             .all()
         )
         for contact in rows:

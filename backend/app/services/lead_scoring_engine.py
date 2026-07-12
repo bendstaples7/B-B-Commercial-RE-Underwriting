@@ -53,6 +53,22 @@ def _cold_mail_ready_outcome(lead: Lead) -> tuple[str, str, dict] | None:
     return None
 
 
+def _apply_cold_mail_block_to_action(
+    lead: Lead,
+    recommended_action: str | None,
+    winning_rule: str,
+    action_signals: dict,
+) -> tuple[str | None, str, dict]:
+    """Replace any final cold-mail action with the owner-policy outcome."""
+    if recommended_action != 'mail_ready':
+        return recommended_action, winning_rule, action_signals
+    blocked = _cold_mail_ready_outcome(lead)
+    if blocked is None:
+        return recommended_action, winning_rule, action_signals
+    blocked_action, blocked_rule, blocked_signals = blocked
+    return blocked_action, blocked_rule, blocked_signals
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -370,6 +386,12 @@ class LeadScoringEngine:
         recommended_action, recommended_contact_method = self._apply_outreach_method(
             lead, recommended_action, action_signals,
         )
+        pre_block_action = recommended_action
+        recommended_action, winning_rule, action_signals = _apply_cold_mail_block_to_action(
+            lead, recommended_action, winning_rule, action_signals,
+        )
+        if pre_block_action == 'mail_ready' and recommended_action != 'mail_ready':
+            recommended_contact_method = None
         if recommended_contact_method:
             action_signals['recommended_contact_method'] = recommended_contact_method
         top_signals = rubric.extract_top_signals(score_details, lead=lead)
@@ -1029,6 +1051,9 @@ class LeadScoringEngine:
             lead, total, data_quality, tier,
         )
         refined, _method = LeadScoringEngine()._apply_outreach_method(lead, action, signals)
+        refined, _, _signals = _apply_cold_mail_block_to_action(
+            lead, refined, '', signals,
+        )
         return refined
 
     @staticmethod
@@ -1040,8 +1065,13 @@ class LeadScoringEngine:
             lead, total, data_quality, tier,
         )
         _refined, method = LeadScoringEngine()._apply_outreach_method(lead, action, signals)
+        refined, _rule, signals = _apply_cold_mail_block_to_action(
+            lead, _refined, '', signals,
+        )
         if method:
             signals = {**signals, 'recommended_contact_method': method}
+        if refined != _refined:
+            signals.pop('recommended_contact_method', None)
         return signals
 
     # ------------------------------------------------------------------

@@ -52,9 +52,7 @@ function nameMatchesMarkers(
   upper: string,
   patterns: { marker: string; re: RegExp }[],
 ): boolean {
-  return patterns.some(({ marker, re }) => {
-    return re.test(upper) || upper.endsWith(marker) || upper.includes(` ${marker}`)
-  })
+  return patterns.some(({ re }) => re.test(upper))
 }
 
 /** Join first/last into a display name; empty string if both missing. */

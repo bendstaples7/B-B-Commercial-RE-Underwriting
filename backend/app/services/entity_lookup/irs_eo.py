@@ -140,7 +140,7 @@ def upsert_eo_row(
     """Insert or update one IRS EO row (used by import + tests)."""
     from app import db
 
-    cleaned_ein = re.sub(r"\D", "", ein or "")[:9]
+    cleaned_ein = re.sub(r"\D", "", ein or "")
     if len(cleaned_ein) != 9:
         raise ValueError(f"Invalid EIN: {ein!r}")
 
