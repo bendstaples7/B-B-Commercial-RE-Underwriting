@@ -17,6 +17,7 @@ from app.services.mail_task_lifecycle_service import (
     complete_mail_prep_tasks,
     complete_tasks_superseded_by_mail,
     count_superseded_tasks_for_lead,
+    create_pending_mail_follow_up_task,
     find_mail_awaiting_lead_ids,
     resolve_mail_queue_status,
     schedule_mail_follow_up_task,
@@ -584,3 +585,51 @@ class TestSubmitCampaignFollowUp:
             ).first()
             assert follow_up is not None
             assert 'Follow up after mailer' in follow_up.title
+
+    def test_submit_campaign_failure_cancels_pending_follow_up(self, app, fernet_key, monkeypatch):
+        from app import db
+        from app.services.open_letter_client_service import OpenLetterClientService
+
+        monkeypatch.setenv('HUBSPOT_ENCRYPTION_KEY', fernet_key)
+
+        with app.app_context():
+            lead = _make_lead(app, '9b Failed Campaign St')
+            pending = create_pending_mail_follow_up_task(lead, actor=USER_ID)
+            db.session.add(MailQueueItem(lead_id=lead.id, user_id=USER_ID, status='queued'))
+            token = OpenLetterClientService.encrypt_token('test-token')
+            config = OpenLetterConfig(
+                user_id=USER_ID,
+                encrypted_api_token=token,
+                batch_minimum=1,
+                default_product_id='prod-1',
+                default_template_id='tmpl-1',
+            )
+            campaign = MailCampaign(
+                status='pending',
+                lead_count=1,
+                product_id='prod-1',
+                template_id='tmpl-1',
+                created_by=USER_ID,
+            )
+            db.session.add_all([config, campaign])
+            db.session.flush()
+            item = MailQueueItem.query.filter_by(lead_id=lead.id, status='queued').first()
+            item.campaign_id = campaign.id
+            db.session.commit()
+
+            mock_client = MagicMock()
+            mock_client.place_order.side_effect = RuntimeError('olc down')
+            cfg_svc = MagicMock()
+            cfg_svc.require_config.return_value = config
+            cfg_svc.get_client.return_value = mock_client
+
+            svc = MailCampaignService()
+            svc._config_service = cfg_svc
+
+            with patch('app.services.mail_campaign_service.refresh_leads_after_mail_task_changes') as refresh:
+                with pytest.raises(RuntimeError, match='olc down'):
+                    svc.submit_campaign(campaign.id)
+
+            assert MailQueueItem.query.get(item.id).status == 'failed'
+            assert LeadTask.query.get(pending.id).status == 'cancelled'
+            refresh.assert_called_once_with([lead.id])

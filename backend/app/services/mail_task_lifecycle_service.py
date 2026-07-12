@@ -406,8 +406,10 @@ def create_pending_mail_follow_up_task(
 def cancel_pending_mail_follow_up_tasks(
     lead_id: int,
     actor: str = 'system',
+    *,
+    reason: str = 'mail_batch_removed',
 ) -> int:
-    """Cancel undated follow-up-after-mailer tasks when removed from the mail batch."""
+    """Cancel undated follow-up-after-mailer tasks when mail is no longer in flight."""
     now = datetime.now(timezone.utc)
     cancelled = 0
     for task in LeadTask.query.filter_by(lead_id=lead_id, status='open').all():
@@ -435,7 +437,7 @@ def cancel_pending_mail_follow_up_tasks(
                     'task_id': task.id,
                     'task_type': task.task_type,
                     'title': task.title,
-                    'reason': 'mail_batch_removed',
+                    'reason': reason,
                     'status': 'cancelled',
                 },
             ),

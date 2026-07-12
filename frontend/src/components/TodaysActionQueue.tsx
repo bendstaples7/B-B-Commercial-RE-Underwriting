@@ -106,13 +106,14 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
     ...(outreach ? { outreach } : {}),
   }
   const navigateOptions = { navigate, fromQueue }
+  const actionExtraQueryKeys = [
+    ...(extraQueryKeys ?? []),
+    'queue-todays-action-outreach-counts',
+  ]
   const bulkCtx = {
     queryClient,
     queryKey: 'queue-todays-action',
-    extraQueryKeys: [
-      ...(extraQueryKeys ?? []),
-      'queue-todays-action-outreach-counts',
-    ],
+    extraQueryKeys: actionExtraQueryKeys,
     onAfterAction: () => {
       clearSelection()
       setPage(1)
@@ -121,10 +122,7 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
   const taskOptions = {
     queryClient,
     queryKey: 'queue-todays-action',
-    extraQueryKeys: [
-      ...(extraQueryKeys ?? []),
-      'queue-todays-action-outreach-counts',
-    ],
+    extraQueryKeys: actionExtraQueryKeys,
     onAfterAction: () => {
       clearSelection()
       setPage(1)
