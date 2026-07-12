@@ -14,7 +14,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import { formatPhoneNumber, phoneCopyText, phoneTelHref } from '@/utils/phone'
 import type { CommandCenterPayload, LeadPhone, PropertyContactSummary } from '@/types'
 import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
-import { contactDisplayName, primaryOwnerDisplayName } from '@/utils/propertyContacts'
+import { contactDisplayName, isEntityContactName, primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import { formatImportedSource } from './leadDetailFormatters'
 import { formatPhoneConfidence } from '@/utils/helpers'
 
@@ -228,12 +228,22 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
                 {name && (
                   <Typography
                     variant="caption"
+                    component="div"
                     fontWeight={contact.is_primary || idx === 0 ? 600 : 500}
                     display="block"
                     sx={{ mb: 0.5 }}
                   >
                     {name}
                     {contact.role && contact.role !== 'owner' ? ` (${contact.role})` : ''}
+                    {contact.is_primary && isEntityContactName(contact) && (
+                      <Chip
+                        size="small"
+                        label="LLC — resolve entity"
+                        color="warning"
+                        variant="outlined"
+                        sx={{ ml: 0.75, height: 18, fontSize: '0.65rem' }}
+                      />
+                    )}
                   </Typography>
                 )}
                 {(contact.phones ?? []).map((p) => (

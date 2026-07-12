@@ -94,6 +94,12 @@ _KNOWN_REVISIONS = frozenset({
     'j9k0l1m2n3o4',
     # LeadTask unique on (hubspot_task_id, lead_id) for multi-lead HubSpot tasks
     'k0l1m2n3o4p5',
+    # Organization entity-lookup fields + organization_parties
+    'l1m2n3o4p5q6',
+    # Free IL SOS Transparency Act LLC bulk tables
+    'm2n3o4p5q6r7',
+    # Widen mm_file_date for ISO dates from community CSV dumps
+    'n3o4p5q6r7s8',
 })
 
 

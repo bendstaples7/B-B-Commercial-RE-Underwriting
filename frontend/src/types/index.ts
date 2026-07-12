@@ -1481,8 +1481,57 @@ export interface Organization {
   notes?: string | null
   source?: string | null
   hubspot_company_id?: string | null
+  jurisdiction?: string | null
+  file_number?: string | null
+  registered_agent_name?: string | null
+  registered_office_address?: string | null
+  entity_lookup_status?: EntityLookupStatus | null
+  entity_lookup_provider?: string | null
+  entity_lookup_checked_at?: string | null
+  entity_lookup_error?: string | null
+  entity_lookup_person_found?: boolean
   created_at: string
   updated_at: string
+}
+
+export type EntityLookupStatus =
+  | 'pending'
+  | 'resolved'
+  | 'no_match'
+  | 'unsupported_jurisdiction'
+  | 'error'
+
+export interface EntityResolutionStatus {
+  lead_id: number
+  primary_is_entity: boolean
+  entity_name: string | null
+  jurisdiction_supported: boolean
+  supported_jurisdiction: string
+  organization_id: number | null
+  organization_name: string | null
+  entity_lookup_status: EntityLookupStatus | null
+  entity_lookup_person_found: boolean
+  entity_lookup_error: string | null
+  entity_lookup_checked_at: string | null
+  entity_lookup_provider: string | null
+  provider?: string | null
+  provider_configured?: boolean
+  dataset_imported_at?: string | null
+  limitations?: string[]
+  can_resolve: boolean
+}
+
+export interface EntityResolutionResult {
+  lead_id: number
+  status: string
+  entity_name?: string | null
+  organization_id?: number | null
+  person_contact_id?: number | null
+  person_found?: boolean
+  person_name?: string | null
+  skip_trace_task_id?: number | null
+  message?: string | null
+  dry_run?: boolean
 }
 
 export interface OrganizationAuditLog {

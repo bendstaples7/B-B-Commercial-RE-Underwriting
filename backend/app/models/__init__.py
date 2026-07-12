@@ -70,8 +70,15 @@ from app.models.rentcast_cache import RentCastCache
 # HubSpot CRM migration — Organization models
 from app.models.organization import Organization
 from app.models.organization_audit_log import OrganizationAuditLog
+from app.models.organization_party import OrganizationParty
 from app.models.property_organization_link import PropertyOrganizationLink
 from app.models.owner_organization_link import OwnerOrganizationLink
+from app.models.il_sos_llc import (
+    IlSosLlcEntity,
+    IlSosLlcManager,
+    IlSosLlcAgent,
+    IlSosImportRun,
+)
 
 # HubSpot CRM migration — Interaction models
 from app.models.interaction import Interaction
@@ -187,8 +194,13 @@ __all__ = [
     # HubSpot CRM migration — Organization
     'Organization',
     'OrganizationAuditLog',
+    'OrganizationParty',
     'PropertyOrganizationLink',
     'OwnerOrganizationLink',
+    'IlSosLlcEntity',
+    'IlSosLlcManager',
+    'IlSosLlcAgent',
+    'IlSosImportRun',
     # HubSpot CRM migration — Interaction
     'Interaction',
     'InteractionAssociation',
