@@ -198,3 +198,34 @@ class AuthService:
             current_app.config["SECRET_KEY"],
             algorithms=["HS256"],
         )
+
+    @staticmethod
+    def email_domain_for_log(email: str) -> str:
+        """Return the email domain for PII-safe auth failure logs.
+
+        Never returns the local part. Missing or malformed addresses become
+        ``unknown``.
+        """
+        if not email or "@" not in email:
+            return "unknown"
+        domain = email.rsplit("@", 1)[-1].strip().lower()
+        return domain or "unknown"
+
+    @staticmethod
+    def token_lifetime_claims(token: str) -> dict[str, int]:
+        """Decode ``iat``/``exp`` from a just-issued JWT for logging only.
+
+        Does not verify the signature (caller already holds a token it just
+        minted). Never returns or logs the token string itself.
+        """
+        claims = jwt.decode(
+            token,
+            options={"verify_signature": False},
+        )
+        iat = int(claims["iat"])
+        exp = int(claims["exp"])
+        return {
+            "iat": iat,
+            "exp": exp,
+            "lifetime_seconds": exp - iat,
+        }
