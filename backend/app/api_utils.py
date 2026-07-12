@@ -111,8 +111,9 @@ def require_auth(f):
     """Decorator that verifies a Bearer JWT and populates ``g.user_id``.
 
     Reads the ``Authorization: Bearer <token>`` header, verifies the JWT
-    via ``AuthService.verify_token()``, and sets ``g.user_id`` to the
-    token's ``sub`` claim.
+    via ``AuthService.verify_token()``, then reloads the user from the
+    database so ``is_active`` / ``is_admin`` reflect current state (not
+    stale JWT claims). Sets ``g.user_id`` and ``g.is_admin`` from that row.
 
     Falls back to the ``X-User-Id`` header **only** when no
     ``Authorization`` header is present (backward-compatibility during
@@ -124,6 +125,7 @@ def require_auth(f):
     - Non-Bearer ``Authorization`` scheme
     - Expired JWT (``jwt.ExpiredSignatureError``)
     - Malformed or invalid-signature JWT (``jwt.InvalidTokenError``)
+    - Unknown or inactive user for an otherwise-valid JWT
 
     Example
     -------
@@ -144,6 +146,7 @@ def require_auth(f):
     """
     @wraps(f)
     def decorated(*args, **kwargs):
+        from app.models.user import User
         from app.services.auth_service import AuthService
 
         auth_header = request.headers.get('Authorization', '')
@@ -155,9 +158,13 @@ def require_auth(f):
                 # Reject setup tokens — they may only be used with POST /api/auth/set-password
                 if claims.get('setup_required') is True:
                     return jsonify({'error': 'Setup token cannot be used for authentication'}), 401
-                g.user_id = claims['sub']
-                is_admin_claim = claims.get('is_admin', False)
-                g.is_admin = is_admin_claim if isinstance(is_admin_claim, bool) else False
+                user = User.query.filter_by(user_id=claims['sub']).first()
+                # Re-check live account state so deactivation / admin revocation
+                # take effect before the JWT's long-lived exp claim.
+                if user is None or not user.is_active:
+                    return jsonify({'error': 'Authentication required'}), 401
+                g.user_id = user.user_id
+                g.is_admin = bool(user.is_admin)
             except jwt.ExpiredSignatureError:
                 return jsonify({'error': 'Token expired'}), 401
             except jwt.InvalidTokenError:
