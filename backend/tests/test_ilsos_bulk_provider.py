@@ -9,6 +9,7 @@ from app import db
 from app.models.il_sos_llc import IlSosLlcAgent, IlSosLlcEntity, IlSosLlcManager
 from app.services.entity_lookup import EntityLookupProviderNotConfiguredError
 from app.services.entity_lookup.ilsos_bulk import IllinoisSosBulkProvider
+from app.services.entity_lookup.opencorporates import IllinoisOpenCorporatesProvider
 from app.services.entity_lookup.ilsos_parser import (
     MANAGER_SCHEMA,
     NAME_SCHEMA,
@@ -59,6 +60,16 @@ def test_parse_records_skips_header_trailer():
     recs = parse_records(body, NAME_SCHEMA)
     assert len(recs) == 1
     assert recs[0]["name"] == "ACME LLC"
+
+
+def test_parse_records_skips_malformed_file_numbers():
+    body = "\n".join([
+        "NOTANUM!" + "THIS IS NOT DATA".ljust(120),
+        "01234567" + "ACME LLC".ljust(120),
+    ])
+    recs = parse_records(body, NAME_SCHEMA)
+    assert len(recs) == 1
+    assert recs[0]["file_number"] == "01234567"
 
 
 def test_factory_defaults_to_ilsos_bulk(monkeypatch):
@@ -172,3 +183,94 @@ class TestIllinoisSosBulkProvider:
             result = IllinoisSosBulkProvider().lookup_llc("Active Preferred LLC")
             assert result.found is True
             assert result.file_number == "44444444"
+
+    def test_lookup_adds_llc_suffix_for_bare_name(self, app):
+        with app.app_context():
+            now = datetime.utcnow()
+            db.session.add(IlSosLlcEntity(
+                file_number="55555555",
+                name="BARE NAME LLC",
+                normalized_name=normalize_llc_name("BARE NAME LLC"),
+                status_code="00",
+                imported_at=now,
+            ))
+            db.session.commit()
+            result = IllinoisSosBulkProvider().lookup_llc("Bare Name")
+            assert result.found is True
+            assert result.file_number == "55555555"
+
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+class _FakeSession:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append({"url": url, **kwargs})
+        return _FakeResponse(self._responses.pop(0))
+
+
+def test_opencorporates_requires_exact_search_match():
+    session = _FakeSession([
+        {
+            "results": {
+                "companies": [
+                    {
+                        "company": {
+                            "name": "DIFFERENT LLC",
+                            "jurisdiction_code": "us_il",
+                            "company_number": "999",
+                        },
+                    },
+                ],
+            },
+        },
+    ])
+    provider = IllinoisOpenCorporatesProvider(api_token="token", session=session)
+    result = provider.lookup_llc("Requested LLC")
+    assert result.found is False
+    assert len(session.calls) == 1
+
+
+def test_opencorporates_inactive_status_is_not_active():
+    session = _FakeSession([
+        {
+            "results": {
+                "companies": [
+                    {
+                        "company": {
+                            "name": "REQUESTED LLC",
+                            "jurisdiction_code": "us_il",
+                            "company_number": "123",
+                        },
+                    },
+                ],
+            },
+        },
+        {
+            "results": {
+                "company": {
+                    "name": "REQUESTED LLC",
+                    "jurisdiction_code": "us_il",
+                    "company_number": "123",
+                    "current_status": "inactive",
+                    "officers": [],
+                },
+            },
+        },
+    ])
+    provider = IllinoisOpenCorporatesProvider(api_token="token", session=session)
+    result = provider.lookup_llc("Requested LLC")
+    assert result.found is True
+    assert result.status == "inactive"

@@ -228,6 +228,7 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
                 {name && (
                   <Typography
                     variant="caption"
+                    component="div"
                     fontWeight={contact.is_primary || idx === 0 ? 600 : 500}
                     display="block"
                     sx={{ mb: 0.5 }}

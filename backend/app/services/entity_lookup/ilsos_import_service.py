@@ -32,8 +32,8 @@ from app.services.entity_lookup.ilsos_parser import (
     MASTER_SCHEMA,
     NAME_SCHEMA,
     format_zip,
+    iter_records,
     normalize_llc_name,
-    parse_records,
 )
 from app.services.plugins.owner_name_utils import is_entity_name
 
@@ -92,16 +92,42 @@ def read_zip_text(zip_path: Path) -> str:
     return raw.decode("latin-1", errors="replace")
 
 
-def _read_csv_from_zip(zip_path: Path, member: str) -> list[dict[str, str]]:
+def _iter_csv_from_zip(zip_path: Path, member: str) -> Iterable[dict[str, str]]:
     with zipfile.ZipFile(zip_path, "r") as zf:
         with zf.open(member) as fh:
             text_stream = io.TextIOWrapper(fh, encoding="utf-8", errors="replace", newline="")
-            return list(csv.DictReader(text_stream))
+            yield from csv.DictReader(text_stream)
 
 
-def _chunked(items: list, size: int) -> Iterable[list]:
-    for i in range(0, len(items), size):
-        yield items[i:i + size]
+def _chunked(items: Iterable, size: int) -> Iterable[list]:
+    batch = []
+    for item in items:
+        batch.append(item)
+        if len(batch) >= size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
+
+
+def _dict_by_file_number(records: Iterable[dict], label: str) -> dict[str, dict]:
+    keyed: dict[str, dict] = {}
+    duplicates = 0
+    for rec in records:
+        file_number = (rec.get("file_number") or "").strip()
+        if not file_number:
+            continue
+        if file_number in keyed:
+            duplicates += 1
+            logger.warning(
+                "Duplicate IL SOS %s record for file_number=%s; keeping latest",
+                label,
+                file_number,
+            )
+        keyed[file_number] = rec
+    if duplicates:
+        logger.warning("IL SOS %s import saw %d duplicate file_number rows", label, duplicates)
+    return keyed
 
 
 class IlSosBulkImportService:
@@ -133,20 +159,26 @@ class IlSosBulkImportService:
             )
             run.source = source
 
-            counts = {
-                "names": len(name_recs),
-                "masters": len(master_recs),
-                "managers": len(manager_recs),
-                "agents": len(agent_recs),
-                "source": source,
-            }
-            logger.info("Parsed IL SOS records: %s", counts)
-
             if dry_run:
+                sample_names = []
+                name_count = 0
+                for rec in name_recs:
+                    name_count += 1
+                    if len(sample_names) < 5:
+                        sample_names.append(rec.get("name"))
+                manager_count = sum(1 for _ in manager_recs)
+                counts = {
+                    "names": name_count,
+                    "masters": len(master_recs),
+                    "managers": manager_count,
+                    "agents": len(agent_recs),
+                    "source": source,
+                }
+                logger.info("Parsed IL SOS records: %s", counts)
                 return {
                     "dry_run": True,
                     "row_counts": counts,
-                    "sample_names": [r.get("name") for r in name_recs[:5]],
+                    "sample_names": sample_names,
                 }
 
             db.session.execute(text("DELETE FROM il_sos_llc_managers"))
@@ -155,75 +187,97 @@ class IlSosBulkImportService:
             db.session.flush()
 
             imported_at = datetime.utcnow()
-            entities: list[IlSosLlcEntity] = []
             entity_keys: set[str] = set()
-            for rec in name_recs:
-                fn = (rec.get("file_number") or "").strip()
-                name = (rec.get("name") or "").strip()
-                if not fn or not name:
-                    continue
-                master = master_recs.get(fn) or {}
-                entities.append(IlSosLlcEntity(
-                    file_number=fn[:8],
-                    name=name[:200],
-                    normalized_name=normalize_llc_name(name)[:200],
-                    status_code=(master.get("status_code") or None),
-                    management_type=(master.get("management_type") or None),
-                    juris_organized=(master.get("juris_organized") or None),
-                    imported_at=imported_at,
-                ))
-                entity_keys.add(fn[:8])
+            entity_count = 0
 
-            for batch in _chunked(entities, BATCH_SIZE):
+            def iter_entities():
+                nonlocal entity_count
+                for rec in name_recs:
+                    fn = (rec.get("file_number") or "").strip()
+                    name = (rec.get("name") or "").strip()
+                    if not fn or not name:
+                        continue
+                    master = master_recs.get(fn) or {}
+                    entity_count += 1
+                    entity_keys.add(fn[:8])
+                    yield IlSosLlcEntity(
+                        file_number=fn[:8],
+                        name=name[:200],
+                        normalized_name=normalize_llc_name(name)[:200],
+                        status_code=(master.get("status_code") or None),
+                        management_type=(master.get("management_type") or None),
+                        juris_organized=(master.get("juris_organized") or None),
+                        imported_at=imported_at,
+                    )
+
+            for batch in _chunked(iter_entities(), BATCH_SIZE):
                 db.session.bulk_save_objects(batch)
                 db.session.flush()
 
-            managers: list[IlSosLlcManager] = []
-            for rec in manager_recs:
-                fn = (rec.get("file_number") or "").strip()[:8]
-                if fn not in entity_keys:
-                    continue
-                mm_name = (rec.get("mm_name") or "").strip()
-                if not mm_name:
-                    continue
-                managers.append(IlSosLlcManager(
-                    file_number=fn,
-                    mm_name=mm_name[:120],
-                    mm_street=_clip(rec.get("mm_street"), 60),
-                    mm_city=_clip(rec.get("mm_city"), 40),
-                    mm_juris=_clip(rec.get("mm_juris"), 2),
-                    mm_zip=format_zip(rec.get("mm_zip")),
-                    mm_file_date=_clip(rec.get("mm_file_date"), 20),
-                    mm_type_code=_clip(rec.get("mm_type_code"), 1),
-                    is_company=is_entity_name(mm_name),
-                ))
-            for batch in _chunked(managers, BATCH_SIZE):
+            manager_count = 0
+
+            def iter_managers():
+                nonlocal manager_count
+                for rec in manager_recs:
+                    fn = (rec.get("file_number") or "").strip()[:8]
+                    if fn not in entity_keys:
+                        continue
+                    mm_name = (rec.get("mm_name") or "").strip()
+                    if not mm_name:
+                        continue
+                    manager_count += 1
+                    yield IlSosLlcManager(
+                        file_number=fn,
+                        mm_name=mm_name[:120],
+                        mm_street=_clip(rec.get("mm_street"), 60),
+                        mm_city=_clip(rec.get("mm_city"), 40),
+                        mm_juris=_clip(rec.get("mm_juris"), 2),
+                        mm_zip=format_zip(rec.get("mm_zip")),
+                        mm_file_date=_clip(rec.get("mm_file_date"), 20),
+                        mm_type_code=_clip(rec.get("mm_type_code"), 1),
+                        is_company=is_entity_name(mm_name),
+                    )
+
+            for batch in _chunked(iter_managers(), BATCH_SIZE):
                 db.session.bulk_save_objects(batch)
                 db.session.flush()
 
-            agents: list[IlSosLlcAgent] = []
-            for fn, rec in agent_recs.items():
-                key = fn[:8]
-                if key not in entity_keys:
-                    continue
-                agent_name = (rec.get("agent_name") or "").strip()
-                if not agent_name:
-                    continue
-                agents.append(IlSosLlcAgent(
-                    file_number=key,
-                    agent_name=agent_name[:120],
-                    agent_street=_clip(rec.get("agent_street"), 60),
-                    agent_city=_clip(rec.get("agent_city"), 40),
-                    agent_zip=format_zip(rec.get("agent_zip")),
-                    agent_code=_clip(rec.get("agent_code"), 1),
-                ))
-            for batch in _chunked(agents, BATCH_SIZE):
+            agent_count = 0
+
+            def iter_agents():
+                nonlocal agent_count
+                for fn, rec in agent_recs.items():
+                    key = fn[:8]
+                    if key not in entity_keys:
+                        continue
+                    agent_name = (rec.get("agent_name") or "").strip()
+                    if not agent_name:
+                        continue
+                    agent_count += 1
+                    yield IlSosLlcAgent(
+                        file_number=key,
+                        agent_name=agent_name[:120],
+                        agent_street=_clip(rec.get("agent_street"), 60),
+                        agent_city=_clip(rec.get("agent_city"), 40),
+                        agent_zip=format_zip(rec.get("agent_zip")),
+                        agent_code=_clip(rec.get("agent_code"), 1),
+                    )
+
+            for batch in _chunked(iter_agents(), BATCH_SIZE):
                 db.session.bulk_save_objects(batch)
                 db.session.flush()
 
-            counts["entities_loaded"] = len(entities)
-            counts["managers_loaded"] = len(managers)
-            counts["agents_loaded"] = len(agents)
+            counts = {
+                "names": entity_count,
+                "masters": len(master_recs),
+                "managers": manager_count,
+                "agents": len(agent_recs),
+                "source": source,
+                "entities_loaded": entity_count,
+                "managers_loaded": manager_count,
+                "agents_loaded": agent_count,
+            }
+            logger.info("Parsed IL SOS records: %s", counts)
 
             run.status = "success"
             run.finished_at = datetime.utcnow()
@@ -253,7 +307,7 @@ class IlSosBulkImportService:
         *,
         force_download: bool,
         prefer_github: bool,
-    ) -> tuple[list[dict], dict[str, dict], list[dict], dict[str, dict], str]:
+    ) -> tuple[Iterable[dict], dict[str, dict], Iterable[dict], dict[str, dict], str]:
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         if prefer_github:
@@ -264,12 +318,11 @@ class IlSosBulkImportService:
             (cache_dir / fname).exists() and (cache_dir / fname).stat().st_size > 0
             for fname in FILES.values()
         )
-        if official_cached and not force_download:
-            return self._load_official_fixed_width(cache_dir, force_download=False)
-
         try:
+            if official_cached and not force_download:
+                return self._load_official_fixed_width(cache_dir, force_download=False)
             return self._load_official_fixed_width(cache_dir, force_download=force_download)
-        except (TimeoutError, URLError, OSError) as exc:
+        except (TimeoutError, URLError, OSError, zipfile.BadZipFile, ValueError) as exc:
             logger.warning(
                 "Official ILSOS download failed (%s); falling back to free GitHub CSV zip",
                 exc,
@@ -278,35 +331,39 @@ class IlSosBulkImportService:
 
     def _load_official_fixed_width(
         self, cache_dir: Path, *, force_download: bool,
-    ) -> tuple[list[dict], dict[str, dict], list[dict], dict[str, dict], str]:
+    ) -> tuple[Iterable[dict], dict[str, dict], Iterable[dict], dict[str, dict], str]:
         paths = {
             key: download_ilsos_zip(fname, cache_dir, force=force_download)
             for key, fname in FILES.items()
         }
-        name_recs = parse_records(read_zip_text(paths["name"]), NAME_SCHEMA)
-        master_recs = {
-            r["file_number"]: r
-            for r in parse_records(read_zip_text(paths["master"]), MASTER_SCHEMA)
-        }
-        manager_recs = parse_records(read_zip_text(paths["managers"]), MANAGER_SCHEMA)
-        agent_recs = {
-            r["file_number"]: r
-            for r in parse_records(read_zip_text(paths["agent"]), AGENT_SCHEMA)
-        }
+        name_recs = iter_records(read_zip_text(paths["name"]), NAME_SCHEMA)
+        master_recs = _dict_by_file_number(
+            iter_records(read_zip_text(paths["master"]), MASTER_SCHEMA),
+            "master",
+        )
+        manager_recs = iter_records(read_zip_text(paths["managers"]), MANAGER_SCHEMA)
+        agent_recs = _dict_by_file_number(
+            iter_records(read_zip_text(paths["agent"]), AGENT_SCHEMA),
+            "agent",
+        )
         return name_recs, master_recs, manager_recs, agent_recs, "ilsos_transparency_act"
 
     def _load_github_csv(
         self, cache_dir: Path, *, force_download: bool,
-    ) -> tuple[list[dict], dict[str, dict], list[dict], dict[str, dict], str]:
+    ) -> tuple[Iterable[dict], dict[str, dict], Iterable[dict], dict[str, dict], str]:
         dest = cache_dir / "llc_github.zip"
         if force_download or not dest.exists() or dest.stat().st_size == 0:
             download_url(GITHUB_LLC_ZIP, dest, timeout=300)
-        name_recs = _read_csv_from_zip(dest, "llcallnam.csv")
-        master_list = _read_csv_from_zip(dest, "llcallmst.csv")
-        master_recs = {r["file_number"]: r for r in master_list if r.get("file_number")}
-        manager_recs = _read_csv_from_zip(dest, "llcallmgr.csv")
-        agent_list = _read_csv_from_zip(dest, "llcallagt.csv")
-        agent_recs = {r["file_number"]: r for r in agent_list if r.get("file_number")}
+        name_recs = _iter_csv_from_zip(dest, "llcallnam.csv")
+        master_recs = _dict_by_file_number(
+            _iter_csv_from_zip(dest, "llcallmst.csv"),
+            "master",
+        )
+        manager_recs = _iter_csv_from_zip(dest, "llcallmgr.csv")
+        agent_recs = _dict_by_file_number(
+            _iter_csv_from_zip(dest, "llcallagt.csv"),
+            "agent",
+        )
         return (
             name_recs,
             master_recs,

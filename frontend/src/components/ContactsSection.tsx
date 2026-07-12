@@ -109,6 +109,10 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
         showSuccess('Entity resolution queued.')
         return
       }
+      if (!('status' in data)) {
+        showError(data.message || 'Entity resolution did not return a result status.')
+        return
+      }
       const result = data as {
         status: string
         person_found?: boolean

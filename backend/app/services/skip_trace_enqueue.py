@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from sqlalchemy import text
+
 from app import db
 from app.models.lead import Lead
 from app.models.lead_task import LeadTask
@@ -36,7 +38,8 @@ class SkipTraceEnqueue:
         Idempotent for open ``skip_trace_owner`` tasks: returns the existing
         open task instead of creating a duplicate.
         """
-        lead = Lead.query.get(lead_id)
+        self._serialize_lead_enqueue(lead_id)
+        lead = Lead.query.filter_by(id=lead_id).with_for_update().first()
         if lead is None:
             logger.warning("SkipTraceEnqueue: lead %s not found", lead_id)
             return None
@@ -80,3 +83,13 @@ class SkipTraceEnqueue:
             task.id, lead_id, contact_id,
         )
         return task
+
+    @staticmethod
+    def _serialize_lead_enqueue(lead_id: int) -> None:
+        bind = db.session.get_bind()
+        if bind is None or bind.dialect.name != "postgresql":
+            return
+        db.session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+            {"lock_key": f"skip_trace_enqueue:{lead_id}"},
+        )

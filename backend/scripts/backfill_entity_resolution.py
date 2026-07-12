@@ -45,6 +45,8 @@ def _iter_candidate_lead_ids(limit: int | None):
     seen = set()
     count = 0
     for lead_id, first, last in q.yield_per(200):
+        if limit is not None and count >= limit:
+            break
         if lead_id in seen:
             continue
         if not is_entity_contact(first, last):
@@ -52,8 +54,6 @@ def _iter_candidate_lead_ids(limit: int | None):
         seen.add(lead_id)
         yield lead_id
         count += 1
-        if limit is not None and count >= limit:
-            break
 
 
 def main() -> int:
@@ -65,6 +65,7 @@ def main() -> int:
     args = parser.parse_args()
 
     from app import create_app
+    from app import db
     from app.services.entity_resolution_service import EntityResolutionService
 
     app = create_app()
@@ -78,6 +79,7 @@ def main() -> int:
             try:
                 result = service.resolve_lead(lead_id, dry_run=args.dry_run)
             except Exception as exc:  # noqa: BLE001
+                db.session.rollback()
                 err += 1
                 logger.error('lead %s failed: %s', lead_id, exc)
                 continue

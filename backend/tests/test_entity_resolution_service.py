@@ -75,6 +75,9 @@ class TestEntityDetection:
         assert is_entity_contact(None, "BSD JEFFERY, LLC") is True
         assert is_entity_contact("Jane", "Smith") is False
 
+    def test_company_suffix_with_punctuation_is_entity(self):
+        assert is_entity_contact(None, "ACME Co.") is True
+
 
 class TestEntityResolutionService:
     def test_skips_non_entity_primary(self, app):
@@ -231,6 +234,11 @@ class TestEntityResolutionService:
             ).count()
             assert open_tasks == 1
 
+            status = svc.get_status(lead.id)
+            assert status["primary_is_entity"] is False
+            assert status["entity_name"] == "REPEAT LLC"
+            assert status["can_resolve"] is True
+
     def test_provider_not_configured_raises(self, app):
         with app.app_context():
             lead = _make_lead()
@@ -299,3 +307,12 @@ class TestSkipTraceEnqueue:
             assert LeadTask.query.filter_by(
                 lead_id=lead.id, task_type="skip_trace_owner", status="open",
             ).count() == 1
+
+
+def test_backfill_limit_zero_yields_no_candidates(app):
+    from scripts.backfill_entity_resolution import _iter_candidate_lead_ids
+
+    with app.app_context():
+        lead = _make_lead()
+        _link_primary(lead.id, None, "LIMIT ZERO LLC")
+        assert list(_iter_candidate_lead_ids(0)) == []

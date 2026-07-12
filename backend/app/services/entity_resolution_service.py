@@ -11,10 +11,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, text
 
 from app import db
-from app.exceptions import ResourceNotFoundError, ValidationException
+from app.exceptions import ResourceNotFoundError
 from app.models.contact import Contact
 from app.models.lead import Lead
 from app.models.organization import Organization
@@ -122,6 +122,15 @@ class EntityResolutionService:
                 entity_name = contact_display_name(primary.first_name, primary.last_name)
 
         org = self._get_linked_owner_org(lead_id)
+        if entity_name is None:
+            linked_entity_contact = self._find_entity_contact(lead_id)
+            if linked_entity_contact is not None:
+                entity_name = contact_display_name(
+                    linked_entity_contact.first_name,
+                    linked_entity_contact.last_name,
+                )
+            elif org is not None and is_entity_name(org.name or ""):
+                entity_name = org.name
         jurisdiction_ok = self._lead_looks_illinois(lead)
         provider = self._get_provider()
         provider_name = getattr(provider, "name", None)
@@ -164,7 +173,7 @@ class EntityResolutionService:
             "dataset_imported_at": dataset_imported_at,
             "limitations": list(FREE_BULK_LIMITATIONS),
             "can_resolve": bool(
-                entity_shaped and jurisdiction_ok and provider_configured
+                entity_name and jurisdiction_ok and provider_configured
             ),
         }
 
@@ -534,6 +543,7 @@ class EntityResolutionService:
         person_found: bool = False,
     ) -> Organization:
         cleaned = " ".join((name or "").split())
+        self._serialize_organization_upsert(cleaned)
         # Case-insensitive equality — never ilike(cleaned), which treats %/_ as wildcards.
         org = (
             Organization.query
@@ -569,6 +579,17 @@ class EntityResolutionService:
             org.source = "entity_resolution"
         db.session.flush()
         return org
+
+    @staticmethod
+    def _serialize_organization_upsert(cleaned_name: str) -> None:
+        """Serialize concurrent PostgreSQL get-or-create attempts for one name."""
+        bind = db.session.get_bind()
+        if bind is None or bind.dialect.name != "postgresql":
+            return
+        db.session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+            {"lock_key": f"entity_resolution_org:{cleaned_name.lower()}"},
+        )
 
     def _ensure_property_org_link(self, lead_id: int, org_id: int) -> None:
         existing = (
@@ -631,15 +652,3 @@ class EntityResolutionService:
             if (party.full_name or "").strip():
                 return party
         return None
-
-
-def assert_can_resolve_or_raise(status_payload: dict) -> None:
-    """Raise ValidationException when UI/API should not start resolution."""
-    if not status_payload.get("primary_is_entity"):
-        raise ValidationException(
-            "Primary contact is not an LLC/entity name.",
-        )
-    if not status_payload.get("jurisdiction_supported"):
-        raise ValidationException(
-            "Entity jurisdiction is not Illinois — not supported yet.",
-        )

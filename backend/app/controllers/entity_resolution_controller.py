@@ -42,6 +42,13 @@ def _actor() -> str:
     return getattr(g, 'user_id', None) or 'entity_resolution'
 
 
+def _json_bool(body: dict, key: str, *, default: bool) -> bool:
+    value = body.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} must be a boolean")
+    return value
+
+
 @entity_resolution_bp.route('/<int:lead_id>/entity-resolution', methods=['GET'])
 @require_auth
 @handle_errors
@@ -63,14 +70,14 @@ def resolve_entity(lead_id: int):
         { "dry_run": false, "async": false }
     """
     body = request.get_json(silent=True) or {}
-    dry_run = bool(body.get('dry_run', False))
-    use_async = bool(body.get('async', False)) and not dry_run
+    dry_run = _json_bool(body, 'dry_run', default=False)
+    use_async = _json_bool(body, 'async', default=False) and not dry_run
 
     if use_async:
         try:
             from celery_worker import entity_resolution_resolve_lead_task
             entity_resolution_resolve_lead_task.apply_async(
-                args=[lead_id], ignore_result=True,
+                args=[lead_id, _actor()], ignore_result=True,
             )
             return jsonify({
                 'queued': True,
@@ -107,8 +114,8 @@ def resolve_entity_bulk():
     if not isinstance(lead_ids, list) or not lead_ids:
         raise ValueError('lead_ids must be a non-empty list')
     lead_ids = [int(x) for x in lead_ids]
-    dry_run = bool(body.get('dry_run', False))
-    use_async = bool(body.get('async', True)) and not dry_run
+    dry_run = _json_bool(body, 'dry_run', default=False)
+    use_async = _json_bool(body, 'async', default=True) and not dry_run
 
     if use_async:
         queued = []
@@ -116,7 +123,7 @@ def resolve_entity_bulk():
             from celery_worker import entity_resolution_resolve_lead_task
             for lid in lead_ids:
                 entity_resolution_resolve_lead_task.apply_async(
-                    args=[lid], ignore_result=True,
+                    args=[lid, _actor()], ignore_result=True,
                 )
                 queued.append(lid)
             return jsonify({

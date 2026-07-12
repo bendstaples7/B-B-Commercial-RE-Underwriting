@@ -525,7 +525,7 @@ def cook_county_enrich_lead_task(lead_id: int) -> dict:
 
 
 @celery.task(name='entity_resolution.resolve_lead')
-def entity_resolution_resolve_lead_task(lead_id: int) -> dict:
+def entity_resolution_resolve_lead_task(lead_id: int, actor: str = "entity_resolution") -> dict:
     """Resolve Illinois LLC primary contact for one lead."""
     import logging
     _logger = logging.getLogger('celery.entity_resolution.resolve_lead')
@@ -535,7 +535,7 @@ def entity_resolution_resolve_lead_task(lead_id: int) -> dict:
         app = create_app()
         with app.app_context():
             from app.services.entity_resolution_service import EntityResolutionService
-            result = EntityResolutionService().resolve_lead(lead_id)
+            result = EntityResolutionService().resolve_lead(lead_id, actor=actor)
             return result.to_dict()
     except Exception as exc:
         _logger.error(

@@ -5,7 +5,7 @@ import re
 
 
 _SINGLE_WORD_MARKERS = frozenset({
-    "LLC", "L.L.C", "INC", "CORP", "TRUST", "LP", "LLP", "COMPANY", "CO.",
+    "LLC", "INC", "CORP", "TRUST", "LP", "LLP", "COMPANY", "CO",
     "VILLAGE", "COUNTY", "CHURCH", "SCHOOL", "UNIVERSITY",
 })
 _PHRASE_MARKERS = ("CITY OF",)

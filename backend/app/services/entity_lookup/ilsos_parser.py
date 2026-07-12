@@ -54,6 +54,7 @@ MASTER_SCHEMA = (
 )
 
 _HEADER_PREFIXES = ("RUN DATE", "END OF FILE")
+_FILE_NUMBER_RE = re.compile(r"^\d{8}$")
 _NON_ALNUM = re.compile(r"[^A-Z0-9]+")
 _LLC_VARIANTS = re.compile(
     r"\b(L\.?\s*L\.?\s*C\.?|LIMITED LIABILITY COMPANY|LIMITED LIABILITY CO)\b",
@@ -92,16 +93,19 @@ def iter_data_lines(text: str) -> Iterator[str]:
         yield line
 
 
-def parse_records(text: str, schema: tuple[tuple[str, int, int], ...]) -> list[dict[str, str]]:
-    """Parse an entire fixed-width file body into records."""
-    records = []
+def iter_records(text: str, schema: tuple[tuple[str, int, int], ...]) -> Iterator[dict[str, str]]:
+    """Yield fixed-width records with a valid 8-digit Illinois file number."""
     for line in iter_data_lines(text):
         rec = parse_fixed_width_line(line, schema)
-        # Skip empty / garbage rows
-        if not rec.get("file_number"):
+        # Skip empty / garbage/header rows that survived the prefix filter.
+        if not _FILE_NUMBER_RE.fullmatch(rec.get("file_number") or ""):
             continue
-        records.append(rec)
-    return records
+        yield rec
+
+
+def parse_records(text: str, schema: tuple[tuple[str, int, int], ...]) -> list[dict[str, str]]:
+    """Parse an entire fixed-width file body into records."""
+    return list(iter_records(text, schema))
 
 
 def format_zip(raw_zip: Optional[str]) -> Optional[str]:

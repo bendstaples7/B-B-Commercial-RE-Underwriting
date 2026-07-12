@@ -136,8 +136,8 @@ class IllinoisOpenCorporatesProvider:
                 agent_address = party.address
                 break
 
-        oc_status = (company.get("current_status") or "").lower()
-        if "active" in oc_status or oc_status in ("good standing", "live"):
+        oc_status = (company.get("current_status") or "").strip().lower()
+        if oc_status in ("active", "good standing", "live"):
             status = "active"
         elif oc_status in ("dissolved", "inactive", "cancelled", "revoked"):
             status = "inactive"
@@ -179,17 +179,17 @@ class IllinoisOpenCorporatesProvider:
         if not results:
             return None
 
-        # Prefer exact (case-insensitive) name match among IL results.
-        target = name.casefold()
+        # Only accept exact (case-insensitive) company-name matches. The search
+        # endpoint is fuzzy, and promoting officers from the top fuzzy hit can
+        # resolve the wrong LLC when the requested legal name is absent.
+        target = " ".join(name.split()).casefold()
         best = None
         for row in results:
             company = row.get("company") or row
-            cname = (company.get("name") or "").casefold()
+            cname = " ".join((company.get("name") or "").split()).casefold()
             if cname == target:
                 best = company
                 break
-            if best is None:
-                best = company
 
         if best is None:
             return None

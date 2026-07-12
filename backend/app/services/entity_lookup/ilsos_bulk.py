@@ -174,10 +174,12 @@ class IllinoisSosBulkProvider:
         if not norm:
             return []
         candidates = [norm]
-        stripped = normalize_llc_name(norm.replace(" LLC", ""))
-        if stripped and stripped != norm:
-            candidates.append(stripped)
-            with_llc = normalize_llc_name(f"{stripped} LLC")
+        if norm.endswith(" LLC"):
+            stripped = normalize_llc_name(norm[:-4])
+            if stripped and stripped not in candidates:
+                candidates.append(stripped)
+        else:
+            with_llc = normalize_llc_name(f"{norm} LLC")
             if with_llc and with_llc not in candidates:
                 candidates.append(with_llc)
         return candidates
