@@ -8,15 +8,13 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material'
-import PhoneIcon from '@mui/icons-material/Phone'
 import EmailIcon from '@mui/icons-material/Email'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
-import { formatPhoneNumber, phoneCopyText, phoneTelHref } from '@/utils/phone'
 import type { CommandCenterPayload, LeadPhone, PropertyContactSummary } from '@/types'
 import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
 import { contactDisplayName, isEntityContactName, primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import { formatImportedSource } from './leadDetailFormatters'
-import { formatPhoneConfidence } from '@/utils/helpers'
+import { PhoneRow } from '@/components/PhoneRow'
 
 function SidebarSection({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -56,44 +54,6 @@ function SidebarRow({
       >
         {isEmpty ? '—' : value}
       </Typography>
-    </Box>
-  )
-}
-
-function CopyablePhone({ phone }: { phone: LeadPhone | string }) {
-  const [copied, setCopied] = useState(false)
-  const value = typeof phone === 'string' ? phone : phone.value
-  const confidenceLabel = typeof phone === 'string'
-    ? null
-    : formatPhoneConfidence(phone.confidence_score, phone.notes)
-  const displayPhone = formatPhoneNumber(value)
-  const handleCopy = () => {
-    navigator.clipboard.writeText(phoneCopyText(value))
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
-  }
-  return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5, flexWrap: 'wrap' }}>
-      <PhoneIcon sx={{ fontSize: 13, color: 'text.secondary' }} />
-      <Link href={phoneTelHref(value)} variant="caption" underline="hover">
-        {displayPhone}
-      </Link>
-      {confidenceLabel && (
-        <Tooltip title={confidenceLabel}>
-          <Chip
-            label={confidenceLabel}
-            size="small"
-            variant="outlined"
-            sx={{ height: 18, fontSize: '0.65rem', maxWidth: 160 }}
-            data-testid={`phone-confidence-${value}`}
-          />
-        </Tooltip>
-      )}
-      <Tooltip title={copied ? 'Copied!' : 'Copy'}>
-        <IconButton size="small" onClick={handleCopy} sx={{ p: 0.25 }}>
-          <ContentCopyIcon sx={{ fontSize: 11 }} />
-        </IconButton>
-      </Tooltip>
     </Box>
   )
 }
@@ -247,7 +207,7 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
                   </Typography>
                 )}
                 {(contact.phones ?? []).map((p) => (
-                  <CopyablePhone key={p.id} phone={{ id: p.id, value: p.value }} />
+                  <PhoneRow key={p.id ?? p.value} phone={p} />
                 ))}
                 {(contact.emails ?? []).map((e) => (
                   <CopyableEmail key={e.id} email={e.value} />
@@ -274,7 +234,7 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
               </Typography>
             ))}
             {phones.map((p, i) => (
-              <CopyablePhone key={p.id ?? `${p.value}-${i}`} phone={p} />
+              <PhoneRow key={p.id ?? `${p.value}-${i}`} phone={p} />
             ))}
             {emails.map((e, i) => (
               <CopyableEmail key={i} email={e} />

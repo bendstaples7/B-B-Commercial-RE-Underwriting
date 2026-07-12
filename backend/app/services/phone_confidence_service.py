@@ -288,6 +288,89 @@ class PhoneConfidenceService:
         )
 
     @classmethod
+    def serialize_contact_phone(
+        cls,
+        phone: ContactPhone | None = None,
+        *,
+        include_contact_id: bool = False,
+        phone_id: int | None = None,
+        contact_id: int | None = None,
+        value: str | None = None,
+        label: str | None = None,
+        notes: str | None = None,
+        confidence_score: int | None = None,
+        last_outcome: str | None = None,
+        last_called_at: datetime | None = None,
+        source: str | None = None,
+    ) -> dict | None:
+        """Canonical phone DTO for API dumps (contacts nested phones + CC phones[]).
+
+        Prefer passing a ``ContactPhone`` model; keyword overrides support merged
+        flat-column rows that have no relational id.
+
+        Returns ``None`` when value is missing/blank so list serializers can skip
+        bad rows without failing the whole contact payload.
+        """
+        if phone is not None:
+            phone_id = phone.id if phone_id is None else phone_id
+            contact_id = phone.contact_id if contact_id is None else contact_id
+            value = phone.value if value is None else value
+            label = phone.label if label is None else label
+            notes = phone.notes if notes is None else notes
+            confidence_score = (
+                phone.confidence_score if confidence_score is None else confidence_score
+            )
+            last_outcome = phone.last_outcome if last_outcome is None else last_outcome
+            last_called_at = phone.last_called_at if last_called_at is None else last_called_at
+            source = phone.source if source is None else source
+
+        if value is None or not str(value).strip():
+            return None
+
+        def _enum_or_str(raw):
+            if raw is None:
+                return None
+            return raw.value if hasattr(raw, 'value') else raw
+
+        called_at = last_called_at
+        if called_at is not None and hasattr(called_at, 'isoformat'):
+            called_at = called_at.isoformat()
+
+        payload: dict = {
+            'value': str(value).strip(),
+            'label': _enum_or_str(label),
+            'notes': notes,
+            'confidence_score': (
+                confidence_score if confidence_score is not None else DEFAULT_CONFIDENCE
+            ),
+            'last_outcome': last_outcome,
+            'last_called_at': called_at,
+            'source': _enum_or_str(source),
+        }
+        if phone_id is not None:
+            payload['id'] = phone_id
+        if include_contact_id and contact_id is not None:
+            payload['contact_id'] = contact_id
+        return payload
+
+    @classmethod
+    def serialize_contact_phones(
+        cls,
+        phones,
+        *,
+        include_contact_id: bool = False,
+    ) -> list[dict]:
+        """Serialize a sequence of ContactPhone models, skipping blank values."""
+        out: list[dict] = []
+        for phone in phones or []:
+            payload = cls.serialize_contact_phone(
+                phone, include_contact_id=include_contact_id,
+            )
+            if payload is not None:
+                out.append(payload)
+        return out
+
+    @classmethod
     def build_phones_payload(cls, lead_id: int, lead: Lead) -> list[dict]:
         """Merge relational contact_phones and flat lead columns into structured phones."""
         relational_rows = db.session.execute(
@@ -310,16 +393,18 @@ class PhoneConfidenceService:
             if not digits or digits in seen_digits:
                 continue
             seen_digits.add(digits)
-            phones.append({
-                'id': row[0],
-                'value': row[1],
-                'label': row[2],
-                'notes': row[3],
-                'confidence_score': row[4] if row[4] is not None else DEFAULT_CONFIDENCE,
-                'last_outcome': row[5],
-                'last_called_at': row[6].isoformat() if row[6] else None,
-                'source': row[7],
-            })
+            payload = cls.serialize_contact_phone(
+                phone_id=row[0],
+                value=row[1],
+                label=row[2],
+                notes=row[3],
+                confidence_score=row[4],
+                last_outcome=row[5],
+                last_called_at=row[6],
+                source=row[7],
+            )
+            if payload is not None:
+                phones.append(payload)
 
         for slot in range(1, 8):
             raw = getattr(lead, f'phone_{slot}')
@@ -329,10 +414,12 @@ class PhoneConfidenceService:
             if not digits or digits in seen_digits:
                 continue
             seen_digits.add(digits)
-            phones.append({
-                'value': str(raw).strip(),
-                'confidence_score': DEFAULT_CONFIDENCE,
-            })
+            payload = cls.serialize_contact_phone(
+                value=str(raw).strip(),
+                confidence_score=DEFAULT_CONFIDENCE,
+            )
+            if payload is not None:
+                phones.append(payload)
 
         return cls.sort_phones_for_display(phones)
 

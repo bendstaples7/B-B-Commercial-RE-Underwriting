@@ -361,16 +361,17 @@ class ContactService:
     @staticmethod
     def serialize_contact_summary(contact: Contact, pc: PropertyContact) -> dict:
         """Serialize a property-linked contact for command-center / detail payloads."""
+        from app.services.phone_confidence_service import PhoneConfidenceService
+
         return {
             'id': contact.id,
             'first_name': contact.first_name,
             'last_name': contact.last_name,
             'role': pc.role,
             'is_primary': bool(pc.is_primary),
-            'phones': [
-                {'id': p.id, 'value': p.value, 'label': p.label}
-                for p in (contact.phones or [])
-            ],
+            'phones': PhoneConfidenceService.serialize_contact_phones(
+                contact.phones or [],
+            ),
             'emails': [
                 {'id': e.id, 'value': e.value, 'label': e.label}
                 for e in (contact.emails or [])

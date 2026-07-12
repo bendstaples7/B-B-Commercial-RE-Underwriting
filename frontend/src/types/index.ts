@@ -456,7 +456,8 @@ export interface PropertyContactSummary {
   last_name: string | null
   role: ContactRole
   is_primary: boolean
-  phones: Array<{ id: number; value: string; label: PhoneLabel }>
+  /** Full phone DTO including confidence — same shape as ContactPhone / LeadPhone. */
+  phones: LeadPhone[]
   emails: Array<{ id: number; value: string; label: EmailLabel }>
 }
 

@@ -471,8 +471,33 @@ class TestOrderedContactsPayload:
             assert set(payload[0].keys()) >= {
                 'id', 'first_name', 'last_name', 'role', 'is_primary', 'phones', 'emails',
             }
+            assert payload[1]['phones'][0]['value'] == '111'
+            assert 'confidence_score' in payload[1]['phones'][0]
 
             display = batch_owner_display_for_leads([prop.id])
             assert display[prop.id]['owner_display_name'] == 'Pri Mary'
             assert display[prop.id]['best_email'] == 'pri@ex.com'
             assert display[prop.id]['best_phone'] == '111'
+
+    def test_payload_phones_include_stored_confidence(self, app):
+        """serialize_contact_summary emits confidence_score and notes from ContactPhone."""
+        with app.app_context():
+            from app import db
+            from app.models.contact_phone import ContactPhone
+
+            service = ContactService()
+            prop = _make_property("708 Confidence Ave")
+            contact = service.create_contact({
+                'first_name': 'Conf',
+                'last_name': 'Owner',
+                'phones': [{'value': '6304305720', 'label': 'mobile'}],
+            })
+            service.link_contact_to_property(prop.id, contact.id, role='owner', is_primary=True)
+            phone = ContactPhone.query.filter_by(contact_id=contact.id).first()
+            phone.confidence_score = 90
+            phone.notes = 'CONFIRMED'
+            db.session.commit()
+
+            payload = service.get_ordered_contacts_payload(prop.id)
+            assert payload[0]['phones'][0]['confidence_score'] == 90
+            assert payload[0]['phones'][0]['notes'] == 'CONFIRMED'
