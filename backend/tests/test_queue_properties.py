@@ -21,17 +21,15 @@ from hypothesis import strategies as st
 
 def is_in_todays_action(lead_status, recommended_action, open_task_due_today):
     """Today's Action: lead_status in active pipeline statuses AND
-    (recommended_action = 'follow_up_now' OR any open task has due_date <= today).
+    an open task has due_date <= today (recommended_action alone is not enough).
     """
     _TODAYS_ACTION_STATUSES = {
         'mailing_no_contact_made', 'mailing_contacted_no_interest',
         'mailing_contacted_interested', 'negotiating_remote',
         'in_person_appointment', 'offer_delivered',
+        'skip_trace', 'awaiting_skip_trace',
     }
-    return (
-        lead_status in _TODAYS_ACTION_STATUSES
-        and (recommended_action == 'follow_up_now' or open_task_due_today)
-    )
+    return lead_status in _TODAYS_ACTION_STATUSES and open_task_due_today
 
 
 def is_in_previously_warm(lead_status, has_hubspot_activity, recent_platform_contact):
@@ -302,8 +300,7 @@ def test_property_10_queue_membership_pure_function_of_lead_state(
     criteria appears in each applicable queue exactly once per queue.
 
     Queue membership criteria (from design.md):
-    - Today's Action: lead_status in (active, follow_up) AND
-        (recommended_action = 'follow_up_now' OR open task due_date <= today)
+    - Today's Action: lead_status in active pipeline AND open task due_date <= today
     - Previously Warm: has_hubspot_activity AND lead_status in (active, new)
         AND no recent platform contact (90 days)
     - Follow-Up Overdue: open task overdue OR
@@ -344,13 +341,14 @@ def test_property_10_queue_membership_pure_function_of_lead_state(
         'mailing_no_contact_made', 'mailing_contacted_no_interest',
         'mailing_contacted_interested', 'negotiating_remote',
         'in_person_appointment', 'offer_delivered',
+        'skip_trace', 'awaiting_skip_trace',
     }
     if in_todays_action:
         assert lead_status in _TODAYS_ACTION_STATUSES, (
             f"Today's Action contains lead with status='{lead_status}'"
         )
-        assert recommended_action == 'follow_up_now' or open_task_due_today, (
-            f"Today's Action contains lead with no qualifying condition: "
+        assert open_task_due_today, (
+            f"Today's Action contains lead with no due task: "
             f"recommended_action={recommended_action}, open_task_due_today={open_task_due_today}"
         )
 

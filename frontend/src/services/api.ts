@@ -1,12 +1,11 @@
 /**
  * API service layer for backend communication
  */
-import axios, { AxiosError, AxiosInstance } from 'axios'
+import api from '@/services/httpClient'
 import type {
   AnalysisSession,
   StartAnalysisResponse,
   StepResult,
-  ErrorResponse,
   Report,
   PropertyScoreResponse,
   RecalculateRequest,
@@ -21,84 +20,6 @@ import {
   HubSpotMatchListSchema,
   PipelineStatusSchema,
 } from '@/services/schemas'
-
-// Create axios instance with default config
-const api: AxiosInstance = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
-  headers: {
-    'Content-Type': 'application/json',
-  },
-  timeout: 30000, // 30 second timeout
-})
-
-// Request interceptor — sends user identity via header, not body.
-// Injecting user_id into the request body breaks Marshmallow schemas that
-// don't declare it, causing 400 validation errors on endpoints like /confirm.
-api.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('session_token')
-    if (token) {
-      config.headers['Authorization'] = `Bearer ${token}`
-    }
-    // Keep X-User-Id for backward compatibility during transition
-    const userId = localStorage.getItem('user_id') || 'default_user'
-    config.headers['X-User-Id'] = userId
-    return config
-  },
-  (error) => Promise.reject(error)
-)
-
-// Response interceptor for error handling
-api.interceptors.response.use(
-  (response) => response,
-  (error: AxiosError<ErrorResponse>) => {
-    if (error.response) {
-      // Server responded with error status
-      const errorData = error.response.data
-      const url = error.config?.url ?? 'unknown'
-      const status = error.response.status
-
-      // Handle 401 Unauthorized — clear session and redirect to login.
-      // Exclude /auth/login itself: a 401 there means wrong credentials,
-      // not an expired session, so the LoginPage handles it directly.
-      if (status === 401 && !url.includes('/auth/login')) {
-        const returnUrl = window.location.pathname + window.location.search
-        localStorage.removeItem('session_token')
-        localStorage.removeItem('user_id')
-        window.location.href = `/login?returnUrl=${encodeURIComponent(returnUrl)}`
-        return Promise.reject(error)
-      }
-
-      // Extract the real message — backend uses several shapes:
-      //   { error: { message: "..." } }  — structured error object
-      //   { error: "..." }               — plain string error (auth endpoints)
-      //   { message: "..." }             — direct message field
-      const errorField = (errorData as any)?.error
-      const message =
-        errorField?.message ||
-        (typeof errorField === 'string' ? errorField : null) ||
-        errorData?.message ||
-        'An error occurred'
-
-      console.error(`[API] ${status} ${url}:`, message, errorData)
-
-      // Handle specific error codes
-      if (status === 429) {
-        throw new Error('Rate limit exceeded. Please try again later.')
-      }
-
-      throw new Error(message)
-    } else if (error.request) {
-      // Request made but no response received
-      console.error('[API] Network error — no response received:', error.request)
-      throw new Error('Network error. Please check your connection.')
-    } else {
-      // Something else happened
-      console.error('[API] Request setup error:', error.message)
-      throw new Error(error.message)
-    }
-  }
-)
 
 export const analysisService = {
   /**
@@ -1333,9 +1254,6 @@ export const contactService = {
 
 // ── Actionable Lead Command Center API Services ───────────────────────────
 import type {
-  QueueCounts,
-  QueuePage,
-  QueueNavigation,
   CommandCenterPayload,
   LeadTask,
   LeadTimelineEntry,
@@ -1346,38 +1264,7 @@ import type {
   CRMRecommendedAction,
 } from '@/types'
 
-export const queueService = {
-  getCounts: (): Promise<QueueCounts> =>
-    api.get('/queues/counts').then(r => r.data),
-  getTodaysAction: (page = 1, perPage = 20): Promise<QueuePage> =>
-    api.get('/queues/todays-action', { params: { page, per_page: perPage } }).then(r => r.data),
-  getPreviouslyWarm: (page = 1, perPage = 20): Promise<QueuePage> =>
-    api.get('/queues/previously-warm', { params: { page, per_page: perPage } }).then(r => r.data),
-  getFollowUpOverdue: (page = 1, perPage = 20): Promise<QueuePage> =>
-    api.get('/queues/follow-up-overdue', { params: { page, per_page: perPage } }).then(r => r.data),
-  getNoNextAction: (page = 1, perPage = 20): Promise<QueuePage> =>
-    api.get('/queues/no-next-action', { params: { page, per_page: perPage } }).then(r => r.data),
-  getNoNextActionStatusCounts: (): Promise<Record<string, number>> =>
-    api.get('/queues/no-next-action/status-counts').then(r => r.data),
-  getNoNextActionLeadIds: (leadStatus: string): Promise<{ lead_ids: number[]; total: number }> =>
-    api.get('/queues/no-next-action/lead-ids', { params: { lead_status: leadStatus } }).then(r => r.data),
-  bulkUpdateNoNextActionStatus: (payload: {
-    source_status: string
-    status: string
-    reason?: string
-  }): Promise<BulkActionResult & { total_matched?: number }> =>
-    api.post('/queues/no-next-action/bulk-update-status', payload).then(r => r.data),
-  getNeedsReview: (page = 1, perPage = 20): Promise<QueuePage> =>
-    api.get('/queues/needs-review', { params: { page, per_page: perPage } }).then(r => r.data),
-  getDoNotContact: (page = 1, perPage = 20): Promise<QueuePage> =>
-    api.get('/queues/do-not-contact', { params: { page, per_page: perPage } }).then(r => r.data),
-  getMissingPropertyMatch: (page = 1, perPage = 20): Promise<QueuePage> =>
-    api.get('/queues/missing-property-match', { params: { page, per_page: perPage } }).then(r => r.data),
-  getMailCandidates: (page = 1, perPage = 20): Promise<QueuePage> =>
-    api.get('/queues/mail-candidates', { params: { page, per_page: perPage } }).then(r => r.data),
-  getNavigation: (queueKey: string, leadId: number): Promise<QueueNavigation> =>
-    api.get(`/queues/${queueKey}/navigation`, { params: { lead_id: leadId } }).then(r => r.data),
-}
+export { queueService } from '@/services/queueApi'
 
 import type {
   ProspectAreaFilterConfig,

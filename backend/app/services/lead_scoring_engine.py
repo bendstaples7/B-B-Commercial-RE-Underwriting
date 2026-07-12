@@ -118,6 +118,16 @@ def _count_open_tasks(lead_id: int) -> int:
         return 0
 
 
+def _mail_work_in_flight(lead_id: int) -> bool:
+    """Queued for mail or pending undated follow-up-after-mailer task."""
+    try:
+        from app.services.mail_task_lifecycle_service import lead_has_mail_work_in_flight
+        return lead_has_mail_work_in_flight(lead_id)
+    except Exception as exc:
+        logger.warning("mail work in flight check failed for lead_id=%s: %s", lead_id, exc)
+        return False
+
+
 def _has_overdue_hubspot_task(lead_id: int) -> bool:
     from sqlalchemy import text as _hs_text
     try:
@@ -420,6 +430,13 @@ class LeadScoringEngine:
                         'most_recent_sale': getattr(lead, 'most_recent_sale', None),
                         'days_since_sale': days_since,
                     }
+                lead_id_early = getattr(lead, 'id', None)
+                if isinstance(lead_id_early, int) and _mail_work_in_flight(lead_id_early):
+                    return 'nurture', 'mail_work_in_flight', {
+                        'has_phone': False,
+                        'has_email': False,
+                        'is_mailable': True,
+                    }
                 return 'mail_ready', 'mailable_no_digital_contact', {
                     'has_phone': False,
                     'has_email': False,
@@ -440,6 +457,9 @@ class LeadScoringEngine:
             )
 
         lead_id = getattr(lead, 'id', None)
+        if isinstance(lead_id, int) and _mail_work_in_flight(lead_id):
+            return 'nurture', 'mail_work_in_flight', {'lead_id': lead_id}
+
         has_overdue_hs_task = _has_overdue_hubspot_task(lead_id) if isinstance(lead_id, int) else False
         if lead.follow_up_overdue or has_overdue_hs_task:
             return 'follow_up_now', 'follow_up_overdue', {
@@ -601,6 +621,10 @@ class LeadScoringEngine:
                     },
                 )
                 db.session.add(entry)
+
+        if result.winning_rule in ('is_warm', 'follow_up_overdue'):
+            from app.services.mail_task_lifecycle_service import ensure_due_today_call_task
+            ensure_due_today_call_task(lead, actor='system')
 
         if commit:
             db.session.commit()

@@ -6,7 +6,7 @@ from flask import Blueprint, g, jsonify, request
 from app.controllers.decorators import handle_errors
 from app.services.mail_queue_service import MailQueueService
 from app.services.prospect_review_service import count_pending_candidates
-from app.services.queue_service import QueueService
+from app.services.queue_service import QueueService, normalize_todays_outreach_filter
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +64,40 @@ def get_counts():
 @queue_bp.route('/todays-action', methods=['GET'])
 @handle_errors
 def get_todays_action():
-    """GET /api/queues/todays-action — paginated Today's Action queue."""
+    """GET /api/queues/todays-action — paginated Today's Action queue.
+
+    Optional query param ``outreach``: mail_now | call_now | email_now | text_now
+    filters by outreach display label (same as UI Next Action column).
+    """
     page, per_page, sort_by, sort_order = _parse_pagination_params()
-    rows, total = _get_queue_service().get_todays_action(page, per_page, sort_by, sort_order)
-    return jsonify({'rows': rows, 'total': total, 'page': page, 'per_page': per_page}), 200
+    outreach = normalize_todays_outreach_filter(request.args.get('outreach'))
+    rows, total = _get_queue_service().get_todays_action(
+        page, per_page, sort_by, sort_order, outreach=outreach,
+    )
+    return jsonify({
+        'rows': rows,
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+        'outreach': outreach,
+    }), 200
+
+
+@queue_bp.route('/todays-action/outreach-counts', methods=['GET'])
+@handle_errors
+def get_todays_action_outreach_counts():
+    """GET /api/queues/todays-action/outreach-counts — Mail Now / Call Now facet counts."""
+    counts = _get_queue_service().get_todays_action_outreach_counts()
+    return jsonify(counts), 200
+
+
+@queue_bp.route('/todays-action/lead-ids', methods=['GET'])
+@handle_errors
+def get_todays_action_lead_ids():
+    """GET /api/queues/todays-action/lead-ids?outreach= — ids matching optional filter."""
+    outreach = normalize_todays_outreach_filter(request.args.get('outreach'))
+    ids = _get_queue_service().get_todays_action_lead_ids(outreach=outreach)
+    return jsonify({'lead_ids': ids, 'total': len(ids), 'outreach': outreach}), 200
 
 
 @queue_bp.route('/previously-warm', methods=['GET'])
@@ -197,6 +227,7 @@ def get_queue_navigation(queue_key: str):
     sort_order = request.args.get('sort_order') or None
     user_id = getattr(g, 'user_id', None)
     mail_user_id = user_id if queue_key == 'mail-candidates' else None
+    outreach = request.args.get('outreach') or None
 
     try:
         payload = _get_queue_service().get_navigation(
@@ -205,6 +236,7 @@ def get_queue_navigation(queue_key: str):
             sort_by=sort_by,
             sort_order=sort_order,
             mail_user_id=mail_user_id,
+            outreach=outreach,
         )
     except ValueError as exc:
         if str(exc).startswith('Unknown queue key'):

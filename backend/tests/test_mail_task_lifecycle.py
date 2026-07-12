@@ -17,6 +17,7 @@ from app.services.mail_task_lifecycle_service import (
     complete_mail_prep_tasks,
     complete_tasks_superseded_by_mail,
     count_superseded_tasks_for_lead,
+    create_pending_mail_follow_up_task,
     find_mail_awaiting_lead_ids,
     resolve_mail_queue_status,
     schedule_mail_follow_up_task,
@@ -352,16 +353,38 @@ class TestScheduleMailFollowUpTask:
             assert task.due_date == sent_at.date() + timedelta(days=MAIL_FOLLOW_UP_OFFSET_DAYS)
             assert 'Follow up after mailer' in task.title
 
-    def test_skips_duplicate_follow_up(self, app):
+    def test_updates_pending_follow_up_due_date_on_send(self, app):
         with app.app_context():
-            lead = _make_lead(app, '6 Dup Follow Up St')
+            from app import db
+            from app.services.mail_task_lifecycle_service import create_pending_mail_follow_up_task
+
+            lead = _make_lead(app, '6 Pending Follow Up St')
+            pending = create_pending_mail_follow_up_task(lead, actor=USER_ID)
+            db.session.commit()
+            assert pending.due_date is None
+
+            sent_at = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+            task = schedule_mail_follow_up_task(
+                lead=lead,
+                sent_at=sent_at,
+                actor=USER_ID,
+            )
+            db.session.commit()
+
+            assert task is not None
+            assert task.id == pending.id
+            assert task.due_date == sent_at.date() + timedelta(days=MAIL_FOLLOW_UP_OFFSET_DAYS)
+
+    def test_returns_existing_when_follow_up_already_dated(self, app):
+        with app.app_context():
+            lead = _make_lead(app, '6b Dup Follow Up St')
             sent_at = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
             due = sent_at.date() + timedelta(days=MAIL_FOLLOW_UP_OFFSET_DAYS)
 
             existing = LeadTask(
                 lead_id=lead.id,
                 task_type='call_owner_today',
-                title='Follow up after mailer — 6 Dup Follow Up St',
+                title='Follow up after mailer — 6b Dup Follow Up St',
                 status='open',
                 due_date=due,
                 created_by='test',
@@ -375,7 +398,116 @@ class TestScheduleMailFollowUpTask:
                 sent_at=sent_at,
                 actor=USER_ID,
             )
-            assert task is None
+            assert task is not None
+            assert task.id == existing.id
+            assert LeadTask.query.filter_by(
+                lead_id=lead.id, status='open',
+            ).count() == 1
+
+
+class TestEnqueueCreatesPendingMailFollowUp:
+    def test_enqueue_creates_pending_follow_up_task(self, app):
+        with app.app_context():
+            lead = _make_lead(app, '2c Enqueue Pending St')
+            prep = _make_task(app, lead.id)
+
+            with patch('app.services.mail_queue_service.refresh_leads_after_mail_task_changes'):
+                with patch('app.services.mail_queue_service.sync_pending_hubspot_completions'):
+                    result = MailQueueService().enqueue_leads([lead.id], USER_ID)
+
+            assert result['added'] == 1
+            assert LeadTask.query.get(prep.id).status == 'completed'
+            pending = LeadTask.query.filter_by(lead_id=lead.id, status='open').all()
+            assert len(pending) == 1
+            assert pending[0].due_date is None
+            assert 'Follow up after mailer' in pending[0].title
+
+    def test_remove_from_batch_cancels_pending_follow_up(self, app):
+        with app.app_context():
+            from app import db
+
+            lead = _make_lead(app, '2d Remove Pending St')
+            with patch('app.services.mail_queue_service.refresh_leads_after_mail_task_changes'):
+                with patch('app.services.mail_queue_service.sync_pending_hubspot_completions'):
+                    MailQueueService().enqueue_leads([lead.id], USER_ID)
+
+            item = MailQueueItem.query.filter_by(
+                lead_id=lead.id, user_id=USER_ID, status='queued',
+            ).one()
+            with patch('app.services.mail_queue_service.refresh_leads_after_mail_task_changes'):
+                MailQueueService().remove_item(item.id, USER_ID)
+
+            open_followups = [
+                t for t in LeadTask.query.filter_by(lead_id=lead.id).all()
+                if 'Follow up after mailer' in (t.title or '')
+            ]
+            assert open_followups
+            assert all(t.status == 'cancelled' for t in open_followups)
+    def test_preserves_pending_mail_follow_up_and_mirror_on_enqueue(self, app):
+        with app.app_context():
+            from app import db
+            from app.models.task import Task
+            from app.services.mail_task_lifecycle_service import create_pending_mail_follow_up_task
+
+            lead = _make_lead(app, '2e Preserve Pending St')
+            pending = create_pending_mail_follow_up_task(lead, actor=USER_ID)
+            db.session.commit()
+            mirror = Task.query.filter_by(lead_id=lead.id, title=pending.title).one()
+
+            count, _ = complete_tasks_superseded_by_mail(lead.id, actor=USER_ID, commit=True)
+            assert count == 0
+            assert LeadTask.query.get(pending.id).status == 'open'
+            assert LeadTask.query.get(pending.id).due_date is None
+            assert Task.query.get(mirror.id).status == 'open'
+
+    def test_does_not_wipe_dated_mail_follow_up_on_reenqueue(self, app):
+        with app.app_context():
+            from app import db
+            from app.services.mail_task_lifecycle_service import create_pending_mail_follow_up_task
+
+            lead = _make_lead(app, '2f Keep Dated St')
+            due = date.today() + timedelta(days=5)
+            existing = LeadTask(
+                lead_id=lead.id,
+                task_type='call_owner_today',
+                title='Follow up after mailer — 2f Keep Dated St',
+                status='open',
+                due_date=due,
+                created_by='test',
+            )
+            db.session.add(existing)
+            db.session.commit()
+
+            complete_tasks_superseded_by_mail(lead.id, actor=USER_ID, commit=True)
+            task = create_pending_mail_follow_up_task(lead, actor=USER_ID)
+            db.session.commit()
+
+            assert task.id == existing.id
+            assert task.due_date == due
+            assert task.status == 'open'
+
+    def test_schedule_after_complete_keeps_mirror_open(self, app):
+        with app.app_context():
+            from app import db
+            from app.models.task import Task
+            from app.services.mail_task_lifecycle_service import create_pending_mail_follow_up_task
+
+            lead = _make_lead(app, '2g Schedule Mirror St')
+            pending = create_pending_mail_follow_up_task(lead, actor=USER_ID)
+            db.session.commit()
+
+            # Simulate send path: supersede then schedule
+            complete_tasks_superseded_by_mail(lead.id, actor=USER_ID, commit=False)
+            sent_at = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc)
+            task = schedule_mail_follow_up_task(lead=lead, sent_at=sent_at, actor=USER_ID)
+            db.session.commit()
+
+            assert task is not None
+            assert task.id == pending.id
+            assert task.due_date == sent_at.date() + timedelta(days=MAIL_FOLLOW_UP_OFFSET_DAYS)
+            mirror = Task.query.filter_by(lead_id=lead.id, title=task.title).one()
+            assert mirror.status == 'open'
+            assert mirror.due_date is not None
 
 
 class TestResolveMailQueueStatus:
@@ -453,3 +585,51 @@ class TestSubmitCampaignFollowUp:
             ).first()
             assert follow_up is not None
             assert 'Follow up after mailer' in follow_up.title
+
+    def test_submit_campaign_failure_cancels_pending_follow_up(self, app, fernet_key, monkeypatch):
+        from app import db
+        from app.services.open_letter_client_service import OpenLetterClientService
+
+        monkeypatch.setenv('HUBSPOT_ENCRYPTION_KEY', fernet_key)
+
+        with app.app_context():
+            lead = _make_lead(app, '9b Failed Campaign St')
+            pending = create_pending_mail_follow_up_task(lead, actor=USER_ID)
+            db.session.add(MailQueueItem(lead_id=lead.id, user_id=USER_ID, status='queued'))
+            token = OpenLetterClientService.encrypt_token('test-token')
+            config = OpenLetterConfig(
+                user_id=USER_ID,
+                encrypted_api_token=token,
+                batch_minimum=1,
+                default_product_id='prod-1',
+                default_template_id='tmpl-1',
+            )
+            campaign = MailCampaign(
+                status='pending',
+                lead_count=1,
+                product_id='prod-1',
+                template_id='tmpl-1',
+                created_by=USER_ID,
+            )
+            db.session.add_all([config, campaign])
+            db.session.flush()
+            item = MailQueueItem.query.filter_by(lead_id=lead.id, status='queued').first()
+            item.campaign_id = campaign.id
+            db.session.commit()
+
+            mock_client = MagicMock()
+            mock_client.place_order.side_effect = RuntimeError('olc down')
+            cfg_svc = MagicMock()
+            cfg_svc.require_config.return_value = config
+            cfg_svc.get_client.return_value = mock_client
+
+            svc = MailCampaignService()
+            svc._config_service = cfg_svc
+
+            with patch('app.services.mail_campaign_service.refresh_leads_after_mail_task_changes') as refresh:
+                with pytest.raises(RuntimeError, match='olc down'):
+                    svc.submit_campaign(campaign.id)
+
+            assert MailQueueItem.query.get(item.id).status == 'failed'
+            assert LeadTask.query.get(pending.id).status == 'cancelled'
+            refresh.assert_called_once_with([lead.id])

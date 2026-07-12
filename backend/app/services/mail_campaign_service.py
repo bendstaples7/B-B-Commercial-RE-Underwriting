@@ -12,6 +12,7 @@ from app.services.lead_timeline_service import LeadTimelineService
 from app.services.open_letter_config_service import OpenLetterConfigService
 from app.services.open_letter_contact_mapper import lead_to_olc_contact
 from app.services.mail_task_lifecycle_service import (
+    cancel_pending_mail_follow_up_tasks,
     complete_tasks_superseded_by_mail,
     refresh_leads_after_mail_task_changes,
     schedule_mail_follow_up_task,
@@ -117,10 +118,20 @@ class MailCampaignService:
             logger.exception('OLC place_order failed for campaign %s', campaign.id)
             campaign.status = 'failed'
             campaign.error_message = str(exc)[:2000]
+            failed_lead_ids: list[int] = []
             for item in items:
                 if item.status == 'queued':
                     item.status = 'failed'
+                    lead = lead_by_item.get(item.id)
+                    if lead is not None:
+                        cancel_pending_mail_follow_up_tasks(
+                            lead.id,
+                            actor=campaign.created_by,
+                            reason='mail_batch_failed',
+                        )
+                        failed_lead_ids.append(lead.id)
             db.session.commit()
+            refresh_leads_after_mail_task_changes(failed_lead_ids)
             raise
 
         data = result.get('data') or {}

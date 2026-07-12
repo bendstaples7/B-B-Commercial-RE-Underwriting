@@ -208,6 +208,53 @@ def _hubspot_task_overdue_excluding_mail_awaiting(cutoff_date):
     )
 
 
+# Outreach display filters for Today's Action (match frontend outreachDisplayLabel).
+TODAYS_ACTION_OUTREACH_FILTERS = frozenset({
+    'mail_now', 'call_now', 'email_now', 'text_now',
+})
+
+
+def _outreach_filter_clause(outreach: str | None):
+    """SQLAlchemy clause for Mail Now / Call Now / etc. display labels."""
+    if not outreach:
+        return None
+    key = outreach.strip().lower()
+    if key == 'mail_now':
+        return or_(
+            Lead.recommended_action == 'mail_ready',
+            and_(
+                Lead.recommended_action == 'follow_up_now',
+                Lead.recommended_contact_method == 'direct_mail',
+            ),
+        )
+    if key == 'call_now':
+        return or_(
+            Lead.recommended_action == 'call_ready',
+            and_(
+                Lead.recommended_action == 'follow_up_now',
+                Lead.recommended_contact_method == 'phone',
+            ),
+        )
+    if key == 'email_now':
+        return and_(
+            Lead.recommended_action == 'follow_up_now',
+            Lead.recommended_contact_method == 'email',
+        )
+    if key == 'text_now':
+        return and_(
+            Lead.recommended_action == 'follow_up_now',
+            Lead.recommended_contact_method == 'text',
+        )
+    return None
+
+
+def normalize_todays_outreach_filter(outreach: str | None) -> str | None:
+    if not outreach:
+        return None
+    key = outreach.strip().lower()
+    return key if key in TODAYS_ACTION_OUTREACH_FILTERS else None
+
+
 class QueueService:
     """Computes badge counts and paginated rows for the 7 Actionable Lead Command Center queues."""
 
@@ -263,38 +310,58 @@ class QueueService:
     # ------------------------------------------------------------------
 
     def _count_todays_action(self, today: date) -> int:
-        """Today's Action: any lead that needs attention today.
+        """Today's Action: due work only (open tasks due today or earlier)."""
+        return self._todays_action_query(today).count()
 
-        Matches leads where ANY of the following is true:
-          - lead_status in (active, follow_up) AND recommended_action = 'follow_up_now'
-          - lead_status in (active, follow_up) AND has an open lead_task due today
-          - Has an open/overdue HubSpot task (tasks table) due today (any lead_status)
-        """
+    def _todays_action_query(self, today: date | None = None, outreach: str | None = None):
+        """Base Today's Action membership query, optionally filtered by outreach label."""
+        today = today or date.today()
         open_lead_task_due_today = _open_lead_task_due_today_excluding_mail_awaiting(today)
-        hubspot_task_due_today = _hubspot_task_overdue_subquery(today)
-
-        return (
-            self._base_query()
-            .filter(
-                or_(
-                    # CRM-native path: requires active pipeline status
-                    and_(
-                        Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
-                        or_(
-                            Lead.recommended_action == 'follow_up_now',
-                            open_lead_task_due_today,
-                        ),
-                    ),
-                    # HubSpot task path: also scoped to active pipeline statuses
-                    # so terminal/suppressed leads don't leak into Today's Action.
-                    and_(
-                        Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
-                        hubspot_task_due_today,
-                    ),
-                )
-            )
-            .count()
+        hubspot_task_due_today = _hubspot_task_overdue_excluding_mail_awaiting(today)
+        query = self._base_query().filter(
+            Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
+            or_(
+                open_lead_task_due_today,
+                hubspot_task_due_today,
+            ),
         )
+        clause = _outreach_filter_clause(normalize_todays_outreach_filter(outreach))
+        if clause is not None:
+            query = query.filter(clause)
+        return query
+
+    def get_todays_action_outreach_counts(self) -> dict[str, int]:
+        """Counts of Today's Action leads by outreach display bucket."""
+        today = date.today()
+        base_total = self._todays_action_query(today).count()
+        return {
+            'all': base_total,
+            'mail_now': self._todays_action_query(today, 'mail_now').count(),
+            'call_now': self._todays_action_query(today, 'call_now').count(),
+            'email_now': self._todays_action_query(today, 'email_now').count(),
+            'text_now': self._todays_action_query(today, 'text_now').count(),
+        }
+
+    def get_todays_action_lead_ids(self, outreach: str | None = None) -> list[int]:
+        """All Today's Action lead IDs matching an optional outreach filter."""
+        query = self._todays_action_query(outreach=outreach)
+        query = _apply_queue_sort(query, 'lead_score', 'desc')
+        return [row[0] for row in query.with_entities(Lead.id).all()]
+
+    def get_todays_action(
+        self,
+        page: int = 1,
+        per_page: int = 20,
+        sort_by: str = 'lead_score',
+        sort_order: str = 'desc',
+        outreach: str | None = None,
+    ) -> tuple[list[dict], int]:
+        """Today's Action — due open tasks; optional outreach display filter."""
+        query = self._todays_action_query(outreach=outreach)
+        total = query.count()
+        query = _apply_queue_sort(query, sort_by, sort_order)
+        leads = query.offset((page - 1) * per_page).limit(per_page).all()
+        return [_leads_to_queue_rows(leads), total]
 
     def _count_previously_warm(self) -> int:
         """Previously Warm: leads where is_warm = True."""
@@ -397,39 +464,6 @@ class QueueService:
     # ------------------------------------------------------------------
     # Paginated queue methods
     # ------------------------------------------------------------------
-
-    def get_todays_action(
-        self,
-        page: int = 1,
-        per_page: int = 20,
-        sort_by: str = 'lead_score',
-        sort_order: str = 'desc',
-    ) -> tuple[list[dict], int]:
-        """Today's Action — see _count_todays_action for criteria."""
-        today = date.today()
-        open_lead_task_due_today = _open_lead_task_due_today_excluding_mail_awaiting(today)
-        hubspot_task_due_today = _hubspot_task_overdue_subquery(today)
-
-        query = self._base_query().filter(
-            or_(
-                and_(
-                    Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
-                    or_(
-                        Lead.recommended_action == 'follow_up_now',
-                        open_lead_task_due_today,
-                    ),
-                ),
-                # HubSpot task path: also scoped to active pipeline statuses
-                and_(
-                    Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
-                    hubspot_task_due_today,
-                ),
-            )
-        )
-        total = query.count()
-        query = _apply_queue_sort(query, sort_by, sort_order)
-        leads = query.offset((page - 1) * per_page).limit(per_page).all()
-        return [_leads_to_queue_rows(leads), total]
 
     def get_previously_warm(
         self,
@@ -773,6 +807,7 @@ class QueueService:
         sort_order: str,
         mail_user_id: str | None,
         cap: int,
+        outreach: str | None = None,
     ) -> tuple[list[int], int]:
         """Lightweight ordered ID list for navigation (no outreach row hydration)."""
         if queue_key == 'mail-candidates':
@@ -782,24 +817,7 @@ class QueueService:
             return all_ids[:cap], len(all_ids)
 
         if queue_key == 'todays-action':
-            today = date.today()
-            open_lead_task_due_today = _open_lead_task_due_today_excluding_mail_awaiting(today)
-            hubspot_task_due_today = _hubspot_task_overdue_subquery(today)
-            query = self._base_query().filter(
-                or_(
-                    and_(
-                        Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
-                        or_(
-                            Lead.recommended_action == 'follow_up_now',
-                            open_lead_task_due_today,
-                        ),
-                    ),
-                    and_(
-                        Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
-                        hubspot_task_due_today,
-                    ),
-                )
-            )
+            query = self._todays_action_query(outreach=outreach)
             query = _apply_queue_sort(query, sort_by, sort_order)
             return self._ordered_ids_from_query(query, cap)
 
@@ -915,9 +933,10 @@ class QueueService:
         sort_by: str,
         sort_order: str,
         mail_user_id: str | None,
+        outreach: str | None = None,
     ) -> tuple:
         scope = self._owner_user_id or '__admin__'
-        return (scope, queue_key, sort_by, sort_order, mail_user_id or '')
+        return (scope, queue_key, sort_by, sort_order, mail_user_id or '', outreach or '')
 
     def get_navigation(
         self,
@@ -926,6 +945,7 @@ class QueueService:
         sort_by: str | None = None,
         sort_order: str | None = None,
         mail_user_id: str | None = None,
+        outreach: str | None = None,
     ) -> dict:
         """Return position / neighbors for a lead within a work queue.
 
@@ -939,14 +959,18 @@ class QueueService:
         _, default_sort_by, default_sort_order = config
         sort_by = sort_by or default_sort_by
         sort_order = sort_order or default_sort_order
+        outreach = normalize_todays_outreach_filter(outreach) if queue_key == 'todays-action' else None
 
-        cache_key = self._navigation_cache_key(queue_key, sort_by, sort_order, mail_user_id)
+        cache_key = self._navigation_cache_key(
+            queue_key, sort_by, sort_order, mail_user_id, outreach,
+        )
         cached = queue_order_cache.get(cache_key)
         if cached is not None:
             ids, total = cached
         else:
             ids, total = self._get_ordered_ids_for_queue(
                 queue_key, sort_by, sort_order, mail_user_id, self.QUEUE_NAV_CAP,
+                outreach=outreach,
             )
             queue_order_cache.set(cache_key, ids, total)
 

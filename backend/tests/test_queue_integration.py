@@ -133,7 +133,7 @@ class TestTodaysActionQueue:
             assert total >= 1
 
     def test_lead_with_follow_up_now_and_active_status_appears(self, app, client):
-        """A lead with recommended_action=follow_up_now and active status appears."""
+        """Bare follow_up_now without a due task does not appear in Today's Action."""
         with app.app_context():
             lead = _make_lead(app, '2 Todays Action St',
                               lead_status='mailing_no_contact_made',
@@ -142,7 +142,7 @@ class TestTodaysActionQueue:
             svc = QueueService()
             rows, _ = svc.get_todays_action()
             ids = [r['id'] for r in rows]
-            assert lead.id in ids
+            assert lead.id not in ids
 
     def test_lead_with_new_status_and_no_tasks_does_not_appear(self, app, client):
         """A plain new lead with no tasks does not appear in Today's Action."""

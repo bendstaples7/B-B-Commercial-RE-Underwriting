@@ -17,7 +17,7 @@ import pytest
 from app.services.deterministic_scoring_engine import (
     DeterministicScoringEngine,
 )
-from app.services.lead_scoring_engine import LeadScoringEngine, DEFAULT_WEIGHTS
+from app.services.lead_scoring_engine import LeadScoringEngine, ScoringResult, DEFAULT_WEIGHTS
 from app.services.plugins.cook_county_assessor import CookCountyAssessorPlugin
 from app.services.plugins.pin_utils import extract_pin, normalize_pin_for_socrata
 
@@ -503,6 +503,33 @@ class TestOutreachContactMethod:
 
         assert result.recommended_contact_method == 'phone'
         assert result.recommended_action == 'call_ready'
+
+    def test_persist_ensures_due_call_task_after_outreach_refinement(self, app):
+        lead = _make_lead(has_phone=True, has_email=True)
+        lead.id = 123
+        lead.is_warm = True
+        lead.recommended_action = 'call_ready'
+        lead.recommended_contact_method = 'phone'
+        result = ScoringResult(
+            total_score=80.0,
+            score_tier='B',
+            data_quality_score=75.0,
+            recommended_action='call_ready',
+            recommended_contact_method='phone',
+            winning_rule='is_warm',
+            action_signals={'is_warm': True},
+            score_details={},
+            top_signals=[],
+            missing_data=[],
+            score_version='test',
+        )
+
+        with app.app_context(), \
+             patch('app.services.lead_scoring_engine.db.session.add'), \
+             patch('app.services.mail_task_lifecycle_service.ensure_due_today_call_task') as ensure_task:
+            LeadScoringEngine().persist(lead, result, write_history=False, commit=False)
+
+        ensure_task.assert_called_once_with(lead, actor='system')
 
 
 class TestMotivationScoreAttribution:

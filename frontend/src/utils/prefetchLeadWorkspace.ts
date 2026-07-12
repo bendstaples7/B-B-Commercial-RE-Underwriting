@@ -29,10 +29,11 @@ export function prefetchQueueNavigation(
   queryClient: QueryClient,
   queueKey: string,
   leadId: number,
+  options?: { outreach?: string | null },
 ): void {
   void queryClient.prefetchQuery({
-    queryKey: ['queue-navigation', queueKey, leadId],
-    queryFn: () => queueService.getNavigation(queueKey, leadId),
+    queryKey: ['queue-navigation', queueKey, options?.outreach ?? null, leadId],
+    queryFn: () => queueService.getNavigation(queueKey, leadId, options),
     staleTime: LEAD_WORKSPACE_STALE_MS,
   })
 }
@@ -42,10 +43,11 @@ export function prefetchAdjacentQueueLeads(
   queueKey: string,
   prevId: number | null | undefined,
   nextId: number | null | undefined,
+  options?: { outreach?: string | null },
 ): void {
   for (const id of [prevId, nextId]) {
     if (id == null) continue
     prefetchLeadWorkspace(queryClient, id)
-    prefetchQueueNavigation(queryClient, queueKey, id)
+    prefetchQueueNavigation(queryClient, queueKey, id, options)
   }
 }
