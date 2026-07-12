@@ -100,7 +100,8 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
   })
 
   const resolveEntityMutation = useMutation({
-    mutationFn: () => entityResolutionApi.resolve(propertyId),
+    mutationFn: (action: 'resolve' | 'research_nonprofit' | 'mark_nonprofit' = 'resolve') =>
+      entityResolutionApi.resolve(propertyId, { action }),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['propertyContacts', propertyId] })
       queryClient.invalidateQueries({ queryKey: ['entityResolution', propertyId] })
@@ -114,6 +115,10 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
         return
       }
       const result = data
+      if (result.status === 'nonprofit') {
+        showSuccess(result.message || 'Marked as nonprofit — cold mail deprioritized.')
+        return
+      }
       if (result.status === 'unsupported_jurisdiction') {
         showError(result.message || 'Non-Illinois LLC — not supported yet.')
         return
@@ -130,17 +135,23 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
         showSuccess(result.message || 'Entity resolved — no natural person found on filing.')
         return
       }
+      if (result.status === 'no_match') {
+        showError(result.message || 'No match found — try Resolve Illinois LLC or mark as nonprofit.')
+        return
+      }
       showError(result.message || `Entity resolution: ${result.status}`)
     },
     onError: (err: Error) =>
-      showError(err.message || 'Failed to resolve Illinois LLC.'),
+      showError(err.message || 'Failed to resolve entity.'),
   })
 
   const primaryContact = contacts?.find((c) => c.is_primary)
   const showEntityBanner =
     Boolean(entityStatus?.primary_is_entity) ||
     Boolean(entityStatus?.entity_lookup_status) ||
+    Boolean(entityStatus?.is_nonprofit) ||
     (primaryContact != null && isEntityContactName(primaryContact))
+  const entityActionPending = resolveEntityMutation.isPending
 
   // ── Set as Primary mutation ───────────────────────────────────────────────
   const setPrimaryMutation = useMutation({
@@ -224,45 +235,96 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
       {showEntityBanner && (
         <Alert
           severity={
-            entityStatus?.provider_configured === false
-              ? 'warning'
-              : entityStatus?.entity_lookup_status === 'unsupported_jurisdiction' ||
-                  entityStatus?.entity_lookup_status === 'no_match'
+            entityStatus?.is_nonprofit || entityStatus?.organization_org_type === 'nonprofit'
+              ? 'success'
+              : entityStatus?.provider_configured === false &&
+                  entityStatus?.nonprofit_provider_configured === false
                 ? 'warning'
-                : entityStatus?.entity_lookup_status === 'resolved'
-                  ? 'success'
-                  : 'info'
+                : entityStatus?.entity_lookup_status === 'unsupported_jurisdiction' ||
+                    entityStatus?.entity_lookup_status === 'no_match'
+                  ? 'warning'
+                  : entityStatus?.entity_lookup_status === 'resolved'
+                    ? 'success'
+                    : 'info'
           }
           icon={<BusinessIcon />}
           sx={{ mb: 2 }}
           action={
-            entityStatus?.can_resolve ? (
-              <Button
-                color="inherit"
-                size="small"
-                disabled={resolveEntityMutation.isPending}
-                onClick={() => resolveEntityMutation.mutate()}
-                aria-label="Resolve Illinois LLC"
-              >
-                {resolveEntityMutation.isPending ? 'Resolving…' : 'Resolve Illinois LLC'}
-              </Button>
-            ) : undefined
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, alignItems: 'flex-end' }}>
+              {entityStatus?.can_research && !entityStatus?.is_nonprofit ? (
+                <Button
+                  color="inherit"
+                  size="small"
+                  disabled={entityActionPending}
+                  onClick={() => resolveEntityMutation.mutate('research_nonprofit')}
+                  aria-label="Research this organization"
+                >
+                  {entityActionPending ? 'Working…' : 'Research organization'}
+                </Button>
+              ) : null}
+              {entityStatus?.can_mark_nonprofit ? (
+                <Button
+                  color="inherit"
+                  size="small"
+                  disabled={entityActionPending}
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        'Mark this owner as a nonprofit? Cold mail will be deprioritized.',
+                      )
+                    ) {
+                      resolveEntityMutation.mutate('mark_nonprofit')
+                    }
+                  }}
+                  aria-label="Mark as nonprofit"
+                >
+                  Mark as nonprofit
+                </Button>
+              ) : null}
+              {entityStatus?.can_resolve ? (
+                <Button
+                  color="inherit"
+                  size="small"
+                  disabled={entityActionPending}
+                  onClick={() => resolveEntityMutation.mutate('resolve')}
+                  aria-label="Resolve Illinois LLC"
+                >
+                  {entityActionPending ? 'Resolving…' : 'Resolve Illinois LLC'}
+                </Button>
+              ) : null}
+            </Box>
           }
         >
           <Typography variant="body2" component="div" sx={{ fontWeight: 600 }}>
-            LLC — resolve entity
+            {entityStatus?.is_nonprofit || entityStatus?.organization_org_type === 'nonprofit'
+              ? 'Nonprofit / institution — cold mail deprioritized'
+              : 'Entity owner — research or resolve'}
             {entityStatus?.entity_name ? ` (${entityStatus.entity_name})` : ''}
           </Typography>
           <Typography variant="caption" component="div" color="text.secondary" sx={{ mt: 0.5 }}>
-            Free Illinois SOS bulk data only — no phones/emails from this step
-            {entityStatus?.dataset_imported_at
-              ? ` · dataset as of ${new Date(entityStatus.dataset_imported_at).toLocaleDateString()}`
+            Research via IRS EO BMF, then Illinois SOS for for-profit LLCs
+            {entityStatus?.nonprofit_dataset_imported_at
+              ? ` · IRS EO as of ${new Date(entityStatus.nonprofit_dataset_imported_at).toLocaleDateString()}`
               : ''}
-            {entityStatus?.provider ? ` · provider: ${entityStatus.provider}` : ''}
+            {entityStatus?.dataset_imported_at
+              ? ` · SOS as of ${new Date(entityStatus.dataset_imported_at).toLocaleDateString()}`
+              : ''}
           </Typography>
+          {entityStatus?.is_institutional && !entityStatus?.is_nonprofit && (
+            <Typography variant="body2" sx={{ mt: 0.5 }}>
+              {entityStatus.is_definite_institutional
+                ? 'Name looks like a public / nonprofit institution — research or mark as nonprofit.'
+                : 'Name may be institutional (e.g. foundation/school) — research IRS EO or mark as nonprofit before mailing.'}
+            </Typography>
+          )}
+          {entityStatus?.nonprofit_provider_configured === false && (
+            <Typography variant="body2" sx={{ mt: 0.5 }}>
+              IRS EO data not loaded yet. An admin can run the IRS EO import, or mark nonprofit manually.
+            </Typography>
+          )}
           {entityStatus?.provider_configured === false && (
             <Typography variant="body2" sx={{ mt: 0.5 }}>
-              Bulk data not loaded yet. An admin must run the IL SOS import before Resolve works.
+              IL SOS bulk data not loaded yet. An admin must run the IL SOS import before Resolve works.
             </Typography>
           )}
           {entityStatus?.entity_lookup_status === 'unsupported_jurisdiction' && (
@@ -272,7 +334,7 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
           )}
           {entityStatus?.entity_lookup_status === 'no_match' && (
             <Typography variant="body2" sx={{ mt: 0.5 }}>
-              No match in the free Illinois SOS dump (foreign LLCs or name variants may be missing).
+              No match in research data — try Resolve Illinois LLC or mark as nonprofit.
             </Typography>
           )}
           {entityStatus?.entity_lookup_status === 'resolved' &&
@@ -282,7 +344,8 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
               </Typography>
             )}
           {entityStatus?.entity_lookup_status === 'resolved' &&
-            !entityStatus.entity_lookup_person_found && (
+            !entityStatus.entity_lookup_person_found &&
+            entityStatus.organization_org_type !== 'nonprofit' && (
               <Typography variant="body2" sx={{ mt: 0.5 }}>
                 Filing found, but no natural person (often only a corporate registered agent).
               </Typography>

@@ -13,6 +13,7 @@ from app.services.open_letter_contact_mapper import is_mailable_lead
 from app.services.recommended_action_metadata import get_recommended_action_display
 from app.services.outreach_method_service import resolve_outreach_contacts_for_leads
 from app.services.scoring_rubric import format_last_sale_at, is_recently_sold
+from app.services.entity_owner_policy import is_cold_mail_blocked
 
 # Statuses that represent active outreach pipeline (not terminal or suppressed)
 ACTIVE_PIPELINE_STATUSES = [
@@ -302,7 +303,11 @@ class QueueService:
         query = self._mail_candidates_query(mail_user_id)
         return sum(
             1 for lead in query.all()
-            if not is_recently_sold(lead) and is_mailable_lead(lead)
+            if (
+                not is_recently_sold(lead)
+                and is_mailable_lead(lead)
+                and not is_cold_mail_blocked(lead)
+            )
         )
 
     # ------------------------------------------------------------------
@@ -740,7 +745,11 @@ class QueueService:
         ordered = query.order_by(*order).all()
         eligible = [
             lead for lead in ordered
-            if not is_recently_sold(lead) and is_mailable_lead(lead)
+            if (
+                not is_recently_sold(lead)
+                and is_mailable_lead(lead)
+                and not is_cold_mail_blocked(lead)
+            )
         ]
         total = len(eligible)
         start = (page - 1) * per_page
@@ -776,7 +785,11 @@ class QueueService:
         ordered = query.order_by(*order).all()
         return [
             lead.id for lead in ordered
-            if not is_recently_sold(lead) and is_mailable_lead(lead)
+            if (
+                not is_recently_sold(lead)
+                and is_mailable_lead(lead)
+                and not is_cold_mail_blocked(lead)
+            )
         ]
 
     # Cap for prev/next neighbor lookup (same order as list endpoints).

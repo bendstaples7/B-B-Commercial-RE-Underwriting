@@ -64,16 +64,32 @@ def get_entity_resolution_status(lead_id: int):
 @require_auth
 @handle_errors
 def resolve_entity(lead_id: int):
-    """Resolve Illinois LLC primary contact → person Contact.
+    """Resolve entity owner: IRS nonprofit research then Illinois LLC → person.
 
     Body (optional)::
-        { "dry_run": false, "async": false }
+        {
+          "dry_run": false,
+          "async": false,
+          "action": "resolve" | "research_nonprofit" | "mark_nonprofit"
+        }
     """
     body = request.get_json(silent=True) or {}
     dry_run = _json_bool(body, 'dry_run', default=False)
     use_async = _json_bool(body, 'async', default=False) and not dry_run
+    action_raw = body.get('action', 'resolve')
+    if action_raw is None:
+        action_raw = 'resolve'
+    if not isinstance(action_raw, str):
+        raise ValueError(
+            "action must be one of: resolve, research_nonprofit, mark_nonprofit"
+        )
+    action = action_raw.strip().lower() or 'resolve'
+    if action not in ('resolve', 'research_nonprofit', 'mark_nonprofit'):
+        raise ValueError(
+            "action must be one of: resolve, research_nonprofit, mark_nonprofit"
+        )
 
-    if use_async:
+    if use_async and action == 'resolve':
         try:
             from celery_worker import entity_resolution_resolve_lead_task
             entity_resolution_resolve_lead_task.apply_async(
@@ -91,7 +107,16 @@ def resolve_entity(lead_id: int):
             )
 
     try:
-        result = _service.resolve_lead(lead_id, dry_run=dry_run, actor=_actor())
+        if action == 'mark_nonprofit':
+            result = _service.mark_as_nonprofit(
+                lead_id, dry_run=dry_run, actor=_actor(),
+            )
+        elif action == 'research_nonprofit':
+            result = _service.research_nonprofit(
+                lead_id, dry_run=dry_run, actor=_actor(),
+            )
+        else:
+            result = _service.resolve_lead(lead_id, dry_run=dry_run, actor=_actor())
     except EntityLookupProviderNotConfiguredError as exc:
         return _provider_error_response(exc)
     except ResourceNotFoundError as exc:

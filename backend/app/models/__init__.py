@@ -79,6 +79,7 @@ from app.models.il_sos_llc import (
     IlSosLlcAgent,
     IlSosImportRun,
 )
+from app.models.irs_eo_organization import IrsEoOrganization
 
 # HubSpot CRM migration — Interaction models
 from app.models.interaction import Interaction
@@ -201,6 +202,7 @@ __all__ = [
     'IlSosLlcManager',
     'IlSosLlcAgent',
     'IlSosImportRun',
+    'IrsEoOrganization',
     # HubSpot CRM migration — Interaction
     'Interaction',
     'InteractionAssociation',

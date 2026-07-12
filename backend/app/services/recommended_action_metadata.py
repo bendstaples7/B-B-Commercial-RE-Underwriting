@@ -8,7 +8,11 @@ from app.services.outreach_method_service import (
 RECOMMENDED_ACTION_METADATA = {
     'enrich_data': {
         'label': 'Enrich Data',
-        'explanation': 'This lead is missing key data needed to evaluate it. Add contact info, property details, or run a skip trace to improve data completeness.',
+        'explanation': (
+            'This lead is missing key data needed to evaluate it. Add contact info, '
+            'property details, research the owner entity, or run a skip trace to '
+            'improve data completeness.'
+        ),
     },
     'resolve_match': {
         'label': 'Resolve Property Match',

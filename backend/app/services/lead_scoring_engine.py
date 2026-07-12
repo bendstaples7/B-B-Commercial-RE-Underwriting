@@ -28,7 +28,30 @@ from app.services.outreach_method_service import (
     refine_outreach_action,
     OUTREACH_ACTIONS,
 )
+from app.services.entity_owner_policy import cold_mail_block_reason
 logger = logging.getLogger(__name__)
+
+
+def _cold_mail_ready_outcome(lead: Lead) -> tuple[str, str, dict] | None:
+    """If cold mail should be blocked, return the replacement action tuple.
+
+    Applied only at ``mail_ready`` decision points so warm / follow-up leads
+    still surface as ``follow_up_now``.
+    """
+    mail_block = cold_mail_block_reason(lead)
+    if mail_block in (
+        'institutional_owner',
+        'nonprofit_organization',
+        'tax_exempt_owner',
+    ):
+        return 'nurture', mail_block, {'cold_mail_blocked': True}
+    if mail_block == 'unresolved_entity_owner':
+        return 'enrich_data', 'research_entity_owner', {
+            'cold_mail_blocked': True,
+            'requires_entity_research': True,
+        }
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -437,6 +460,9 @@ class LeadScoringEngine:
                         'has_email': False,
                         'is_mailable': True,
                     }
+                blocked = _cold_mail_ready_outcome(lead)
+                if blocked is not None:
+                    return blocked
                 return 'mail_ready', 'mailable_no_digital_contact', {
                     'has_phone': False,
                     'has_email': False,
@@ -484,6 +510,9 @@ class LeadScoringEngine:
                     'most_recent_sale': getattr(lead, 'most_recent_sale', None),
                     'days_since_sale': days_since,
                 }
+            blocked = _cold_mail_ready_outcome(lead)
+            if blocked is not None:
+                return blocked
             return 'mail_ready', 'tier_a_high_quality', {
                 'score_tier': score_tier, 'data_quality_score': data_quality_score,
             }
