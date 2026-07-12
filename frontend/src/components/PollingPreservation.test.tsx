@@ -28,6 +28,7 @@ import * as path from 'path'
 
 const COMPONENTS_DIR = path.resolve(__dirname)
 const CONTEXT_DIR = path.resolve(__dirname, '../context')
+const UTILS_DIR = path.resolve(__dirname, '../utils')
 
 function readSource(filename: string): string {
   return fs.readFileSync(path.join(COMPONENTS_DIR, filename), 'utf-8')
@@ -35,6 +36,26 @@ function readSource(filename: string): string {
 
 function readContextSource(filename: string): string {
   return fs.readFileSync(path.join(CONTEXT_DIR, filename), 'utf-8')
+}
+
+function readUtilsSource(filename: string): string {
+  return fs.readFileSync(path.join(UTILS_DIR, filename), 'utf-8')
+}
+
+function hasQueueVisiblePollInterval(source: string): boolean {
+  if (source.includes('refetchInterval: 60_000')) return true
+
+  const sharedDefaults = readUtilsSource('queueQueryDefaults.ts')
+  const usesListDefaultsWithPolling =
+    source.includes('queueListQueryDefaults') &&
+    sharedDefaults.includes('export const queueListQueryDefaults') &&
+    sharedDefaults.includes('refetchInterval: 60_000')
+  const usesRefetchDefaultsWithPolling =
+    source.includes('queueListRefetchDefaults') &&
+    sharedDefaults.includes('export const queueListRefetchDefaults') &&
+    sharedDefaults.includes('refetchInterval: 60_000')
+
+  return usesListDefaultsWithPolling || usesRefetchDefaultsWithPolling
 }
 
 // ---------------------------------------------------------------------------
@@ -307,7 +328,7 @@ describe('Preservation 3.5 — Queue page components poll at 60s while tab is vi
 
     for (const filename of queueComponents) {
       const source = readSource(filename)
-      if (!source.includes('refetchInterval: 60_000')) {
+      if (!hasQueueVisiblePollInterval(source)) {
         missing.push(filename)
       }
     }
