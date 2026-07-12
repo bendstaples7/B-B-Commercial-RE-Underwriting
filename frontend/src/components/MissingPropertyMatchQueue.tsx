@@ -149,7 +149,10 @@ export function MissingPropertyMatchQueue() {
   }
 
   const emptyMessage = useMemo(() => {
-    if (isInitialLoading || data == null) return null
+    if (isInitialLoading) return null
+    if (data == null) {
+      return 'Unable to load leads waiting for property match review. Please try again.'
+    }
     if (total === 0) return 'No leads waiting for property match review.'
     if (!currentRow) return 'Loading…'
     return null

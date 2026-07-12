@@ -27,7 +27,7 @@ export function DoNotContactQueue() {
   const { selectedIds, onSelectionChange, onPageChangeWithClear, clearSelection } =
     useQueueSelection()
 
-  const { data, isLoading, isFetching, isPlaceholderData } = useQuery({
+  const { data, isLoading, isPlaceholderData } = useQuery({
     queryKey: ['queue-do-not-contact', page],
     queryFn: () => queueService.getDoNotContact(page, 20),
     ...queueListQueryDefaults,
@@ -37,7 +37,7 @@ export function DoNotContactQueue() {
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
   const isInitialLoading = isLoading && !data
-  const showRefetchIndicator = isFetching && isPlaceholderData
+  const showRefetchIndicator = isPlaceholderData
   const handlePageChange = onPageChangeWithClear((newPage) => {
     setPage(clampPage(newPage, totalPages))
   })
@@ -101,6 +101,7 @@ export function DoNotContactQueue() {
           <QueueTable
             rows={rows}
             total={total}
+            disabled={showRefetchIndicator}
             fromQueue={fromQueue}
             selectedIds={selectedIds}
             onSelectionChange={onSelectionChange}

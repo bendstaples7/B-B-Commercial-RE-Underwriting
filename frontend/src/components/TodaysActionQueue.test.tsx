@@ -114,6 +114,7 @@ describe('TodaysActionQueue', () => {
     renderComponent()
 
     expect(await screen.findByTestId('queue-loading')).toBeInTheDocument()
+    expect(screen.getByLabelText('Loading queue')).toBeInTheDocument()
     expect(screen.queryByTestId('todays-action-empty')).not.toBeInTheDocument()
     expect(screen.getByTestId('todays-action-total')).toHaveTextContent('—')
 
@@ -152,6 +153,8 @@ describe('TodaysActionQueue', () => {
     })
 
     expect(screen.getByTestId('queue-table')).toBeInTheDocument()
+    expect(screen.getByTestId('queue-table')).toHaveAttribute('aria-disabled', 'true')
+    expect(screen.getByTestId('row-action-view-1')).toBeDisabled()
     expect(screen.queryByTestId('todays-action-empty')).not.toBeInTheDocument()
     expect(screen.getByTestId('todays-action-total')).toHaveTextContent('—')
 

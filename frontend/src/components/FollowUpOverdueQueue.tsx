@@ -38,7 +38,7 @@ export function FollowUpOverdueQueue() {
   const { selectedIds, onSelectionChange, onPageChangeWithClear, clearSelection } =
     useQueueSelection()
 
-  const { data, isLoading, isFetching, isPlaceholderData } = useQuery({
+  const { data, isLoading, isPlaceholderData } = useQuery({
     queryKey: ['queue-follow-up-overdue', page],
     queryFn: () => queueService.getFollowUpOverdue(page, 20),
     ...queueListQueryDefaults,
@@ -48,7 +48,7 @@ export function FollowUpOverdueQueue() {
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
   const isInitialLoading = isLoading && !data
-  const showRefetchIndicator = isFetching && isPlaceholderData
+  const showRefetchIndicator = isPlaceholderData
   const handlePageChange = onPageChangeWithClear((newPage) => {
     setPage(clampPage(newPage, totalPages))
   })
@@ -124,6 +124,7 @@ export function FollowUpOverdueQueue() {
           <QueueTable
             rows={rows}
             total={total}
+            disabled={showRefetchIndicator}
             fromQueue={fromQueue}
             selectedIds={selectedIds}
             onSelectionChange={onSelectionChange}

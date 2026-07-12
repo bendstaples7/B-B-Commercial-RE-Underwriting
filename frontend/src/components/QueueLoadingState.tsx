@@ -9,7 +9,7 @@ export function QueueLoadingState() {
       sx={{ display: 'flex', justifyContent: 'center', p: 4 }}
       data-testid="queue-loading"
     >
-      <CircularProgress />
+      <CircularProgress aria-label="Loading queue" />
     </Box>
   )
 }

@@ -53,7 +53,7 @@ export function NoNextActionQueue() {
   const [queueWideSourceStatus, setQueueWideSourceStatus] = useState<LeadStatus | null>(null)
   const [bulkError, setBulkError] = useState<string | null>(null)
 
-  const { data, isLoading, isFetching, isPlaceholderData } = useQuery({
+  const { data, isLoading, isPlaceholderData } = useQuery({
     queryKey: ['queue-no-next-action', page],
     queryFn: () => queueService.getNoNextAction(page, 20),
     ...queueListQueryDefaults,
@@ -70,7 +70,7 @@ export function NoNextActionQueue() {
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
   const isInitialLoading = isLoading && !data
-  const showRefetchIndicator = isFetching && isPlaceholderData
+  const showRefetchIndicator = isPlaceholderData
   const handlePageChange = onPageChangeWithClear((newPage) => {
     setPage(clampPage(newPage, totalPages))
   })
@@ -243,12 +243,14 @@ export function NoNextActionQueue() {
                 <Chip
                   size="small"
                   label={`${LEAD_STATUS_LABELS[status as LeadStatus] ?? status} (${count})`}
-                  onClick={() => selectAllOnPageForStatus(status)}
+                  onClick={showRefetchIndicator ? undefined : () => selectAllOnPageForStatus(status)}
+                  disabled={showRefetchIndicator}
                   data-testid={`select-page-${status}`}
                 />
                 <Button
                   size="small"
                   onClick={() => selectAllInQueueForStatus(status)}
+                  disabled={showRefetchIndicator}
                   data-testid={`select-queue-${status}`}
                 >
                   All {count}
@@ -260,6 +262,7 @@ export function NoNextActionQueue() {
                     setQueueWideSourceStatus(status as LeadStatus)
                     setStatusDialogOpen(true)
                   }}
+                  disabled={showRefetchIndicator}
                   data-testid={`bulk-queue-${status}`}
                 >
                   Update all
@@ -294,6 +297,7 @@ export function NoNextActionQueue() {
           <QueueTable
             rows={rows}
             total={total}
+            disabled={showRefetchIndicator}
             fromQueue={fromQueue}
             rowActions={rowActions}
             extraColumns={extraColumns}

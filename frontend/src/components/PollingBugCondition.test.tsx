@@ -104,6 +104,7 @@ const defaultQueueCounts = {
 // Source file paths for static analysis
 const COMPONENTS_DIR = path.resolve(__dirname)
 const CONTEXT_DIR = path.resolve(__dirname, '../context')
+const UTILS_DIR = path.resolve(__dirname, '../utils')
 
 function readSource(filename: string): string {
   return fs.readFileSync(path.join(COMPONENTS_DIR, filename), 'utf-8')
@@ -111,6 +112,26 @@ function readSource(filename: string): string {
 
 function readContextSource(filename: string): string {
   return fs.readFileSync(path.join(CONTEXT_DIR, filename), 'utf-8')
+}
+
+function readUtilsSource(filename: string): string {
+  return fs.readFileSync(path.join(UTILS_DIR, filename), 'utf-8')
+}
+
+function hasQueueBackgroundPollGuard(source: string): boolean {
+  if (source.includes('refetchIntervalInBackground: false')) return true
+
+  const sharedDefaults = readUtilsSource('queueQueryDefaults.ts')
+  const usesGuardedListDefaults =
+    source.includes('queueListQueryDefaults') &&
+    sharedDefaults.includes('export const queueListQueryDefaults') &&
+    sharedDefaults.includes('refetchIntervalInBackground: false')
+  const usesGuardedRefetchDefaults =
+    source.includes('queueListRefetchDefaults') &&
+    sharedDefaults.includes('export const queueListRefetchDefaults') &&
+    sharedDefaults.includes('refetchIntervalInBackground: false')
+
+  return usesGuardedListDefaults || usesGuardedRefetchDefaults
 }
 
 // ---------------------------------------------------------------------------
@@ -348,9 +369,8 @@ describe('Sub-property D — Queue page background poll', () => {
      */
     const source = readSource('TodaysActionQueue.tsx')
 
-    // On FIXED code: source contains this option
-    // On UNFIXED code: source does NOT contain this — FAILS
-    expect(source).toContain('refetchIntervalInBackground: false')
+    // Fixed code can define this locally or through the shared queue defaults.
+    expect(hasQueueBackgroundPollGuard(source)).toBe(true)
   })
 
   it('property: all seven queue page components must have refetchIntervalInBackground: false', () => {
@@ -374,7 +394,7 @@ describe('Sub-property D — Queue page background poll', () => {
 
     for (const filename of queueComponents) {
       const source = readSource(filename)
-      if (!source.includes('refetchIntervalInBackground: false')) {
+      if (!hasQueueBackgroundPollGuard(source)) {
         missing.push(filename)
       }
     }

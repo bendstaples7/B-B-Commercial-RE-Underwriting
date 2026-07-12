@@ -22,11 +22,11 @@ export const queueListQueryDefaults = {
   placeholderData: keepPreviousData,
 } as const
 
-/** Dim + block interaction while showing placeholder rows from a prior query key. */
-export function queuePlaceholderTableSx(isPlaceholderFetching: boolean): SxProps<Theme> {
+/** Dim stale rows while placeholder data from a prior query key is shown. */
+export function queuePlaceholderTableSx(isPlaceholderData: boolean): SxProps<Theme> {
   return {
-    opacity: isPlaceholderFetching ? 0.6 : 1,
+    opacity: isPlaceholderData ? 0.6 : 1,
     transition: 'opacity 0.15s',
-    ...(isPlaceholderFetching ? { pointerEvents: 'none' } : {}),
+    ...(isPlaceholderData ? { pointerEvents: 'none' } : {}),
   }
 }

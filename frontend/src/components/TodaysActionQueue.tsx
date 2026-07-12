@@ -81,6 +81,7 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
   const isInitialLoading = isLoading && !data
   const showEmpty = data != null && rows.length === 0 && total === 0
   const showRefetchIndicator = isFetching && isPlaceholderData
+  const disablePlaceholderInteractions = isPlaceholderData
 
   const handlePageChange = onPageChangeWithClear((newPage) => {
     setPage(clampPage(newPage, totalPages))
@@ -230,10 +231,11 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
           )}
         </Box>
       ) : (
-        <Box sx={queuePlaceholderTableSx(showRefetchIndicator)}>
+        <Box sx={queuePlaceholderTableSx(disablePlaceholderInteractions)}>
           <QueueTable
             rows={rows}
             total={total}
+            disabled={disablePlaceholderInteractions}
             fromQueue={fromQueue}
             selectedIds={selectedIds}
             onSelectionChange={onSelectionChange}
