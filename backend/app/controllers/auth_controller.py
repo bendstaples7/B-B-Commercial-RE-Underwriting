@@ -115,14 +115,30 @@ def login():
     try:
         user = _auth_service.authenticate(email, password)
     except PasswordSetupRequiredException as exc:
+        logger.info(
+            "auth_login_setup_required user_id=%s",
+            exc.user.user_id,
+        )
         setup_token = _auth_service.issue_setup_token(exc.user)
         return jsonify({'setup_required': True, 'setup_token': setup_token}), 200
 
     if user is None:
         # Return identical 401 for wrong email and wrong password (Req 2.2)
+        logger.warning(
+            "auth_login_fail domain=%s",
+            AuthService.email_domain_for_log(email),
+        )
         return jsonify({'error': 'Invalid email or password.'}), 401
 
     token = _auth_service.issue_token(user)
+    claims = AuthService.token_lifetime_claims(token)
+    logger.info(
+        "auth_login_ok user_id=%s lifetime_seconds=%s iat=%s exp=%s",
+        user.user_id,
+        claims["lifetime_seconds"],
+        claims["iat"],
+        claims["exp"],
+    )
 
     return jsonify({
         'session_token': token,
@@ -216,6 +232,14 @@ def set_password():
 
     # 7. Issue a normal session token and return the user payload
     session_token = auth_service.issue_token(user)
+    claims = AuthService.token_lifetime_claims(session_token)
+    logger.info(
+        "auth_set_password_ok user_id=%s lifetime_seconds=%s iat=%s exp=%s",
+        user.user_id,
+        claims["lifetime_seconds"],
+        claims["iat"],
+        claims["exp"],
+    )
     return jsonify({
         'session_token': session_token,
         'user_id': user.user_id,

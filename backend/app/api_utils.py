@@ -41,10 +41,13 @@ trusts whatever ``set_user_identity`` already placed in ``g.user_id``.
 No controller should ever read ``X-User-Id`` directly or parse
 ``user_id`` from the request body.
 """
+import logging
 from functools import wraps
 
 import jwt
 from flask import g, jsonify, request
+
+logger = logging.getLogger(__name__)
 
 
 def get_current_user_id() -> str:
@@ -157,22 +160,43 @@ def require_auth(f):
                 claims = AuthService().verify_token(token)
                 # Reject setup tokens — they may only be used with POST /api/auth/set-password
                 if claims.get('setup_required') is True:
+                    logger.warning(
+                        "auth_reject reason=setup_token path=%s",
+                        request.path,
+                    )
                     return jsonify({'error': 'Setup token cannot be used for authentication'}), 401
                 user = User.query.filter_by(user_id=claims['sub']).first()
                 # Re-check live account state so deactivation / admin revocation
                 # take effect before the JWT's long-lived exp claim.
                 if user is None or not user.is_active:
+                    logger.warning(
+                        "auth_reject reason=user_inactive path=%s user_id=%s",
+                        request.path,
+                        claims.get('sub'),
+                    )
                     return jsonify({'error': 'Authentication required'}), 401
                 g.user_id = user.user_id
                 g.is_admin = bool(user.is_admin)
             except jwt.ExpiredSignatureError:
+                logger.warning(
+                    "auth_reject reason=token_expired path=%s",
+                    request.path,
+                )
                 return jsonify({'error': 'Token expired'}), 401
             except jwt.InvalidTokenError:
+                logger.warning(
+                    "auth_reject reason=token_invalid path=%s",
+                    request.path,
+                )
                 return jsonify({'error': 'Invalid token'}), 401
         elif auth_header_lower:
             # A non-Bearer Authorization header (e.g. Basic) is not supported.
             # Reject it explicitly rather than falling through to the X-User-Id
             # fallback, which would allow bypassing JWT verification.
+            logger.warning(
+                "auth_reject reason=missing_auth path=%s",
+                request.path,
+            )
             return jsonify({'error': 'Authentication required'}), 401
         elif request.headers.get('X-User-Id') and _allow_legacy_header():
             # Legacy fallback — only accepted when ALLOW_LEGACY_X_USER_ID is
@@ -180,6 +204,10 @@ def require_auth(f):
             g.user_id = request.headers.get('X-User-Id')
             g.is_admin = False
         else:
+            logger.warning(
+                "auth_reject reason=missing_auth path=%s",
+                request.path,
+            )
             return jsonify({'error': 'Authentication required'}), 401
         return f(*args, **kwargs)
     return decorated
