@@ -198,6 +198,63 @@ describe('QueueTable', () => {
     })
   })
 
+  describe('disabled interactions', () => {
+    it('disables stale-row selection, navigation, sorting, and actions', async () => {
+      const onSort = vi.fn()
+      const onSelectionChange = vi.fn()
+      const rowAction = vi.fn().mockResolvedValue(undefined)
+      const bulkAction = vi.fn().mockResolvedValue({
+        successes: 1,
+        failures: 0,
+      } satisfies BulkActionResult)
+
+      render(
+        <QueueTable
+          rows={[makeRow(1)]}
+          total={25}
+          disabled
+          selectedIds={[1]}
+          onSelectionChange={onSelectionChange}
+          onSort={onSort}
+          rowActions={[
+            {
+              label: 'Call',
+              icon: <PhoneIcon fontSize="small" />,
+              onClick: rowAction,
+              testId: 'action-call',
+            },
+          ]}
+          bulkActions={[
+            {
+              label: 'Bulk test',
+              onClick: bulkAction,
+              testId: 'bulk-action-test',
+            },
+          ]}
+          page={1}
+          totalPages={2}
+          onPageChange={vi.fn()}
+        />
+      )
+
+      expect(screen.getByTestId('queue-table')).toHaveAttribute('aria-disabled', 'true')
+      expect(screen.getByTestId('select-all-checkbox')).toBeDisabled()
+      expect(screen.getByTestId('select-row-1')).toBeDisabled()
+      expect(screen.getByText('First1 Last1').closest('a')).toBeNull()
+      expect(screen.getByTestId('row-action-view-1')).toBeDisabled()
+      expect(screen.getByTestId('action-call')).toBeDisabled()
+      expect(screen.getByTestId('bulk-action-test')).toBeDisabled()
+
+      await user.click(screen.getByTestId('sort-owner_name'))
+      await user.click(screen.getByTestId('queue-row-1'))
+
+      expect(onSort).not.toHaveBeenCalled()
+      expect(onSelectionChange).not.toHaveBeenCalled()
+      expect(rowAction).not.toHaveBeenCalled()
+      expect(bulkAction).not.toHaveBeenCalled()
+    })
+  })
+
   // -------------------------------------------------------------------------
   // Bulk selection
   // -------------------------------------------------------------------------
@@ -673,6 +730,18 @@ describe('QueueTable', () => {
       )
 
       expect(screen.getByTestId('queue-table-total')).toHaveTextContent('42 total')
+    })
+
+    it('hides stale total count while placeholder data is shown', () => {
+      render(
+        <QueueTable
+          rows={[makeRow(1), makeRow(2)]}
+          total={42}
+          isPlaceholderData
+        />
+      )
+
+      expect(screen.getByTestId('queue-table-total')).toHaveTextContent('— total')
     })
 
     it('renders extra columns', () => {

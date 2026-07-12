@@ -15,6 +15,7 @@ import EditIcon from '@mui/icons-material/Edit'
 import { useNavigate } from 'react-router-dom'
 import { QueueTable } from './QueueTable'
 import type { RowAction, ExtraColumn } from './QueueTable'
+import { QueueLoadingState } from './QueueLoadingState'
 import {
   queueService,
   commandCenterService,
@@ -27,6 +28,7 @@ import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { SuppressLeadDialog } from './SuppressLeadDialog'
 import { BulkStatusUpdateDialog } from './BulkStatusUpdateDialog'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
+import { queueListQueryDefaults, queuePlaceholderTableSx } from '@/utils/queueQueryDefaults'
 import { ALL_LEAD_STATUSES } from '@/constants/leadStatuses'
 import { LEAD_STATUS_LABELS } from '@/components/LeadStatusChip'
 
@@ -51,11 +53,10 @@ export function NoNextActionQueue() {
   const [queueWideSourceStatus, setQueueWideSourceStatus] = useState<LeadStatus | null>(null)
   const [bulkError, setBulkError] = useState<string | null>(null)
 
-  const { data } = useQuery({
+  const { data, isLoading, isPlaceholderData } = useQuery({
     queryKey: ['queue-no-next-action', page],
     queryFn: () => queueService.getNoNextAction(page, 20),
-    refetchInterval: 60_000,
-    refetchIntervalInBackground: false,
+    ...queueListQueryDefaults,
   })
 
   const { data: statusCounts = {} } = useQuery({
@@ -68,6 +69,8 @@ export function NoNextActionQueue() {
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
+  const isInitialLoading = isLoading && !data
+  const showRefetchIndicator = isPlaceholderData
   const handlePageChange = onPageChangeWithClear((newPage) => {
     setPage(clampPage(newPage, totalPages))
   })
@@ -209,7 +212,7 @@ export function NoNextActionQueue() {
         No Next Action
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Total: <strong>{total}</strong>
+        Total: <strong>{data != null && !isPlaceholderData ? total : '—'}</strong>
       </Typography>
 
       {bulkError && (
@@ -219,7 +222,13 @@ export function NoNextActionQueue() {
       )}
 
       {statusChips.length > 0 && (
-        <Box sx={{ mb: 2 }} data-testid="status-shortcuts-toolbar">
+        <Box
+          sx={{
+            mb: 2,
+            ...(showRefetchIndicator ? { pointerEvents: 'none', opacity: 0.6 } : {}),
+          }}
+          data-testid="status-shortcuts-toolbar"
+        >
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
             Select all by status
           </Typography>
@@ -234,12 +243,14 @@ export function NoNextActionQueue() {
                 <Chip
                   size="small"
                   label={`${LEAD_STATUS_LABELS[status as LeadStatus] ?? status} (${count})`}
-                  onClick={() => selectAllOnPageForStatus(status)}
+                  onClick={showRefetchIndicator ? undefined : () => selectAllOnPageForStatus(status)}
+                  disabled={showRefetchIndicator}
                   data-testid={`select-page-${status}`}
                 />
                 <Button
                   size="small"
                   onClick={() => selectAllInQueueForStatus(status)}
+                  disabled={showRefetchIndicator}
                   data-testid={`select-queue-${status}`}
                 >
                   All {count}
@@ -251,6 +262,7 @@ export function NoNextActionQueue() {
                     setQueueWideSourceStatus(status as LeadStatus)
                     setStatusDialogOpen(true)
                   }}
+                  disabled={showRefetchIndicator}
                   data-testid={`bulk-queue-${status}`}
                 >
                   Update all
@@ -261,7 +273,7 @@ export function NoNextActionQueue() {
         </Box>
       )}
 
-      {selectedIds.length > 0 && (
+      {selectedIds.length > 0 && !showRefetchIndicator && (
         <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
           <Button
             size="small"
@@ -278,17 +290,25 @@ export function NoNextActionQueue() {
         </Stack>
       )}
 
-      <QueueTable
-        rows={rows}
-        total={total}
-        fromQueue={fromQueue}
-        rowActions={rowActions}
-        extraColumns={extraColumns}
-        selectedIds={selectedIds}
-        onSelectionChange={onSelectionChange}
-        bulkActions={bulkActions}
-        {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
-      />
+      {isInitialLoading ? (
+        <QueueLoadingState />
+      ) : (
+        <Box sx={queuePlaceholderTableSx(showRefetchIndicator)}>
+          <QueueTable
+            rows={rows}
+            total={total}
+            disabled={showRefetchIndicator}
+            isPlaceholderData={showRefetchIndicator}
+            fromQueue={fromQueue}
+            rowActions={rowActions}
+            extraColumns={extraColumns}
+            selectedIds={selectedIds}
+            onSelectionChange={onSelectionChange}
+            bulkActions={bulkActions}
+            {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
+          />
+        </Box>
+      )}
 
       <BulkStatusUpdateDialog
         open={statusDialogOpen}

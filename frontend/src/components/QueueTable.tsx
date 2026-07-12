@@ -57,6 +57,10 @@ export interface ExtraColumn {
 export interface QueueTableProps {
   rows: QueueRow[]
   total: number
+  /** Disables row navigation, selection, actions, sorting, and pagination. */
+  disabled?: boolean
+  /** Indicates rows are stale placeholder data from the previous query key. */
+  isPlaceholderData?: boolean
   /** When set, lead opens preserve HubSpot-style queue work session. */
   fromQueue?: FromQueueState
   sortBy?: string
@@ -113,6 +117,8 @@ const SORTABLE_COLUMNS = [
 export function QueueTable({
   rows,
   total,
+  disabled = false,
+  isPlaceholderData = false,
   fromQueue,
   sortBy,
   sortOrder = 'asc',
@@ -143,6 +149,7 @@ export function QueueTable({
   const someSelected = rows.some((r) => selectedIds.includes(r.id)) && !allSelected
 
   const handleSelectAll = () => {
+    if (disabled) return
     if (!onSelectionChange) return
     if (allSelected) {
       onSelectionChange([])
@@ -152,6 +159,7 @@ export function QueueTable({
   }
 
   const handleSelectRow = (id: number) => {
+    if (disabled) return
     if (!onSelectionChange) return
     if (selectedIds.includes(id)) {
       onSelectionChange(selectedIds.filter((sid) => sid !== id))
@@ -165,6 +173,7 @@ export function QueueTable({
   // ---------------------------------------------------------------------------
 
   const handleRowAction = async (action: RowAction, row: QueueRow) => {
+    if (disabled) return
     // Mark row as pending
     setRowStates((prev) => ({
       ...prev,
@@ -196,7 +205,7 @@ export function QueueTable({
   // ---------------------------------------------------------------------------
 
   const handleBulkAction = async (action: BulkAction) => {
-    if (isBulkProcessing) return
+    if (disabled || isBulkProcessing) return
     setBulkMessage(null)
     setIsBulkProcessing(true)
     try {
@@ -221,6 +230,7 @@ export function QueueTable({
   // ---------------------------------------------------------------------------
 
   const handleSort = (column: string) => {
+    if (disabled) return
     if (onSort) {
       onSort(column)
     }
@@ -235,7 +245,11 @@ export function QueueTable({
   const hasActions = true
 
   return (
-    <Box data-testid="queue-table">
+    <Box
+      data-testid="queue-table"
+      aria-busy={disabled || undefined}
+      aria-disabled={disabled || undefined}
+    >
       {/* Bulk action bar */}
       {bulkActions.length > 0 && selectedIds.length > 0 && (
         <Stack
@@ -254,7 +268,7 @@ export function QueueTable({
               size="small"
               variant="outlined"
               onClick={() => handleBulkAction(action)}
-              disabled={isBulkProcessing}
+              disabled={disabled || isBulkProcessing}
               data-testid={action.testId ?? `bulk-action-${action.label.toLowerCase().replace(/\s+/g, '-')}`}
             >
               {action.label}
@@ -296,6 +310,7 @@ export function QueueTable({
                     checked={allSelected}
                     indeterminate={someSelected}
                     onChange={handleSelectAll}
+                    disabled={disabled}
                     inputProps={{ 'aria-label': 'Select all rows', 'data-testid': 'select-all-checkbox' } as React.InputHTMLAttributes<HTMLInputElement>}
                   />
                 </TableCell>
@@ -309,6 +324,7 @@ export function QueueTable({
                       active={sortBy === col.key}
                       direction={sortBy === col.key ? sortOrder : 'asc'}
                       onClick={() => handleSort(col.key)}
+                      disabled={disabled}
                       data-testid={`sort-${col.key}`}
                     >
                       {col.label}
@@ -340,9 +356,13 @@ export function QueueTable({
                 <Fragment key={row.id}>
                   <TableRow
                     selected={isSelected}
-                    sx={{ opacity: isPending ? 0.5 : 1, cursor: 'pointer' }}
+                    sx={{
+                      opacity: isPending ? 0.5 : 1,
+                      cursor: disabled ? 'default' : 'pointer',
+                    }}
                     data-testid={`queue-row-${row.id}`}
                     onClick={(e) => {
+                      if (disabled) return
                       // Don't navigate if clicking a checkbox or action button
                       const target = e.target as HTMLElement
                       if (target.closest('input[type="checkbox"]') || target.closest('button') || target.closest('a')) return
@@ -355,7 +375,7 @@ export function QueueTable({
                         <Checkbox
                           checked={isSelected}
                           onChange={() => handleSelectRow(row.id)}
-                          disabled={isPending}
+                          disabled={disabled || isPending}
                           inputProps={{ 'aria-label': `Select row ${row.id}`, 'data-testid': `select-row-${row.id}` } as React.InputHTMLAttributes<HTMLInputElement>}
                         />
                       </TableCell>
@@ -363,16 +383,22 @@ export function QueueTable({
 
                     {/* Lead name — links to Command Center */}
                     <TableCell data-testid={`row-name-${row.id}`}>
-                      <Link
-                        component={RouterLink}
-                        to={leadTo(row.id)}
-                        state={leadNavState}
-                        underline="hover"
-                        color="primary"
-                        fontWeight={500}
-                      >
-                        {getOwnerName(row)}
-                      </Link>
+                      {disabled ? (
+                        <Typography component="span" color="text.secondary" fontWeight={500}>
+                          {getOwnerName(row)}
+                        </Typography>
+                      ) : (
+                        <Link
+                          component={RouterLink}
+                          to={leadTo(row.id)}
+                          state={leadNavState}
+                          underline="hover"
+                          color="primary"
+                          fontWeight={500}
+                        >
+                          {getOwnerName(row)}
+                        </Link>
+                      )}
                     </TableCell>
 
                     {/* Lead score */}
@@ -420,16 +446,27 @@ export function QueueTable({
                       <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
                         {/* Built-in: open Command Center */}
                         <Tooltip title="Open lead detail">
-                          <IconButton
-                            size="small"
-                            component={RouterLink}
-                            to={leadTo(row.id)}
-                            state={leadNavState}
-                            aria-label="Open lead detail"
-                            data-testid={`row-action-view-${row.id}`}
-                          >
-                            <OpenInNewIcon fontSize="small" />
-                          </IconButton>
+                          {disabled ? (
+                            <IconButton
+                              size="small"
+                              disabled
+                              aria-label="Open lead detail"
+                              data-testid={`row-action-view-${row.id}`}
+                            >
+                              <OpenInNewIcon fontSize="small" />
+                            </IconButton>
+                          ) : (
+                            <IconButton
+                              size="small"
+                              component={RouterLink}
+                              to={leadTo(row.id)}
+                              state={leadNavState}
+                              aria-label="Open lead detail"
+                              data-testid={`row-action-view-${row.id}`}
+                            >
+                              <OpenInNewIcon fontSize="small" />
+                            </IconButton>
+                          )}
                         </Tooltip>
                         {rowActions.map((action) => (
                           <Tooltip key={action.label} title={action.label}>
@@ -437,7 +474,7 @@ export function QueueTable({
                               <IconButton
                                 size="small"
                                 onClick={() => handleRowAction(action, row)}
-                                disabled={isPending}
+                                disabled={disabled || isPending}
                                 aria-label={action.label}
                                 data-testid={action.testId ?? `row-action-${action.label.toLowerCase().replace(/\s+/g, '-')}-${row.id}`}
                               >
@@ -493,7 +530,7 @@ export function QueueTable({
           sx={{ mt: 1, display: 'block' }}
           data-testid="queue-table-total"
         >
-          {total} total
+          {isPlaceholderData ? '—' : total} total
         </Typography>
       )}
 
@@ -514,6 +551,7 @@ export function QueueTable({
             color="primary"
             onChange={(_event, value) => onPageChange?.(value)}
             aria-label="queue pagination"
+            disabled={disabled}
           />
         </Box>
       )}

@@ -8,8 +8,10 @@ import BlockIcon from '@mui/icons-material/Block'
 import { useNavigate } from 'react-router-dom'
 import { QueueTable } from './QueueTable'
 import type { RowAction, ExtraColumn } from './QueueTable'
+import { QueueLoadingState } from './QueueLoadingState'
 import { queueService, commandCenterService } from '@/services/api'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
+import { queueListQueryDefaults, queuePlaceholderTableSx } from '@/utils/queueQueryDefaults'
 import type { QueueRow } from '@/types'
 import {
   createCreateTaskRowAction,
@@ -31,16 +33,17 @@ export function PreviouslyWarmQueue() {
   const { selectedIds, onSelectionChange, onPageChangeWithClear, clearSelection } =
     useQueueSelection()
 
-  const { data } = useQuery({
+  const { data, isLoading, isPlaceholderData } = useQuery({
     queryKey: ['queue-previously-warm', page],
     queryFn: () => queueService.getPreviouslyWarm(page, 20),
-    refetchInterval: 60_000,
-    refetchIntervalInBackground: false,
+    ...queueListQueryDefaults,
   })
 
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
+  const isInitialLoading = isLoading && !data
+  const showRefetchIndicator = isPlaceholderData
   const handlePageChange = onPageChangeWithClear((newPage) => {
     setPage(clampPage(newPage, totalPages))
   })
@@ -118,20 +121,28 @@ export function PreviouslyWarmQueue() {
         Previously Warm
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Total: <strong>{total}</strong>
+        Total: <strong>{data != null && !isPlaceholderData ? total : '—'}</strong>
       </Typography>
 
-      <QueueTable
-        rows={rows}
-        total={total}
-        fromQueue={fromQueue}
-        selectedIds={selectedIds}
-        onSelectionChange={onSelectionChange}
-        rowActions={rowActions}
-        bulkActions={bulkActions}
-        extraColumns={extraColumns}
-        {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
-      />
+      {isInitialLoading ? (
+        <QueueLoadingState />
+      ) : (
+        <Box sx={queuePlaceholderTableSx(showRefetchIndicator)}>
+          <QueueTable
+            rows={rows}
+            total={total}
+            disabled={showRefetchIndicator}
+            isPlaceholderData={showRefetchIndicator}
+            fromQueue={fromQueue}
+            selectedIds={selectedIds}
+            onSelectionChange={onSelectionChange}
+            rowActions={rowActions}
+            bulkActions={bulkActions}
+            extraColumns={extraColumns}
+            {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
+          />
+        </Box>
+      )}
 
       <SuppressLeadDialog
         open={suppressTarget !== null}

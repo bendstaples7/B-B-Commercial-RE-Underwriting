@@ -7,6 +7,7 @@ import { Box, Chip, Typography } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
 import { QueueTable } from './QueueTable'
 import type { RowAction, ExtraColumn } from './QueueTable'
+import { QueueLoadingState } from './QueueLoadingState'
 import { queueService } from '@/services/api'
 import type { QueueRow } from '@/types'
 import {
@@ -20,6 +21,7 @@ import {
 } from './queueBulkActions'
 import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
+import { queueListQueryDefaults, queuePlaceholderTableSx } from '@/utils/queueQueryDefaults'
 
 function computeDaysOverdue(lastContactDate: string | null): number | null {
   if (!lastContactDate) return null
@@ -36,16 +38,17 @@ export function FollowUpOverdueQueue() {
   const { selectedIds, onSelectionChange, onPageChangeWithClear, clearSelection } =
     useQueueSelection()
 
-  const { data } = useQuery({
+  const { data, isLoading, isPlaceholderData } = useQuery({
     queryKey: ['queue-follow-up-overdue', page],
     queryFn: () => queueService.getFollowUpOverdue(page, 20),
-    refetchInterval: 60_000,
-    refetchIntervalInBackground: false,
+    ...queueListQueryDefaults,
   })
 
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
+  const isInitialLoading = isLoading && !data
+  const showRefetchIndicator = isPlaceholderData
   const handlePageChange = onPageChangeWithClear((newPage) => {
     setPage(clampPage(newPage, totalPages))
   })
@@ -111,20 +114,28 @@ export function FollowUpOverdueQueue() {
         Follow-Up Overdue
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Total: <strong>{total}</strong>
+        Total: <strong>{data != null && !isPlaceholderData ? total : '—'}</strong>
       </Typography>
 
-      <QueueTable
-        rows={rows}
-        total={total}
-        fromQueue={fromQueue}
-        selectedIds={selectedIds}
-        onSelectionChange={onSelectionChange}
-        rowActions={rowActions}
-        bulkActions={bulkActions}
-        extraColumns={extraColumns}
-        {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
-      />
+      {isInitialLoading ? (
+        <QueueLoadingState />
+      ) : (
+        <Box sx={queuePlaceholderTableSx(showRefetchIndicator)}>
+          <QueueTable
+            rows={rows}
+            total={total}
+            disabled={showRefetchIndicator}
+            isPlaceholderData={showRefetchIndicator}
+            fromQueue={fromQueue}
+            selectedIds={selectedIds}
+            onSelectionChange={onSelectionChange}
+            rowActions={rowActions}
+            bulkActions={bulkActions}
+            extraColumns={extraColumns}
+            {...(totalPages > 1 ? { page, totalPages, onPageChange: handlePageChange } : {})}
+          />
+        </Box>
+      )}
     </Box>
   )
 }

@@ -2,7 +2,7 @@
 from datetime import date, datetime, timedelta
 from typing import ClassVar
 
-from sqlalchemy import exists, and_, or_, case, select
+from sqlalchemy import exists, and_, or_, case, select, func
 
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry, MailQueueItem
@@ -342,15 +342,30 @@ class QueueService:
         return query
 
     def get_todays_action_outreach_counts(self) -> dict[str, int]:
-        """Counts of Today's Action leads by outreach display bucket."""
+        """Counts of Today's Action leads by outreach display bucket.
+
+        Uses one membership scan with conditional aggregates instead of five
+        separate COUNT queries.
+        """
         today = date.today()
-        base_total = self._todays_action_query(today).count()
+        base = self._todays_action_query(today)
+        mail_clause = _outreach_filter_clause('mail_now')
+        call_clause = _outreach_filter_clause('call_now')
+        email_clause = _outreach_filter_clause('email_now')
+        text_clause = _outreach_filter_clause('text_now')
+        row = base.with_entities(
+            func.count(Lead.id).label('all_count'),
+            func.coalesce(func.sum(case((mail_clause, 1), else_=0)), 0).label('mail_now'),
+            func.coalesce(func.sum(case((call_clause, 1), else_=0)), 0).label('call_now'),
+            func.coalesce(func.sum(case((email_clause, 1), else_=0)), 0).label('email_now'),
+            func.coalesce(func.sum(case((text_clause, 1), else_=0)), 0).label('text_now'),
+        ).one()
         return {
-            'all': base_total,
-            'mail_now': self._todays_action_query(today, 'mail_now').count(),
-            'call_now': self._todays_action_query(today, 'call_now').count(),
-            'email_now': self._todays_action_query(today, 'email_now').count(),
-            'text_now': self._todays_action_query(today, 'text_now').count(),
+            'all': int(row.all_count or 0),
+            'mail_now': int(row.mail_now or 0),
+            'call_now': int(row.call_now or 0),
+            'email_now': int(row.email_now or 0),
+            'text_now': int(row.text_now or 0),
         }
 
     def get_todays_action_lead_ids(self, outreach: str | None = None) -> list[int]:

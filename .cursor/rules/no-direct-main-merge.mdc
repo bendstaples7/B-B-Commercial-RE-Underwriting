@@ -13,6 +13,10 @@ alwaysApply: true
 - `git push origin main` or push directly to `main`
 - `gh workflow run Deploy` or other production deploy triggers
 
+## When planning a new feature
+
+Default for any new feature (or non-trivial fix) plan: **include creating a new branch off latest `main` as step 0** before implementation. Do not plan work that commits on `main`, continues an unrelated branch, or leaves branching as optional unless the user explicitly says to reuse a branch or work on an existing PR.
+
 ## Required workflow
 
 1. Create a feature branch from `main`

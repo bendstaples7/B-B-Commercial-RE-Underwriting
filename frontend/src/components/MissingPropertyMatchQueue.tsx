@@ -3,7 +3,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Box, Snackbar, Typography } from '@mui/material'
+import { Alert, Box, Button, Snackbar, Typography } from '@mui/material'
 import { useSearchParams } from 'react-router-dom'
 import {
   queueService,
@@ -15,7 +15,9 @@ import { PropertyMatchReviewCard } from './PropertyMatchReviewCard'
 import { PropertyMatchRejectDialog } from './PropertyMatchRejectDialog'
 import { PropertyAddressEditDialog } from './PropertyAddressEditDialog'
 import { SuppressLeadDialog } from './SuppressLeadDialog'
+import { QueueLoadingState } from './QueueLoadingState'
 import { computeTotalPages } from '@/utils/pagination'
+import { queueListRefetchDefaults } from '@/utils/queueQueryDefaults'
 
 export function MissingPropertyMatchQueue() {
   const [page, setPage] = useState(1)
@@ -30,16 +32,19 @@ export function MissingPropertyMatchQueue() {
   const [actionPending, setActionPending] = useState(false)
   const [snackbar, setSnackbar] = useState<string | null>(null)
 
-  const { data } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['queue-missing-property-match', page],
     queryFn: () => queueService.getMissingPropertyMatch(page, 20),
-    refetchInterval: 60_000,
-    refetchIntervalInBackground: false,
+    // Card workflow mutates the current lead — do not keep previous page data
+    // or an already-handled card can reappear as actionable during page advance.
+    ...queueListRefetchDefaults,
   })
 
   const rows = data?.rows ?? []
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
+  const isInitialLoading = isLoading && !data
+  const loadFailed = !isInitialLoading && (isError || data == null)
 
   const focusAppliedRef = useRef(false)
 
@@ -145,10 +150,11 @@ export function MissingPropertyMatchQueue() {
   }
 
   const emptyMessage = useMemo(() => {
+    if (isInitialLoading || loadFailed) return null
     if (total === 0) return 'No leads waiting for property match review.'
     if (!currentRow) return 'Loading…'
     return null
-  }, [total, currentRow])
+  }, [isInitialLoading, loadFailed, total, currentRow])
 
   return (
     <Box data-testid="missing-property-match-queue">
@@ -156,10 +162,27 @@ export function MissingPropertyMatchQueue() {
         Missing Property Match
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Review GIS-recommended addresses and approve or reject matches. Total: <strong>{total}</strong>
+        Review GIS-recommended addresses and approve or reject matches. Total:{' '}
+        <strong>{data != null ? total : '—'}</strong>
       </Typography>
 
-      {emptyMessage ? (
+      {isInitialLoading ? (
+        <QueueLoadingState />
+      ) : loadFailed ? (
+        <Alert
+          severity="error"
+          data-testid="missing-property-match-error"
+          action={
+            <Button color="inherit" size="small" onClick={() => refetch()}>
+              Retry
+            </Button>
+          }
+        >
+          {error instanceof Error
+            ? error.message
+            : 'Unable to load leads waiting for property match review. Please try again.'}
+        </Alert>
+      ) : emptyMessage ? (
         <Alert severity="info">{emptyMessage}</Alert>
       ) : currentRow ? (
         <PropertyMatchReviewCard
