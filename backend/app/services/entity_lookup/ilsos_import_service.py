@@ -188,11 +188,13 @@ class IlSosBulkImportService:
 
             imported_at = datetime.utcnow()
             entity_keys: set[str] = set()
+            name_count = 0
             entity_count = 0
 
             def iter_entities():
-                nonlocal entity_count
+                nonlocal name_count, entity_count
                 for rec in name_recs:
+                    name_count += 1
                     fn = (rec.get("file_number") or "").strip()
                     name = (rec.get("name") or "").strip()
                     if not fn or not name:
@@ -214,11 +216,13 @@ class IlSosBulkImportService:
                 db.session.bulk_save_objects(batch)
                 db.session.flush()
 
+            manager_source_count = 0
             manager_count = 0
 
             def iter_managers():
-                nonlocal manager_count
+                nonlocal manager_source_count, manager_count
                 for rec in manager_recs:
+                    manager_source_count += 1
                     fn = (rec.get("file_number") or "").strip()[:8]
                     if fn not in entity_keys:
                         continue
@@ -268,9 +272,9 @@ class IlSosBulkImportService:
                 db.session.flush()
 
             counts = {
-                "names": entity_count,
+                "names": name_count,
                 "masters": len(master_recs),
-                "managers": manager_count,
+                "managers": manager_source_count,
                 "agents": len(agent_recs),
                 "source": source,
                 "entities_loaded": entity_count,
