@@ -218,10 +218,6 @@ class EntityResolutionService:
                         message="Primary contact is not an entity/LLC name",
                         dry_run=dry_run,
                     )
-            else:
-                entity_name = contact_display_name(
-                    entity_contact.first_name, entity_contact.last_name,
-                )
 
         if entity_contact is not None:
             entity_name = contact_display_name(

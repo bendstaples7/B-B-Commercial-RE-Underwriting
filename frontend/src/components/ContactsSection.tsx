@@ -109,16 +109,11 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
         showSuccess('Entity resolution queued.')
         return
       }
-      if (!('status' in data)) {
+      if (!('status' in data) || typeof data.status !== 'string') {
         showError(data.message || 'Entity resolution did not return a result status.')
         return
       }
-      const result = data as {
-        status: string
-        person_found?: boolean
-        person_name?: string | null
-        message?: string | null
-      }
+      const result = data
       if (result.status === 'unsupported_jurisdiction') {
         showError(result.message || 'Non-Illinois LLC — not supported yet.')
         return

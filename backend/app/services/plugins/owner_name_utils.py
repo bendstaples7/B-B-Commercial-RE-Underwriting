@@ -38,9 +38,6 @@ def is_entity_contact(first_name: str | None, last_name: str | None) -> bool:
     display = contact_display_name(first_name, last_name)
     if not display:
         return False
-    # Typical LLC ingest: empty first_name + full entity string in last_name.
-    if not (first_name or "").strip() and is_entity_name(display):
-        return True
     return is_entity_name(display)
 
 

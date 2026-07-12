@@ -22,5 +22,5 @@ def upgrade():
 def downgrade():
     op.execute("""
         ALTER TABLE il_sos_llc_managers
-        ALTER COLUMN mm_file_date TYPE VARCHAR(8)
+        ALTER COLUMN mm_file_date TYPE VARCHAR(8) USING LEFT(mm_file_date, 8)
     """)

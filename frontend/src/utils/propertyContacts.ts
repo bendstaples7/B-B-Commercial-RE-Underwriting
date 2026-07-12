@@ -12,6 +12,11 @@ const ENTITY_MARKERS = [
   'CO.',
 ]
 
+const ENTITY_PATTERNS = ENTITY_MARKERS.map((marker) => ({
+  marker,
+  re: new RegExp(`(?:^|[\\s,])${marker.replace(/\./g, '\\.')}(?:$|[\\s,])`, 'i'),
+}))
+
 /** Join first/last into a display name; empty string if both missing. */
 export function contactDisplayName(
   contact: { first_name?: string | null; last_name?: string | null } | null | undefined,
@@ -27,8 +32,7 @@ export function isEntityContactName(
   const name = contactDisplayName(contact)
   if (!name) return false
   const upper = name.toUpperCase()
-  return ENTITY_MARKERS.some((marker) => {
-    const re = new RegExp(`(?:^|[\\s,])${marker.replace(/\./g, '\\.')}(?:$|[\\s,])`, 'i')
+  return ENTITY_PATTERNS.some(({ marker, re }) => {
     return re.test(upper) || upper.endsWith(marker) || upper.includes(` ${marker}`)
   })
 }

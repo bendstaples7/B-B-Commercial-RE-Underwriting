@@ -194,6 +194,28 @@ class TestEntityResolutionService:
             org = Organization.query.get(result.organization_id)
             assert org.entity_lookup_person_found is False
 
+    def test_blank_party_name_is_ignored(self, app):
+        with app.app_context():
+            lead = _make_lead()
+            _link_primary(lead.id, None, "BLANK PARTY LLC")
+            provider = FakeProvider(result=EntityLookupResult(
+                found=True,
+                jurisdiction="us_il",
+                name="BLANK PARTY LLC",
+                parties=[
+                    EntityPartyResult(
+                        full_name="",
+                        party_type="manager",
+                        is_company=False,
+                    ),
+                ],
+                provider_name="fake",
+            ))
+            result = EntityResolutionService(provider=provider).resolve_lead(lead.id)
+            assert result.status == "resolved"
+            assert result.person_found is False
+            assert result.person_contact_id is None
+
     def test_idempotent_re_resolve(self, app):
         with app.app_context():
             lead = _make_lead()

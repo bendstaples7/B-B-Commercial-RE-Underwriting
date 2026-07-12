@@ -84,7 +84,7 @@ def resolve_entity(lead_id: int):
                 'lead_id': lead_id,
                 'message': 'Entity resolution queued',
             }), 202
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — Celery unavailable, fall back to sync
             logger.warning(
                 "Celery unavailable for entity resolution lead %s: %s — running sync",
                 lead_id, exc,
@@ -131,7 +131,7 @@ def resolve_entity_bulk():
                 'lead_ids': queued,
                 'count': len(queued),
             }), 202
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — Celery unavailable, sync remaining leads
             # Only sync leads that were not already handed to Celery.
             remaining = [lid for lid in lead_ids if lid not in queued]
             logger.warning(

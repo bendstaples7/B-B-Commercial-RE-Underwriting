@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from app import db
 from app.models.il_sos_llc import IlSosLlcAgent, IlSosLlcEntity, IlSosLlcManager
 from app.services.entity_lookup import (
     SUPPORTED_JURISDICTION,
@@ -106,7 +107,7 @@ class IllinoisSosBulkProvider:
                 zip=mgr.mm_zip,
             ))
 
-        agent = IlSosLlcAgent.query.get(entity.file_number)
+        agent = db.session.get(IlSosLlcAgent, entity.file_number)
         agent_name = None
         agent_address = None
         if agent is not None:
