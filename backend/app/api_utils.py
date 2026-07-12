@@ -168,7 +168,14 @@ def require_auth(f):
                 user = User.query.filter_by(user_id=claims['sub']).first()
                 # Re-check live account state so deactivation / admin revocation
                 # take effect before the JWT's long-lived exp claim.
-                if user is None or not user.is_active:
+                if user is None:
+                    logger.warning(
+                        "auth_reject reason=user_not_found path=%s user_id=%s",
+                        request.path,
+                        claims.get('sub'),
+                    )
+                    return jsonify({'error': 'Authentication required'}), 401
+                if not user.is_active:
                     logger.warning(
                         "auth_reject reason=user_inactive path=%s user_id=%s",
                         request.path,

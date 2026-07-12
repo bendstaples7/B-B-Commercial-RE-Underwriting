@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import jwt
 import pytest
 
+from app import db
 from app.services.auth_service import AuthService
 
 
@@ -116,3 +117,74 @@ class TestRequireAuthRejectLogging:
         assert len(reject_lines) == 1
         assert "path=" in reject_lines[0]
         assert token not in reject_lines[0]
+
+    def test_missing_user_logs_user_not_found(self, client, app, caplog):
+        with app.app_context():
+            now = datetime.utcnow()
+            token = jwt.encode(
+                {
+                    "sub": "missing-user-id",
+                    "email": "missing@example.com",
+                    "display_name": "Missing",
+                    "is_admin": False,
+                    "iat": now,
+                    "exp": now + timedelta(hours=1),
+                },
+                app.config["SECRET_KEY"],
+                algorithm="HS256",
+            )
+
+        with caplog.at_level("WARNING", logger="app.api_utils"):
+            resp = client.get(
+                "/api/admin/users",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert resp.status_code == 401
+        assert resp.get_json()["error"] == "Authentication required"
+        messages = _log_messages(caplog, "app.api_utils")
+        not_found_lines = [
+            m for m in messages if "auth_reject reason=user_not_found" in m
+        ]
+        assert len(not_found_lines) == 1
+        assert "missing-user-id" in not_found_lines[0]
+        assert token not in not_found_lines[0]
+
+    def test_inactive_user_logs_user_inactive(self, client, app, caplog):
+        with app.app_context():
+            user = AuthService().create_user(
+                email="inactive@example.com",
+                password="securepass1",
+                display_name="Inactive",
+            )
+            user.is_active = False
+            db.session.commit()
+            now = datetime.utcnow()
+            token = jwt.encode(
+                {
+                    "sub": user.user_id,
+                    "email": user.email,
+                    "display_name": user.display_name,
+                    "is_admin": False,
+                    "iat": now,
+                    "exp": now + timedelta(hours=1),
+                },
+                app.config["SECRET_KEY"],
+                algorithm="HS256",
+            )
+
+        with caplog.at_level("WARNING", logger="app.api_utils"):
+            resp = client.get(
+                "/api/admin/users",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert resp.status_code == 401
+        assert resp.get_json()["error"] == "Authentication required"
+        messages = _log_messages(caplog, "app.api_utils")
+        inactive_lines = [
+            m for m in messages if "auth_reject reason=user_inactive" in m
+        ]
+        assert len(inactive_lines) == 1
+        assert user.user_id in inactive_lines[0]
+        assert token not in inactive_lines[0]

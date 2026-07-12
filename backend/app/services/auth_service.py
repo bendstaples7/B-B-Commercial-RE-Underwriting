@@ -221,7 +221,6 @@ class AuthService:
         claims = jwt.decode(
             token,
             options={"verify_signature": False},
-            algorithms=["HS256"],
         )
         iat = int(claims["iat"])
         exp = int(claims["exp"])
