@@ -42,6 +42,7 @@ No controller should ever read ``X-User-Id`` directly or parse
 ``user_id`` from the request body.
 """
 import logging
+import uuid
 from functools import wraps
 
 import jwt
@@ -110,6 +111,17 @@ def _allow_legacy_header() -> bool:
     return bool(current_app.config.get('ALLOW_LEGACY_X_USER_ID', False))
 
 
+def _user_id_for_log(value) -> str:
+    """Return a PII-safe, log-injection-safe user identifier."""
+    if value is None:
+        return 'missing'
+    candidate = str(value).replace('\r', '').replace('\n', '').strip()
+    try:
+        return str(uuid.UUID(candidate))
+    except (TypeError, ValueError):
+        return 'invalid'
+
+
 def require_auth(f):
     """Decorator that verifies a Bearer JWT and populates ``g.user_id``.
 
@@ -172,14 +184,14 @@ def require_auth(f):
                     logger.warning(
                         "auth_reject reason=user_not_found path=%s user_id=%s",
                         request.path,
-                        claims.get('sub'),
+                        _user_id_for_log(claims.get('sub')),
                     )
                     return jsonify({'error': 'Authentication required'}), 401
                 if not user.is_active:
                     logger.warning(
                         "auth_reject reason=user_inactive path=%s user_id=%s",
                         request.path,
-                        claims.get('sub'),
+                        _user_id_for_log(user.user_id),
                     )
                     return jsonify({'error': 'Authentication required'}), 401
                 g.user_id = user.user_id

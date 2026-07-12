@@ -1,4 +1,5 @@
 """Tests for PII-safe auth session logging (login issue + require_auth reject)."""
+import uuid
 from datetime import datetime, timedelta
 
 import jwt
@@ -121,9 +122,10 @@ class TestRequireAuthRejectLogging:
     def test_missing_user_logs_user_not_found(self, client, app, caplog):
         with app.app_context():
             now = datetime.utcnow()
+            missing_user_id = str(uuid.uuid4())
             token = jwt.encode(
                 {
-                    "sub": "missing-user-id",
+                    "sub": missing_user_id,
                     "email": "missing@example.com",
                     "display_name": "Missing",
                     "is_admin": False,
@@ -147,7 +149,43 @@ class TestRequireAuthRejectLogging:
             m for m in messages if "auth_reject reason=user_not_found" in m
         ]
         assert len(not_found_lines) == 1
-        assert "missing-user-id" in not_found_lines[0]
+        assert missing_user_id in not_found_lines[0]
+        assert token not in not_found_lines[0]
+
+    def test_missing_user_log_redacts_unsafe_subject(self, client, app, caplog):
+        unsafe_subject = "attacker@example.com\r\nforged=true"
+        with app.app_context():
+            now = datetime.utcnow()
+            token = jwt.encode(
+                {
+                    "sub": unsafe_subject,
+                    "email": "attacker@example.com",
+                    "display_name": "Attacker",
+                    "is_admin": False,
+                    "iat": now,
+                    "exp": now + timedelta(hours=1),
+                },
+                app.config["SECRET_KEY"],
+                algorithm="HS256",
+            )
+
+        with caplog.at_level("WARNING", logger="app.api_utils"):
+            resp = client.get(
+                "/api/admin/users",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert resp.status_code == 401
+        messages = _log_messages(caplog, "app.api_utils")
+        not_found_lines = [
+            m for m in messages if "auth_reject reason=user_not_found" in m
+        ]
+        assert len(not_found_lines) == 1
+        assert "user_id=invalid" in not_found_lines[0]
+        assert "attacker@example.com" not in not_found_lines[0]
+        assert "forged=true" not in not_found_lines[0]
+        assert "\r" not in not_found_lines[0]
+        assert "\n" not in not_found_lines[0]
         assert token not in not_found_lines[0]
 
     def test_inactive_user_logs_user_inactive(self, client, app, caplog):
