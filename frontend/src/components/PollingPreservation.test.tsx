@@ -47,11 +47,11 @@ function hasQueueVisiblePollInterval(source: string): boolean {
 
   const sharedDefaults = readUtilsSource('queueQueryDefaults.ts')
   const usesListDefaultsWithPolling =
-    source.includes('queueListQueryDefaults') &&
+    /\.\.\.\s*queueListQueryDefaults\b/.test(source) &&
     sharedDefaults.includes('export const queueListQueryDefaults') &&
     sharedDefaults.includes('refetchInterval: 60_000')
   const usesRefetchDefaultsWithPolling =
-    source.includes('queueListRefetchDefaults') &&
+    /\.\.\.\s*queueListRefetchDefaults\b/.test(source) &&
     sharedDefaults.includes('export const queueListRefetchDefaults') &&
     sharedDefaults.includes('refetchInterval: 60_000')
 

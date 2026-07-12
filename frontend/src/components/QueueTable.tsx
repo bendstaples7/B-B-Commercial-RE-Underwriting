@@ -59,6 +59,8 @@ export interface QueueTableProps {
   total: number
   /** Disables row navigation, selection, actions, sorting, and pagination. */
   disabled?: boolean
+  /** Indicates rows are stale placeholder data from the previous query key. */
+  isPlaceholderData?: boolean
   /** When set, lead opens preserve HubSpot-style queue work session. */
   fromQueue?: FromQueueState
   sortBy?: string
@@ -116,6 +118,7 @@ export function QueueTable({
   rows,
   total,
   disabled = false,
+  isPlaceholderData = false,
   fromQueue,
   sortBy,
   sortOrder = 'asc',
@@ -527,7 +530,7 @@ export function QueueTable({
           sx={{ mt: 1, display: 'block' }}
           data-testid="queue-table-total"
         >
-          {total} total
+          {isPlaceholderData ? '—' : total} total
         </Typography>
       )}
 

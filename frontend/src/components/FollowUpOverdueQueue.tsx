@@ -125,6 +125,7 @@ export function FollowUpOverdueQueue() {
             rows={rows}
             total={total}
             disabled={showRefetchIndicator}
+            isPlaceholderData={showRefetchIndicator}
             fromQueue={fromQueue}
             selectedIds={selectedIds}
             onSelectionChange={onSelectionChange}

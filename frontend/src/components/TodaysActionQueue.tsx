@@ -236,6 +236,7 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
             rows={rows}
             total={total}
             disabled={disablePlaceholderInteractions}
+            isPlaceholderData={disablePlaceholderInteractions}
             fromQueue={fromQueue}
             selectedIds={selectedIds}
             onSelectionChange={onSelectionChange}

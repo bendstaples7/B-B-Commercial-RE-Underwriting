@@ -123,11 +123,11 @@ function hasQueueBackgroundPollGuard(source: string): boolean {
 
   const sharedDefaults = readUtilsSource('queueQueryDefaults.ts')
   const usesGuardedListDefaults =
-    source.includes('queueListQueryDefaults') &&
+    /\.\.\.\s*queueListQueryDefaults\b/.test(source) &&
     sharedDefaults.includes('export const queueListQueryDefaults') &&
     sharedDefaults.includes('refetchIntervalInBackground: false')
   const usesGuardedRefetchDefaults =
-    source.includes('queueListRefetchDefaults') &&
+    /\.\.\.\s*queueListRefetchDefaults\b/.test(source) &&
     sharedDefaults.includes('export const queueListRefetchDefaults') &&
     sharedDefaults.includes('refetchIntervalInBackground: false')
 

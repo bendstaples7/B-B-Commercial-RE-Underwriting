@@ -298,6 +298,7 @@ export function NoNextActionQueue() {
             rows={rows}
             total={total}
             disabled={showRefetchIndicator}
+            isPlaceholderData={showRefetchIndicator}
             fromQueue={fromQueue}
             rowActions={rowActions}
             extraColumns={extraColumns}

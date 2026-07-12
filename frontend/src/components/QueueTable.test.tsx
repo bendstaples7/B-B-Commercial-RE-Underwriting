@@ -732,6 +732,18 @@ describe('QueueTable', () => {
       expect(screen.getByTestId('queue-table-total')).toHaveTextContent('42 total')
     })
 
+    it('hides stale total count while placeholder data is shown', () => {
+      render(
+        <QueueTable
+          rows={[makeRow(1), makeRow(2)]}
+          total={42}
+          isPlaceholderData
+        />
+      )
+
+      expect(screen.getByTestId('queue-table-total')).toHaveTextContent('— total')
+    })
+
     it('renders extra columns', () => {
       const extraColumns = [
         {
