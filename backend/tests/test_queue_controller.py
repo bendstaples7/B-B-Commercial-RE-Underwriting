@@ -132,7 +132,23 @@ class TestTodaysActionQueue:
             response = client.get('/api/queues/todays-action?sort_by=lead_score&sort_order=asc', headers=_AUTH_HEADERS)
             assert response.status_code == 200
 
-    def test_lead_with_follow_up_now_appears(self, client, app):
+    def test_invalid_outreach_filter_echoes_null(self, client, app):
+        """Invalid outreach filters are ignored and echoed as null."""
+        with app.app_context():
+            response = client.get('/api/queues/todays-action?outreach=stale', headers=_AUTH_HEADERS)
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            assert data['outreach'] is None
+
+    def test_invalid_outreach_filter_echoes_null_for_lead_ids(self, client, app):
+        """Lead-id bulk selection reports the normalized outreach filter."""
+        with app.app_context():
+            response = client.get('/api/queues/todays-action/lead-ids?outreach=stale', headers=_AUTH_HEADERS)
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            assert data['outreach'] is None
+
+    def test_bare_follow_up_now_does_not_appear(self, client, app):
         """Bare follow_up_now without a due task does not appear in Today's Action."""
         with app.app_context():
             lead = _make_lead(app, '2 Todays St',

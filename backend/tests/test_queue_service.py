@@ -96,7 +96,7 @@ def test_todays_action_excludes_bare_follow_up_now_without_due_task(app):
                           lead_status='mailing_no_contact_made',
                           recommended_action='follow_up_now')
         svc = QueueService()
-        rows, total = svc.get_todays_action()
+        rows, _total = svc.get_todays_action()
         ids = [r['id'] for r in rows]
         assert lead.id not in ids
 

@@ -248,7 +248,7 @@ def _outreach_filter_clause(outreach: str | None):
     return None
 
 
-def _normalize_todays_outreach_filter(outreach: str | None) -> str | None:
+def normalize_todays_outreach_filter(outreach: str | None) -> str | None:
     if not outreach:
         return None
     key = outreach.strip().lower()
@@ -325,7 +325,7 @@ class QueueService:
                 hubspot_task_due_today,
             ),
         )
-        clause = _outreach_filter_clause(_normalize_todays_outreach_filter(outreach))
+        clause = _outreach_filter_clause(normalize_todays_outreach_filter(outreach))
         if clause is not None:
             query = query.filter(clause)
         return query
@@ -959,7 +959,7 @@ class QueueService:
         _, default_sort_by, default_sort_order = config
         sort_by = sort_by or default_sort_by
         sort_order = sort_order or default_sort_order
-        outreach = _normalize_todays_outreach_filter(outreach) if queue_key == 'todays-action' else None
+        outreach = normalize_todays_outreach_filter(outreach) if queue_key == 'todays-action' else None
 
         cache_key = self._navigation_cache_key(
             queue_key, sort_by, sort_order, mail_user_id, outreach,

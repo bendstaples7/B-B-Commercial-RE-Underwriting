@@ -6,7 +6,7 @@ from flask import Blueprint, g, jsonify, request
 from app.controllers.decorators import handle_errors
 from app.services.mail_queue_service import MailQueueService
 from app.services.prospect_review_service import count_pending_candidates
-from app.services.queue_service import QueueService
+from app.services.queue_service import QueueService, normalize_todays_outreach_filter
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ def get_todays_action():
     filters by outreach display label (same as UI Next Action column).
     """
     page, per_page, sort_by, sort_order = _parse_pagination_params()
-    outreach = request.args.get('outreach') or None
+    outreach = normalize_todays_outreach_filter(request.args.get('outreach'))
     rows, total = _get_queue_service().get_todays_action(
         page, per_page, sort_by, sort_order, outreach=outreach,
     )
@@ -95,7 +95,7 @@ def get_todays_action_outreach_counts():
 @handle_errors
 def get_todays_action_lead_ids():
     """GET /api/queues/todays-action/lead-ids?outreach= — ids matching optional filter."""
-    outreach = request.args.get('outreach') or None
+    outreach = normalize_todays_outreach_filter(request.args.get('outreach'))
     ids = _get_queue_service().get_todays_action_lead_ids(outreach=outreach)
     return jsonify({'lead_ids': ids, 'total': len(ids), 'outreach': outreach}), 200
 

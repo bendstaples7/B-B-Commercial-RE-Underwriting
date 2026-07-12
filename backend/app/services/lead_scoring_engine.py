@@ -622,10 +622,7 @@ class LeadScoringEngine:
                 )
                 db.session.add(entry)
 
-        if (
-            result.recommended_action == 'follow_up_now'
-            and result.winning_rule in ('is_warm', 'follow_up_overdue')
-        ):
+        if result.winning_rule in ('is_warm', 'follow_up_overdue'):
             from app.services.mail_task_lifecycle_service import ensure_due_today_call_task
             ensure_due_today_call_task(lead, actor='system')
 
