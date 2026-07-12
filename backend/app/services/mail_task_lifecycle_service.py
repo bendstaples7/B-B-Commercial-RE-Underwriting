@@ -362,7 +362,7 @@ def create_pending_mail_follow_up_task(
 
     now = datetime.now(timezone.utc)
     title = _mail_follow_up_title(lead)
-    task = LeadTask(
+    task = LeadTask(  # cancelled if campaign submission fails before send
         lead_id=lead.id,
         task_type='call_owner_today',
         title=title,
