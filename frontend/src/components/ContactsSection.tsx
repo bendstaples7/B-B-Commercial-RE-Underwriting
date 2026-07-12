@@ -26,6 +26,7 @@ import { contactService } from '@/services/api'
 import { entityResolutionApi } from '@/services/entityResolutionApi'
 import { formatPhoneNumber, phoneTelHref } from '@/utils/phone'
 import { formatPhoneConfidence } from '@/utils/helpers'
+import { formatDate } from '@/utils/formatters'
 import { isEntityContactName } from '@/utils/propertyContacts'
 import type { PropertyContact, ContactRole, EntityResolutionStatus } from '@/types'
 import { ContactFormModal } from './ContactFormModal'
@@ -237,7 +238,7 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
           severity={
             entityStatus?.is_nonprofit || entityStatus?.organization_org_type === 'nonprofit'
               ? 'success'
-              : entityStatus?.provider_configured === false &&
+              : entityStatus?.provider_configured === false ||
                   entityStatus?.nonprofit_provider_configured === false
                 ? 'warning'
                 : entityStatus?.entity_lookup_status === 'unsupported_jurisdiction' ||
@@ -304,10 +305,10 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
           <Typography variant="caption" component="div" color="text.secondary" sx={{ mt: 0.5 }}>
             Research via IRS EO BMF, then Illinois SOS for for-profit LLCs
             {entityStatus?.nonprofit_dataset_imported_at
-              ? ` · IRS EO as of ${new Date(entityStatus.nonprofit_dataset_imported_at).toLocaleDateString()}`
+              ? ` · IRS EO as of ${formatDate(entityStatus.nonprofit_dataset_imported_at)}`
               : ''}
             {entityStatus?.dataset_imported_at
-              ? ` · SOS as of ${new Date(entityStatus.dataset_imported_at).toLocaleDateString()}`
+              ? ` · SOS as of ${formatDate(entityStatus.dataset_imported_at)}`
               : ''}
           </Typography>
           {entityStatus?.is_institutional && !entityStatus?.is_nonprofit && (

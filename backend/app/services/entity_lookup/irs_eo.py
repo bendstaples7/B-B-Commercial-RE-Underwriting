@@ -89,7 +89,7 @@ class IrsEoNonprofitProvider:
         if state_code:
             query = query.filter(IrsEoOrganization.state == state_code)
 
-        # Prefer active EO rows when status is present (IRS STATUS blank/"01" common).
+        # Prefer active EO rows when status is present (blank/"01" = active).
         matches = query.order_by(IrsEoOrganization.ein.asc()).limit(5).all()
         if state_code and not matches:
             return NonprofitLookupResult(
@@ -106,13 +106,17 @@ class IrsEoNonprofitProvider:
                 error="No matching tax-exempt organization in IRS EO BMF",
             )
         if len(matches) > 1:
-            return NonprofitLookupResult(
-                found=False,
-                error=(
-                    f"Ambiguous IRS EO name match ({len(matches)} rows) — "
-                    "confirm manually or refine the entity name"
-                ),
-            )
+            active = [row for row in matches if _is_active_eo_status(row.status)]
+            if len(active) == 1:
+                matches = active
+            else:
+                return NonprofitLookupResult(
+                    found=False,
+                    error=(
+                        f"Ambiguous IRS EO name match ({len(matches)} rows) — "
+                        "confirm manually or refine the entity name"
+                    ),
+                )
 
         row = matches[0]
         return NonprofitLookupResult(
@@ -124,6 +128,12 @@ class IrsEoNonprofitProvider:
             ntee_cd=row.ntee_cd,
             subsection=row.subsection,
         )
+
+
+def _is_active_eo_status(status: Optional[str]) -> bool:
+    """IRS EO BMF: blank or ``01`` means unconditional/active exemption."""
+    code = (status or "").strip()
+    return code == "" or code == "01"
 
 
 def upsert_eo_row(
@@ -151,10 +161,10 @@ def upsert_eo_row(
 
     row.name = " ".join((name or "").split())[:200]
     row.normalized_name = normalize_eo_name(row.name)
-    row.city = (city or None)
+    row.city = ((city or "").strip()[:64] or None)
     row.state = re.sub(r"[^A-Z]", "", (state or "").upper())[:2] or None
-    row.ntee_cd = (ntee_cd or None)
-    row.subsection = (subsection or None)
-    row.status = (status or None)
+    row.ntee_cd = ((ntee_cd or "").strip()[:10] or None)
+    row.subsection = ((subsection or "").strip()[:4] or None)
+    row.status = ((status or "").strip()[:2] or None)
     row.imported_at = imported_at or datetime.utcnow()
     return row

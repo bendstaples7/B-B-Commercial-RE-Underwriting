@@ -76,6 +76,50 @@ class TestIrsEoLookup:
             assert result.found is False
             assert "Ambiguous" in (result.error or "")
 
+    def test_prefers_single_active_among_ambiguous(self, app):
+        with app.app_context():
+            from app import db
+
+            upsert_eo_row(
+                ein="111111111",
+                name="Shared Charity Name Inc",
+                state="IL",
+                status="02",
+            )
+            upsert_eo_row(
+                ein="222222222",
+                name="Shared Charity Name Inc",
+                state="IL",
+                status="01",
+            )
+            db.session.commit()
+
+            result = IrsEoNonprofitProvider().lookup_nonprofit(
+                "Shared Charity Name Inc",
+                state="IL",
+            )
+            assert result.found is True
+            assert result.ein == "222222222"
+
+    def test_upsert_truncates_wide_fields(self, app):
+        with app.app_context():
+            from app import db
+
+            row = upsert_eo_row(
+                ein="444444444",
+                name="Wide Fields Org",
+                city="C" * 80,
+                state="IL",
+                ntee_cd="NTEECODETOO_LONG",
+                subsection="12345",
+                status="ABCD",
+            )
+            db.session.commit()
+            assert len(row.city or "") <= 64
+            assert len(row.ntee_cd or "") <= 10
+            assert len(row.subsection or "") <= 4
+            assert len(row.status or "") <= 2
+
     def test_no_national_fallback(self, app):
         with app.app_context():
             from app import db
