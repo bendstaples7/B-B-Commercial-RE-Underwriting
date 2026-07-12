@@ -321,14 +321,10 @@ def test_require_admin_guards_all_routes(route, client, app):
 
         method, path = route
 
-        # Build a non-admin user token
-        mock_user = MagicMock()
-        mock_user.user_id = 'non-admin-user-id'
-        mock_user.email = 'nonadmin@example.com'
-        mock_user.display_name = 'Non Admin'
-        mock_user.is_admin = False
-
-        token = AuthService().issue_token(mock_user)
+        # Persist a real non-admin user — require_auth reloads is_admin from DB
+        user = _make_user('nonadmin.example.com', is_admin=False)
+        db.session.commit()
+        token = AuthService().issue_token(user)
 
         # Make the request with the non-admin token
         headers = {'Authorization': f'Bearer {token}'}
@@ -352,7 +348,7 @@ def test_require_admin_guards_all_routes(route, client, app):
         assert data is not None
         assert data.get('error') == 'Forbidden'
         assert data.get('message') == 'Admin access required.'
-
+        db.session.rollback()
 
 # ---------------------------------------------------------------------------
 # Property 5: User list ordering invariant

@@ -131,6 +131,41 @@ class TestRequireAdminForbidden:
 
 
 # ---------------------------------------------------------------------------
+# Test: require_auth revalidates live user state (inactive / revoked admin)
+# ---------------------------------------------------------------------------
+
+class TestRequireAuthLiveUserLookup:
+    """require_auth rejects inactive users and honors current is_admin from DB."""
+
+    def test_inactive_user_token_returns_401(self, client, app):
+        """A still-valid JWT for a deactivated user is rejected with 401."""
+        with app.app_context():
+            user = _make_user("inactive@test.com", "Inactive User", is_admin=False)
+            token = AuthService().issue_token(user)
+            user.is_active = False
+            db.session.commit()
+
+        resp = client.get("/api/admin/users", headers=_auth_headers(token))
+        assert resp.status_code == 401
+        data = json.loads(resp.data)
+        assert data["error"] == "Authentication required"
+
+    def test_revoked_admin_token_returns_403(self, client, app):
+        """JWT issued while admin, then is_admin cleared → 403 on admin routes."""
+        with app.app_context():
+            user = _make_user("exadmin@test.com", "Ex Admin", is_admin=True)
+            token = AuthService().issue_token(user)
+            user.is_admin = False
+            db.session.commit()
+
+        resp = client.get("/api/admin/users", headers=_auth_headers(token))
+        assert resp.status_code == 403
+        data = json.loads(resp.data)
+        assert data["error"] == "Forbidden"
+        assert data["message"] == "Admin access required."
+
+
+# ---------------------------------------------------------------------------
 # Test: require_admin returns 401 when no token is present
 # ---------------------------------------------------------------------------
 

@@ -11,7 +11,7 @@
  * Token validation rules (client-side, signature verified server-side):
  *   1. Token must be a valid 3-segment JWT with a decodable payload.
  *   2. `exp` claim must be in the future (compared to Date.now() / 1000).
- *   3. `exp - iat` must be ≤ 28800 seconds (8 hours) — rejects tokens with
+ *   3. `exp - iat` must be ≤ 2592000 seconds (30 days) — rejects tokens with
  *      an unexpectedly long lifetime.
  *
  * Usage:
@@ -33,7 +33,7 @@ import type { AuthUser, AuthContextValue } from '@/types'
 // JWT helpers (client-side decode only — no signature verification)
 // ---------------------------------------------------------------------------
 
-const MAX_TOKEN_LIFETIME_SECONDS = 28800 // 8 hours
+const MAX_TOKEN_LIFETIME_SECONDS = 30 * 24 * 3600 // 30 days
 
 /**
  * Decode the payload of a JWT without verifying the signature.
@@ -78,7 +78,7 @@ export function validateStoredToken(token: string): AuthUser | null {
   // Rule 1: token must not be expired
   if (exp <= nowSeconds) return null
 
-  // Rule 2: token lifetime must not exceed 8 hours
+  // Rule 2: token lifetime must not exceed 30 days
   if (exp - iat > MAX_TOKEN_LIFETIME_SECONDS) return null
 
   // Extract user identity from claims
