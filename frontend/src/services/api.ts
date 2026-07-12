@@ -1349,8 +1349,26 @@ import type {
 export const queueService = {
   getCounts: (): Promise<QueueCounts> =>
     api.get('/queues/counts').then(r => r.data),
-  getTodaysAction: (page = 1, perPage = 20): Promise<QueuePage> =>
-    api.get('/queues/todays-action', { params: { page, per_page: perPage } }).then(r => r.data),
+  getTodaysAction: (
+    page = 1,
+    perPage = 20,
+    outreach?: string | null,
+  ): Promise<QueuePage> =>
+    api.get('/queues/todays-action', {
+      params: {
+        page,
+        per_page: perPage,
+        ...(outreach ? { outreach } : {}),
+      },
+    }).then(r => r.data),
+  getTodaysActionOutreachCounts: (): Promise<Record<string, number>> =>
+    api.get('/queues/todays-action/outreach-counts').then(r => r.data),
+  getTodaysActionLeadIds: (
+    outreach?: string | null,
+  ): Promise<{ lead_ids: number[]; total: number; outreach: string | null }> =>
+    api.get('/queues/todays-action/lead-ids', {
+      params: outreach ? { outreach } : {},
+    }).then(r => r.data),
   getPreviouslyWarm: (page = 1, perPage = 20): Promise<QueuePage> =>
     api.get('/queues/previously-warm', { params: { page, per_page: perPage } }).then(r => r.data),
   getFollowUpOverdue: (page = 1, perPage = 20): Promise<QueuePage> =>
@@ -1375,8 +1393,17 @@ export const queueService = {
     api.get('/queues/missing-property-match', { params: { page, per_page: perPage } }).then(r => r.data),
   getMailCandidates: (page = 1, perPage = 20): Promise<QueuePage> =>
     api.get('/queues/mail-candidates', { params: { page, per_page: perPage } }).then(r => r.data),
-  getNavigation: (queueKey: string, leadId: number): Promise<QueueNavigation> =>
-    api.get(`/queues/${queueKey}/navigation`, { params: { lead_id: leadId } }).then(r => r.data),
+  getNavigation: (
+    queueKey: string,
+    leadId: number,
+    options?: { outreach?: string | null },
+  ): Promise<QueueNavigation> =>
+    api.get(`/queues/${queueKey}/navigation`, {
+      params: {
+        lead_id: leadId,
+        ...(options?.outreach ? { outreach: options.outreach } : {}),
+      },
+    }).then(r => r.data),
 }
 
 import type {

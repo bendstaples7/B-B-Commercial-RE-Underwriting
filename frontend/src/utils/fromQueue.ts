@@ -4,6 +4,8 @@
 export interface FromQueueState {
   key: string
   label: string
+  /** Today's Action outreach filter (mail_now, call_now, …) for prev/next nav. */
+  outreach?: string
 }
 
 /** Known work queues — used for ?queue= URL param and navigation labels. */
@@ -21,7 +23,9 @@ export const WORK_QUEUE_META: Record<string, { label: string }> = {
 export function isFromQueueState(value: unknown): value is FromQueueState {
   if (!value || typeof value !== 'object') return false
   const v = value as Record<string, unknown>
-  return typeof v.key === 'string' && typeof v.label === 'string'
+  if (typeof v.key !== 'string' || typeof v.label !== 'string') return false
+  if (v.outreach !== undefined && typeof v.outreach !== 'string') return false
+  return true
 }
 
 export function fromQueueFromKey(key: string | null | undefined): FromQueueState | null {

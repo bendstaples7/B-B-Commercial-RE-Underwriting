@@ -69,7 +69,7 @@ function sortTasks(tasks: LeadTask[]): LeadTask[] {
 }
 
 function formatDueDate(dueDate: string | null): string {
-  if (!dueDate) return ''
+  if (!dueDate) return 'Pending'
   // dueDate is a date string like "2024-01-15"
   const [year, month, day] = dueDate.split('-')
   return `Due ${month}/${day}/${year}`
@@ -407,12 +407,18 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
                     }
                     secondary={
                       <>
-                        {task.due_date && (
+                        {(task.due_date || dueStatus === 'no_due') && (
                           <Typography
                             component="span"
                             variant="caption"
                             color={
-                              overdue ? 'error' : dueToday ? 'warning.main' : 'text.secondary'
+                              overdue
+                                ? 'error'
+                                : dueToday
+                                  ? 'warning.main'
+                                  : dueStatus === 'no_due'
+                                    ? 'info.main'
+                                    : 'text.secondary'
                             }
                             data-testid={`task-due-date-${task.id}`}
                             sx={{ display: 'block' }}

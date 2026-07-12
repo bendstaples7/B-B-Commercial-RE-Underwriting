@@ -549,8 +549,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     data: queueNavigation,
     isLoading: queueNavLoading,
   } = useQuery<QueueNavigation>({
-    queryKey: ['queue-navigation', fromQueue?.key, leadId],
-    queryFn: () => queueService.getNavigation(fromQueue!.key, leadId),
+    queryKey: ['queue-navigation', fromQueue?.key, fromQueue?.outreach ?? null, leadId],
+    queryFn: () =>
+      queueService.getNavigation(fromQueue!.key, leadId, {
+        outreach: fromQueue?.outreach,
+      }),
     enabled: !!fromQueue,
     staleTime: LEAD_WORKSPACE_STALE_MS,
   })
@@ -581,7 +584,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     (targetLeadId: number) => {
       prefetchLeadWorkspace(queryClient, targetLeadId)
       if (fromQueue) {
-        prefetchQueueNavigation(queryClient, fromQueue.key, targetLeadId)
+        prefetchQueueNavigation(queryClient, fromQueue.key, targetLeadId, {
+          outreach: fromQueue.outreach,
+        })
       }
     },
     [queryClient, fromQueue],
@@ -594,6 +599,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       fromQueue.key,
       queueNavigation.prev_id,
       queueNavigation.next_id,
+      { outreach: fromQueue.outreach },
     )
   }, [fromQueue, queueNavigation, queryClient])
 
@@ -649,7 +655,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       return
     }
     try {
-      const nav = await queueService.getNavigation(fromQueue.key, leadId)
+      const nav = await queueService.getNavigation(fromQueue.key, leadId, {
+        outreach: fromQueue.outreach,
+      })
       if (nav.next_id) {
         advanceInQueue(nav.next_id)
       } else {
@@ -667,7 +675,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     await queryClient.invalidateQueries({ queryKey: ['queue-navigation', fromQueue.key] })
     await queryClient.invalidateQueries({ queryKey: [`queue-${fromQueue.key}`] })
     try {
-      const nav = await queueService.getNavigation(fromQueue.key, leadId)
+      const nav = await queueService.getNavigation(fromQueue.key, leadId, {
+        outreach: fromQueue.outreach,
+      })
       if (nav.position === null) {
         void advanceAfterTaskComplete()
       }

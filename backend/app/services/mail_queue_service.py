@@ -16,7 +16,9 @@ from app.services.open_letter_contact_mapper import (
 )
 from app.services.scoring_rubric import is_recently_sold
 from app.services.mail_task_lifecycle_service import (
+    cancel_pending_mail_follow_up_tasks,
     complete_tasks_superseded_by_mail,
+    create_pending_mail_follow_up_task,
     refresh_leads_after_mail_task_changes,
 )
 from app.services.hubspot_task_completion_service import sync_pending_hubspot_completions
@@ -134,6 +136,7 @@ class MailQueueService:
                             _completed, pending_sync = complete_tasks_superseded_by_mail(
                                 lead_id, actor=user_id, commit=False,
                             )
+                            create_pending_mail_follow_up_task(lead, actor=user_id)
                             # Flush remaining writes before savepoint release so
                             # success accounting only runs if the unit commits.
                             db.session.flush()
@@ -270,5 +273,8 @@ class MailQueueService:
         # Clear legacy flag when no queued items remain.
         if lead and not MailQueueItem.query.filter_by(lead_id=lead.id, status='queued').count():
             lead.up_next_to_mail = False
+            cancel_pending_mail_follow_up_tasks(lead.id, actor=user_id)
         db.session.commit()
+        if lead:
+            refresh_leads_after_mail_task_changes([lead.id])
         return item

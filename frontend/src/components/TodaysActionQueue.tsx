@@ -1,14 +1,23 @@
 /**
  * TodaysActionQueue — Today's Action queue view.
  *
- * Fetches leads that need action today: follow_up_now recommended action or
- * open tasks due today. Shows summary header with overdue and follow-up counts.
- *
- * Requirements: 6.3, 18.1
+ * Due open tasks (due today or earlier), sorted by lead score.
+ * Optional next-action (outreach) filter for Mail Now / Call Now bulk workflows.
  */
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Box, Link, Typography } from '@mui/material'
+import {
+  Box,
+  Button,
+  FormControl,
+  InputLabel,
+  Link,
+  MenuItem,
+  Select,
+  Stack,
+  Typography,
+} from '@mui/material'
+import type { SelectChangeEvent } from '@mui/material/Select'
 import { Link as RouterLink, useNavigate } from 'react-router-dom'
 import { QueueTable } from './QueueTable'
 import type { RowAction } from './QueueTable'
@@ -29,16 +38,37 @@ export interface TodaysActionQueueProps {
   extraQueryKeys?: string[]
 }
 
+type OutreachFilter = '' | 'mail_now' | 'call_now' | 'email_now' | 'text_now'
+
+const OUTREACH_OPTIONS: { value: OutreachFilter; label: string }[] = [
+  { value: '', label: 'All next actions' },
+  { value: 'mail_now', label: 'Mail Now' },
+  { value: 'call_now', label: 'Call Now' },
+  { value: 'email_now', label: 'Email Now' },
+  { value: 'text_now', label: 'Text Now' },
+]
+
 export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {}) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [page, setPage] = useState(1)
+  const [outreach, setOutreach] = useState<OutreachFilter>('')
+  const [selectError, setSelectError] = useState<string | null>(null)
   const { selectedIds, onSelectionChange, onPageChangeWithClear, clearSelection } =
     useQueueSelection()
 
+  const outreachParam = outreach || null
+
   const { data } = useQuery({
-    queryKey: ['queue-todays-action', page],
-    queryFn: () => queueService.getTodaysAction(page, 20),
+    queryKey: ['queue-todays-action', page, outreach],
+    queryFn: () => queueService.getTodaysAction(page, 20, outreachParam),
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+  })
+
+  const { data: outreachCounts } = useQuery({
+    queryKey: ['queue-todays-action-outreach-counts'],
+    queryFn: () => queueService.getTodaysActionOutreachCounts(),
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
   })
@@ -50,24 +80,39 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
     setPage(clampPage(newPage, totalPages))
   })
 
-  const overdueCount = rows.filter((r) => r.follow_up_overdue).length
-  const callCount = rows.filter(
-    (r) =>
-      r.recommended_action === 'call_ready'
-      || (r.recommended_action === 'follow_up_now' && r.recommended_contact_method === 'phone'),
-  ).length
-  const mailCount = rows.filter(
-    (r) =>
-      r.recommended_action === 'mail_ready'
-      || (r.recommended_action === 'follow_up_now' && r.recommended_contact_method === 'direct_mail'),
-  ).length
+  const handleOutreachChange = (event: SelectChangeEvent) => {
+    setOutreach(event.target.value as OutreachFilter)
+    setPage(1)
+    clearSelection()
+    setSelectError(null)
+  }
 
-  const fromQueue = { key: 'todays-action', label: "Today's Action" }
+  const selectAllMatching = async () => {
+    try {
+      const result = await queueService.getTodaysActionLeadIds(outreachParam)
+      onSelectionChange(result.lead_ids)
+      setSelectError(null)
+    } catch (err) {
+      console.error('[TodaysActionQueue] Failed to load matching lead IDs:', err)
+      setSelectError(
+        err instanceof Error ? err.message : 'Failed to select matching leads. Please try again.',
+      )
+    }
+  }
+
+  const fromQueue = {
+    key: 'todays-action',
+    label: "Today's Action",
+    ...(outreach ? { outreach } : {}),
+  }
   const navigateOptions = { navigate, fromQueue }
   const bulkCtx = {
     queryClient,
     queryKey: 'queue-todays-action',
-    extraQueryKeys,
+    extraQueryKeys: [
+      ...(extraQueryKeys ?? []),
+      'queue-todays-action-outreach-counts',
+    ],
     onAfterAction: () => {
       clearSelection()
       setPage(1)
@@ -76,7 +121,10 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
   const taskOptions = {
     queryClient,
     queryKey: 'queue-todays-action',
-    extraQueryKeys,
+    extraQueryKeys: [
+      ...(extraQueryKeys ?? []),
+      'queue-todays-action-outreach-counts',
+    ],
     onAfterAction: () => {
       clearSelection()
       setPage(1)
@@ -92,35 +140,82 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
 
   const bulkActions = resolveBulkActions(['add_to_mail_batch', 'create_task'], bulkCtx)
 
+  const optionLabel = (value: OutreachFilter, label: string) => {
+    if (!outreachCounts) return label
+    if (value === '') {
+      const count = outreachCounts.all ?? total
+      return `${label} (${count})`
+    }
+    const count = outreachCounts[value] ?? 0
+    return `${label} (${count})`
+  }
+
   return (
     <Box data-testid="todays-action-queue">
       <Typography variant="h6" gutterBottom>
         Today's Action
       </Typography>
 
-      <Box sx={{ display: 'flex', gap: 3, mb: 2 }}>
+      <Stack
+        direction={{ xs: 'column', sm: 'row' }}
+        spacing={2}
+        alignItems={{ xs: 'stretch', sm: 'center' }}
+        sx={{ mb: 2 }}
+        flexWrap="wrap"
+      >
         <Typography variant="body2" color="text.secondary">
           Total: <strong>{total}</strong>
         </Typography>
-        <Typography variant="body2" color="error.main">
-          Overdue: <strong>{overdueCount}</strong>
+        <FormControl size="small" sx={{ minWidth: 220 }}>
+          <InputLabel id="todays-action-outreach-label">Next action</InputLabel>
+          <Select
+            labelId="todays-action-outreach-label"
+            label="Next action"
+            value={outreach}
+            onChange={handleOutreachChange}
+            data-testid="todays-action-outreach-filter"
+          >
+            {OUTREACH_OPTIONS.map((opt) => (
+              <MenuItem key={opt.value || 'all'} value={opt.value}>
+                {optionLabel(opt.value, opt.label)}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        {outreach !== '' && total > 0 && (
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={selectAllMatching}
+            data-testid="todays-action-select-all-matching"
+          >
+            Select all {OUTREACH_OPTIONS.find((o) => o.value === outreach)?.label ?? 'matching'}
+          </Button>
+        )}
+      </Stack>
+
+      {selectError && (
+        <Typography variant="body2" color="error" sx={{ mb: 1 }} data-testid="todays-action-select-error">
+          {selectError}
         </Typography>
-        <Typography variant="body2" color="warning.main">
-          Calls: <strong>{callCount}</strong>
-        </Typography>
-        <Typography variant="body2" color="info.main">
-          Mail: <strong>{mailCount}</strong>
-        </Typography>
-      </Box>
+      )}
 
       {rows.length === 0 && total === 0 ? (
         <Box sx={{ py: 4, textAlign: 'center' }} data-testid="todays-action-empty">
           <Typography variant="body1" color="text.secondary" gutterBottom>
-            You're all caught up!
+            {outreach
+              ? `No leads with that next action in Today's Action.`
+              : "You're all caught up!"}
           </Typography>
-          <Link component={RouterLink} to="/queues/no-next-action" variant="body2">
-            View leads with no next action →
-          </Link>
+          {outreach ? (
+            <Button size="small" onClick={() => setOutreach('')}>
+              Clear filter
+            </Button>
+          ) : (
+            <Link component={RouterLink} to="/queues/no-next-action" variant="body2">
+              View leads with no next action →
+            </Link>
+          )}
         </Box>
       ) : (
         <QueueTable

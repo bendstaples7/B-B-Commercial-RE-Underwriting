@@ -9,7 +9,11 @@ import openLetterService from '@/services/openLetterApi'
 import type { LeadStatus } from '@/types'
 
 vi.mock('@/services/api', () => ({
-  queueService: { getTodaysAction: vi.fn() },
+  queueService: {
+    getTodaysAction: vi.fn(),
+    getTodaysActionOutreachCounts: vi.fn(),
+    getTodaysActionLeadIds: vi.fn(),
+  },
   leadTaskService: { createTask: vi.fn() },
   bulkActionService: { bulkCreateTask: vi.fn() },
   commandCenterService: { reactivate: vi.fn(), suppress: vi.fn() },
@@ -88,6 +92,13 @@ function renderComponent() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(queueService.getTodaysActionOutreachCounts).mockResolvedValue({
+    all: 5,
+    mail_now: 2,
+    call_now: 1,
+    email_now: 0,
+    text_now: 0,
+  })
 })
 
 describe('TodaysActionQueue', () => {
@@ -97,7 +108,37 @@ describe('TodaysActionQueue', () => {
     renderComponent()
 
     await waitFor(() => {
-      expect(queueService.getTodaysAction).toHaveBeenCalledWith(1, 20)
+      expect(queueService.getTodaysAction).toHaveBeenCalledWith(1, 20, null)
+    })
+  })
+
+  it('renders next-action filter and selects all Mail Now leads', async () => {
+    const user = userEvent.setup()
+    vi.mocked(queueService.getTodaysAction).mockResolvedValue(makeQueuePage(2, 20, 1, 2))
+    vi.mocked(queueService.getTodaysActionLeadIds).mockResolvedValue({
+      lead_ids: [1, 2],
+      total: 2,
+      outreach: 'mail_now',
+    })
+
+    renderComponent()
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Next action')).toBeInTheDocument()
+    })
+
+    await user.click(screen.getByLabelText('Next action'))
+    await user.click(await screen.findByText('Mail Now (2)'))
+
+    await waitFor(() => {
+      expect(queueService.getTodaysAction).toHaveBeenCalledWith(1, 20, 'mail_now')
+    })
+
+    await user.click(screen.getByTestId('todays-action-select-all-matching'))
+
+    await waitFor(() => {
+      expect(queueService.getTodaysActionLeadIds).toHaveBeenCalledWith('mail_now')
+      expect(screen.getByTestId('bulk-action-bar')).toBeInTheDocument()
     })
   })
 
@@ -225,7 +266,7 @@ describe('TodaysActionQueue', () => {
         title: 'Follow up',
         task_type: 'add_to_mail_batch',
       })
-      expect(queueService.getTodaysAction).toHaveBeenCalledWith(1, 20)
+      expect(queueService.getTodaysAction).toHaveBeenCalledWith(1, 20, null)
     })
   })
 })
