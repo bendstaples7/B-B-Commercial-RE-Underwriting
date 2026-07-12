@@ -8,7 +8,6 @@ Supports entity/nonprofit mail deprioritization: classify organizations as
 nonprofit and look up IRS Exempt Organizations Business Master File rows.
 """
 from alembic import op
-import sqlalchemy as sa
 
 
 revision = 'o6p7q8r9s0t1'
@@ -22,43 +21,31 @@ def upgrade():
         "ALTER TYPE org_type_enum ADD VALUE IF NOT EXISTS 'nonprofit'"
     )
 
-    op.create_table(
-        'irs_eo_organizations',
-        sa.Column('ein', sa.String(9), primary_key=True),
-        sa.Column('name', sa.String(200), nullable=False),
-        sa.Column('normalized_name', sa.String(200), nullable=False),
-        sa.Column('city', sa.String(64), nullable=True),
-        sa.Column('state', sa.String(2), nullable=True),
-        sa.Column('ntee_cd', sa.String(10), nullable=True),
-        sa.Column('subsection', sa.String(4), nullable=True),
-        sa.Column('status', sa.String(2), nullable=True),
-        sa.Column(
-            'imported_at',
-            sa.DateTime(),
-            nullable=False,
-            server_default=sa.text('CURRENT_TIMESTAMP'),
-        ),
-    )
-    op.create_index(
-        'ix_irs_eo_organizations_normalized_name',
-        'irs_eo_organizations',
-        ['normalized_name'],
-    )
-    op.create_index(
-        'ix_irs_eo_organizations_state_normalized_name',
-        'irs_eo_organizations',
-        ['state', 'normalized_name'],
-    )
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS irs_eo_organizations (
+            ein VARCHAR(9) PRIMARY KEY,
+            name VARCHAR(200) NOT NULL,
+            normalized_name VARCHAR(200) NOT NULL,
+            city VARCHAR(64),
+            state VARCHAR(2),
+            ntee_cd VARCHAR(10),
+            subsection VARCHAR(4),
+            status VARCHAR(2),
+            imported_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS ix_irs_eo_organizations_normalized_name
+        ON irs_eo_organizations (normalized_name)
+    """)
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS ix_irs_eo_organizations_state_normalized_name
+        ON irs_eo_organizations (state, normalized_name)
+    """)
 
 
 def downgrade():
-    op.drop_index(
-        'ix_irs_eo_organizations_state_normalized_name',
-        table_name='irs_eo_organizations',
-    )
-    op.drop_index(
-        'ix_irs_eo_organizations_normalized_name',
-        table_name='irs_eo_organizations',
-    )
-    op.drop_table('irs_eo_organizations')
+    op.execute("DROP INDEX IF EXISTS ix_irs_eo_organizations_state_normalized_name")
+    op.execute("DROP INDEX IF EXISTS ix_irs_eo_organizations_normalized_name")
+    op.execute("DROP TABLE IF EXISTS irs_eo_organizations")
     # PostgreSQL cannot easily remove enum values; leave nonprofit in place.
