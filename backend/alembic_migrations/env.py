@@ -100,6 +100,8 @@ _KNOWN_REVISIONS = frozenset({
     'm2n3o4p5q6r7',
     # Widen mm_file_date for ISO dates from community CSV dumps
     'n3o4p5q6r7s8',
+    # nonprofit org_type + IRS EO BMF lookup table
+    'o6p7q8r9s0t1',
 })
 
 
