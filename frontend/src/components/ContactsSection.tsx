@@ -24,10 +24,9 @@ import CloseIcon from '@mui/icons-material/Close'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { contactService } from '@/services/api'
 import { entityResolutionApi } from '@/services/entityResolutionApi'
-import { formatPhoneNumber, phoneTelHref } from '@/utils/phone'
-import { formatPhoneConfidence } from '@/utils/helpers'
 import { formatDate } from '@/utils/formatters'
 import { isEntityContactName } from '@/utils/propertyContacts'
+import { PhoneRow } from '@/components/PhoneRow'
 import type { PropertyContact, ContactRole, EntityResolutionStatus } from '@/types'
 import { ContactFormModal } from './ContactFormModal'
 
@@ -434,13 +433,12 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
                     {contact.phones && contact.phones.length > 0 && (
                       <Box sx={{ mb: 0.25 }}>
                         {contact.phones.map((phone) => (
-                          <Typography key={phone.id} variant="body2" color="text.secondary">
-                            📞 {formatPhoneNumber(phone.value)}
-                            {phone.label && phone.label !== 'other' ? ` (${phone.label})` : ''}
-                            {formatPhoneConfidence(phone.confidence_score, phone.notes)
-                              ? ` · ${formatPhoneConfidence(phone.confidence_score, phone.notes)}`
-                              : ''}
-                          </Typography>
+                          <PhoneRow
+                            key={phone.id}
+                            phone={phone}
+                            showLabel
+                            dense={false}
+                          />
                         ))}
                       </Box>
                     )}
@@ -524,17 +522,7 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
                 <Box sx={{ mb: 2 }}>
                   <Typography variant="subtitle2" color="text.secondary" gutterBottom>Phone</Typography>
                   {detailContact.phones.map((p) => (
-                    <Typography key={p.id} variant="body1" sx={{ mb: 0.5 }}>
-                      📞 <a href={phoneTelHref(p.value)} style={{ textDecoration: 'none', color: 'inherit' }}>{formatPhoneNumber(p.value)}</a>
-                      {p.label && p.label !== 'other' && (
-                        <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>({p.label})</Typography>
-                      )}
-                      {formatPhoneConfidence(p.confidence_score, p.notes) && (
-                        <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>
-                          · {formatPhoneConfidence(p.confidence_score, p.notes)}
-                        </Typography>
-                      )}
-                    </Typography>
+                    <PhoneRow key={p.id} phone={p} showLabel dense={false} />
                   ))}
                 </Box>
               )}

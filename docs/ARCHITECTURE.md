@@ -17,7 +17,7 @@ Update this doc when ownership changes.
 | Queue context banners | [`deriveQueueContext.ts`](../frontend/src/utils/deriveQueueContext.ts) | Inline banner logic in detail pages |
 | Lead status UI | [`LeadStatusSelector.tsx`](../frontend/src/components/LeadStatusSelector.tsx) | Inline status Select + reason fields |
 | Motivation score (product) | [`MotivationSignalService`](../backend/app/services/motivation_signal_service.py) → `lead.motivation_score` + MotivationSignalsPanel | Second motivation formula; treating HubSpot SIGNAL_ADJUSTMENTS as motivation_score |
-| Owners / phones / emails (CC + queues) | [`Contact`](../backend/app/models/contact.py) + [`PropertyContact`](../backend/app/models/property_contact.py) via [`ContactService`](../backend/app/services/contact_service.py) | Dual Info-tab flat owner/phone editor; queue rows reading only `owner_first_name`/`phone_1` when contacts exist |
+| Owners / phones / emails (CC + queues) | [`Contact`](../backend/app/models/contact.py) + [`PropertyContact`](../backend/app/models/property_contact.py) via [`ContactService`](../backend/app/services/contact_service.py); CC phone **display** reads `contacts[].phones` (full phone DTO via [`PhoneConfidenceService.serialize_contact_phone`](../backend/app/services/phone_confidence_service.py)); top-level `phones[]` is merge/sort for outreach + no-contact fallback; UI via [`PhoneRow.tsx`](../frontend/src/components/PhoneRow.tsx) | Dual Info-tab flat owner/phone editor; queue rows reading only `owner_first_name`/`phone_1` when contacts exist; skinny `{id,value,label}` phone dumps; stripping confidence in sidebar |
 | Organizations / LLC filings | [`Organization`](../backend/app/models/organization.py) + [`OrganizationParty`](../backend/app/models/organization_party.py) via [`OrganizationService`](../backend/app/services/organization_service.py) / [`EntityResolutionService`](../backend/app/services/entity_resolution_service.py); `org_type` includes `nonprofit` | Scraping Illinois SOS; parallel LLC tables; putting managers only on flat lead fields |
 | LLC → person resolution (IL) | [`EntityResolutionService`](../backend/app/services/entity_resolution_service.py): institutional name / IRS EO BMF ([`irs_eo.py`](../backend/app/services/entity_lookup/irs_eo.py)) nonprofit research first, then free [`IllinoisSosBulkProvider`](../backend/app/services/entity_lookup/ilsos_bulk.py); cold-mail gate via [`entity_owner_policy`](../backend/app/services/entity_owner_policy.py) + [`LeadScoringEngine`](../backend/app/services/lead_scoring_engine.py) | Interactive ILSOS scraping; Google/Serp as primary nonprofit classifier; parallel mail-skip engines; Cook County plugins owning SOS/manager lookup; calling skip-trace vendors from entity resolution |
 | Skip-trace handoff | [`SkipTraceEnqueue`](../backend/app/services/skip_trace_enqueue.py) → v1 manual `skip_trace_owner` task / `needs_skip_trace` | Calling a skip-trace API from EntityResolutionService; duplicate enqueue paths |
@@ -33,7 +33,7 @@ Update this doc when ownership changes.
 | Unified scoring + recommended action | [`LeadScoringEngine`](../backend/app/services/lead_scoring_engine.py) + [`scoring_rubric.py`](../backend/app/services/scoring_rubric.py) via [`refresh_lead_scoring`](../backend/app/services/lead_refresh.py) | `DeterministicScoringEngine`, `ActionEngineService`, or second writers to `leads.lead_score` / `leads.recommended_action` |
 | Pipeline status | `lead.lead_status` via lead_status_service / LeadStatusSelector | Treating `hubspot_deal_stage` as editable pipeline status (it is a read-only HubSpot mirror) |
 | Live `leads.lead_score` | [`LeadScoringEngine.persist()`](../backend/app/services/lead_scoring_engine.py) — same value as latest `lead_scores.total_score` | Second writer to `leads.lead_score` |
-| Per-phone confidence | [`PhoneConfidenceService`](../backend/app/services/phone_confidence_service.py) → `contact_phones.confidence_score` | Parallel phone tracking tables |
+| Per-phone confidence | [`PhoneConfidenceService`](../backend/app/services/phone_confidence_service.py) → `contact_phones.confidence_score`; all contact phone API dumps use `serialize_contact_phone` | Parallel phone tracking tables; hand-built phone dicts that omit `confidence_score` |
 | HubSpot contact refresh | [`HubSpotContactSyncService`](../backend/app/services/hubspot_contact_sync_service.py) | Ad-hoc contact API fetch outside enrich/backfill |
 | Score history / audit API | [`LeadScoringEngine`](../backend/app/services/lead_scoring_engine.py) → `lead_scores` table (append-only) | Separate scoring engine writing different scores |
 | Recommended action (live) | [`LeadScoringEngine`](../backend/app/services/lead_scoring_engine.py) → `leads.recommended_action` (same as `lead_scores.recommended_action`) | Parallel action engines or unmapped RA enums |
@@ -63,6 +63,16 @@ Update this doc when ownership changes.
 1. **Extend or delete** — replacing behavior means deleting the old file in the same PR (or a tracked follow-up within one release).
 2. **One writer per column** — only one code path updates persisted derived fields (`lead_score`, `recommended_action`).
 3. **Stubs are temporary** — re-export shims (`LeadDetailPage`, `lead_controller`) must not outlive one release; track removal in PR description.
+
+## Known dual-path follow-ups
+
+Active gaps where product UI can miss data that exists on a parallel path (fix in separate PRs; do not expand these paths):
+
+1. **HubSpot activity → CC timeline** — live sync still writes `Interaction` via `HubSpotActivityConverterService`; docs/canonical import is `HubSpotTimelineImportService` → `LeadTimelineEntry`. CC timeline does not UNION Interactions.
+2. **Queue task membership vs CC `open_tasks`** — Today’s Action / overdue still EXISTS against CRM `tasks`; CC open tasks are `LeadTask` only. Mirror gaps show due work with an empty Open Tasks panel.
+3. **Flat owner/phone on All Properties / marketing** — queues enrich via contacts; list/marketing UIs still lean on flat `owner_*` / `phone_*`.
+4. **`up_next_to_mail` vs `mail_ready` + `MailQueueItem`** — legacy flag still OR’d into awaiting-mail / lifecycle for uncleared rows.
+5. **Follow-Up Overdue membership** — still mixes `follow_up_now` RA + CRM tasks, unlike Today’s Action (due `LeadTask` only).
 
 ## Related specs
 

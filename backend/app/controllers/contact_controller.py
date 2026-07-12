@@ -97,6 +97,8 @@ def handle_errors(f):
 
 def _serialize_contact(contact):
     """Serialize a Contact to a dictionary including phones and emails."""
+    from app.services.phone_confidence_service import PhoneConfidenceService
+
     return {
         'id': contact.id,
         'first_name': contact.first_name,
@@ -104,15 +106,10 @@ def _serialize_contact(contact):
         'role': contact.role,
         'role_description': contact.role_description,
         'notes': contact.notes,
-        'phones': [
-            {
-                'id': p.id,
-                'contact_id': p.contact_id,
-                'value': p.value,
-                'label': p.label,
-            }
-            for p in contact.phones
-        ],
+        'phones': PhoneConfidenceService.serialize_contact_phones(
+            contact.phones,
+            include_contact_id=True,
+        ),
         'emails': [
             {
                 'id': e.id,

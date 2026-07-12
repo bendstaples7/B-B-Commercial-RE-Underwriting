@@ -396,33 +396,18 @@ def _serialize_property_detail(lead):
     else:
         data['analysis_session'] = None
 
-    # Contacts — all contacts linked to this property from the relational
-    # contacts system, ordered primary-first then by id.  The legacy flat
-    # owner_first_name / owner_last_name columns on the lead record are from
-    # the original import and are NOT kept in sync by HubSpot enrichment, so
-    # the contacts list here is the authoritative source for who to reach out
-    # to.  Embedding them in the detail response avoids a second round-trip.
+    # Contacts — authoritative owner/phone source (same shape as command center).
+    # Serialize from the lead relationship so unit stubs without an app context still work.
+    # Legacy flat owner_*/phone_* columns are not kept in sync by HubSpot enrichment.
+    from app.services.contact_service import ContactService
+
     linked_pcs = (
         lead.property_contacts
         .order_by(PropertyContact.is_primary.desc(), PropertyContact.id.asc())
         .all()
     )
     data['contacts'] = [
-        {
-            'id': pc.contact.id,
-            'first_name': pc.contact.first_name,
-            'last_name': pc.contact.last_name,
-            'role': pc.role,
-            'is_primary': pc.is_primary,
-            'phones': [
-                {'id': p.id, 'value': p.value, 'label': p.label}
-                for p in pc.contact.phones
-            ],
-            'emails': [
-                {'id': e.id, 'value': e.value, 'label': e.label}
-                for e in pc.contact.emails
-            ],
-        }
+        ContactService.serialize_contact_summary(pc.contact, pc)
         for pc in linked_pcs
         if pc.contact
     ]

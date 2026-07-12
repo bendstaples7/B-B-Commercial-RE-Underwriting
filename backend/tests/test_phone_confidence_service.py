@@ -67,6 +67,67 @@ class TestConfidenceHelpers:
         sorted_phones = PhoneConfidenceService.sort_phones_for_display(phones)
         assert sorted_phones[0]['value'] == '222'
 
+    def test_serialize_contact_phone_defaults_confidence(self):
+        from app.models.contact_phone import ContactPhone
+
+        phone = ContactPhone(
+            id=1,
+            contact_id=2,
+            value='6304305720',
+            label='mobile',
+            confidence_score=None,
+            notes='maybe',
+        )
+        payload = PhoneConfidenceService.serialize_contact_phone(phone)
+        assert payload is not None
+        assert payload['id'] == 1
+        assert payload['value'] == '6304305720'
+        assert payload['confidence_score'] == 50
+        assert payload['notes'] == 'maybe'
+        assert 'contact_id' not in payload
+
+    def test_serialize_contact_phone_include_contact_id(self):
+        from app.models.contact_phone import ContactPhone
+
+        phone = ContactPhone(
+            id=1,
+            contact_id=7,
+            value='6302023839',
+            label='other',
+            confidence_score=80,
+        )
+        payload = PhoneConfidenceService.serialize_contact_phone(
+            phone, include_contact_id=True,
+        )
+        assert payload is not None
+        assert payload['contact_id'] == 7
+        assert payload['confidence_score'] == 80
+
+    def test_serialize_contact_phone_skips_blank_value(self):
+        from app.models.contact_phone import ContactPhone
+
+        blank = ContactPhone(
+            id=2,
+            contact_id=7,
+            value='   ',
+            label='other',
+            confidence_score=50,
+        )
+        assert PhoneConfidenceService.serialize_contact_phone(blank) is None
+        assert PhoneConfidenceService.serialize_contact_phone(value='') is None
+
+    def test_serialize_contact_phones_skips_blank_rows(self):
+        from app.models.contact_phone import ContactPhone
+
+        phones = [
+            ContactPhone(id=1, contact_id=1, value='6304305720', label='mobile', confidence_score=90),
+            ContactPhone(id=2, contact_id=1, value='  ', label='other', confidence_score=50),
+        ]
+        payloads = PhoneConfidenceService.serialize_contact_phones(phones)
+        assert len(payloads) == 1
+        assert payloads[0]['value'] == '6304305720'
+        assert payloads[0]['confidence_score'] == 90
+
 
 def test_update_from_call_updates_contact_phone(app):
     with app.app_context():

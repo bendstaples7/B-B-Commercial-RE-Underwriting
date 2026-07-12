@@ -195,6 +195,45 @@ class TestGetCommandCenter:
             assert data['contacts'][1]['first_name'] == 'Second'
             assert data['contacts'][1]['is_primary'] is False
 
+    def test_contacts_phones_include_confidence_score(self, client, app):
+        """Nested contacts[].phones include confidence_score (not skinny id/value/label)."""
+        with app.app_context():
+            from app import db
+            from app.models.contact_phone import ContactPhone
+            from app.services.contact_service import ContactService
+
+            lead = _make_lead(app, '2c Confidence St')
+            svc = ContactService()
+            contact = svc.create_contact({
+                'first_name': 'Hilberto',
+                'last_name': 'Olivier',
+                'phones': [{'value': '6302023839', 'label': 'mobile'}],
+            })
+            svc.link_contact_to_property(lead.id, contact.id, role='owner', is_primary=True)
+            phone = ContactPhone.query.filter_by(contact_id=contact.id).first()
+            phone.confidence_score = 80
+            phone.notes = 'CONFIRMED'
+            db.session.commit()
+
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
+            data = json.loads(response.data)
+            assert response.status_code == 200
+            nested = data['contacts'][0]['phones'][0]
+            assert nested['value'] == '6302023839'
+            assert nested['confidence_score'] == 80
+            assert nested['notes'] == 'CONFIRMED'
+            assert 'label' in nested
+
+            # Property-contacts API uses the same full phone DTO
+            pc_resp = client.get(
+                f'/api/properties/{lead.id}/contacts',
+                headers=_AUTH_HEADERS,
+            )
+            assert pc_resp.status_code == 200
+            pc_phones = json.loads(pc_resp.data)[0]['phones']
+            assert pc_phones[0]['confidence_score'] == 80
+            assert pc_phones[0]['notes'] == 'CONFIRMED'
+
     def test_open_tasks_included_in_response(self, client, app):
         """Open tasks are included in the command center response."""
         with app.app_context():

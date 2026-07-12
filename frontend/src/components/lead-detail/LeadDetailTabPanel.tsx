@@ -27,6 +27,7 @@ import ApartmentIcon from '@mui/icons-material/Apartment'
 import { multifamilyService } from '@/services/api'
 import { leadService } from '@/services/leadApi'
 import { formatPhoneNumber } from '@/utils/phone'
+import { formatPhoneConfidence } from '@/utils/helpers'
 import {
   formatDate,
   formatDateTime,
@@ -235,10 +236,16 @@ export function LeadDetailTabPanel({
             <>
               {infoContacts.map((contact, idx) => {
                 const name = contactDisplayName(contact)
-                const phoneRows = (contact.phones ?? []).map((p, i) => [
-                  `Phone${(contact.phones?.length ?? 0) > 1 ? ` ${i + 1}` : ''}`,
-                  formatPhoneNumber(p.value),
-                ] as [string, string | null])
+                const phoneRows = (contact.phones ?? []).map((p, i) => {
+                  const confidence = formatPhoneConfidence(p.confidence_score, p.notes)
+                  const display = confidence
+                    ? `${formatPhoneNumber(p.value)} · ${confidence}`
+                    : formatPhoneNumber(p.value)
+                  return [
+                    `Phone${(contact.phones?.length ?? 0) > 1 ? ` ${i + 1}` : ''}`,
+                    display,
+                  ] as [string, string | null]
+                })
                 const emailRows = (contact.emails ?? []).map((e, i) => [
                   `Email${(contact.emails?.length ?? 0) > 1 ? ` ${i + 1}` : ''}`,
                   e.value,
