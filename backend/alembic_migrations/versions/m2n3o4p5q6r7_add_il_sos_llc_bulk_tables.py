@@ -8,8 +8,6 @@ Free Business Data Transparency Act dumps (llcallnam/mgr/agt/mst) loaded
 locally for Illinois LLC entity resolution.
 """
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 revision = 'm2n3o4p5q6r7'
 down_revision = 'l1m2n3o4p5q6'
@@ -18,73 +16,71 @@ depends_on = None
 
 
 def upgrade():
-    op.create_table(
-        'il_sos_llc_entities',
-        sa.Column('file_number', sa.String(8), primary_key=True),
-        sa.Column('name', sa.String(200), nullable=False),
-        sa.Column('normalized_name', sa.String(200), nullable=False),
-        sa.Column('status_code', sa.String(2), nullable=True),
-        sa.Column('management_type', sa.String(1), nullable=True),
-        sa.Column('juris_organized', sa.String(2), nullable=True),
-        sa.Column('imported_at', sa.DateTime(), nullable=False),
-    )
-    op.create_index(
-        'ix_il_sos_llc_entities_normalized_name',
-        'il_sos_llc_entities',
-        ['normalized_name'],
-    )
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS il_sos_llc_entities (
+            file_number VARCHAR(8) PRIMARY KEY,
+            name VARCHAR(200) NOT NULL,
+            normalized_name VARCHAR(200) NOT NULL,
+            status_code VARCHAR(2),
+            management_type VARCHAR(1),
+            juris_organized VARCHAR(2),
+            imported_at TIMESTAMP WITHOUT TIME ZONE NOT NULL
+        )
+    """)
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS ix_il_sos_llc_entities_normalized_name
+        ON il_sos_llc_entities (normalized_name)
+    """)
 
-    op.create_table(
-        'il_sos_llc_managers',
-        sa.Column('id', sa.Integer(), primary_key=True),
-        sa.Column('file_number', sa.String(8), nullable=False),
-        sa.Column('mm_name', sa.String(120), nullable=False),
-        sa.Column('mm_street', sa.String(60), nullable=True),
-        sa.Column('mm_city', sa.String(40), nullable=True),
-        sa.Column('mm_juris', sa.String(2), nullable=True),
-        sa.Column('mm_zip', sa.String(10), nullable=True),
-        sa.Column('mm_file_date', sa.String(8), nullable=True),
-        sa.Column('mm_type_code', sa.String(1), nullable=True),
-        sa.Column('is_company', sa.Boolean(), nullable=False, server_default=sa.false()),
-        sa.ForeignKeyConstraint(
-            ['file_number'], ['il_sos_llc_entities.file_number'], ondelete='CASCADE',
-        ),
-    )
-    op.create_index(
-        'ix_il_sos_llc_managers_file_number',
-        'il_sos_llc_managers',
-        ['file_number'],
-    )
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS il_sos_llc_managers (
+            id SERIAL PRIMARY KEY,
+            file_number VARCHAR(8) NOT NULL
+                REFERENCES il_sos_llc_entities(file_number) ON DELETE CASCADE,
+            mm_name VARCHAR(120) NOT NULL,
+            mm_street VARCHAR(60),
+            mm_city VARCHAR(40),
+            mm_juris VARCHAR(2),
+            mm_zip VARCHAR(10),
+            mm_file_date VARCHAR(8),
+            mm_type_code VARCHAR(1),
+            is_company BOOLEAN NOT NULL DEFAULT FALSE
+        )
+    """)
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS ix_il_sos_llc_managers_file_number
+        ON il_sos_llc_managers (file_number)
+    """)
 
-    op.create_table(
-        'il_sos_llc_agents',
-        sa.Column('file_number', sa.String(8), primary_key=True),
-        sa.Column('agent_name', sa.String(120), nullable=False),
-        sa.Column('agent_street', sa.String(60), nullable=True),
-        sa.Column('agent_city', sa.String(40), nullable=True),
-        sa.Column('agent_zip', sa.String(10), nullable=True),
-        sa.Column('agent_code', sa.String(1), nullable=True),
-        sa.ForeignKeyConstraint(
-            ['file_number'], ['il_sos_llc_entities.file_number'], ondelete='CASCADE',
-        ),
-    )
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS il_sos_llc_agents (
+            file_number VARCHAR(8) PRIMARY KEY
+                REFERENCES il_sos_llc_entities(file_number) ON DELETE CASCADE,
+            agent_name VARCHAR(120) NOT NULL,
+            agent_street VARCHAR(60),
+            agent_city VARCHAR(40),
+            agent_zip VARCHAR(10),
+            agent_code VARCHAR(1)
+        )
+    """)
 
-    op.create_table(
-        'il_sos_import_runs',
-        sa.Column('id', sa.Integer(), primary_key=True),
-        sa.Column('source', sa.String(100), nullable=False),
-        sa.Column('status', sa.String(40), nullable=False),
-        sa.Column('started_at', sa.DateTime(), nullable=False),
-        sa.Column('finished_at', sa.DateTime(), nullable=True),
-        sa.Column('row_counts', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-        sa.Column('error', sa.Text(), nullable=True),
-    )
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS il_sos_import_runs (
+            id SERIAL PRIMARY KEY,
+            source VARCHAR(100) NOT NULL,
+            status VARCHAR(40) NOT NULL,
+            started_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+            finished_at TIMESTAMP WITHOUT TIME ZONE,
+            row_counts JSONB,
+            error TEXT
+        )
+    """)
 
 
 def downgrade():
-    op.drop_table('il_sos_import_runs')
-    op.drop_table('il_sos_llc_agents')
-    op.drop_index('ix_il_sos_llc_managers_file_number', table_name='il_sos_llc_managers')
-    op.drop_table('il_sos_llc_managers')
-    op.drop_index('ix_il_sos_llc_entities_normalized_name', table_name='il_sos_llc_entities')
-    op.drop_table('il_sos_llc_entities')
+    op.execute("DROP TABLE IF EXISTS il_sos_import_runs")
+    op.execute("DROP TABLE IF EXISTS il_sos_llc_agents")
+    op.execute("DROP INDEX IF EXISTS ix_il_sos_llc_managers_file_number")
+    op.execute("DROP TABLE IF EXISTS il_sos_llc_managers")
+    op.execute("DROP INDEX IF EXISTS ix_il_sos_llc_entities_normalized_name")
+    op.execute("DROP TABLE IF EXISTS il_sos_llc_entities")

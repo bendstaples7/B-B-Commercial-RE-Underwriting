@@ -5,7 +5,6 @@ Revises: m2n3o4p5q6r7
 Create Date: 2026-07-12
 """
 from alembic import op
-import sqlalchemy as sa
 
 revision = 'n3o4p5q6r7s8'
 down_revision = 'm2n3o4p5q6r7'
@@ -14,20 +13,14 @@ depends_on = None
 
 
 def upgrade():
-    with op.batch_alter_table('il_sos_llc_managers') as batch_op:
-        batch_op.alter_column(
-            'mm_file_date',
-            existing_type=sa.String(8),
-            type_=sa.String(20),
-            existing_nullable=True,
-        )
+    op.execute("""
+        ALTER TABLE il_sos_llc_managers
+        ALTER COLUMN mm_file_date TYPE VARCHAR(20)
+    """)
 
 
 def downgrade():
-    with op.batch_alter_table('il_sos_llc_managers') as batch_op:
-        batch_op.alter_column(
-            'mm_file_date',
-            existing_type=sa.String(20),
-            type_=sa.String(8),
-            existing_nullable=True,
-        )
+    op.execute("""
+        ALTER TABLE il_sos_llc_managers
+        ALTER COLUMN mm_file_date TYPE VARCHAR(8)
+    """)
