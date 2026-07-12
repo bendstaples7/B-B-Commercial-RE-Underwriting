@@ -19,12 +19,15 @@ import {
   CircularProgress,
 } from '@mui/material'
 import PersonAddIcon from '@mui/icons-material/PersonAdd'
+import BusinessIcon from '@mui/icons-material/Business'
 import CloseIcon from '@mui/icons-material/Close'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { contactService } from '@/services/api'
+import { entityResolutionApi } from '@/services/entityResolutionApi'
 import { formatPhoneNumber, phoneTelHref } from '@/utils/phone'
 import { formatPhoneConfidence } from '@/utils/helpers'
-import type { PropertyContact, ContactRole } from '@/types'
+import { isEntityContactName } from '@/utils/propertyContacts'
+import type { PropertyContact, ContactRole, EntityResolutionStatus } from '@/types'
 import { ContactFormModal } from './ContactFormModal'
 
 // ---------------------------------------------------------------------------
@@ -88,6 +91,57 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
     queryKey: ['propertyContacts', propertyId],
     queryFn: () => contactService.getPropertyContacts(propertyId),
   })
+
+  const {
+    data: entityStatus,
+  } = useQuery<EntityResolutionStatus>({
+    queryKey: ['entityResolution', propertyId],
+    queryFn: () => entityResolutionApi.getStatus(propertyId),
+  })
+
+  const resolveEntityMutation = useMutation({
+    mutationFn: () => entityResolutionApi.resolve(propertyId),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['propertyContacts', propertyId] })
+      queryClient.invalidateQueries({ queryKey: ['entityResolution', propertyId] })
+      queryClient.invalidateQueries({ queryKey: ['commandCenter', propertyId] })
+      if ('queued' in data && data.queued) {
+        showSuccess('Entity resolution queued.')
+        return
+      }
+      const result = data as {
+        status: string
+        person_found?: boolean
+        person_name?: string | null
+        message?: string | null
+      }
+      if (result.status === 'unsupported_jurisdiction') {
+        showError(result.message || 'Non-Illinois LLC — not supported yet.')
+        return
+      }
+      if (result.status === 'resolved' && result.person_found) {
+        showSuccess(
+          result.person_name
+            ? `Resolved manager: ${result.person_name}. Skip-trace task created.`
+            : 'Entity resolved. Skip-trace task created.',
+        )
+        return
+      }
+      if (result.status === 'resolved') {
+        showSuccess(result.message || 'Entity resolved — no natural person found on filing.')
+        return
+      }
+      showError(result.message || `Entity resolution: ${result.status}`)
+    },
+    onError: (err: Error) =>
+      showError(err.message || 'Failed to resolve Illinois LLC.'),
+  })
+
+  const primaryContact = contacts?.find((c) => c.is_primary)
+  const showEntityBanner =
+    Boolean(entityStatus?.primary_is_entity) ||
+    Boolean(entityStatus?.entity_lookup_status) ||
+    (primaryContact != null && isEntityContactName(primaryContact))
 
   // ── Set as Primary mutation ───────────────────────────────────────────────
   const setPrimaryMutation = useMutation({
@@ -167,6 +221,88 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({ propertyId }) 
           Add Contact
         </Button>
       </Box>
+
+      {showEntityBanner && (
+        <Alert
+          severity={
+            entityStatus?.provider_configured === false
+              ? 'warning'
+              : entityStatus?.entity_lookup_status === 'unsupported_jurisdiction' ||
+                  entityStatus?.entity_lookup_status === 'no_match'
+                ? 'warning'
+                : entityStatus?.entity_lookup_status === 'resolved'
+                  ? 'success'
+                  : 'info'
+          }
+          icon={<BusinessIcon />}
+          sx={{ mb: 2 }}
+          action={
+            entityStatus?.can_resolve ? (
+              <Button
+                color="inherit"
+                size="small"
+                disabled={resolveEntityMutation.isPending}
+                onClick={() => resolveEntityMutation.mutate()}
+                aria-label="Resolve Illinois LLC"
+              >
+                {resolveEntityMutation.isPending ? 'Resolving…' : 'Resolve Illinois LLC'}
+              </Button>
+            ) : undefined
+          }
+        >
+          <Typography variant="body2" component="div" sx={{ fontWeight: 600 }}>
+            LLC — resolve entity
+            {entityStatus?.entity_name ? ` (${entityStatus.entity_name})` : ''}
+          </Typography>
+          <Typography variant="caption" component="div" color="text.secondary" sx={{ mt: 0.5 }}>
+            Free Illinois SOS bulk data only — no phones/emails from this step
+            {entityStatus?.dataset_imported_at
+              ? ` · dataset as of ${new Date(entityStatus.dataset_imported_at).toLocaleDateString()}`
+              : ''}
+            {entityStatus?.provider ? ` · provider: ${entityStatus.provider}` : ''}
+          </Typography>
+          {entityStatus?.provider_configured === false && (
+            <Typography variant="body2" sx={{ mt: 0.5 }}>
+              Bulk data not loaded yet. An admin must run the IL SOS import before Resolve works.
+            </Typography>
+          )}
+          {entityStatus?.entity_lookup_status === 'unsupported_jurisdiction' && (
+            <Typography variant="body2" sx={{ mt: 0.5 }}>
+              Non-Illinois jurisdiction not supported yet.
+            </Typography>
+          )}
+          {entityStatus?.entity_lookup_status === 'no_match' && (
+            <Typography variant="body2" sx={{ mt: 0.5 }}>
+              No match in the free Illinois SOS dump (foreign LLCs or name variants may be missing).
+            </Typography>
+          )}
+          {entityStatus?.entity_lookup_status === 'resolved' &&
+            entityStatus.entity_lookup_person_found && (
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                Resolved — person set as primary. Skip-trace task created for phones/emails.
+              </Typography>
+            )}
+          {entityStatus?.entity_lookup_status === 'resolved' &&
+            !entityStatus.entity_lookup_person_found && (
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                Filing found, but no natural person (often only a corporate registered agent).
+              </Typography>
+            )}
+          {entityStatus?.jurisdiction_supported === false &&
+            entityStatus?.entity_lookup_status !== 'unsupported_jurisdiction' && (
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                Non-Illinois — not supported yet.
+              </Typography>
+            )}
+          {entityStatus?.entity_lookup_status && (
+            <Chip
+              size="small"
+              label={entityStatus.entity_lookup_status.replace(/_/g, ' ')}
+              sx={{ mt: 0.75 }}
+            />
+          )}
+        </Alert>
+      )}
 
       {/* Loading state */}
       {isLoading && (

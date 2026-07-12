@@ -1,11 +1,36 @@
 import type { PropertyContactSummary } from '@/types'
 
+const ENTITY_MARKERS = [
+  'LLC',
+  'L.L.C',
+  'INC',
+  'CORP',
+  'TRUST',
+  'LP',
+  'LLP',
+  'COMPANY',
+  'CO.',
+]
+
 /** Join first/last into a display name; empty string if both missing. */
 export function contactDisplayName(
   contact: { first_name?: string | null; last_name?: string | null } | null | undefined,
 ): string {
   if (!contact) return ''
   return [contact.first_name, contact.last_name].filter(Boolean).join(' ')
+}
+
+/** True when a contact name looks like an LLC / corp / trust entity. */
+export function isEntityContactName(
+  contact: { first_name?: string | null; last_name?: string | null } | null | undefined,
+): boolean {
+  const name = contactDisplayName(contact)
+  if (!name) return false
+  const upper = name.toUpperCase()
+  return ENTITY_MARKERS.some((marker) => {
+    const re = new RegExp(`(?:^|[\\s,])${marker.replace(/\./g, '\\.')}(?:$|[\\s,])`, 'i')
+    return re.test(upper) || upper.endsWith(marker) || upper.includes(` ${marker}`)
+  })
 }
 
 /**

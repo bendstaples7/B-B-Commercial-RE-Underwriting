@@ -96,6 +96,9 @@ scripts/sync-local-db.conf
 .venv/
 backend/.venv/
 
+# Local IL SOS Transparency Act bulk zip cache
+backend/data/il_sos_bulk/
+
 # GitHub auth temp files (create-pr.sh may use /tmp/pr-body.md)
 
 # VPS runtime deploy marker (written by deploy.sh, not committed)

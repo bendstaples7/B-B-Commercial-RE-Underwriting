@@ -657,6 +657,9 @@ def create_app(config_name='development'):
     from app.controllers.property_match_controller import property_match_bp
     app.register_blueprint(property_match_bp, url_prefix='/api/leads')
 
+    from app.controllers.entity_resolution_controller import entity_resolution_bp
+    app.register_blueprint(entity_resolution_bp, url_prefix='/api/leads')
+
     from app.controllers.quick_add_controller import quick_add_bp
     app.register_blueprint(quick_add_bp, url_prefix='/api/leads')
 
