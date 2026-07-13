@@ -92,6 +92,10 @@ function scoreToTier(score: number): ScoreTier {
   return 'D'
 }
 
+function cleanAddressPart(value?: string | null): string {
+  return (value || '').trim().replace(/^,+|,+$/g, '').trim()
+}
+
 // ── StickyHeader ──────────────────────────────────────────────────────────────
 // Requirements: 5.1, 10.1, 10.2
 
@@ -105,11 +109,11 @@ interface StickyHeaderProps {
 }
 
 function formatPropertyAddress(data: CommandCenterPayload): string {
-  const street = (data.property_street || '').trim()
+  const street = cleanAddressPart(data.property_street)
   const cityStateZip = [data.property_city, data.property_state, data.property_zip]
+    .map(cleanAddressPart)
     .filter(Boolean)
     .join(', ')
-    .replace(/,\s*,/g, ',')
   if (street && cityStateZip) return `${street}, ${cityStateZip}`
   return street || cityStateZip || `Lead #${data.id}`
 }

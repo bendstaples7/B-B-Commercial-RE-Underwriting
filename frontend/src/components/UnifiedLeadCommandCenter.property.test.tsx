@@ -61,6 +61,27 @@ vi.mock('@/services/leadApi', async (importOriginal) => {
 
 import type { PropertyDetail } from '@/types'
 
+function cleanAddressPart(value?: string | null): string {
+  return (value || '').trim().replace(/^,+|,+$/g, '').trim()
+}
+
+function expectedStickyHeaderAddress(payload: {
+  id: number
+  property_street?: string | null
+  property_city?: string | null
+  property_state?: string | null
+  property_zip?: string | null
+}): string {
+  const street = cleanAddressPart(payload.property_street)
+  const cityStateZip = [payload.property_city, payload.property_state, payload.property_zip]
+    .map(cleanAddressPart)
+    .filter(Boolean)
+    .join(', ')
+
+  if (street && cityStateZip) return `${street}, ${cityStateZip}`
+  return street || cityStateZip || `Lead #${payload.id}`
+}
+
 function minimalPropertyDetail(id: number): PropertyDetail {
   return {
     id,
@@ -698,14 +719,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         const headerEl = container.querySelector('header')!
 
         // 1. Property address is the sticky header focus (owners live in sidebar/Contacts)
-        const street = (payload.property_street || '').trim()
-        const cityStateZip = [payload.property_city, payload.property_state, payload.property_zip]
-          .filter(Boolean)
-          .join(', ')
-        const expectedAddress =
-          street && cityStateZip
-            ? `${street}, ${cityStateZip}`
-            : street || cityStateZip || `Lead #${payload.id}`
+        const expectedAddress = expectedStickyHeaderAddress(payload)
 
         const addressBlock = headerEl.querySelector('[data-testid="sticky-header-address"]')
         expect(addressBlock).not.toBeNull()
