@@ -299,13 +299,13 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     })
   })
 
-  it('renders the primary owner under the property address in the sticky header', async () => {
+  it('keeps the sticky header focused on the property address', async () => {
     renderComponent()
     await waitFor(() => {
-      expect(screen.getByTestId('sticky-header-owner')).toBeInTheDocument()
+      expect(screen.getByTestId('sticky-header-address')).toBeInTheDocument()
     })
-    expect(screen.getByTestId('sticky-header-owner')).toHaveTextContent('Jane Doe')
     expect(screen.getByTestId('sticky-header-address')).toHaveTextContent('456 Oak Ave')
+    expect(screen.queryByTestId('sticky-header-owner')).not.toBeInTheDocument()
   })
 
   it('renders the activity panel', async () => {
