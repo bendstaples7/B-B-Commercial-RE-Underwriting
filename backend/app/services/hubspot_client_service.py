@@ -349,6 +349,58 @@ class HubSpotClientService:
         logger.info("HubSpotClientService.complete_task: marking task %s COMPLETED", hubspot_task_id)
         return self._patch(path, body)
 
+    def update_task(
+        self,
+        hubspot_task_id: str,
+        *,
+        subject: str | None = None,
+        due_date=None,
+        clear_due_date: bool = False,
+    ) -> dict:
+        """Update HubSpot task subject and/or due date via CRM v3 Tasks API.
+
+        ``due_date`` may be a ``date`` or ``datetime``. Dates are sent as noon UTC
+        that day (ms epoch string), matching HubSpot ``hs_timestamp`` convention.
+        """
+        from datetime import date, datetime, timezone
+
+        properties: dict = {}
+        if subject is not None:
+            properties['hs_task_subject'] = subject
+        if clear_due_date:
+            # Empty string clears the due date in HubSpot CRM v3.
+            properties['hs_timestamp'] = ''
+        elif due_date is not None:
+            if isinstance(due_date, datetime):
+                dt = due_date
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+            elif isinstance(due_date, date):
+                dt = datetime(
+                    due_date.year,
+                    due_date.month,
+                    due_date.day,
+                    12,
+                    0,
+                    0,
+                    tzinfo=timezone.utc,
+                )
+            else:
+                raise TypeError(f'Unsupported due_date type: {type(due_date)!r}')
+            properties['hs_timestamp'] = str(int(dt.timestamp() * 1000))
+
+        if not properties:
+            return {}
+
+        path = f"/crm/v3/objects/tasks/{hubspot_task_id}"
+        body = {"properties": properties}
+        logger.info(
+            "HubSpotClientService.update_task: id=%s properties=%s",
+            hubspot_task_id,
+            list(properties.keys()),
+        )
+        return self._patch(path, body)
+
     def create_deal(self, properties: dict) -> dict:
         """Create a HubSpot deal via POST /crm/v3/objects/deals."""
         path = "/crm/v3/objects/deals"

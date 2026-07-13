@@ -1699,6 +1699,7 @@ export const QUICK_ADD_DEAL_SOURCES = [
   'Referral',
   'Direct Mail',
   'CoStar',
+  'Listsource',
   'Other',
 ] as const
 
@@ -1904,7 +1905,25 @@ export interface RecommendedActionMeta {
   outreach_contact?: OutreachContact | null;
   label: string | null;
   explanation: string | null;
+  winning_rule?: string | null;
+  winning_rule_label?: string | null;
   signals: Record<string, unknown>;
+}
+
+export interface DataQualityBreakdown {
+  total: number;
+  property: number;
+  contact: number;
+  best_phone_confidence: number | null;
+  has_email: boolean;
+  email_owner_or_primary?: boolean;
+  missing: string[];
+}
+
+export interface WorkQueueMembership {
+  key: string;
+  label: string;
+  path: string;
 }
 
 export interface QueueRow {
@@ -2090,6 +2109,7 @@ export interface CommandCenterPayload {
   lead_score: number;
   lead_status: LeadStatus;
   lead_category?: string;
+  review_reason?: string | null;
   has_property_match: boolean;
   analysis_session_id: number | null;
   hubspot_deal_stage?: string | null;
@@ -2121,6 +2141,8 @@ export interface CommandCenterPayload {
     per_page: number;
   };
   data_completeness_score?: number | null;
+  data_quality_breakdown?: DataQualityBreakdown | null;
+  work_queues?: WorkQueueMembership[];
   condo_risk_status?: CondoRiskStatus | null;
   building_sale_possible?: BuildingSalePossible | null;
   condo_analysis_id?: number | null;

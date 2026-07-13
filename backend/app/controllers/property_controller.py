@@ -181,7 +181,7 @@ def _serialize_property_summary(lead, latest_score: LeadScore | None = None):
             top_signal = signals[0].get('dimension')
     elif lead.lead_score:
         score_tier = calculate_score_tier(lead.lead_score)
-        _, missing_data = rubric.calculate_data_quality_score(lead)
+        _, missing_data, _ = rubric.calculate_data_quality_score(lead)
 
     data = {
         'id': lead.id,

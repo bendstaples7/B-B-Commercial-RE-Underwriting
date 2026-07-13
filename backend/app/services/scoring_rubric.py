@@ -1,6 +1,7 @@
 """Point-based scoring rubric for residential and commercial leads.
 
-Pure functions — no DB access. Used by LeadScoringEngine for dimension breakdowns.
+Mostly pure functions. ``calculate_data_quality_score`` may read linked
+ContactPhone / ContactEmail rows when ``lead.id`` is set.
 """
 import json
 import logging
@@ -16,6 +17,7 @@ from app.services.enrichment_scoring import (
     property_equity_score,
     scale_subscore_to_100,
 )
+from sqlalchemy.exc import SQLAlchemyError
 
 logger = logging.getLogger(__name__)
 
@@ -81,15 +83,24 @@ COMMERCIAL_MAX_POINTS = {
     "engagement": 10,
 }
 
+# Property identity slice (max 50) + contact reachability slice (max 50) = 100.
+PROPERTY_IDENTITY_MAX = 50.0
+CONTACT_REACHABILITY_MAX = 50.0
+BEST_PHONE_MAX_POINTS = 35.0
+EMAIL_MAX_POINTS = 15.0
+EMAIL_BASE_POINTS = 10.0
+EMAIL_OWNER_PRIMARY_BONUS = 5.0
+
+# Rescaled from the former 100-point property-only checklist (halved).
 DATA_QUALITY_FIELDS = {
-    "has_pin": 20,
-    "has_property_address": 15,
-    "has_normalized_address": 10,
-    "has_owner_name": 15,
-    "has_owner_mailing_address": 15,
-    "has_property_type_or_assessor_class": 10,
-    "has_estimated_unit_count_or_building_size": 10,
-    "has_source_reference": 5,
+    "has_pin": 10.0,
+    "has_property_address": 7.5,
+    "has_normalized_address": 5.0,
+    "has_owner_name": 7.5,
+    "has_owner_mailing_address": 7.5,
+    "has_property_type_or_assessor_class": 5.0,
+    "has_estimated_unit_count_or_building_size": 5.0,
+    "has_source_reference": 2.5,
 }
 
 MISSING_DATA_FIELDS = [
@@ -98,6 +109,7 @@ MISSING_DATA_FIELDS = [
     "estimated_units", "building_sqft", "years_owned", "neighborhood",
     "condo_risk_status", "building_sale_possible", "violation_data",
     "permit_data", "tax_data", "skip_trace_data",
+    "phone", "email",
 ]
 
 TIER_A_MIN = 75
@@ -577,7 +589,8 @@ def building_size_fit_score(lead: Lead) -> float:
     return 3.0
 
 
-def calculate_data_quality_score(lead: Lead) -> tuple[float, list[str]]:
+def _property_identity_score(lead: Lead) -> float:
+    """Assessor / identity fields — max PROPERTY_IDENTITY_MAX (50)."""
     score = 0.0
     if lead.county_assessor_pin and str(lead.county_assessor_pin).strip():
         score += DATA_QUALITY_FIELDS["has_pin"]
@@ -595,10 +608,297 @@ def calculate_data_quality_score(lead: Lead) -> tuple[float, list[str]]:
         score += DATA_QUALITY_FIELDS["has_estimated_unit_count_or_building_size"]
     if (lead.source and lead.source.strip()) or (lead.data_source and lead.data_source.strip()):
         score += DATA_QUALITY_FIELDS["has_source_reference"]
-    return score, identify_missing_data(lead)
+    return min(PROPERTY_IDENTITY_MAX, score)
 
 
-def identify_missing_data(lead: Lead) -> list[str]:
+def _flat_phone_confidences(lead: Lead) -> list[int]:
+    from app.services.phone_confidence_service import DEFAULT_CONFIDENCE
+
+    scores: list[int] = []
+    for slot in range(1, 8):
+        raw = getattr(lead, f"phone_{slot}", None)
+        if isinstance(raw, str) and raw.strip():
+            scores.append(DEFAULT_CONFIDENCE)
+    return scores
+
+
+def _relational_phone_confidences(lead_id: int) -> list[int]:
+    """Best-effort DB read of ContactPhone confidence for a property lead."""
+    from app.services.phone_confidence_service import DEFAULT_CONFIDENCE
+    from flask import has_app_context
+
+    if not has_app_context():
+        return []
+
+    try:
+        from sqlalchemy import text
+        from app import db
+
+        rows = db.session.execute(
+            text("""
+                SELECT cp.confidence_score
+                FROM contact_phones cp
+                JOIN property_contacts pc ON pc.contact_id = cp.contact_id
+                WHERE pc.property_id = :lead_id
+                  AND cp.value IS NOT NULL
+                  AND TRIM(cp.value) <> ''
+            """),
+            {"lead_id": lead_id},
+        ).fetchall()
+    except SQLAlchemyError as exc:
+        logger.warning("relational phone confidence lookup failed for lead %s: %s", lead_id, exc)
+        return []
+
+    out: list[int] = []
+    for (confidence,) in rows:
+        out.append(int(confidence) if confidence is not None else DEFAULT_CONFIDENCE)
+    return out
+
+
+def _best_phone_confidence(lead: Lead) -> int | None:
+    """Highest phone confidence across relational contacts and flat slots."""
+    scores = list(_flat_phone_confidences(lead))
+    lead_id = getattr(lead, "id", None)
+    if isinstance(lead_id, int):
+        scores.extend(_relational_phone_confidences(lead_id))
+    if not scores:
+        return None
+    return max(scores)
+
+
+def _phone_reachability_points(best_confidence: int | None) -> float:
+    from app.services.phone_confidence_service import MIN_VIABLE_CONFIDENCE
+
+    if best_confidence is None or best_confidence < MIN_VIABLE_CONFIDENCE:
+        return 0.0
+    return BEST_PHONE_MAX_POINTS * (best_confidence / 100.0)
+
+
+def _has_flat_email(lead: Lead) -> bool:
+    for slot in range(1, 6):
+        raw = getattr(lead, f"email_{slot}", None)
+        if isinstance(raw, str) and raw.strip():
+            return True
+    return False
+
+
+def _email_reachability(lead: Lead) -> tuple[float, bool, bool]:
+    """Return (points, has_email, is_owner_or_primary)."""
+    has_flat = _has_flat_email(lead)
+    has_relational = False
+    is_owner_or_primary = False
+    lead_id = getattr(lead, "id", None)
+    if isinstance(lead_id, int):
+        from flask import has_app_context
+        if not has_app_context():
+            lead_id = None
+    if isinstance(lead_id, int):
+        try:
+            from sqlalchemy import text
+            from app import db
+
+            rows = db.session.execute(
+                text("""
+                    SELECT ce.value, pc.role, pc.is_primary
+                    FROM contact_emails ce
+                    JOIN property_contacts pc ON pc.contact_id = ce.contact_id
+                    WHERE pc.property_id = :lead_id
+                      AND ce.value IS NOT NULL
+                      AND TRIM(ce.value) <> ''
+                """),
+                {"lead_id": lead_id},
+            ).fetchall()
+            for value, role, is_primary in rows:
+                if not value or not str(value).strip():
+                    continue
+                has_relational = True
+                role_val = role.value if hasattr(role, "value") else role
+                if is_primary or (isinstance(role_val, str) and role_val.lower() == "owner"):
+                    is_owner_or_primary = True
+        except SQLAlchemyError as exc:
+            logger.warning("relational email lookup failed for lead %s: %s", lead_id, exc)
+
+    has_email = has_flat or has_relational
+    if not has_email:
+        return 0.0, False, False
+    points = EMAIL_BASE_POINTS
+    if is_owner_or_primary:
+        points += EMAIL_OWNER_PRIMARY_BONUS
+    return min(EMAIL_MAX_POINTS, points), True, is_owner_or_primary
+
+
+def _contact_reachability_score(lead: Lead) -> tuple[float, dict]:
+    """Phones (confidence-weighted) + emails — max CONTACT_REACHABILITY_MAX (50)."""
+    best_confidence = _best_phone_confidence(lead)
+    phone_points = _phone_reachability_points(best_confidence)
+    email_points, has_email, email_owner_primary = _email_reachability(lead)
+    contact_total = min(CONTACT_REACHABILITY_MAX, phone_points + email_points)
+    return contact_total, {
+        "best_phone_confidence": best_confidence,
+        "phone_points": round(phone_points, 2),
+        "has_email": has_email,
+        "email_owner_or_primary": email_owner_primary,
+        "email_points": round(email_points, 2),
+    }
+
+
+def _contact_reachability_from_values(
+    best_confidence: int | None,
+    has_email: bool,
+    email_owner_primary: bool,
+) -> tuple[float, dict]:
+    phone_points = _phone_reachability_points(best_confidence)
+    email_points = 0.0
+    if has_email:
+        email_points = EMAIL_BASE_POINTS
+        if email_owner_primary:
+            email_points += EMAIL_OWNER_PRIMARY_BONUS
+        email_points = min(EMAIL_MAX_POINTS, email_points)
+    contact_total = min(CONTACT_REACHABILITY_MAX, phone_points + email_points)
+    return contact_total, {
+        "best_phone_confidence": best_confidence,
+        "phone_points": round(phone_points, 2),
+        "has_email": has_email,
+        "email_owner_or_primary": email_owner_primary,
+        "email_points": round(email_points, 2),
+    }
+
+
+def batch_contact_reachability_scores(leads: list[Lead]) -> dict[int, tuple[float, dict]]:
+    """Compute contact reachability for a lead batch with one phone and one email query."""
+    lead_ids = [lead.id for lead in leads if isinstance(getattr(lead, "id", None), int)]
+    if not lead_ids:
+        return {}
+    from flask import has_app_context
+
+    from app.services.phone_confidence_service import DEFAULT_CONFIDENCE
+
+    phone_confidences: dict[int, list[int]] = {lead_id: [] for lead_id in lead_ids}
+    email_meta: dict[int, tuple[bool, bool]] = {lead_id: (False, False) for lead_id in lead_ids}
+
+    if has_app_context():
+        try:
+            from sqlalchemy import bindparam, text
+            from app import db
+
+            phone_stmt = text("""
+                SELECT pc.property_id, cp.confidence_score
+                FROM contact_phones cp
+                JOIN property_contacts pc ON pc.contact_id = cp.contact_id
+                WHERE pc.property_id IN :lead_ids
+                  AND cp.value IS NOT NULL
+                  AND TRIM(cp.value) <> ''
+            """).bindparams(bindparam("lead_ids", expanding=True))
+            phone_rows = db.session.execute(
+                phone_stmt,
+                {"lead_ids": lead_ids},
+            ).fetchall()
+            for property_id, confidence in phone_rows:
+                phone_confidences.setdefault(property_id, []).append(
+                    int(confidence) if confidence is not None else DEFAULT_CONFIDENCE
+                )
+        except SQLAlchemyError as exc:
+            logger.warning("batch relational phone confidence lookup failed: %s", exc)
+
+        try:
+            from sqlalchemy import bindparam, text
+            from app import db
+
+            email_stmt = text("""
+                SELECT pc.property_id, ce.value, pc.role, pc.is_primary
+                FROM contact_emails ce
+                JOIN property_contacts pc ON pc.contact_id = ce.contact_id
+                WHERE pc.property_id IN :lead_ids
+                  AND ce.value IS NOT NULL
+                  AND TRIM(ce.value) <> ''
+            """).bindparams(bindparam("lead_ids", expanding=True))
+            email_rows = db.session.execute(
+                email_stmt,
+                {"lead_ids": lead_ids},
+            ).fetchall()
+            for property_id, value, role, is_primary in email_rows:
+                if not value or not str(value).strip():
+                    continue
+                has_email, is_owner_or_primary = email_meta.get(property_id, (False, False))
+                role_val = role.value if hasattr(role, "value") else role
+                email_meta[property_id] = (
+                    True,
+                    is_owner_or_primary
+                    or bool(is_primary)
+                    or (isinstance(role_val, str) and role_val.lower() == "owner"),
+                )
+        except SQLAlchemyError as exc:
+            logger.warning("batch relational email lookup failed: %s", exc)
+
+    out: dict[int, tuple[float, dict]] = {}
+    for lead in leads:
+        lead_id = getattr(lead, "id", None)
+        if not isinstance(lead_id, int):
+            continue
+        scores = list(phone_confidences.get(lead_id, []))
+        scores.extend(_flat_phone_confidences(lead))
+        best_confidence = max(scores) if scores else None
+        has_relational_email, email_owner_primary = email_meta.get(lead_id, (False, False))
+        has_email = _has_flat_email(lead) or has_relational_email
+        out[lead_id] = _contact_reachability_from_values(
+            best_confidence,
+            has_email,
+            email_owner_primary,
+        )
+    return out
+
+
+def build_data_quality_breakdown(
+    lead: Lead,
+    contact_reachability: tuple[float, dict] | None = None,
+) -> dict:
+    """Structured completeness breakdown for scoring + command center UI."""
+    property_score = _property_identity_score(lead)
+    contact_score, contact_meta = contact_reachability or _contact_reachability_score(lead)
+    missing = identify_missing_data(
+        lead,
+        best_confidence=contact_meta["best_phone_confidence"],
+        has_email=contact_meta["has_email"],
+    )
+    total = min(100.0, round(property_score + contact_score, 2))
+    return {
+        "total": total,
+        "property": round(property_score, 2),
+        "contact": round(contact_score, 2),
+        "best_phone_confidence": contact_meta["best_phone_confidence"],
+        "has_email": contact_meta["has_email"],
+        "email_owner_or_primary": contact_meta["email_owner_or_primary"],
+        "missing": missing,
+    }
+
+
+def calculate_data_quality_score(
+    lead: Lead,
+    contact_reachability: tuple[float, dict] | None = None,
+) -> tuple[float, list[str], dict]:
+    """Completeness 0–100: ~50 property identity + ~50 contact reachability.
+
+    Returns ``(total_score, missing_field_names, breakdown)``.
+    """
+    breakdown = build_data_quality_breakdown(lead, contact_reachability=contact_reachability)
+    return breakdown["total"], breakdown["missing"], breakdown
+
+
+def identify_missing_data(
+    lead: Lead,
+    best_confidence: int | None = None,
+    has_email: bool | None = None,
+) -> list[str]:
+    from app.services.phone_confidence_service import MIN_VIABLE_CONFIDENCE
+
+    if best_confidence is None:
+        best_confidence = _best_phone_confidence(lead)
+    has_viable_phone = (
+        best_confidence is not None and best_confidence >= MIN_VIABLE_CONFIDENCE
+    )
+    if has_email is None:
+        has_email = _email_reachability(lead)[1]
+
     field_checks = {
         "pin": lambda: lead.county_assessor_pin and str(lead.county_assessor_pin).strip(),
         "property_address": lambda: lead.property_street and lead.property_street.strip(),
@@ -629,6 +929,8 @@ def identify_missing_data(lead: Lead) -> list[str]:
         "skip_trace_data": lambda: (
             lead.date_skip_traced is not None or bool(lead.phone_1) or bool(lead.email_1)
         ),
+        "phone": lambda: has_viable_phone,
+        "email": lambda: has_email,
     }
     missing = []
     for field_name in MISSING_DATA_FIELDS:

@@ -24,6 +24,7 @@ from app.models.lead_crm_flags_view import LeadCRMFlagsView
 from app.services import scoring_rubric as rubric
 from app.services.open_letter_contact_mapper import is_mailable_lead
 from app.services.outreach_method_service import (
+    ENGAGED_PIPELINE_STATUSES,
     evaluate_contact_method,
     refine_outreach_action,
     OUTREACH_ACTIONS,
@@ -118,6 +119,7 @@ class ScoringResult:
     missing_data: list
     score_version: str
     base_score: float = 0.0
+    data_quality_breakdown: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +311,7 @@ class LeadScoringEngine:
         lead: Lead,
         weights: ScoringWeights,
         signals: Optional[list] = None,
+        contact_reachability: tuple[float, dict] | None = None,
     ) -> ScoringResult:
         from app.services.motivation_signal_service import MotivationSignalService
 
@@ -327,7 +330,12 @@ class LeadScoringEngine:
         score_details = dict(rubric_result["score_details"])
         score_version = rubric_result["score_version"]
 
-        data_quality_score, missing_data = rubric.calculate_data_quality_score(lead)
+        data_quality_score, missing_data, data_quality_breakdown = (
+            rubric.calculate_data_quality_score(
+                lead,
+                contact_reachability=contact_reachability,
+            )
+        )
         buckets = rubric.bucket_scores(score_details, data_quality_score, category)
 
         base_score = (
@@ -384,7 +392,7 @@ class LeadScoringEngine:
             lead, total, data_quality_score, score_tier,
         )
         recommended_action, recommended_contact_method = self._apply_outreach_method(
-            lead, recommended_action, action_signals,
+            lead, recommended_action, action_signals, winning_rule=winning_rule,
         )
         pre_block_action = recommended_action
         recommended_action, winning_rule, action_signals = _apply_cold_mail_block_to_action(
@@ -409,6 +417,7 @@ class LeadScoringEngine:
             missing_data=missing_data,
             score_version=score_version,
             base_score=round(base_score, 2),
+            data_quality_breakdown=data_quality_breakdown,
         )
 
     def compute_score(
@@ -505,17 +514,6 @@ class LeadScoringEngine:
                 }
             return 'add_contact_info', 'no_contact_info', {'has_phone': False, 'has_email': False}
 
-        if not has_property_match and lead.property_street:
-            return (
-                'resolve_match', 'no_property_match_with_address',
-                {'has_property_match': False, 'property_street': lead.property_street},
-            )
-        if not has_property_match and not lead.property_street:
-            return (
-                'enrich_data', 'no_property_match_no_address',
-                {'has_property_match': False, 'property_street': lead.property_street},
-            )
-
         lead_id = getattr(lead, 'id', None)
         if isinstance(lead_id, int) and _mail_work_in_flight(lead_id):
             return 'nurture', 'mail_work_in_flight', {'lead_id': lead_id}
@@ -529,6 +527,37 @@ class LeadScoringEngine:
 
         if lead.is_warm:
             return 'follow_up_now', 'is_warm', {'is_warm': True}
+
+        # Engaged pipeline: relationship work, not "enrich data" — even if score is low.
+        if lead.lead_status in ENGAGED_PIPELINE_STATUSES:
+            return 'nurture', 'engaged_pipeline_nurture', {
+                'lead_status': lead.lead_status,
+                'has_phone': has_phone,
+            }
+
+        if score_tier == "D":
+            # Low investment score ≠ missing data. Contactable/mailable leads stay relationship work.
+            if has_phone:
+                return 'nurture', 'tier_d_contactable', {
+                    'score_tier': score_tier,
+                    'has_phone': True,
+                }
+            if is_mailable_lead(lead) or _has_mailing_address(lead):
+                return 'nurture', 'tier_d_mailable', {
+                    'score_tier': score_tier,
+                    'has_phone': False,
+                }
+
+        if not has_property_match and lead.property_street:
+            return (
+                'resolve_match', 'no_property_match_with_address',
+                {'has_property_match': False, 'property_street': lead.property_street},
+            )
+        if not has_property_match and not lead.property_street:
+            return (
+                'enrich_data', 'no_property_match_no_address',
+                {'has_property_match': False, 'property_street': lead.property_street},
+            )
 
         open_tasks = _count_open_tasks(lead_id) if isinstance(lead_id, int) else 0
 
@@ -604,6 +633,7 @@ class LeadScoringEngine:
         previous_action = lead.recommended_action
         previous_method = lead.recommended_contact_method
         lead.lead_score = result.total_score
+        lead.data_completeness_score = result.data_quality_score
         lead.recommended_action = result.recommended_action
         lead.recommended_contact_method = result.recommended_contact_method
         db.session.add(lead)
@@ -863,7 +893,10 @@ class LeadScoringEngine:
                 db.session.commit()
                 pending_commits = 0
 
-        def _rescore_one(lead: Lead) -> None:
+        def _rescore_one(
+            lead: Lead,
+            contact_reachability: tuple[float, dict] | None = None,
+        ) -> None:
             nonlocal rescored, pending_commits
             weights = self.get_weights(lead.owner_user_id or user_id)
             signals = (
@@ -872,7 +905,12 @@ class LeadScoringEngine:
                 .order_by(HubSpotSignal.extracted_at.asc())
                 .all()
             )
-            result = self.compute(lead, weights, signals=signals)
+            result = self.compute(
+                lead,
+                weights,
+                signals=signals,
+                contact_reachability=contact_reachability,
+            )
             self.persist(lead, result, write_history=False, commit=False)
             rescored += 1
             pending_commits += 1
@@ -886,8 +924,10 @@ class LeadScoringEngine:
             if lead_ids is not None:
                 for i in range(0, len(lead_ids), BULK_RESCORE_BATCH_SIZE):
                     batch_ids = lead_ids[i:i + BULK_RESCORE_BATCH_SIZE]
-                    for lead in _lead_query().filter(Lead.id.in_(batch_ids)).all():
-                        _rescore_one(lead)
+                    leads = _lead_query().filter(Lead.id.in_(batch_ids)).all()
+                    reachability = rubric.batch_contact_reachability_scores(leads)
+                    for lead in leads:
+                        _rescore_one(lead, reachability.get(lead.id))
             else:
                 offset = 0
                 while True:
@@ -897,8 +937,9 @@ class LeadScoringEngine:
                     )
                     if not leads:
                         break
+                    reachability = rubric.batch_contact_reachability_scores(leads)
                     for lead in leads:
-                        _rescore_one(lead)
+                        _rescore_one(lead, reachability.get(lead.id))
                     offset += BULK_RESCORE_BATCH_SIZE
             _flush_batch()
         except Exception:
@@ -1059,10 +1100,12 @@ class LeadScoringEngine:
         total = float(getattr(lead, 'lead_score', 0) or 0)
         data_quality = float(getattr(lead, 'data_completeness_score', 0) or 0)
         tier = rubric.calculate_score_tier(total)
-        action, _, signals = LeadScoringEngine.evaluate_recommended_action(
+        action, winning_rule, signals = LeadScoringEngine.evaluate_recommended_action(
             lead, total, data_quality, tier,
         )
-        refined, _method = LeadScoringEngine()._apply_outreach_method(lead, action, signals)
+        refined, _method = LeadScoringEngine()._apply_outreach_method(
+            lead, action, signals, winning_rule=winning_rule,
+        )
         refined, _, _signals = _apply_cold_mail_block_to_action(
             lead, refined, '', signals,
         )
@@ -1070,21 +1113,31 @@ class LeadScoringEngine:
 
     @staticmethod
     def get_winning_rule_signals(lead: Lead) -> dict:
+        _action, _rule, signals = LeadScoringEngine.get_action_decision(lead)
+        return signals
+
+    @staticmethod
+    def get_action_decision(lead: Lead) -> tuple[str | None, str, dict]:
+        """Return (recommended_action, winning_rule, action_signals) for display."""
         total = float(getattr(lead, 'lead_score', 0) or 0)
         data_quality = float(getattr(lead, 'data_completeness_score', 0) or 0)
         tier = rubric.calculate_score_tier(total)
-        action, _, signals = LeadScoringEngine.evaluate_recommended_action(
+        action, winning_rule, signals = LeadScoringEngine.evaluate_recommended_action(
             lead, total, data_quality, tier,
         )
-        _refined, method = LeadScoringEngine()._apply_outreach_method(lead, action, signals)
-        refined, _rule, signals = _apply_cold_mail_block_to_action(
-            lead, _refined, '', signals,
+        pre_block, method = LeadScoringEngine()._apply_outreach_method(
+            lead, action, signals, winning_rule=winning_rule,
+        )
+        refined, winning_rule, signals = _apply_cold_mail_block_to_action(
+            lead, pre_block, winning_rule, signals,
         )
         if method:
             signals = {**signals, 'recommended_contact_method': method}
-        if refined != _refined:
-            signals.pop('recommended_contact_method', None)
-        return signals
+        if refined != pre_block:
+            signals = {
+                k: v for k, v in signals.items() if k != 'recommended_contact_method'
+            }
+        return refined, winning_rule, signals
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -1095,6 +1148,8 @@ class LeadScoringEngine:
         lead: Lead,
         recommended_action: str | None,
         action_signals: dict,
+        *,
+        winning_rule: str | None = None,
     ) -> tuple[str | None, str | None]:
         """Resolve contact channel and refine outreach action."""
         if not recommended_action:
@@ -1123,7 +1178,9 @@ class LeadScoringEngine:
             has_email=has_email,
             recent_email=recent_email,
         )
-        refined = refine_outreach_action(recommended_action, method)
+        refined = refine_outreach_action(
+            recommended_action, method, winning_rule=winning_rule,
+        )
         if refined == 'mail_ready':
             method = 'direct_mail'
         elif refined == 'call_ready':

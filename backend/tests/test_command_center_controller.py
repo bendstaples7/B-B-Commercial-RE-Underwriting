@@ -68,7 +68,7 @@ def _make_lead(app, street, **kwargs):
     return lead
 
 
-def _make_task(app, lead_id, status='open', due_date=None, task_type='custom', title='Test task'):
+def _make_task(app, lead_id, status='open', due_date=None, task_type='custom', title='Test task', hubspot_task_id=None):
     task = LeadTask(
         lead_id=lead_id,
         task_type=task_type,
@@ -76,6 +76,7 @@ def _make_task(app, lead_id, status='open', due_date=None, task_type='custom', t
         status=status,
         due_date=due_date,
         created_by='test',
+        hubspot_task_id=hubspot_task_id,
     )
     db.session.add(task)
     db.session.commit()
@@ -300,6 +301,18 @@ class TestGetCommandCenter:
             db.session.refresh(lead)
             assert lead.review_required is False
 
+    def test_persists_live_data_completeness_score(self, client, app):
+        """Opening command center stores the live completeness score on the lead."""
+        with app.app_context():
+            lead = _make_lead(app, '4b Completeness St', data_completeness_score=0.0)
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
+            data = json.loads(response.data)
+
+            assert response.status_code == 200
+            assert data['data_completeness_score'] > 0
+            db.session.refresh(lead)
+            assert lead.data_completeness_score == data['data_completeness_score']
+
     def test_timeline_section_has_entries_key(self, client, app):
         """Timeline section contains entries list and total."""
         with app.app_context():
@@ -336,6 +349,44 @@ class TestUpdateStatus:
                 headers=_AUTH_HEADERS,
             )
             assert response.status_code == 200
+            body = response.get_json()
+            assert 'lead_score' in body
+            assert body['lead_status'] == 'deprioritize'
+
+    def test_in_person_appointment_increases_score_via_pipeline_bonus(self, client, app):
+        """Status → in_person_appointment applies +30 bonus and leaves enrich_data."""
+        with app.app_context():
+            from app.services.lead_scoring_engine import LeadScoringEngine
+
+            lead = _make_lead(
+                app,
+                '6b In Person St',
+                lead_status='mailing_no_contact_made',
+                lead_score=30.0,
+                has_phone=True,
+                has_email=False,
+                has_property_match=True,
+                analysis_complete=True,
+            )
+            # Establish a real baseline score at mailing_no_contact_made (0 bonus).
+            LeadScoringEngine().score_and_persist(lead.id)
+            db.session.refresh(lead)
+            before = float(lead.lead_score or 0)
+            assert LeadScoringEngine._pipeline_stage_bonus(lead) == 0.0
+
+            response = client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({'status': 'in_person_appointment'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = response.get_json()
+            assert body['lead_status'] == 'in_person_appointment'
+            assert float(body['lead_score']) == pytest.approx(before + 30.0, abs=0.15)
+            assert body['recommended_action'] == 'call_ready'
+            db.session.refresh(lead)
+            assert LeadScoringEngine._pipeline_stage_bonus(lead) == 30.0
 
     def test_status_change_persists(self, client, app):
         """PATCH /api/leads/<id>/status persists the new status to the database."""
@@ -614,6 +665,124 @@ class TestCreateTask:
             )
             assert response.status_code == 400
 
+    def test_create_task_rejects_non_owner(self, client, app):
+        """POST /tasks cannot mutate a lead owned by another user."""
+        with app.app_context():
+            lead = _make_lead(app, '14b Other Owner Task St', owner_user_id='other-user')
+            response = client.post(
+                f'/api/leads/{lead.id}/tasks',
+                data=json.dumps({'title': 'Call owner', 'task_type': 'custom'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 404
+            assert LeadTask.query.filter_by(lead_id=lead.id).count() == 0
+
+    def test_create_task_missing_lead_returns_404(self, client, app):
+        with app.app_context():
+            response = client.post(
+                '/api/leads/999999/tasks',
+                data=json.dumps({'title': 'Call owner', 'task_type': 'custom'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 404
+
+
+class TestUpdateTaskHubSpotWriteback:
+    def test_update_task_rejects_non_owner(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, 'HS Other Owner St', owner_user_id='other-user')
+            task = _make_task(app, lead.id, title='Do not edit')
+            response = client.patch(
+                f'/api/leads/{lead.id}/tasks/{task.id}',
+                data=json.dumps({'title': 'Edited'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 404
+            db.session.refresh(task)
+            assert task.title == 'Do not edit'
+
+    def test_native_task_update_skips_hubspot(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, 'HS Native Skip St')
+            task = _make_task(app, lead.id, due_date=date(2026, 9, 15), title='Local only')
+            with patch(
+                'app.services.hubspot_task_completion_service.sync_hubspot_task_properties',
+            ) as mock_sync:
+                response = client.patch(
+                    f'/api/leads/{lead.id}/tasks/{task.id}',
+                    data=json.dumps({'due_date': '2026-07-13', 'title': 'Local sooner'}),
+                    content_type='application/json',
+                    headers=_AUTH_HEADERS,
+                )
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            assert data['due_date'] == '2026-07-13'
+            assert data['title'] == 'Local sooner'
+            assert 'hubspot_synced' not in data
+            mock_sync.assert_not_called()
+
+    def test_hubspot_task_update_pushes_properties(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, 'HS Writeback St')
+            task = _make_task(
+                app,
+                lead.id,
+                due_date=date(2026, 9, 15),
+                title='Follow up Bob',
+                hubspot_task_id='402073870862',
+            )
+            with patch(
+                'app.services.hubspot_task_completion_service.sync_hubspot_task_properties',
+                return_value=True,
+            ) as mock_sync:
+                response = client.patch(
+                    f'/api/leads/{lead.id}/tasks/{task.id}',
+                    data=json.dumps({'due_date': '2026-07-13', 'title': 'Follow up sooner'}),
+                    content_type='application/json',
+                    headers=_AUTH_HEADERS,
+                )
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            assert data['hubspot_synced'] is True
+            assert data['due_date'] == '2026-07-13'
+            mock_sync.assert_called_once()
+            kwargs = mock_sync.call_args.kwargs
+            assert mock_sync.call_args.args[0] == '402073870862'
+            assert kwargs['title'] == 'Follow up sooner'
+            assert kwargs['due_date'] == date(2026, 7, 13)
+            assert kwargs['clear_due_date'] is False
+
+    def test_hubspot_sync_failure_still_saves_locally(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, 'HS Fail Soft St')
+            task = _make_task(
+                app,
+                lead.id,
+                due_date=date(2026, 9, 15),
+                title='Keep local',
+                hubspot_task_id='hs-fail-1',
+            )
+            with patch(
+                'app.services.hubspot_task_completion_service.sync_hubspot_task_properties',
+                return_value=False,
+            ):
+                response = client.patch(
+                    f'/api/leads/{lead.id}/tasks/{task.id}',
+                    data=json.dumps({'due_date': '2026-07-14'}),
+                    content_type='application/json',
+                    headers=_AUTH_HEADERS,
+                )
+            assert response.status_code == 200
+            data = json.loads(response.data)
+            assert data['hubspot_synced'] is False
+            assert data['due_date'] == '2026-07-14'
+            db.session.refresh(task)
+            assert task.due_date == date(2026, 7, 14)
+
 
 # ---------------------------------------------------------------------------
 # 34.2 — POST /api/leads/<id>/tasks/<task_id>/complete
@@ -625,7 +794,10 @@ class TestCompleteTask:
         with app.app_context():
             lead = _make_lead(app, '15 Complete St')
             task = _make_task(app, lead.id)
-            response = client.post(f'/api/leads/{lead.id}/tasks/{task.id}/complete')
+            response = client.post(
+                f'/api/leads/{lead.id}/tasks/{task.id}/complete',
+                headers=_AUTH_HEADERS,
+            )
             assert response.status_code == 200
 
     def test_complete_task_sets_status_completed(self, client, app):
@@ -633,7 +805,10 @@ class TestCompleteTask:
         with app.app_context():
             lead = _make_lead(app, '16 Complete St')
             task = _make_task(app, lead.id)
-            client.post(f'/api/leads/{lead.id}/tasks/{task.id}/complete')
+            client.post(
+                f'/api/leads/{lead.id}/tasks/{task.id}/complete',
+                headers=_AUTH_HEADERS,
+            )
             db.session.refresh(task)
             assert task.status == 'completed'
 
@@ -642,7 +817,10 @@ class TestCompleteTask:
         with app.app_context():
             lead = _make_lead(app, '17 Complete St')
             task = _make_task(app, lead.id)
-            client.post(f'/api/leads/{lead.id}/tasks/{task.id}/complete')
+            client.post(
+                f'/api/leads/{lead.id}/tasks/{task.id}/complete',
+                headers=_AUTH_HEADERS,
+            )
             db.session.refresh(task)
             assert task.completed_at is not None
 
@@ -651,9 +829,25 @@ class TestCompleteTask:
         with app.app_context():
             lead = _make_lead(app, '18 Complete St')
             task = _make_task(app, lead.id)
-            response = client.post(f'/api/leads/{lead.id}/tasks/{task.id}/complete')
+            response = client.post(
+                f'/api/leads/{lead.id}/tasks/{task.id}/complete',
+                headers=_AUTH_HEADERS,
+            )
             data = json.loads(response.data)
             assert data['status'] == 'completed'
+
+    def test_complete_task_rejects_non_owner(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '18b Complete Other Owner St', owner_user_id='other-user')
+            task = _make_task(app, lead.id)
+            response = client.post(
+                f'/api/leads/{lead.id}/tasks/{task.id}/complete',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 404
+            db.session.refresh(task)
+            assert task.status == 'open'
 
 
 # ---------------------------------------------------------------------------

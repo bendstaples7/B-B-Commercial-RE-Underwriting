@@ -150,5 +150,5 @@ class DeterministicScoringEngine:
 
     @staticmethod
     def _identify_missing_data(lead: Lead) -> list:
-        _, missing = rubric.calculate_data_quality_score(lead)
+        _, missing, _ = rubric.calculate_data_quality_score(lead)
         return missing

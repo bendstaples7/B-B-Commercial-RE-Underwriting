@@ -23,6 +23,7 @@ import type { LeadTask, CRMRecommendedAction } from '@/types'
 vi.mock('@/services/api', () => ({
   leadTaskService: {
     createTask: vi.fn(),
+    updateTask: vi.fn(),
   },
 }))
 
@@ -30,6 +31,7 @@ import { leadTaskService } from '@/services/api'
 
 // Cast to access the mock function
 const mockCreateTask = leadTaskService.createTask as ReturnType<typeof vi.fn>
+const mockUpdateTask = leadTaskService.updateTask as ReturnType<typeof vi.fn>
 
 // ---------------------------------------------------------------------------
 // Test data helpers
@@ -938,6 +940,221 @@ describe('LeadTaskList', () => {
       expect(screen.getByTestId('mail-awaiting-paused-note')).toHaveTextContent(
         'Outreach paused — waiting for batch send.',
       )
+    })
+  })
+
+  describe('task editing', () => {
+    it('opens inline title edit when clicking the pencil or title', async () => {
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[makeTask(5, { title: 'Follow up with Bob', due_date: '2026-09-15' })]}
+          onTaskCreated={vi.fn()}
+          onTaskUpdated={vi.fn()}
+          onTaskCompleted={vi.fn()}
+        />,
+      )
+
+      await user.click(screen.getByTestId('edit-task-btn-5'))
+
+      expect(screen.getByTestId('task-edit-title-input')).toHaveValue('Follow up with Bob')
+    })
+
+    it('saves title on Enter via updateTask', async () => {
+      const onTaskUpdated = vi.fn()
+      mockUpdateTask.mockResolvedValue({
+        id: 5,
+        title: 'Follow up sooner',
+        status: 'open',
+        due_date: '2026-09-15',
+      })
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[makeTask(5, { title: 'Follow up with Bob', due_date: '2026-09-15' })]}
+          onTaskCreated={vi.fn()}
+          onTaskUpdated={onTaskUpdated}
+          onTaskCompleted={vi.fn()}
+        />,
+      )
+
+      await user.click(screen.getByTestId('task-title-5'))
+      const titleInput = screen.getByTestId('task-edit-title-input')
+      await user.clear(titleInput)
+      await user.type(titleInput, 'Follow up sooner{Enter}')
+
+      await waitFor(() => {
+        expect(mockUpdateTask).toHaveBeenCalledWith(1, 5, {
+          title: 'Follow up sooner',
+        })
+      })
+      expect(onTaskUpdated).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 5,
+          title: 'Follow up sooner',
+        }),
+      )
+    })
+
+    it('opens due date edit when clicking the due date and saves on Enter', async () => {
+      const onTaskUpdated = vi.fn()
+      mockUpdateTask.mockResolvedValue({
+        id: 5,
+        title: 'Follow up with Bob',
+        status: 'open',
+        due_date: '2026-07-13',
+      })
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[makeTask(5, { title: 'Follow up with Bob', due_date: '2026-09-15' })]}
+          onTaskCreated={vi.fn()}
+          onTaskUpdated={onTaskUpdated}
+          onTaskCompleted={vi.fn()}
+        />,
+      )
+
+      await user.click(screen.getByTestId('task-due-date-5'))
+      const dueInput = screen.getByTestId('task-edit-due-date-input')
+      await user.clear(dueInput)
+      await user.type(dueInput, '2026-07-13{Enter}')
+
+      await waitFor(() => {
+        expect(mockUpdateTask).toHaveBeenCalledWith(1, 5, {
+          due_date: '2026-07-13',
+        })
+      })
+    })
+
+    it('cancels inline edit with Escape without calling updateTask', async () => {
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[makeTask(5, { title: 'Follow up with Bob', due_date: '2026-09-15' })]}
+          onTaskCreated={vi.fn()}
+          onTaskUpdated={vi.fn()}
+          onTaskCompleted={vi.fn()}
+        />,
+      )
+
+      await user.click(screen.getByTestId('edit-task-btn-5'))
+      const titleInput = screen.getByTestId('task-edit-title-input')
+      await user.clear(titleInput)
+      await user.type(titleInput, 'Changed then cancelled')
+      await user.keyboard('{Escape}')
+
+      expect(screen.queryByTestId('task-edit-title-input')).not.toBeInTheDocument()
+      expect(mockUpdateTask).not.toHaveBeenCalled()
+    })
+
+    it('saves a later blur edit after cancelling a previous edit with Escape', async () => {
+      mockUpdateTask.mockResolvedValue({
+        id: 5,
+        title: 'Saved on blur',
+        status: 'open',
+        due_date: '2026-09-15',
+      })
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[makeTask(5, { title: 'Follow up with Bob', due_date: '2026-09-15' })]}
+          onTaskCreated={vi.fn()}
+          onTaskUpdated={vi.fn()}
+          onTaskCompleted={vi.fn()}
+        />,
+      )
+
+      await user.click(screen.getByTestId('edit-task-btn-5'))
+      await user.clear(screen.getByTestId('task-edit-title-input'))
+      await user.type(screen.getByTestId('task-edit-title-input'), 'Cancelled first')
+      await user.keyboard('{Escape}')
+
+      await user.click(screen.getByTestId('edit-task-btn-5'))
+      const titleInput = screen.getByTestId('task-edit-title-input')
+      await user.clear(titleInput)
+      await user.type(titleInput, 'Saved on blur')
+      const { fireEvent } = await import('@testing-library/react')
+      fireEvent.blur(titleInput)
+
+      await waitFor(() => {
+        expect(mockUpdateTask).toHaveBeenCalledWith(1, 5, {
+          title: 'Saved on blur',
+        })
+      })
+    })
+
+    it('does not allow editing optimistic placeholder tasks', async () => {
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[makeTask(0, { title: 'Optimistic placeholder' })]}
+          onTaskCreated={vi.fn()}
+          onTaskUpdated={vi.fn()}
+          onTaskCompleted={vi.fn()}
+        />,
+      )
+
+      expect(screen.queryByTestId('edit-task-btn-0')).not.toBeInTheDocument()
+      await user.click(screen.getByTestId('task-title-0'))
+      expect(screen.queryByTestId('task-edit-title-input')).not.toBeInTheDocument()
+      expect(mockUpdateTask).not.toHaveBeenCalled()
+    })
+
+    it('keeps the current editor active while a blur save is in flight', async () => {
+      let resolveUpdate: (value: unknown) => void = () => {}
+      mockUpdateTask.mockReturnValue(
+        new Promise((resolve) => {
+          resolveUpdate = resolve
+        }),
+      )
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[
+            makeTask(5, { title: 'Task A' }),
+            makeTask(6, { title: 'Task B' }),
+          ]}
+          onTaskCreated={vi.fn()}
+          onTaskUpdated={vi.fn()}
+          onTaskCompleted={vi.fn()}
+        />,
+      )
+
+      await user.click(screen.getByTestId('edit-task-btn-5'))
+      const titleInput = screen.getByTestId('task-edit-title-input')
+      await user.clear(titleInput)
+      await user.type(titleInput, 'Task A changed')
+      await user.click(screen.getByTestId('edit-task-btn-6'))
+
+      expect(screen.getByTestId('task-edit-title-input')).toHaveValue('Task A changed')
+      expect(mockUpdateTask).toHaveBeenCalledWith(1, 5, {
+        title: 'Task A changed',
+      })
+
+      resolveUpdate({
+        id: 5,
+        title: 'Task A changed',
+        status: 'open',
+        due_date: null,
+      })
+      await waitFor(() => {
+        expect(screen.queryByTestId('task-edit-title-input')).not.toBeInTheDocument()
+      })
+    })
+
+    it('shows edit affordance for HubSpot-imported LeadTasks', () => {
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[makeTask(5, { title: 'HS task', source: 'hubspot' })]}
+          onTaskCreated={vi.fn()}
+          onTaskCompleted={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('edit-task-btn-5')).toBeInTheDocument()
     })
   })
 })

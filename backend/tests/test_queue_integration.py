@@ -498,8 +498,8 @@ class TestActionEngineIntegration:
             assert action != 'analyze_property'
             assert action == 'nurture'
 
-    def test_warm_lead_gets_mail_ready_in_residential_early_stage(self, app):
-        """A warm residential lead in early mailing stages gets mail_ready."""
+    def test_warm_lead_with_phone_gets_call_ready_in_residential_early_stage(self, app):
+        """Warm + phone prefers Call Ready over the early-mail status lock."""
         with app.app_context():
             lead = _make_lead(app, '4 Action Engine St',
                               lead_status='mailing_no_contact_made',
@@ -509,7 +509,7 @@ class TestActionEngineIntegration:
                               is_warm=True,
                               data_completeness_score=80.0)
             action = ActionEngineService.compute_recommended_action(lead)
-            assert action == 'mail_ready'
+            assert action == 'call_ready'
 
     def test_dnc_lead_gets_none(self, app):
         """A do_not_contact lead gets recommended_action=do_not_contact."""

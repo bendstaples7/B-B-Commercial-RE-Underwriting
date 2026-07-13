@@ -78,7 +78,7 @@ def _make_lead(**kwargs):
 # ---------------------------------------------------------------------------
 
 class TestContactabilityScore:
-    """Tests for _contactability_score — 0 to max_points (default 20)."""
+    """Tests for _contactability_score — skip-trace + socials only (phones/emails in data quality)."""
 
     def setup_method(self):
         self.engine = DeterministicScoringEngine()
@@ -89,49 +89,42 @@ class TestContactabilityScore:
         score = self.engine._contactability_score(lead)
         assert score == 0.0, f"Expected 0 for empty lead, got {score}"
 
-    def test_skip_traced_only_scores_quarter(self):
+    def test_skip_traced_only_scores_half(self):
         lead = _make_lead(date_skip_traced=date(2024, 1, 15))
         score = self.engine._contactability_score(lead)
-        expected = self.max_pts / 4.0
+        expected = self.max_pts / 2.0
         assert score == expected, f"Expected {expected}, got {score}"
 
     def test_full_contactability_scores_max(self):
         lead = _make_lead(
             date_skip_traced=date(2024, 1, 15),
-            phone_1="555-0100",
-            email_1="owner@example.com",
             socials="https://linkedin.com/in/owner",
         )
         score = self.engine._contactability_score(lead)
         assert score == self.max_pts, f"Expected {self.max_pts}, got {score}"
 
-    def test_phone_email_socials_no_skip_trace(self):
-        """Missing skip trace date but has all contact methods — 3/4 of max."""
+    def test_phone_and_email_do_not_affect_contactability(self):
+        """Phone/email presence moved to data quality — contactability ignores them."""
         lead = _make_lead(
             phone_1="555-0100",
             email_1="owner@example.com",
-            socials="@owner_handle",
         )
         score = self.engine._contactability_score(lead)
-        expected = (self.max_pts / 4.0) * 3
+        assert score == 0.0
+
+    def test_socials_only_scores_half(self):
+        lead = _make_lead(socials="@owner_handle")
+        score = self.engine._contactability_score(lead)
+        expected = self.max_pts / 2.0
         assert score == expected, f"Expected {expected}, got {score}"
 
     def test_uses_max_points_parameter(self):
         lead = _make_lead(
             date_skip_traced=date(2024, 1, 15),
-            phone_1="555-0100",
-            email_1="owner@example.com",
             socials="@owner",
         )
         score = self.engine._contactability_score(lead, max_points=10.0)
         assert score == 10.0, f"Expected 10.0 with custom max, got {score}"
-
-    def test_any_phone_field_triggers_phone_segment(self):
-        """phone_7 should count just as phone_1 does."""
-        lead = _make_lead(phone_7="555-9999")
-        score = self.engine._contactability_score(lead)
-        expected = self.max_pts / 4.0
-        assert score == expected, f"Expected {expected}, got {score}"
 
 
 # ---------------------------------------------------------------------------

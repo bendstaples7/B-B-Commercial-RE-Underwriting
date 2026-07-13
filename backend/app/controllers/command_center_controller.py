@@ -26,6 +26,7 @@ from app.services.call_log_service import CallLogService
 from app.services.recommended_action_metadata import (
     RECOMMENDED_ACTION_METADATA,
     get_recommended_action_display,
+    get_winning_rule_label,
 )
 from app.services.outreach_method_service import resolve_outreach_contact
 from app.services.lead_scoring_engine import LeadScoringEngine
@@ -207,6 +208,17 @@ def _require_lead_read_access(lead: Lead):
     return None
 
 
+def _load_authorized_lead(lead_id: int):
+    """Load a lead and apply the owner/admin access gate used by Command Center."""
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return None, (jsonify({'error': 'Not found', 'message': f'Lead {lead_id} not found'}), 404)
+    denied = _require_lead_read_access(lead)
+    if denied is not None:
+        return None, denied
+    return lead, None
+
+
 # ---------------------------------------------------------------------------
 # Error handling decorator (mirrors property_controller.py pattern)
 # ---------------------------------------------------------------------------
@@ -259,6 +271,23 @@ def handle_errors(f):
 def _get_winning_rule_signals(lead) -> dict:
     """Return signals for the winning rule — delegated to LeadScoringEngine."""
     return LeadScoringEngine.get_winning_rule_signals(lead)
+
+
+def _get_action_decision(lead):
+    return LeadScoringEngine.get_action_decision(lead)
+
+
+def _get_queue_service_for_cc():
+    """QueueService scoped like queue_controller (admin sees all)."""
+    from app.controllers.property_controller import _current_user_is_admin
+    from app.services.queue_service import QueueService
+
+    user_id = getattr(g, 'user_id', None)
+    if not user_id or user_id == 'anonymous':
+        return QueueService(owner_user_id=None)
+    if _current_user_is_admin():
+        return QueueService(owner_user_id=None)
+    return QueueService(owner_user_id=user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -342,16 +371,45 @@ def get_command_center(lead_id: int):
 
     _hs_health = HubSpotDealSyncService.get_lead_sync_health(lead_id)
 
-    ra = lead.recommended_action
-    contact_method = lead.recommended_contact_method
+    from app.services.scoring_rubric import build_data_quality_breakdown
+    from app import db as _db
+    data_quality_breakdown = build_data_quality_breakdown(lead)
+    # Always serve live completeness so the sidebar is never stuck at the
+    # never-written column default of 0.
+    data_completeness_score = data_quality_breakdown['total']
+    # Winning-rule explanation reads lead.data_completeness_score — align the
+    # in-memory value with the live breakdown before computing the decision.
+    if lead.data_completeness_score != data_completeness_score:
+        lead.data_completeness_score = data_completeness_score
+        _db.session.add(lead)
+        _db.session.commit()
+        from app.services.lead_refresh import refresh_lead_scoring
+        refresh_lead_scoring(lead_id)
+        lead = Lead.query.get(lead_id)
+        data_quality_breakdown = build_data_quality_breakdown(lead)
+        data_completeness_score = data_quality_breakdown['total']
+
+    # Display next step + "why" from one live decision so label/explanation
+    # cannot disagree with a stale persisted recommended_action column.
+    decision_action, winning_rule, winning_signals = _get_action_decision(lead)
+    ra = decision_action if decision_action is not None else lead.recommended_action
+    contact_method = winning_signals.get('recommended_contact_method')
+    if contact_method is None and ra == lead.recommended_action:
+        contact_method = lead.recommended_contact_method
     ra_display = get_recommended_action_display(ra, contact_method)
     open_tasks = _lead_task_service.list_open(lead_id)
     timeline_entries, timeline_total = _lead_timeline_service.get_page(lead_id, page=1, per_page=25)
 
+    queue_svc = _get_queue_service_for_cc()
+    # Ready-to-mail membership is owner-scoped (queued-by this owner), not viewer.
+    mail_user_id = lead.owner_user_id or getattr(g, 'user_id', None)
+    if not mail_user_id or mail_user_id == 'anonymous':
+        mail_user_id = None
+    work_queues = queue_svc.membership_for_lead(lead_id, mail_user_id=mail_user_id)
+
     # ------------------------------------------------------------------
     # Collect phones: relational contact_phones + flat columns (structured)
     # ------------------------------------------------------------------
-    from app import db as _db
     from sqlalchemy import text as _text
     from app.services.phone_confidence_service import PhoneConfidenceService
 
@@ -448,24 +506,34 @@ def get_command_center(lead_id: int):
                     _db.session.add(lead)
                     _db.session.commit()
 
-    # Deal context — prefer lead columns; fall back to cached HubSpot deal payload.
+    # Deal context — lead column first; fill blanks from HubSpot deal_source and
+    # sheet ``source`` as equal peers (description is tertiary Listsource signal).
+    from app.services.helpers.deal_source import resolve_blank_deal_source
+
     deal_source = (lead.deal_source or '').strip() or None
     deal_description = (lead.deal_description or '').strip() or None
+    cached_source = None
+    cached_description = None
     if row:
         cached_source = row[2] if len(row) > 2 else None
         cached_description = row[3] if len(row) > 3 else None
-        deal_context_dirty = False
-        if not deal_source and cached_source:
-            deal_source = cached_source
-            lead.deal_source = cached_source
-            deal_context_dirty = True
         if not deal_description and cached_description:
             deal_description = cached_description
             lead.deal_description = cached_description
-            deal_context_dirty = True
-        if deal_context_dirty:
             _db.session.add(lead)
             _db.session.commit()
+
+    resolved = resolve_blank_deal_source(
+        current=deal_source,
+        hubspot_deal_source=cached_source,
+        sheet_source=lead.source,
+        deal_description=deal_description or cached_description,
+    )
+    if resolved and resolved != deal_source:
+        deal_source = resolved
+        lead.deal_source = resolved
+        _db.session.add(lead)
+        _db.session.commit()
 
     # Interaction table is frozen for Command Center — HubSpot activity history
     # lives on LeadTimelineEntry via HubSpotTimelineImportService. Do not UNION
@@ -626,7 +694,9 @@ def get_command_center(lead_id: int):
         'building_sale_possible': getattr(lead, 'building_sale_possible', None),
         'condo_analysis_id': getattr(lead, 'condo_analysis_id', None),
         'assessor_class': getattr(lead, 'assessor_class', None),
-        'data_completeness_score': lead.data_completeness_score,
+        'data_completeness_score': data_completeness_score,
+        'data_quality_breakdown': data_quality_breakdown,
+        'work_queues': work_queues,
         'analysis_session_id': lead.analysis_session_id,
         'last_contact_date': lead.last_contact_date.isoformat() if lead.last_contact_date else None,
         'last_hubspot_sync_at': lead.last_hubspot_sync_at.isoformat() if lead.last_hubspot_sync_at else None,
@@ -641,9 +711,11 @@ def get_command_center(lead_id: int):
             'recommended_contact_method': contact_method,
             'label': ra_display.get('label'),
             'explanation': ra_display.get('explanation'),
+            'winning_rule': winning_rule,
+            'winning_rule_label': get_winning_rule_label(winning_rule),
             'outreach_contact': resolve_outreach_contact(lead, contact_method),
             'signals': {
-                **_get_winning_rule_signals(lead),
+                **winning_signals,
                 **({'recommended_contact_method': contact_method} if contact_method else {}),
             },
         },
@@ -784,6 +856,7 @@ def update_status(lead_id: int):
     # so the action reflects the updated score.
     if new_status not in ('do_not_contact', 'suppressed'):
         _rescore_after_status_change(lead_id)
+        db.session.refresh(lead)
 
     try:
         from app.services.hubspot_writeback_service import HubSpotWriteBackService
@@ -794,17 +867,25 @@ def update_status(lead_id: int):
             lead_id, exc,
         )
 
-    return jsonify({'lead_status': lead.lead_status, 'recommended_action': lead.recommended_action}), 200
+    return jsonify({
+        'lead_status': lead.lead_status,
+        'recommended_action': lead.recommended_action,
+        'lead_score': lead.lead_score,
+    }), 200
 
 
 @command_center_bp.route('/<int:lead_id>/tasks', methods=['POST'])
 @handle_errors
+@require_auth
 def create_task(lead_id: int):
     """
     POST /api/leads/<lead_id>/tasks
 
     Create a new LeadTask for a lead.
     """
+    _lead, denied = _load_authorized_lead(lead_id)
+    if denied is not None:
+        return denied
     data = LeadTaskCreateSchema().load(request.get_json() or {})
     actor = getattr(g, 'user_id', 'anonymous')
     # Pass recompute_action=False: refresh_lead_scoring below recomputes the
@@ -828,49 +909,101 @@ def create_task(lead_id: int):
 
 @command_center_bp.route('/<int:lead_id>/tasks/<int:task_id>', methods=['PATCH'])
 @handle_errors
+@require_auth
 def update_task(lead_id: int, task_id: int):
     """
     PATCH /api/leads/<lead_id>/tasks/<task_id>
 
     Snooze (if new_due_date present) or update a task's title/due_date.
+    HubSpot-imported tasks also best-effort sync title/due date to HubSpot.
     """
+    _lead, denied = _load_authorized_lead(lead_id)
+    if denied is not None:
+        return denied
+    from app import db
+    from app.services.hubspot_task_completion_service import (
+        mirror_crm_task_from_lead_task,
+        sync_hubspot_task_properties,
+    )
+
     actor = getattr(g, 'user_id', 'anonymous')
     body = request.get_json() or {}
+    title_changed = False
+    due_changed = False
+    clear_due_date = False
     if 'new_due_date' in body:
         data = LeadTaskSnoozeSchema().load(body)
         task = _lead_task_service.snooze(task_id, lead_id, data['new_due_date'], actor=actor)
+        due_changed = True
     else:
         data = LeadTaskUpdateSchema().load(body)
-        from app import db
         task = LeadTask.query.filter_by(id=task_id, lead_id=lead_id).first()
         if task is None:
             return jsonify({'error': 'Not found'}), 404
         if 'title' in data:
             task.title = data['title']
+            title_changed = True
         if 'due_date' in data:
+            clear_due_date = data['due_date'] is None
             task.due_date = data['due_date']
+            due_changed = True
         db.session.add(task)
         db.session.commit()
+
+    # Capture fields before optional mirror rollback can expire the ORM instance.
+    task_id_out = task.id
+    task_title = task.title
+    task_status = task.status
+    task_due_date = task.due_date
+    hubspot_task_id = task.hubspot_task_id
+
+    hubspot_synced = None
+    if hubspot_task_id and (title_changed or due_changed):
+        try:
+            mirror_crm_task_from_lead_task(task)
+            db.session.commit()
+        except Exception as exc:
+            db.session.rollback()
+            logger.warning(
+                'mirror_crm_task_from_lead_task failed for hubspot_task_id=%s: %s',
+                hubspot_task_id,
+                exc,
+            )
+
+        hubspot_synced = sync_hubspot_task_properties(
+            str(hubspot_task_id),
+            title=task_title if title_changed else None,
+            due_date=None if clear_due_date else (task_due_date if due_changed else None),
+            clear_due_date=clear_due_date,
+        )
+
     # Refresh lead_score + recommended_action after the task change (due-date
     # / snooze changes can affect follow-up overdue state and the action).
     from app.services.lead_refresh import refresh_lead_scoring
     refresh_lead_scoring(lead_id)
-    return jsonify({
-        'id': task.id,
-        'title': task.title,
-        'status': task.status,
-        'due_date': task.due_date.isoformat() if task.due_date else None,
-    }), 200
+    payload = {
+        'id': task_id_out,
+        'title': task_title,
+        'status': task_status,
+        'due_date': task_due_date.isoformat() if task_due_date else None,
+    }
+    if hubspot_synced is not None:
+        payload['hubspot_synced'] = hubspot_synced
+    return jsonify(payload), 200
 
 
 @command_center_bp.route('/<int:lead_id>/tasks/<int:task_id>/complete', methods=['POST'])
 @handle_errors
+@require_auth
 def complete_task(lead_id: int, task_id: int):
     """
     POST /api/leads/<lead_id>/tasks/<task_id>/complete
 
     Mark a LeadTask as completed.
     """
+    _lead, denied = _load_authorized_lead(lead_id)
+    if denied is not None:
+        return denied
     actor = getattr(g, 'user_id', 'anonymous')
     # recompute_action=False — refresh_lead_scoring below owns the single
     # recommended_action recompute (after rescoring), avoiding a double recompute.

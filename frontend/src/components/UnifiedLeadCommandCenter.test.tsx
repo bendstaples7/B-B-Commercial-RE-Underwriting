@@ -299,6 +299,37 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     })
   })
 
+  it('renders queue context banners from server work queue membership', async () => {
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        work_queues: [
+          { key: 'needs-review', label: 'Needs Review', path: '/queues/needs-review' },
+          { key: 'previously-warm', label: 'Previously Warm', path: '/queues/previously-warm' },
+        ],
+        review_reason: 'Manual review needed',
+      }),
+    )
+
+    renderComponent()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('work-queue-banner-needs-review')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('work-queue-banner-needs-review')).toHaveTextContent(
+      'Manual review needed',
+    )
+    expect(screen.getByTestId('work-queue-strip-previously-warm')).toBeInTheDocument()
+  })
+
+  it('shows the primary owner under the property address in the sticky header', async () => {
+    renderComponent()
+    await waitFor(() => {
+      expect(screen.getByTestId('sticky-header-address')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('sticky-header-address')).toHaveTextContent('456 Oak Ave')
+    expect(screen.getByTestId('sticky-header-owner')).toHaveTextContent('Jane Doe')
+  })
+
   it('renders the activity panel', async () => {
     renderComponent()
     await waitFor(() => {

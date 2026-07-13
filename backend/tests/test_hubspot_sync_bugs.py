@@ -2588,15 +2588,18 @@ class TestBug8RescoreOnChange:
                 analysis_complete=True,
                 lead_score=99.0,            # stale sentinel — must be recomputed
                 recommended_action=None,
+                owner_user_id="test-user",
             )
             db.session.add(lead)
             db.session.commit()
             lead_id = lead.id
 
             # --- Create a task -------------------------------------------
+            auth = {'X-User-Id': 'test-user'}
             create_resp = client.post(
                 f'/api/leads/{lead_id}/tasks',
                 json={'title': 'Call owner', 'task_type': 'custom'},
+                headers=auth,
             )
             assert create_resp.status_code == 201
             task_id = create_resp.get_json()['id']
@@ -2610,7 +2613,8 @@ class TestBug8RescoreOnChange:
 
             # --- Complete the task ---------------------------------------
             complete_resp = client.post(
-                f'/api/leads/{lead_id}/tasks/{task_id}/complete'
+                f'/api/leads/{lead_id}/tasks/{task_id}/complete',
+                headers=auth,
             )
             assert complete_resp.status_code == 200
 

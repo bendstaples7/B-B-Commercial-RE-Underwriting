@@ -18,6 +18,7 @@ from app.models.hubspot_match import HubSpotMatch
 from app.models.hubspot_deal import HubSpotDeal
 from app.models.hubspot_contact import HubSpotContact
 from app.models.hubspot_company import HubSpotCompany
+from app.services.helpers.deal_source import resolve_blank_deal_source
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +190,9 @@ class HubSpotMatcherService:
         Copies fields that are currently null/empty on the Lead from the
         deal's raw_payload.  This is intentionally non-destructive: existing
         non-null values on the lead are never overwritten unless
-        ``sync_deal_context=True`` (used during explicit HubSpot refresh).
+        ``sync_deal_context=True`` (used during explicit HubSpot refresh) for
+        ``deal_description`` only. ``deal_source`` is always fill-if-blank so
+        Google Sheet ``source`` and HubSpot ``deal_source`` stay equal peers.
 
         ``hubspot_deal_stage`` is always synced from the linked deal.
         """
@@ -264,13 +267,19 @@ class HubSpotMatcherService:
             lead.county_assessor_pin = pin
             updated_fields.append("county_assessor_pin")
 
-        deal_source = (props.get("deal_source") or "").strip() or None
-        if deal_source and (sync_deal_context or not (lead.deal_source or '').strip()):
-            if lead.deal_source != deal_source:
-                lead.deal_source = deal_source
-                updated_fields.append("deal_source")
-
         deal_description = (props.get("description") or "").strip() or None
+        deal_source = resolve_blank_deal_source(
+            current=lead.deal_source,
+            hubspot_deal_source=props.get("deal_source"),
+            sheet_source=lead.source,
+            deal_description=deal_description,
+        )
+        # Sheet ``source`` and HubSpot ``deal_source`` are equal fill-if-blank peers —
+        # never overwrite a value already set from either side.
+        if deal_source and not (lead.deal_source or '').strip():
+            lead.deal_source = deal_source
+            updated_fields.append("deal_source")
+
         if deal_description and (sync_deal_context or not (lead.deal_description or '').strip()):
             if lead.deal_description != deal_description:
                 lead.deal_description = deal_description

@@ -16,6 +16,7 @@ import { render, screen, fireEvent, within, waitFor } from '@testing-library/rea
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom'
 import { deriveQueueContext } from '@/utils/deriveQueueContext'
+import { primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import { UnifiedLeadCommandCenter, ALL_LEAD_STATUSES } from './UnifiedLeadCommandCenter'
 import { QueueTable } from './QueueTable'
 import GlobalSearchBar from './GlobalSearchBar'
@@ -60,6 +61,27 @@ vi.mock('@/services/leadApi', async (importOriginal) => {
 })
 
 import type { PropertyDetail } from '@/types'
+
+function cleanAddressPart(value?: string | null): string {
+  return (value || '').trim().replace(/^,+|,+$/g, '').trim()
+}
+
+function expectedStickyHeaderAddress(payload: {
+  id: number
+  property_street?: string | null
+  property_city?: string | null
+  property_state?: string | null
+  property_zip?: string | null
+}): string {
+  const street = cleanAddressPart(payload.property_street)
+  const cityStateZip = [payload.property_city, payload.property_state, payload.property_zip]
+    .map(cleanAddressPart)
+    .filter(Boolean)
+    .join(', ')
+
+  if (street && cityStateZip) return `${street}, ${cityStateZip}`
+  return street || cityStateZip || `Lead #${payload.id}`
+}
 
 function minimalPropertyDetail(id: number): PropertyDetail {
   return {
@@ -300,7 +322,29 @@ const commandCenterPayloadArb = fc.record({
       per_page: fc.constant(20),
     })
   ),
-  // Fields used by deriveQueueContext
+  // Fields used by deriveQueueContext (server work_queues)
+  work_queues: fc.array(
+    fc.record({
+      key: fc.constantFrom(
+        'do-not-contact',
+        'needs-review',
+        'follow-up-overdue',
+        'missing-property-match',
+        'no-next-action',
+        'previously-warm',
+        'todays-action',
+      ),
+      label: fc.string({ minLength: 1 }),
+      path: fc.constantFrom(
+        '/queues/do-not-contact',
+        '/queues/needs-review',
+        '/queues/follow-up-overdue',
+        '/queues/missing-property-match',
+        '/queues/no-next-action',
+      ),
+    }),
+    { maxLength: 4 },
+  ),
   has_overdue_hubspot_task: fc.boolean(),
   overdue_task_title: fc.option(fc.string()),
   overdue_task_due: fc.option(fc.constant(new Date().toISOString())),
@@ -675,20 +719,25 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         // Get the sticky header element specifically to scope header-only assertions
         const headerEl = container.querySelector('header')!
 
-        // 1. Property address is the sticky header focus (owners live in sidebar/Contacts)
-        const street = (payload.property_street || '').trim()
-        const cityStateZip = [payload.property_city, payload.property_state, payload.property_zip]
-          .filter(Boolean)
-          .join(', ')
-        const expectedAddress =
-          street && cityStateZip
-            ? `${street}, ${cityStateZip}`
-            : street || cityStateZip || `Lead #${payload.id}`
+        // 1. Property address is the sticky header focus; primary owner may appear under it
+        const expectedAddress = expectedStickyHeaderAddress(payload)
 
         const addressBlock = headerEl.querySelector('[data-testid="sticky-header-address"]')
         expect(addressBlock).not.toBeNull()
         expect(addressBlock!.textContent).toContain(expectedAddress)
-        expect(headerEl.querySelector('[data-testid="sticky-header-owner"]')).toBeNull()
+
+        const expectedOwner = primaryOwnerDisplayName(
+          undefined,
+          payload.owner_first_name,
+          payload.owner_last_name,
+        )
+        const ownerEl = headerEl.querySelector('[data-testid="sticky-header-owner"]')
+        if (expectedOwner) {
+          expect(ownerEl).not.toBeNull()
+          expect(ownerEl!.textContent).toContain(expectedOwner)
+        } else {
+          expect(ownerEl).toBeNull()
+        }
         expect(headerEl.textContent).not.toContain('Owner 2:')
         expect(headerEl.textContent).not.toContain('Company:')
         expect(headerEl.textContent).not.toContain('Also listed:')

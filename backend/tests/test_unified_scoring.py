@@ -504,6 +504,52 @@ class TestOutreachContactMethod:
         assert result.recommended_contact_method == 'phone'
         assert result.recommended_action == 'call_ready'
 
+    def test_engaged_lead_bypasses_property_match_blocker(self):
+        lead = _make_lead(
+            id=None,
+            lead_status='mailing_contacted_interested',
+            has_phone=True,
+            has_email=False,
+            has_property_match=False,
+            property_street='123 Missing Match St',
+            follow_up_overdue=False,
+            is_warm=False,
+            motivation_score=0,
+        )
+
+        action, rule, _signals = LeadScoringEngine.evaluate_recommended_action(
+            lead,
+            total_score=65,
+            data_quality_score=45,
+            score_tier='D',
+        )
+
+        assert action == 'nurture'
+        assert rule == 'engaged_pipeline_nurture'
+
+    def test_tier_d_contactable_lead_bypasses_property_match_blocker(self):
+        lead = _make_lead(
+            id=None,
+            lead_status='mailing_no_contact_made',
+            has_phone=True,
+            has_email=False,
+            has_property_match=False,
+            property_street='124 Missing Match St',
+            follow_up_overdue=False,
+            is_warm=False,
+            motivation_score=0,
+        )
+
+        action, rule, _signals = LeadScoringEngine.evaluate_recommended_action(
+            lead,
+            total_score=35,
+            data_quality_score=35,
+            score_tier='D',
+        )
+
+        assert action == 'nurture'
+        assert rule == 'tier_d_contactable'
+
     def test_persist_ensures_due_call_task_after_outreach_refinement(self, app):
         lead = _make_lead(has_phone=True, has_email=True)
         lead.id = 123
