@@ -17,17 +17,8 @@ export function deriveQueueContext(data: any): QueueContext[] {
   if (data.follow_up_overdue) {
     queues.push({ label: 'Follow-Up Overdue', path: '/queues/follow-up-overdue', reason: 'A follow-up task is overdue.', color: 'error' })
   }
-  // Today's Action: overdue HubSpot task (most common case)
-  if (data.has_overdue_hubspot_task) {
-    const taskDesc = data.overdue_task_title
-      ? `"${data.overdue_task_title}" (HubSpot task) was due ${data.overdue_task_due ? new Date(data.overdue_task_due).toLocaleDateString() : 'in the past'} and is still open.`
-      : 'A HubSpot task is overdue.'
-    queues.push({ label: "Today's Action", path: '/', reason: taskDesc, color: 'warning' })
-  } else if (data.is_warm && !data.follow_up_overdue) {
-    queues.push({ label: "Today's Action", path: '/', reason: 'This lead has prior warm engagement — reach out now.', color: 'warning' })
-  } else if (data.recommended_action?.value === 'follow_up_now' && !data.follow_up_overdue && !data.is_warm) {
-    queues.push({ label: "Today's Action", path: '/', reason: data.recommended_action.explanation || 'Follow up now.', color: 'warning' })
-  }
+  // Today's Action banners removed from lead detail — the RA panel + tasks
+  // already surface follow-up work without a second yellow alert strip.
   if (!data.has_property_match) {
     queues.push({ label: 'Missing Property Match', path: '/queues/missing-property-match', reason: 'No confirmed property match exists for this lead.', color: 'info' })
   }

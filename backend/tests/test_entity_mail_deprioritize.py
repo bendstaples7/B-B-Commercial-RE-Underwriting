@@ -269,6 +269,65 @@ class TestColdMailBlockReason:
 
 
 class TestScoringMailGate:
+    def test_commercial_needs_review_with_mail_in_flight_is_nurture(self, monkeypatch):
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine._mail_work_in_flight',
+            lambda lead_id: True,
+        )
+
+        lead = MagicMock()
+        lead.lead_status = 'mailing_no_contact_made'
+        lead.lead_category = 'commercial'
+        lead.condo_risk_status = 'needs_review'
+        lead.do_not_contact = False
+        lead.id = 4860
+
+        action, reason, meta = LeadScoringEngine.evaluate_recommended_action(
+            lead, total_score=60.0, data_quality_score=50.0, score_tier='C',
+        )
+        assert action == 'nurture'
+        assert reason == 'mail_work_in_flight'
+        assert meta.get('condo_risk_status') == 'needs_review'
+
+    def test_commercial_likely_condo_still_suppress_with_mail_in_flight(self, monkeypatch):
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine._mail_work_in_flight',
+            lambda lead_id: True,
+        )
+
+        lead = MagicMock()
+        lead.lead_status = 'mailing_no_contact_made'
+        lead.lead_category = 'commercial'
+        lead.condo_risk_status = 'likely_condo'
+        lead.do_not_contact = False
+        lead.id = 4861
+
+        action, reason, meta = LeadScoringEngine.evaluate_recommended_action(
+            lead, total_score=60.0, data_quality_score=50.0, score_tier='C',
+        )
+        assert action == 'suppress'
+        assert reason == 'likely_condo'
+        assert meta.get('condo_risk_status') == 'likely_condo'
+
+    def test_commercial_needs_review_without_mail_still_nmr(self, monkeypatch):
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine._mail_work_in_flight',
+            lambda lead_id: False,
+        )
+
+        lead = MagicMock()
+        lead.lead_status = 'mailing_no_contact_made'
+        lead.lead_category = 'commercial'
+        lead.condo_risk_status = 'needs_review'
+        lead.do_not_contact = False
+        lead.id = 4862
+
+        action, reason, _meta = LeadScoringEngine.evaluate_recommended_action(
+            lead, total_score=60.0, data_quality_score=50.0, score_tier='C',
+        )
+        assert action == 'needs_manual_review'
+        assert reason == 'condo_needs_review'
+
     def test_institutional_nurture_instead_of_mail_ready(self, monkeypatch):
         monkeypatch.setattr(
             'app.services.lead_scoring_engine._resolve_crm_flags',

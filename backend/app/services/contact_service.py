@@ -409,21 +409,38 @@ class ContactService:
             raise ValidationException('Lead with id is required.', field='lead_id')
 
         property_id = lead.id
-        owners: list[tuple[str | None, str | None, bool]] = []
+        owners: list[tuple[str | None, str | None]] = []
         o1_first = (lead.owner_first_name or '').strip() or None
         o1_last = (lead.owner_last_name or '').strip() or None
         if o1_first or o1_last:
-            owners.append((o1_first, o1_last, True))
+            owners.append((o1_first, o1_last))
         o2_first = (getattr(lead, 'owner_2_first_name', None) or '').strip() or None
         o2_last = (getattr(lead, 'owner_2_last_name', None) or '').strip() or None
         if o2_first or o2_last:
-            # Owner 2 is primary when Owner 1 was absent.
-            owners.append((o2_first, o2_last, not owners))
+            owners.append((o2_first, o2_last))
+
+        from app.services.helpers.owner_organization import promote_named_owner_to_organization
 
         results: list[tuple[Contact, PropertyContact]] = []
         primary_contact: Contact | None = None
+        person_owners: list[tuple[str | None, str | None]] = []
+        promoted_any_org = False
 
-        for first_name, last_name, want_primary in owners:
+        for first_name, last_name in owners:
+            org = promote_named_owner_to_organization(
+                property_id,
+                first_name,
+                last_name,
+                source='owner_import',
+                unlink_contact=False,
+            )
+            if org is not None:
+                promoted_any_org = True
+                continue
+            person_owners.append((first_name, last_name))
+
+        for index, (first_name, last_name) in enumerate(person_owners):
+            want_primary = index == 0
             contact, link = self._upsert_named_owner(
                 property_id,
                 first_name,
@@ -438,7 +455,7 @@ class ContactService:
             any(getattr(lead, f'phone_{i}', None) for i in range(1, 8))
             or any(getattr(lead, f'email_{i}', None) for i in range(1, 6))
         ):
-            # Phones/emails without names — ensure a primary owner shell exists.
+            # Phones/emails without person names — ensure a primary owner shell exists.
             contact, link = self._upsert_named_owner(
                 property_id, None, 'Owner', is_primary=True,
             )
@@ -461,6 +478,18 @@ class ContactService:
             from app.services.lead_refresh import refresh_lead_scoring
             refresh_lead_scoring(property_id)
 
+        if promoted_any_org and commit:
+            try:
+                from app.services.entity_resolution_service import EntityResolutionService
+                EntityResolutionService().ensure_researched(
+                    property_id, actor='owner_import',
+                )
+            except Exception:  # noqa: BLE001 — never block owner upsert
+                logger.exception(
+                    'ensure_researched failed after owner upsert for lead %s',
+                    property_id,
+                )
+
         return results
 
     def _upsert_named_owner(
@@ -471,6 +500,8 @@ class ContactService:
         *,
         is_primary: bool,
     ) -> tuple[Contact, PropertyContact]:
+        from app.services.plugins.owner_name_utils import owner_names_equivalent
+
         first_norm = (first_name or '').strip().lower()
         last_norm = (last_name or '').strip().lower()
 
@@ -483,14 +514,26 @@ class ContactService:
         for contact, link in existing_rows:
             c_first = (contact.first_name or '').strip().lower()
             c_last = (contact.last_name or '').strip().lower()
-            if c_first == first_norm and c_last == last_norm:
-                if is_primary and not link.is_primary:
-                    PropertyContact.query.filter_by(
-                        property_id=property_id, is_primary=True,
-                    ).update({'is_primary': False})
-                    link.is_primary = True
-                    link.role = link.role or 'owner'
-                return contact, link
+            exact = c_first == first_norm and c_last == last_norm
+            fuzzy = (not exact) and owner_names_equivalent(
+                contact.first_name, contact.last_name, first_name, last_name,
+            )
+            if not exact and not fuzzy:
+                continue
+            # Prefer the more complete first name (e.g. JOSEPH A over Joseph)
+            if (first_name or '').strip() and len((first_name or '').strip()) > len(
+                (contact.first_name or '').strip()
+            ):
+                contact.first_name = first_name
+            if (last_name or '').strip() and not (contact.last_name or '').strip():
+                contact.last_name = last_name
+            if is_primary and not link.is_primary:
+                PropertyContact.query.filter_by(
+                    property_id=property_id, is_primary=True,
+                ).update({'is_primary': False})
+                link.is_primary = True
+                link.role = link.role or 'owner'
+            return contact, link
 
         if is_primary:
             PropertyContact.query.filter_by(
@@ -513,6 +556,75 @@ class ContactService:
         db.session.add(link)
         db.session.flush()
         return contact, link
+
+    def unlink_duplicate_person_owners(self, property_id: int) -> int:
+        """Unlink redundant person owner contacts that fuzzy-match a kept row.
+
+        Prefers the primary link, then the more complete name, then lowest id.
+        Returns number of PropertyContact rows removed.
+        """
+        from app.services.plugins.owner_name_utils import (
+            is_address_like_contact,
+            is_entity_contact,
+            owner_names_equivalent,
+        )
+
+        rows = (
+            db.session.query(Contact, PropertyContact)
+            .join(PropertyContact, PropertyContact.contact_id == Contact.id)
+            .filter(PropertyContact.property_id == property_id)
+            .order_by(Contact.id.asc())
+            .all()
+        )
+        people = [
+            (c, link)
+            for c, link in rows
+            if not is_entity_contact(c.first_name, c.last_name)
+            and not is_address_like_contact(c.first_name, c.last_name)
+        ]
+        removed = 0
+        kept: list[tuple[Contact, PropertyContact]] = []
+        for contact, link in people:
+            match_idx = next(
+                (
+                    i
+                    for i, (kept_c, _) in enumerate(kept)
+                    if owner_names_equivalent(
+                        kept_c.first_name, kept_c.last_name,
+                        contact.first_name, contact.last_name,
+                    )
+                ),
+                None,
+            )
+            if match_idx is None:
+                kept.append((contact, link))
+                continue
+
+            kept_c, kept_link = kept[match_idx]
+            prefer_new = False
+            if link.is_primary and not kept_link.is_primary:
+                prefer_new = True
+            elif kept_link.is_primary and not link.is_primary:
+                prefer_new = False
+            elif len((contact.first_name or '').strip()) > len(
+                (kept_c.first_name or '').strip()
+            ):
+                prefer_new = True
+            elif contact.id < kept_c.id and len(
+                (contact.first_name or '').strip()
+            ) == len((kept_c.first_name or '').strip()):
+                prefer_new = True
+
+            if prefer_new:
+                db.session.delete(kept_link)
+                kept[match_idx] = (contact, link)
+            else:
+                db.session.delete(link)
+            removed += 1
+
+        if removed:
+            db.session.flush()
+        return removed
 
     def _attach_flat_phones_emails(
         self,

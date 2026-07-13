@@ -44,7 +44,8 @@ import { ScoreLegend } from '@/components/ScoreLegend'
 import { MotivationSignalsPanel } from '@/components/lead-detail/MotivationSignalsPanel'
 import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
 import { contactDisplayName } from '@/utils/propertyContacts'
-import { formatImportedSource } from './leadDetailFormatters'
+import { formatImportNote } from './leadDetailFormatters'
+import { ccSubsectionTitleSx } from '@/components/lead-detail/commandCenterChrome'
 
 const DEFAULT_TAB_INDEX = 0
 
@@ -185,7 +186,7 @@ export function LeadDetailTabPanel({
 
   const fieldGroup = (title: string, fields: [string, string | number | null | undefined][]) => (
     <Box sx={{ mb: 3 }}>
-      <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
+      <Typography sx={ccSubsectionTitleSx}>
         {title}
       </Typography>
       <TableContainer>
@@ -325,7 +326,9 @@ export function LeadDetailTabPanel({
           {fieldGroup('Research & Tracking', [
             ['Deal Source', commandCenterData.deal_source ?? '—'],
             ['Deal Description', commandCenterData.deal_description ?? '—'],
-            ['Imported Source', formatImportedSource(commandCenterData) ?? '—'],
+            ...(formatImportNote(commandCenterData)
+              ? [['Import note', formatImportNote(commandCenterData)] as [string, string]]
+              : []),
             ['Date Identified', formatDate(leadData.date_identified)],
             ['Notes', leadData.notes],
             ['Needs Skip Trace', leadData.needs_skip_trace != null ? (leadData.needs_skip_trace ? 'Yes' : 'No') : null],
@@ -333,7 +336,7 @@ export function LeadDetailTabPanel({
             ['Date Skip Traced', formatDate(leadData.date_skip_traced)],
           ])}
           {fieldGroup('Metadata', [
-            ['Data Source', leadData.data_source],
+            ['Import channel', leadData.data_source],
             ['Created', formatDateTime(leadData.created_at)],
             ['Updated', formatDateTime(leadData.updated_at)],
           ])}
@@ -520,7 +523,7 @@ export function LeadDetailTabPanel({
 
       {activeTab === 5 && (
         <Box sx={{ p: 2 }}>
-          <ContactsSection propertyId={leadId} />
+          <ContactsSection propertyId={leadId} commandCenterData={commandCenterData} />
         </Box>
       )}
     </Box>

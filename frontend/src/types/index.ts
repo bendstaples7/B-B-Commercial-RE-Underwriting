@@ -1496,6 +1496,27 @@ export interface Organization {
   updated_at: string
 }
 
+/** Organization linked to a lead/property in command-center payload. */
+export interface PropertyOrganizationSummary {
+  id: number
+  name: string
+  org_type: OrgType | string | null
+  status?: OrgStatus | string | null
+  role: string
+  link_id: number
+  entity_lookup_status?: EntityLookupStatus | string | null
+  entity_lookup_person_found?: boolean | null
+  entity_lookup_checked_at?: string | null
+  entity_lookup_error?: string | null
+  jurisdiction?: string | null
+  file_number?: string | null
+  registered_office_address?: string | null
+  registered_agent_name?: string | null
+  /** Natural person found on Illinois SOS filing (manager/member). */
+  resolved_person_name?: string | null
+  resolved_person_role?: string | null
+}
+
 export type EntityLookupStatus =
   | 'pending'
   | 'resolved'
@@ -1519,6 +1540,11 @@ export interface EntityResolutionStatus {
   entity_lookup_error: string | null
   entity_lookup_checked_at: string | null
   entity_lookup_provider: string | null
+  registered_office_address?: string | null
+  registered_agent_name?: string | null
+  file_number?: string | null
+  resolved_person_name?: string | null
+  resolved_person_role?: string | null
   provider?: string | null
   provider_configured?: boolean
   dataset_imported_at?: string | null
@@ -1672,6 +1698,7 @@ export const QUICK_ADD_DEAL_SOURCES = [
   'Cityscape Unused Zoning Capacity',
   'Referral',
   'Direct Mail',
+  'CoStar',
   'Other',
 ] as const
 
@@ -2027,6 +2054,8 @@ export interface CommandCenterPayload {
   owner_2_last_name?: string | null;
   /** Relational contacts — prefer over flat owner/phone/email fields when present. */
   contacts?: PropertyContactSummary[];
+  /** Linked companies / LLCs (HubSpot-style Organizations). */
+  organizations?: PropertyOrganizationSummary[];
   property_street: string | null;
   property_city: string | null;
   property_state: string | null;
@@ -2096,6 +2125,26 @@ export interface CommandCenterPayload {
   building_sale_possible?: BuildingSalePossible | null;
   condo_analysis_id?: number | null;
   assessor_class?: string | null;
+  units?: number | null;
+  units_allowed?: number | null;
+}
+
+export interface BuildingOwnershipAnalyzeResult {
+  lead_id: number
+  condo_analysis_id?: number | null
+  condo_risk_status?: CondoRiskStatus | null
+  building_sale_possible?: BuildingSalePossible | null
+  recommended_action?: string | null
+  analysis_details?: Record<string, unknown> | null
+  classification?: {
+    condo_risk_status?: CondoRiskStatus
+    building_sale_possible?: BuildingSalePossible
+    reason?: string
+    confidence?: string
+    triggered_rules?: string[]
+  } | null
+  skipped?: boolean
+  skip_reason?: string | null
 }
 
 export interface LogCallFollowUpPayload {
@@ -2432,6 +2481,9 @@ export interface BuildingOwnershipDetail {
   assessor_class?: string | null
   manually_reviewed?: boolean
   manual_override_status?: CondoRiskStatus | null
+  analyzed_at?: string | null
+  created_at?: string | null
+  updated_at?: string | null
 }
 
 export interface NoNextActionStatusCounts {

@@ -71,7 +71,11 @@ RECOMMENDED_ACTION_METADATA = {
     },
     'needs_manual_review': {
         'label': 'Needs Manual Review',
-        'explanation': 'Condo risk or other factors require manual review before proceeding.',
+        'explanation': (
+            'Building ownership or other factors need attention. '
+            'Review the Building ownership section on this page — '
+            'no separate confirm action is required when analysis is already complete.'
+        ),
     },
 }
 

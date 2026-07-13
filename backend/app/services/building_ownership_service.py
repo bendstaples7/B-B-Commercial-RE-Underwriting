@@ -28,18 +28,20 @@ class BuildingOwnershipService:
     def __init__(self) -> None:
         self._condo_filter = CondoFilterService()
 
-    def analyze_lead(self, lead_id: int) -> dict:
+    def analyze_lead(self, lead_id: int, *, force: bool = False) -> dict:
         lead = db.session.get(Lead, lead_id)
         if lead is None:
             raise ValueError(f'Lead {lead_id} not found')
 
         from app.services.building_ownership_backfill import lead_needs_building_ownership_analysis
 
-        if not lead_needs_building_ownership_analysis(lead):
+        if not force and not lead_needs_building_ownership_analysis(lead):
             existing = self.get_for_lead(lead_id)
             if existing is not None:
                 return {
                     **existing,
+                    'lead_id': lead_id,
+                    'condo_analysis_id': lead.condo_analysis_id,
                     'skipped': True,
                     'skip_reason': 'analysis_current',
                 }
@@ -86,12 +88,16 @@ class BuildingOwnershipService:
         refresh_lead_scoring(lead_id)
         db.session.refresh(lead)
 
+        recommended = lead.recommended_action
+        if recommended is not None and hasattr(recommended, 'value'):
+            recommended = recommended.value
+
         return {
             'lead_id': lead_id,
             'condo_analysis_id': analysis.id,
             'condo_risk_status': lead.condo_risk_status,
             'building_sale_possible': lead.building_sale_possible,
-            'recommended_action': lead.recommended_action.value if lead.recommended_action else None,
+            'recommended_action': recommended,
             'analysis_details': analysis.analysis_details,
             'classification': {
                 'condo_risk_status': result.condo_risk_status,
@@ -201,6 +207,15 @@ class BuildingOwnershipService:
             or any(row.get('is_condo_class') for row in assessor_pins)
         )
 
+        units = getattr(lead, "units", None)
+        try:
+            units_int = int(units) if units is not None else None
+        except (TypeError, ValueError):
+            units_int = None
+        is_commercial = (
+            str(getattr(lead, "lead_category", "") or "").strip().lower() == "commercial"
+        )
+
         return AddressGroupMetrics(
             property_count=1,
             pin_count=len(pins),
@@ -209,4 +224,6 @@ class BuildingOwnershipService:
             has_condo_language=has_condo_lang,
             missing_pin_count=missing_pin,
             missing_owner_count=missing_owner,
+            units=units_int,
+            is_commercial=is_commercial,
         )

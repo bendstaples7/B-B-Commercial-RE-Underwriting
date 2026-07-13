@@ -162,6 +162,24 @@ class TestQuickAddEndpoint:
             )
             assert response.status_code == 400
 
+    def test_costar_deal_source_accepted(self, quick_add_client, app):
+        with app.app_context():
+            response = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_street': '3508 CoStar Deal Source St, Chicago, IL',
+                    'deal_source': 'CoStar',
+                }),
+                content_type='application/json',
+            )
+            assert response.status_code == 201
+            body = response.get_json()
+            assert body['deal_source'] == 'CoStar'
+            lead = db.session.get(Lead, body['lead_id'])
+            assert lead is not None
+            assert lead.deal_source == 'CoStar'
+
     def test_response_includes_hubspot_push_status(self, quick_add_client, app):
         with app.app_context():
             response = quick_add_client.post(

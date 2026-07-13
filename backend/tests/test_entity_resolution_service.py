@@ -146,8 +146,8 @@ class TestEntityResolutionService:
             llc_link = PropertyContact.query.filter_by(
                 property_id=lead.id, contact_id=llc.id,
             ).first()
-            assert llc_link is not None
-            assert llc_link.is_primary is False
+            # LLC lives on Organization — property contact link is removed.
+            assert llc_link is None
 
             org = Organization.query.get(result.organization_id)
             assert org.entity_lookup_status == "resolved"
@@ -316,6 +316,93 @@ class TestEntityResolutionService:
             assert other.entity_lookup_status is None
 
 
+class TestEnsureResearched:
+    def test_skips_when_already_resolved(self, app):
+        with app.app_context():
+            lead = _make_lead()
+            org = Organization(
+                name="ALREADY RESOLVED LLC",
+                org_type="llc",
+                status="active",
+                source="test",
+                entity_lookup_status="resolved",
+            )
+            db.session.add(org)
+            db.session.flush()
+            db.session.add(PropertyOrganizationLink(
+                property_id=lead.id,
+                organization_id=org.id,
+                role="owner",
+            ))
+            db.session.commit()
+            provider = FakeProvider()
+            result = EntityResolutionService(provider=provider).ensure_researched(
+                lead.id, sync=True,
+            )
+            assert result["skipped"] is True
+            assert result["reason"] == "already_researched"
+            assert provider.calls == []
+
+    def test_soft_fails_when_provider_not_configured(self, app):
+        with app.app_context():
+            lead = _make_lead()
+            org = Organization(
+                name="NEEDS RESEARCH LLC",
+                org_type="llc",
+                status="unknown",
+                source="test",
+            )
+            db.session.add(org)
+            db.session.flush()
+            db.session.add(PropertyOrganizationLink(
+                property_id=lead.id,
+                organization_id=org.id,
+                role="owner",
+            ))
+            db.session.commit()
+            provider = FakeProvider(configured=False)
+            result = EntityResolutionService(provider=provider).ensure_researched(
+                lead.id, sync=True,
+            )
+            assert result.get("pending") is True
+            db.session.refresh(org)
+            assert org.entity_lookup_status == "pending"
+
+    def test_runs_resolve_when_org_needs_research(self, app):
+        with app.app_context():
+            lead = _make_lead()
+            org = Organization(
+                name="RUN RESOLVE LLC",
+                org_type="llc",
+                status="unknown",
+                source="test",
+            )
+            db.session.add(org)
+            db.session.flush()
+            db.session.add(PropertyOrganizationLink(
+                property_id=lead.id,
+                organization_id=org.id,
+                role="owner",
+            ))
+            db.session.commit()
+            provider = FakeProvider(result=EntityLookupResult(
+                found=True,
+                jurisdiction="us_il",
+                name="RUN RESOLVE LLC",
+                file_number="12345678",
+                parties=[],
+                provider_name="fake",
+            ))
+            result = EntityResolutionService(provider=provider).ensure_researched(
+                lead.id, sync=True,
+            )
+            assert result.get("skipped") is False
+            assert result.get("status") == "resolved"
+            assert provider.calls
+            db.session.refresh(org)
+            assert org.entity_lookup_status == "resolved"
+
+
 class TestSkipTraceEnqueue:
     def test_creates_task_once(self, app):
         with app.app_context():
@@ -329,6 +416,20 @@ class TestSkipTraceEnqueue:
             assert LeadTask.query.filter_by(
                 lead_id=lead.id, task_type="skip_trace_owner", status="open",
             ).count() == 1
+
+    def test_title_uses_contact_display_name(self, app):
+        with app.app_context():
+            from app.models.contact import Contact
+
+            lead = _make_lead(ownership_type="individual")
+            contact = Contact(first_name="JOSEPH A", last_name="KIFERBAUM", role="owner")
+            db.session.add(contact)
+            db.session.commit()
+
+            task = SkipTraceEnqueue().enqueue(lead.id, contact_id=contact.id)
+            assert task is not None
+            assert "JOSEPH A KIFERBAUM" in (task.title or "")
+            assert "contact_id=" not in (task.title or "")
 
 
 def test_backfill_limit_zero_yields_no_candidates(app):

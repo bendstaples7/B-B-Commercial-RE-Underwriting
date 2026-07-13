@@ -105,6 +105,74 @@ def is_entity_contact(first_name: str | None, last_name: str | None) -> bool:
     return is_entity_name(display)
 
 
+_STREET_TOKENS = frozenset({
+    "ST", "STREET", "AVE", "AVENUE", "RD", "ROAD", "BLVD", "BOULEVARD",
+    "DR", "DRIVE", "LN", "LANE", "CT", "COURT", "PL", "PLACE", "WAY",
+    "CIR", "CIRCLE", "PKWY", "PARKWAY", "HWY", "HIGHWAY", "TER", "TERRACE",
+})
+
+
+def is_address_like_name(cleaned: str) -> bool:
+    """True when *cleaned* looks like a street address stuffed into a name field.
+
+    Mirrors frontend ``isAddressLikeContactName`` (e.g. ``3508SACRAMENTO MAYNARD``).
+    Address-like names must stay Contacts — never promote to Organization.
+    """
+    name = re.sub(r"\s+", " ", (cleaned or "").strip())
+    if not name:
+        return False
+    upper = name.upper()
+    if not re.search(r"\d", upper):
+        return False
+    if is_entity_name(upper):
+        return False
+
+    tokens = [t.replace(".", "") for t in re.split(r"[\s,]+", upper) if t]
+    if any(t in _STREET_TOKENS for t in tokens):
+        return True
+    # Mashed house-number + street fragment: "3508SACRAMENTO"
+    if re.search(r"\d[A-Z]{3,}", upper.replace(" ", "")):
+        return True
+    if re.match(r"^\d+\s+[A-Z]", upper):
+        return True
+    return False
+
+
+def is_address_like_contact(first_name: str | None, last_name: str | None) -> bool:
+    """True when a Contact name looks like an address mash."""
+    display = contact_display_name(first_name, last_name)
+    if not display:
+        return False
+    return is_address_like_name(display)
+
+
+def owner_names_equivalent(
+    first_a: str | None,
+    last_a: str | None,
+    first_b: str | None,
+    last_b: str | None,
+) -> bool:
+    """True when two person names are the same person ignoring case / middle initials.
+
+    ``Joseph Kiferbaum`` matches ``JOSEPH A KIFERBAUM``; does not match a different
+    last name or a different first given name.
+    """
+    last_norm_a = re.sub(r"[^a-z]", "", (last_a or "").lower())
+    last_norm_b = re.sub(r"[^a-z]", "", (last_b or "").lower())
+    if not last_norm_a or last_norm_a != last_norm_b:
+        return False
+
+    tokens_a = [re.sub(r"[^a-z]", "", t) for t in (first_a or "").lower().split() if t]
+    tokens_b = [re.sub(r"[^a-z]", "", t) for t in (first_b or "").lower().split() if t]
+    tokens_a = [t for t in tokens_a if t]
+    tokens_b = [t for t in tokens_b if t]
+    if not tokens_a and not tokens_b:
+        return True
+    if not tokens_a or not tokens_b:
+        return False
+    return tokens_a[0] == tokens_b[0]
+
+
 def is_institutional_contact(first_name: str | None, last_name: str | None) -> bool:
     """True when a Contact record looks like a public / nonprofit institution."""
     display = contact_display_name(first_name, last_name)

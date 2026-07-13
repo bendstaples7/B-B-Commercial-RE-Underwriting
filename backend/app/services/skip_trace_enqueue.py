@@ -12,11 +12,24 @@ from typing import Optional
 from sqlalchemy import text
 
 from app import db
+from app.models.contact import Contact
 from app.models.lead import Lead
 from app.models.lead_task import LeadTask
 from app.services.lead_task_service import LeadTaskService
 
 logger = logging.getLogger(__name__)
+
+
+def _contact_display_name(contact_id: int) -> Optional[str]:
+    contact = Contact.query.filter_by(id=contact_id).first()
+    if contact is None:
+        return None
+    parts = [
+        str(part).strip()
+        for part in (contact.first_name, contact.last_name)
+        if part and str(part).strip()
+    ]
+    return " ".join(parts) if parts else None
 
 
 class SkipTraceEnqueue:
@@ -61,7 +74,9 @@ class SkipTraceEnqueue:
 
         title = reason
         if contact_id is not None:
-            title = f"{reason} (contact_id={contact_id})"
+            display_name = _contact_display_name(contact_id)
+            suffix = display_name or f"contact_id={contact_id}"
+            title = f"{reason} ({suffix})"
         if len(title) > 255:
             title = title[:255]
 

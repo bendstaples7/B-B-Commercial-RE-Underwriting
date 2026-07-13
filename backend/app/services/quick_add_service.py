@@ -8,6 +8,7 @@ from typing import Any
 from app import db
 from app.models import Lead, LeadTimelineEntry
 from app.services.google_sheets_importer import GoogleSheetsImporter
+from app.services.helpers.deal_source import DEAL_SOURCE_OPTIONS
 from app.services.hubspot_writeback_service import DEFAULT_QUICK_ADD_DEAL_SOURCE
 
 logger = logging.getLogger(__name__)
@@ -16,14 +17,7 @@ QUICK_ADD_DATA_SOURCE = 'quick_add'
 QUICK_ADD_SOURCE = 'walk_by'
 QUICK_ADD_STATUS = 'skip_trace'
 
-QUICK_ADD_DEAL_SOURCE_OPTIONS: tuple[str, ...] = (
-    'Driving For Dollars',
-    'Cityscape',
-    'Cityscape Unused Zoning Capacity',
-    'Referral',
-    'Direct Mail',
-    'Other',
-)
+QUICK_ADD_DEAL_SOURCE_OPTIONS: tuple[str, ...] = DEAL_SOURCE_OPTIONS
 
 PRIORITY_TO_MANUAL: dict[str, int] = {
     'high': 5,

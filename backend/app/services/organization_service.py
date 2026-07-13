@@ -262,6 +262,21 @@ class OrganizationService:
             "Linked property_id=%d to org_id=%d role=%r",
             property_id, org_id, role,
         )
+
+        if (role or "").strip().lower() == "owner":
+            try:
+                from app.services.entity_resolution_service import EntityResolutionService
+                EntityResolutionService().ensure_researched(
+                    property_id,
+                    actor="manual_company_link",
+                    sync=True,
+                )
+            except Exception:  # noqa: BLE001 — linking must not fail on research
+                logger.exception(
+                    "ensure_researched failed after linking org_id=%s to property_id=%s",
+                    org_id, property_id,
+                )
+
         return link
 
     def unlink_property(self, link_id: int) -> None:

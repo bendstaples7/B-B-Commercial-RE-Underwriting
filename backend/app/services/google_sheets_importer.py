@@ -13,8 +13,23 @@ from googleapiclient.discovery import build
 from app import db
 from app.models.lead import Lead, LeadAuditTrail
 from app.models.import_job import ImportJob, FieldMapping, OAuthToken
+from app.services.helpers.deal_source import normalize_imported_source_to_deal_source
 
 logger = logging.getLogger(__name__)
+
+
+def _fill_deal_source_from_import_source(lead: Lead) -> bool:
+    """Fill blank ``deal_source`` from free-text ``source`` when mappable.
+
+    Returns True when the lead was updated.
+    """
+    if (lead.deal_source or '').strip():
+        return False
+    mapped = normalize_imported_source_to_deal_source(getattr(lead, 'source', None))
+    if not mapped:
+        return False
+    lead.deal_source = mapped
+    return True
 
 
 def _split_owner_name(first: Optional[str], last: Optional[str]) -> tuple[Optional[str], Optional[str]]:
@@ -851,6 +866,7 @@ class GoogleSheetsImporter:
             if import_job_id:
                 existing.last_import_job_id = import_job_id
             existing.updated_at = datetime.utcnow()
+            _fill_deal_source_from_import_source(existing)
             return existing
         else:
             # Create new lead
@@ -864,6 +880,7 @@ class GoogleSheetsImporter:
             if owner_user_id:
                 lead.owner_user_id = owner_user_id
             self._set_lead_fields(lead, validated_data)
+            _fill_deal_source_from_import_source(lead)
             db.session.add(lead)
             try:
                 with db.session.begin_nested():
@@ -884,6 +901,7 @@ class GoogleSheetsImporter:
                 if import_job_id:
                     existing.last_import_job_id = import_job_id
                 existing.updated_at = datetime.utcnow()
+                _fill_deal_source_from_import_source(existing)
                 return existing
             try:
                 from app.services.contact_service import ContactService
