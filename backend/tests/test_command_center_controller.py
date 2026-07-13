@@ -678,6 +678,16 @@ class TestCreateTask:
             assert response.status_code == 404
             assert LeadTask.query.filter_by(lead_id=lead.id).count() == 0
 
+    def test_create_task_missing_lead_returns_404(self, client, app):
+        with app.app_context():
+            response = client.post(
+                '/api/leads/999999/tasks',
+                data=json.dumps({'title': 'Call owner', 'task_type': 'custom'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 404
+
 
 class TestUpdateTaskHubSpotWriteback:
     def test_update_task_rejects_non_owner(self, client, app):

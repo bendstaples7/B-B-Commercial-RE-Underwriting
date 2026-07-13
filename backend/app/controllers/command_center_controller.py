@@ -212,7 +212,7 @@ def _load_authorized_lead(lead_id: int):
     """Load a lead and apply the owner/admin access gate used by Command Center."""
     lead = Lead.query.get(lead_id)
     if lead is None:
-        return None, jsonify({'error': 'Not found', 'message': f'Lead {lead_id} not found'}), 404
+        return None, (jsonify({'error': 'Not found', 'message': f'Lead {lead_id} not found'}), 404)
     denied = _require_lead_read_access(lead)
     if denied is not None:
         return None, denied
