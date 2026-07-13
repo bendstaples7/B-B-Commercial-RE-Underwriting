@@ -1,6 +1,7 @@
 """Marshmallow schemas for request validation."""
 from marshmallow import Schema, fields, validate, ValidationError, validates_schema, validates, EXCLUDE, pre_load
 from datetime import datetime
+from app.services.helpers.deal_source import DEAL_SOURCE_OPTIONS
 
 
 class RequestSchema(Schema):
@@ -1788,14 +1789,7 @@ class QuickAddSchema(RequestSchema):
     deal_source = fields.String(
         allow_none=True,
         load_default=None,
-        validate=validate.OneOf([
-            'Driving For Dollars',
-            'Cityscape',
-            'Cityscape Unused Zoning Capacity',
-            'Referral',
-            'Direct Mail',
-            'Other',
-        ]),
+        validate=validate.OneOf(list(DEAL_SOURCE_OPTIONS)),
     )
     date_identified = fields.Date(allow_none=True, load_default=None)
     capture_latitude = fields.Float(

@@ -170,6 +170,7 @@ class EntityResolutionService:
         can_research = bool(
             entity_name and jurisdiction_ok and nonprofit_configured and not org_is_nonprofit
         )
+        resolved_person_name, resolved_person_role = self.resolved_person_for_org(org)
 
         return {
             "lead_id": lead_id,
@@ -195,6 +196,15 @@ class EntityResolutionService:
             "entity_lookup_provider": (
                 org.entity_lookup_provider if org else provider_name
             ),
+            "registered_office_address": (
+                org.registered_office_address if org else None
+            ),
+            "registered_agent_name": (
+                org.registered_agent_name if org else None
+            ),
+            "file_number": org.file_number if org else None,
+            "resolved_person_name": resolved_person_name,
+            "resolved_person_role": resolved_person_role,
             "provider": provider_name,
             "provider_configured": provider_configured,
             "dataset_imported_at": dataset_imported_at,
@@ -213,6 +223,133 @@ class EntityResolutionService:
                 and not is_definite_institutional
             ),
         }
+
+    @staticmethod
+    def resolved_person_for_org(
+        org: Optional[Organization],
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Return (display_name, party_type) for the best natural-person party."""
+        if org is None:
+            return None, None
+        parties = (
+            OrganizationParty.query
+            .filter_by(organization_id=org.id, is_company=False)
+            .all()
+        )
+        for party_type in _PERSON_PARTY_PRIORITY:
+            for party in parties:
+                if party.party_type != party_type:
+                    continue
+                name = contact_display_name(party.first_name, party.last_name).strip()
+                if not name:
+                    # SOS often stores "LAST, FIRST" in full_name
+                    raw = (party.full_name or "").strip()
+                    if "," in raw:
+                        last, _, first = raw.partition(",")
+                        name = contact_display_name(first.strip(), last.strip()).strip() or raw
+                    else:
+                        name = raw
+                if name:
+                    return name, party_type
+        return None, None
+
+    @staticmethod
+    def owner_org_needs_research(org: Optional[Organization]) -> bool:
+        """True when a linked owner org has never been successfully researched."""
+        if org is None:
+            return False
+        status = (org.entity_lookup_status or "").strip()
+        if not status:
+            return True
+        return status in ("pending", "error")
+
+    def ensure_researched(
+        self,
+        lead_id: int,
+        *,
+        actor: str = "owner_import",
+        sync: bool = False,
+    ) -> dict:
+        """Queue (or sync-run) entity resolution when an owner org still needs research.
+
+        Never raises for missing SOS data — marks ``pending`` and returns so
+        imports / company promotion stay non-blocking.
+        """
+        org = self._get_linked_owner_org(lead_id)
+        if org is None:
+            return {
+                "queued": False,
+                "skipped": True,
+                "reason": "no_owner_org",
+            }
+        if not self.owner_org_needs_research(org):
+            return {
+                "queued": False,
+                "skipped": True,
+                "reason": "already_researched",
+                "organization_id": org.id,
+                "entity_lookup_status": org.entity_lookup_status,
+            }
+
+        entity_name = self._resolve_entity_name(lead_id)
+        if not entity_name:
+            return {
+                "queued": False,
+                "skipped": True,
+                "reason": "no_entity_name",
+                "organization_id": org.id if org else None,
+            }
+
+        if not sync:
+            try:
+                from celery_worker import entity_resolution_resolve_lead_task
+                entity_resolution_resolve_lead_task.apply_async(
+                    args=[lead_id],
+                    kwargs={"actor": actor},
+                )
+                logger.info(
+                    "Queued entity resolution for lead_id=%s actor=%s",
+                    lead_id, actor,
+                )
+                return {
+                    "queued": True,
+                    "skipped": False,
+                    "organization_id": org.id if org else None,
+                    "entity_name": entity_name,
+                }
+            except Exception as exc:  # noqa: BLE001
+                logger.info(
+                    "Celery unavailable for entity resolution lead %s: %s — running sync",
+                    lead_id, exc,
+                )
+
+        try:
+            result = self.resolve_lead(lead_id, actor=actor)
+            return {
+                "queued": False,
+                "skipped": False,
+                "sync": True,
+                "status": result.status,
+                "organization_id": result.organization_id,
+                "entity_name": result.entity_name,
+            }
+        except EntityLookupProviderNotConfiguredError as exc:
+            if org is not None:
+                org.entity_lookup_status = "pending"
+                org.entity_lookup_error = str(exc)
+                org.entity_lookup_checked_at = None
+                db.session.commit()
+            logger.warning(
+                "Entity resolution pending for lead_id=%s — SOS data not loaded: %s",
+                lead_id, exc,
+            )
+            return {
+                "queued": False,
+                "skipped": False,
+                "pending": True,
+                "organization_id": org.id if org else None,
+                "message": str(exc),
+            }
 
     def resolve_lead(
         self,
@@ -673,6 +810,16 @@ class EntityResolutionService:
                 )
             person_contact_id = contact.id
             person_name = contact_display_name(contact.first_name, contact.last_name)
+            # LLC lives on Organization now — drop the entity-shaped Contact link.
+            from app.services.helpers.owner_organization import (
+                unlink_matching_entity_property_contact,
+            )
+            unlink_matching_entity_property_contact(
+                lead_id,
+                lookup.name or entity_name,
+            )
+            # Collapse Joseph / JOSEPH A style duplicates created by import + SOS.
+            self._contacts.unlink_duplicate_person_owners(lead_id)
             db.session.flush()
 
             task = self._skip_trace.enqueue(

@@ -12,9 +12,26 @@ import EmailIcon from '@mui/icons-material/Email'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import type { CommandCenterPayload, LeadPhone, PropertyContactSummary } from '@/types'
 import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
-import { contactDisplayName, isEntityContactName, primaryOwnerDisplayName } from '@/utils/propertyContacts'
-import { formatImportedSource } from './leadDetailFormatters'
+import {
+  isEntityContactName,
+  ownerDisplayEntries,
+} from '@/utils/propertyContacts'
+import { formatImportNote } from './leadDetailFormatters'
 import { PhoneRow } from '@/components/PhoneRow'
+import { ccCardSx } from '@/components/lead-detail/commandCenterChrome'
+
+const SIDEBAR_LABEL_SX = {
+  flexShrink: 0,
+  width: 108,
+  textAlign: 'left' as const,
+}
+
+const SIDEBAR_VALUE_SX = {
+  flex: 1,
+  minWidth: 0,
+  textAlign: 'right' as const,
+  wordBreak: 'break-word' as const,
+}
 
 function SidebarSection({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -35,25 +52,67 @@ function SidebarRow({
   value,
   alwaysShow = false,
   testId,
+  valueFontWeight,
 }: {
   label: string
   value: ReactNode
   alwaysShow?: boolean
   testId?: string
+  valueFontWeight?: number
 }) {
   const isEmpty = value == null || value === ''
   if (isEmpty && !alwaysShow) return null
   return (
-    <Box sx={{ display: 'flex', gap: 1, mb: 0.5 }} data-testid={testId}>
-      <Typography variant="caption" color="text.secondary" sx={{ minWidth: 90, flexShrink: 0 }}>
+    <Box
+      sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1, mb: 0.5 }}
+      data-testid={testId}
+    >
+      <Typography variant="caption" color="text.secondary" sx={SIDEBAR_LABEL_SX}>
         {label}
       </Typography>
       <Typography
         variant="caption"
-        sx={{ wordBreak: 'break-word', color: isEmpty ? 'text.disabled' : 'text.primary' }}
+        fontWeight={valueFontWeight}
+        sx={{
+          ...SIDEBAR_VALUE_SX,
+          whiteSpace: 'pre-line',
+          color: isEmpty ? 'text.disabled' : 'text.primary',
+        }}
       >
         {isEmpty ? '—' : value}
       </Typography>
+    </Box>
+  )
+}
+
+/** Label left / content right for non-text values (phones, emails, chips). */
+function SidebarLabeledContent({
+  label,
+  children,
+  testId,
+}: {
+  label: string
+  children: ReactNode
+  testId?: string
+}) {
+  return (
+    <Box
+      sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1, mb: 0.5 }}
+      data-testid={testId}
+    >
+      <Typography variant="caption" color="text.secondary" sx={SIDEBAR_LABEL_SX}>
+        {label}
+      </Typography>
+      <Box
+        sx={{
+          ...SIDEBAR_VALUE_SX,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-end',
+        }}
+      >
+        {children}
+      </Box>
     </Box>
   )
 }
@@ -66,7 +125,7 @@ function CopyableEmail({ email }: { email: string }) {
     setTimeout(() => setCopied(false), 1500)
   }
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 0.5, mb: 0.5 }}>
       <EmailIcon sx={{ fontSize: 13, color: 'text.secondary' }} />
       <Link href={`mailto:${email}`} variant="caption" underline="hover" noWrap>
         {email}
@@ -119,18 +178,14 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
   const contacts: PropertyContactSummary[] = commandCenterData.contacts ?? []
   const useContacts = contacts.length > 0
 
-  const flatOwnerName = primaryOwnerDisplayName(
-    null,
+  const ownerEntries = ownerDisplayEntries(
+    contacts,
     commandCenterData.owner_first_name,
     commandCenterData.owner_last_name,
+    commandCenterData.owner_2_first_name,
+    commandCenterData.owner_2_last_name,
+    commandCenterData.organizations,
   )
-  const secondaryOwners = useContacts
-    ? []
-    : [
-        [commandCenterData.owner_2_first_name, commandCenterData.owner_2_last_name]
-          .filter(Boolean)
-          .join(' '),
-      ].filter(Boolean)
 
   const phones: LeadPhone[] = useContacts
     ? []
@@ -164,9 +219,10 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
 
   return (
     <Paper
-      variant="outlined"
       data-testid="property-sidebar"
       sx={{
+        ...ccCardSx,
+        mb: 0,
         position: 'sticky',
         top: 80,
         maxHeight: 'calc(100vh - 100px)',
@@ -175,101 +231,109 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
         minWidth: 280,
         maxWidth: 320,
         flexShrink: 0,
-        p: 2,
       }}
     >
       <SidebarSection title="Contact Info">
+        {ownerEntries.map((entry, idx) => (
+          <SidebarRow
+            key={`${entry.label}-${entry.name}`}
+            label={entry.label}
+            value={
+              <>
+                {entry.name}
+                {entry.contact?.is_primary && isEntityContactName(entry.contact) ? (
+                  <Chip
+                    size="small"
+                    label="LLC — resolve entity"
+                    variant="outlined"
+                    sx={{ ml: 0.75, height: 18, fontSize: '0.65rem' }}
+                  />
+                ) : null}
+              </>
+            }
+            valueFontWeight={idx === 0 ? 600 : 500}
+            testId={
+              idx === 0
+                ? 'sidebar-owner-name'
+                : entry.label === 'Company'
+                  ? 'sidebar-company-name'
+                  : entry.label === 'Also listed'
+                    ? 'sidebar-also-listed-name'
+                    : entry.label === 'Owner 2'
+                      ? 'sidebar-owner-2-name'
+                      : undefined
+            }
+          />
+        ))}
         {useContacts ? (
-          contacts.map((contact, idx) => {
-            const name = contactDisplayName(contact)
-            if (!name && !(contact.phones?.length) && !(contact.emails?.length)) return null
+          contacts.map((contact) => {
+            const phonesList = contact.phones ?? []
+            const emailsList = contact.emails ?? []
+            if (!phonesList.length && !emailsList.length) return null
             return (
-              <Box key={contact.id} sx={{ mb: idx < contacts.length - 1 ? 1.5 : 0.5 }}>
-                {name && (
-                  <Typography
-                    variant="caption"
-                    component="div"
-                    fontWeight={contact.is_primary || idx === 0 ? 600 : 500}
-                    display="block"
-                    sx={{ mb: 0.5 }}
-                  >
-                    {name}
-                    {contact.role && contact.role !== 'owner' ? ` (${contact.role})` : ''}
-                    {contact.is_primary && isEntityContactName(contact) && (
-                      <Chip
-                        size="small"
-                        label="LLC — resolve entity"
-                        color="warning"
-                        variant="outlined"
-                        sx={{ ml: 0.75, height: 18, fontSize: '0.65rem' }}
-                      />
-                    )}
-                  </Typography>
-                )}
-                {(contact.phones ?? []).map((p) => (
-                  <PhoneRow key={p.id ?? p.value} phone={p} />
+              <Box key={`contact-methods-${contact.id}`} sx={{ mb: 0.5 }}>
+                {phonesList.map((p) => (
+                  <SidebarLabeledContent key={p.id ?? p.value} label="Phone">
+                    <PhoneRow phone={p} />
+                  </SidebarLabeledContent>
                 ))}
-                {(contact.emails ?? []).map((e) => (
-                  <CopyableEmail key={e.id} email={e.value} />
+                {emailsList.map((e) => (
+                  <SidebarLabeledContent key={e.id} label="Email">
+                    <CopyableEmail email={e.value} />
+                  </SidebarLabeledContent>
                 ))}
               </Box>
             )
           })
         ) : (
           <>
-            {flatOwnerName && (
-              <Typography variant="caption" fontWeight={600} display="block" sx={{ mb: 0.75 }}>
-                {flatOwnerName}
-              </Typography>
-            )}
-            {secondaryOwners.map((name) => (
-              <Typography
-                key={name}
-                variant="caption"
-                color="text.secondary"
-                display="block"
-                sx={{ mb: 0.5 }}
-              >
-                {name}
-              </Typography>
-            ))}
             {phones.map((p, i) => (
-              <PhoneRow key={p.id ?? `${p.value}-${i}`} phone={p} />
+              <SidebarLabeledContent key={p.id ?? `${p.value}-${i}`} label="Phone">
+                <PhoneRow phone={p} />
+              </SidebarLabeledContent>
             ))}
             {emails.map((e, i) => (
-              <CopyableEmail key={i} email={e} />
+              <SidebarLabeledContent key={i} label="Email">
+                <CopyableEmail email={e} />
+              </SidebarLabeledContent>
             ))}
           </>
         )}
         {data.socials && <SidebarRow label="Socials" value={data.socials} />}
       </SidebarSection>
 
-      {((!useContacts && secondaryOwners.length > 0) || commandCenterData.ownership_type) && (
+      {commandCenterData.ownership_type && (
         <SidebarSection title="Owner">
-          {!useContacts &&
-            secondaryOwners.map((name) => (
-              <SidebarRow key={name} label="Owner 2" value={name} />
-            ))}
           <SidebarRow label="Type" value={commandCenterData.ownership_type} />
         </SidebarSection>
       )}
 
       <SidebarSection title="Property">
         {(commandCenterData.property_street || commandCenterData.property_city) && (
-          <Box sx={{ mb: 0.75 }}>
-            {commandCenterData.property_street && (
-              <Typography variant="caption" fontWeight={600} display="block">
+          <SidebarRow
+            label="Address"
+            value={
+              <>
                 {commandCenterData.property_street}
-              </Typography>
-            )}
-            {(commandCenterData.property_city || commandCenterData.property_state || commandCenterData.property_zip) && (
-              <Typography variant="caption" color="text.secondary" display="block">
-                {[commandCenterData.property_city, commandCenterData.property_state, commandCenterData.property_zip]
-                  .filter(Boolean)
-                  .join(', ')}
-              </Typography>
-            )}
-          </Box>
+                {(commandCenterData.property_city ||
+                  commandCenterData.property_state ||
+                  commandCenterData.property_zip) && (
+                  <>
+                    {commandCenterData.property_street ? '\n' : ''}
+                    {[
+                      commandCenterData.property_city,
+                      commandCenterData.property_state,
+                      commandCenterData.property_zip,
+                    ]
+                      .filter(Boolean)
+                      .join(', ')}
+                  </>
+                )}
+              </>
+            }
+            valueFontWeight={600}
+            testId="sidebar-property-address"
+          />
         )}
         <SidebarRow label="Type" value={commandCenterData.property_type} />
         <SidebarRow
@@ -309,7 +373,11 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
             value={commandCenterData.most_recent_sale_display ?? data.most_recent_sale}
           />
           {formatSaleDateFreshness(commandCenterData.sale_date_meta) && (
-            <Typography variant="caption" color="text.disabled" sx={{ display: 'block', pl: '90px' }}>
+            <Typography
+              variant="caption"
+              color="text.disabled"
+              sx={{ display: 'block', textAlign: 'right', pl: '108px' }}
+            >
               {formatSaleDateFreshness(commandCenterData.sale_date_meta)}
             </Typography>
           )}
@@ -320,20 +388,19 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
           alwaysShow
           testId="sidebar-deal-source"
         />
-        <Box sx={{ mt: 0.5, mb: 0.75 }} data-testid="sidebar-deal-description">
-          <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.25 }}>
-            Deal Description
-          </Typography>
+        <SidebarLabeledContent label="Deal Description" testId="sidebar-deal-description">
           <Typography
-            variant="body2"
+            variant="caption"
+            component="div"
             sx={{
               whiteSpace: 'pre-wrap',
+              textAlign: 'right',
               color: commandCenterData.deal_description ? 'text.primary' : 'text.disabled',
             }}
           >
             {commandCenterData.deal_description || '—'}
           </Typography>
-        </Box>
+        </SidebarLabeledContent>
         {data.address_2 && <SidebarRow label="Address 2" value={data.address_2} />}
         {data.returned_addresses && (
           <SidebarRow label="Other Addresses" value={data.returned_addresses} />
@@ -342,16 +409,28 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
 
       {(commandCenterData.mailing_address || commandCenterData.mailing_city) && (
         <SidebarSection title="Owner Mailing Address">
-          {commandCenterData.mailing_address && (
-            <Typography variant="caption" display="block">{commandCenterData.mailing_address}</Typography>
-          )}
-          {(commandCenterData.mailing_city || commandCenterData.mailing_state || commandCenterData.mailing_zip) && (
-            <Typography variant="caption" display="block">
-              {[commandCenterData.mailing_city, commandCenterData.mailing_state, commandCenterData.mailing_zip]
-                .filter(Boolean)
-                .join(', ')}
-            </Typography>
-          )}
+          <SidebarRow
+            label="Mailing"
+            value={
+              <>
+                {commandCenterData.mailing_address}
+                {(commandCenterData.mailing_city ||
+                  commandCenterData.mailing_state ||
+                  commandCenterData.mailing_zip) && (
+                  <>
+                    {commandCenterData.mailing_address ? '\n' : ''}
+                    {[
+                      commandCenterData.mailing_city,
+                      commandCenterData.mailing_state,
+                      commandCenterData.mailing_zip,
+                    ]
+                      .filter(Boolean)
+                      .join(', ')}
+                  </>
+                )}
+              </>
+            }
+          />
         </SidebarSection>
       )}
 
@@ -409,9 +488,9 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
       )}
 
       <SidebarSection title="Import & Sync">
-        <SidebarRow label="Imported Source" value={formatImportedSource(commandCenterData)} />
+        <SidebarRow label="Import note" value={formatImportNote(commandCenterData)} />
         <SidebarRow label="Category" value={commandCenterData.lead_category} />
-        <SidebarRow label="Data Source" value={data.data_source} />
+        <SidebarRow label="Import channel" value={data.data_source} />
         <SidebarRow label="Identified" value={data.date_identified} />
         <SidebarRow
           label="Added"

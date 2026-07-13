@@ -17,7 +17,7 @@ import {
 } from '@mui/material'
 import BlockIcon from '@mui/icons-material/Block'
 import AddTaskIcon from '@mui/icons-material/AddTask'
-import type { RecommendedActionMeta, LeadStatus, LeadTask, CRMRecommendedAction, OutreachContact, CondoRiskStatus } from '@/types'
+import type { RecommendedActionMeta, LeadStatus, LeadTask, CRMRecommendedAction, OutreachContact } from '@/types'
 import { outreachDisplayLabel } from '@/constants/scoringRecommendedActions'
 import { OutreachContactInline, OutreachContactMissingHint } from '@/components/OutreachContactCallout'
 
@@ -84,7 +84,6 @@ const ACTION_BUTTONS: Record<CRMRecommendedAction, ActionButton[]> = {
     { label: 'Research Property', action: 'research_property' },
   ],
   needs_manual_review: [
-    { label: 'Confirm Building Ownership', action: 'research_property' },
     { label: 'Log Note', action: 'log_note' },
     { label: 'Create Task', action: 'create_task' },
   ],
@@ -139,7 +138,8 @@ export interface RecommendedActionPanelProps {
   isMailable?: boolean
   /** When true, show outreach contact inline under the action label */
   showOutreachContact?: boolean
-  condoRiskStatus?: CondoRiskStatus | null
+  /** Drop outer border when nested inside a shared action card. */
+  embedded?: boolean
   onAction: (action: string) => Promise<void>
   onCreateTask?: () => void
 }
@@ -164,7 +164,7 @@ export function RecommendedActionPanel({
   mailQueueStatus = null,
   isMailable = false,
   showOutreachContact = false,
-  condoRiskStatus = null,
+  embedded = false,
   onAction,
   onCreateTask,
 }: RecommendedActionPanelProps) {
@@ -174,6 +174,9 @@ export function RecommendedActionPanel({
   const isDNC = leadStatus === 'do_not_contact'
   const isInMailBatch = mailQueueStatus === 'queued'
   const wasSentRecently = mailQueueStatus === 'sent_recently'
+  const panelSx = embedded
+    ? { p: 0 }
+    : { p: 2, border: 1, borderColor: 'divider', borderRadius: 1 }
 
   const handleAction = async (action: string) => {
     setActionError(null)
@@ -233,7 +236,7 @@ export function RecommendedActionPanel({
     return (
       <Box
         data-testid="recommended-action-panel"
-        sx={{ p: 2, border: 1, borderColor: 'divider', borderRadius: 1 }}
+        sx={panelSx}
       >
         {isDNC && (
           <Chip
@@ -264,7 +267,7 @@ export function RecommendedActionPanel({
     isMailable
     && !isInMailBatch
     && !wasSentRecently
-    && value === 'add_contact_info'
+    && (value === 'add_contact_info' || value === 'needs_manual_review')
     && !prioritizedRaButtons.some((btn) => btn.action === 'add_to_mail_batch')
   ) {
     prioritizedRaButtons = [
@@ -278,7 +281,7 @@ export function RecommendedActionPanel({
   return (
     <Box
       data-testid="recommended-action-panel"
-      sx={{ p: 2, border: 1, borderColor: 'divider', borderRadius: 1 }}
+      sx={panelSx}
     >
       {/* DNC badge — shown when lead is do_not_contact */}
       {isDNC && (
@@ -292,23 +295,16 @@ export function RecommendedActionPanel({
         />
       )}
 
-      {condoRiskStatus && (
-        <Chip
-          size="small"
-          variant="outlined"
-          color={condoRiskStatus === 'likely_condo' ? 'warning' : 'default'}
-          label={`Condo: ${condoRiskStatus.replace(/_/g, ' ')}`}
-          sx={{ mb: 1.5, ml: isDNC ? 1 : 0 }}
-          data-testid="condo-status-chip"
-        />
-      )}
-
       {/* RA label — hidden for nurture (no system suggestion, just quick actions) */}
       {!hideRaHeading && (
         <Typography
-          variant="subtitle1"
-          fontWeight="bold"
-          gutterBottom
+          sx={{
+            fontSize: '0.8rem',
+            fontWeight: 700,
+            letterSpacing: 0.02,
+            color: 'text.secondary',
+            mb: 0.75,
+          }}
           data-testid="ra-label"
         >
           {displayLabel}

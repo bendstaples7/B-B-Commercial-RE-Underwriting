@@ -574,6 +574,50 @@ describe('RecommendedActionPanel', () => {
 
       expect(screen.queryByTestId('ra-action-btn-add_to_mail_batch')).not.toBeInTheDocument()
     })
+
+    it('shows Add to Mail Queue for needs_manual_review when mailable and likely_not_condo', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('needs_manual_review', 'Needs Manual Review')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          isMailable
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('ra-action-btn-add_to_mail_batch')).toBeInTheDocument()
+    })
+
+    it('shows Add to Mail Queue for needs_manual_review when mailable even if condo still needs review', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('needs_manual_review', 'Needs Manual Review')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          isMailable
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('ra-action-btn-add_to_mail_batch')).toBeInTheDocument()
+    })
+
+    it('does not show Confirm Building Ownership for needs_manual_review', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('needs_manual_review', 'Needs Manual Review')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.queryByTestId('ra-action-btn-research_property')).not.toBeInTheDocument()
+      expect(screen.queryByText('Confirm Building Ownership')).not.toBeInTheDocument()
+      expect(screen.getByTestId('ra-universal-btn-log_note')).toBeInTheDocument()
+      expect(screen.getByTestId('ra-action-btn-create_task')).toBeInTheDocument()
+    })
   })
 })
 

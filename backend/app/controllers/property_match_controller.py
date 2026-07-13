@@ -113,7 +113,9 @@ def get_building_ownership(lead_id: int):
 @require_auth
 @handle_errors
 def analyze_building_ownership(lead_id: int):
-    return jsonify(_ownership_svc.analyze_lead(lead_id)), 200
+    body = request.get_json(silent=True) or {}
+    force = bool(body.get('force'))
+    return jsonify(_ownership_svc.analyze_lead(lead_id, force=force)), 200
 
 
 @property_match_bp.route('/<int:lead_id>/building-ownership/override', methods=['PUT'])

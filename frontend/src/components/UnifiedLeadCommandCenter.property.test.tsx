@@ -285,6 +285,7 @@ const commandCenterPayloadArb = fc.record({
   property_street: fc.option(fc.string()),
   property_city: fc.option(fc.string()),
   property_state: fc.option(fc.string()),
+  property_zip: fc.option(fc.string()),
   lead_score: fc.integer({ min: 0, max: 100 }),
   lead_status: fc.constantFrom(...ALL_LEAD_STATUSES),
   open_tasks: fc.array(taskArb, { maxLength: 20 }),
@@ -674,16 +675,23 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         // Get the sticky header element specifically to scope header-only assertions
         const headerEl = container.querySelector('header')!
 
-        // 1. Owner name — matches the component's exact logic:
-        //   [firstName, lastName].filter(Boolean).join(' ') || 'Unknown Owner'
-        const ownerParts = [payload.owner_first_name, payload.owner_last_name].filter(Boolean)
-        const ownerName = ownerParts.join(' ')
-        const displayName = ownerName || 'Unknown Owner'
+        // 1. Property address is the sticky header focus (owners live in sidebar/Contacts)
+        const street = (payload.property_street || '').trim()
+        const cityStateZip = [payload.property_city, payload.property_state, payload.property_zip]
+          .filter(Boolean)
+          .join(', ')
+        const expectedAddress =
+          street && cityStateZip
+            ? `${street}, ${cityStateZip}`
+            : street || cityStateZip || `Lead #${payload.id}`
 
-        // Find the owner name element by its MUI Typography subtitle1 CSS class
-        const ownerNameEl = headerEl.querySelector('.MuiTypography-subtitle1')
-        expect(ownerNameEl).not.toBeNull()
-        expect(ownerNameEl!.textContent).toBe(displayName)
+        const addressBlock = headerEl.querySelector('[data-testid="sticky-header-address"]')
+        expect(addressBlock).not.toBeNull()
+        expect(addressBlock!.textContent).toContain(expectedAddress)
+        expect(headerEl.querySelector('[data-testid="sticky-header-owner"]')).toBeNull()
+        expect(headerEl.textContent).not.toContain('Owner 2:')
+        expect(headerEl.textContent).not.toContain('Company:')
+        expect(headerEl.textContent).not.toContain('Also listed:')
 
         // 2. Lead score — header button shows "N / 100"
         const scoreEl = headerEl.querySelector('[data-testid="header-lead-score"]')

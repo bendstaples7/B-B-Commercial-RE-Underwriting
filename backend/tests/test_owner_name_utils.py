@@ -1,6 +1,7 @@
 """Tests for owner name entity / institutional classification."""
 from app.services.plugins.owner_name_utils import (
     apply_owner_name_fields,
+    is_address_like_name,
     is_definite_institutional_name,
     is_entity_name,
     is_institutional_name,
@@ -41,6 +42,35 @@ class TestInstitutionalName:
         # Relies on IRS EO research — name markers alone are not enough.
         assert not is_institutional_name("Voice of the People in Uptown Inc")
         assert is_entity_name("Voice of the People in Uptown Inc")
+
+
+class TestOwnerNamesEquivalent:
+    def test_middle_initial_matches(self):
+        from app.services.plugins.owner_name_utils import owner_names_equivalent
+        assert owner_names_equivalent("Joseph", "Kiferbaum", "JOSEPH A", "KIFERBAUM")
+
+    def test_different_last_name(self):
+        from app.services.plugins.owner_name_utils import owner_names_equivalent
+        assert not owner_names_equivalent("Joseph", "Kiferbaum", "Joseph", "Smith")
+
+    def test_different_first_name(self):
+        from app.services.plugins.owner_name_utils import owner_names_equivalent
+        assert not owner_names_equivalent("Joseph", "Kiferbaum", "Jane", "Kiferbaum")
+
+
+class TestAddressLikeName:
+    def test_mashed_sacramento(self):
+        assert is_address_like_name("3508SACRAMENTO MAYNARD")
+
+    def test_street_address(self):
+        assert is_address_like_name("123 Main St")
+
+    def test_person_not_address(self):
+        assert not is_address_like_name("Joseph Kiferbaum")
+
+    def test_llc_not_address_even_with_digits(self):
+        assert is_entity_name("123 Main Street LLC")
+        assert not is_address_like_name("123 Main Street LLC")
 
 
 class TestApplyOwnerNameFields:

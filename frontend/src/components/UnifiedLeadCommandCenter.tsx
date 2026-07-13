@@ -42,7 +42,6 @@ import openLetterService from '@/services/openLetterApi'
 import { deriveQueueContext } from '@/utils/deriveQueueContext'
 import { parseLogActivityParam, buildLeadUrl } from '@/utils/queueLogNavigation'
 import { isFromQueueState, fromQueueFromKey, queuePath, type FromQueueState } from '@/utils/fromQueue'
-import { primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import {
   LEAD_WORKSPACE_STALE_MS,
   prefetchAdjacentQueueLeads,
@@ -63,7 +62,11 @@ import { resolveOutreachContactFromCommandCenter } from '@/utils/outreachContact
 import { outreachContactPlacement } from '@/utils/outreachContactPlacement'
 import { LeadDetailTabPanel } from '@/components/lead-detail/LeadDetailTabPanel'
 import { PropertySidebar } from '@/components/lead-detail/PropertySidebar'
-import { BuildingOwnershipReviewDrawer } from '@/components/BuildingOwnershipReviewDrawer'
+import { BuildingOwnershipSection } from '@/components/BuildingOwnershipSection'
+import {
+  ccCardSx,
+  ccSectionTitleSx,
+} from '@/components/lead-detail/commandCenterChrome'
 import { SuppressLeadDialog } from '@/components/SuppressLeadDialog'
 
 export { ALL_LEAD_STATUSES } from '@/constants/leadStatuses'
@@ -101,6 +104,16 @@ interface StickyHeaderProps {
   fromQueue?: FromQueueState | null
 }
 
+function formatPropertyAddress(data: CommandCenterPayload): string {
+  const street = (data.property_street || '').trim()
+  const cityStateZip = [data.property_city, data.property_state, data.property_zip]
+    .filter(Boolean)
+    .join(', ')
+    .replace(/,\s*,/g, ',')
+  if (street && cityStateZip) return `${street}, ${cityStateZip}`
+  return street || cityStateZip || `Lead #${data.id}`
+}
+
 function StickyHeader({
   leadId,
   commandCenterData,
@@ -112,20 +125,7 @@ function StickyHeader({
   const [scoreDialogOpen, setScoreDialogOpen] = useState(false)
   const navigate = useNavigate()
 
-  const ownerName =
-    primaryOwnerDisplayName(
-      commandCenterData.contacts,
-      commandCenterData.owner_first_name,
-      commandCenterData.owner_last_name,
-    ) || 'Unknown Owner'
-
-  const address = [
-    commandCenterData.property_street,
-    commandCenterData.property_city,
-    commandCenterData.property_state,
-  ]
-    .filter(Boolean)
-    .join(', ')
+  const propertyAddress = formatPropertyAddress(commandCenterData)
 
   const scoreTier = scoreRecord?.score_tier ?? scoreToTier(commandCenterData.lead_score)
   const displayScore = scoreRecord?.total_score ?? commandCenterData.lead_score
@@ -153,12 +153,15 @@ function StickyHeader({
             <ArrowBackIcon />
           </IconButton>
 
-          <Box sx={{ flexGrow: 1 }}>
-            <Typography variant="subtitle1" fontWeight="bold">
-              {ownerName}
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              {address}
+          <Box sx={{ flexGrow: 1, minWidth: 0 }} data-testid="sticky-header-address">
+            <Typography
+              variant="subtitle1"
+              fontWeight={700}
+              sx={{ lineHeight: 1.3 }}
+              noWrap
+              title={propertyAddress}
+            >
+              {propertyAddress}
             </Typography>
           </Box>
 
@@ -299,22 +302,34 @@ function QueueContextBanners({ commandCenterData }: QueueContextBannersProps) {
   if (queues.length === 0) return null
 
   return (
-    <Box sx={{ mb: 1 }}>
-      {queues.map((queue, index) => (
-        <Alert
-          key={index}
-          severity={queue.color === 'default' ? 'info' : queue.color}
-          data-testid="queue-context-banner"
-          sx={{ mb: 0.5 }}
-          action={
-            <Button component={RouterLink} to={queue.path} size="small" color="inherit">
-              View Queue
-            </Button>
-          }
-        >
-          <strong>{queue.label}</strong> — {queue.reason}
-        </Alert>
-      ))}
+    <Box sx={{ px: { xs: 1, sm: 2 }, pt: 1, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+      {queues.map((queue, index) => {
+        const isCritical = queue.color === 'error'
+        return (
+          <Alert
+            key={index}
+            severity={isCritical ? 'error' : 'info'}
+            variant="outlined"
+            data-testid="queue-context-banner"
+            sx={{
+              py: 0.25,
+              flex: '1 1 280px',
+              '& .MuiAlert-message': { fontSize: '0.8rem' },
+            }}
+            action={
+              <Button component={RouterLink} to={queue.path} size="small" color="inherit">
+                View
+              </Button>
+            }
+          >
+            <strong>{queue.label}</strong>
+            <Box component="span" sx={{ color: 'text.secondary' }}>
+              {' — '}
+              {queue.reason}
+            </Box>
+          </Alert>
+        )
+      })}
     </Box>
   )
 }
@@ -330,6 +345,8 @@ interface TasksPanelProps {
   missingOutreachChannel?: OutreachContact['channel'] | null
   mailQueueStatus?: 'queued' | 'sent_recently' | null
   upNextToMail?: boolean
+  /** Drop Paper chrome when nested inside a shared action card. */
+  embedded?: boolean
   onTasksChanged: () => void
   /** Called after a task is successfully completed (for queue auto-advance). */
   onAfterTaskCompleted?: () => void
@@ -349,6 +366,7 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
     missingOutreachChannel = null,
     mailQueueStatus = null,
     upNextToMail = false,
+    embedded = false,
     onTasksChanged,
     onAfterTaskCompleted,
   },
@@ -429,22 +447,41 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
   }
 
   return (
-    <Paper ref={panelRef} sx={{ p: 2, mb: 2 }} data-testid="tasks-panel">
-      <LeadTaskList
-        ref={taskListRef}
-        leadId={leadId}
-        tasks={tasks}
-        outreachContact={outreachContact}
-        showOutreachContactOnPrimaryTask={showOutreachContactOnPrimaryTask}
-        missingOutreachChannel={missingOutreachChannel}
-        mailQueueStatus={mailQueueStatus}
-        upNextToMail={upNextToMail}
-        onTaskCreated={handleTaskCreated}
-        onTaskCompleted={handleTaskCompleted}
-        onOptimisticTaskCreate={handleOptimisticTaskCreate}
-        onOptimisticTaskRevert={handleOptimisticTaskRevert}
-      />
-    </Paper>
+    <Box ref={panelRef} data-testid="tasks-panel" sx={embedded ? { p: 0 } : undefined}>
+      {embedded ? (
+        <LeadTaskList
+          ref={taskListRef}
+          leadId={leadId}
+          tasks={tasks}
+          outreachContact={outreachContact}
+          showOutreachContactOnPrimaryTask={showOutreachContactOnPrimaryTask}
+          missingOutreachChannel={missingOutreachChannel}
+          mailQueueStatus={mailQueueStatus}
+          upNextToMail={upNextToMail}
+          onTaskCreated={handleTaskCreated}
+          onTaskCompleted={handleTaskCompleted}
+          onOptimisticTaskCreate={handleOptimisticTaskCreate}
+          onOptimisticTaskRevert={handleOptimisticTaskRevert}
+        />
+      ) : (
+        <Paper sx={{ p: 2, mb: 2 }}>
+          <LeadTaskList
+            ref={taskListRef}
+            leadId={leadId}
+            tasks={tasks}
+            outreachContact={outreachContact}
+            showOutreachContactOnPrimaryTask={showOutreachContactOnPrimaryTask}
+            missingOutreachChannel={missingOutreachChannel}
+            mailQueueStatus={mailQueueStatus}
+            upNextToMail={upNextToMail}
+            onTaskCreated={handleTaskCreated}
+            onTaskCompleted={handleTaskCompleted}
+            onOptimisticTaskCreate={handleOptimisticTaskCreate}
+            onOptimisticTaskRevert={handleOptimisticTaskRevert}
+          />
+        </Paper>
+      )}
+    </Box>
   )
 })
 
@@ -507,8 +544,8 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
 
     return (
       <Box ref={panelRef} sx={{ mb: 2, overflow: 'auto' }} data-testid="activity-panel">
-        <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>
-          Activity History
+        <Typography sx={ccSectionTitleSx}>
+          Activity
         </Typography>
         <LeadTimeline
           leadId={leadId}
@@ -624,7 +661,6 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     open: false,
     message: '',
   })
-  const [buildingOwnershipOpen, setBuildingOwnershipOpen] = useState(false)
   const [suppressDialogOpen, setSuppressDialogOpen] = useState(false)
   const [dncDialogOpen, setDncDialogOpen] = useState(false)
   const [dncPending, setDncPending] = useState(false)
@@ -733,9 +769,13 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
         return
       }
-      case 'research_property':
-        setBuildingOwnershipOpen(true)
+      case 'research_property': {
+        const el = document.getElementById('building-ownership-section')
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        }
         return
+      }
       case 'run_analysis': {
         navigate(`${location.pathname}?tab=analysis`, { replace: true })
         if (leadLoading) {
@@ -908,8 +948,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', p: { xs: 1, sm: 2 } }}>
         {/* Activity column — order: RecommendedActionPanel → TasksPanel → ActivityPanel → TabPanel */}
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          {/* RecommendedActionPanel — first in ActivityColumn (Req 5.3) */}
-          <Box sx={{ mb: 2 }}>
+          {/* One card: recommended action + quick actions + open tasks */}
+          <Paper sx={ccCardSx} data-testid="lead-action-section">
+            <Typography sx={{ ...ccSectionTitleSx, mb: 1.5 }}>
+              Next steps
+            </Typography>
             <RecommendedActionPanel
               recommendedAction={recommendedActionWithContact}
               leadStatus={commandCenterData!.lead_status}
@@ -917,24 +960,37 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               mailQueueStatus={commandCenterData!.mail_queue_status ?? null}
               isMailable={commandCenterData!.is_mailable ?? false}
               showOutreachContact={placement === 'recommended_action'}
-              condoRiskStatus={commandCenterData!.condo_risk_status ?? null}
+              embedded
               onAction={handleRaAction}
               onCreateTask={handleCreateTask}
             />
-          </Box>
+            <Box
+              sx={{
+                borderTop: 1,
+                borderColor: 'divider',
+                mt: 2,
+                pt: 2,
+              }}
+            >
+              <TasksPanel
+                ref={tasksPanelRef}
+                leadId={leadId}
+                initialTasks={openTasks}
+                outreachContact={outreachContact}
+                showOutreachContactOnPrimaryTask={placement === 'primary_task'}
+                missingOutreachChannel={missingOutreachChannel}
+                mailQueueStatus={commandCenterData!.mail_queue_status ?? null}
+                upNextToMail={Boolean(commandCenterData!.up_next_to_mail)}
+                embedded
+                onTasksChanged={() => queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })}
+                onAfterTaskCompleted={fromQueue ? () => { void advanceAfterTaskComplete() } : undefined}
+              />
+            </Box>
+          </Paper>
 
-          {/* TasksPanel — second in ActivityColumn (Req 7.1–7.4) */}
-          <TasksPanel
-            ref={tasksPanelRef}
+          <BuildingOwnershipSection
             leadId={leadId}
-            initialTasks={openTasks}
-            outreachContact={outreachContact}
-            showOutreachContactOnPrimaryTask={placement === 'primary_task'}
-            missingOutreachChannel={missingOutreachChannel}
-            mailQueueStatus={commandCenterData!.mail_queue_status ?? null}
-            upNextToMail={Boolean(commandCenterData!.up_next_to_mail)}
-            onTasksChanged={() => queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })}
-            onAfterTaskCompleted={fromQueue ? () => { void advanceAfterTaskComplete() } : undefined}
+            commandCenterData={commandCenterData!}
           />
 
           {/* ActivityPanel — third in ActivityColumn (Req 8.1–8.3) */}
@@ -973,14 +1029,6 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         openTasks={openTasks}
         onClose={() => setActivityModal(null)}
         onSaved={handleActivitySaved}
-      />
-
-      <BuildingOwnershipReviewDrawer
-        leadId={leadId}
-        commandCenterData={commandCenterData!}
-        open={buildingOwnershipOpen}
-        onClose={() => setBuildingOwnershipOpen(false)}
-        onUpdated={() => queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })}
       />
 
       <SuppressLeadDialog

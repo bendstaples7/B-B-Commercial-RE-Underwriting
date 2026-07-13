@@ -3,6 +3,8 @@
 Applies deterministic priority-ordered rules to address group metrics
 to produce a condo risk classification and building sale assessment.
 """
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 
@@ -17,6 +19,8 @@ class AddressGroupMetrics:
     has_condo_language: bool
     missing_pin_count: int
     missing_owner_count: int
+    units: int | None = None
+    is_commercial: bool = False
 
 
 @dataclass
@@ -30,6 +34,12 @@ class ClassificationResult:
     confidence: str                 # high | medium | low
 
 
+def _is_multi_unit_commercial(metrics: AddressGroupMetrics) -> bool:
+    if metrics.is_commercial:
+        return True
+    return metrics.units is not None and metrics.units >= 5
+
+
 def classify(metrics: AddressGroupMetrics) -> ClassificationResult:
     """Apply deterministic priority-ordered rules to produce classification.
 
@@ -39,6 +49,8 @@ def classify(metrics: AddressGroupMetrics) -> ClassificationResult:
     3. pin_count >= 4 AND owner_count >= 2 → likely_condo / no / high confidence
     4. pin_count=1 AND owner_count=1 AND no unit AND no condo language
        → likely_not_condo / yes / high confidence
+    4b. commercial / multi-unit (5+) with 1–2 PINs and no condo indicators
+       → likely_not_condo / yes / medium confidence
     5. pin_count >= 2 AND owner_count=1 AND no unit
        → partial_condo_possible / maybe / medium confidence
     6. pin_count >= 2 AND owner_count > 1 AND no unit AND no condo language
@@ -106,6 +118,24 @@ def classify(metrics: AddressGroupMetrics) -> ClassificationResult:
             triggered_rules=["rule_4_single_pin_owner"],
             reason="Single PIN and single owner with no condo indicators suggests whole-building ownership",
             confidence="high",
+        )
+
+    # Rule 4b: Commercial / multi-unit with few PINs → lean not condoized
+    if (
+        _is_multi_unit_commercial(metrics)
+        and 1 <= metrics.pin_count <= 2
+        and not metrics.has_unit_number
+        and not metrics.has_condo_language
+    ):
+        return ClassificationResult(
+            condo_risk_status="likely_not_condo",
+            building_sale_possible="yes",
+            triggered_rules=["rule_4b_commercial_few_pins"],
+            reason=(
+                f"Few PINs ({metrics.pin_count}) on a multi-unit commercial property "
+                f"with no condo indicators — likely whole-building ownership, not condoized"
+            ),
+            confidence="medium",
         )
 
     # Rule 5: Multiple PINs, single owner, no unit marker

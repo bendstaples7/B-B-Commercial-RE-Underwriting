@@ -422,6 +422,37 @@ describe('LeadTaskList', () => {
       })
     })
 
+    it('creates add_to_mail_batch task when type is selected', async () => {
+      const newTask = makeTask(100, {
+        title: 'Add to mail queue',
+        task_type: 'add_to_mail_batch',
+      })
+      mockCreateTask.mockResolvedValue(newTask)
+
+      render(
+        <LeadTaskList
+          leadId={7}
+          tasks={[]}
+          onTaskCreated={vi.fn()}
+        />,
+      )
+
+      await user.click(screen.getByTestId('open-task-form-btn'))
+      const typeSelect = screen.getByLabelText('Type')
+      await user.click(typeSelect)
+      await user.click(await screen.findByRole('option', { name: 'Add to mail queue' }))
+      expect(screen.getByTestId('task-title-input')).toHaveValue('Add to mail queue')
+      await user.click(screen.getByTestId('save-task-btn'))
+
+      await waitFor(() => {
+        expect(mockCreateTask).toHaveBeenCalledWith(7, {
+          title: 'Add to mail queue',
+          task_type: 'add_to_mail_batch',
+          due_date: null,
+        })
+      })
+    })
+
     it('passes due_date when provided', async () => {
       const newTask = makeTask(99, { title: 'Task with date', due_date: '2025-06-15' })
       mockCreateTask.mockResolvedValue(newTask)

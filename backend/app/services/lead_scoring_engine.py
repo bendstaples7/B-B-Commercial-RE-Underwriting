@@ -441,10 +441,22 @@ class LeadScoringEngine:
                 condo_lower = condo_status.strip().lower()
                 if condo_lower == "likely_condo":
                     return 'suppress', 'likely_condo', {'condo_risk_status': condo_status}
-                if condo_lower == "needs_review":
-                    return 'needs_manual_review', 'condo_needs_review', {'condo_risk_status': condo_status}
-                if condo_lower == "partial_condo_possible":
-                    return 'needs_manual_review', 'condo_partial_ambiguous', {'condo_risk_status': condo_status}
+                # Mail already queued: wait on the batch instead of Needs Manual Review.
+                # Do not override likely_condo suppress above.
+                if condo_lower in ("needs_review", "partial_condo_possible"):
+                    lead_id_condo = getattr(lead, "id", None)
+                    if isinstance(lead_id_condo, int) and _mail_work_in_flight(lead_id_condo):
+                        return 'nurture', 'mail_work_in_flight', {
+                            'condo_risk_status': condo_status,
+                            'mail_work_in_flight': True,
+                        }
+                    if condo_lower == "needs_review":
+                        return 'needs_manual_review', 'condo_needs_review', {
+                            'condo_risk_status': condo_status,
+                        }
+                    return 'needs_manual_review', 'condo_partial_ambiguous', {
+                        'condo_risk_status': condo_status,
+                    }
 
         if getattr(lead, "do_not_contact", False) is True:
             return 'suppress', 'do_not_contact_flag', {'do_not_contact': True}

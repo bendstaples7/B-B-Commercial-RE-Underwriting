@@ -484,10 +484,49 @@ def get_command_center(lead_id: int):
 
     hubspot_sync = HubSpotDealSyncService.get_lead_sync_health(lead_id)
 
-    # Relational contacts (primary first) — authoritative for owner display;
-    # flat owner/phone/email columns remain for transition consumers.
+    # Relational contacts (primary first) — people / address-like only going forward.
+    # Organizations (LLCs) are linked separately via property_organization_links.
     from app.services.contact_service import ContactService
+    from app.services.entity_resolution_service import EntityResolutionService
+    from app.models.organization import Organization
+    from app.models.property_organization_link import PropertyOrganizationLink
+
     contacts_payload = ContactService().get_ordered_contacts_payload(lead_id)
+
+    org_rows = (
+        _db.session.query(Organization, PropertyOrganizationLink)
+        .join(
+            PropertyOrganizationLink,
+            PropertyOrganizationLink.organization_id == Organization.id,
+        )
+        .filter(PropertyOrganizationLink.property_id == lead_id)
+        .order_by(PropertyOrganizationLink.id.asc())
+        .all()
+    )
+    organizations_payload = []
+    for org, link in org_rows:
+        person_name, person_role = EntityResolutionService.resolved_person_for_org(org)
+        organizations_payload.append({
+            'id': org.id,
+            'name': org.name,
+            'org_type': org.org_type,
+            'status': org.status,
+            'role': link.role,
+            'link_id': link.id,
+            'entity_lookup_status': org.entity_lookup_status,
+            'entity_lookup_person_found': org.entity_lookup_person_found,
+            'entity_lookup_checked_at': (
+                org.entity_lookup_checked_at.isoformat()
+                if org.entity_lookup_checked_at else None
+            ),
+            'entity_lookup_error': org.entity_lookup_error,
+            'jurisdiction': org.jurisdiction,
+            'file_number': org.file_number,
+            'registered_office_address': org.registered_office_address,
+            'registered_agent_name': org.registered_agent_name,
+            'resolved_person_name': person_name,
+            'resolved_person_role': person_role,
+        })
 
     return jsonify({
         'id': lead.id,
@@ -496,6 +535,7 @@ def get_command_center(lead_id: int):
         'owner_2_first_name': lead.owner_2_first_name,
         'owner_2_last_name': lead.owner_2_last_name,
         'contacts': contacts_payload,
+        'organizations': organizations_payload,
         # Property details
         'property_street': lead.property_street,
         'property_city': lead.property_city,
