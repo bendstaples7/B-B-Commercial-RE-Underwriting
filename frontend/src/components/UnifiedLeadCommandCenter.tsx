@@ -40,6 +40,7 @@ import { commandCenterService, leadTaskService, leadScoreService, queueService }
 import { leadService } from '@/services/leadApi'
 import { multifamilyService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
+import { primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import { parseLogActivityParam, buildLeadUrl } from '@/utils/queueLogNavigation'
 import { isFromQueueState, fromQueueFromKey, queuePath, type FromQueueState } from '@/utils/fromQueue'
 import {
@@ -130,6 +131,12 @@ function StickyHeader({
   const navigate = useNavigate()
 
   const propertyAddress = formatPropertyAddress(commandCenterData)
+  const primaryOwner = primaryOwnerDisplayName(
+    commandCenterData.contacts,
+    commandCenterData.owner_first_name,
+    commandCenterData.owner_last_name,
+    commandCenterData.organizations,
+  )
 
   const scoreTier = scoreRecord?.score_tier ?? scoreToTier(commandCenterData.lead_score)
   const displayScore = scoreRecord?.total_score ?? commandCenterData.lead_score
@@ -167,6 +174,18 @@ function StickyHeader({
             >
               {propertyAddress}
             </Typography>
+            {primaryOwner ? (
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ lineHeight: 1.2 }}
+                noWrap
+                title={primaryOwner}
+                data-testid="sticky-header-owner"
+              >
+                {primaryOwner}
+              </Typography>
+            ) : null}
           </Box>
 
           {/* Lead score — opens breakdown dialog */}

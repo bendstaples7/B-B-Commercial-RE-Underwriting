@@ -16,6 +16,7 @@ import { render, screen, fireEvent, within, waitFor } from '@testing-library/rea
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom'
 import { deriveQueueContext } from '@/utils/deriveQueueContext'
+import { primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import { UnifiedLeadCommandCenter, ALL_LEAD_STATUSES } from './UnifiedLeadCommandCenter'
 import { QueueTable } from './QueueTable'
 import GlobalSearchBar from './GlobalSearchBar'
@@ -718,13 +719,25 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         // Get the sticky header element specifically to scope header-only assertions
         const headerEl = container.querySelector('header')!
 
-        // 1. Property address is the sticky header focus (owners live in sidebar/Contacts)
+        // 1. Property address is the sticky header focus; primary owner may appear under it
         const expectedAddress = expectedStickyHeaderAddress(payload)
 
         const addressBlock = headerEl.querySelector('[data-testid="sticky-header-address"]')
         expect(addressBlock).not.toBeNull()
         expect(addressBlock!.textContent).toContain(expectedAddress)
-        expect(headerEl.querySelector('[data-testid="sticky-header-owner"]')).toBeNull()
+
+        const expectedOwner = primaryOwnerDisplayName(
+          undefined,
+          payload.owner_first_name,
+          payload.owner_last_name,
+        )
+        const ownerEl = headerEl.querySelector('[data-testid="sticky-header-owner"]')
+        if (expectedOwner) {
+          expect(ownerEl).not.toBeNull()
+          expect(ownerEl!.textContent).toContain(expectedOwner)
+        } else {
+          expect(ownerEl).toBeNull()
+        }
         expect(headerEl.textContent).not.toContain('Owner 2:')
         expect(headerEl.textContent).not.toContain('Company:')
         expect(headerEl.textContent).not.toContain('Also listed:')
