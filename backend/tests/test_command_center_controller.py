@@ -665,8 +665,36 @@ class TestCreateTask:
             )
             assert response.status_code == 400
 
+    def test_create_task_rejects_non_owner(self, client, app):
+        """POST /tasks cannot mutate a lead owned by another user."""
+        with app.app_context():
+            lead = _make_lead(app, '14b Other Owner Task St', owner_user_id='other-user')
+            response = client.post(
+                f'/api/leads/{lead.id}/tasks',
+                data=json.dumps({'title': 'Call owner', 'task_type': 'custom'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 404
+            assert LeadTask.query.filter_by(lead_id=lead.id).count() == 0
+
 
 class TestUpdateTaskHubSpotWriteback:
+    def test_update_task_rejects_non_owner(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, 'HS Other Owner St', owner_user_id='other-user')
+            task = _make_task(app, lead.id, title='Do not edit')
+            response = client.patch(
+                f'/api/leads/{lead.id}/tasks/{task.id}',
+                data=json.dumps({'title': 'Edited'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 404
+            db.session.refresh(task)
+            assert task.title == 'Do not edit'
+
     def test_native_task_update_skips_hubspot(self, client, app):
         with app.app_context():
             lead = _make_lead(app, 'HS Native Skip St')
@@ -797,6 +825,19 @@ class TestCompleteTask:
             )
             data = json.loads(response.data)
             assert data['status'] == 'completed'
+
+    def test_complete_task_rejects_non_owner(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '18b Complete Other Owner St', owner_user_id='other-user')
+            task = _make_task(app, lead.id)
+            response = client.post(
+                f'/api/leads/{lead.id}/tasks/{task.id}/complete',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 404
+            db.session.refresh(task)
+            assert task.status == 'open'
 
 
 # ---------------------------------------------------------------------------

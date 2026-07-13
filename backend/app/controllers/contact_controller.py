@@ -132,6 +132,14 @@ def _serialize_property_contact(contact, pc):
     return data
 
 
+def _refresh_linked_property_scoring(contact) -> None:
+    """Refresh score/action for every property linked to a changed contact."""
+    from app.services.lead_refresh import refresh_lead_scoring
+
+    for pc in contact.property_contacts.all():
+        refresh_lead_scoring(pc.property_id)
+
+
 # ---------------------------------------------------------------------------
 # Contact CRUD routes  (/api/contacts/*)
 # ---------------------------------------------------------------------------
@@ -200,6 +208,8 @@ def update_contact(contact_id):
     """
     data = request.get_json(silent=True) or {}
     contact = contact_service.update_contact(contact_id, data)
+    if 'phones' in data or 'emails' in data:
+        _refresh_linked_property_scoring(contact)
     return jsonify(_serialize_contact(contact)), 200
 
 

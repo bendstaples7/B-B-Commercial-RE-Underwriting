@@ -208,6 +208,17 @@ def _require_lead_read_access(lead: Lead):
     return None
 
 
+def _load_authorized_lead(lead_id: int):
+    """Load a lead and apply the owner/admin access gate used by Command Center."""
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return None, jsonify({'error': 'Not found', 'message': f'Lead {lead_id} not found'}), 404
+    denied = _require_lead_read_access(lead)
+    if denied is not None:
+        return None, denied
+    return lead, None
+
+
 # ---------------------------------------------------------------------------
 # Error handling decorator (mirrors property_controller.py pattern)
 # ---------------------------------------------------------------------------
@@ -867,6 +878,9 @@ def create_task(lead_id: int):
 
     Create a new LeadTask for a lead.
     """
+    _lead, denied = _load_authorized_lead(lead_id)
+    if denied is not None:
+        return denied
     data = LeadTaskCreateSchema().load(request.get_json() or {})
     actor = getattr(g, 'user_id', 'anonymous')
     # Pass recompute_action=False: refresh_lead_scoring below recomputes the
@@ -898,6 +912,9 @@ def update_task(lead_id: int, task_id: int):
     Snooze (if new_due_date present) or update a task's title/due_date.
     HubSpot-imported tasks also best-effort sync title/due date to HubSpot.
     """
+    _lead, denied = _load_authorized_lead(lead_id)
+    if denied is not None:
+        return denied
     from app import db
     from app.services.hubspot_task_completion_service import (
         mirror_crm_task_from_lead_task,
@@ -979,6 +996,9 @@ def complete_task(lead_id: int, task_id: int):
 
     Mark a LeadTask as completed.
     """
+    _lead, denied = _load_authorized_lead(lead_id)
+    if denied is not None:
+        return denied
     actor = getattr(g, 'user_id', 'anonymous')
     # recompute_action=False — refresh_lead_scoring below owns the single
     # recommended_action recompute (after rescoring), avoiding a double recompute.

@@ -11,6 +11,7 @@ Covers:
 """
 import json
 import pytest
+from unittest.mock import patch
 
 from app import db
 
@@ -329,6 +330,31 @@ class TestOwnerNameFilter:
         data = json.loads(response.data)
         assert data["total"] == 1
         assert data["leads"][0]["property_street"] == "900 Multi Contact St"
+
+
+class TestContactUpdateRefresh:
+    def test_contact_phone_update_refreshes_linked_property_scoring(self, client, app):
+        with app.app_context():
+            prop = _create_property("950 Refresh Contact St")
+            contact = _create_contact("Refresh", "Owner")
+            _link_contact(prop.id, contact.id)
+
+            with patch(
+                "app.services.lead_refresh.refresh_lead_scoring",
+            ) as mock_refresh:
+                response = client.put(
+                    f"/api/contacts/{contact.id}",
+                    data=json.dumps({
+                        "first_name": "Refresh",
+                        "last_name": "Owner",
+                        "phones": [{"value": "6302023839", "label": "mobile"}],
+                    }),
+                    content_type="application/json",
+                    headers=_AUTH_HEADERS,
+                )
+
+            assert response.status_code == 200
+            mock_refresh.assert_called_once_with(prop.id)
 
 
 # ---------------------------------------------------------------------------

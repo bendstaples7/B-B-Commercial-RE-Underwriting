@@ -311,6 +311,7 @@ class LeadScoringEngine:
         lead: Lead,
         weights: ScoringWeights,
         signals: Optional[list] = None,
+        contact_reachability: tuple[float, dict] | None = None,
     ) -> ScoringResult:
         from app.services.motivation_signal_service import MotivationSignalService
 
@@ -330,7 +331,10 @@ class LeadScoringEngine:
         score_version = rubric_result["score_version"]
 
         data_quality_score, missing_data, data_quality_breakdown = (
-            rubric.calculate_data_quality_score(lead)
+            rubric.calculate_data_quality_score(
+                lead,
+                contact_reachability=contact_reachability,
+            )
         )
         buckets = rubric.bucket_scores(score_details, data_quality_score, category)
 
@@ -510,17 +514,6 @@ class LeadScoringEngine:
                 }
             return 'add_contact_info', 'no_contact_info', {'has_phone': False, 'has_email': False}
 
-        if not has_property_match and lead.property_street:
-            return (
-                'resolve_match', 'no_property_match_with_address',
-                {'has_property_match': False, 'property_street': lead.property_street},
-            )
-        if not has_property_match and not lead.property_street:
-            return (
-                'enrich_data', 'no_property_match_no_address',
-                {'has_property_match': False, 'property_street': lead.property_street},
-            )
-
         lead_id = getattr(lead, 'id', None)
         if isinstance(lead_id, int) and _mail_work_in_flight(lead_id):
             return 'nurture', 'mail_work_in_flight', {'lead_id': lead_id}
@@ -541,6 +534,30 @@ class LeadScoringEngine:
                 'lead_status': lead.lead_status,
                 'has_phone': has_phone,
             }
+
+        if score_tier == "D":
+            # Low investment score ≠ missing data. Contactable/mailable leads stay relationship work.
+            if has_phone:
+                return 'nurture', 'tier_d_contactable', {
+                    'score_tier': score_tier,
+                    'has_phone': True,
+                }
+            if is_mailable_lead(lead) or _has_mailing_address(lead):
+                return 'nurture', 'tier_d_mailable', {
+                    'score_tier': score_tier,
+                    'has_phone': False,
+                }
+
+        if not has_property_match and lead.property_street:
+            return (
+                'resolve_match', 'no_property_match_with_address',
+                {'has_property_match': False, 'property_street': lead.property_street},
+            )
+        if not has_property_match and not lead.property_street:
+            return (
+                'enrich_data', 'no_property_match_no_address',
+                {'has_property_match': False, 'property_street': lead.property_street},
+            )
 
         open_tasks = _count_open_tasks(lead_id) if isinstance(lead_id, int) else 0
 
@@ -591,17 +608,6 @@ class LeadScoringEngine:
         if score_tier == "C":
             return 'nurture', 'tier_c', {'score_tier': score_tier}
         if score_tier == "D":
-            # Low investment score ≠ missing data. Only enrich when unreachable.
-            if has_phone:
-                return 'nurture', 'tier_d_contactable', {
-                    'score_tier': score_tier,
-                    'has_phone': True,
-                }
-            if is_mailable_lead(lead) or _has_mailing_address(lead):
-                return 'nurture', 'tier_d_mailable', {
-                    'score_tier': score_tier,
-                    'has_phone': False,
-                }
             return 'enrich_data', 'tier_d', {'score_tier': score_tier}
         if open_tasks == 0:
             return 'create_task', 'no_tasks_create_one', {
@@ -887,7 +893,10 @@ class LeadScoringEngine:
                 db.session.commit()
                 pending_commits = 0
 
-        def _rescore_one(lead: Lead) -> None:
+        def _rescore_one(
+            lead: Lead,
+            contact_reachability: tuple[float, dict] | None = None,
+        ) -> None:
             nonlocal rescored, pending_commits
             weights = self.get_weights(lead.owner_user_id or user_id)
             signals = (
@@ -896,7 +905,12 @@ class LeadScoringEngine:
                 .order_by(HubSpotSignal.extracted_at.asc())
                 .all()
             )
-            result = self.compute(lead, weights, signals=signals)
+            result = self.compute(
+                lead,
+                weights,
+                signals=signals,
+                contact_reachability=contact_reachability,
+            )
             self.persist(lead, result, write_history=False, commit=False)
             rescored += 1
             pending_commits += 1
@@ -910,8 +924,10 @@ class LeadScoringEngine:
             if lead_ids is not None:
                 for i in range(0, len(lead_ids), BULK_RESCORE_BATCH_SIZE):
                     batch_ids = lead_ids[i:i + BULK_RESCORE_BATCH_SIZE]
-                    for lead in _lead_query().filter(Lead.id.in_(batch_ids)).all():
-                        _rescore_one(lead)
+                    leads = _lead_query().filter(Lead.id.in_(batch_ids)).all()
+                    reachability = rubric.batch_contact_reachability_scores(leads)
+                    for lead in leads:
+                        _rescore_one(lead, reachability.get(lead.id))
             else:
                 offset = 0
                 while True:
@@ -921,8 +937,9 @@ class LeadScoringEngine:
                     )
                     if not leads:
                         break
+                    reachability = rubric.batch_contact_reachability_scores(leads)
                     for lead in leads:
-                        _rescore_one(lead)
+                        _rescore_one(lead, reachability.get(lead.id))
                     offset += BULK_RESCORE_BATCH_SIZE
             _flush_batch()
         except Exception:

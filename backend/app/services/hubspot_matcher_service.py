@@ -267,9 +267,12 @@ class HubSpotMatcherService:
             lead.county_assessor_pin = pin
             updated_fields.append("county_assessor_pin")
 
+        deal_description = (props.get("description") or "").strip() or None
         deal_source = resolve_blank_deal_source(
             current=lead.deal_source,
             hubspot_deal_source=props.get("deal_source"),
+            sheet_source=lead.source,
+            deal_description=deal_description,
         )
         # Sheet ``source`` and HubSpot ``deal_source`` are equal fill-if-blank peers —
         # never overwrite a value already set from either side.
@@ -277,7 +280,6 @@ class HubSpotMatcherService:
             lead.deal_source = deal_source
             updated_fields.append("deal_source")
 
-        deal_description = (props.get("description") or "").strip() or None
         if deal_description and (sync_deal_context or not (lead.deal_description or '').strip()):
             if lead.deal_description != deal_description:
                 lead.deal_description = deal_description
