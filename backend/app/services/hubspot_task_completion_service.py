@@ -263,17 +263,27 @@ def sync_hubspot_task_to_hubspot(hubspot_task_id: str) -> bool:
         return False
 
 
-def _record_task_platform_write(hubspot_task_id: str) -> None:
+def _record_task_platform_write(hubspot_task_id: str) -> int:
     """Record outbound task write so webhook loop guard can suppress echo."""
     from app.models.hubspot_platform_write import HubSpotPlatformWrite
 
-    db.session.add(
-        HubSpotPlatformWrite(
-            object_type='task',
-            hubspot_id=str(hubspot_task_id),
-        )
+    write = HubSpotPlatformWrite(
+        object_type='task',
+        hubspot_id=str(hubspot_task_id),
     )
+    db.session.add(write)
     db.session.commit()
+    return write.id
+
+
+def _delete_task_platform_write(write_id: int) -> None:
+    """Remove a pre-recorded platform write when the outbound write failed."""
+    from app.models.hubspot_platform_write import HubSpotPlatformWrite
+
+    write = db.session.get(HubSpotPlatformWrite, write_id)
+    if write is not None:
+        db.session.delete(write)
+        db.session.commit()
 
 
 def sync_hubspot_task_properties(
@@ -291,6 +301,7 @@ def sync_hubspot_task_properties(
         return False
     if title is None and due_date is None and not clear_due_date:
         return False
+    platform_write_id: int | None = None
     try:
         from app.models.hubspot_config import HubSpotConfig
         from app.services.hubspot_client_service import HubSpotClientService
@@ -298,13 +309,13 @@ def sync_hubspot_task_properties(
         config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
         if not config:
             return False
+        platform_write_id = _record_task_platform_write(str(hubspot_task_id))
         HubSpotClientService(config).update_task(
             str(hubspot_task_id),
             subject=title,
             due_date=None if clear_due_date else due_date,
             clear_due_date=clear_due_date,
         )
-        _record_task_platform_write(str(hubspot_task_id))
         logger.info(
             'HubSpot task %s properties updated via API (title=%s due=%s clear=%s)',
             hubspot_task_id,
@@ -314,6 +325,9 @@ def sync_hubspot_task_properties(
         )
         return True
     except Exception as exc:
+        db.session.rollback()
+        if platform_write_id is not None:
+            _delete_task_platform_write(platform_write_id)
         logger.warning(
             'Failed to update HubSpot task %s properties via API: %s',
             hubspot_task_id,

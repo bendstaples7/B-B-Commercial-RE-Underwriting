@@ -289,8 +289,10 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
 
   const handleStartEdit = (task: LeadTask, field: 'title' | 'due_date' = 'title') => {
     // Local LeadTask rows (native or HubSpot-imported) are editable via PATCH.
-    // Legacy string ids (e.g. hs-…) are not.
-    if (typeof task.id !== 'number') return
+    // Legacy string ids (e.g. hs-…) and optimistic placeholders are not.
+    if (editSubmittingRef.current) return
+    if (typeof task.id !== 'number' || task.id <= 0) return
+    skipBlurSaveRef.current = false
     setFormOpen(false)
     setEditingTaskId(task.id)
     setEditingField(field)
@@ -310,7 +312,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
   }
 
   const handleSaveEdit = async (task: LeadTask, field: 'title' | 'due_date') => {
-    if (typeof task.id !== 'number') return
+    if (typeof task.id !== 'number' || task.id <= 0) return
     if (editSubmittingRef.current) return
 
     if (field === 'title') {
@@ -385,6 +387,13 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
       // Allow later blurs after the Enter-driven commit finishes.
       skipBlurSaveRef.current = false
     })
+  }
+
+  const suppressCancelBlurSave = () => {
+    skipBlurSaveRef.current = true
+    window.setTimeout(() => {
+      skipBlurSaveRef.current = false
+    }, 0)
   }
 
   const handleEditBlur = (task: LeadTask, field: 'title' | 'due_date') => {
@@ -468,7 +477,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
             const overdue = dueStatus === 'overdue'
             const dueToday = dueStatus === 'due_today'
             const isHubSpot = task.source === 'hubspot'
-            const canEdit = typeof task.id === 'number'
+            const canEdit = typeof task.id === 'number' && task.id > 0
             const editingTitle =
               canEdit && editingTaskId === task.id && editingField === 'title'
             const editingDue =
@@ -572,7 +581,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
                                   commitEditField(task, 'title')
                                 } else if (e.key === 'Escape') {
                                   e.preventDefault()
-                                  skipBlurSaveRef.current = true
+                                  suppressCancelBlurSave()
                                   handleCancelEdit()
                                 }
                               }}
@@ -667,7 +676,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
                                 commitEditField(task, 'due_date')
                               } else if (e.key === 'Escape') {
                                 e.preventDefault()
-                                skipBlurSaveRef.current = true
+                                suppressCancelBlurSave()
                                 handleCancelEdit()
                               }
                             }}

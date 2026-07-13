@@ -2109,6 +2109,7 @@ export interface CommandCenterPayload {
   lead_score: number;
   lead_status: LeadStatus;
   lead_category?: string;
+  review_reason?: string | null;
   has_property_match: boolean;
   analysis_session_id: number | null;
   hubspot_deal_stage?: string | null;

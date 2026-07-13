@@ -62,6 +62,7 @@ def test_sync_hubspot_task_properties_records_platform_write(app):
 
 
 def test_sync_hubspot_task_properties_returns_false_on_api_error(app):
+    from app.models.hubspot_platform_write import HubSpotPlatformWrite
     from app.services.hubspot_task_completion_service import sync_hubspot_task_properties
 
     with app.app_context():
@@ -78,6 +79,10 @@ def test_sync_hubspot_task_properties_returns_false_on_api_error(app):
             ok = sync_hubspot_task_properties('bad-id', title='x')
 
         assert ok is False
+        assert HubSpotPlatformWrite.query.filter_by(
+            object_type='task',
+            hubspot_id='bad-id',
+        ).first() is None
 
 
 def test_mirror_crm_task_from_lead_task_clears_due_date(app):

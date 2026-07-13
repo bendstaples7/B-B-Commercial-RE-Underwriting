@@ -90,12 +90,11 @@ def main() -> None:
             flush=True,
         )
         for lead_id, source, descr, mapped in updates[:25]:
-            snip = (descr or '')[:60]
             logger.info(
-                "  lead %s: source=%r descr=%r → deal_source=%r",
+                "  lead %s: source=%r description_present=%s -> deal_source=%r",
                 lead_id,
                 source,
-                snip,
+                bool(descr),
                 mapped,
             )
         if len(updates) > 25:

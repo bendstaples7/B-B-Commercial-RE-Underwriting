@@ -1049,6 +1049,101 @@ describe('LeadTaskList', () => {
       expect(mockUpdateTask).not.toHaveBeenCalled()
     })
 
+    it('saves a later blur edit after cancelling a previous edit with Escape', async () => {
+      mockUpdateTask.mockResolvedValue({
+        id: 5,
+        title: 'Saved on blur',
+        status: 'open',
+        due_date: '2026-09-15',
+      })
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[makeTask(5, { title: 'Follow up with Bob', due_date: '2026-09-15' })]}
+          onTaskCreated={vi.fn()}
+          onTaskUpdated={vi.fn()}
+          onTaskCompleted={vi.fn()}
+        />,
+      )
+
+      await user.click(screen.getByTestId('edit-task-btn-5'))
+      await user.clear(screen.getByTestId('task-edit-title-input'))
+      await user.type(screen.getByTestId('task-edit-title-input'), 'Cancelled first')
+      await user.keyboard('{Escape}')
+
+      await user.click(screen.getByTestId('edit-task-btn-5'))
+      const titleInput = screen.getByTestId('task-edit-title-input')
+      await user.clear(titleInput)
+      await user.type(titleInput, 'Saved on blur')
+      const { fireEvent } = await import('@testing-library/react')
+      fireEvent.blur(titleInput)
+
+      await waitFor(() => {
+        expect(mockUpdateTask).toHaveBeenCalledWith(1, 5, {
+          title: 'Saved on blur',
+        })
+      })
+    })
+
+    it('does not allow editing optimistic placeholder tasks', async () => {
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[makeTask(0, { title: 'Optimistic placeholder' })]}
+          onTaskCreated={vi.fn()}
+          onTaskUpdated={vi.fn()}
+          onTaskCompleted={vi.fn()}
+        />,
+      )
+
+      expect(screen.queryByTestId('edit-task-btn-0')).not.toBeInTheDocument()
+      await user.click(screen.getByTestId('task-title-0'))
+      expect(screen.queryByTestId('task-edit-title-input')).not.toBeInTheDocument()
+      expect(mockUpdateTask).not.toHaveBeenCalled()
+    })
+
+    it('keeps the current editor active while a blur save is in flight', async () => {
+      let resolveUpdate: (value: unknown) => void = () => {}
+      mockUpdateTask.mockReturnValue(
+        new Promise((resolve) => {
+          resolveUpdate = resolve
+        }),
+      )
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[
+            makeTask(5, { title: 'Task A' }),
+            makeTask(6, { title: 'Task B' }),
+          ]}
+          onTaskCreated={vi.fn()}
+          onTaskUpdated={vi.fn()}
+          onTaskCompleted={vi.fn()}
+        />,
+      )
+
+      await user.click(screen.getByTestId('edit-task-btn-5'))
+      const titleInput = screen.getByTestId('task-edit-title-input')
+      await user.clear(titleInput)
+      await user.type(titleInput, 'Task A changed')
+      await user.click(screen.getByTestId('edit-task-btn-6'))
+
+      expect(screen.getByTestId('task-edit-title-input')).toHaveValue('Task A changed')
+      expect(mockUpdateTask).toHaveBeenCalledWith(1, 5, {
+        title: 'Task A changed',
+      })
+
+      resolveUpdate({
+        id: 5,
+        title: 'Task A changed',
+        status: 'open',
+        due_date: null,
+      })
+      await waitFor(() => {
+        expect(screen.queryByTestId('task-edit-title-input')).not.toBeInTheDocument()
+      })
+    })
+
     it('shows edit affordance for HubSpot-imported LeadTasks', () => {
       render(
         <LeadTaskList

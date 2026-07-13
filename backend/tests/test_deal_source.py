@@ -23,6 +23,8 @@ class TestNormalizeImportedSourceToDealSource:
     def test_listsource_variants(self):
         assert normalize_imported_source_to_deal_source('Listsource') == 'Listsource'
         assert normalize_imported_source_to_deal_source('List Source') == 'Listsource'
+        assert normalize_imported_source_to_deal_source('List-source Date ID: 3/1/2021') == 'Listsource'
+        assert normalize_imported_source_to_deal_source('list_source Date ID: 3/1/2021') == 'Listsource'
         assert normalize_imported_source_to_deal_source(
             'Listsource Date ID: 3/1/2021 Munawar'
         ) == 'Listsource'

@@ -18,7 +18,7 @@ DEAL_SOURCE_OPTIONS: tuple[str, ...] = (
 )
 
 _COSTAR_RE = re.compile(r'co[\s_-]*star', re.IGNORECASE)
-_LISTSOURCE_RE = re.compile(r'\blist\s*source\b', re.IGNORECASE)
+_LISTSOURCE_RE = re.compile(r'\blist[\s_-]*source\b', re.IGNORECASE)
 
 # Exact (case-insensitive) map from common import / HubSpot values → canonical enum.
 _EXACT_ALIASES: dict[str, str] = {
