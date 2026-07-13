@@ -78,3 +78,40 @@ def test_sync_hubspot_task_properties_returns_false_on_api_error(app):
             ok = sync_hubspot_task_properties('bad-id', title='x')
 
         assert ok is False
+
+
+def test_mirror_crm_task_from_lead_task_clears_due_date(app):
+    from app import db
+    from app.models.lead import Lead
+    from app.models.lead_task import LeadTask
+    from app.models.task import Task
+    from app.services.hubspot_task_completion_service import mirror_crm_task_from_lead_task
+
+    with app.app_context():
+        lead = Lead(property_street='1 Due Clear St', lead_status='awaiting_skip_trace')
+        db.session.add(lead)
+        db.session.flush()
+
+        lead_task = LeadTask(
+            lead_id=lead.id,
+            task_type='custom',
+            title='Follow up without date',
+            status='open',
+            due_date=None,
+            hubspot_task_id='hs-clear-due-1',
+        )
+        crm_task = Task(
+            title='Old follow up',
+            due_date=datetime(2026, 7, 13, 13, 0, 0),
+            status='open',
+            hubspot_task_id='hs-clear-due-1',
+        )
+        db.session.add_all([lead_task, crm_task])
+        db.session.flush()
+
+        mirror_crm_task_from_lead_task(lead_task)
+        db.session.flush()
+
+        assert crm_task.title == 'Follow up without date'
+        assert crm_task.due_date is None
+        assert crm_task.updated_at is not None

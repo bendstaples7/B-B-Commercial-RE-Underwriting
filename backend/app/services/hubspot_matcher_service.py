@@ -18,6 +18,7 @@ from app.models.hubspot_match import HubSpotMatch
 from app.models.hubspot_deal import HubSpotDeal
 from app.models.hubspot_contact import HubSpotContact
 from app.models.hubspot_company import HubSpotCompany
+from app.services.helpers.deal_source import resolve_blank_deal_source
 
 logger = logging.getLogger(__name__)
 
@@ -266,7 +267,10 @@ class HubSpotMatcherService:
             lead.county_assessor_pin = pin
             updated_fields.append("county_assessor_pin")
 
-        deal_source = (props.get("deal_source") or "").strip() or None
+        deal_source = resolve_blank_deal_source(
+            current=lead.deal_source,
+            hubspot_deal_source=props.get("deal_source"),
+        )
         # Sheet ``source`` and HubSpot ``deal_source`` are equal fill-if-blank peers —
         # never overwrite a value already set from either side.
         if deal_source and not (lead.deal_source or '').strip():

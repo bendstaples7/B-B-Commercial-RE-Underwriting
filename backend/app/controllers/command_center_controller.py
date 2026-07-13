@@ -361,13 +361,17 @@ def get_command_center(lead_id: int):
     _hs_health = HubSpotDealSyncService.get_lead_sync_health(lead_id)
 
     from app.services.scoring_rubric import build_data_quality_breakdown
+    from app import db as _db
     data_quality_breakdown = build_data_quality_breakdown(lead)
     # Always serve live completeness so the sidebar is never stuck at the
     # never-written column default of 0.
     data_completeness_score = data_quality_breakdown['total']
     # Winning-rule explanation reads lead.data_completeness_score — align the
     # in-memory value with the live breakdown before computing the decision.
-    lead.data_completeness_score = data_completeness_score
+    if lead.data_completeness_score != data_completeness_score:
+        lead.data_completeness_score = data_completeness_score
+        _db.session.add(lead)
+        _db.session.commit()
 
     # Display next step + "why" from one live decision so label/explanation
     # cannot disagree with a stale persisted recommended_action column.
@@ -390,7 +394,6 @@ def get_command_center(lead_id: int):
     # ------------------------------------------------------------------
     # Collect phones: relational contact_phones + flat columns (structured)
     # ------------------------------------------------------------------
-    from app import db as _db
     from sqlalchemy import text as _text
     from app.services.phone_confidence_service import PhoneConfidenceService
 
@@ -937,8 +940,13 @@ def update_task(lead_id: int, task_id: int):
         try:
             mirror_crm_task_from_lead_task(task)
             db.session.commit()
-        except Exception:
+        except Exception as exc:
             db.session.rollback()
+            logger.warning(
+                'mirror_crm_task_from_lead_task failed for hubspot_task_id=%s: %s',
+                hubspot_task_id,
+                exc,
+            )
 
         hubspot_synced = sync_hubspot_task_properties(
             str(hubspot_task_id),

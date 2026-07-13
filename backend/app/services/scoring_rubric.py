@@ -17,6 +17,7 @@ from app.services.enrichment_scoring import (
     property_equity_score,
     scale_subscore_to_100,
 )
+from sqlalchemy.exc import SQLAlchemyError
 
 logger = logging.getLogger(__name__)
 
@@ -640,8 +641,8 @@ def _relational_phone_confidences(lead_id: int) -> list[int]:
             """),
             {"lead_id": lead_id},
         ).fetchall()
-    except Exception as exc:
-        logger.debug("relational phone confidence lookup failed for lead %s: %s", lead_id, exc)
+    except SQLAlchemyError as exc:
+        logger.warning("relational phone confidence lookup failed for lead %s: %s", lead_id, exc)
         return []
 
     out: list[int] = []
@@ -706,8 +707,8 @@ def _email_reachability(lead: Lead) -> tuple[float, bool, bool]:
                 role_val = role.value if hasattr(role, "value") else role
                 if is_primary or (isinstance(role_val, str) and role_val.lower() == "owner"):
                     is_owner_or_primary = True
-        except Exception as exc:
-            logger.debug("relational email lookup failed for lead %s: %s", lead_id, exc)
+        except SQLAlchemyError as exc:
+            logger.warning("relational email lookup failed for lead %s: %s", lead_id, exc)
 
     has_email = has_flat or has_relational
     if not has_email:
@@ -737,7 +738,11 @@ def build_data_quality_breakdown(lead: Lead) -> dict:
     """Structured completeness breakdown for scoring + command center UI."""
     property_score = _property_identity_score(lead)
     contact_score, contact_meta = _contact_reachability_score(lead)
-    missing = identify_missing_data(lead)
+    missing = identify_missing_data(
+        lead,
+        best_confidence=contact_meta["best_phone_confidence"],
+        has_email=contact_meta["has_email"],
+    )
     total = min(100.0, round(property_score + contact_score, 2))
     return {
         "total": total,
@@ -759,14 +764,20 @@ def calculate_data_quality_score(lead: Lead) -> tuple[float, list[str], dict]:
     return breakdown["total"], breakdown["missing"], breakdown
 
 
-def identify_missing_data(lead: Lead) -> list[str]:
-    best_confidence = _best_phone_confidence(lead)
+def identify_missing_data(
+    lead: Lead,
+    best_confidence: int | None = None,
+    has_email: bool | None = None,
+) -> list[str]:
     from app.services.phone_confidence_service import MIN_VIABLE_CONFIDENCE
 
+    if best_confidence is None:
+        best_confidence = _best_phone_confidence(lead)
     has_viable_phone = (
         best_confidence is not None and best_confidence >= MIN_VIABLE_CONFIDENCE
     )
-    has_email = _email_reachability(lead)[1]
+    if has_email is None:
+        has_email = _email_reachability(lead)[1]
 
     field_checks = {
         "pin": lambda: lead.county_assessor_pin and str(lead.county_assessor_pin).strip(),

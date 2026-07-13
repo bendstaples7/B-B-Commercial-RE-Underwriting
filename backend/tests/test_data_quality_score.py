@@ -132,3 +132,32 @@ class TestDataQualityScore:
         low_score, _, low_bd = calculate_data_quality_score(lead)
         assert low_bd["best_phone_confidence"] == 50
         assert high_score > low_score
+
+    def test_contact_reachability_lookups_are_reused_for_missing_data(self, monkeypatch):
+        calls = {"phone": 0, "email": 0}
+        lead = _lead(id=202)
+
+        def fake_relational_phone_confidences(_lead_id):
+            calls["phone"] += 1
+            return [90]
+
+        def fake_email_reachability(_lead):
+            calls["email"] += 1
+            return EMAIL_BASE_POINTS, True, False
+
+        monkeypatch.setattr(
+            "app.services.scoring_rubric._relational_phone_confidences",
+            fake_relational_phone_confidences,
+        )
+        monkeypatch.setattr(
+            "app.services.scoring_rubric._email_reachability",
+            fake_email_reachability,
+        )
+
+        _, missing, breakdown = calculate_data_quality_score(lead)
+
+        assert breakdown["best_phone_confidence"] == 90
+        assert breakdown["has_email"] is True
+        assert "phone" not in missing
+        assert "email" not in missing
+        assert calls == {"phone": 1, "email": 1}

@@ -301,6 +301,18 @@ class TestGetCommandCenter:
             db.session.refresh(lead)
             assert lead.review_required is False
 
+    def test_persists_live_data_completeness_score(self, client, app):
+        """Opening command center stores the live completeness score on the lead."""
+        with app.app_context():
+            lead = _make_lead(app, '4b Completeness St', data_completeness_score=0.0)
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
+            data = json.loads(response.data)
+
+            assert response.status_code == 200
+            assert data['data_completeness_score'] > 0
+            db.session.refresh(lead)
+            assert lead.data_completeness_score == data['data_completeness_score']
+
     def test_timeline_section_has_entries_key(self, client, app):
         """Timeline section contains entries list and total."""
         with app.app_context():

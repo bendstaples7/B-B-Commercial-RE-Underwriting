@@ -6,6 +6,8 @@ from app.services.helpers.deal_source import (
     resolve_blank_deal_source,
 )
 from app.services.google_sheets_importer import _fill_deal_source_from_import_source
+from app.services.hubspot_matcher_service import HubSpotMatcherService
+from app.models.hubspot_deal import HubSpotDeal
 from app.models.lead import Lead
 
 
@@ -40,6 +42,15 @@ class TestNormalizeImportedSourceToDealSource:
 
 
 class TestResolveBlankDealSourceEqualPriority:
+    def test_sheet_wins_tie_when_peers_disagree(self):
+        assert (
+            resolve_blank_deal_source(
+                hubspot_deal_source='Cityscape',
+                sheet_source='Listsource',
+            )
+            == 'Listsource'
+        )
+
     def test_sheet_source_fills_when_hubspot_blank(self):
         assert (
             resolve_blank_deal_source(
@@ -127,3 +138,18 @@ class TestFillDealSourceFromImportSource:
             lead = Lead(source='handwritten note', deal_source=None)
             assert _fill_deal_source_from_import_source(lead) is False
             assert lead.deal_source is None
+
+
+class TestHubSpotDealSourceEnrichment:
+    def test_enrich_lead_from_deal_canonicalizes_deal_source_alias(self, app):
+        with app.app_context():
+            lead = Lead(property_street='1 Source St', deal_source=None)
+            deal = HubSpotDeal(
+                hubspot_id='deal-source-alias',
+                raw_payload={'properties': {'deal_source': 'list source'}},
+            )
+
+            updated = HubSpotMatcherService().enrich_lead_from_deal(lead, deal)
+
+            assert 'deal_source' in updated
+            assert lead.deal_source == 'Listsource'

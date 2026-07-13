@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 
 from app import db
 from app.models import LeadTask, LeadTimelineEntry
@@ -334,8 +334,6 @@ def mirror_crm_task_from_lead_task(lead_task) -> None:
     if lead_task.due_date is None:
         crm_task.due_date = None
     else:
-        from datetime import datetime, time
-
         crm_task.due_date = datetime.combine(lead_task.due_date, time(13, 0, 0))
     crm_task.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.session.add(crm_task)

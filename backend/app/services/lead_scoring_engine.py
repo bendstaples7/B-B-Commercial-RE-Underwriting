@@ -24,6 +24,7 @@ from app.models.lead_crm_flags_view import LeadCRMFlagsView
 from app.services import scoring_rubric as rubric
 from app.services.open_letter_contact_mapper import is_mailable_lead
 from app.services.outreach_method_service import (
+    ENGAGED_PIPELINE_STATUSES,
     evaluate_contact_method,
     refine_outreach_action,
     OUTREACH_ACTIONS,
@@ -535,12 +536,7 @@ class LeadScoringEngine:
             return 'follow_up_now', 'is_warm', {'is_warm': True}
 
         # Engaged pipeline: relationship work, not "enrich data" — even if score is low.
-        engaged_statuses = (
-            'in_person_appointment',
-            'negotiating_remote',
-            'mailing_contacted_interested',
-        )
-        if lead.lead_status in engaged_statuses:
+        if lead.lead_status in ENGAGED_PIPELINE_STATUSES:
             return 'nurture', 'engaged_pipeline_nurture', {
                 'lead_status': lead.lead_status,
                 'has_phone': has_phone,
