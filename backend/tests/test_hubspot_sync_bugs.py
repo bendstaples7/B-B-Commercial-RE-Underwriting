@@ -2588,6 +2588,7 @@ class TestBug8RescoreOnChange:
                 analysis_complete=True,
                 lead_score=99.0,            # stale sentinel — must be recomputed
                 recommended_action=None,
+                owner_user_id="test-user",
             )
             db.session.add(lead)
             db.session.commit()
