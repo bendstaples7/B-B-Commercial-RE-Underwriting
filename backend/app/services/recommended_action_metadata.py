@@ -9,9 +9,9 @@ RECOMMENDED_ACTION_METADATA = {
     'enrich_data': {
         'label': 'Enrich Data',
         'explanation': (
-            'This lead is missing key data needed to evaluate it. Add contact info, '
-            'property details, research the owner entity, or run a skip trace to '
-            'improve data completeness.'
+            'Next step is to fill gaps that block scoring or outreach — typically '
+            'a property match / street address, owner-entity research, or a low '
+            'overall score (Tier D). Phones and emails alone do not clear this action.'
         ),
     },
     'resolve_match': {
@@ -88,6 +88,53 @@ TASK_TYPE_TO_RECOMMENDED_ACTION = {
     'research_missing_pin': 'resolve_match',
     'confirm_building_ownership': 'needs_manual_review',
 }
+
+
+WINNING_RULE_LABELS = {
+    'no_property_match_no_address': 'No matched property and no street address on file',
+    'research_entity_owner': 'Owner is an unresolved entity — research before cold mail',
+    'is_warm': 'Lead is marked warm from prior engagement',
+    'engaged_pipeline_nurture': (
+        'Engaged pipeline status — stay in relationship; call when appropriate'
+    ),
+    'tier_d_contactable': (
+        'Lead score is Tier D but a phone is on file — nurture / call, not enrich'
+    ),
+    'tier_d_mailable': (
+        'Lead score is Tier D but mailable — nurture rather than enrich'
+    ),
+    'tier_d': 'Lead score is Tier D with no reachable contact channel',
+    'follow_up_overdue': 'Follow-up is overdue',
+    'do_not_contact': 'Lead is marked do not contact',
+    'terminal_status': 'Lead is in a terminal pipeline status',
+    'likely_condo': 'Commercial lead flagged as likely condo',
+    'condo_needs_review': 'Condo / building ownership needs review',
+    'condo_partial_ambiguous': 'Partial condo status is ambiguous',
+    'skip_trace_status': 'Lead is in skip-trace status without enough contact info',
+    'no_contact_info': 'No phone, email, or mailable address on file',
+    'mailable_no_digital_contact': 'Mailable but no phone or email',
+    'no_property_match_with_address': 'Has an address but no confirmed property match',
+    'mail_work_in_flight': 'Mail work is already in progress',
+    'recently_sold': 'Property was recently sold',
+    'tier_a_high_quality': 'Tier A with high data quality',
+    'tier_b_high_quality': 'Tier B with high data quality',
+    'high_motivation_tier_b': 'Tier B with high motivation',
+    'high_score_no_tasks': 'High score with no open tasks',
+    'high_motivation_high_score': 'High score and high motivation',
+    'tier_c': 'Tier C — nurture for later',
+    'no_tasks_create_one': 'No open tasks — create a next step',
+    'has_open_tasks': 'Has open tasks — continue current work',
+    'negative_motivation': 'Negative motivation score',
+    'institutional_owner': 'Institutional owner — cold mail blocked',
+    'nonprofit_organization': 'Nonprofit owner — cold mail blocked',
+    'tax_exempt_owner': 'Tax-exempt owner — cold mail blocked',
+}
+
+
+def get_winning_rule_label(rule: str | None) -> str | None:
+    if not rule:
+        return None
+    return WINNING_RULE_LABELS.get(rule, rule.replace('_', ' '))
 
 
 def get_recommended_action_display(

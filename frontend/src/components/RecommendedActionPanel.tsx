@@ -256,7 +256,7 @@ export function RecommendedActionPanel({
     )
   }
 
-  const { value, label, explanation, recommended_contact_method: contactMethod, outreach_contact: outreachContact } = recommendedAction
+  const { value, label, explanation, recommended_contact_method: contactMethod, outreach_contact: outreachContact, winning_rule_label: winningRuleLabel } = recommendedAction
   const displayLabel = label ?? (value ? outreachDisplayLabel(value, contactMethod) : 'No recommended action')
   const hideRaHeading = value === 'nurture'
   const raButtons = (ACTION_BUTTONS[value] ?? []).filter(
@@ -323,11 +323,22 @@ export function RecommendedActionPanel({
         <Typography
           variant="body2"
           color="text.secondary"
-          sx={{ mb: 2 }}
+          sx={{ mb: winningRuleLabel ? 1 : 2 }}
           data-testid="ra-explanation"
         >
           {explanation}
         </Typography>
+      )}
+
+      {!hideRaHeading && winningRuleLabel && (
+        <Alert
+          severity="info"
+          variant="outlined"
+          sx={{ mb: 2, py: 0.25, '& .MuiAlert-message': { fontSize: '0.8rem' } }}
+          data-testid="ra-winning-rule"
+        >
+          Why this next step: {winningRuleLabel}
+        </Alert>
       )}
 
       {/* Inline error — shown on action failure, does NOT change RA or Timeline */}

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react'
+import { Link as RouterLink } from 'react-router-dom'
 import {
   Box,
   Chip,
@@ -97,10 +98,10 @@ function SidebarLabeledContent({
 }) {
   return (
     <Box
-      sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1, mb: 0.5 }}
+      sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1, mb: 0.75 }}
       data-testid={testId}
     >
-      <Typography variant="caption" color="text.secondary" sx={SIDEBAR_LABEL_SX}>
+      <Typography variant="caption" color="text.secondary" sx={{ ...SIDEBAR_LABEL_SX, pt: 0.15 }}>
         {label}
       </Typography>
       <Box
@@ -109,6 +110,7 @@ function SidebarLabeledContent({
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'flex-end',
+          gap: 0.35,
         }}
       >
         {children}
@@ -125,13 +127,13 @@ function CopyableEmail({ email }: { email: string }) {
     setTimeout(() => setCopied(false), 1500)
   }
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 0.5, mb: 0.5 }}>
-      <EmailIcon sx={{ fontSize: 13, color: 'text.secondary' }} />
+    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 0.5, minWidth: 0 }}>
+      <EmailIcon sx={{ fontSize: 13, color: 'text.secondary', flexShrink: 0 }} />
       <Link href={`mailto:${email}`} variant="caption" underline="hover" noWrap>
         {email}
       </Link>
       <Tooltip title={copied ? 'Copied!' : 'Copy'}>
-        <IconButton size="small" onClick={handleCopy} sx={{ p: 0.25 }}>
+        <IconButton size="small" onClick={handleCopy} sx={{ p: 0.25, flexShrink: 0 }}>
           <ContentCopyIcon sx={{ fontSize: 11 }} />
         </IconButton>
       </Tooltip>
@@ -188,7 +190,7 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
   )
 
   const phones: LeadPhone[] = useContacts
-    ? []
+    ? contacts.flatMap((c) => c.phones ?? [])
     : data.phones?.length
       ? data.phones
       : [
@@ -204,7 +206,7 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
           .map((value) => ({ value: value as string, confidence_score: 50 }))
 
   const emails: string[] = useContacts
-    ? []
+    ? contacts.flatMap((c) => (c.emails ?? []).map((e) => e.value).filter(Boolean))
     : data.emails?.length
       ? data.emails
       : [
@@ -228,8 +230,8 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
         maxHeight: 'calc(100vh - 100px)',
         overflowY: 'auto',
         display: { xs: 'none', sm: 'none', md: 'none', lg: 'block' },
-        minWidth: 280,
-        maxWidth: 320,
+        minWidth: 340,
+        maxWidth: 400,
         flexShrink: 0,
       }}
     >
@@ -265,39 +267,19 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
             }
           />
         ))}
-        {useContacts ? (
-          contacts.map((contact) => {
-            const phonesList = contact.phones ?? []
-            const emailsList = contact.emails ?? []
-            if (!phonesList.length && !emailsList.length) return null
-            return (
-              <Box key={`contact-methods-${contact.id}`} sx={{ mb: 0.5 }}>
-                {phonesList.map((p) => (
-                  <SidebarLabeledContent key={p.id ?? p.value} label="Phone">
-                    <PhoneRow phone={p} />
-                  </SidebarLabeledContent>
-                ))}
-                {emailsList.map((e) => (
-                  <SidebarLabeledContent key={e.id} label="Email">
-                    <CopyableEmail email={e.value} />
-                  </SidebarLabeledContent>
-                ))}
-              </Box>
-            )
-          })
-        ) : (
-          <>
+        {phones.length > 0 && (
+          <SidebarLabeledContent label="Phone" testId="sidebar-phones">
             {phones.map((p, i) => (
-              <SidebarLabeledContent key={p.id ?? `${p.value}-${i}`} label="Phone">
-                <PhoneRow phone={p} />
-              </SidebarLabeledContent>
+              <PhoneRow key={p.id ?? `${p.value}-${i}`} phone={p} />
             ))}
+          </SidebarLabeledContent>
+        )}
+        {emails.length > 0 && (
+          <SidebarLabeledContent label="Email" testId="sidebar-emails">
             {emails.map((e, i) => (
-              <SidebarLabeledContent key={i} label="Email">
-                <CopyableEmail email={e} />
-              </SidebarLabeledContent>
+              <CopyableEmail key={`${e}-${i}`} email={e} />
             ))}
-          </>
+          </SidebarLabeledContent>
         )}
         {data.socials && <SidebarRow label="Socials" value={data.socials} />}
       </SidebarSection>
@@ -487,6 +469,28 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
         </SidebarSection>
       )}
 
+      <SidebarSection title="Work Queues">
+        {(commandCenterData.work_queues?.length ?? 0) > 0 ? (
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }} data-testid="work-queues">
+            {commandCenterData.work_queues!.map((q) => (
+              <Chip
+                key={q.key}
+                component={RouterLink}
+                to={q.path}
+                clickable
+                size="small"
+                label={q.label}
+                data-testid={`work-queue-${q.key}`}
+              />
+            ))}
+          </Box>
+        ) : (
+          <Typography variant="caption" color="text.secondary" data-testid="work-queues-empty">
+            Not in an active work queue.
+          </Typography>
+        )}
+      </SidebarSection>
+
       <SidebarSection title="Import & Sync">
         <SidebarRow label="Import note" value={formatImportNote(commandCenterData)} />
         <SidebarRow label="Category" value={commandCenterData.lead_category} />
@@ -517,6 +521,15 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
       </SidebarSection>
 
       <SidebarSection title="Data Quality">
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          display="block"
+          sx={{ mb: 1 }}
+          data-testid="data-quality-caption"
+        >
+          Property identity + contact reachability (not activity history).
+        </Typography>
         <SidebarRow
           label="Completeness"
           value={
@@ -525,6 +538,37 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
               : null
           }
         />
+        {commandCenterData.data_quality_breakdown && (
+          <>
+            <SidebarRow
+              label="Property fields"
+              value={`${Math.round(commandCenterData.data_quality_breakdown.property)} / 50`}
+            />
+            <SidebarRow
+              label="Contact reach"
+              value={`${Math.round(commandCenterData.data_quality_breakdown.contact)} / 50`}
+            />
+            <SidebarRow
+              label="Best phone"
+              value={
+                commandCenterData.data_quality_breakdown.best_phone_confidence != null
+                  ? `${commandCenterData.data_quality_breakdown.best_phone_confidence}%`
+                  : 'None'
+              }
+            />
+            <SidebarRow
+              label="Email"
+              value={commandCenterData.data_quality_breakdown.has_email ? 'Present' : 'Missing'}
+            />
+            {(commandCenterData.data_quality_breakdown.missing?.length ?? 0) > 0 && (
+              <Box sx={{ mt: 1, display: 'flex', flexWrap: 'wrap', gap: 0.5 }} data-testid="data-quality-missing">
+                {commandCenterData.data_quality_breakdown.missing.slice(0, 6).map((field) => (
+                  <Chip key={field} size="small" variant="outlined" label={field.replace(/_/g, ' ')} />
+                ))}
+              </Box>
+            )}
+          </>
+        )}
       </SidebarSection>
     </Paper>
   )

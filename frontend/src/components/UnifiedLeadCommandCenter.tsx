@@ -29,6 +29,7 @@ import {
   DialogContent,
   DialogContentText,
   DialogTitle,
+  Chip,
 } from '@mui/material'
 import { Link as RouterLink, useNavigate, useSearchParams, useLocation } from 'react-router-dom'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
@@ -39,7 +40,7 @@ import { commandCenterService, leadTaskService, leadScoreService, queueService }
 import { leadService } from '@/services/leadApi'
 import { multifamilyService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
-import { deriveQueueContext } from '@/utils/deriveQueueContext'
+import { primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import { parseLogActivityParam, buildLeadUrl } from '@/utils/queueLogNavigation'
 import { isFromQueueState, fromQueueFromKey, queuePath, type FromQueueState } from '@/utils/fromQueue'
 import {
@@ -126,6 +127,12 @@ function StickyHeader({
   const navigate = useNavigate()
 
   const propertyAddress = formatPropertyAddress(commandCenterData)
+  const primaryOwner = primaryOwnerDisplayName(
+    commandCenterData.contacts,
+    commandCenterData.owner_first_name,
+    commandCenterData.owner_last_name,
+    commandCenterData.organizations,
+  )
 
   const scoreTier = scoreRecord?.score_tier ?? scoreToTier(commandCenterData.lead_score)
   const displayScore = scoreRecord?.total_score ?? commandCenterData.lead_score
@@ -163,6 +170,18 @@ function StickyHeader({
             >
               {propertyAddress}
             </Typography>
+            {primaryOwner ? (
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ lineHeight: 1.2 }}
+                noWrap
+                title={primaryOwner}
+                data-testid="sticky-header-owner"
+              >
+                {primaryOwner}
+              </Typography>
+            ) : null}
           </Box>
 
           {/* Lead score — opens breakdown dialog */}
@@ -290,46 +309,48 @@ function QueueWorkHeader({
   )
 }
 
-// ── QueueContextBanners ───────────────────────────────────────────────────────
+// ── Work queue membership strip ──────────────────────────────────────────────
 
-interface QueueContextBannersProps {
+interface WorkQueueMembershipStripProps {
   commandCenterData: CommandCenterPayload
 }
 
-function QueueContextBanners({ commandCenterData }: QueueContextBannersProps) {
-  const queues = deriveQueueContext(commandCenterData)
-
-  if (queues.length === 0) return null
+/** Always-visible work-queue membership (sidebar is lg+ only). */
+function WorkQueueMembershipStrip({ commandCenterData }: WorkQueueMembershipStripProps) {
+  const memberships = commandCenterData.work_queues ?? []
 
   return (
-    <Box sx={{ px: { xs: 1, sm: 2 }, pt: 1, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-      {queues.map((queue, index) => {
-        const isCritical = queue.color === 'error'
-        return (
-          <Alert
-            key={index}
-            severity={isCritical ? 'error' : 'info'}
-            variant="outlined"
-            data-testid="queue-context-banner"
-            sx={{
-              py: 0.25,
-              flex: '1 1 280px',
-              '& .MuiAlert-message': { fontSize: '0.8rem' },
-            }}
-            action={
-              <Button component={RouterLink} to={queue.path} size="small" color="inherit">
-                View
-              </Button>
-            }
-          >
-            <strong>{queue.label}</strong>
-            <Box component="span" sx={{ color: 'text.secondary' }}>
-              {' — '}
-              {queue.reason}
-            </Box>
-          </Alert>
-        )
-      })}
+    <Box
+      sx={{
+        px: { xs: 1, sm: 2 },
+        pt: 1,
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        gap: 1,
+      }}
+      data-testid="work-queue-membership-strip"
+    >
+      <Typography variant="body2" fontWeight={600} sx={{ mr: 0.5 }}>
+        Work queues
+      </Typography>
+      {memberships.length > 0 ? (
+        memberships.map((q) => (
+          <Chip
+            key={q.key}
+            component={RouterLink}
+            to={q.path}
+            clickable
+            size="small"
+            label={q.label}
+            data-testid={`work-queue-strip-${q.key}`}
+          />
+        ))
+      ) : (
+        <Typography variant="body2" color="text.secondary" data-testid="work-queue-strip-empty">
+          Not in an active work queue
+        </Typography>
+      )}
     </Box>
   )
 }
@@ -409,6 +430,12 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
     onTasksChanged()
   }
 
+  const handleTaskUpdated = (task: LeadTask) => {
+    setTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, ...task } : t)))
+    queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+    onTasksChanged()
+  }
+
   // Called immediately on form submit (before API call) to add a placeholder
   // so the UI grows from N to N+1 optimistically (Requirement 7.2, Property 12).
   const handleOptimisticTaskCreate = (optimisticTask: LeadTask) => {
@@ -459,6 +486,7 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
           mailQueueStatus={mailQueueStatus}
           upNextToMail={upNextToMail}
           onTaskCreated={handleTaskCreated}
+          onTaskUpdated={handleTaskUpdated}
           onTaskCompleted={handleTaskCompleted}
           onOptimisticTaskCreate={handleOptimisticTaskCreate}
           onOptimisticTaskRevert={handleOptimisticTaskRevert}
@@ -475,6 +503,7 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
             mailQueueStatus={mailQueueStatus}
             upNextToMail={upNextToMail}
             onTaskCreated={handleTaskCreated}
+            onTaskUpdated={handleTaskUpdated}
             onTaskCompleted={handleTaskCompleted}
             onOptimisticTaskCreate={handleOptimisticTaskCreate}
             onOptimisticTaskRevert={handleOptimisticTaskRevert}
@@ -706,6 +735,8 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
 
   const handleStatusChanged = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+    // Header prefers leadScore history over CC lead_score — must refresh or score looks stuck.
+    await queryClient.invalidateQueries({ queryKey: ['leadScore', leadId] })
     await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
     if (!fromQueue) return
     await queryClient.invalidateQueries({ queryKey: ['queue-navigation', fromQueue.key] })
@@ -941,8 +972,8 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         />
       </Box>
 
-      {/* Queue context banners — one per queue membership (Req 5.2) */}
-      <QueueContextBanners commandCenterData={commandCenterData!} />
+      {/* Work queue membership chips (alert banners removed — queues are enough) */}
+      <WorkQueueMembershipStrip commandCenterData={commandCenterData!} />
 
       {/* Two-column flex layout: activity column (left) + property sidebar (right, hidden below lg) */}
       <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', p: { xs: 1, sm: 2 } }}>

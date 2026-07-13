@@ -269,6 +269,19 @@ def _filter_mail_eligible_leads(leads: list) -> list:
     ]
 
 
+# URL kebab-key → (label, frontend path)
+WORK_QUEUE_DISPLAY: dict[str, tuple[str, str]] = {
+    'todays-action': ("Today's Action", '/queues/todays-action'),
+    'previously-warm': ('Previously Warm', '/queues/previously-warm'),
+    'follow-up-overdue': ('Follow-Up Overdue', '/queues/follow-up-overdue'),
+    'no-next-action': ('No Next Action', '/queues/no-next-action'),
+    'needs-review': ('Needs Review', '/queues/needs-review'),
+    'do-not-contact': ('Do Not Contact', '/queues/do-not-contact'),
+    'missing-property-match': ('Missing Property Match', '/queues/missing-property-match'),
+    'mail-candidates': ('Ready to Mail', '/queues/ready-to-mail'),
+}
+
+
 class QueueService:
     """Computes badge counts and paginated rows for the 7 Actionable Lead Command Center queues."""
 
@@ -291,6 +304,80 @@ class QueueService:
         if self._owner_user_id:
             q = q.filter(Lead.owner_user_id == self._owner_user_id)
         return q
+
+    def _lead_matches_query(self, query, lead_id: int) -> bool:
+        return query.filter(Lead.id == lead_id).limit(1).first() is not None
+
+    def _follow_up_overdue_query(self):
+        today = date.today()
+        yesterday = today - timedelta(days=1)
+        seven_days_ago = today - timedelta(days=7)
+        open_lead_task_overdue = _open_lead_task_overdue_excluding_mail_awaiting(today)
+        hubspot_task_overdue = _hubspot_task_overdue_excluding_mail_awaiting(yesterday)
+        return self._base_query().filter(
+            or_(
+                open_lead_task_overdue,
+                and_(
+                    Lead.recommended_action == 'follow_up_now',
+                    Lead.last_contact_date < seven_days_ago,
+                    ~_lead_awaiting_mail_subquery(),
+                ),
+                hubspot_task_overdue,
+            )
+        )
+
+    def _missing_property_match_query(self):
+        has_research_task = exists().where(
+            and_(
+                LeadTask.lead_id == Lead.id,
+                LeadTask.task_type == 'research_missing_pin',
+                LeadTask.status == 'open',
+            )
+        )
+        return self._base_query().filter(
+            Lead.has_property_match.is_(False),
+            ~has_research_task,
+        )
+
+    def membership_for_lead(
+        self,
+        lead_id: int,
+        *,
+        mail_user_id: str | None = None,
+    ) -> list[dict]:
+        """Return work queues this lead currently belongs to (computed, same filters as lists)."""
+        checks: list[tuple[str, object]] = [
+            ('todays-action', self._todays_action_query()),
+            ('previously-warm', self._base_query().filter(Lead.is_warm.is_(True))),
+            ('follow-up-overdue', self._follow_up_overdue_query()),
+            ('no-next-action', self._no_next_action_query()),
+            ('needs-review', self._base_query().filter(Lead.review_required.is_(True))),
+            ('do-not-contact', self._base_query().filter(Lead.lead_status == 'do_not_contact')),
+            ('missing-property-match', self._missing_property_match_query()),
+        ]
+
+        memberships: list[dict] = []
+        for key, query in checks:
+            if self._lead_matches_query(query, lead_id):
+                label, path = WORK_QUEUE_DISPLAY[key]
+                memberships.append({'key': key, 'label': label, 'path': path})
+
+        effective_mail_user = mail_user_id or self._owner_user_id
+        if effective_mail_user:
+            candidates = (
+                self._mail_candidates_query(effective_mail_user)
+                .filter(Lead.id == lead_id)
+                .all()
+            )
+            if _filter_mail_eligible_leads(candidates):
+                label, path = WORK_QUEUE_DISPLAY['mail-candidates']
+                memberships.append({
+                    'key': 'mail-candidates',
+                    'label': label,
+                    'path': path,
+                })
+
+        return memberships
 
     # ------------------------------------------------------------------
     # Badge counts

@@ -298,12 +298,13 @@ def test_scoring_never_returns_analyze_property():
 # Priority 6: follow_up_overdue → follow_up_now
 # ---------------------------------------------------------------------------
 
-def test_priority_6_follow_up_overdue_returns_mail_ready_for_residential_early_stage():
+def test_priority_6_follow_up_overdue_returns_call_ready_for_residential_early_stage():
+    """Overdue follow-up prefers phone even on early mail statuses."""
     lead = make_lead(follow_up_overdue=True, lead_status='mailing_no_contact_made')
     with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
          patch.object(LeadScoringEngine, '_has_recent_email', return_value=False):
         result = ActionEngineService.compute_recommended_action(lead)
-    assert result == 'mail_ready'
+    assert result == 'call_ready'
 
 
 def test_priority_6_follow_up_overdue_post_mailing_returns_call_ready():
@@ -321,12 +322,13 @@ def test_priority_6_follow_up_overdue_post_mailing_returns_call_ready():
 # Priority 7: is_warm → follow_up_now
 # ---------------------------------------------------------------------------
 
-def test_priority_7_is_warm_residential_early_stage_returns_mail_ready():
+def test_priority_7_is_warm_residential_early_stage_returns_call_ready():
+    """Warm + phone prefers call even on early mail statuses."""
     lead = make_lead(is_warm=True, lead_status='mailing_no_contact_made')
     with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
          patch.object(LeadScoringEngine, '_has_recent_email', return_value=False):
         result = ActionEngineService.compute_recommended_action(lead)
-    assert result == 'mail_ready'
+    assert result == 'call_ready'
 
 
 def test_commercial_three_unanswered_calls_returns_mail_ready():
@@ -391,8 +393,9 @@ def test_priority_10_active_no_tasks_returns_create_task():
 
 
 def test_priority_10_new_no_tasks_returns_create_task():
+    """Non-engaged status with mid score and no tasks → create_task."""
     lead = make_lead(
-        lead_status='negotiating_remote',
+        lead_status='mailing_contacted_no_interest',
         lead_score=65.0,
         data_completeness_score=60.0,
     )
@@ -401,22 +404,97 @@ def test_priority_10_new_no_tasks_returns_create_task():
     assert result == 'create_task'
 
 
+def test_engaged_pipeline_in_person_returns_call_ready_not_enrich():
+    """In-person appointment + phone → call_ready (nurture refined), not enrich_data."""
+    lead = make_lead(
+        lead_status='in_person_appointment',
+        lead_score=31.0,
+        data_completeness_score=60.0,
+        has_phone=True,
+        is_warm=False,
+        follow_up_overdue=False,
+    )
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
+        result = ActionEngineService.compute_recommended_action(lead)
+    assert result == 'call_ready'
+
+
+def test_tier_d_with_phone_returns_call_ready_not_enrich():
+    lead = make_lead(
+        lead_status='mailing_no_contact_made',
+        lead_score=25.0,
+        data_completeness_score=40.0,
+        has_phone=True,
+        is_warm=False,
+        follow_up_overdue=False,
+    )
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
+        # Cold early-mail status locks method to direct_mail, so tier_d_contactable
+        # stays nurture (only engaged/tier_d + phone channel refines to call_ready).
+        result = ActionEngineService.compute_recommended_action(lead)
+    assert result != 'enrich_data'
+    assert result == 'nurture'
+
+
+def test_mail_work_in_flight_with_phone_stays_nurture():
+    lead = make_lead(
+        lead_status='mailing_no_contact_made',
+        lead_score=40.0,
+        data_completeness_score=60.0,
+        has_phone=True,
+        is_warm=False,
+        follow_up_overdue=False,
+    )
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
+         patch('app.services.lead_scoring_engine._mail_work_in_flight', return_value=True), \
+         patch.object(LeadScoringEngine, '_has_recent_email', return_value=False):
+        result = ActionEngineService.compute_recommended_action(lead)
+    assert result == 'nurture'
+
+
+def test_tier_d_unreachable_still_enrich_or_add_contact():
+    """Tier D with no phone/email is not a false 'enrich because low score' on contactable leads."""
+    lead = make_lead(
+        lead_status='offer_delivered',
+        lead_score=20.0,
+        data_completeness_score=10.0,
+        has_phone=False,
+        has_email=False,
+        has_property_match=True,
+        property_street='1 Main',
+        is_warm=False,
+        follow_up_overdue=False,
+    )
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
+        with patch(
+            'app.services.lead_scoring_engine.is_mailable_lead',
+            return_value=False,
+        ):
+            with patch(
+                'app.services.lead_scoring_engine._has_mailing_address',
+                return_value=False,
+            ):
+                result = ActionEngineService.compute_recommended_action(lead)
+    assert result in ('add_contact_info', 'enrich_data')
+
+
 # ---------------------------------------------------------------------------
 # Priority 9: default → nurture (when open tasks exist)
 # ---------------------------------------------------------------------------
 
-def test_priority_11_default_returns_nurture():
-    """follow_up status with open tasks → nurture."""
+def test_priority_11_engaged_status_returns_call_ready():
+    """Engaged pipeline + phone → call_ready (nurture refined), even with open tasks."""
     lead = make_lead(
         lead_status='mailing_contacted_interested',
         lead_score=40.0,
         data_completeness_score=60.0,
         follow_up_overdue=False,
         is_warm=False,
+        has_phone=True,
     )
     with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=1):
         result = ActionEngineService.compute_recommended_action(lead)
-    assert result == 'nurture'
+    assert result == 'call_ready'
 
 
 # ---------------------------------------------------------------------------

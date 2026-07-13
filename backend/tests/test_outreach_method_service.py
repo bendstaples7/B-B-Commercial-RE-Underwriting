@@ -25,13 +25,54 @@ def _lead(**kwargs):
 
 
 @pytest.mark.parametrize('status', sorted(RESIDENTIAL_DIRECT_MAIL_STATUSES))
-def test_residential_early_stage_always_direct_mail(status):
-    lead = _lead(lead_status=status, is_warm=True, follow_up_overdue=True)
+def test_residential_early_stage_cold_always_direct_mail(status):
+    """Cold early-stage mail statuses still lock to direct_mail."""
+    lead = _lead(lead_status=status, is_warm=False, follow_up_overdue=False)
     method = evaluate_contact_method(
         lead, 'follow_up_now',
         has_phone=True, has_email=True, recent_email=True,
     )
     assert method == 'direct_mail'
+
+
+@pytest.mark.parametrize('status', sorted(RESIDENTIAL_DIRECT_MAIL_STATUSES))
+def test_residential_early_stage_warm_or_overdue_prefers_phone(status):
+    """Engaged/warm/overdue beats the cold-mail status lock when a phone exists."""
+    lead = _lead(lead_status=status, is_warm=True, follow_up_overdue=False)
+    method = evaluate_contact_method(
+        lead, 'follow_up_now',
+        has_phone=True, has_email=True, recent_email=False,
+    )
+    assert method == 'phone'
+
+
+def test_in_person_appointment_prefers_phone_even_without_warm():
+    lead = _lead(
+        lead_status='in_person_appointment',
+        is_warm=False,
+        follow_up_overdue=False,
+    )
+    method = evaluate_contact_method(
+        lead, 'nurture',
+        has_phone=True, has_email=False, recent_email=False,
+    )
+    assert method == 'phone'
+
+
+def test_refine_nurture_phone_to_call_ready_for_engaged_rule():
+    assert refine_outreach_action(
+        'nurture', 'phone', winning_rule='engaged_pipeline_nurture',
+    ) == 'call_ready'
+
+
+def test_refine_nurture_phone_stays_nurture_for_hold_rules():
+    assert refine_outreach_action(
+        'nurture', 'phone', winning_rule='mail_work_in_flight',
+    ) == 'nurture'
+    assert refine_outreach_action(
+        'nurture', 'phone', winning_rule='tier_c',
+    ) == 'nurture'
+    assert refine_outreach_action('nurture', 'phone') == 'nurture'
 
 
 def test_residential_warm_post_mailing_prefers_phone():
@@ -44,7 +85,7 @@ def test_residential_warm_post_mailing_prefers_phone():
 
 
 def test_residential_recent_email_prefers_email():
-    lead = _lead(lead_status='negotiating_remote')
+    lead = _lead(lead_status='offer_delivered')
     method = evaluate_contact_method(
         lead, 'ready_for_outreach',
         has_phone=True, has_email=True, recent_email=True,
@@ -53,7 +94,7 @@ def test_residential_recent_email_prefers_email():
 
 
 def test_residential_many_unanswered_calls_prefers_text():
-    lead = _lead(lead_status='negotiating_remote', unanswered_call_count=3)
+    lead = _lead(lead_status='offer_delivered', unanswered_call_count=3)
     method = evaluate_contact_method(
         lead, 'ready_for_outreach',
         has_phone=True, has_email=False, recent_email=False,

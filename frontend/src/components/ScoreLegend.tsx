@@ -173,13 +173,12 @@ export const ScoreLegend: React.FC<ScoreLegendProps> = ({
             </Typography>
           }
         >
-          Data completeness score, 0–100. Measures how many key fields are
-          present on the underlying lead: PIN, property address, normalized
-          address, owner name, owner mailing address, property type, unit
-          count or building size, and source reference. A low Quality score
-          means the Score itself is less reliable — enrich the lead before
-          acting. The filter panel exposes a <em>Quality &lt; 70</em> toggle
-          for this.
+          Data completeness score, 0–100. Half measures property identity
+          (PIN, address, owner name, mailing address, type, size, source).
+          Half measures contact reachability: phones weighted by confidence
+          (e.g. confirmed ≈ 90) plus email presence. Activity history does not
+          count. A low Quality score means the Score itself is less reliable.
+          The filter panel exposes a <em>Quality &lt; 70</em> toggle for this.
         </LegendRow>
 
         <Divider />
@@ -194,27 +193,31 @@ export const ScoreLegend: React.FC<ScoreLegendProps> = ({
         >
           <Stack spacing={0.5}>
             <Typography variant="body2" color="text.secondary">
-              Suggested next step based on Tier, Quality, and overrides:
+              Suggested next step from the action engine (tier, contactability,
+              match status, warmth). Common outcomes:
             </Typography>
             <Box component="ul" sx={{ pl: 2, m: 0 }}>
               <li>
-                <strong>Mail Ready</strong> — Tier A with Quality ≥ 70.
-                Ready for a mailer.
+                <strong>Mail Ready</strong> — Tier A with Quality ≥ 70 (when
+                cold mail is allowed).
               </li>
               <li>
                 <strong>Review Now</strong> — Tier B with Quality ≥ 70.
-                Worth a closer look.
               </li>
               <li>
-                <strong>Enrich Data</strong> — Tier A or B but Quality &lt;
-                70. Fill in missing fields before contacting.
+                <strong>Enrich Data</strong> — Tier D, no property match /
+                street, or unresolved entity owner research — not merely
+                “missing phones.”
               </li>
               <li>
-                <strong>Nurture</strong> — Tier C. Hold for later.
+                <strong>Follow Up Now</strong> — Warm lead or overdue follow-up.
               </li>
               <li>
-                <strong>Suppress</strong> — Tier D, flagged do-not-contact,
-                or a commercial lead that is likely a condo.
+                <strong>Nurture</strong> — Tier C or other hold states.
+              </li>
+              <li>
+                <strong>Suppress</strong> — Terminal status, DNC flag, or
+                likely condo.
               </li>
               <li>
                 <strong>Needs Manual Review</strong> — Commercial lead whose

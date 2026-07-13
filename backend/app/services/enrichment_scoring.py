@@ -19,24 +19,20 @@ def safe_attr(obj, name: str, default=None):
 
 
 def contactability_score(lead: Lead, max_points: float = 20.0) -> float:
-    """Score based on contact information completeness and skip-trace recency."""
+    """Enrichment depth beyond contact presence (phones/emails live in data quality).
+
+    Segments: skip-trace recency and socials. Phone/email presence is scored in
+    ``calculate_data_quality_score`` so lead_score does not double-count reachability.
+    """
     segments = 0
 
     if safe_attr(lead, "date_skip_traced") is not None:
         segments += 1
 
-    phone_fields = [f"phone_{i}" for i in range(1, 8)]
-    if any(safe_attr(lead, f) for f in phone_fields):
-        segments += 1
-
-    email_fields = [f"email_{i}" for i in range(1, 6)]
-    if any(safe_attr(lead, f) for f in email_fields):
-        segments += 1
-
     if safe_attr(lead, "socials"):
         segments += 1
 
-    return (segments / 4.0) * max_points
+    return (segments / 2.0) * max_points
 
 
 def property_equity_score(lead: Lead, max_points: float = 25.0) -> float:

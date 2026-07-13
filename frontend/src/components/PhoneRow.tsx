@@ -31,18 +31,32 @@ export function PhoneRow({ phone, showLabel = false, dense = true }: PhoneRowPro
   }
 
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5, flexWrap: 'wrap' }}>
-      <PhoneIcon sx={{ fontSize: dense ? 13 : 16, color: 'text.secondary' }} />
+    <Box
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: dense ? 'flex-end' : 'flex-start',
+        gap: 0.5,
+        minWidth: 0,
+        maxWidth: '100%',
+        flexWrap: dense ? 'nowrap' : 'wrap',
+      }}
+    >
+      <PhoneIcon
+        sx={{ fontSize: dense ? 13 : 16, color: 'text.secondary', flexShrink: 0 }}
+      />
       <Link
         href={phoneTelHref(value)}
         variant={dense ? 'caption' : 'body2'}
         underline="hover"
         onClick={(e) => e.stopPropagation()}
+        noWrap
+        sx={{ flexShrink: 0 }}
       >
         {displayPhone}
       </Link>
       {showLabel && label && label !== 'other' && (
-        <Typography component="span" variant="caption" color="text.secondary">
+        <Typography component="span" variant="caption" color="text.secondary" noWrap>
           ({label})
         </Typography>
       )}
@@ -52,7 +66,19 @@ export function PhoneRow({ phone, showLabel = false, dense = true }: PhoneRowPro
             label={confidenceLabel}
             size="small"
             variant="outlined"
-            sx={{ height: 18, fontSize: '0.65rem', maxWidth: 160 }}
+            sx={{
+              height: 18,
+              fontSize: '0.65rem',
+              maxWidth: dense ? 96 : 160,
+              flexShrink: 1,
+              minWidth: 0,
+              '& .MuiChip-label': {
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                px: 0.75,
+              },
+            }}
             data-testid={`phone-confidence-${value}`}
           />
         </Tooltip>
@@ -64,7 +90,7 @@ export function PhoneRow({ phone, showLabel = false, dense = true }: PhoneRowPro
             e.stopPropagation()
             handleCopy()
           }}
-          sx={{ p: 0.25 }}
+          sx={{ p: 0.25, flexShrink: 0 }}
         >
           <ContentCopyIcon sx={{ fontSize: dense ? 11 : 14 }} />
         </IconButton>

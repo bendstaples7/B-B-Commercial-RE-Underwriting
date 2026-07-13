@@ -263,6 +263,84 @@ def sync_hubspot_task_to_hubspot(hubspot_task_id: str) -> bool:
         return False
 
 
+def _record_task_platform_write(hubspot_task_id: str) -> None:
+    """Record outbound task write so webhook loop guard can suppress echo."""
+    from app.models.hubspot_platform_write import HubSpotPlatformWrite
+
+    db.session.add(
+        HubSpotPlatformWrite(
+            object_type='task',
+            hubspot_id=str(hubspot_task_id),
+        )
+    )
+    db.session.commit()
+
+
+def sync_hubspot_task_properties(
+    hubspot_task_id: str,
+    *,
+    title: str | None = None,
+    due_date=None,
+    clear_due_date: bool = False,
+) -> bool:
+    """Best-effort push of title/due_date to HubSpot; records platform write on success.
+
+    Local edits always win in the UI — callers should treat False as non-fatal.
+    """
+    if not hubspot_task_id:
+        return False
+    if title is None and due_date is None and not clear_due_date:
+        return False
+    try:
+        from app.models.hubspot_config import HubSpotConfig
+        from app.services.hubspot_client_service import HubSpotClientService
+
+        config = HubSpotConfig.query.order_by(HubSpotConfig.id.desc()).first()
+        if not config:
+            return False
+        HubSpotClientService(config).update_task(
+            str(hubspot_task_id),
+            subject=title,
+            due_date=None if clear_due_date else due_date,
+            clear_due_date=clear_due_date,
+        )
+        _record_task_platform_write(str(hubspot_task_id))
+        logger.info(
+            'HubSpot task %s properties updated via API (title=%s due=%s clear=%s)',
+            hubspot_task_id,
+            title is not None,
+            due_date is not None,
+            clear_due_date,
+        )
+        return True
+    except Exception as exc:
+        logger.warning(
+            'Failed to update HubSpot task %s properties via API: %s',
+            hubspot_task_id,
+            exc,
+        )
+        return False
+
+
+def mirror_crm_task_from_lead_task(lead_task) -> None:
+    """Keep parallel CRM ``tasks`` row in sync when present (best-effort)."""
+    hs_id = getattr(lead_task, 'hubspot_task_id', None)
+    if not hs_id:
+        return
+    crm_task = Task.query.filter_by(hubspot_task_id=str(hs_id)).first()
+    if crm_task is None:
+        return
+    crm_task.title = lead_task.title
+    if lead_task.due_date is None:
+        crm_task.due_date = None
+    else:
+        from datetime import datetime, time
+
+        crm_task.due_date = datetime.combine(lead_task.due_date, time(13, 0, 0))
+    crm_task.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    db.session.add(crm_task)
+
+
 def sync_pending_hubspot_completions(hubspot_task_ids: list[str]) -> None:
     """Sync HubSpot tasks after a surrounding transaction has committed."""
     for hubspot_task_id in hubspot_task_ids:

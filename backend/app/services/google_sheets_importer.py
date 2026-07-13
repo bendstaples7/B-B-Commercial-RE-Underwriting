@@ -13,19 +13,24 @@ from googleapiclient.discovery import build
 from app import db
 from app.models.lead import Lead, LeadAuditTrail
 from app.models.import_job import ImportJob, FieldMapping, OAuthToken
-from app.services.helpers.deal_source import normalize_imported_source_to_deal_source
+from app.services.helpers.deal_source import (
+    infer_deal_source_from_lead_fields,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def _fill_deal_source_from_import_source(lead: Lead) -> bool:
-    """Fill blank ``deal_source`` from free-text ``source`` when mappable.
+    """Fill blank ``deal_source`` from free-text ``source`` / description when mappable.
 
     Returns True when the lead was updated.
     """
     if (lead.deal_source or '').strip():
         return False
-    mapped = normalize_imported_source_to_deal_source(getattr(lead, 'source', None))
+    mapped = infer_deal_source_from_lead_fields(
+        source=getattr(lead, 'source', None),
+        deal_description=getattr(lead, 'deal_description', None),
+    )
     if not mapped:
         return False
     lead.deal_source = mapped

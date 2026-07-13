@@ -300,7 +300,29 @@ const commandCenterPayloadArb = fc.record({
       per_page: fc.constant(20),
     })
   ),
-  // Fields used by deriveQueueContext
+  // Fields used by deriveQueueContext (server work_queues)
+  work_queues: fc.array(
+    fc.record({
+      key: fc.constantFrom(
+        'do-not-contact',
+        'needs-review',
+        'follow-up-overdue',
+        'missing-property-match',
+        'no-next-action',
+        'previously-warm',
+        'todays-action',
+      ),
+      label: fc.string({ minLength: 1 }),
+      path: fc.constantFrom(
+        '/queues/do-not-contact',
+        '/queues/needs-review',
+        '/queues/follow-up-overdue',
+        '/queues/missing-property-match',
+        '/queues/no-next-action',
+      ),
+    }),
+    { maxLength: 4 },
+  ),
   has_overdue_hubspot_task: fc.boolean(),
   overdue_task_title: fc.option(fc.string()),
   overdue_task_due: fc.option(fc.constant(new Date().toISOString())),

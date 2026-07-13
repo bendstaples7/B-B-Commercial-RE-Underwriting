@@ -4,7 +4,7 @@
  *
  * Requirements: 3.2, 3.3, 3.6, 4.3, 7.5, 7.6
  */
-import { forwardRef, useImperativeHandle, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import {
   Alert,
   Box,
@@ -27,6 +27,7 @@ import {
 } from '@mui/material'
 import AddIcon from '@mui/icons-material/Add'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import AddTaskIcon from '@mui/icons-material/AddTask'
 import HubIcon from '@mui/icons-material/Hub'
 import type { LeadTask, LeadTaskType, CRMRecommendedAction, OutreachContact } from '@/types'
@@ -102,6 +103,8 @@ export interface LeadTaskListProps {
   tasks: LeadTask[]
   recommendedAction?: CRMRecommendedAction | null
   onTaskCreated: (task: LeadTask) => void
+  /** Called after a successful title/due-date update on a native task. */
+  onTaskUpdated?: (task: LeadTask) => void
   onTaskCompleted?: (taskId: number | string) => void
   onHubSpotTaskDone?: (taskId: number) => void
   /** Called immediately when the user submits the form, before the API call
@@ -138,6 +141,7 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
     tasks,
     recommendedAction,
     onTaskCreated,
+    onTaskUpdated,
     onTaskCompleted,
     onHubSpotTaskDone,
     onOptimisticTaskCreate,
@@ -158,6 +162,23 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [markingDone, setMarkingDone] = useState<number | null>(null)
+  const [editingTaskId, setEditingTaskId] = useState<number | null>(null)
+  const [editingField, setEditingField] = useState<'title' | 'due_date' | null>(null)
+  const [editTitle, setEditTitle] = useState('')
+  const [editDueDate, setEditDueDate] = useState('')
+  const [editTitleError, setEditTitleError] = useState<string | null>(null)
+  const [editSubmitError, setEditSubmitError] = useState<string | null>(null)
+  const [editSubmitting, setEditSubmitting] = useState(false)
+  const editSubmittingRef = useRef(false)
+  const skipBlurSaveRef = useRef(false)
+  const editingRef = useRef<{ id: number | null; field: 'title' | 'due_date' | null }>({
+    id: null,
+    field: null,
+  })
+
+  useEffect(() => {
+    editingRef.current = { id: editingTaskId, field: editingField }
+  }, [editingTaskId, editingField])
 
   const openTasks = tasks.filter((t) => t.status === 'open' || t.status === 'overdue')
   const sortedTasks = sortTasks(openTasks)
@@ -170,6 +191,12 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
   // ---------------------------------------------------------------------------
 
   const handleOpenForm = () => {
+    setEditingTaskId(null)
+    setEditingField(null)
+    setEditTitle('')
+    setEditDueDate('')
+    setEditTitleError(null)
+    setEditSubmitError(null)
     setFormOpen(true)
     setTitle('')
     setTaskType('custom')
@@ -260,6 +287,111 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
     }
   }
 
+  const handleStartEdit = (task: LeadTask, field: 'title' | 'due_date' = 'title') => {
+    // Local LeadTask rows (native or HubSpot-imported) are editable via PATCH.
+    // Legacy string ids (e.g. hs-…) are not.
+    if (typeof task.id !== 'number') return
+    setFormOpen(false)
+    setEditingTaskId(task.id)
+    setEditingField(field)
+    setEditTitle(task.title)
+    setEditDueDate(task.due_date ?? '')
+    setEditTitleError(null)
+    setEditSubmitError(null)
+  }
+
+  const handleCancelEdit = () => {
+    setEditingTaskId(null)
+    setEditingField(null)
+    setEditTitle('')
+    setEditDueDate('')
+    setEditTitleError(null)
+    setEditSubmitError(null)
+  }
+
+  const handleSaveEdit = async (task: LeadTask, field: 'title' | 'due_date') => {
+    if (typeof task.id !== 'number') return
+    if (editSubmittingRef.current) return
+
+    if (field === 'title') {
+      const error = validateTitle(editTitle)
+      if (error) {
+        setEditTitleError(error)
+        return
+      }
+      if (editTitle.trim() === task.title) {
+        if (editingRef.current.id === task.id && editingRef.current.field === field) {
+          handleCancelEdit()
+        }
+        return
+      }
+    } else {
+      const nextDue = editDueDate || null
+      if (nextDue === (task.due_date ?? null)) {
+        if (editingRef.current.id === task.id && editingRef.current.field === field) {
+          handleCancelEdit()
+        }
+        return
+      }
+    }
+
+    const saveForId = task.id
+    const saveForField = field
+    setEditTitleError(null)
+    setEditSubmitError(null)
+    editSubmittingRef.current = true
+    setEditSubmitting(true)
+
+    const payload =
+      field === 'title'
+        ? { title: editTitle.trim() }
+        : { due_date: editDueDate || null }
+
+    try {
+      const updated = await leadTaskService.updateTask(leadId, task.id, payload)
+      onTaskUpdated?.({
+        ...task,
+        ...updated,
+        lead_id: updated.lead_id ?? task.lead_id ?? leadId,
+        task_type: updated.task_type ?? task.task_type,
+        created_at: updated.created_at ?? task.created_at,
+        completed_at: updated.completed_at ?? task.completed_at,
+        created_by: updated.created_by ?? task.created_by,
+        title: updated.title ?? (field === 'title' ? editTitle.trim() : task.title),
+        due_date:
+          updated.due_date !== undefined
+            ? updated.due_date
+            : field === 'due_date'
+              ? editDueDate || null
+              : task.due_date,
+      })
+      // Don't dismiss a different field the user opened while this save was in flight.
+      if (editingRef.current.id === saveForId && editingRef.current.field === saveForField) {
+        handleCancelEdit()
+      }
+    } catch (err) {
+      setEditSubmitError(
+        err instanceof Error ? err.message : 'Failed to update task. Please try again.',
+      )
+    } finally {
+      editSubmittingRef.current = false
+      setEditSubmitting(false)
+    }
+  }
+
+  const commitEditField = (task: LeadTask, field: 'title' | 'due_date') => {
+    skipBlurSaveRef.current = true
+    void handleSaveEdit(task, field).finally(() => {
+      // Allow later blurs after the Enter-driven commit finishes.
+      skipBlurSaveRef.current = false
+    })
+  }
+
+  const handleEditBlur = (task: LeadTask, field: 'title' | 'due_date') => {
+    if (skipBlurSaveRef.current || editSubmittingRef.current) return
+    void handleSaveEdit(task, field)
+  }
+
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
@@ -336,20 +468,27 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
             const overdue = dueStatus === 'overdue'
             const dueToday = dueStatus === 'due_today'
             const isHubSpot = task.source === 'hubspot'
+            const canEdit = typeof task.id === 'number'
+            const editingTitle =
+              canEdit && editingTaskId === task.id && editingField === 'title'
+            const editingDue =
+              canEdit && editingTaskId === task.id && editingField === 'due_date'
             const showContactOnTask =
               showOutreachContactOnPrimaryTask
               && index === 0
               && (outreachContact || missingOutreachChannel)
+
             return (
               <Box key={task.id}>
                 {index > 0 && <Divider component="li" />}
                 <ListItem
                   data-testid={`task-item-${task.id}`}
-                  sx={
-                    overdue
+                  sx={{
+                    ...(overdue
                       ? { borderLeft: 3, borderColor: 'error.main', pl: 1.5, ml: 0 }
-                      : undefined
-                  }
+                      : {}),
+                    ...((onTaskCompleted || isHubSpot) ? { pr: 6 } : {}),
+                  }}
                   secondaryAction={
                     !isHubSpot && onTaskCompleted ? (
                       <IconButton
@@ -398,63 +537,177 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
                 >
                   <ListItemText
                     primary={
-                      <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap">
-                        <span>{task.title}</span>
-                        {overdue && (
-                          <Chip
-                            label="Overdue"
-                            size="small"
-                            color="error"
-                            sx={{ height: 18, fontSize: '0.65rem' }}
-                            data-testid={`task-overdue-chip-${task.id}`}
-                          />
+                      <Stack spacing={0.5} sx={{ pr: 1 }}>
+                        {editSubmitError && editingTaskId === task.id && (
+                          <Alert
+                            severity="error"
+                            sx={{ py: 0 }}
+                            onClose={() => setEditSubmitError(null)}
+                            data-testid="task-edit-error"
+                          >
+                            {editSubmitError}
+                          </Alert>
                         )}
-                        {dueToday && (
-                          <Chip
-                            label="Due today"
-                            size="small"
-                            color="warning"
-                            sx={{ height: 18, fontSize: '0.65rem' }}
-                            data-testid={`task-due-today-chip-${task.id}`}
-                          />
-                        )}
-                        {isHubSpot && (
-                          <Chip
-                            icon={<HubIcon sx={{ fontSize: '12px !important' }} />}
-                            label="HubSpot"
-                            size="small"
-                            sx={{
-                              height: 18,
-                              fontSize: '0.65rem',
-                              bgcolor: '#ff7a59',
-                              color: '#fff',
-                              '& .MuiChip-icon': { color: '#fff' },
-                            }}
-                          />
-                        )}
+                        <Stack direction="row" alignItems="center" spacing={0.5} flexWrap="wrap">
+                          {editingTitle ? (
+                            <TextField
+                              value={editTitle}
+                              onChange={(e) => {
+                                setEditTitle(e.target.value)
+                                if (editTitleError) setEditTitleError(null)
+                              }}
+                              error={!!editTitleError}
+                              helperText={editTitleError}
+                              size="small"
+                              fullWidth
+                              autoFocus
+                              disabled={editSubmitting}
+                              inputProps={{
+                                maxLength: 255,
+                                'data-testid': 'task-edit-title-input',
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault()
+                                  commitEditField(task, 'title')
+                                } else if (e.key === 'Escape') {
+                                  e.preventDefault()
+                                  skipBlurSaveRef.current = true
+                                  handleCancelEdit()
+                                }
+                              }}
+                              onBlur={() => handleEditBlur(task, 'title')}
+                              sx={{ flex: 1, minWidth: 140 }}
+                            />
+                          ) : (
+                            <>
+                              <Box
+                                component="span"
+                                onClick={canEdit ? () => handleStartEdit(task, 'title') : undefined}
+                                data-testid={`task-title-${task.id}`}
+                                sx={{
+                                  cursor: canEdit ? 'pointer' : 'default',
+                                  borderRadius: 0.5,
+                                  px: 0.25,
+                                  '&:hover': canEdit
+                                    ? { bgcolor: 'action.hover' }
+                                    : undefined,
+                                }}
+                              >
+                                {task.title}
+                              </Box>
+                              {canEdit && (
+                                <Tooltip title="Edit title">
+                                  <IconButton
+                                    aria-label={`Edit title: ${task.title}`}
+                                    onClick={() => handleStartEdit(task, 'title')}
+                                    data-testid={`edit-task-btn-${task.id}`}
+                                    size="small"
+                                    sx={{ p: 0.25 }}
+                                  >
+                                    <EditOutlinedIcon sx={{ fontSize: 14 }} />
+                                  </IconButton>
+                                </Tooltip>
+                              )}
+                            </>
+                          )}
+                          {overdue && (
+                            <Chip
+                              label="Overdue"
+                              size="small"
+                              color="error"
+                              sx={{ height: 18, fontSize: '0.65rem' }}
+                              data-testid={`task-overdue-chip-${task.id}`}
+                            />
+                          )}
+                          {dueToday && (
+                            <Chip
+                              label="Due today"
+                              size="small"
+                              color="warning"
+                              sx={{ height: 18, fontSize: '0.65rem' }}
+                              data-testid={`task-due-today-chip-${task.id}`}
+                            />
+                          )}
+                          {isHubSpot && (
+                            <Chip
+                              icon={<HubIcon sx={{ fontSize: '12px !important' }} />}
+                              label="HubSpot"
+                              size="small"
+                              sx={{
+                                height: 18,
+                                fontSize: '0.65rem',
+                                bgcolor: '#ff7a59',
+                                color: '#fff',
+                                '& .MuiChip-icon': { color: '#fff' },
+                              }}
+                            />
+                          )}
+                        </Stack>
                       </Stack>
                     }
                     secondary={
                       <>
-                        {(task.due_date || dueStatus === 'no_due') && (
-                          <Typography
-                            component="span"
-                            variant="caption"
-                            color={
-                              overdue
-                                ? 'error'
-                                : dueToday
-                                  ? 'warning.main'
-                                  : dueStatus === 'no_due'
-                                    ? 'info.main'
-                                    : 'text.secondary'
+                        {editingDue ? (
+                          <TextField
+                            type="date"
+                            value={editDueDate}
+                            onChange={(e) => setEditDueDate(e.target.value)}
+                            size="small"
+                            autoFocus
+                            disabled={editSubmitting}
+                            InputLabelProps={{ shrink: true }}
+                            helperText={
+                              isHubSpot ? 'Also pushes to HubSpot when possible.' : undefined
                             }
-                            data-testid={`task-due-date-${task.id}`}
-                            sx={{ display: 'block' }}
-                          >
-                            {formatDueDate(task.due_date)}
-                            {overdue && ' (overdue)'}
-                          </Typography>
+                            inputProps={{ 'data-testid': 'task-edit-due-date-input' }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault()
+                                commitEditField(task, 'due_date')
+                              } else if (e.key === 'Escape') {
+                                e.preventDefault()
+                                skipBlurSaveRef.current = true
+                                handleCancelEdit()
+                              }
+                            }}
+                            onBlur={() => handleEditBlur(task, 'due_date')}
+                            sx={{ mt: 0.5, maxWidth: 200 }}
+                          />
+                        ) : (
+                          (task.due_date || dueStatus === 'no_due') && (
+                            <Typography
+                              component="span"
+                              variant="caption"
+                              color={
+                                overdue
+                                  ? 'error'
+                                  : dueToday
+                                    ? 'warning.main'
+                                    : dueStatus === 'no_due'
+                                      ? 'info.main'
+                                      : 'text.secondary'
+                              }
+                              data-testid={`task-due-date-${task.id}`}
+                              onClick={canEdit ? () => handleStartEdit(task, 'due_date') : undefined}
+                              sx={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 0.25,
+                                mt: 0.25,
+                                cursor: canEdit ? 'pointer' : 'default',
+                                borderRadius: 0.5,
+                                px: 0.25,
+                                '&:hover': canEdit ? { bgcolor: 'action.hover' } : undefined,
+                              }}
+                            >
+                              {formatDueDate(task.due_date)}
+                              {overdue && ' (overdue)'}
+                              {canEdit && (
+                                <EditOutlinedIcon sx={{ fontSize: 12, opacity: 0.7 }} />
+                              )}
+                            </Typography>
+                          )
                         )}
                         {showContactOnTask && outreachContact && (
                           <OutreachContactInline contact={outreachContact} />

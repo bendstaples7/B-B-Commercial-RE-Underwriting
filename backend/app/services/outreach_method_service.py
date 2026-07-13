@@ -43,6 +43,13 @@ METHOD_EXPLANATIONS = {
 VALID_CONTACT_CHANNELS = frozenset(CONTACT_METHOD_LABELS.keys())
 
 
+ENGAGED_PIPELINE_STATUSES = frozenset({
+    'in_person_appointment',
+    'negotiating_remote',
+    'mailing_contacted_interested',
+})
+
+
 def evaluate_contact_method(
     lead: Lead,
     recommended_action: str | None,
@@ -81,14 +88,21 @@ def _residential_contact_method(
     recent_email: bool,
 ) -> str:
     status = getattr(lead, 'lead_status', None)
-    if status in RESIDENTIAL_DIRECT_MAIL_STATUSES:
-        return 'direct_mail'
+    engaged_or_follow_up = (
+        status in ENGAGED_PIPELINE_STATUSES
+        or getattr(lead, 'follow_up_overdue', False)
+        or getattr(lead, 'is_warm', False)
+    )
 
-    if getattr(lead, 'is_warm', False) or getattr(lead, 'follow_up_overdue', False):
+    # Engaged / overdue / warm: prefer phone before cold-mail status lock.
+    if engaged_or_follow_up:
         if has_phone:
             return 'phone'
         if has_email:
             return 'email'
+        return 'direct_mail'
+
+    if status in RESIDENTIAL_DIRECT_MAIL_STATUSES:
         return 'direct_mail'
 
     if recent_email and has_email:
@@ -103,7 +117,20 @@ def _residential_contact_method(
     return 'direct_mail'
 
 
-def refine_outreach_action(action: str | None, method: str | None) -> str | None:
+# Only these nurture outcomes should surface as Call Ready after channel refine.
+# Hold / score-band nurture (mail in flight, tier C, etc.) must stay nurture.
+NURTURE_TO_CALL_RULES = frozenset({
+    'engaged_pipeline_nurture',
+    'tier_d_contactable',
+})
+
+
+def refine_outreach_action(
+    action: str | None,
+    method: str | None,
+    *,
+    winning_rule: str | None = None,
+) -> str | None:
     """Map generic outreach actions to channel-specific actions where enums exist."""
     if not action or not method:
         return action
@@ -112,6 +139,12 @@ def refine_outreach_action(action: str | None, method: str | None) -> str | None
         return action
 
     if method == 'phone' and action in ('follow_up_now', 'ready_for_outreach'):
+        return 'call_ready'
+    if (
+        method == 'phone'
+        and action == 'nurture'
+        and winning_rule in NURTURE_TO_CALL_RULES
+    ):
         return 'call_ready'
     if method == 'direct_mail' and action in ('follow_up_now', 'ready_for_outreach'):
         return 'mail_ready'

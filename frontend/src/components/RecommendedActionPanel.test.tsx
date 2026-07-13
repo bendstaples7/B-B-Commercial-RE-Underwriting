@@ -117,6 +117,26 @@ describe('RecommendedActionPanel', () => {
       expect(screen.getByTestId('ra-action-btn-research_property')).toBeInTheDocument()
     })
 
+    it('shows winning rule caption when provided', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={{
+            ...makeRA('enrich_data', 'Enrich Data', 'Fill gaps that block scoring.'),
+            winning_rule: 'tier_d',
+            winning_rule_label:
+              'Lead score is Tier D — add property and contact data to improve the score',
+          }}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          onAction={vi.fn()}
+        />
+      )
+
+      expect(screen.getByTestId('ra-winning-rule')).toHaveTextContent(
+        'Why this next step: Lead score is Tier D',
+      )
+    })
+
     it('renders action buttons for analyze_property RA', () => {
       render(
         <RecommendedActionPanel
