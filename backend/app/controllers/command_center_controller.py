@@ -383,6 +383,11 @@ def get_command_center(lead_id: int):
         lead.data_completeness_score = data_completeness_score
         _db.session.add(lead)
         _db.session.commit()
+        from app.services.lead_refresh import refresh_lead_scoring
+        refresh_lead_scoring(lead_id)
+        lead = Lead.query.get(lead_id)
+        data_quality_breakdown = build_data_quality_breakdown(lead)
+        data_completeness_score = data_quality_breakdown['total']
 
     # Display next step + "why" from one live decision so label/explanation
     # cannot disagree with a stale persisted recommended_action column.
