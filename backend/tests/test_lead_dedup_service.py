@@ -210,6 +210,30 @@ class TestDuplicateClusters:
             ids = {frozenset(lead.id for lead in group) for group in clusters}
             assert frozenset({jammed.id, split.id}) in ids
 
+    def test_does_not_cluster_conflicting_middle_initials(self, app):
+        from app.services.lead_dedup_service import find_duplicate_clusters
+
+        with app.app_context():
+            a = Lead(
+                property_street='100 Shared St',
+                owner_first_name='Gilbert E',
+                owner_last_name='Janson',
+                owner_user_id='user-1',
+            )
+            b = Lead(
+                property_street='100 Shared Street',
+                owner_first_name='Gilbert A',
+                owner_last_name='Janson',
+                owner_user_id='user-1',
+            )
+            db.session.add_all([a, b])
+            db.session.commit()
+
+            clusters = find_duplicate_clusters()
+            for group in clusters:
+                ids = {lead.id for lead in group}
+                assert not ({a.id, b.id} <= ids)
+
 
 class TestDuplicateSentinel:
     def test_auto_merges_clear_duplicate(self, app):

@@ -380,10 +380,19 @@ def run(dry_run: bool = False, mode: str = 'unit'):
                 from app import create_app
                 from app.services.lead_refresh import refresh_lead_scoring
 
-                app = create_app()
-                with app.app_context():
-                    for winner_id in winners_to_rescore:
-                        refresh_lead_scoring(winner_id)
+                # Suppress migrations and startup CRM/ownership backfills.
+                prev_migration = os.environ.get('KIRO_MIGRATION')
+                os.environ['KIRO_MIGRATION'] = '1'
+                try:
+                    app = create_app()
+                    with app.app_context():
+                        for winner_id in winners_to_rescore:
+                            refresh_lead_scoring(winner_id)
+                finally:
+                    if prev_migration is None:
+                        os.environ.pop('KIRO_MIGRATION', None)
+                    else:
+                        os.environ['KIRO_MIGRATION'] = prev_migration
                 logger.info("Rescored %d winner lead(s)", len(winners_to_rescore))
         else:
             conn.rollback()

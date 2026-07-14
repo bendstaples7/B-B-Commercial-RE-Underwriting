@@ -213,6 +213,31 @@ def _first_token_and_last(first: str, last: str) -> tuple[str | None, str | None
     return first_token, last_norm
 
 
+def _middle_tokens(first: str) -> list[str]:
+    tokens = [re.sub(r"[^a-z]", "", t) for t in (first or "").lower().split() if t]
+    tokens = [t for t in tokens if t]
+    return tokens[1:]
+
+
+def _middles_compatible(a: list[str], b: list[str]) -> bool:
+    """True when middle tokens agree, or one is an initial of the other."""
+    if not a or not b:
+        return True
+    if a == b:
+        return True
+    if len(a) != len(b):
+        return False
+    for left, right in zip(a, b):
+        if left == right:
+            continue
+        if len(left) == 1 and right.startswith(left):
+            continue
+        if len(right) == 1 and left.startswith(right):
+            continue
+        return False
+    return True
+
+
 def owner_names_equivalent(
     first_a: str | None,
     last_a: str | None,
@@ -233,6 +258,33 @@ def owner_names_equivalent(
             if not last_norm_b or not tok_b:
                 continue
             if last_norm_a == last_norm_b and tok_a == tok_b:
+                return True
+    return False
+
+
+def owner_names_merge_safe(
+    first_a: str | None,
+    last_a: str | None,
+    first_b: str | None,
+    last_b: str | None,
+) -> bool:
+    """Stricter match for destructive lead merges.
+
+    Same as ``owner_names_equivalent``, but if both sides expose middle-name
+    tokens they must be compatible (exact or initials). Prevents auto-merging
+    ``Gilbert E Janson`` with ``Gilbert A Janson`` at the same building.
+    """
+    for fa, la in _owner_name_variants(first_a, last_a):
+        tok_a, last_norm_a = _first_token_and_last(fa, la)
+        if not last_norm_a or not tok_a:
+            continue
+        for fb, lb in _owner_name_variants(first_b, last_b):
+            tok_b, last_norm_b = _first_token_and_last(fb, lb)
+            if not last_norm_b or not tok_b:
+                continue
+            if last_norm_a != last_norm_b or tok_a != tok_b:
+                continue
+            if _middles_compatible(_middle_tokens(fa), _middle_tokens(fb)):
                 return True
     return False
 

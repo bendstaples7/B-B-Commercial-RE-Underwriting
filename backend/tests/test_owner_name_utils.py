@@ -25,6 +25,14 @@ class TestExpandOwnerNameParts:
     def test_jr_equivalent_to_split_name(self):
         assert owner_names_equivalent('John Smith Jr', None, 'John', 'Smith')
 
+    def test_conflicting_middle_initials_not_merge_safe(self):
+        from app.services.plugins.owner_name_utils import owner_names_merge_safe
+
+        assert owner_names_equivalent('Gilbert E', 'Janson', 'Gilbert A', 'Janson')
+        assert not owner_names_merge_safe('Gilbert E', 'Janson', 'Gilbert A', 'Janson')
+        assert owner_names_merge_safe('Gilbert', 'Janson', 'Gilbert E', 'Janson')
+        assert owner_names_merge_safe('Gilbert E', 'Janson', 'Gilbert Edward', 'Janson')
+
     def test_equivalent_jammed_vs_split(self):
         assert owner_names_equivalent(
             'GARCIA ADALBERTO', None, 'GARCIA', 'ADALBERTO',

@@ -225,7 +225,7 @@ def cluster_same_building_by_owner_name(
 
     from app.services.plugins.owner_name_utils import (
         expand_owner_name_parts,
-        owner_names_equivalent,
+        owner_names_merge_safe,
     )
 
     street_groups: dict[tuple, list[Any]] = defaultdict(list)
@@ -257,7 +257,8 @@ def cluster_same_building_by_owner_name(
 
         for i in range(len(group)):
             for j in range(i + 1, len(group)):
-                if owner_names_equivalent(
+                # Merge-safe: conflicting middle initials stay in separate clusters.
+                if owner_names_merge_safe(
                     first_of(group[i]), last_of(group[i]),
                     first_of(group[j]), last_of(group[j]),
                 ):

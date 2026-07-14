@@ -23,6 +23,7 @@ import {
 import SearchIcon from '@mui/icons-material/Search'
 import { searchService } from '@/services/api'
 import { LeadStatusChip } from '@/components/LeadStatusChip'
+import { RelatedPropertyRow } from '@/components/RelatedPropertyRow'
 import { highlightMatch, matchTypeLabel } from '@/utils/searchResultDisplay'
 import { groupSearchLeadsByPerson } from '@/utils/groupSearchLeadsByPerson'
 import { clampPage, computeTotalPages } from '@/utils/pagination'
@@ -296,35 +297,11 @@ export function SearchResultsPage() {
                       )}
                       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, pl: 0.5 }}>
                         {group.properties.map((prop) => (
-                          <Box
+                          <RelatedPropertyRow
                             key={prop.id}
-                            sx={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 1,
-                              flexWrap: 'wrap',
-                            }}
-                          >
-                            <Link
-                              component={RouterLink}
-                              to={`/leads/${prop.id}`}
-                              underline="hover"
-                              sx={{ fontSize: '0.875rem', overflowWrap: 'anywhere' }}
-                              data-testid={`search-lead-${prop.id}`}
-                            >
-                              {prop.property_street || `Lead #${prop.id}`}
-                              {prop.property_city ? ` · ${prop.property_city}` : ''}
-                            </Link>
-                            {prop.lead_score != null && (
-                              <Chip
-                                label={prop.lead_score}
-                                size="small"
-                                variant="outlined"
-                                sx={{ height: 20 }}
-                              />
-                            )}
-                            {prop.lead_status && <LeadStatusChip status={prop.lead_status} />}
-                          </Box>
+                            prop={prop}
+                            testIdPrefix="search-lead"
+                          />
                         ))}
                       </Box>
                     </ListItem>

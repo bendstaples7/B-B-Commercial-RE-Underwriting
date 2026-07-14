@@ -21,7 +21,7 @@ import type {
   PropertyContactSummary,
   RelatedPropertySummary,
 } from '@/types'
-import { LeadStatusChip } from '@/components/LeadStatusChip'
+import { RelatedPropertyRow } from '@/components/RelatedPropertyRow'
 import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
 import {
   isEntityContactName,
@@ -443,33 +443,13 @@ export function PropertySidebar({
             sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}
           >
             {(commandCenterData.related_properties as RelatedPropertySummary[]).map((prop) => (
-              <Box
+              <RelatedPropertyRow
                 key={prop.id}
-                sx={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  justifyContent: 'space-between',
-                  gap: 1,
-                  flexWrap: 'wrap',
-                }}
-              >
-                <Link
-                  component={RouterLink}
-                  to={`/leads/${prop.id}`}
-                  underline="hover"
-                  sx={{ fontSize: '0.8125rem', fontWeight: 500, overflowWrap: 'anywhere' }}
-                  data-testid={`sidebar-related-property-${prop.id}`}
-                >
-                  {prop.property_street || `Lead #${prop.id}`}
-                  {prop.property_city ? ` · ${prop.property_city}` : ''}
-                </Link>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
-                  {prop.lead_score != null && (
-                    <Chip label={prop.lead_score} size="small" variant="outlined" sx={{ height: 20 }} />
-                  )}
-                  {prop.lead_status && <LeadStatusChip status={prop.lead_status} />}
-                </Box>
-              </Box>
+                prop={prop}
+                testIdPrefix="sidebar-related-property"
+                fontSize="0.8125rem"
+                fontWeight={500}
+              />
             ))}
           </Box>
         </SidebarSection>
