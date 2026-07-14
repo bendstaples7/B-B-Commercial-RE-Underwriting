@@ -146,6 +146,57 @@ def is_address_like_contact(first_name: str | None, last_name: str | None) -> bo
     return is_address_like_name(display)
 
 
+def expand_owner_name_parts(
+    first_name: str | None,
+    last_name: str | None,
+) -> tuple[str, str]:
+    """Normalize owner fields when the full name was jammed into ``first_name``.
+
+    ``GARCIA ADALBERTO`` + empty last → (``GARCIA``, ``ADALBERTO``) so it matches
+    rows that already have split first/last. Trailing token becomes last name.
+    """
+    first = (first_name or "").strip()
+    last = (last_name or "").strip()
+    if last or not first:
+        return first, last
+    parts = first.split()
+    if len(parts) < 2:
+        return first, last
+    return " ".join(parts[:-1]), parts[-1]
+
+
+def _owner_name_variants(
+    first_name: str | None,
+    last_name: str | None,
+) -> list[tuple[str, str]]:
+    """Candidate (first, last) pairs including jammed FIRST LAST and LAST FIRST."""
+    first = (first_name or "").strip()
+    last = (last_name or "").strip()
+    variants: list[tuple[str, str]] = [expand_owner_name_parts(first, last)]
+    if not last and len(first.split()) >= 2:
+        parts = first.split()
+        # Assessor-style LAST FIRST jammed into first_name.
+        variants.append((" ".join(parts[1:]), parts[0]))
+    # Deduplicate while preserving order
+    seen: set[tuple[str, str]] = set()
+    out: list[tuple[str, str]] = []
+    for pair in variants:
+        key = (pair[0].lower(), pair[1].lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(pair)
+    return out
+
+
+def _first_token_and_last(first: str, last: str) -> tuple[str | None, str | None]:
+    last_norm = re.sub(r"[^a-z]", "", (last or "").lower()) or None
+    tokens = [re.sub(r"[^a-z]", "", t) for t in (first or "").lower().split() if t]
+    tokens = [t for t in tokens if t]
+    first_token = tokens[0] if tokens else None
+    return first_token, last_norm
+
+
 def owner_names_equivalent(
     first_a: str | None,
     last_a: str | None,
@@ -154,23 +205,20 @@ def owner_names_equivalent(
 ) -> bool:
     """True when two person names are the same person ignoring case / middle initials.
 
-    ``Joseph Kiferbaum`` matches ``JOSEPH A KIFERBAUM``; does not match a different
-    last name or a different first given name.
+    ``Joseph Kiferbaum`` matches ``JOSEPH A KIFERBAUM``; jammed assessor forms
+    ``GARCIA ADALBERTO`` match both ``GARCIA``/``ADALBERTO`` and reverse order.
     """
-    last_norm_a = re.sub(r"[^a-z]", "", (last_a or "").lower())
-    last_norm_b = re.sub(r"[^a-z]", "", (last_b or "").lower())
-    if not last_norm_a or last_norm_a != last_norm_b:
-        return False
-
-    tokens_a = [re.sub(r"[^a-z]", "", t) for t in (first_a or "").lower().split() if t]
-    tokens_b = [re.sub(r"[^a-z]", "", t) for t in (first_b or "").lower().split() if t]
-    tokens_a = [t for t in tokens_a if t]
-    tokens_b = [t for t in tokens_b if t]
-    if not tokens_a and not tokens_b:
-        return True
-    if not tokens_a or not tokens_b:
-        return False
-    return tokens_a[0] == tokens_b[0]
+    for fa, la in _owner_name_variants(first_a, last_a):
+        tok_a, last_norm_a = _first_token_and_last(fa, la)
+        if not last_norm_a or not tok_a:
+            continue
+        for fb, lb in _owner_name_variants(first_b, last_b):
+            tok_b, last_norm_b = _first_token_and_last(fb, lb)
+            if not last_norm_b or not tok_b:
+                continue
+            if last_norm_a == last_norm_b and tok_a == tok_b:
+                return True
+    return False
 
 
 def is_institutional_contact(first_name: str | None, last_name: str | None) -> bool:

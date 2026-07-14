@@ -38,11 +38,24 @@ LEAD_STATUS_RANK: dict[str, int] = {
 
 
 def street_line_from_address(address: Optional[str]) -> str:
-    """Return the street line from a Places-style full address (before first comma)."""
+    """Return the street line from a Places-style or glued full address.
+
+    Prefer the segment before the first comma (``street, city, state ZIP``).
+    When commas are missing, strip a trailing ``City ST ZIP`` only when a
+    2-letter US state is present — do not use zip-only parsing (that would
+    turn ``1719 W Barry 60657`` into ``1719 W``).
+    """
     text = (address or '').strip()
     if not text:
         return ''
-    return text.split(',', 1)[0].strip()
+    if ',' in text:
+        return text.split(',', 1)[0].strip()
+    from app.services.address_parse_service import street_only_from_glued_city_state_zip
+
+    street = street_only_from_glued_city_state_zip(text)
+    if street:
+        return street
+    return text
 
 
 def cities_compatible(a: Optional[str], b: Optional[str]) -> bool:

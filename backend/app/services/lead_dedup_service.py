@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 
 from app import db
@@ -216,6 +216,9 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
             continue
         w_val = getattr(winner, field, None)
         l_val = getattr(loser, field, None)
+        if field == 'lead_score':
+            # Scoring has a single writer — refresh after merge instead of copying.
+            continue
         if (w_val is None or w_val == '') and l_val not in (None, ''):
             setattr(winner, field, l_val)
 
@@ -227,29 +230,48 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
         changed_by=changed_by,
     ))
     db.session.delete(loser)
+    db.session.flush()
+    try:
+        from app.services.lead_refresh import refresh_lead_scoring
+        refresh_lead_scoring(winner_id)
+    except Exception:  # noqa: BLE001 — never fail a merge on rescoring
+        logger.exception('refresh_lead_scoring failed after merging %s into %s', loser_id, winner_id)
     logger.info("Merged lead %s into %s", loser_id, winner_id)
 
 
 def find_duplicate_clusters() -> list[list[Lead]]:
     """Return groups of duplicate leads (same owner + dedup street key)."""
+    from app.services.plugins.owner_name_utils import expand_owner_name_parts
+
+    # Require a last name column, or a multi-token first_name (jammed FULL NAME).
     rows = Lead.query.filter(
         Lead.owner_first_name.isnot(None),
         Lead.owner_first_name != '',
-        Lead.owner_last_name.isnot(None),
-        Lead.owner_last_name != '',
         Lead.property_street.isnot(None),
         Lead.property_street != '',
-        Lead.normalized_street.isnot(None),
-        Lead.normalized_street != '',
+        or_(
+            and_(Lead.owner_last_name.isnot(None), Lead.owner_last_name != ''),
+            Lead.owner_first_name.contains(' '),
+        ),
     ).all()
 
     buckets: dict[tuple, list[Lead]] = {}
     for lead in rows:
+        first, last = expand_owner_name_parts(
+            lead.owner_first_name, lead.owner_last_name,
+        )
+        if not first or not last:
+            continue
+        street_key = (lead.normalized_street or '').strip() or dedup_street_key(
+            lead.property_street,
+        )
+        if not street_key:
+            continue
         key = (
             lead.owner_user_id,
-            (lead.owner_first_name or '').strip().lower(),
-            (lead.owner_last_name or '').strip().lower(),
-            lead.normalized_street,
+            first.strip().lower(),
+            last.strip().lower(),
+            street_key,
         )
         buckets.setdefault(key, []).append(lead)
 

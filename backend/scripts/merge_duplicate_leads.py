@@ -171,6 +171,11 @@ def _merge_loser_into_winner(cur, winner: dict, loser: dict) -> None:
                     merged = merge_mailer_history(w_val, l_val)
                     if merged is not None and merged != w_val:
                         updates[field] = Json(merged)
+                elif field == 'lead_score':
+                    w_score = float(w_val) if w_val is not None else 0.0
+                    l_score = float(l_val) if l_val is not None else 0.0
+                    if l_score > w_score:
+                        updates[field] = l_val
                 elif (w_val is None or w_val == '') and l_val not in (None, ''):
                     updates[field] = l_val
 
@@ -227,15 +232,23 @@ def _find_normalized_merge_groups(rows: list[dict]) -> list[list[dict]]:
 
 def _find_dedup_merge_groups(rows: list[dict]) -> list[list[dict]]:
     """Group by owner + building-level dedup_street_key (matches DB unique index)."""
+    from app.services.plugins.owner_name_utils import expand_owner_name_parts
+
     buckets: dict[tuple, list[dict]] = defaultdict(list)
     for row in rows:
         street_key = dedup_street_key(row.get('property_street'))
         if not street_key:
             continue
+        first, last = expand_owner_name_parts(
+            row.get('owner_first_name'),
+            row.get('owner_last_name'),
+        )
+        if not first or not last:
+            continue
         key = (
             row.get('owner_user_id'),
-            (row.get('owner_first_name') or '').strip().lower(),
-            (row.get('owner_last_name') or '').strip().lower(),
+            first.strip().lower(),
+            last.strip().lower(),
             street_key,
         )
         buckets[key].append(dict(row))
@@ -293,7 +306,6 @@ def run(dry_run: bool = False, mode: str = 'unit'):
                            last_hubspot_sync_at
                     FROM leads
                     WHERE owner_first_name IS NOT NULL AND owner_first_name != ''
-                      AND owner_last_name  IS NOT NULL AND owner_last_name  != ''
                       AND property_street  IS NOT NULL AND property_street  != ''
                 """)
             rows = cur.fetchall()

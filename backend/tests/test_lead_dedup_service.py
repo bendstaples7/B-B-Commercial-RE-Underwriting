@@ -26,6 +26,24 @@ class TestDedupStreetKey:
             '4903 N Hermitage Ave, Chicago, IL 60640, USA',
         )
 
+    def test_no_comma_city_state_zip_shares_key_with_bare_street(self):
+        """City/state/zip glued into property_street (no commas) must not diverge."""
+        bare = '4128 W Barry Ave'
+        glued = '4128 W Barry Ave Chicago IL 60618'
+        comma = '4128 W Barry Ave, Chicago, IL 60618'
+        assert dedup_street_key(bare) == dedup_street_key(glued)
+        assert dedup_street_key(bare) == dedup_street_key(comma)
+
+    def test_harding_no_comma_shares_key_with_bare_street(self):
+        assert dedup_street_key('3446 N Harding Ave') == dedup_street_key(
+            '3446 N Harding Ave Chicago IL 60618',
+        )
+
+    def test_zip_only_suffix_does_not_strip_street_name(self):
+        """``1719 W Barry 60657`` must keep Barry (no state token to strip on)."""
+        assert dedup_street_key('1719 W Barry 60657') == dedup_street_key('1719 W Barry')
+        assert 'BARRY' in dedup_street_key('1719 W Barry 60657')
+
     def test_north_and_n_share_key(self):
         assert dedup_street_key('4903 North Hermitage') == dedup_street_key('4903 N Hermitage')
 

@@ -30,6 +30,21 @@ def parse_embedded_us_address(raw: str) -> tuple[str, str, str, str] | None:
     return _parse_space_separated_no_state(text)
 
 
+def street_only_from_glued_city_state_zip(raw: str) -> str | None:
+    """If ``raw`` is ``street City ST ZIP`` (state required), return street line.
+
+    Does not use zip-only parsing — that would mis-handle ``1719 W Barry 60657``.
+    """
+    text = (raw or '').strip()
+    if not text or ',' in text:
+        return None
+    parsed = _parse_space_separated_with_state(text)
+    if not parsed:
+        return None
+    street = (parsed[0] or '').strip()
+    return street or None
+
+
 def _parse_comma_separated(raw: str) -> tuple[str, str, str, str] | None:
     parts = [p.strip() for p in raw.split(',') if p.strip()]
     if len(parts) < 3:
