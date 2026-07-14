@@ -154,7 +154,7 @@ function minimalPropertyDetail(id: number): PropertyDetail {
 async function waitForCommandCenterLoaded(container: HTMLElement) {
   await waitFor(
     () => {
-      expect(container.querySelector('header')).not.toBeNull()
+      expect(container.querySelector('[data-testid="sticky-header"]')).not.toBeNull()
     },
     { timeout: 5000 },
   )
@@ -709,14 +709,14 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         // commandCenterData is loaded (StickyHeader is rendered post-load).
         await waitFor(
           () => {
-            const header = container.querySelector('header')
+            const header = container.querySelector('[data-testid="sticky-header"]')
             expect(header).not.toBeNull()
           },
           { timeout: 3000 }
         )
 
         // Get the sticky header element specifically to scope header-only assertions
-        const headerEl = container.querySelector('header')!
+        const headerEl = container.querySelector('[data-testid="sticky-header"]')!
 
         // 1. Property address is the sticky header focus; primary owner may appear under it
         const expectedAddress = expectedStickyHeaderAddress(payload)
