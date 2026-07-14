@@ -154,6 +154,7 @@ function StickyHeader({
   return (
     <>
       <Box
+        component="header"
         data-testid="sticky-header"
         sx={{
           bgcolor: 'background.paper',
