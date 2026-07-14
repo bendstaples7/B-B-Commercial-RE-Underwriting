@@ -3,7 +3,7 @@
  *
  * Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8
  */
-import { useState, useEffect } from 'react'
+import { useState, useEffect, type KeyboardEvent, type MouseEvent } from 'react'
 import {
   Avatar,
   Box,
@@ -25,6 +25,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import HistoryIcon from '@mui/icons-material/History'
 import type { LeadTimelineEntry } from '@/types'
 import { formatPhoneNumber } from '@/utils/phone'
+import { stripHtmlTags } from '@/utils/helpers'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -36,15 +37,23 @@ const SUMMARY_COLLAPSE_THRESHOLD = 120
 
 /**
  * Derive display text for a timeline entry, falling back to metadata when summary is empty.
+ * HubSpot bodies often include HTML wrappers — always show plain text.
+ * Plain-text notes keep their original newlines; HTML is stripped with newlines preserved from <br>.
  */
 function getEntryDisplayText(entry: LeadTimelineEntry): string {
-  if (entry.summary?.trim()) return entry.summary
-  const metadata = entry.metadata
-  if (!metadata) return ''
-  const body = metadata.body
-  if (typeof body === 'string' && body.trim()) return body
-  const notes = metadata.notes
-  if (typeof notes === 'string' && notes.trim()) return notes
+  const candidates = [
+    entry.summary,
+    entry.metadata?.body,
+    entry.metadata?.notes,
+  ]
+  for (const raw of candidates) {
+    if (typeof raw !== 'string' || !raw.trim()) continue
+    // Plain text (no tags / entities): preserve multi-line notes as authored
+    if (!/<[^>]*>|&[a-zA-Z#]+;/i.test(raw)) {
+      return raw.trim()
+    }
+    return stripHtmlTags(raw, { preserveNewlines: true })
+  }
   return ''
 }
 
@@ -116,8 +125,10 @@ function extractEmailMessageBody(body: string): string {
  */
 function getFullNoteBody(entry: LeadTimelineEntry): string {
   const body = entry.metadata?.body
-  if (typeof body === 'string' && body.trim()) return body
-  return entry.summary?.trim() ?? ''
+  if (typeof body === 'string' && body.trim()) {
+    return stripHtmlTags(body, { preserveNewlines: true })
+  }
+  return stripHtmlTags(entry.summary?.trim() ?? '', { preserveNewlines: true })
 }
 
 function isEmailEntry(entry: LeadTimelineEntry): boolean {
@@ -144,11 +155,11 @@ function buildEmailDetailRows(metadata: Record<string, unknown>): TimelineDetail
       ? metadata.subject
       : (body ? parseEmailSubjectFromBody(body) : null)
   if (subject) {
-    rows.push({ label: 'Subject', value: subject })
+    rows.push({ label: 'Subject', value: stripHtmlTags(subject) })
   }
   const message = body ? extractEmailMessageBody(body) : ''
   if (message) {
-    rows.push({ label: 'Message', value: message })
+    rows.push({ label: 'Message', value: stripHtmlTags(message) })
   }
   return rows
 }
@@ -183,7 +194,7 @@ export function buildTimelineDetailRows(entry: LeadTimelineEntry): TimelineDetai
       })
     }
     if (typeof metadata.notes === 'string' && metadata.notes.trim()) {
-      rows.push({ label: 'Notes', value: metadata.notes })
+      rows.push({ label: 'Notes', value: stripHtmlTags(metadata.notes) })
     }
     if (rows.length === 0) {
       const displayText = getEntryDisplayText(entry)
@@ -308,7 +319,7 @@ function TimelineEntryRow({ entry, highlighted = false }: TimelineEntryRowProps)
 
   const previewText = hasExpandableDetails ? getPreviewText(entry) : summaryText
 
-  const handleToggleDetails = (event: React.MouseEvent | React.KeyboardEvent) => {
+  const handleToggleDetails = (event: MouseEvent | KeyboardEvent) => {
     event.stopPropagation()
     if (hasExpandableDetails) {
       setDetailsExpanded((v) => !v)
@@ -410,7 +421,24 @@ function TimelineEntryRow({ entry, highlighted = false }: TimelineEntryRowProps)
                   <Typography
                     variant="body2"
                     color="text.secondary"
-                    sx={{ mt: 0.25, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                    sx={{
+                      mt: 0.25,
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      cursor: 'pointer',
+                      '&:hover': { color: 'text.primary' },
+                    }}
+                    onClick={handleToggleDetails}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        handleToggleDetails(event)
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={detailsExpanded}
+                    aria-label={detailsExpanded ? 'Hide details' : 'Show details'}
                     data-testid={`entry-summary-${entry.id}`}
                   >
                     {previewText}
@@ -418,7 +446,12 @@ function TimelineEntryRow({ entry, highlighted = false }: TimelineEntryRowProps)
                 )}
                 <Collapse in={detailsExpanded}>
                   <Box
-                    sx={{ mt: 0.5, pl: 0.5, borderLeft: 2, borderColor: 'divider' }}
+                    sx={{
+                      mt: 0.5,
+                      pl: 0.5,
+                      borderLeft: 2,
+                      borderColor: 'divider',
+                    }}
                     data-testid={`entry-details-${entry.id}`}
                   >
                     {detailRows.map((row) => (

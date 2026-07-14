@@ -39,6 +39,7 @@ Update this doc when ownership changes.
 | Recommended action (live) | [`LeadScoringEngine`](../backend/app/services/lead_scoring_engine.py) → `leads.recommended_action` (same as `lead_scores.recommended_action`) | Parallel action engines or unmapped RA enums |
 | Lead timeline (read/write) | [`command_center_controller.py`](../backend/app/controllers/command_center_controller.py) + [`CallLogService`](../backend/app/services/call_log_service.py) → `LeadTimelineEntry` | Duplicate `GET /api/leads/:id/timeline` handlers; injecting Interaction rows into CC |
 | HubSpot activity → CC timeline | [`HubSpotTimelineImportService`](../backend/app/services/hubspot_timeline_import_service.py) → `LeadTimelineEntry` | Writing HubSpot activities only to `Interaction` for product UI |
+| Lead quick briefing (CC) | [`LeadBriefingService`](../backend/app/services/lead_briefing_service.py) → `POST /api/leads/:id/briefing` (persists latest on `leads.quick_briefing`; Refresh revises); included on CC payload; UI [`LeadBriefingPanel.tsx`](../frontend/src/components/LeadBriefingPanel.tsx) | Parallel OpenAI client; auto-running briefings on every CC open; version history store |
 | Lead open tasks (CC) | [`LeadTask`](../backend/app/models/lead_task.py) via [`LeadTaskService`](../backend/app/services/lead_task_service.py) (incl. `hubspot_task_id`) | UNION of CRM `tasks` into CC `open_tasks` |
 | Interaction timeline (CRM) | `GET /api/leads/:id/interaction-timeline` in [`interaction_controller.py`](../backend/app/controllers/interaction_controller.py) — **frozen for CC/product** | Overlapping URL with command-center timeline; new product consumers |
 | Work queues (API) | [`queue_service.py`](../backend/app/services/queue_service.py) at `/api/queues/*` | `/api/properties/views/*` (301 → queues; legacy only) |
@@ -53,6 +54,7 @@ Update this doc when ownership changes.
 |---------|-------|---------|
 | Lead detail (command center) | `GET /api/leads/:id/command-center` | command center controller |
 | Lead activity timeline | `GET /api/leads/:id/timeline` | command center → `{ entries, total, page }` |
+| Lead quick briefing | `POST /api/leads/:id/briefing` | LeadBriefingService → persist `leads.quick_briefing`; `{ bullets[5], mode, generated_at, updated_at, ... }` (revise when saved exists) |
 | CRM interaction timeline | `GET /api/leads/:id/interaction-timeline` | interaction controller → `{ timeline }` |
 | Log note / call | `POST /api/leads/:id/notes`, `/calls` | CallLogService |
 | Work queues | `GET /api/queues/*` | queue controller |
@@ -68,12 +70,12 @@ Update this doc when ownership changes.
 
 Active gaps where product UI can miss data that exists on a parallel path (fix in separate PRs; do not expand these paths):
 
-1. **HubSpot activity → CC timeline** — live sync still writes `Interaction` via `HubSpotActivityConverterService`; docs/canonical import is `HubSpotTimelineImportService` → `LeadTimelineEntry`. CC timeline does not UNION Interactions.
-2. **Queue task membership vs CC `open_tasks`** — Today’s Action / overdue still EXISTS against CRM `tasks`; CC open tasks are `LeadTask` only. Mirror gaps show due work with an empty Open Tasks panel.
-3. **Flat owner/phone on All Properties / marketing** — queues enrich via contacts; list/marketing UIs still lean on flat `owner_*` / `phone_*`.
-4. **`up_next_to_mail` vs `mail_ready` + `MailQueueItem`** — legacy flag still OR’d into awaiting-mail / lifecycle for uncleared rows.
-5. **Follow-Up Overdue membership** — still mixes `follow_up_now` RA + CRM tasks, unlike Today’s Action (due `LeadTask` only).
+1. **Queue task membership vs CC `open_tasks`** — Today’s Action / overdue still EXISTS against CRM `tasks`; CC open tasks are `LeadTask` only. Mirror gaps show due work with an empty Open Tasks panel.
+2. **Flat owner/phone on All Properties / marketing** — queues enrich via contacts; list/marketing UIs still lean on flat `owner_*` / `phone_*`.
+3. **`up_next_to_mail` vs `mail_ready` + `MailQueueItem`** — legacy flag still OR’d into awaiting-mail / lifecycle for uncleared rows.
+4. **Follow-Up Overdue membership** — still mixes `follow_up_now` RA + CRM tasks, unlike Today’s Action (due `LeadTask` only).
 
+~~Former #1 HubSpot activity → CC timeline~~ — closed: live convert / incremental webhook call `HubSpotTimelineImportService.sync_lead_from_interactions` after writing Interactions; historical backfill via `scripts/backfill_hubspot_interactions_to_timeline.py`. Interactions remain for scoring/signals / frozen CRM timeline.
 ## Related specs
 
 Feature specs live in [`.kiro/specs/`](../.kiro/specs/). When a spec task says "remove file", deletion is part of **done**, not optional cleanup.

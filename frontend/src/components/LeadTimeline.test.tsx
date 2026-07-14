@@ -617,6 +617,57 @@ describe('LeadTimeline', () => {
       expect(screen.getByTestId('entry-detail-value-1-note')).toHaveTextContent(longNote)
     })
 
+    it('expands when the note preview text is clicked', async () => {
+      const longNote = 'A'.repeat(200)
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(1, {
+              summary: longNote.slice(0, 80),
+              metadata: { body: longNote },
+            }),
+          ]}
+          initialTotal={1}
+        />,
+      )
+
+      expect(screen.queryByTestId('entry-details-1')).not.toBeVisible()
+
+      await user.click(screen.getByTestId('entry-summary-1'))
+
+      expect(screen.getByTestId('entry-details-1')).toBeVisible()
+      expect(screen.getByTestId('entry-detail-value-1-note')).toHaveTextContent(longNote)
+    })
+
+    it('does not collapse when clicking expanded note body (allows text select/copy)', async () => {
+      const longNote = 'A'.repeat(200)
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(1, {
+              summary: longNote.slice(0, 80),
+              metadata: { body: longNote },
+            }),
+          ]}
+          initialTotal={1}
+        />,
+      )
+
+      await user.click(screen.getByTestId('entry-summary-1'))
+      expect(screen.getByTestId('entry-details-1')).toBeVisible()
+
+      await user.click(screen.getByTestId('entry-details-1'))
+      expect(screen.getByTestId('entry-detail-value-1-note')).toBeVisible()
+
+      await user.click(screen.getByTestId('entry-details-toggle-1'))
+      await waitFor(() => {
+        expect(screen.getByTestId('entry-detail-value-1-note')).not.toBeVisible()
+      })
+      expect(screen.getByTestId('entry-summary-1')).toBeVisible()
+    })
+
     it('collapses details when the entry is clicked again', async () => {
       render(
         <LeadTimeline

@@ -1319,6 +1319,16 @@ export const commandCenterService = {
     api.post(`/leads/${leadId}/suppress`).then(r => r.data),
   getTimeline: (leadId: number, page = 1): Promise<{ entries: LeadTimelineEntry[]; total: number; page: number; per_page: number }> =>
     api.get(`/leads/${leadId}/timeline`, { params: { page } }).then(r => r.data),
+  generateBriefing: (leadId: number): Promise<{
+    lead_id: number
+    bullets: string[]
+    generated_at: string
+    updated_at?: string
+    timeline_entries_used: number
+    open_tasks_used: number
+    mode?: 'create' | 'revise'
+  }> =>
+    api.post(`/leads/${leadId}/briefing`).then(r => r.data),
   syncHubSpot: (leadId: number): Promise<{
     lead_id: number;
     synced: boolean;

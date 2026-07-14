@@ -1166,9 +1166,21 @@ def run_incremental_matching(object_type: str, object_id: str):
     _run(object_type, object_id)
 
 
-@celery.task(name='hubspot_webhook.convert_activity')
-def convert_incremental_activity(engagement_id: str):
-    """Run HubSpotActivityConverterService for a single engagement."""
+@celery.task(
+    name='hubspot_webhook.convert_activity',
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    max_retries=5,
+)
+def convert_incremental_activity(self, engagement_id: str):
+    """Run HubSpotActivityConverterService for a single engagement.
+
+    Retries on failure so a transient timeline/DB error after Interaction
+    convert still gets a Command Center bridge on a later attempt.
+    """
     from app.tasks.hubspot_webhook_tasks import run_convert_incremental_activity
     run_convert_incremental_activity(engagement_id)
 

@@ -2068,6 +2068,15 @@ export interface ProspectApproveResult {
   import_job_id?: number;
 }
 
+export interface QuickBriefing {
+  bullets: string[];
+  generated_at: string;
+  updated_at?: string;
+  timeline_entries_used?: number;
+  open_tasks_used?: number;
+  mode?: 'create' | 'revise';
+}
+
 export interface CommandCenterPayload {
   id: number;
   owner_first_name: string | null;
@@ -2143,6 +2152,8 @@ export interface CommandCenterPayload {
     page: number;
     per_page: number;
   };
+  /** Latest persisted Gemini quick briefing (null until Generate). */
+  quick_briefing?: QuickBriefing | null;
   data_completeness_score?: number | null;
   data_quality_breakdown?: DataQualityBreakdown | null;
   work_queues?: WorkQueueMembership[];
