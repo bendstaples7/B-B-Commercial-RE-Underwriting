@@ -146,6 +146,98 @@ def is_address_like_contact(first_name: str | None, last_name: str | None) -> bo
     return is_address_like_name(display)
 
 
+_GENERATIONAL_SUFFIX_RE = re.compile(
+    r"^(?:jr\.?|sr\.?|ii|iii|iv|v)$",
+    re.IGNORECASE,
+)
+
+
+def _strip_generational_suffixes(parts: list[str]) -> list[str]:
+    """Drop trailing Jr/Sr/II-style tokens so they are not treated as last names."""
+    cleaned = list(parts)
+    while len(cleaned) >= 2 and _GENERATIONAL_SUFFIX_RE.fullmatch(cleaned[-1] or ""):
+        cleaned.pop()
+    return cleaned
+
+
+def expand_owner_name_parts(
+    first_name: str | None,
+    last_name: str | None,
+) -> tuple[str, str]:
+    """Normalize owner fields when the full name was jammed into ``first_name``.
+
+    ``GARCIA ADALBERTO`` + empty last → (``GARCIA``, ``ADALBERTO``) so it matches
+    rows that already have split first/last. Trailing token becomes last name.
+    Generational suffixes (Jr, Sr, II, …) are stripped before the split.
+    """
+    first = (first_name or "").strip()
+    last = (last_name or "").strip()
+    if last or not first:
+        return first, last
+    parts = _strip_generational_suffixes(first.split())
+    if len(parts) < 2:
+        return first, last
+    return " ".join(parts[:-1]), parts[-1]
+
+
+def _owner_name_variants(
+    first_name: str | None,
+    last_name: str | None,
+) -> list[tuple[str, str]]:
+    """Candidate (first, last) pairs including jammed FIRST LAST and LAST FIRST."""
+    first = (first_name or "").strip()
+    last = (last_name or "").strip()
+    variants: list[tuple[str, str]] = [expand_owner_name_parts(first, last)]
+    if not last and len(first.split()) >= 2:
+        parts = _strip_generational_suffixes(first.split())
+        if len(parts) >= 2:
+            # Assessor-style LAST FIRST jammed into first_name.
+            variants.append((" ".join(parts[1:]), parts[0]))
+    # Deduplicate while preserving order
+    seen: set[tuple[str, str]] = set()
+    out: list[tuple[str, str]] = []
+    for pair in variants:
+        key = (pair[0].lower(), pair[1].lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(pair)
+    return out
+
+
+def _first_token_and_last(first: str, last: str) -> tuple[str | None, str | None]:
+    last_norm = re.sub(r"[^a-z]", "", (last or "").lower()) or None
+    tokens = [re.sub(r"[^a-z]", "", t) for t in (first or "").lower().split() if t]
+    tokens = [t for t in tokens if t]
+    first_token = tokens[0] if tokens else None
+    return first_token, last_norm
+
+
+def _middle_tokens(first: str) -> list[str]:
+    tokens = [re.sub(r"[^a-z]", "", t) for t in (first or "").lower().split() if t]
+    tokens = [t for t in tokens if t]
+    return tokens[1:]
+
+
+def _middles_compatible(a: list[str], b: list[str]) -> bool:
+    """True when middle tokens agree, or one is an initial of the other."""
+    if not a or not b:
+        return True
+    if a == b:
+        return True
+    if len(a) != len(b):
+        return False
+    for left, right in zip(a, b):
+        if left == right:
+            continue
+        if len(left) == 1 and right.startswith(left):
+            continue
+        if len(right) == 1 and left.startswith(right):
+            continue
+        return False
+    return True
+
+
 def owner_names_equivalent(
     first_a: str | None,
     last_a: str | None,
@@ -154,23 +246,47 @@ def owner_names_equivalent(
 ) -> bool:
     """True when two person names are the same person ignoring case / middle initials.
 
-    ``Joseph Kiferbaum`` matches ``JOSEPH A KIFERBAUM``; does not match a different
-    last name or a different first given name.
+    ``Joseph Kiferbaum`` matches ``JOSEPH A KIFERBAUM``; jammed assessor forms
+    ``GARCIA ADALBERTO`` match both ``GARCIA``/``ADALBERTO`` and reverse order.
     """
-    last_norm_a = re.sub(r"[^a-z]", "", (last_a or "").lower())
-    last_norm_b = re.sub(r"[^a-z]", "", (last_b or "").lower())
-    if not last_norm_a or last_norm_a != last_norm_b:
-        return False
+    for fa, la in _owner_name_variants(first_a, last_a):
+        tok_a, last_norm_a = _first_token_and_last(fa, la)
+        if not last_norm_a or not tok_a:
+            continue
+        for fb, lb in _owner_name_variants(first_b, last_b):
+            tok_b, last_norm_b = _first_token_and_last(fb, lb)
+            if not last_norm_b or not tok_b:
+                continue
+            if last_norm_a == last_norm_b and tok_a == tok_b:
+                return True
+    return False
 
-    tokens_a = [re.sub(r"[^a-z]", "", t) for t in (first_a or "").lower().split() if t]
-    tokens_b = [re.sub(r"[^a-z]", "", t) for t in (first_b or "").lower().split() if t]
-    tokens_a = [t for t in tokens_a if t]
-    tokens_b = [t for t in tokens_b if t]
-    if not tokens_a and not tokens_b:
-        return True
-    if not tokens_a or not tokens_b:
-        return False
-    return tokens_a[0] == tokens_b[0]
+
+def owner_names_merge_safe(
+    first_a: str | None,
+    last_a: str | None,
+    first_b: str | None,
+    last_b: str | None,
+) -> bool:
+    """Stricter match for destructive lead merges.
+
+    Same as ``owner_names_equivalent``, but if both sides expose middle-name
+    tokens they must be compatible (exact or initials). Prevents auto-merging
+    ``Gilbert E Janson`` with ``Gilbert A Janson`` at the same building.
+    """
+    for fa, la in _owner_name_variants(first_a, last_a):
+        tok_a, last_norm_a = _first_token_and_last(fa, la)
+        if not last_norm_a or not tok_a:
+            continue
+        for fb, lb in _owner_name_variants(first_b, last_b):
+            tok_b, last_norm_b = _first_token_and_last(fb, lb)
+            if not last_norm_b or not tok_b:
+                continue
+            if last_norm_a != last_norm_b or tok_a != tok_b:
+                continue
+            if _middles_compatible(_middle_tokens(fa), _middle_tokens(fb)):
+                return True
+    return False
 
 
 def is_institutional_contact(first_name: str | None, last_name: str | None) -> bool:

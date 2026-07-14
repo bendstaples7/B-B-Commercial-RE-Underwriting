@@ -1,11 +1,50 @@
 """Tests for owner name entity / institutional classification."""
 from app.services.plugins.owner_name_utils import (
     apply_owner_name_fields,
+    expand_owner_name_parts,
     is_address_like_name,
     is_definite_institutional_name,
     is_entity_name,
     is_institutional_name,
+    owner_names_equivalent,
 )
+
+
+class TestExpandOwnerNameParts:
+    def test_jammed_full_name_splits_trailing_last(self):
+        assert expand_owner_name_parts('GARCIA ADALBERTO', None) == ('GARCIA', 'ADALBERTO')
+
+    def test_already_split_unchanged(self):
+        assert expand_owner_name_parts('GARCIA', 'ADALBERTO') == ('GARCIA', 'ADALBERTO')
+
+    def test_expand_strips_generational_suffix(self):
+        assert expand_owner_name_parts('John Smith Jr', None) == ('John', 'Smith')
+        assert expand_owner_name_parts('John Smith Jr.', None) == ('John', 'Smith')
+        assert expand_owner_name_parts('Mary Jane Doe III', None) == ('Mary Jane', 'Doe')
+
+    def test_jr_equivalent_to_split_name(self):
+        assert owner_names_equivalent('John Smith Jr', None, 'John', 'Smith')
+
+    def test_conflicting_middle_initials_not_merge_safe(self):
+        from app.services.plugins.owner_name_utils import owner_names_merge_safe
+
+        assert owner_names_equivalent('Gilbert E', 'Janson', 'Gilbert A', 'Janson')
+        assert not owner_names_merge_safe('Gilbert E', 'Janson', 'Gilbert A', 'Janson')
+        assert owner_names_merge_safe('Gilbert', 'Janson', 'Gilbert E', 'Janson')
+        assert owner_names_merge_safe('Gilbert E', 'Janson', 'Gilbert Edward', 'Janson')
+
+    def test_equivalent_jammed_vs_split(self):
+        assert owner_names_equivalent(
+            'GARCIA ADALBERTO', None, 'GARCIA', 'ADALBERTO',
+        )
+
+    def test_equivalent_jammed_assessor_last_first_vs_western(self):
+        assert owner_names_equivalent(
+            'GARCIA ADALBERTO', None, 'ADALBERTO', 'GARCIA',
+        )
+
+    def test_last_name_only_not_equivalent(self):
+        assert not owner_names_equivalent(None, 'Smith', None, 'Smith')
 
 
 class TestInstitutionalName:

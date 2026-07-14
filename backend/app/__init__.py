@@ -706,7 +706,10 @@ def create_app(config_name='development'):
     # at startup. This means the user never has to enter the secret in the UI —
     # just set the env var and restart the server.
     # ---------------------------------------------------------------------------
-    if config_name != 'testing':
+    # Skip HubSpot secret auto-config and all startup recovery/backfill when this
+    # process is a migration/script context (KIRO_MIGRATION=1) — maintenance
+    # scripts need app context for scoring without launching CRM backfills.
+    if config_name != 'testing' and not _is_migration_context():
         with app.app_context():
             try:
                 hs_client_secret = os.environ.get('HUBSPOT_CLIENT_SECRET', '').strip()
@@ -728,7 +731,7 @@ def create_app(config_name='development'):
     # This happens when the server was restarted without a Celery worker running,
     # leaving runs permanently stuck. We mark them failed so the UI is accurate.
     # ---------------------------------------------------------------------------
-    if config_name != 'testing':
+    if config_name != 'testing' and not _is_migration_context():
         with app.app_context():
             try:
                 from app.models.hubspot_import_run import HubSpotImportRun

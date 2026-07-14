@@ -18,7 +18,7 @@ from app.models.contact_email import ContactEmail
 from app.models.property_contact import PropertyContact
 from app.models.lead import Property
 from app.exceptions import ResourceNotFoundError, ConflictError, ValidationException
-from app.services.contact_backfill import split_phone_field, split_email_field
+from app.services.contact_backfill import phone_digits, split_phone_field, split_email_field
 
 from sqlalchemy.orm import selectinload
 
@@ -439,6 +439,10 @@ class ContactService:
                 continue
             person_owners.append((first_name, last_name))
 
+        phone_digit_list = self._flat_phone_digits_from_lead(lead)
+        email_list = self._flat_emails_from_lead(lead)
+        owner_user_id = getattr(lead, 'owner_user_id', None)
+
         for index, (first_name, last_name) in enumerate(person_owners):
             want_primary = index == 0
             contact, link = self._upsert_named_owner(
@@ -446,6 +450,9 @@ class ContactService:
                 first_name,
                 last_name,
                 is_primary=want_primary,
+                owner_user_id=owner_user_id,
+                phone_digit_list=phone_digit_list if want_primary else None,
+                emails=email_list if want_primary else None,
             )
             results.append((contact, link))
             if want_primary or primary_contact is None:
@@ -457,7 +464,13 @@ class ContactService:
         ):
             # Phones/emails without person names — ensure a primary owner shell exists.
             contact, link = self._upsert_named_owner(
-                property_id, None, 'Owner', is_primary=True,
+                property_id,
+                None,
+                'Owner',
+                is_primary=True,
+                owner_user_id=owner_user_id,
+                phone_digit_list=phone_digit_list,
+                emails=email_list,
             )
             primary_contact = contact
             results.append((contact, link))
@@ -492,6 +505,106 @@ class ContactService:
 
         return results
 
+    @staticmethod
+    def _flat_phone_digits_from_lead(lead: Property) -> list[str]:
+        digits: list[str] = []
+        seen: set[str] = set()
+        for i in range(1, 8):
+            raw = getattr(lead, f'phone_{i}', None)
+            for value in split_phone_field(raw):
+                d = phone_digits(value)
+                if d and d not in seen:
+                    seen.add(d)
+                    digits.append(d)
+        return digits
+
+    @staticmethod
+    def _flat_emails_from_lead(lead: Property) -> list[str]:
+        emails: list[str] = []
+        seen: set[str] = set()
+        for i in range(1, 6):
+            raw = getattr(lead, f'email_{i}', None)
+            for value in split_email_field(raw or ''):
+                e = (value or '').strip().lower()
+                if e and e not in seen:
+                    seen.add(e)
+                    emails.append(e)
+        return emails
+
+    def _user_property_scope_filter(self, owner_user_id: str | None):
+        """Scope Property queries to the same CRM user (including both-null)."""
+        if owner_user_id is None:
+            return Property.owner_user_id.is_(None)
+        return Property.owner_user_id == owner_user_id
+
+    def find_reusable_contact_for_user(
+        self,
+        owner_user_id: str | None,
+        *,
+        phone_digit_list: list[str] | None = None,
+        emails: list[str] | None = None,
+        first_name: str | None = None,
+        last_name: str | None = None,
+    ) -> Contact | None:
+        """Find an existing Contact already linked to this user's properties.
+
+        Match by lowercased email or normalized phone digits. When a person name
+        is supplied, require ``owner_names_equivalent`` so shared office numbers
+        do not attach the wrong person.
+        """
+        from app.services.plugins.owner_name_utils import owner_names_equivalent
+
+        emails_lower = [
+            (e or '').strip().lower() for e in (emails or []) if (e or '').strip()
+        ]
+        phones = [d for d in (phone_digit_list or []) if d]
+        if not emails_lower and not phones:
+            return None
+
+        require_name = bool((first_name or '').strip() or (last_name or '').strip())
+        scope = self._user_property_scope_filter(owner_user_id)
+        contact_ids_q = (
+            db.session.query(PropertyContact.contact_id)
+            .join(Property, Property.id == PropertyContact.property_id)
+            .filter(scope)
+        )
+
+        def _name_ok(contact: Contact) -> bool:
+            if not require_name:
+                return True
+            return owner_names_equivalent(
+                contact.first_name, contact.last_name, first_name, last_name,
+            )
+
+        if emails_lower:
+            hits = (
+                db.session.query(Contact)
+                .join(ContactEmail, ContactEmail.contact_id == Contact.id)
+                .filter(Contact.id.in_(contact_ids_q))
+                .filter(db.func.lower(ContactEmail.value).in_(emails_lower))
+                .order_by(Contact.id.asc())
+                .all()
+            )
+            for hit in hits:
+                if _name_ok(hit):
+                    return hit
+
+        if phones:
+            wanted = set(phones)
+            phone_rows = (
+                db.session.query(Contact, ContactPhone)
+                .join(ContactPhone, ContactPhone.contact_id == Contact.id)
+                .filter(Contact.id.in_(contact_ids_q))
+                .order_by(Contact.id.asc())
+                .all()
+            )
+            for contact, phone in phone_rows:
+                if phone_digits(phone.value) not in wanted:
+                    continue
+                if _name_ok(contact):
+                    return contact
+        return None
+
     def _upsert_named_owner(
         self,
         property_id: int,
@@ -499,6 +612,9 @@ class ContactService:
         last_name: str | None,
         *,
         is_primary: bool,
+        owner_user_id: str | None = None,
+        phone_digit_list: list[str] | None = None,
+        emails: list[str] | None = None,
     ) -> tuple[Contact, PropertyContact]:
         from app.services.plugins.owner_name_utils import owner_names_equivalent
 
@@ -535,6 +651,55 @@ class ContactService:
                 link.role = link.role or 'owner'
             return contact, link
 
+        # Cross-property reuse: same user + phone/email (+ name gate) on another building.
+        reused = self.find_reusable_contact_for_user(
+            owner_user_id,
+            phone_digit_list=phone_digit_list,
+            emails=emails,
+            first_name=first_name,
+            last_name=last_name,
+        )
+        if reused is not None:
+            for contact, link in existing_rows:
+                if contact.id == reused.id:
+                    if is_primary and not link.is_primary:
+                        PropertyContact.query.filter_by(
+                            property_id=property_id, is_primary=True,
+                        ).update({'is_primary': False})
+                        link.is_primary = True
+                        link.role = link.role or 'owner'
+                    return reused, link
+            if is_primary:
+                PropertyContact.query.filter_by(
+                    property_id=property_id, is_primary=True,
+                ).update({'is_primary': False})
+            if (first_name or '').strip() and len((first_name or '').strip()) > len(
+                (reused.first_name or '').strip()
+            ):
+                reused.first_name = first_name
+            if (last_name or '').strip() and not (reused.last_name or '').strip():
+                reused.last_name = last_name
+            link = PropertyContact(
+                property_id=property_id,
+                contact_id=reused.id,
+                role='owner',
+                is_primary=is_primary or not existing_rows,
+            )
+            try:
+                with db.session.begin_nested():
+                    db.session.add(link)
+                    db.session.flush()
+            except sqlalchemy.exc.IntegrityError:
+                existing = (
+                    PropertyContact.query
+                    .filter_by(property_id=property_id, contact_id=reused.id)
+                    .first()
+                )
+                if existing is None:
+                    raise
+                return reused, existing
+            return reused, link
+
         if is_primary:
             PropertyContact.query.filter_by(
                 property_id=property_id, is_primary=True,
@@ -556,6 +721,476 @@ class ContactService:
         db.session.add(link)
         db.session.flush()
         return contact, link
+
+    RELATED_PROPERTIES_CAP = 15
+
+    @staticmethod
+    def _escape_like(value: str) -> str:
+        return (
+            (value or '')
+            .replace('\\', '\\\\')
+            .replace('%', '\\%')
+            .replace('_', '\\_')
+        )
+
+    def _serialize_related_property(self, p: Property) -> dict:
+        return {
+            'id': p.id,
+            'property_street': p.property_street,
+            'property_city': p.property_city,
+            'lead_status': p.lead_status,
+            'lead_score': float(p.lead_score) if p.lead_score is not None else None,
+        }
+
+    def _is_same_building(self, a: Property, b: Property) -> bool:
+        from app.services.lead_merge_utils import streets_match_normalized
+        from app.services.plugins.pin_utils import normalize_pin_for_socrata
+
+        if streets_match_normalized(a.property_street, b.property_street):
+            return True
+        pin_a = normalize_pin_for_socrata(a.county_assessor_pin or '') or ''
+        pin_b = normalize_pin_for_socrata(b.county_assessor_pin or '') or ''
+        return bool(pin_a and pin_b and pin_a == pin_b)
+
+    def _owner_names_for_related(self, lead: Property) -> tuple[str | None, str | None]:
+        from app.services.plugins.owner_name_utils import expand_owner_name_parts
+
+        first = (lead.owner_first_name or '').strip() or None
+        last = (lead.owner_last_name or '').strip() or None
+        if not first and not last:
+            primary_row = (
+                db.session.query(Contact)
+                .join(PropertyContact, PropertyContact.contact_id == Contact.id)
+                .filter(
+                    PropertyContact.property_id == lead.id,
+                    PropertyContact.is_primary.is_(True),
+                )
+                .first()
+            )
+            if primary_row is None:
+                primary_row = (
+                    db.session.query(Contact)
+                    .join(PropertyContact, PropertyContact.contact_id == Contact.id)
+                    .filter(PropertyContact.property_id == lead.id)
+                    .order_by(Contact.id.asc())
+                    .first()
+                )
+            if primary_row is not None:
+                first = (primary_row.first_name or '').strip() or None
+                last = (primary_row.last_name or '').strip() or None
+        first, last = expand_owner_name_parts(first, last)
+        return (first or None), (last or None)
+
+    def get_related_properties(
+        self,
+        lead_id: int,
+        *,
+        limit: int | None = None,
+    ) -> list[dict]:
+        """Other buildings for the same person (shared Contact and/or owner name).
+
+        Never merges leads — returns skinny dicts for CC / search badges.
+        Excludes same-building address/PIN variants.
+        Only traverses **owner** role links within the lead's ``owner_user_id`` scope.
+        """
+        from app.services.plugins.owner_name_utils import owner_names_equivalent
+        from sqlalchemy import case, or_
+
+        cap = self.RELATED_PROPERTIES_CAP if limit is None else limit
+        lead = db.session.get(Property, lead_id)
+        if lead is None:
+            return []
+
+        related_ids: set[int] = set()
+        scope = self._user_property_scope_filter(lead.owner_user_id)
+
+        contact_ids = [
+            row.contact_id
+            for row in (
+                PropertyContact.query
+                .join(Property, Property.id == PropertyContact.property_id)
+                .filter(
+                    PropertyContact.property_id == lead_id,
+                    PropertyContact.role == 'owner',
+                    scope,
+                )
+                .all()
+            )
+        ]
+        if contact_ids:
+            for (pid,) in (
+                db.session.query(PropertyContact.property_id)
+                .join(Property, Property.id == PropertyContact.property_id)
+                .filter(
+                    PropertyContact.contact_id.in_(contact_ids),
+                    PropertyContact.property_id != lead_id,
+                    PropertyContact.role == 'owner',
+                    scope,
+                )
+                .all()
+            ):
+                related_ids.add(pid)
+
+        first, last = self._owner_names_for_related(lead)
+        if first or last:
+            q = Property.query.filter(
+                Property.id != lead_id,
+                scope,
+            )
+            if last:
+                last_l = last.lower()
+                escaped = self._escape_like(last_l)
+                q = q.filter(
+                    or_(
+                        db.func.lower(db.func.trim(Property.owner_last_name)) == last_l,
+                        db.func.lower(Property.owner_first_name).like(
+                            f'% {escaped}', escape='\\',
+                        ),
+                    )
+                )
+            for other in q.limit(250).all():
+                if not owner_names_equivalent(
+                    first, last, other.owner_first_name, other.owner_last_name,
+                ):
+                    continue
+                related_ids.add(other.id)
+
+        if not related_ids:
+            return []
+
+        props = (
+            Property.query
+            .filter(Property.id.in_(related_ids), scope)
+            .order_by(
+                case((Property.lead_score.is_(None), 1), else_=0),
+                Property.lead_score.desc(),
+                Property.id.asc(),
+            )
+            .all()
+        )
+        out: list[dict] = []
+        for p in props:
+            if self._is_same_building(lead, p):
+                continue
+            out.append(self._serialize_related_property(p))
+            if len(out) >= cap:
+                break
+        return out
+
+    def property_count_for_lead(self, lead_id: int) -> int:
+        """Number of buildings in this person's portfolio including *lead_id*."""
+        return 1 + len(self.get_related_properties(lead_id))
+
+    def person_identity_for_lead(self, lead: Property) -> dict[str, str | None]:
+        """Stable person key + display name for search portfolio grouping.
+
+        Keys on ``owner_user_id`` + expanded last name + first given-name token so
+        ``GILBERT JANSON`` and ``GILBERT E JANSON`` share one key. When an owner
+        Contact is linked to multiple properties in this user scope, prefer
+        ``contact:<id>``.
+        """
+        import re
+        from app.services.plugins.owner_name_utils import expand_owner_name_parts
+
+        scope = self._user_property_scope_filter(lead.owner_user_id)
+        for (cid,) in (
+            db.session.query(PropertyContact.contact_id)
+            .join(Property, Property.id == PropertyContact.property_id)
+            .filter(
+                PropertyContact.property_id == lead.id,
+                PropertyContact.role == 'owner',
+                scope,
+            )
+            .all()
+        ):
+            prop_count = (
+                PropertyContact.query
+                .join(Property, Property.id == PropertyContact.property_id)
+                .filter(
+                    PropertyContact.contact_id == cid,
+                    PropertyContact.role == 'owner',
+                    scope,
+                )
+                .count()
+            )
+            if prop_count < 2:
+                continue
+            contact = db.session.get(Contact, cid)
+            display = None
+            if contact is not None:
+                display = ' '.join(
+                    p for p in (
+                        (contact.first_name or '').strip(),
+                        (contact.last_name or '').strip(),
+                    ) if p
+                ) or None
+            user = lead.owner_user_id or ''
+            return {
+                'person_key': f'{user}|contact:{cid}',
+                'owner_display_name': display,
+            }
+
+        first = (lead.owner_first_name or '').strip() or None
+        last = (lead.owner_last_name or '').strip() or None
+        first, last = expand_owner_name_parts(first, last)
+        last_norm = re.sub(r'[^a-z]', '', (last or '').lower())
+        tokens = [re.sub(r'[^a-z]', '', t) for t in (first or '').lower().split() if t]
+        tokens = [t for t in tokens if t]
+        first_token = tokens[0] if tokens else ''
+        user = lead.owner_user_id or ''
+        if last_norm and first_token:
+            person_key = f'{user}|{last_norm}|{first_token}'
+        else:
+            person_key = f'lead:{lead.id}'
+
+        if first and last:
+            display = f'{first} {last}'.strip()
+        else:
+            display = (first or last or '').strip() or None
+        return {
+            'person_key': person_key,
+            'owner_display_name': display,
+        }
+
+    def _person_identity_from_maps(
+        self,
+        lead: Property,
+        lead_contacts: dict[int, set[int]],
+        contact_scoped_props: dict[int, set[int]],
+        contacts_by_id: dict[int, Contact],
+    ) -> dict[str, str | None]:
+        """Build person identity using preloaded contact / property maps (no queries)."""
+        import re
+        from app.services.plugins.owner_name_utils import expand_owner_name_parts
+
+        for cid in sorted(lead_contacts.get(lead.id, set())):
+            if len(contact_scoped_props.get(cid, set())) < 2:
+                continue
+            contact = contacts_by_id.get(cid)
+            display = None
+            if contact is not None:
+                display = ' '.join(
+                    p for p in (
+                        (contact.first_name or '').strip(),
+                        (contact.last_name or '').strip(),
+                    ) if p
+                ) or None
+            user = lead.owner_user_id or ''
+            return {
+                'person_key': f'{user}|contact:{cid}',
+                'owner_display_name': display,
+            }
+
+        first = (lead.owner_first_name or '').strip() or None
+        last = (lead.owner_last_name or '').strip() or None
+        first, last = expand_owner_name_parts(first, last)
+        last_norm = re.sub(r'[^a-z]', '', (last or '').lower())
+        tokens = [re.sub(r'[^a-z]', '', t) for t in (first or '').lower().split() if t]
+        tokens = [t for t in tokens if t]
+        first_token = tokens[0] if tokens else ''
+        user = lead.owner_user_id or ''
+        if last_norm and first_token:
+            person_key = f'{user}|{last_norm}|{first_token}'
+        else:
+            person_key = f'lead:{lead.id}'
+
+        if first and last:
+            display = f'{first} {last}'.strip()
+        else:
+            display = (first or last or '').strip() or None
+        return {
+            'person_key': person_key,
+            'owner_display_name': display,
+        }
+
+    def portfolio_enrichment_for_leads(self, lead_ids: list[int]) -> dict[int, dict]:
+        """Batched person_key / property_count / portfolio rows for search.
+
+        Avoids per-lead ``person_identity_for_lead`` / ``get_related_properties``
+        calls. Shared-contact traversal is owner-role + user-scoped only.
+        """
+        from collections import defaultdict
+        from app.services.plugins.owner_name_utils import (
+            expand_owner_name_parts,
+            owner_names_equivalent,
+        )
+        from sqlalchemy import or_
+
+        if not lead_ids:
+            return {}
+
+        leads = Property.query.filter(Property.id.in_(lead_ids)).all()
+        by_id = {lead.id: lead for lead in leads}
+        out: dict[int, dict] = {}
+
+        page_links = (
+            PropertyContact.query
+            .join(Property, Property.id == PropertyContact.property_id)
+            .filter(
+                PropertyContact.property_id.in_(lead_ids),
+                PropertyContact.role == 'owner',
+            )
+            .all()
+        )
+        contact_ids = {link.contact_id for link in page_links}
+        lead_contacts: dict[int, set[int]] = defaultdict(set)
+        lead_primary_contact: dict[int, int] = {}
+        for link in page_links:
+            lead_contacts[link.property_id].add(link.contact_id)
+            if link.is_primary:
+                lead_primary_contact[link.property_id] = link.contact_id
+
+        # contact_id -> (property_id, owner_user_id) for owner links only
+        contact_prop_users: dict[int, list[tuple[int, str | None]]] = defaultdict(list)
+        if contact_ids:
+            for cid, pid, uid in (
+                db.session.query(
+                    PropertyContact.contact_id,
+                    PropertyContact.property_id,
+                    Property.owner_user_id,
+                )
+                .join(Property, Property.id == PropertyContact.property_id)
+                .filter(
+                    PropertyContact.contact_id.in_(contact_ids),
+                    PropertyContact.role == 'owner',
+                )
+                .all()
+            ):
+                contact_prop_users[cid].append((pid, uid))
+
+        contacts_by_id: dict[int, Contact] = {}
+        if contact_ids:
+            contacts_by_id = {
+                c.id: c for c in Contact.query.filter(Contact.id.in_(contact_ids)).all()
+            }
+
+        related_ids_by_lead: dict[int, set[int]] = {lid: set() for lid in lead_ids}
+        contact_scoped_props: dict[int, dict[int, set[int]]] = defaultdict(
+            lambda: defaultdict(set),
+        )
+        # contact_scoped_props[lead_id][contact_id] = props in that lead's user scope
+        for lid in lead_ids:
+            lead = by_id.get(lid)
+            if lead is None:
+                continue
+            for cid in lead_contacts.get(lid, set()):
+                for pid, uid in contact_prop_users.get(cid, []):
+                    if uid != lead.owner_user_id:
+                        continue
+                    contact_scoped_props[lid][cid].add(pid)
+                    if pid != lid:
+                        related_ids_by_lead[lid].add(pid)
+
+        def _names_for_page_lead(lead: Property) -> tuple[str | None, str | None]:
+            """Match `_owner_names_for_related` using preloaded owner contacts."""
+            first = (lead.owner_first_name or '').strip() or None
+            last = (lead.owner_last_name or '').strip() or None
+            if not first and not last:
+                cid = lead_primary_contact.get(lead.id)
+                if cid is None:
+                    cids = lead_contacts.get(lead.id) or set()
+                    cid = min(cids) if cids else None
+                contact = contacts_by_id.get(cid) if cid is not None else None
+                if contact is not None:
+                    first = (contact.first_name or '').strip() or None
+                    last = (contact.last_name or '').strip() or None
+            first, last = expand_owner_name_parts(first, last)
+            return (first or None), (last or None)
+
+        # Name fallback: one candidate query per (user, last-name) bucket
+        name_buckets: dict[tuple[str | None, str], list[Property]] = defaultdict(list)
+        names_by_lead: dict[int, tuple[str | None, str | None]] = {}
+        for lead in leads:
+            first, last = _names_for_page_lead(lead)
+            names_by_lead[lead.id] = (first, last)
+            if not last:
+                continue
+            name_buckets[(lead.owner_user_id, last.lower())].append(lead)
+
+        for (uid, last_l), bucket in name_buckets.items():
+            scope = self._user_property_scope_filter(uid)
+            escaped = self._escape_like(last_l)
+            candidates = (
+                Property.query
+                .filter(
+                    scope,
+                    or_(
+                        db.func.lower(db.func.trim(Property.owner_last_name)) == last_l,
+                        db.func.lower(Property.owner_first_name).like(
+                            f'% {escaped}', escape='\\',
+                        ),
+                    ),
+                )
+                .limit(250)
+                .all()
+            )
+            for lead in bucket:
+                first, last = names_by_lead[lead.id]
+                for other in candidates:
+                    if other.id == lead.id:
+                        continue
+                    if not owner_names_equivalent(
+                        first, last, other.owner_first_name, other.owner_last_name,
+                    ):
+                        continue
+                    related_ids_by_lead[lead.id].add(other.id)
+                    if other.id in related_ids_by_lead:
+                        related_ids_by_lead[other.id].add(lead.id)
+
+        all_prop_ids: set[int] = set(by_id.keys())
+        for s in related_ids_by_lead.values():
+            all_prop_ids |= s
+        missing = all_prop_ids - set(by_id.keys())
+        if missing:
+            for p in Property.query.filter(Property.id.in_(missing)).all():
+                by_id[p.id] = p
+
+        for lid in lead_ids:
+            lead = by_id.get(lid)
+            if lead is None:
+                continue
+            # Flatten scoped props for identity helper
+            scoped_flat: dict[int, set[int]] = {
+                cid: props for cid, props in contact_scoped_props.get(lid, {}).items()
+            }
+            identity = self._person_identity_from_maps(
+                lead, lead_contacts, scoped_flat, contacts_by_id,
+            )
+
+            related_by_id: dict[int, dict] = {}
+            for rid in related_ids_by_lead.get(lid, set()):
+                other = by_id.get(rid)
+                if other is None or other.id == lid:
+                    continue
+                if other.owner_user_id != lead.owner_user_id:
+                    continue
+                if self._is_same_building(lead, other):
+                    continue
+                related_by_id[rid] = self._serialize_related_property(other)
+
+            portfolio = [
+                self._serialize_related_property(lead),
+                *sorted(
+                    related_by_id.values(),
+                    key=lambda r: (-(r.get('lead_score') or -1), r['id']),
+                ),
+            ]
+            seen: set[int] = set()
+            unique: list[dict] = []
+            for row in portfolio:
+                rid = row.get('id')
+                if rid is None or rid in seen:
+                    continue
+                seen.add(rid)
+                unique.append(row)
+            out[lid] = {
+                'person_key': identity['person_key'],
+                'owner_display_name': identity['owner_display_name'],
+                'property_street': lead.property_street,
+                'property_count': len(unique),
+                'portfolio_properties': unique,
+            }
+        return out
 
     def unlink_duplicate_person_owners(self, property_id: int) -> int:
         """Unlink redundant person owner contacts that fuzzy-match a kept row.

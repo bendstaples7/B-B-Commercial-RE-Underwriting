@@ -24,6 +24,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 from app.services.lead_dedup_service import COPYABLE_FIELDS  # noqa: E402
 from app.services.lead_merge_utils import (  # noqa: E402
     cluster_leads_by_normalized_street,
+    cluster_same_building_by_owner_name,
     dedup_street_key,
     merge_mailer_history,
     owner_group_key,
@@ -171,6 +172,9 @@ def _merge_loser_into_winner(cur, winner: dict, loser: dict) -> None:
                     merged = merge_mailer_history(w_val, l_val)
                     if merged is not None and merged != w_val:
                         updates[field] = Json(merged)
+                elif field == 'lead_score':
+                    # Single writer — refresh_lead_scoring after commit.
+                    continue
                 elif (w_val is None or w_val == '') and l_val not in (None, ''):
                     updates[field] = l_val
 
@@ -227,19 +231,13 @@ def _find_normalized_merge_groups(rows: list[dict]) -> list[list[dict]]:
 
 def _find_dedup_merge_groups(rows: list[dict]) -> list[list[dict]]:
     """Group by owner + building-level dedup_street_key (matches DB unique index)."""
-    buckets: dict[tuple, list[dict]] = defaultdict(list)
-    for row in rows:
-        street_key = dedup_street_key(row.get('property_street'))
-        if not street_key:
-            continue
-        key = (
-            row.get('owner_user_id'),
-            (row.get('owner_first_name') or '').strip().lower(),
-            (row.get('owner_last_name') or '').strip().lower(),
-            street_key,
-        )
-        buckets[key].append(dict(row))
-    return [members for members in buckets.values() if len(members) >= 2]
+    return cluster_same_building_by_owner_name(
+        [dict(row) for row in rows],
+        owner_user_id_of=lambda r: r.get('owner_user_id'),
+        street_of=lambda r: r.get('property_street'),
+        first_of=lambda r: r.get('owner_first_name'),
+        last_of=lambda r: r.get('owner_last_name'),
+    )
 
 
 def _find_pin_merge_groups(rows: list[dict]) -> list[list[dict]]:
@@ -293,7 +291,6 @@ def run(dry_run: bool = False, mode: str = 'unit'):
                            last_hubspot_sync_at
                     FROM leads
                     WHERE owner_first_name IS NOT NULL AND owner_first_name != ''
-                      AND owner_last_name  IS NOT NULL AND owner_last_name  != ''
                       AND property_street  IS NOT NULL AND property_street  != ''
                 """)
             rows = cur.fetchall()
@@ -313,6 +310,7 @@ def run(dry_run: bool = False, mode: str = 'unit'):
             )
 
             total_merged = 0
+            winners_to_rescore: set[int] = set()
             for members in merge_groups:
                 winner = pick_merge_winner(members, confirmed_hs_ids)
                 losers = [m for m in members if m['id'] != winner['id']]
@@ -335,6 +333,7 @@ def run(dry_run: bool = False, mode: str = 'unit'):
                 for loser in losers:
                     _merge_loser_into_winner(cur, winner, loser)
                     total_merged += 1
+                    winners_to_rescore.add(winner['id'])
 
         else:
             cur.execute("""
@@ -349,6 +348,7 @@ def run(dry_run: bool = False, mode: str = 'unit'):
             logger.info("Found %d unit duplicate group(s) to merge", len(merge_groups))
 
             total_merged = 0
+            winners_to_rescore = set()
             for key, bare_records, unit_records in merge_groups:
                 winner = max(
                     unit_records,
@@ -371,10 +371,29 @@ def run(dry_run: bool = False, mode: str = 'unit'):
                 for loser in losers:
                     _merge_loser_into_winner(cur, winner, loser)
                     total_merged += 1
+                    winners_to_rescore.add(winner['id'])
 
         if not dry_run:
             conn.commit()
             logger.info("Done. Merged %d duplicate record(s).", total_merged)
+            if winners_to_rescore:
+                from app import create_app
+                from app.services.lead_refresh import refresh_lead_scoring
+
+                # Suppress migrations and startup CRM/ownership backfills.
+                prev_migration = os.environ.get('KIRO_MIGRATION')
+                os.environ['KIRO_MIGRATION'] = '1'
+                try:
+                    app = create_app()
+                    with app.app_context():
+                        for winner_id in winners_to_rescore:
+                            refresh_lead_scoring(winner_id)
+                finally:
+                    if prev_migration is None:
+                        os.environ.pop('KIRO_MIGRATION', None)
+                    else:
+                        os.environ['KIRO_MIGRATION'] = prev_migration
+                logger.info("Rescored %d winner lead(s)", len(winners_to_rescore))
         else:
             conn.rollback()
             logger.info("[DRY RUN] Would merge %d duplicate record(s).", total_merged)

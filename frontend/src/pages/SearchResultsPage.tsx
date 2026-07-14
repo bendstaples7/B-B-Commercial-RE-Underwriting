@@ -1,7 +1,7 @@
 /**
  * SearchResultsPage — full-page paginated search results for leads and sessions.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link as RouterLink, useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -23,7 +23,9 @@ import {
 import SearchIcon from '@mui/icons-material/Search'
 import { searchService } from '@/services/api'
 import { LeadStatusChip } from '@/components/LeadStatusChip'
+import { RelatedPropertyRow } from '@/components/RelatedPropertyRow'
 import { highlightMatch, matchTypeLabel } from '@/utils/searchResultDisplay'
+import { groupSearchLeadsByPerson } from '@/utils/groupSearchLeadsByPerson'
 import { clampPage, computeTotalPages } from '@/utils/pagination'
 
 const PER_PAGE = 25
@@ -66,6 +68,10 @@ export function SearchResultsPage() {
   }
 
   const hasLeads = (data?.leads.length ?? 0) > 0
+  const personGroups = useMemo(
+    () => (data?.leads?.length ? groupSearchLeadsByPerson(data.leads) : []),
+    [data?.leads],
+  )
   const hasSessions = (data?.sessions.length ?? 0) > 0
   const isEmpty = !isLoading && !isError && data && !hasLeads && !hasSessions
 
@@ -140,8 +146,14 @@ export function SearchResultsPage() {
               <>No results for &ldquo;{q}&rdquo;</>
             ) : (
               <>
-                Results for &ldquo;{q}&rdquo; — {data.leads_total} lead
-                {data.leads_total === 1 ? '' : 's'}
+                Results for &ldquo;{q}&rdquo; — {data.leads_total} matching propert
+                {data.leads_total === 1 ? 'y' : 'ies'}
+                {personGroups.length > 0 && (
+                  <>
+                    {' '}
+                    (showing {personGroups.length} person{personGroups.length === 1 ? '' : 's'} on this page)
+                  </>
+                )}
                 {data.sessions_total > 0 && (
                   <>
                     , {data.sessions_total} analysis session
@@ -164,59 +176,137 @@ export function SearchResultsPage() {
                 <ListSubheader component="div" sx={{ bgcolor: 'background.paper', lineHeight: '40px' }}>
                   Leads
                 </ListSubheader>
-                {data.leads.map((lead) => (
-                  <ListItem key={`lead-${lead.id}`} disablePadding divider>
-                    <ListItemButton
-                      component={RouterLink}
-                      to={`/leads/${lead.id}`}
-                      data-testid={`search-lead-${lead.id}`}
+                {personGroups.map((group, groupIndex) => {
+                  const multi = group.propertyCount > 1
+                  const lead = group.primaryLead
+                  const groupTestId = `search-person-group-${groupIndex}`
+                  if (!multi) {
+                    return (
+                      <ListItem key={group.key} disablePadding divider>
+                        <ListItemButton
+                          component={RouterLink}
+                          to={`/leads/${lead.id}`}
+                          data-testid={`search-lead-${lead.id}`}
+                        >
+                          <ListItemText
+                            primary={
+                              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                                <Typography
+                                  variant="body1"
+                                  sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                                >
+                                  {lead.label}
+                                </Typography>
+                                {lead.lead_score != null && (
+                                  <Chip
+                                    label={lead.lead_score}
+                                    size="small"
+                                    variant="outlined"
+                                    sx={{ height: 22 }}
+                                  />
+                                )}
+                                {lead.lead_status && <LeadStatusChip status={lead.lead_status} />}
+                              </Box>
+                            }
+                            secondary={
+                              lead.match_context ? (
+                                <Box
+                                  component="span"
+                                  sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}
+                                >
+                                  <Box
+                                    component="span"
+                                    sx={{
+                                      color: 'text.disabled',
+                                      fontWeight: 600,
+                                      textTransform: 'uppercase',
+                                      letterSpacing: '0.05em',
+                                      fontSize: '0.65rem',
+                                    }}
+                                  >
+                                    {matchTypeLabel(lead.match_context.type)}:&nbsp;
+                                  </Box>
+                                  <Box
+                                    component="span"
+                                    sx={{ fontSize: '0.85rem', color: 'text.secondary' }}
+                                  >
+                                    {highlightMatch(lead.match_context.value, q)}
+                                  </Box>
+                                </Box>
+                              ) : undefined
+                            }
+                            secondaryTypographyProps={{ component: 'span' }}
+                          />
+                        </ListItemButton>
+                      </ListItem>
+                    )
+                  }
+
+                  return (
+                    <ListItem
+                      key={group.key}
+                      divider
+                      disablePadding
+                      sx={{ display: 'block', py: 1.25, px: 2 }}
+                      data-testid={groupTestId}
                     >
-                      <ListItemText
-                        primary={
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                            <Typography
-                              variant="body1"
-                              sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
-                            >
-                              {lead.label}
-                            </Typography>
-                            {lead.lead_score != null && (
-                              <Chip
-                                label={lead.lead_score}
-                                size="small"
-                                variant="outlined"
-                                sx={{ height: 22 }}
-                              />
-                            )}
-                            {lead.lead_status && <LeadStatusChip status={lead.lead_status} />}
+                      <Box
+                        sx={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 1,
+                          flexWrap: 'wrap',
+                          mb: 0.75,
+                        }}
+                      >
+                        <Typography
+                          variant="body1"
+                          sx={{ fontWeight: 600, overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                        >
+                          {group.ownerDisplayName}
+                        </Typography>
+                        <Chip
+                          label={`${group.propertyCount} properties`}
+                          size="small"
+                          color="primary"
+                          variant="outlined"
+                          sx={{ height: 22 }}
+                          data-testid={`search-person-property-count-${groupIndex}`}
+                        />
+                      </Box>
+                      {lead.match_context && (
+                        <Box
+                          sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.75 }}
+                        >
+                          <Box
+                            component="span"
+                            sx={{
+                              color: 'text.disabled',
+                              fontWeight: 600,
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.05em',
+                              fontSize: '0.65rem',
+                            }}
+                          >
+                            {matchTypeLabel(lead.match_context.type)}:&nbsp;
                           </Box>
-                        }
-                        secondary={
-                          lead.match_context ? (
-                            <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
-                              <Box
-                                component="span"
-                                sx={{
-                                  color: 'text.disabled',
-                                  fontWeight: 600,
-                                  textTransform: 'uppercase',
-                                  letterSpacing: '0.05em',
-                                  fontSize: '0.65rem',
-                                }}
-                              >
-                                {matchTypeLabel(lead.match_context.type)}:&nbsp;
-                              </Box>
-                              <Box component="span" sx={{ fontSize: '0.85rem', color: 'text.secondary' }}>
-                                {highlightMatch(lead.match_context.value, q)}
-                              </Box>
-                            </Box>
-                          ) : undefined
-                        }
-                        secondaryTypographyProps={{ component: 'span' }}
-                      />
-                    </ListItemButton>
-                  </ListItem>
-                ))}
+                          <Box component="span" sx={{ fontSize: '0.85rem', color: 'text.secondary' }}>
+                            {highlightMatch(lead.match_context.value, q)}
+                          </Box>
+                        </Box>
+                      )}
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, pl: 0.5 }}>
+                        {group.properties.map((prop) => (
+                          <RelatedPropertyRow
+                            key={prop.id}
+                            prop={prop}
+                            testIdPrefix="search-lead"
+                          />
+                        ))}
+                      </Box>
+                    </ListItem>
+                  )
+                })}
               </List>
             </Paper>
           )}

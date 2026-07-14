@@ -38,11 +38,24 @@ LEAD_STATUS_RANK: dict[str, int] = {
 
 
 def street_line_from_address(address: Optional[str]) -> str:
-    """Return the street line from a Places-style full address (before first comma)."""
+    """Return the street line from a Places-style or glued full address.
+
+    Prefer the segment before the first comma (``street, city, state ZIP``).
+    When commas are missing, strip a trailing ``City ST ZIP`` only when a
+    2-letter US state is present — do not use zip-only parsing (that would
+    turn ``1719 W Barry 60657`` into ``1719 W``).
+    """
     text = (address or '').strip()
     if not text:
         return ''
-    return text.split(',', 1)[0].strip()
+    if ',' in text:
+        return text.split(',', 1)[0].strip()
+    from app.services.address_parse_service import street_only_from_glued_city_state_zip
+
+    street = street_only_from_glued_city_state_zip(text)
+    if street:
+        return street
+    return text
 
 
 def cities_compatible(a: Optional[str], b: Optional[str]) -> bool:
@@ -175,6 +188,89 @@ def merge_mailer_history(winner_val: Any, loser_val: Any) -> Any:
     if not winner_entries:
         return loser_val
     return winner_entries + loser_entries
+
+
+def prefer_higher_lead_score(winner_val: Any, loser_val: Any) -> Any | None:
+    """Return loser score when it is strictly higher; else None (keep winner).
+
+    Application merge paths must not write ``lead_score`` (single writer:
+    scoring engine / ``refresh_lead_scoring``). Offline cleanup scripts may use
+    this helper only when they intentionally copy the higher persisted score.
+    """
+    try:
+        w_score = float(winner_val) if winner_val is not None else 0.0
+        l_score = float(loser_val) if loser_val is not None else 0.0
+    except (TypeError, ValueError):
+        return None
+    if l_score > w_score:
+        return loser_val
+    return None
+
+
+def cluster_same_building_by_owner_name(
+    items: Sequence[Any],
+    *,
+    owner_user_id_of,
+    street_of,
+    first_of,
+    last_of,
+) -> list[list[Any]]:
+    """Group same-building records whose owner names are equivalent.
+
+    Buckets by ``(owner_user_id, dedup_street_key)`` then partitions with
+    ``owner_names_equivalent`` so jammed LAST/FIRST and split first/last rows
+    in the same building merge together.
+    """
+    from collections import defaultdict
+
+    from app.services.plugins.owner_name_utils import (
+        expand_owner_name_parts,
+        owner_names_merge_safe,
+    )
+
+    street_groups: dict[tuple, list[Any]] = defaultdict(list)
+    for item in items:
+        street_key = dedup_street_key(street_of(item))
+        if not street_key:
+            continue
+        first, last = expand_owner_name_parts(first_of(item), last_of(item))
+        if not first or not last:
+            continue
+        street_groups[(owner_user_id_of(item), street_key)].append(item)
+
+    clusters: list[list[Any]] = []
+    for group in street_groups.values():
+        if len(group) < 2:
+            continue
+        parent = list(range(len(group)))
+
+        def find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        def union(i: int, j: int) -> None:
+            ri, rj = find(i), find(j)
+            if ri != rj:
+                parent[max(ri, rj)] = min(ri, rj)
+
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                # Merge-safe: conflicting middle initials stay in separate clusters.
+                if owner_names_merge_safe(
+                    first_of(group[i]), last_of(group[i]),
+                    first_of(group[j]), last_of(group[j]),
+                ):
+                    union(i, j)
+
+        buckets: dict[int, list[Any]] = defaultdict(list)
+        for i, item in enumerate(group):
+            buckets[find(i)].append(item)
+        for members in buckets.values():
+            if len(members) >= 2:
+                clusters.append(members)
+    return clusters
 
 
 def owner_names_from_deal_props(props: dict) -> tuple[str, str]:

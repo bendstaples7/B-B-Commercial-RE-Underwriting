@@ -15,7 +15,13 @@ import {
 import EmailIcon from '@mui/icons-material/Email'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
-import type { CommandCenterPayload, LeadPhone, PropertyContactSummary } from '@/types'
+import type {
+  CommandCenterPayload,
+  LeadPhone,
+  PropertyContactSummary,
+  RelatedPropertySummary,
+} from '@/types'
+import { RelatedPropertyRow } from '@/components/RelatedPropertyRow'
 import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
 import {
   isEntityContactName,
@@ -429,6 +435,25 @@ export function PropertySidebar({
           <SidebarRow label="Other Addresses" value={data.returned_addresses} />
         )}
       </SidebarSection>
+
+      {(commandCenterData.related_properties?.length ?? 0) > 0 && (
+        <SidebarSection title="Other properties">
+          <Box
+            data-testid="sidebar-related-properties"
+            sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}
+          >
+            {(commandCenterData.related_properties as RelatedPropertySummary[]).map((prop) => (
+              <RelatedPropertyRow
+                key={prop.id}
+                prop={prop}
+                testIdPrefix="sidebar-related-property"
+                fontSize="0.8125rem"
+                fontWeight={500}
+              />
+            ))}
+          </Box>
+        </SidebarSection>
+      )}
 
       <SidebarSection title="Owner Mailing Address">
         <SidebarRow

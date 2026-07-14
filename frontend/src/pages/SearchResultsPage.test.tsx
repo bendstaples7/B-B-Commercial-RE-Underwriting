@@ -62,7 +62,8 @@ describe('SearchResultsPage', () => {
     await waitFor(() => {
       expect(screen.getByTestId('search-lead-11129')).toBeInTheDocument()
     })
-    expect(screen.getByText(/2 leads/i)).toBeInTheDocument()
+    expect(screen.getByText(/2 matching properties/i)).toBeInTheDocument()
+    expect(screen.getByText(/showing 1 person on this page/i)).toBeInTheDocument()
   })
 
   it('shows empty state when no matches', async () => {

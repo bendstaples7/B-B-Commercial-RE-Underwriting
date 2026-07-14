@@ -1517,6 +1517,15 @@ export interface PropertyOrganizationSummary {
   resolved_person_role?: string | null
 }
 
+/** Other building owned by the same person (Command Center / portfolio). */
+export interface RelatedPropertySummary {
+  id: number
+  property_street: string | null
+  property_city?: string | null
+  lead_status?: string | null
+  lead_score?: number | null
+}
+
 export type EntityLookupStatus =
   | 'pending'
   | 'resolved'
@@ -2087,6 +2096,8 @@ export interface CommandCenterPayload {
   contacts?: PropertyContactSummary[];
   /** Linked companies / LLCs (HubSpot-style Organizations). */
   organizations?: PropertyOrganizationSummary[];
+  /** Other buildings owned by the same person (not same-address duplicates). */
+  related_properties?: RelatedPropertySummary[];
   property_street: string | null;
   property_city: string | null;
   property_state: string | null;
@@ -2414,6 +2425,14 @@ export interface SearchResultItem {
   nav_path: string
   lead_score?: number | null
   lead_status?: string | null
+  /** Buildings in this person's portfolio including this lead (1 = only this one). */
+  property_count?: number | null
+  /** Same-person grouping key (user + last + first token). */
+  person_key?: string | null
+  owner_display_name?: string | null
+  property_street?: string | null
+  /** This building plus sibling portfolio rows for search grouping. */
+  portfolio_properties?: RelatedPropertySummary[] | null
   relevance_score?: number | null
   created_at?: string | null
   status?: string | null

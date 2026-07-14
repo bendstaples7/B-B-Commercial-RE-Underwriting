@@ -26,6 +26,30 @@ class TestDedupStreetKey:
             '4903 N Hermitage Ave, Chicago, IL 60640, USA',
         )
 
+    def test_no_comma_city_state_zip_shares_key_with_bare_street(self):
+        """City/state/zip glued into property_street (no commas) must not diverge."""
+        bare = '4128 W Barry Ave'
+        glued = '4128 W Barry Ave Chicago IL 60618'
+        comma = '4128 W Barry Ave, Chicago, IL 60618'
+        assert dedup_street_key(bare) == dedup_street_key(glued)
+        assert dedup_street_key(bare) == dedup_street_key(comma)
+
+    def test_harding_no_comma_shares_key_with_bare_street(self):
+        assert dedup_street_key('3446 N Harding Ave') == dedup_street_key(
+            '3446 N Harding Ave Chicago IL 60618',
+        )
+
+    def test_zip_only_suffix_does_not_strip_street_name(self):
+        """``1719 W Barry 60657`` must keep Barry (no state token to strip on)."""
+        assert dedup_street_key('1719 W Barry 60657') == dedup_street_key('1719 W Barry')
+        assert 'BARRY' in dedup_street_key('1719 W Barry 60657')
+
+    def test_street_suffix_st_is_not_treated_as_state(self):
+        """``1719 W Barry St 60657`` must not parse ST as the US state."""
+        assert 'BARRY' in dedup_street_key('1719 W Barry St 60657')
+        assert dedup_street_key('1719 W Barry St 60657') == dedup_street_key('1719 W Barry St')
+        assert dedup_street_key('1719 W Barry St 60657') != dedup_street_key('1719 W')
+
     def test_north_and_n_share_key(self):
         assert dedup_street_key('4903 North Hermitage') == dedup_street_key('4903 N Hermitage')
 
@@ -159,6 +183,56 @@ class TestFindLeadByIdentity:
             )
 
             assert hit is None
+
+
+class TestDuplicateClusters:
+    def test_clusters_jammed_last_first_with_split_names(self, app):
+        """Assessor LAST FIRST jammed into first_name must cluster with split rows."""
+        from app.services.lead_dedup_service import find_duplicate_clusters
+
+        with app.app_context():
+            jammed = Lead(
+                property_street='4128 W Barry Ave',
+                owner_first_name='GARCIA ADALBERTO',
+                owner_last_name=None,
+                owner_user_id='user-1',
+            )
+            split = Lead(
+                property_street='4128 W Barry Ave Chicago IL 60618',
+                owner_first_name='ADALBERTO',
+                owner_last_name='GARCIA',
+                owner_user_id='user-1',
+            )
+            db.session.add_all([jammed, split])
+            db.session.commit()
+
+            clusters = find_duplicate_clusters()
+            ids = {frozenset(lead.id for lead in group) for group in clusters}
+            assert frozenset({jammed.id, split.id}) in ids
+
+    def test_does_not_cluster_conflicting_middle_initials(self, app):
+        from app.services.lead_dedup_service import find_duplicate_clusters
+
+        with app.app_context():
+            a = Lead(
+                property_street='100 Shared St',
+                owner_first_name='Gilbert E',
+                owner_last_name='Janson',
+                owner_user_id='user-1',
+            )
+            b = Lead(
+                property_street='100 Shared Street',
+                owner_first_name='Gilbert A',
+                owner_last_name='Janson',
+                owner_user_id='user-1',
+            )
+            db.session.add_all([a, b])
+            db.session.commit()
+
+            clusters = find_duplicate_clusters()
+            for group in clusters:
+                ids = {lead.id for lead in group}
+                assert not ({a.id, b.id} <= ids)
 
 
 class TestDuplicateSentinel:

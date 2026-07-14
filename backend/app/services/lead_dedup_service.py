@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 
 from app import db
@@ -216,6 +216,9 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
             continue
         w_val = getattr(winner, field, None)
         l_val = getattr(loser, field, None)
+        if field == 'lead_score':
+            # Scoring has a single writer — caller must rescore after commit.
+            continue
         if (w_val is None or w_val == '') and l_val not in (None, ''):
             setattr(winner, field, l_val)
 
@@ -232,28 +235,27 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
 
 def find_duplicate_clusters() -> list[list[Lead]]:
     """Return groups of duplicate leads (same owner + dedup street key)."""
+    from app.services.lead_merge_utils import cluster_same_building_by_owner_name
+
+    # Require a last name column, or a multi-token first_name (jammed FULL NAME).
     rows = Lead.query.filter(
         Lead.owner_first_name.isnot(None),
         Lead.owner_first_name != '',
-        Lead.owner_last_name.isnot(None),
-        Lead.owner_last_name != '',
         Lead.property_street.isnot(None),
         Lead.property_street != '',
-        Lead.normalized_street.isnot(None),
-        Lead.normalized_street != '',
+        or_(
+            and_(Lead.owner_last_name.isnot(None), Lead.owner_last_name != ''),
+            Lead.owner_first_name.contains(' '),
+        ),
     ).all()
 
-    buckets: dict[tuple, list[Lead]] = {}
-    for lead in rows:
-        key = (
-            lead.owner_user_id,
-            (lead.owner_first_name or '').strip().lower(),
-            (lead.owner_last_name or '').strip().lower(),
-            lead.normalized_street,
-        )
-        buckets.setdefault(key, []).append(lead)
-
-    return [group for group in buckets.values() if len(group) >= 2]
+    return cluster_same_building_by_owner_name(
+        rows,
+        owner_user_id_of=lambda lead: lead.owner_user_id,
+        street_of=lambda lead: lead.property_street,
+        first_of=lambda lead: lead.owner_first_name,
+        last_of=lambda lead: lead.owner_last_name,
+    )
 
 
 def run_duplicate_sentinel(
@@ -270,6 +272,7 @@ def run_duplicate_sentinel(
         'flagged': 0,
         'skipped': 0,
     }
+    winners_to_rescore: set[int] = set()
 
     for cluster in clusters:
         if stats['merged'] >= max_merges:
@@ -299,9 +302,15 @@ def run_duplicate_sentinel(
         for loser in losers:
             merge_lead_into_winner(winner, loser)
             stats['merged'] += 1
+            winners_to_rescore.add(winner.id)
 
     if not dry_run:
+        # Commit merges before rescoring — refresh_lead_scoring rolls back the
+        # shared session on failure and must not undo an in-flight merge.
         db.session.commit()
+        from app.services.lead_refresh import refresh_lead_scoring
+        for winner_id in winners_to_rescore:
+            refresh_lead_scoring(winner_id)
     else:
         db.session.rollback()
 

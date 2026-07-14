@@ -560,6 +560,7 @@ def get_command_center(lead_id: int):
     from app.models.property_organization_link import PropertyOrganizationLink
 
     contacts_payload = ContactService().get_ordered_contacts_payload(lead_id)
+    related_properties = ContactService().get_related_properties(lead_id)
 
     org_rows = (
         _db.session.query(Organization, PropertyOrganizationLink)
@@ -604,6 +605,7 @@ def get_command_center(lead_id: int):
         'owner_2_last_name': lead.owner_2_last_name,
         'contacts': contacts_payload,
         'organizations': organizations_payload,
+        'related_properties': related_properties,
         # Property details
         'property_street': lead.property_street,
         'property_city': lead.property_city,

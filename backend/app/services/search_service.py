@@ -409,6 +409,19 @@ class SearchService:
                 'match_context': build_match_context(row, q_trimmed, q_digits),
             })
 
+        if leads:
+            from app.services.contact_service import ContactService
+            enrichment = ContactService().portfolio_enrichment_for_leads(
+                [item['id'] for item in leads],
+            )
+            for item in leads:
+                extra = enrichment.get(item['id']) or {}
+                item['property_count'] = extra.get('property_count', 1)
+                item['person_key'] = extra.get('person_key')
+                item['owner_display_name'] = extra.get('owner_display_name')
+                item['property_street'] = extra.get('property_street')
+                item['portfolio_properties'] = extra.get('portfolio_properties') or []
+
         sessions = []
         for row in sessions_rows:
             address = (row.address or '').strip()
