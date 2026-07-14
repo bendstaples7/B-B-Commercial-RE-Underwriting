@@ -39,9 +39,10 @@ class TestRunGisMatchWiring:
                 instance._enrich_with_gis.return_value = mock_outcome
                 mock_cls.return_value = instance
 
-                matched = _run_gis_match(lead_id)
+                matched, cook_scheduled = _run_gis_match(lead_id)
 
                 assert matched is True
+                assert cook_scheduled is True
                 mock_cls.assert_called_once()
                 kwargs = mock_cls.call_args.kwargs
                 assert 'dedup_engine' in kwargs
@@ -52,7 +53,7 @@ class TestRunGisMatchWiring:
 
     def test_returns_false_when_lead_missing(self, app):
         with app.app_context():
-            assert _run_gis_match(999_999_999) is False
+            assert _run_gis_match(999_999_999) == (False, False)
 
     def test_skips_when_already_matched(self, app):
         with app.app_context():
@@ -69,7 +70,7 @@ class TestRunGisMatchWiring:
             with patch(
                 'app.services.lead_ingestion_service.LeadIngestionService'
             ) as mock_cls:
-                assert _run_gis_match(lead.id) is True
+                assert _run_gis_match(lead.id) == (True, False)
                 mock_cls.assert_not_called()
 
     def test_followup_does_not_dispatch_cook_enrichment_twice_after_gis_match(self, app):
@@ -86,7 +87,7 @@ class TestRunGisMatchWiring:
 
         with (
             patch('app.create_app', return_value=app),
-            patch('app.tasks.quick_add_tasks._run_gis_match', return_value=True),
+            patch('app.tasks.quick_add_tasks._run_gis_match', return_value=(True, True)),
             patch('app.services.cook_county_enrichment_service.dispatch_cook_county_enrichment') as dispatch,
             patch(
                 'app.services.hubspot_writeback_service.HubSpotWriteBackService.push_lead_as_deal',
@@ -98,3 +99,34 @@ class TestRunGisMatchWiring:
         assert result['gis_matched'] is True
         assert result['enriched'] is True
         dispatch.assert_not_called()
+
+    def test_followup_dispatches_cook_when_already_matched_before_task(self, app):
+        with app.app_context():
+            lead = Lead(
+                property_street='3 Already Matched St',
+                property_city='Chicago',
+                property_state='IL',
+                has_property_match=True,
+                owner_user_id='test-user',
+            )
+            db.session.add(lead)
+            db.session.commit()
+            lead_id = lead.id
+
+        with (
+            patch('app.create_app', return_value=app),
+            patch('app.tasks.quick_add_tasks._run_gis_match', return_value=(True, False)),
+            patch(
+                'app.services.cook_county_enrichment_service.dispatch_cook_county_enrichment',
+                return_value=True,
+            ) as dispatch,
+            patch(
+                'app.services.hubspot_writeback_service.HubSpotWriteBackService.push_lead_as_deal',
+                return_value={'synced': False, 'action': 'skipped', 'reason': 'write_back_disabled'},
+            ),
+        ):
+            result = run_quick_add_followup_inner(lead_id)
+
+        assert result['gis_matched'] is True
+        assert result['enriched'] is True
+        dispatch.assert_called_once_with(lead_id)

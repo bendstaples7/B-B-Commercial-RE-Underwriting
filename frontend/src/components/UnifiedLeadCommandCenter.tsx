@@ -1025,8 +1025,8 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         boxSizing: 'border-box',
       }}
     >
-      {/* Queue work bar + sticky lead header */}
-      <Box sx={{ position: 'sticky', top: 0, zIndex: 100, bgcolor: 'background.default', maxWidth: '100%', overflow: 'hidden' }}>
+      {/* Queue work bar + sticky lead header — no overflow clipping on sticky ancestors */}
+      <Box sx={{ position: 'sticky', top: 0, zIndex: 100, bgcolor: 'background.default', maxWidth: '100%' }}>
         {fromQueue && (
           <QueueWorkHeader
             fromQueue={fromQueue}

@@ -4,8 +4,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def _run_gis_match(lead_id: int) -> bool:
-    """Attempt county GIS parcel match; returns True when a parcel was found."""
+def _run_gis_match(lead_id: int) -> tuple[bool, bool]:
+    """Attempt county GIS parcel match.
+
+    Returns ``(matched, cook_enrichment_already_scheduled)``.
+    When a *new* match is found, ``_enrich_with_gis`` schedules Cook enrichment
+    via ``maybe_dispatch_after_gis_match``; the follow-up task should not queue
+    a second enrichment. When the lead was already matched, enrichment still
+    needs a follow-up dispatch.
+    """
     from app import db
     from app.models import Lead
     from app.services.deduplication_engine import DeduplicationEngine
@@ -14,9 +21,9 @@ def _run_gis_match(lead_id: int) -> bool:
 
     lead = db.session.get(Lead, lead_id)
     if lead is None:
-        return False
+        return False, False
     if lead.has_property_match:
-        return True
+        return True, False
 
     ingestion = LeadIngestionService(
         dedup_engine=DeduplicationEngine(),
@@ -31,7 +38,7 @@ def _run_gis_match(lead_id: int) -> bool:
             lead.property_state,
         )
         db.session.commit()  # persist any city/state/zip backfill from parser
-        return False
+        return False, False
 
     outcome = ingestion._enrich_with_gis(lead, connector, import_job_id=None)  # noqa: SLF001
     db.session.commit()
@@ -42,7 +49,7 @@ def _run_gis_match(lead_id: int) -> bool:
         matched,
         outcome.get('connector_name'),
     )
-    return matched
+    return matched, matched
 
 
 def run_quick_add_followup_inner(lead_id: int) -> dict:
@@ -55,14 +62,15 @@ def run_quick_add_followup_inner(lead_id: int) -> dict:
     app = create_app()
     with app.app_context():
         gis_matched = False
+        cook_already_scheduled = False
         try:
-            gis_matched = _run_gis_match(lead_id)
+            gis_matched, cook_already_scheduled = _run_gis_match(lead_id)
         except Exception as exc:
             logger.warning('Quick-add GIS match failed for lead %s: %s', lead_id, exc)
             db.session.rollback()
 
         enrich_result = False
-        if gis_matched:
+        if cook_already_scheduled:
             enrich_result = True
         else:
             try:

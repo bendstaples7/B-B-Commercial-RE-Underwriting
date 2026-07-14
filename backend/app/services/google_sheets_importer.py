@@ -762,7 +762,16 @@ class GoogleSheetsImporter:
             county_assessor_pin=pin,
         )
         if hit:
-            if pin or cities_compatible(incoming_city, hit.property_city):
+            # PIN matches are unambiguous; street-identity hits must still respect city.
+            # Do not treat "pin present on the request" as a match — verify digits.
+            pin_matched = False
+            if pin:
+                from app.services.plugins.pin_utils import normalize_pin_for_socrata
+
+                incoming_pin = normalize_pin_for_socrata(pin)
+                existing_pin = normalize_pin_for_socrata(hit.county_assessor_pin or '')
+                pin_matched = bool(incoming_pin and existing_pin and incoming_pin == existing_pin)
+            if pin_matched or cities_compatible(incoming_city, hit.property_city):
                 return hit
 
         # 2. Exact street match (legacy path when owner names missing)

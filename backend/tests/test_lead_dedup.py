@@ -69,6 +69,29 @@ class TestGoogleSheetsNormalizedDedup:
             assert hit is not None
             assert hit.id == existing.id
 
+    def test_find_duplicate_street_identity_respects_city(self, app):
+        with app.app_context():
+            existing = Lead(
+                property_street='1915 W Schiller St',
+                property_city='Chicago',
+                owner_first_name='Ronald',
+                owner_last_name='Jutkins',
+                owner_user_id='user-abc',
+            )
+            db.session.add(existing)
+            db.session.commit()
+
+            hit = GoogleSheetsImporter._find_duplicate(
+                {
+                    'property_street': '1915 W Schiller',
+                    'property_city': 'Evanston',
+                    'owner_first_name': 'Ronald',
+                    'owner_last_name': 'Jutkins',
+                },
+                owner_user_id='user-abc',
+            )
+            assert hit is None
+
 
 class TestHubSpotAddressDisambiguation:
     def _make_deal(self, hubspot_id: str, address: str, **owner_props) -> HubSpotDeal:
