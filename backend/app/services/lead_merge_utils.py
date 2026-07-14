@@ -207,6 +207,71 @@ def prefer_higher_lead_score(winner_val: Any, loser_val: Any) -> Any | None:
     return None
 
 
+def cluster_same_building_by_owner_name(
+    items: Sequence[Any],
+    *,
+    owner_user_id_of,
+    street_of,
+    first_of,
+    last_of,
+) -> list[list[Any]]:
+    """Group same-building records whose owner names are equivalent.
+
+    Buckets by ``(owner_user_id, dedup_street_key)`` then partitions with
+    ``owner_names_equivalent`` so jammed LAST/FIRST and split first/last rows
+    in the same building merge together.
+    """
+    from collections import defaultdict
+
+    from app.services.plugins.owner_name_utils import (
+        expand_owner_name_parts,
+        owner_names_equivalent,
+    )
+
+    street_groups: dict[tuple, list[Any]] = defaultdict(list)
+    for item in items:
+        street_key = dedup_street_key(street_of(item))
+        if not street_key:
+            continue
+        first, last = expand_owner_name_parts(first_of(item), last_of(item))
+        if not first or not last:
+            continue
+        street_groups[(owner_user_id_of(item), street_key)].append(item)
+
+    clusters: list[list[Any]] = []
+    for group in street_groups.values():
+        if len(group) < 2:
+            continue
+        parent = list(range(len(group)))
+
+        def find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        def union(i: int, j: int) -> None:
+            ri, rj = find(i), find(j)
+            if ri != rj:
+                parent[max(ri, rj)] = min(ri, rj)
+
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                if owner_names_equivalent(
+                    first_of(group[i]), last_of(group[i]),
+                    first_of(group[j]), last_of(group[j]),
+                ):
+                    union(i, j)
+
+        buckets: dict[int, list[Any]] = defaultdict(list)
+        for i, item in enumerate(group):
+            buckets[find(i)].append(item)
+        for members in buckets.values():
+            if len(members) >= 2:
+                clusters.append(members)
+    return clusters
+
+
 def owner_names_from_deal_props(props: dict) -> tuple[str, str]:
     """Extract owner first/last from HubSpot deal properties when present."""
     first = (

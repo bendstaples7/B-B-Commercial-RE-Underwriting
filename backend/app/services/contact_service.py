@@ -924,8 +924,9 @@ class ContactService:
                         (contact.last_name or '').strip(),
                     ) if p
                 ) or None
+            user = lead.owner_user_id or ''
             return {
-                'person_key': f'contact:{cid}',
+                'person_key': f'{user}|contact:{cid}',
                 'owner_display_name': display,
             }
 
@@ -974,8 +975,9 @@ class ContactService:
                         (contact.last_name or '').strip(),
                     ) if p
                 ) or None
+            user = lead.owner_user_id or ''
             return {
-                'person_key': f'contact:{cid}',
+                'person_key': f'{user}|contact:{cid}',
                 'owner_display_name': display,
             }
 
@@ -1032,8 +1034,11 @@ class ContactService:
         )
         contact_ids = {link.contact_id for link in page_links}
         lead_contacts: dict[int, set[int]] = defaultdict(set)
+        lead_primary_contact: dict[int, int] = {}
         for link in page_links:
             lead_contacts[link.property_id].add(link.contact_id)
+            if link.is_primary:
+                lead_primary_contact[link.property_id] = link.contact_id
 
         # contact_id -> (property_id, owner_user_id) for owner links only
         contact_prop_users: dict[int, list[tuple[int, str | None]]] = defaultdict(list)
@@ -1076,13 +1081,28 @@ class ContactService:
                     if pid != lid:
                         related_ids_by_lead[lid].add(pid)
 
+        def _names_for_page_lead(lead: Property) -> tuple[str | None, str | None]:
+            """Match `_owner_names_for_related` using preloaded owner contacts."""
+            first = (lead.owner_first_name or '').strip() or None
+            last = (lead.owner_last_name or '').strip() or None
+            if not first and not last:
+                cid = lead_primary_contact.get(lead.id)
+                if cid is None:
+                    cids = lead_contacts.get(lead.id) or set()
+                    cid = min(cids) if cids else None
+                contact = contacts_by_id.get(cid) if cid is not None else None
+                if contact is not None:
+                    first = (contact.first_name or '').strip() or None
+                    last = (contact.last_name or '').strip() or None
+            first, last = expand_owner_name_parts(first, last)
+            return (first or None), (last or None)
+
         # Name fallback: one candidate query per (user, last-name) bucket
         name_buckets: dict[tuple[str | None, str], list[Property]] = defaultdict(list)
+        names_by_lead: dict[int, tuple[str | None, str | None]] = {}
         for lead in leads:
-            first, last = expand_owner_name_parts(
-                (lead.owner_first_name or '').strip() or None,
-                (lead.owner_last_name or '').strip() or None,
-            )
+            first, last = _names_for_page_lead(lead)
+            names_by_lead[lead.id] = (first, last)
             if not last:
                 continue
             name_buckets[(lead.owner_user_id, last.lower())].append(lead)
@@ -1105,10 +1125,7 @@ class ContactService:
                 .all()
             )
             for lead in bucket:
-                first, last = expand_owner_name_parts(
-                    (lead.owner_first_name or '').strip() or None,
-                    (lead.owner_last_name or '').strip() or None,
-                )
+                first, last = names_by_lead[lead.id]
                 for other in candidates:
                     if other.id == lead.id:
                         continue
@@ -1117,6 +1134,8 @@ class ContactService:
                     ):
                         continue
                     related_ids_by_lead[lead.id].add(other.id)
+                    if other.id in related_ids_by_lead:
+                        related_ids_by_lead[other.id].add(lead.id)
 
         all_prop_ids: set[int] = set(by_id.keys())
         for s in related_ids_by_lead.values():

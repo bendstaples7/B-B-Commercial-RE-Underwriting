@@ -11,6 +11,14 @@ export interface SearchPersonGroup {
   properties: RelatedPropertySummary[]
 }
 
+/** Prefer backend street; if missing, take the address side of ``Name · Street`` labels. */
+function streetFallback(lead: SearchResultItem): string {
+  if (lead.property_street) return lead.property_street
+  const parts = lead.label.split('·')
+  if (parts.length >= 2) return parts.slice(1).join('·').trim()
+  return ''
+}
+
 function mergePortfolio(
   leads: SearchResultItem[],
 ): RelatedPropertySummary[] {
@@ -22,7 +30,7 @@ function mergePortfolio(
         : [
             {
               id: lead.id,
-              property_street: lead.property_street ?? lead.label,
+              property_street: streetFallback(lead),
               lead_status: lead.lead_status,
               lead_score: lead.lead_score,
             },

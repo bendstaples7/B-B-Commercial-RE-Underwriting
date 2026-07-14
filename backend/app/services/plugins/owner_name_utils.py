@@ -146,6 +146,20 @@ def is_address_like_contact(first_name: str | None, last_name: str | None) -> bo
     return is_address_like_name(display)
 
 
+_GENERATIONAL_SUFFIX_RE = re.compile(
+    r"^(?:jr\.?|sr\.?|ii|iii|iv|v)$",
+    re.IGNORECASE,
+)
+
+
+def _strip_generational_suffixes(parts: list[str]) -> list[str]:
+    """Drop trailing Jr/Sr/II-style tokens so they are not treated as last names."""
+    cleaned = list(parts)
+    while len(cleaned) >= 2 and _GENERATIONAL_SUFFIX_RE.fullmatch(cleaned[-1] or ""):
+        cleaned.pop()
+    return cleaned
+
+
 def expand_owner_name_parts(
     first_name: str | None,
     last_name: str | None,
@@ -154,12 +168,13 @@ def expand_owner_name_parts(
 
     ``GARCIA ADALBERTO`` + empty last → (``GARCIA``, ``ADALBERTO``) so it matches
     rows that already have split first/last. Trailing token becomes last name.
+    Generational suffixes (Jr, Sr, II, …) are stripped before the split.
     """
     first = (first_name or "").strip()
     last = (last_name or "").strip()
     if last or not first:
         return first, last
-    parts = first.split()
+    parts = _strip_generational_suffixes(first.split())
     if len(parts) < 2:
         return first, last
     return " ".join(parts[:-1]), parts[-1]
@@ -174,9 +189,10 @@ def _owner_name_variants(
     last = (last_name or "").strip()
     variants: list[tuple[str, str]] = [expand_owner_name_parts(first, last)]
     if not last and len(first.split()) >= 2:
-        parts = first.split()
-        # Assessor-style LAST FIRST jammed into first_name.
-        variants.append((" ".join(parts[1:]), parts[0]))
+        parts = _strip_generational_suffixes(first.split())
+        if len(parts) >= 2:
+            # Assessor-style LAST FIRST jammed into first_name.
+            variants.append((" ".join(parts[1:]), parts[0]))
     # Deduplicate while preserving order
     seen: set[tuple[str, str]] = set()
     out: list[tuple[str, str]] = []

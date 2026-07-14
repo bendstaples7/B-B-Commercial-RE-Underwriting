@@ -55,4 +55,19 @@ describe('groupSearchLeadsByPerson', () => {
     expect(groups[1].propertyCount).toBe(1)
     expect(groups[1].primaryLead.id).toBe(3)
   })
+
+  it('extracts street from Name · Street label when property_street missing', () => {
+    const groups = groupSearchLeadsByPerson([
+      lead({
+        id: 9,
+        person_key: 'lead:9',
+        owner_display_name: 'GILBERT JANSON',
+        label: 'GILBERT JANSON · 2623 N Southport Ave',
+        property_street: undefined,
+        property_count: 1,
+        relevance_score: 5,
+      }),
+    ])
+    expect(groups[0].properties[0].property_street).toBe('2623 N Southport Ave')
+  })
 })

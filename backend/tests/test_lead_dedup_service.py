@@ -185,6 +185,32 @@ class TestFindLeadByIdentity:
             assert hit is None
 
 
+class TestDuplicateClusters:
+    def test_clusters_jammed_last_first_with_split_names(self, app):
+        """Assessor LAST FIRST jammed into first_name must cluster with split rows."""
+        from app.services.lead_dedup_service import find_duplicate_clusters
+
+        with app.app_context():
+            jammed = Lead(
+                property_street='4128 W Barry Ave',
+                owner_first_name='GARCIA ADALBERTO',
+                owner_last_name=None,
+                owner_user_id='user-1',
+            )
+            split = Lead(
+                property_street='4128 W Barry Ave Chicago IL 60618',
+                owner_first_name='ADALBERTO',
+                owner_last_name='GARCIA',
+                owner_user_id='user-1',
+            )
+            db.session.add_all([jammed, split])
+            db.session.commit()
+
+            clusters = find_duplicate_clusters()
+            ids = {frozenset(lead.id for lead in group) for group in clusters}
+            assert frozenset({jammed.id, split.id}) in ids
+
+
 class TestDuplicateSentinel:
     def test_auto_merges_clear_duplicate(self, app):
         with app.app_context():

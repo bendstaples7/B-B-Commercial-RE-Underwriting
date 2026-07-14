@@ -235,7 +235,7 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
 
 def find_duplicate_clusters() -> list[list[Lead]]:
     """Return groups of duplicate leads (same owner + dedup street key)."""
-    from app.services.plugins.owner_name_utils import expand_owner_name_parts
+    from app.services.lead_merge_utils import cluster_same_building_by_owner_name
 
     # Require a last name column, or a multi-token first_name (jammed FULL NAME).
     rows = Lead.query.filter(
@@ -249,25 +249,13 @@ def find_duplicate_clusters() -> list[list[Lead]]:
         ),
     ).all()
 
-    buckets: dict[tuple, list[Lead]] = {}
-    for lead in rows:
-        first, last = expand_owner_name_parts(
-            lead.owner_first_name, lead.owner_last_name,
-        )
-        if not first or not last:
-            continue
-        street_key = dedup_street_key(lead.property_street)
-        if not street_key:
-            continue
-        key = (
-            lead.owner_user_id,
-            first.strip().lower(),
-            last.strip().lower(),
-            street_key,
-        )
-        buckets.setdefault(key, []).append(lead)
-
-    return [group for group in buckets.values() if len(group) >= 2]
+    return cluster_same_building_by_owner_name(
+        rows,
+        owner_user_id_of=lambda lead: lead.owner_user_id,
+        street_of=lambda lead: lead.property_street,
+        first_of=lambda lead: lead.owner_first_name,
+        last_of=lambda lead: lead.owner_last_name,
+    )
 
 
 def run_duplicate_sentinel(

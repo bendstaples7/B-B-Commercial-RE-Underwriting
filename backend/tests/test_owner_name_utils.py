@@ -17,6 +17,14 @@ class TestExpandOwnerNameParts:
     def test_already_split_unchanged(self):
         assert expand_owner_name_parts('GARCIA', 'ADALBERTO') == ('GARCIA', 'ADALBERTO')
 
+    def test_expand_strips_generational_suffix(self):
+        assert expand_owner_name_parts('John Smith Jr', None) == ('John', 'Smith')
+        assert expand_owner_name_parts('John Smith Jr.', None) == ('John', 'Smith')
+        assert expand_owner_name_parts('Mary Jane Doe III', None) == ('Mary Jane', 'Doe')
+
+    def test_jr_equivalent_to_split_name(self):
+        assert owner_names_equivalent('John Smith Jr', None, 'John', 'Smith')
+
     def test_equivalent_jammed_vs_split(self):
         assert owner_names_equivalent(
             'GARCIA ADALBERTO', None, 'GARCIA', 'ADALBERTO',

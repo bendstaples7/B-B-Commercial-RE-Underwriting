@@ -107,9 +107,23 @@ def find_merge_groups(session):
         .join(Property, Property.id == PropertyContact.property_id)
         .all()
     )
+    contact_users: dict[int, set] = defaultdict(set)
     user_to_contacts: dict = defaultdict(set)
     for contact_id, owner_user_id in rows:
+        contact_users[contact_id].add(owner_user_id)
         user_to_contacts[owner_user_id].add(contact_id)
+
+    # Contacts spanning multiple CRM users cannot be safely merged — skip them.
+    cross_scope = {cid for cid, users in contact_users.items() if len(users) > 1}
+    if cross_scope:
+        logger.info(
+            'Skipping %d contact(s) linked across multiple owner_user_id scopes',
+            len(cross_scope),
+        )
+        for uid in list(user_to_contacts.keys()):
+            user_to_contacts[uid] -= cross_scope
+            if not user_to_contacts[uid]:
+                del user_to_contacts[uid]
 
     all_contact_ids = {cid for cids in user_to_contacts.values() for cid in cids}
     if not all_contact_ids:
@@ -165,6 +179,42 @@ def _merge_link_metadata(exists, link) -> None:
         exists.role = link.role
 
 
+def _merge_contact_fields(winner, loser) -> None:
+    """Fill empty winner Contact fields from loser; prefer owner role."""
+    if not (winner.notes or '').strip() and (loser.notes or '').strip():
+        winner.notes = loser.notes
+    if (
+        not (winner.role_description or '').strip()
+        and (loser.role_description or '').strip()
+    ):
+        winner.role_description = loser.role_description
+    if loser.role == 'owner' and winner.role != 'owner':
+        winner.role = 'owner'
+    elif winner.role in (None, 'other') and loser.role and loser.role != 'other':
+        winner.role = loser.role
+
+
+def _reconcile_phone(winner_phone, loser_phone) -> None:
+    """Keep the richer phone metadata when digits collide."""
+    w_conf = winner_phone.confidence_score
+    l_conf = loser_phone.confidence_score
+    if l_conf is not None and (w_conf is None or l_conf > w_conf):
+        winner_phone.confidence_score = l_conf
+    if loser_phone.source == 'manual' and winner_phone.source != 'manual':
+        winner_phone.source = 'manual'
+    if loser_phone.last_called_at and (
+        not winner_phone.last_called_at
+        or loser_phone.last_called_at > winner_phone.last_called_at
+    ):
+        winner_phone.last_called_at = loser_phone.last_called_at
+        if loser_phone.last_outcome:
+            winner_phone.last_outcome = loser_phone.last_outcome
+    if not (winner_phone.notes or '').strip() and (loser_phone.notes or '').strip():
+        winner_phone.notes = loser_phone.notes
+    if winner_phone.label == 'other' and loser_phone.label and loser_phone.label != 'other':
+        winner_phone.label = loser_phone.label
+
+
 def merge_contact_group(session, contact_ids: list[int], *, apply: bool) -> dict:
     """Repoint property_contacts / phones / emails onto the lowest contact id."""
     from app.models.contact import Contact
@@ -183,7 +233,9 @@ def merge_contact_group(session, contact_ids: list[int], *, apply: bool) -> dict
         return summary
 
     existing_phones = {
-        phone_digits(p.value) for p in (winner.phones or []) if phone_digits(p.value)
+        phone_digits(p.value): p
+        for p in (winner.phones or [])
+        if phone_digits(p.value)
     }
     existing_emails = {
         (e.value or '').strip().lower() for e in (winner.emails or []) if (e.value or '').strip()
@@ -193,6 +245,8 @@ def merge_contact_group(session, contact_ids: list[int], *, apply: bool) -> dict
         loser = Contact.query.get(loser_id)
         if loser is None:
             continue
+
+        _merge_contact_fields(winner, loser)
 
         links = PropertyContact.query.filter_by(contact_id=loser_id).all()
         for link in links:
@@ -212,7 +266,10 @@ def merge_contact_group(session, contact_ids: list[int], *, apply: bool) -> dict
             digits = phone_digits(phone.value)
             if digits and digits not in existing_phones:
                 phone.contact_id = winner_id
-                existing_phones.add(digits)
+                existing_phones[digits] = phone
+            elif digits and digits in existing_phones:
+                _reconcile_phone(existing_phones[digits], phone)
+                session.delete(phone)
             else:
                 session.delete(phone)
 
