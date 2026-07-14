@@ -896,6 +896,8 @@ def create_task(lead_id: int):
             lead_id,
             actor=actor,
             reason=data.get('title') or 'Run skip trace on owner',
+            due_date=data.get('due_date'),
+            recompute_action=False,
         )
         if task is None:
             return jsonify({'error': 'Lead not found'}), 404

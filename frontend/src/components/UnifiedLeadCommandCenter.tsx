@@ -1022,7 +1022,6 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       sx={{
         maxWidth: '100%',
         minWidth: 0,
-        overflowX: 'hidden',
         boxSizing: 'border-box',
       }}
     >

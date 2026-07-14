@@ -57,7 +57,11 @@ def cities_compatible(a: Optional[str], b: Optional[str]) -> bool:
 def _collapse_cardinal_after_house(norm: str) -> str:
     """Collapse NORTH/SOUTH/EAST/WEST when it is the token after the house number."""
     parts = norm.split()
-    if len(parts) >= 2 and parts[1] in _CARDINAL_TO_ABBREV:
+    if (
+        len(parts) >= 3
+        and parts[1] in _CARDINAL_TO_ABBREV
+        and parts[2] not in _STREET_TYPE_SUFFIXES
+    ):
         parts[1] = _CARDINAL_TO_ABBREV[parts[1]]
         return ' '.join(parts)
     return norm

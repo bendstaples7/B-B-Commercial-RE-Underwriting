@@ -63,6 +63,12 @@ const PROPERTY_TYPE_OPTIONS = [
   { value: 'Land', label: 'Land' },
 ]
 
+const MOBILE_SORT_OPTIONS = [
+  { key: 'lead_score', label: 'Score' },
+  { key: 'created_at', label: 'Created' },
+  { key: 'property_street', label: 'Address' },
+] as const
+
 const PER_PAGE = 20
 
 /**
@@ -365,6 +371,16 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = () => {
     setPage(1)
   }, [])
 
+  const handleMobileSort = useCallback((key: string) => {
+    setPage(1)
+    if (sortBy === key) {
+      setSortOrder((current) => (current === 'asc' ? 'desc' : 'asc'))
+      return
+    }
+    setSortBy(key)
+    setSortOrder(key === 'lead_score' ? 'desc' : 'asc')
+  }, [sortBy])
+
   const handleClearFilters = () => {
     setLeadCategory('')
     setPropertyType('')
@@ -518,6 +534,25 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = () => {
 
           {isMobile ? (
             <Stack spacing={1} sx={{ flex: 1, mb: 1 }}>
+              <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap" sx={{ px: 0.5 }}>
+                <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center', mr: 0.5 }}>
+                  Sort
+                </Typography>
+                {MOBILE_SORT_OPTIONS.map((option) => {
+                  const active = sortBy === option.key
+                  return (
+                    <Chip
+                      key={option.key}
+                      size="small"
+                      label={active ? `${option.label} (${sortOrder})` : option.label}
+                      color={active ? 'primary' : 'default'}
+                      variant={active ? 'filled' : 'outlined'}
+                      onClick={() => handleMobileSort(option.key)}
+                      data-testid={`property-mobile-sort-${option.key}`}
+                    />
+                  )
+                })}
+              </Stack>
               {loading && displayedRows.length === 0 && (
                 <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
                   Loading properties…

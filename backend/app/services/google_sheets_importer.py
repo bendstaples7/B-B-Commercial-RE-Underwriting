@@ -762,7 +762,8 @@ class GoogleSheetsImporter:
             county_assessor_pin=pin,
         )
         if hit:
-            return hit
+            if pin or cities_compatible(incoming_city, hit.property_city):
+                return hit
 
         # 2. Exact street match (legacy path when owner names missing)
         if street:
@@ -856,18 +857,28 @@ class GoogleSheetsImporter:
                     Lead.query
                     .filter(Lead.owner_first_name.ilike(first))
                     .filter(Lead.owner_last_name.ilike(last))
-                    .filter(
+                )
+                if owner_user_id:
+                    q = q.filter(Lead.owner_user_id == owner_user_id)
+                bind = db.session.get_bind()
+                if bind is not None and bind.dialect.name == 'postgresql':
+                    hit = q.filter(
                         db.or_(
                             Lead.property_street == base_street,
                             Lead.property_street.op('~*')(unit_pattern),
                         )
-                    )
-                )
-                if owner_user_id:
-                    q = q.filter(Lead.owner_user_id == owner_user_id)
-                hit = q.first()
-                if hit:
-                    return hit
+                    ).first()
+                    if hit and cities_compatible(incoming_city, hit.property_city):
+                        return hit
+                else:
+                    for candidate in q.filter(Lead.property_street.isnot(None)).limit(50).all():
+                        if not cities_compatible(incoming_city, candidate.property_city):
+                            continue
+                        if candidate.property_street == base_street or streets_match_normalized(
+                            base_street,
+                            candidate.property_street,
+                        ):
+                            return candidate
 
         return None
 

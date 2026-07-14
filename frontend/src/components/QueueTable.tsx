@@ -99,6 +99,10 @@ function getAddress(row: QueueRow): string {
     .join(', ') || '—'
 }
 
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(target.closest('a,button,input,textarea,select,label'))
+}
+
 // ---------------------------------------------------------------------------
 // Sortable column definitions
 // ---------------------------------------------------------------------------
@@ -317,7 +321,7 @@ export function QueueTable({
                 <Chip
                   key={col.key}
                   size="small"
-                  label={col.label}
+                  label={sortBy === col.key ? `${col.label} (${sortOrder})` : col.label}
                   color={sortBy === col.key ? 'primary' : 'default'}
                   variant={sortBy === col.key ? 'filled' : 'outlined'}
                   onClick={() => handleSort(col.key)}
@@ -358,10 +362,25 @@ export function QueueTable({
                 data-testid={`queue-row-${row.id}`}
                 sx={{
                   p: 1.5,
+                  cursor: disabled ? 'default' : 'pointer',
                   opacity: isPending ? 0.5 : 1,
                   borderColor: isSelected ? 'primary.main' : undefined,
                   bgcolor: isSelected ? 'action.selected' : undefined,
                 }}
+                onClick={(event) => {
+                  if (disabled || isInteractiveTarget(event.target)) return
+                  navigate(leadTo(row.id), { state: leadNavState })
+                }}
+                onKeyDown={(event) => {
+                  if (disabled || isInteractiveTarget(event.target)) return
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    navigate(leadTo(row.id), { state: leadNavState })
+                  }
+                }}
+                role={disabled ? undefined : 'button'}
+                tabIndex={disabled ? undefined : 0}
+                aria-label={disabled ? undefined : `Open lead ${getOwnerName(row)}`}
               >
                 <Stack spacing={1}>
                   <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>

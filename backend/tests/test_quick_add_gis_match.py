@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 from app import db
 from app.models import Lead
-from app.tasks.quick_add_tasks import _run_gis_match
+from app.tasks.quick_add_tasks import _run_gis_match, run_quick_add_followup_inner
 
 
 class TestRunGisMatchWiring:
@@ -71,3 +71,30 @@ class TestRunGisMatchWiring:
             ) as mock_cls:
                 assert _run_gis_match(lead.id) is True
                 mock_cls.assert_not_called()
+
+    def test_followup_does_not_dispatch_cook_enrichment_twice_after_gis_match(self, app):
+        with app.app_context():
+            lead = Lead(
+                property_street='2 GIS Matched St',
+                property_city='Chicago',
+                property_state='IL',
+                owner_user_id='test-user',
+            )
+            db.session.add(lead)
+            db.session.commit()
+            lead_id = lead.id
+
+        with (
+            patch('app.create_app', return_value=app),
+            patch('app.tasks.quick_add_tasks._run_gis_match', return_value=True),
+            patch('app.services.cook_county_enrichment_service.dispatch_cook_county_enrichment') as dispatch,
+            patch(
+                'app.services.hubspot_writeback_service.HubSpotWriteBackService.push_lead_as_deal',
+                return_value={'synced': False, 'action': 'skipped', 'reason': 'write_back_disabled'},
+            ),
+        ):
+            result = run_quick_add_followup_inner(lead_id)
+
+        assert result['gis_matched'] is True
+        assert result['enriched'] is True
+        dispatch.assert_not_called()

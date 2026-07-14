@@ -326,6 +326,7 @@ export function QuickAddPage() {
           value={address}
           onChange={(e) => {
             setAddress(e.target.value)
+            setParsedAddress({ city: null, state: null, zip: null })
             if (e.target.value.trim()) setAddressError('')
           }}
           onKeyDown={(e) => {
