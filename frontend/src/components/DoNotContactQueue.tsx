@@ -86,7 +86,7 @@ export function DoNotContactQueue() {
   const bulkActions = resolveBulkActions(['reactivate'], bulkCtx)
 
   return (
-    <Box data-testid="do-not-contact-queue">
+    <Box data-testid="do-not-contact-queue" sx={{ maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}>
       <Typography variant="h6" gutterBottom>
         Do Not Contact
       </Typography>

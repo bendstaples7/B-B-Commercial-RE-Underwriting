@@ -5,6 +5,8 @@ import {
   Dialog,
   DialogContent,
   DialogTitle,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material'
 import { useQuery } from '@tanstack/react-query'
 import type { LeadTask, LeadTimelineEntry } from '@/types'
@@ -42,6 +44,8 @@ export function LogActivityModal({
   onClose,
   onSaved,
 }: LogActivityModalProps) {
+  const theme = useTheme()
+  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'))
   const { data: contacts = [], isLoading: contactsLoading } = useQuery({
     queryKey: ['propertyContacts', leadId],
     queryFn: () => contactService.getPropertyContacts(leadId),
@@ -60,6 +64,7 @@ export function LogActivityModal({
       onClose={onClose}
       maxWidth="sm"
       fullWidth
+      fullScreen={fullScreen}
       scroll="paper"
       aria-labelledby="log-activity-dialog-title"
       data-testid={`log-activity-modal-${activityType}`}
@@ -69,7 +74,7 @@ export function LogActivityModal({
         dividers
         sx={{
           overflowY: 'auto',
-          maxHeight: 'min(80vh, 720px)',
+          maxHeight: fullScreen ? 'none' : 'min(80vh, 720px)',
           pt: 2,
           '& .MuiFormControl-root': { overflow: 'visible' },
         }}

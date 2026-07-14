@@ -116,7 +116,7 @@ export function PreviouslyWarmQueue() {
   )
 
   return (
-    <Box data-testid="previously-warm-queue">
+    <Box data-testid="previously-warm-queue" sx={{ maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}>
       <Typography variant="h6" gutterBottom>
         Previously Warm
       </Typography>

@@ -46,13 +46,16 @@ export const ccMetaSx: SxProps<Theme> = {
 
 /** One job = one card. Outlined, no elevation, consistent padding. */
 export const ccCardSx: SxProps<Theme> = {
-  p: 2,
+  p: { xs: 1.5, sm: 2 },
   mb: 2,
   border: 1,
   borderColor: 'divider',
   borderRadius: 1,
   boxShadow: 'none',
   bgcolor: 'background.paper',
+  maxWidth: '100%',
+  overflow: 'hidden',
+  boxSizing: 'border-box',
 }
 
 /** Quieter supporting block (building ownership, secondary context). */

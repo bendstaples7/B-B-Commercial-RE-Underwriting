@@ -156,7 +156,7 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
   }
 
   return (
-    <Box data-testid="todays-action-queue">
+    <Box data-testid="todays-action-queue" sx={{ maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}>
       <Typography variant="h6" gutterBottom>
         Today's Action
       </Typography>
@@ -165,8 +165,9 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
         direction={{ xs: 'column', sm: 'row' }}
         spacing={2}
         alignItems={{ xs: 'stretch', sm: 'center' }}
-        sx={{ mb: 2 }}
+        sx={{ mb: 2, width: '100%' }}
         flexWrap="wrap"
+        useFlexGap
       >
         <Typography variant="body2" color="text.secondary">
           Total:{' '}
@@ -177,7 +178,7 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
             <CircularProgress size={14} sx={{ ml: 1, verticalAlign: 'middle' }} />
           )}
         </Typography>
-        <FormControl size="small" sx={{ minWidth: 220 }}>
+        <FormControl size="small" sx={{ minWidth: { xs: 0, sm: 220 }, width: { xs: '100%', sm: 'auto' } }}>
           <InputLabel id="todays-action-outreach-label">Next action</InputLabel>
           <Select
             labelId="todays-action-outreach-label"
@@ -199,6 +200,7 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
             variant="outlined"
             onClick={selectAllMatching}
             data-testid="todays-action-select-all-matching"
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
             Select all {OUTREACH_OPTIONS.find((o) => o.value === outreach)?.label ?? 'matching'}
           </Button>

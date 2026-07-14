@@ -112,8 +112,8 @@ export const ComparableSalesDisplay: React.FC<ComparableSalesDisplayProps> = ({
           The subject property is shown in the first row, followed by comparable sales.
         </Typography>
 
-        <TableContainer sx={{ mt: 2, maxHeight: 600 }}>
-          <Table stickyHeader size="small">
+        <TableContainer sx={{ mt: 2, maxHeight: 600, overflowX: 'auto' }}>
+          <Table stickyHeader size="small" sx={{ minWidth: 900 }}>
             <TableHead>
               <TableRow>
                 <TableCell sx={{ fontWeight: 'bold', minWidth: 200 }}>Address</TableCell>
@@ -139,7 +139,7 @@ export const ComparableSalesDisplay: React.FC<ComparableSalesDisplayProps> = ({
                   '& td': { fontWeight: 'bold' },
                 }}
               >
-                <TableCell>
+                <TableCell sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
                   {subjectProperty.address}
                   <Chip label="Subject" size="small" color="primary" sx={{ ml: 1 }} />
                 </TableCell>
@@ -168,7 +168,9 @@ export const ComparableSalesDisplay: React.FC<ComparableSalesDisplayProps> = ({
               {/* Comparable Sales Rows */}
               {comparables.map((comp) => (
                 <TableRow key={comp.id} hover>
-                  <TableCell>{comp.address}</TableCell>
+                  <TableCell sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
+                    {comp.address}
+                  </TableCell>
                   <TableCell>{formatDate(comp.saleDate)}</TableCell>
                   <TableCell align="right">{formatCurrency(comp.salePrice)}</TableCell>
                   <TableCell>{formatPropertyType(comp.propertyType)}</TableCell>

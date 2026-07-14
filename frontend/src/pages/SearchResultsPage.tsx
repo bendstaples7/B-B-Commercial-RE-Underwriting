@@ -70,7 +70,17 @@ export function SearchResultsPage() {
   const isEmpty = !isLoading && !isError && data && !hasLeads && !hasSessions
 
   return (
-    <Box sx={{ maxWidth: 960, mx: 'auto', py: 3, px: 2 }} data-testid="search-results-page">
+    <Box
+      sx={{
+        maxWidth: 960,
+        mx: 'auto',
+        py: { xs: 2, sm: 3 },
+        px: { xs: 1.5, sm: 2 },
+        minWidth: 0,
+        overflowX: 'hidden',
+      }}
+      data-testid="search-results-page"
+    >
       <Typography variant="h5" gutterBottom>
         Search
       </Typography>
@@ -86,19 +96,21 @@ export function SearchResultsPage() {
           mb: 3,
           border: 1,
           borderColor: 'divider',
+          maxWidth: '100%',
+          minWidth: 0,
         }}
         onSubmit={(e) => {
           e.preventDefault()
           submitSearch(draftQuery)
         }}
       >
-        <SearchIcon color="action" sx={{ mr: 1 }} />
+        <SearchIcon color="action" sx={{ mr: 1, flexShrink: 0 }} />
         <InputBase
           value={draftQuery}
           onChange={(e) => setDraftQuery(e.target.value)}
           placeholder="Search name, address, phone, email…"
           inputProps={{ maxLength: 200, 'data-testid': 'search-page-input' }}
-          sx={{ flex: 1 }}
+          sx={{ flex: 1, minWidth: 0 }}
           autoFocus
         />
       </Paper>
@@ -162,7 +174,12 @@ export function SearchResultsPage() {
                       <ListItemText
                         primary={
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                            <Typography variant="body1">{lead.label}</Typography>
+                            <Typography
+                              variant="body1"
+                              sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                            >
+                              {lead.label}
+                            </Typography>
                             {lead.lead_score != null && (
                               <Chip
                                 label={lead.lead_score}
@@ -231,8 +248,13 @@ export function SearchResultsPage() {
                     >
                       <ListItemText
                         primary={
-                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                            <Typography variant="body1">{session.label}</Typography>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                            <Typography
+                              variant="body1"
+                              sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                            >
+                              {session.label}
+                            </Typography>
                             {session.status && (
                               <Chip
                                 label={session.status}

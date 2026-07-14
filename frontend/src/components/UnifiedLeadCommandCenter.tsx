@@ -17,8 +17,6 @@ import {
   Alert,
   Button,
   Box,
-  AppBar,
-  Toolbar,
   IconButton,
   Typography,
   Paper,
@@ -30,12 +28,15 @@ import {
   DialogContentText,
   DialogTitle,
   Chip,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material'
 import { Link as RouterLink, useNavigate, useSearchParams, useLocation } from 'react-router-dom'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import BarChartIcon from '@mui/icons-material/BarChart'
+import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted'
 import { commandCenterService, leadTaskService, leadScoreService, queueService } from '@/services/api'
 import { leadService } from '@/services/leadApi'
 import { multifamilyService } from '@/services/api'
@@ -152,24 +153,45 @@ function StickyHeader({
 
   return (
     <>
-      <AppBar position="static" color="default" elevation={1}>
-        <Toolbar>
+      <Box
+        data-testid="sticky-header"
+        sx={{
+          bgcolor: 'background.paper',
+          borderBottom: 1,
+          borderColor: 'divider',
+        }}
+      >
+        <Box
+          sx={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'flex-start',
+            gap: { xs: 1, sm: 0 },
+            px: { xs: 1, sm: 2 },
+            py: 1,
+            minHeight: { xs: 'auto', sm: 48 },
+          }}
+        >
           <IconButton
             data-testid="back-button"
             onClick={handleBack}
             edge="start"
             aria-label={fromQueue ? `Back to ${fromQueue.label}` : 'Go back'}
-            sx={{ mr: 1 }}
+            sx={{ mr: 0.5, mt: { xs: 0.25, sm: 0 } }}
           >
             <ArrowBackIcon />
           </IconButton>
 
-          <Box sx={{ flexGrow: 1, minWidth: 0 }} data-testid="sticky-header-address">
+          <Box sx={{ flexGrow: 1, minWidth: 0, flexBasis: { xs: 'calc(100% - 48px)', sm: 'auto' }, overflow: 'hidden' }} data-testid="sticky-header-address">
             <Typography
               variant="subtitle1"
               fontWeight={700}
-              sx={{ lineHeight: 1.3 }}
-              noWrap
+              sx={{
+                lineHeight: 1.3,
+                overflowWrap: 'anywhere',
+                wordBreak: 'break-word',
+                whiteSpace: { xs: 'normal', sm: 'nowrap' },
+              }}
               title={propertyAddress}
             >
               {propertyAddress}
@@ -178,8 +200,12 @@ function StickyHeader({
               <Typography
                 variant="body2"
                 color="text.secondary"
-                sx={{ lineHeight: 1.2 }}
-                noWrap
+                sx={{
+                  lineHeight: 1.2,
+                  overflowWrap: 'anywhere',
+                  wordBreak: 'break-word',
+                  whiteSpace: { xs: 'normal', sm: 'nowrap' },
+                }}
                 title={primaryOwner}
                 data-testid="sticky-header-owner"
               >
@@ -188,40 +214,50 @@ function StickyHeader({
             ) : null}
           </Box>
 
-          {/* Lead score — opens breakdown dialog */}
-          <Tooltip title={scoreRecord ? `${tierTooltip} — click for breakdown` : tierTooltip}>
-            <span>
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={() => scoreRecord && setScoreDialogOpen(true)}
-                disabled={!scoreRecord}
-                data-testid="header-lead-score"
-                aria-label="View lead score breakdown"
-                startIcon={<BarChartIcon sx={{ fontSize: 18 }} />}
-                sx={{
-                  mr: 2,
-                  textTransform: 'none',
-                  fontWeight: 600,
-                  flexShrink: 0,
-                }}
-              >
-                {Math.round(displayScore)} / 100
-                <Box component="span" sx={{ ml: 0.75 }}>
-                  <LeadScoreBadge tier={scoreTier} size="small" />
-                </Box>
-              </Button>
-            </span>
-          </Tooltip>
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              flexWrap: 'wrap',
+              width: { xs: '100%', sm: 'auto' },
+              pl: { xs: 5, sm: 0 },
+              justifyContent: { xs: 'flex-start', sm: 'flex-end' },
+            }}
+          >
+            <Tooltip title={scoreRecord ? `${tierTooltip} — click for breakdown` : tierTooltip}>
+              <span>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => scoreRecord && setScoreDialogOpen(true)}
+                  disabled={!scoreRecord}
+                  data-testid="header-lead-score"
+                  aria-label="View lead score breakdown"
+                  startIcon={<BarChartIcon sx={{ fontSize: 18 }} />}
+                  sx={{
+                    textTransform: 'none',
+                    fontWeight: 600,
+                    flexShrink: 0,
+                  }}
+                >
+                  {Math.round(displayScore)} / 100
+                  <Box component="span" sx={{ ml: 0.75 }}>
+                    <LeadScoreBadge tier={scoreTier} size="small" />
+                  </Box>
+                </Button>
+              </span>
+            </Tooltip>
 
-          <LeadStatusSelector
-            leadId={leadId}
-            status={commandCenterData.lead_status}
-            allStatuses={ALL_LEAD_STATUSES}
-            onStatusChanged={onStatusChanged}
-          />
-        </Toolbar>
-      </AppBar>
+            <LeadStatusSelector
+              leadId={leadId}
+              status={commandCenterData.lead_status}
+              allStatuses={ALL_LEAD_STATUSES}
+              onStatusChanged={onStatusChanged}
+            />
+          </Box>
+        </Box>
+      </Box>
 
       {scoreRecord && (
         <ScoreBreakdownDialog
@@ -253,6 +289,8 @@ function QueueWorkHeader({
   onPrefetchLead,
 }: QueueWorkHeaderProps) {
   const navigate = useNavigate()
+  const theme = useTheme()
+  const isXs = useMediaQuery(theme.breakpoints.down('sm'))
   const positionLabel =
     navigation?.position != null
       ? `${navigation.position} of ${navigation.total}`
@@ -266,49 +304,73 @@ function QueueWorkHeader({
       sx={{
         display: 'flex',
         alignItems: 'center',
-        gap: 1,
-        px: 2,
-        py: 1,
+        flexWrap: 'wrap',
+        gap: 0.5,
+        px: { xs: 1, sm: 2 },
+        py: 0.75,
         bgcolor: 'action.hover',
         borderBottom: 1,
         borderColor: 'divider',
       }}
     >
-      <Typography variant="body2" fontWeight={600} sx={{ flexGrow: 1 }}>
+      <Typography
+        variant="body2"
+        fontWeight={600}
+        sx={{
+          flexGrow: 1,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
         {fromQueue.label}
         <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 1 }}>
           · {isLoading ? '…' : positionLabel}
         </Typography>
       </Typography>
-      <Button
-        size="small"
-        onClick={() => navigate(queuePath(fromQueue.key))}
-        data-testid="queue-back-to-list"
-      >
-        Back to queue
-      </Button>
-      <IconButton
-        size="small"
-        disabled={!navigation?.prev_id}
-        aria-label="Previous in queue"
-        data-testid="queue-prev-btn"
-        onMouseEnter={() => navigation?.prev_id && onPrefetchLead?.(navigation.prev_id)}
-        onFocus={() => navigation?.prev_id && onPrefetchLead?.(navigation.prev_id)}
-        onClick={() => navigation?.prev_id && onAdvance(navigation.prev_id)}
-      >
-        <ChevronLeftIcon />
-      </IconButton>
-      <IconButton
-        size="small"
-        disabled={!navigation?.next_id}
-        aria-label="Next in queue"
-        data-testid="queue-next-btn"
-        onMouseEnter={() => navigation?.next_id && onPrefetchLead?.(navigation.next_id)}
-        onFocus={() => navigation?.next_id && onPrefetchLead?.(navigation.next_id)}
-        onClick={() => navigation?.next_id && onAdvance(navigation.next_id)}
-      >
-        <ChevronRightIcon />
-      </IconButton>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25, ml: 'auto', flexShrink: 0 }}>
+        {isXs ? (
+          <IconButton
+            size="small"
+            onClick={() => navigate(queuePath(fromQueue.key))}
+            aria-label="Back to queue"
+            data-testid="queue-back-to-list"
+          >
+            <FormatListBulletedIcon fontSize="small" />
+          </IconButton>
+        ) : (
+          <Button
+            size="small"
+            onClick={() => navigate(queuePath(fromQueue.key))}
+            data-testid="queue-back-to-list"
+          >
+            Back to queue
+          </Button>
+        )}
+        <IconButton
+          size="small"
+          disabled={!navigation?.prev_id}
+          aria-label="Previous in queue"
+          data-testid="queue-prev-btn"
+          onMouseEnter={() => navigation?.prev_id && onPrefetchLead?.(navigation.prev_id)}
+          onFocus={() => navigation?.prev_id && onPrefetchLead?.(navigation.prev_id)}
+          onClick={() => navigation?.prev_id && onAdvance(navigation.prev_id)}
+        >
+          <ChevronLeftIcon />
+        </IconButton>
+        <IconButton
+          size="small"
+          disabled={!navigation?.next_id}
+          aria-label="Next in queue"
+          data-testid="queue-next-btn"
+          onMouseEnter={() => navigation?.next_id && onPrefetchLead?.(navigation.next_id)}
+          onFocus={() => navigation?.next_id && onPrefetchLead?.(navigation.next_id)}
+          onClick={() => navigation?.next_id && onAdvance(navigation.next_id)}
+        >
+          <ChevronRightIcon />
+        </IconButton>
+      </Box>
     </Box>
   )
 }
@@ -328,7 +390,7 @@ function WorkQueueMembershipStrip({ commandCenterData }: WorkQueueMembershipStri
       sx={{
         px: { xs: 1, sm: 2 },
         pt: 1,
-        display: 'flex',
+        display: { xs: 'none', sm: 'flex' },
         flexWrap: 'wrap',
         alignItems: 'center',
         gap: 1,
@@ -576,7 +638,7 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
     }
 
     return (
-      <Box ref={panelRef} sx={{ mb: 2, overflow: 'auto' }} data-testid="activity-panel">
+      <Box ref={panelRef} sx={{ mb: 2 }} data-testid="activity-panel">
         <Typography sx={ccSectionTitleSx}>
           Activity
         </Typography>
@@ -954,9 +1016,17 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   }
 
   return (
-    <Box>
+    <Box
+      data-testid="unified-lead-command-center"
+      sx={{
+        maxWidth: '100%',
+        minWidth: 0,
+        overflowX: 'hidden',
+        boxSizing: 'border-box',
+      }}
+    >
       {/* Queue work bar + sticky lead header */}
-      <Box sx={{ position: 'sticky', top: 0, zIndex: 100, bgcolor: 'background.default' }}>
+      <Box sx={{ position: 'sticky', top: 0, zIndex: 100, bgcolor: 'background.default', maxWidth: '100%', overflow: 'hidden' }}>
         {fromQueue && (
           <QueueWorkHeader
             fromQueue={fromQueue}
@@ -979,9 +1049,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       <WorkQueueMembershipStrip commandCenterData={commandCenterData!} />
 
       {/* Two-column flex layout: activity column (left) + property sidebar (right, hidden below lg) */}
-      <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', p: { xs: 1, sm: 2 } }}>
+      <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', p: { xs: 0, sm: 2 }, maxWidth: '100%', minWidth: 0 }}>
         {/* Activity column — order: RecommendedActionPanel → TasksPanel → ActivityPanel → TabPanel */}
-        <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Box sx={{ flex: 1, minWidth: 0, maxWidth: '100%', px: { xs: 0.5, sm: 0 }, overflow: 'hidden' }}>
           {/* One card: recommended action + quick actions + open tasks */}
           <Paper sx={ccCardSx} data-testid="lead-action-section">
             <Typography sx={{ ...ccSectionTitleSx, mb: 1.5 }}>
@@ -1021,6 +1091,8 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               />
             </Box>
           </Paper>
+
+          <PropertySidebar variant="inline" commandCenterData={commandCenterData!} />
 
           <BuildingOwnershipSection
             leadId={leadId}

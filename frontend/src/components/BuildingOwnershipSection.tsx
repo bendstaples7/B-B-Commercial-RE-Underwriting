@@ -23,7 +23,11 @@ import {
   ToggleButton,
   ToggleButtonGroup,
   Typography,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { buildingOwnershipService } from '@/services/api'
 import { formatDateTime } from '@/utils/formatters'
@@ -141,6 +145,9 @@ export function BuildingOwnershipSection({
   const [analyzeSnapshot, setAnalyzeSnapshot] = useState<BuildingOwnershipAnalyzeResult | null>(
     null,
   )
+  const theme = useTheme()
+  const isXs = useMediaQuery(theme.breakpoints.down('sm'))
+  const [mobileExpanded, setMobileExpanded] = useState(false)
 
   const hasAnalysisId = Boolean(
     commandCenterData.condo_analysis_id || analyzeSnapshot?.condo_analysis_id,
@@ -268,10 +275,27 @@ export function BuildingOwnershipSection({
       data-testid="building-ownership-section"
       id="building-ownership-section"
     >
-      <Typography sx={ccSubsectionTitleSx}>
-        Building ownership
-      </Typography>
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 1,
+          mb: !isXs || mobileExpanded ? 0 : 0,
+          cursor: isXs ? 'pointer' : 'default',
+        }}
+        onClick={isXs ? () => setMobileExpanded((open) => !open) : undefined}
+        role={isXs ? 'button' : undefined}
+        aria-expanded={isXs ? mobileExpanded : undefined}
+      >
+        <Typography sx={ccSubsectionTitleSx} component="div">
+          Building ownership
+        </Typography>
+        {isXs && (mobileExpanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />)}
+      </Box>
 
+      <Collapse in={!isXs || mobileExpanded}>
+      <Box sx={{ pt: 1 }}>
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
         spacing={1}
@@ -401,8 +425,8 @@ export function BuildingOwnershipSection({
           <Typography sx={{ ...ccMetaSx, mb: 1 }} data-testid="building-ownership-pin-explanation">
             {pinExplanation(pinCount || assessorPins.length, units, assessorPins)}
           </Typography>
-          <TableContainer sx={{ mb: 1.5 }}>
-            <Table size="small">
+          <TableContainer sx={{ mb: 1.5, overflowX: 'auto' }}>
+            <Table size="small" sx={{ minWidth: 320 }}>
               <TableHead>
                 <TableRow>
                   <TableCell>PIN</TableCell>
@@ -571,6 +595,8 @@ export function BuildingOwnershipSection({
           </Collapse>
         </>
       )}
+      </Box>
+      </Collapse>
     </Paper>
   )
 }

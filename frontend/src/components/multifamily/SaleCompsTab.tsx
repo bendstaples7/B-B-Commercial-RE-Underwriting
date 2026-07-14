@@ -498,16 +498,16 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
       {/* ── Suggested Comps Section ── */}
       {(suggestedComps?.length ?? 0) > 0 && (
         <Box sx={{ mb: 3 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
             <AutoAwesomeIcon fontSize="small" color="primary" />
             <Typography variant="subtitle1" fontWeight={600}>
               AI Suggestions
             </Typography>
             <Chip label={suggestedComps!.length} size="small" color="primary" />
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" color="text.secondary" sx={{ flex: { xs: '1 1 100%', sm: '0 1 auto' } }}>
               — Review and add the comps you want to include in your analysis
             </Typography>
-            <Box sx={{ ml: 'auto' }}>
+            <Box sx={{ ml: { xs: 0, sm: 'auto' } }}>
               <Button
                 size="small"
                 variant="outlined"
@@ -521,8 +521,8 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
               </Button>
             </Box>
           </Box>
-          <TableContainer component={Paper} variant="outlined">
-            <Table size="small" aria-label="Suggested sale comps">
+          <TableContainer component={Paper} variant="outlined" sx={{ overflowX: 'auto' }}>
+            <Table size="small" aria-label="Suggested sale comps" sx={{ minWidth: 720 }}>
               <TableHead>
                 <TableRow sx={{ bgcolor: 'action.hover' }}>
                   <TableCell>Address</TableCell>
@@ -657,8 +657,8 @@ export function SaleCompsTab({ dealId }: SaleCompsTabProps) {
           </Typography>
         </Paper>
       ) : comps.length > 0 ? (
-        <TableContainer component={Paper} variant="outlined">
-          <Table size="small" aria-label="Confirmed sale comps table">
+        <TableContainer component={Paper} variant="outlined" sx={{ overflowX: 'auto' }}>
+          <Table size="small" aria-label="Confirmed sale comps table" sx={{ minWidth: 720 }}>
             <TableHead>
               <TableRow>
                 <TableCell>Address</TableCell>

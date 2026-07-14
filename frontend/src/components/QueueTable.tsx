@@ -9,19 +9,24 @@ import {
   Alert,
   Box,
   Checkbox,
+  Chip,
   IconButton,
   Link,
   Pagination,
+  Paper,
+  Stack,
   Table,
   TableBody,
   TableCell,
+  TableContainer,
   TableHead,
   TableRow,
   TableSortLabel,
   Tooltip,
   Typography,
   Button,
-  Stack,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import type { QueueRow, BulkActionResult } from '@/types'
@@ -138,6 +143,8 @@ export function QueueTable({
   const [bulkMessage, setBulkMessage] = useState<string | null>(null)
   const [isBulkProcessing, setIsBulkProcessing] = useState(false)
   const navigate = useNavigate()
+  const theme = useTheme()
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'))
   const leadNavState = fromQueue ? { fromQueue } : undefined
   const leadTo = (id: number) => buildLeadUrl(id, fromQueue?.key)
 
@@ -255,6 +262,8 @@ export function QueueTable({
         <Stack
           direction="row"
           spacing={1}
+          useFlexGap
+          flexWrap="wrap"
           alignItems="center"
           sx={{ mb: 1, p: 1, bgcolor: 'action.selected', borderRadius: 1 }}
           data-testid="bulk-action-bar"
@@ -299,7 +308,179 @@ export function QueueTable({
             No leads in this queue
           </Typography>
         </Box>
+      ) : isMobile ? (
+        <Stack spacing={1.5} data-testid="queue-table-cards">
+          {/* Mobile sort chips */}
+          {onSort && (
+            <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap" sx={{ px: 0.5 }}>
+              {SORTABLE_COLUMNS.map((col) => (
+                <Chip
+                  key={col.key}
+                  size="small"
+                  label={col.label}
+                  color={sortBy === col.key ? 'primary' : 'default'}
+                  variant={sortBy === col.key ? 'filled' : 'outlined'}
+                  onClick={() => handleSort(col.key)}
+                  disabled={disabled}
+                  data-testid={`sort-${col.key}`}
+                />
+              ))}
+            </Stack>
+          )}
+          {hasSelection && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 0.5 }}>
+              <Checkbox
+                checked={allSelected}
+                indeterminate={someSelected}
+                onChange={handleSelectAll}
+                disabled={disabled}
+                inputProps={{ 'aria-label': 'Select all rows', 'data-testid': 'select-all-checkbox' } as React.InputHTMLAttributes<HTMLInputElement>}
+              />
+              <Typography variant="body2" color="text.secondary">
+                Select all on page
+              </Typography>
+            </Box>
+          )}
+          {rows.map((row) => {
+            const rowState = rowStates[row.id]
+            const isPending = rowState?.pending ?? false
+            const rowError = rowState?.error ?? null
+            const isSelected = selectedIds.includes(row.id)
+            const nextAction = row.recommended_action
+              ? (row.outreach_action_label
+                ?? outreachDisplayLabel(row.recommended_action, row.recommended_contact_method))
+              : null
+
+            return (
+              <Paper
+                key={row.id}
+                variant="outlined"
+                data-testid={`queue-row-${row.id}`}
+                sx={{
+                  p: 1.5,
+                  opacity: isPending ? 0.5 : 1,
+                  borderColor: isSelected ? 'primary.main' : undefined,
+                  bgcolor: isSelected ? 'action.selected' : undefined,
+                }}
+              >
+                <Stack spacing={1}>
+                  <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+                    {hasSelection && (
+                      <Checkbox
+                        checked={isSelected}
+                        onChange={() => handleSelectRow(row.id)}
+                        disabled={disabled || isPending}
+                        sx={{ mt: -0.5, ml: -0.5 }}
+                        inputProps={{ 'aria-label': `Select row ${row.id}`, 'data-testid': `select-row-${row.id}` } as React.InputHTMLAttributes<HTMLInputElement>}
+                      />
+                    )}
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      {disabled ? (
+                        <Typography fontWeight={600} data-testid={`row-name-${row.id}`}>
+                          {getOwnerName(row)}
+                        </Typography>
+                      ) : (
+                        <Link
+                          component={RouterLink}
+                          to={leadTo(row.id)}
+                          state={leadNavState}
+                          underline="hover"
+                          color="primary"
+                          fontWeight={600}
+                          data-testid={`row-name-${row.id}`}
+                        >
+                          {getOwnerName(row)}
+                        </Link>
+                      )}
+                      <Typography variant="body2" color="text.secondary" data-testid={`row-address-${row.id}`}>
+                        {getAddress(row)}
+                      </Typography>
+                    </Box>
+                    <Typography variant="subtitle2" data-testid={`row-score-${row.id}`}>
+                      {row.lead_score}
+                    </Typography>
+                  </Box>
+
+                  <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                    <Box data-testid={`row-status-${row.id}`}>
+                      {row.lead_status ? <LeadStatusChip status={row.lead_status} /> : '—'}
+                    </Box>
+                    {nextAction && (
+                      <Typography variant="body2" data-testid={`row-action-${row.id}`}>
+                        {nextAction}
+                      </Typography>
+                    )}
+                  </Stack>
+                  {row.recommended_action && (
+                    <OutreachContactCallout contact={row.outreach_contact} compact />
+                  )}
+                  {extraColumns.map((col) => (
+                    <Box key={col.key}>
+                      <Typography variant="caption" color="text.secondary">
+                        {col.label}
+                      </Typography>
+                      <Box>{col.render(row)}</Box>
+                    </Box>
+                  ))}
+
+                  <Stack direction="row" justifyContent="flex-end" spacing={0.5}>
+                    <Tooltip title="Open lead detail">
+                      {disabled ? (
+                        <IconButton size="small" disabled aria-label="Open lead detail" data-testid={`row-action-view-${row.id}`}>
+                          <OpenInNewIcon fontSize="small" />
+                        </IconButton>
+                      ) : (
+                        <IconButton
+                          size="small"
+                          component={RouterLink}
+                          to={leadTo(row.id)}
+                          state={leadNavState}
+                          aria-label="Open lead detail"
+                          data-testid={`row-action-view-${row.id}`}
+                        >
+                          <OpenInNewIcon fontSize="small" />
+                        </IconButton>
+                      )}
+                    </Tooltip>
+                    {rowActions.map((action) => (
+                      <Tooltip key={action.label} title={action.label}>
+                        <span>
+                          <IconButton
+                            size="small"
+                            onClick={() => handleRowAction(action, row)}
+                            disabled={disabled || isPending}
+                            aria-label={action.label}
+                            data-testid={action.testId ?? `row-action-${action.label.toLowerCase().replace(/\s+/g, '-')}-${row.id}`}
+                          >
+                            {action.icon}
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    ))}
+                  </Stack>
+
+                  {rowError && (
+                    <Alert
+                      severity="error"
+                      data-testid={`row-error-${row.id}`}
+                      onClose={() =>
+                        setRowStates((prev) => {
+                          const next = { ...prev }
+                          delete next[row.id]
+                          return next
+                        })
+                      }
+                    >
+                      {rowError}
+                    </Alert>
+                  )}
+                </Stack>
+              </Paper>
+            )
+          })}
+        </Stack>
       ) : (
+        <TableContainer sx={{ overflowX: 'auto' }}>
         <Table size="small" data-testid="queue-table-table">
           <TableHead>
             <TableRow>
@@ -520,6 +701,7 @@ export function QueueTable({
             })}
           </TableBody>
         </Table>
+        </TableContainer>
       )}
 
       {/* Total count */}

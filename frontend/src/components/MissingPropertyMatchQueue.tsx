@@ -157,11 +157,18 @@ export function MissingPropertyMatchQueue() {
   }, [isInitialLoading, loadFailed, total, currentRow])
 
   return (
-    <Box data-testid="missing-property-match-queue">
-      <Typography variant="h6" gutterBottom>
+    <Box
+      data-testid="missing-property-match-queue"
+      sx={{ maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}
+    >
+      <Typography variant="h6" gutterBottom sx={{ overflowWrap: 'anywhere' }}>
         Missing Property Match
       </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography
+        variant="body2"
+        color="text.secondary"
+        sx={{ mb: 2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+      >
         Review GIS-recommended addresses and approve or reject matches. Total:{' '}
         <strong>{data != null ? total : '—'}</strong>
       </Typography>

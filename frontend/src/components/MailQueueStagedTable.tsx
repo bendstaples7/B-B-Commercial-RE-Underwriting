@@ -37,8 +37,8 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
   })
 
   return (
-    <TableContainer component={Paper} data-testid="mail-queue-staged-table">
-      <Table size="small">
+    <TableContainer component={Paper} data-testid="mail-queue-staged-table" sx={{ overflowX: 'auto' }}>
+      <Table size="small" sx={{ minWidth: 640 }}>
         <TableHead>
           <TableRow>
             <TableCell>Owner</TableCell>
@@ -62,13 +62,15 @@ export const MailQueueStagedTable: React.FC<MailQueueStagedTableProps> = ({
           ) : (
             items.map((item) => (
               <TableRow key={item.id}>
-                <TableCell>{item.owner_name || '—'}</TableCell>
-                <TableCell>
+                <TableCell sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
+                  {item.owner_name || '—'}
+                </TableCell>
+                <TableCell sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
                   <RouterLink to={`/leads/${item.lead_id}`}>
                     {item.property_street || `#${item.lead_id}`}
                   </RouterLink>
                 </TableCell>
-                <TableCell>
+                <TableCell sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
                   {[item.mailing_address, item.mailing_city, item.mailing_state, item.mailing_zip]
                     .filter(Boolean)
                     .join(', ') || '—'}

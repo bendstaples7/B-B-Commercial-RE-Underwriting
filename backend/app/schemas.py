@@ -1807,6 +1807,21 @@ class QuickAddSchema(RequestSchema):
         load_default=None,
         validate=validate.Length(max=500),
     )
+    property_city = fields.String(
+        allow_none=True,
+        load_default=None,
+        validate=validate.Length(max=100),
+    )
+    property_state = fields.String(
+        allow_none=True,
+        load_default=None,
+        validate=validate.Length(max=50),
+    )
+    property_zip = fields.String(
+        allow_none=True,
+        load_default=None,
+        validate=validate.Length(max=20),
+    )
 
 
 class QuickAddLookupSchema(RequestSchema):

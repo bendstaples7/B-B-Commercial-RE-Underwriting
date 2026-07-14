@@ -93,7 +93,7 @@ export function NeedsReviewQueue() {
   const bulkActions = resolveBulkActions(['create_task'], bulkCtx)
 
   return (
-    <Box data-testid="needs-review-queue">
+    <Box data-testid="needs-review-queue" sx={{ maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}>
       <Typography variant="h6" gutterBottom>
         Needs Review
       </Typography>

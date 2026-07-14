@@ -207,7 +207,7 @@ export function NoNextActionQueue() {
   }
 
   return (
-    <Box data-testid="no-next-action-queue">
+    <Box data-testid="no-next-action-queue" sx={{ maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}>
       <Typography variant="h6" gutterBottom>
         No Next Action
       </Typography>
@@ -274,7 +274,13 @@ export function NoNextActionQueue() {
       )}
 
       {selectedIds.length > 0 && !showRefetchIndicator && (
-        <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
+        <Stack
+          direction={{ xs: 'column', sm: 'row' }}
+          spacing={1}
+          useFlexGap
+          flexWrap="wrap"
+          sx={{ mb: 1, width: '100%' }}
+        >
           <Button
             size="small"
             variant="contained"
@@ -284,6 +290,7 @@ export function NoNextActionQueue() {
               setStatusDialogOpen(true)
             }}
             data-testid="bulk-update-status-selected"
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
             Update status ({selectedIds.length})
           </Button>

@@ -62,11 +62,22 @@ export function PropertyMatchReviewCard({
   const ownerName = [row.owner_first_name, row.owner_last_name].filter(Boolean).join(' ') || 'Unknown owner'
 
   return (
-    <Paper sx={{ p: 2 }} data-testid="property-match-review-card">
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
-        <Box>
-          <Typography variant="h6">{ownerName}</Typography>
-          <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
+    <Paper
+      sx={{ p: { xs: 1.5, sm: 2 }, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }}
+      data-testid="property-match-review-card"
+    >
+      <Stack
+        direction={{ xs: 'column', sm: 'row' }}
+        justifyContent="space-between"
+        alignItems={{ xs: 'stretch', sm: 'center' }}
+        spacing={1}
+        sx={{ mb: 2 }}
+      >
+        <Box sx={{ minWidth: 0, flex: 1 }}>
+          <Typography variant="h6" sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
+            {ownerName}
+          </Typography>
+          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 0.5 }}>
             <Chip size="small" label={`Score ${row.lead_score}`} />
             {row.lead_status && (
               <Chip
@@ -77,7 +88,7 @@ export function PropertyMatchReviewCard({
             )}
           </Stack>
         </Box>
-        <Stack direction="row" spacing={0.5} alignItems="center">
+        <Stack direction="row" spacing={0.5} alignItems="center" justifyContent="flex-end">
           <IconButton onClick={onPrev} disabled={index <= 0} aria-label="Previous lead">
             <ChevronLeftIcon />
           </IconButton>
@@ -91,9 +102,13 @@ export function PropertyMatchReviewCard({
       </Stack>
 
       <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mb: 2 }}>
-        <Box flex={1}>
+        <Box flex={1} sx={{ minWidth: 0 }}>
           <Typography variant="subtitle2" gutterBottom>As entered</Typography>
-          <Typography variant="body2" data-testid="entered-address">
+          <Typography
+            variant="body2"
+            data-testid="entered-address"
+            sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+          >
             {formatAddress(preview?.entered_address ?? {
               property_street: row.property_street,
               property_city: row.property_city,
@@ -102,17 +117,26 @@ export function PropertyMatchReviewCard({
             })}
           </Typography>
         </Box>
-        <Box flex={1}>
+        <Box flex={1} sx={{ minWidth: 0 }}>
           <Typography variant="subtitle2" gutterBottom>Recommended match</Typography>
           {previewLoading ? (
             <CircularProgress size={24} />
           ) : preview?.found ? (
             <>
-              <Typography variant="body2" data-testid="recommended-address">
+              <Typography
+                variant="body2"
+                data-testid="recommended-address"
+                sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+              >
                 {formatAddress(preview.recommended_address)}
               </Typography>
               {preview.pin && (
-                <Typography variant="caption" color="text.secondary" display="block">
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  display="block"
+                  sx={{ overflowWrap: 'anywhere' }}
+                >
                   PIN {preview.pin}
                   {preview.connector ? ` · ${preview.connector}` : ''}
                 </Typography>
@@ -124,7 +148,12 @@ export function PropertyMatchReviewCard({
               )}
             </>
           ) : (
-            <Typography variant="body2" color="text.secondary" data-testid="no-match-message">
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              data-testid="no-match-message"
+              sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+            >
               {preview?.message ?? 'No assessor match found'}
             </Typography>
           )}
@@ -133,7 +162,12 @@ export function PropertyMatchReviewCard({
 
       <Divider sx={{ mb: 2 }} />
 
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
+      <Stack
+        direction={{ xs: 'column', sm: 'row' }}
+        spacing={2}
+        alignItems="stretch"
+        sx={{ width: '100%' }}
+      >
         <Button
           variant="contained"
           color="success"
@@ -142,7 +176,7 @@ export function PropertyMatchReviewCard({
           onClick={onApprove}
           disabled={actionPending || previewLoading || !preview?.found}
           data-testid="approve-match-btn"
-          sx={{ flex: 1, minHeight: 48 }}
+          sx={{ flex: 1, minHeight: 48, width: { xs: '100%', sm: 'auto' } }}
         >
           Approve match
         </Button>
@@ -154,17 +188,34 @@ export function PropertyMatchReviewCard({
           onClick={onReject}
           disabled={actionPending}
           data-testid="reject-match-btn"
-          sx={{ flex: 1, minHeight: 48 }}
+          sx={{ flex: 1, minHeight: 48, width: { xs: '100%', sm: 'auto' } }}
         >
           Reject
         </Button>
       </Stack>
 
-      <Stack direction="row" spacing={2} sx={{ mt: 2 }} justifyContent="space-between">
-        <Button component={RouterLink} to={`/leads/${row.id}`} size="small">
+      <Stack
+        direction={{ xs: 'column', sm: 'row' }}
+        spacing={1}
+        useFlexGap
+        flexWrap="wrap"
+        sx={{ mt: 2 }}
+        justifyContent="space-between"
+      >
+        <Button
+          component={RouterLink}
+          to={`/leads/${row.id}`}
+          size="small"
+          sx={{ width: { xs: '100%', sm: 'auto' } }}
+        >
           Open Command Center
         </Button>
-        <Button size="small" color="warning" onClick={onSuppress}>
+        <Button
+          size="small"
+          color="warning"
+          onClick={onSuppress}
+          sx={{ width: { xs: '100%', sm: 'auto' } }}
+        >
           Suppress
         </Button>
       </Stack>

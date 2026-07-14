@@ -15,6 +15,10 @@ import {
   Pagination,
   Tabs,
   Tab,
+  Stack,
+  Chip,
+  useTheme,
+  useMediaQuery,
 } from '@mui/material'
 import FilterListIcon from '@mui/icons-material/FilterList'
 import ClearIcon from '@mui/icons-material/Clear'
@@ -199,6 +203,8 @@ const COLUMN_DEFS: ColDef<LeadRow>[] = [
 export const PropertyListPage: React.FC<PropertyListPageProps> = () => {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
+  const theme = useTheme()
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'))
   const [leads, setLeads] = useState<PropertySummary[]>([])
   const [totalLeads, setTotalLeads] = useState(0)
   const [totalPages, setTotalPages] = useState(0)
@@ -402,8 +408,8 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = () => {
   }
 
   return (
-    <Box component="section" aria-labelledby="property-list-heading" sx={{ px: { xs: 1, sm: 2 }, height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+    <Box component="section" aria-labelledby="property-list-heading" sx={{ px: { xs: 1, sm: 2 }, height: '100%', display: 'flex', flexDirection: 'column', maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1, flexWrap: 'wrap', gap: 1 }}>
         <Typography variant="h5" id="property-list-heading" component="h2">Properties</Typography>
       </Box>
 
@@ -415,11 +421,20 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = () => {
       {/* Tab 0: All Properties */}
       {activeTab === 0 && (
         <>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+          <Box
+            sx={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              mb: 2,
+              flexWrap: 'wrap',
+              gap: 1,
+            }}
+          >
             <Typography variant="body2" color="text.secondary">
               {totalLeads} propert{totalLeads !== 1 ? 'ies' : 'y'} found
             </Typography>
-            <Box sx={{ display: 'flex', gap: 1 }}>
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
               <RecalculateButton mode="bulk-all" />
               <Button variant="outlined" startIcon={<FilterListIcon />} onClick={() => setFiltersOpen((p) => !p)} aria-expanded={filtersOpen}>
                 Filters
@@ -501,23 +516,83 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = () => {
 
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
-          <Paper sx={{ flex: 1, minHeight: 500, width: '100%' }}>
-            <div style={{ height: '100%', width: '100%', minHeight: 500 }}>
-              <AgGridReact<LeadRow>
-                rowData={displayedRows}
-                columnDefs={COLUMN_DEFS}
-                defaultColDef={defaultColDef}
-                loading={loading}
-                rowSelection="single"
-                onRowClicked={(e) => {
-                  if (e.data?.id) navigate('/leads/' + e.data.id)
-                }}
-                onSortChanged={handleSortChanged}
-                suppressMovableColumns={false}
-                animateRows={true}
-              />
-            </div>
-          </Paper>
+          {isMobile ? (
+            <Stack spacing={1} sx={{ flex: 1, mb: 1 }}>
+              {loading && displayedRows.length === 0 && (
+                <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
+                  Loading properties…
+                </Typography>
+              )}
+              {!loading && displayedRows.length === 0 && (
+                <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
+                  No properties match the current filters.
+                </Typography>
+              )}
+              {displayedRows.map((row) => {
+                const address = [row.property_street, row.property_city, row.property_state]
+                  .filter(Boolean)
+                  .join(', ')
+                const actionLabel = row.recommended_action
+                  ? outreachDisplayLabel(row.recommended_action, row.recommended_contact_method)
+                  : null
+                return (
+                  <Paper
+                    key={row.id}
+                    variant="outlined"
+                    sx={{ p: 1.5, cursor: 'pointer' }}
+                    onClick={() => navigate(`/leads/${row.id}`)}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Open lead ${address || row.id}`}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        navigate(`/leads/${row.id}`)
+                      }
+                    }}
+                  >
+                    <Typography variant="body2" fontWeight={600} noWrap>
+                      {address || `Lead #${row.id}`}
+                    </Typography>
+                    <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.75 }} flexWrap="wrap" useFlexGap>
+                      <LeadScoreBadge tier={row.score_tier ?? null} size="small" />
+                      <Typography variant="body2" color="text.secondary">
+                        Score {row.lead_score == null ? '—' : Math.round(row.lead_score)}
+                      </Typography>
+                      {actionLabel && (
+                        <Chip label={actionLabel} size="small" variant="outlined" sx={{ maxWidth: '100%' }} />
+                      )}
+                    </Stack>
+                  </Paper>
+                )
+              })}
+            </Stack>
+          ) : (
+            <Paper
+              sx={{
+                flex: 1,
+                minHeight: 500,
+                width: '100%',
+                overflowX: 'auto',
+              }}
+            >
+              <div style={{ height: '100%', width: '100%', minHeight: 500 }}>
+                <AgGridReact<LeadRow>
+                  rowData={displayedRows}
+                  columnDefs={COLUMN_DEFS}
+                  defaultColDef={defaultColDef}
+                  loading={loading}
+                  rowSelection="single"
+                  onRowClicked={(e) => {
+                    if (e.data?.id) navigate('/leads/' + e.data.id)
+                  }}
+                  onSortChanged={handleSortChanged}
+                  suppressMovableColumns={false}
+                  animateRows={true}
+                />
+              </div>
+            </Paper>
+          )}
 
           {totalPages > 1 && (
             <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
@@ -529,7 +604,7 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = () => {
 
       {/* Tab 1: Condo Analysis — shelved until data is complete */}
       {activeTab === 1 && (        <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-          <Box sx={{ display: 'flex', gap: 2, mb: 2, alignItems: 'center' }}>
+          <Box sx={{ display: 'flex', gap: 2, mb: 2, alignItems: 'center', flexWrap: 'wrap' }}>
             <Button
               variant="contained"
               onClick={handleRunAnalysis}

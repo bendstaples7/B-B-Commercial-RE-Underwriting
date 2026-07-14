@@ -21,6 +21,29 @@ class TestDedupStreetKey:
     def test_abbreviation_variants_share_key(self):
         assert dedup_street_key('4263 W Montrose') == dedup_street_key('4263 W Montrose Ave Apt 1')
 
+    def test_places_full_address_shares_key_with_street(self):
+        assert dedup_street_key('4903 N Hermitage') == dedup_street_key(
+            '4903 N Hermitage Ave, Chicago, IL 60640, USA',
+        )
+
+    def test_north_and_n_share_key(self):
+        assert dedup_street_key('4903 North Hermitage') == dedup_street_key('4903 N Hermitage')
+
+
+class TestCitiesCompatible:
+    def test_missing_either_side_is_compatible(self):
+        from app.services.lead_merge_utils import cities_compatible
+
+        assert cities_compatible(None, 'Chicago') is True
+        assert cities_compatible('Chicago', None) is True
+        assert cities_compatible('', '') is True
+
+    def test_distinct_cities_incompatible(self):
+        from app.services.lead_merge_utils import cities_compatible
+
+        assert cities_compatible('Chicago', 'Evanston') is False
+        assert cities_compatible('Chicago', 'chicago') is True
+
 
 class TestLeadDedupFields:
     def test_refresh_sets_normalized_street(self, app):

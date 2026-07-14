@@ -495,8 +495,8 @@ function MultifamilyPanel() {
   }
 
   return (
-    <TableContainer component={Paper} variant="outlined">
-      <Table aria-label="Multifamily deals">
+    <TableContainer component={Paper} variant="outlined" sx={{ overflowX: 'auto' }}>
+      <Table aria-label="Multifamily deals" sx={{ minWidth: 640 }}>
         <TableHead>
           <TableRow>
             <TableCell>Address</TableCell>
@@ -516,7 +516,11 @@ function MultifamilyPanel() {
               onClick={() => navigate(`/multifamily/deals/${deal.id}`)}
             >
               <TableCell>
-                <Typography variant="body2" fontWeight={500}>
+                <Typography
+                  variant="body2"
+                  fontWeight={500}
+                  sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                >
                   {deal.property_address}
                 </Typography>
               </TableCell>
@@ -572,32 +576,46 @@ export function AnalysisLandingPage() {
   const [mobileTab, setMobileTab] = useState(0)
 
   return (
-    <Box>
+    <Box sx={{ maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}>
       {/* Page header */}
       <Box
         sx={{
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'flex-start',
+          alignItems: { xs: 'stretch', sm: 'flex-start' },
           mb: 3,
           flexWrap: 'wrap',
           gap: 2,
+          flexDirection: { xs: 'column', sm: 'row' },
         }}
       >
-        <Box>
+        <Box sx={{ minWidth: 0 }}>
           <Typography variant="h5" component="h1" fontWeight={600}>
             Analysis
           </Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+          >
             Single-family ARV and multifamily pro-forma workflows
           </Typography>
         </Box>
-        <Box sx={{ display: 'flex', gap: 1 }}>
+        <Box
+          sx={{
+            display: 'flex',
+            gap: 1,
+            flexWrap: 'wrap',
+            flexDirection: { xs: 'column', sm: 'row' },
+            width: { xs: '100%', sm: 'auto' },
+          }}
+        >
           <Button
             variant="outlined"
             startIcon={<UploadFileIcon />}
             onClick={() => navigate('/multifamily/om-intake')}
             aria-label="Upload an Offering Memorandum PDF"
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
             Upload OM
           </Button>
@@ -606,6 +624,7 @@ export function AnalysisLandingPage() {
             startIcon={<AddIcon />}
             onClick={() => setDialogOpen(true)}
             aria-label="Start a new analysis"
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
             New Analysis
           </Button>

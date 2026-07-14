@@ -186,11 +186,19 @@ export const ScoringWeightsEditor: React.FC = () => {
   }
 
   return (
-    <Box component="section" aria-labelledby="scoring-weights-heading" sx={{ px: { xs: 1, sm: 2 } }}>
+    <Box
+      component="section"
+      aria-labelledby="scoring-weights-heading"
+      sx={{ px: { xs: 1, sm: 2 }, maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}
+    >
       <Typography variant="h5" id="scoring-weights-heading" component="h2" gutterBottom>
         Scoring Weights
       </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+      <Typography
+        variant="body2"
+        color="text.secondary"
+        sx={{ mb: 3, overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+      >
         Adjust how each criterion contributes to the overall lead score. Weights must sum to 100%.
       </Typography>
 
@@ -230,7 +238,7 @@ export const ScoringWeightsEditor: React.FC = () => {
                   {formatPercent(weights[criterion.key])}
                 </Typography>
               </Box>
-              <Typography variant="caption" color="text.secondary">
+              <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
                 {criterion.description}
               </Typography>
             </Box>
@@ -276,13 +284,23 @@ export const ScoringWeightsEditor: React.FC = () => {
         )}
 
         {/* Actions */}
-        <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+        <Box
+          sx={{
+            display: 'flex',
+            gap: 1,
+            justifyContent: { xs: 'stretch', sm: 'flex-end' },
+            flexDirection: { xs: 'column', sm: 'row' },
+            flexWrap: 'wrap',
+            width: '100%',
+          }}
+        >
           <Button
             variant="text"
             startIcon={<RefreshIcon />}
             onClick={handleReset}
             disabled={!isDirty || saving}
             aria-label="Reset weights to last saved values"
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
             Reset
           </Button>
@@ -292,6 +310,7 @@ export const ScoringWeightsEditor: React.FC = () => {
             onClick={handleSave}
             disabled={!isSumValid || !isDirty || saving}
             aria-label="Save scoring weights and rescore all properties"
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
             {saving ? 'Saving…' : 'Save & Rescore'}
           </Button>

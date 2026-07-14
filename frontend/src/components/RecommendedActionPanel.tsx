@@ -175,8 +175,8 @@ export function RecommendedActionPanel({
   const isInMailBatch = mailQueueStatus === 'queued'
   const wasSentRecently = mailQueueStatus === 'sent_recently'
   const panelSx = embedded
-    ? { p: 0 }
-    : { p: 2, border: 1, borderColor: 'divider', borderRadius: 1 }
+    ? { p: 0, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }
+    : { p: 2, border: 1, borderColor: 'divider', borderRadius: 1, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }
 
   const handleAction = async (action: string) => {
     setActionError(null)
@@ -214,18 +214,36 @@ export function RecommendedActionPanel({
         }
         data-testid={`${testIdPrefix}-${btn.action}`}
         aria-label={btn.label}
+        sx={{
+          width: { xs: '100%', sm: 'auto' },
+          justifyContent: { xs: 'flex-start', sm: 'center' },
+          flexShrink: 0,
+          maxWidth: '100%',
+        }}
       >
         {isLoading ? 'Working…' : btn.label}
       </Button>
     )
   }
 
+  const actionStackSx = {
+    width: '100%',
+    maxWidth: '100%',
+  } as const
+
   const renderUniversalActions = (raButtons: ActionButton[] = []) => (
-    <Box sx={{ mb: raButtons.length > 0 ? 2 : 0, mt: 2 }}>
+    <Box sx={{ mb: raButtons.length > 0 ? 2 : 0, mt: 2, maxWidth: '100%' }}>
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
         Quick actions
       </Typography>
-      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap data-testid="ra-universal-actions">
+      <Stack
+        direction={{ xs: 'column', sm: 'row' }}
+        spacing={1}
+        flexWrap="wrap"
+        useFlexGap
+        sx={actionStackSx}
+        data-testid="ra-universal-actions"
+      >
         {UNIVERSAL_ACTIONS.map((btn) => renderActionButton(btn, 'ra-universal-btn'))}
       </Stack>
     </Box>
@@ -323,7 +341,7 @@ export function RecommendedActionPanel({
         <Typography
           variant="body2"
           color="text.secondary"
-          sx={{ mb: winningRuleLabel ? 1 : 2 }}
+          sx={{ mb: winningRuleLabel ? 1 : 2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}
           data-testid="ra-explanation"
         >
           {explanation}
@@ -334,7 +352,16 @@ export function RecommendedActionPanel({
         <Alert
           severity="info"
           variant="outlined"
-          sx={{ mb: 2, py: 0.25, '& .MuiAlert-message': { fontSize: '0.8rem' } }}
+          sx={{
+            mb: 2,
+            py: 0.25,
+            maxWidth: '100%',
+            '& .MuiAlert-message': {
+              fontSize: '0.8rem',
+              overflowWrap: 'anywhere',
+              wordBreak: 'break-word',
+            },
+          }}
           data-testid="ra-winning-rule"
         >
           Why this next step: {winningRuleLabel}
@@ -373,23 +400,31 @@ export function RecommendedActionPanel({
 
       {/* RA-specific action buttons */}
       {prioritizedRaButtons.length > 0 && (
-        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+        <Stack
+          direction={{ xs: 'column', sm: 'row' }}
+          spacing={1}
+          flexWrap="wrap"
+          useFlexGap
+          sx={actionStackSx}
+        >
           {prioritizedRaButtons.map((btn) => {
             if (btn.action === 'add_to_mail_batch' && isInMailBatch) {
               return (
                 <Stack
                   key="in-mail-batch"
-                  direction="row"
+                  direction={{ xs: 'column', sm: 'row' }}
                   spacing={1}
-                  alignItems="center"
+                  alignItems={{ xs: 'stretch', sm: 'center' }}
                   flexWrap="wrap"
                   useFlexGap
+                  sx={{ width: { xs: '100%', sm: 'auto' } }}
                 >
                   <Button
                     variant="outlined"
                     size="small"
                     disabled
                     data-testid="ra-action-btn-in-mail-batch"
+                    sx={{ width: { xs: '100%', sm: 'auto' } }}
                   >
                     In mail batch
                   </Button>
@@ -399,6 +434,7 @@ export function RecommendedActionPanel({
                     variant="text"
                     size="small"
                     data-testid="ra-action-btn-view-mail-batch"
+                    sx={{ width: { xs: '100%', sm: 'auto' } }}
                   >
                     View batch
                   </Button>

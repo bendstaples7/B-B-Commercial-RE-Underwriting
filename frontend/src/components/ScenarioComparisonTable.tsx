@@ -145,8 +145,8 @@ export const ScenarioComparisonTable: React.FC<ScenarioComparisonTableProps> = (
         price point is highlighted.
       </Typography>
 
-      <TableContainer>
-        <Table size="small">
+      <TableContainer sx={{ overflowX: 'auto' }}>
+        <Table size="small" sx={{ minWidth: 480 }}>
           <TableHead>
             <TableRow>
               <TableCell sx={{ fontWeight: 'bold' }}>Price Point</TableCell>

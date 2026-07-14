@@ -76,18 +76,20 @@ def quick_add_lead():
         capture_latitude=data.get('capture_latitude'),
         capture_longitude=data.get('capture_longitude'),
         capture_location_label=data.get('capture_location_label'),
+        property_city=data.get('property_city'),
+        property_state=data.get('property_state'),
+        property_zip=data.get('property_zip'),
     )
 
+    # Always queue follow-up for GIS match (+ enrichment / HubSpot when enabled).
     write_back_enabled = hubspot_write_back_enabled()
-    if not write_back_enabled:
-        hubspot_push_status = 'disabled'
-    else:
-        hubspot_push_status = 'queued'
-        try:
-            from celery_worker import run_quick_add_followup
-            run_quick_add_followup.delay(lead.id)
-        except Exception as exc:
-            logger.warning('Could not enqueue quick-add followup for lead %s: %s', lead.id, exc)
+    hubspot_push_status = 'queued' if write_back_enabled else 'disabled'
+    try:
+        from celery_worker import run_quick_add_followup
+        run_quick_add_followup.delay(lead.id)
+    except Exception as exc:
+        logger.warning('Could not enqueue quick-add followup for lead %s: %s', lead.id, exc)
+        if write_back_enabled:
             hubspot_push_status = 'queue_failed'
 
     return jsonify({
