@@ -136,9 +136,7 @@ def parse_city_state_zip_from_address(
     if not match:
         return None, None, None
 
-    city = parts[-2].strip() or None
-    if not city:
-        return None, None, None
+    city = parts[-2]
     return city, "IL", match.group("zip")
 
 

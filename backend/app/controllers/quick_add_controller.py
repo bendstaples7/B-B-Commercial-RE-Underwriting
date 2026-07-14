@@ -89,8 +89,7 @@ def quick_add_lead():
         run_quick_add_followup.delay(lead.id)
     except Exception as exc:
         logger.warning('Could not enqueue quick-add followup for lead %s: %s', lead.id, exc)
-        if write_back_enabled:
-            hubspot_push_status = 'queue_failed'
+        hubspot_push_status = 'queue_failed'
 
     return jsonify({
         'lead_id': lead.id,

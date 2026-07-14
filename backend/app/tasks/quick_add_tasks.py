@@ -59,6 +59,7 @@ def run_quick_add_followup_inner(lead_id: int) -> dict:
             gis_matched = _run_gis_match(lead_id)
         except Exception as exc:
             logger.warning('Quick-add GIS match failed for lead %s: %s', lead_id, exc)
+            db.session.rollback()
 
         enrich_result = False
         try:
@@ -68,11 +69,13 @@ def run_quick_add_followup_inner(lead_id: int) -> dict:
             enrich_result = dispatch_cook_county_enrichment(lead_id)
         except Exception as exc:
             logger.warning('Quick-add Cook County enrichment failed for lead %s: %s', lead_id, exc)
+            db.session.rollback()
 
         try:
             push_result = HubSpotWriteBackService().push_lead_as_deal(lead_id)
         except Exception as exc:
             logger.exception('Quick-add HubSpot push failed for lead %s', lead_id)
+            db.session.rollback()
             push_result = {
                 'synced': False,
                 'action': 'failed',

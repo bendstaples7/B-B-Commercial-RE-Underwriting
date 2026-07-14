@@ -1,6 +1,7 @@
 """Tests for POST /api/leads/quick-add."""
 import json
 from datetime import date
+from unittest.mock import patch
 
 import pytest
 
@@ -269,6 +270,10 @@ class TestQuickAddEndpoint:
             body = response.get_json()
             assert body['created'] is False
             assert body['lead_id'] == lead_id
+            db.session.refresh(lead)
+            assert lead.property_city == 'Chicago'
+            assert lead.property_state == 'IL'
+            assert lead.property_zip == '60640'
 
     def test_dedup_does_not_collide_across_cities(self, quick_add_client, app):
         with app.app_context():
@@ -354,6 +359,26 @@ class TestQuickAddEndpoint:
             body = response.get_json()
             assert body['hubspot_push_status'] in ('disabled', 'queued', 'queue_failed')
             assert isinstance(body['hubspot_write_back_enabled'], bool)
+
+    def test_enqueue_failure_reports_queue_failed_when_writeback_disabled(self, quick_add_client, app):
+        with app.app_context():
+            with (
+                patch('app.controllers.quick_add_controller.hubspot_write_back_enabled', return_value=False),
+                patch('celery_worker.run_quick_add_followup.delay', side_effect=RuntimeError('broker down')),
+            ):
+                response = quick_add_client.post(
+                    '/api/leads/quick-add',
+                    headers=_AUTH_HEADERS,
+                    data=json.dumps({
+                        'property_street': '222 Queue Failure Ave, Chicago, IL',
+                    }),
+                    content_type='application/json',
+                )
+
+            assert response.status_code == 201
+            body = response.get_json()
+            assert body['hubspot_write_back_enabled'] is False
+            assert body['hubspot_push_status'] == 'queue_failed'
 
 
 class TestMergeDealDescription:

@@ -286,13 +286,14 @@ const ReviewRow: React.FC<ReviewRowProps> = ({
             sx={{
               display: 'flex',
               gap: 1,
-              justifyContent: { xs: 'stretch', sm: 'flex-end' },
+              justifyContent: 'flex-end',
               flexWrap: 'wrap',
               flexDirection: { xs: 'column', sm: 'row' },
+              alignItems: { xs: 'stretch', sm: 'center' },
             }}
           >
             <Tooltip title="Confirm this match">
-              <span style={{ width: '100%' }}>
+              <Box component="span" sx={{ width: { xs: '100%', sm: 'auto' } }}>
                 <Button
                   size="small"
                   variant="contained"
@@ -311,11 +312,11 @@ const ReviewRow: React.FC<ReviewRowProps> = ({
                 >
                   Confirm
                 </Button>
-              </span>
+              </Box>
             </Tooltip>
 
             <Tooltip title="Reject and link to a different record">
-              <span style={{ width: '100%' }}>
+              <Box component="span" sx={{ width: { xs: '100%', sm: 'auto' } }}>
                 <Button
                   size="small"
                   variant="outlined"
@@ -334,11 +335,11 @@ const ReviewRow: React.FC<ReviewRowProps> = ({
                 >
                   Reject + Re-link
                 </Button>
-              </span>
+              </Box>
             </Tooltip>
 
             <Tooltip title="Mark as a brand-new record (no existing match)">
-              <span style={{ width: '100%' }}>
+              <Box component="span" sx={{ width: { xs: '100%', sm: 'auto' } }}>
                 <Button
                   size="small"
                   variant="outlined"
@@ -357,7 +358,7 @@ const ReviewRow: React.FC<ReviewRowProps> = ({
                 >
                   Mark as New Record
                 </Button>
-              </span>
+              </Box>
             </Tooltip>
           </Box>
         </TableCell>

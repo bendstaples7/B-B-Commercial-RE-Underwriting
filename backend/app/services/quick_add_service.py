@@ -121,9 +121,9 @@ class QuickAddService:
 
         street_line = street_line_from_address(needle) or needle
         query_city, _, _ = parse_city_state_zip_from_address(needle)
-        search_needles = {needle}
+        search_needles = [needle]
         if street_line != needle:
-            search_needles.add(street_line)
+            search_needles.append(street_line)
 
         seen_ids: set[int] = set()
         rows: list[Lead] = []
@@ -272,6 +272,12 @@ class QuickAddService:
                 'property_street': street,
                 'source': QUICK_ADD_SOURCE,
             }
+            if city and not lead.property_city:
+                upsert_payload['property_city'] = city
+            if state and not lead.property_state:
+                upsert_payload['property_state'] = state
+            if zip_code and not lead.property_zip:
+                upsert_payload['property_zip'] = zip_code
             self._importer._update_lead_fields(lead, upsert_payload, changed_by='quick_add')  # noqa: SLF001
             lead.data_source = QUICK_ADD_DATA_SOURCE
             lead.deal_source = resolved_deal_source
@@ -296,11 +302,15 @@ class QuickAddService:
         db.session.commit()
 
         if created:
-            SkipTraceEnqueue().enqueue(
-                lead.id,
-                actor='quick_add',
-                reason='Quick add — run skip trace on owner',
-            )
+            try:
+                SkipTraceEnqueue().enqueue(
+                    lead.id,
+                    actor='quick_add',
+                    reason='Quick add — run skip trace on owner',
+                )
+            except Exception:
+                logger.exception('Could not enqueue skip trace for quick-add lead %s', lead.id)
+                db.session.rollback()
             lead = db.session.get(Lead, lead.id) or lead
 
         return lead, created

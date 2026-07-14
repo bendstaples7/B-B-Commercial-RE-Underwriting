@@ -423,7 +423,7 @@ export function QueueTable({
                     </Box>
                   ))}
 
-                  <Stack direction="row" justifyContent="flex-end" spacing={0.5}>
+                  <Stack direction="row" justifyContent="flex-end" spacing={0.5} useFlexGap flexWrap="wrap">
                     <Tooltip title="Open lead detail">
                       {disabled ? (
                         <IconButton size="small" disabled aria-label="Open lead detail" data-testid={`row-action-view-${row.id}`}>

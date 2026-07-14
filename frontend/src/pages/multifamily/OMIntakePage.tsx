@@ -89,7 +89,7 @@ export function OMIntakePage() {
   // ---------------------------------------------------------------------------
 
   return (
-    <Container maxWidth="lg" sx={{ maxWidth: '100%', minWidth: 0, overflowX: 'hidden', px: { xs: 1.5, sm: 3 } }}>
+    <Container sx={{ maxWidth: '100%', minWidth: 0, overflowX: 'hidden', px: { xs: 1.5, sm: 3 } }}>
       {/* Page title */}
       <Typography variant="h5" component="h1" gutterBottom sx={{ mb: 3, overflowWrap: 'anywhere' }}>
         {pageTitle}

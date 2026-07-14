@@ -269,6 +269,14 @@ export function BuildingOwnershipSection({
     })
   }
 
+  const toggleMobileExpanded = () => setMobileExpanded((open) => !open)
+
+  const handleMobileHeaderKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    toggleMobileExpanded()
+  }
+
   return (
     <Paper
       sx={ccSupportCardSx}
@@ -281,12 +289,14 @@ export function BuildingOwnershipSection({
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: 1,
-          mb: !isXs || mobileExpanded ? 0 : 0,
+          mb: isXs && !mobileExpanded ? 1 : 0,
           cursor: isXs ? 'pointer' : 'default',
         }}
-        onClick={isXs ? () => setMobileExpanded((open) => !open) : undefined}
+        onClick={isXs ? toggleMobileExpanded : undefined}
+        onKeyDown={isXs ? handleMobileHeaderKeyDown : undefined}
         role={isXs ? 'button' : undefined}
         aria-expanded={isXs ? mobileExpanded : undefined}
+        tabIndex={isXs ? 0 : undefined}
       >
         <Typography sx={ccSubsectionTitleSx} component="div">
           Building ownership

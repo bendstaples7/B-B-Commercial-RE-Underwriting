@@ -662,7 +662,7 @@ export function PropertySidebar({
             ) : null}
           </Box>
         </AccordionSummary>
-        <AccordionDetails sx={{ pt: 0 }}>{sections}</AccordionDetails>
+        <AccordionDetails id="property-contacts-content" sx={{ pt: 0 }}>{sections}</AccordionDetails>
       </Accordion>
     )
   }
