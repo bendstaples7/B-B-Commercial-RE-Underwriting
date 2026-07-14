@@ -54,6 +54,8 @@ export function QuickAddFabHost() {
   const hideReason =
     pathname.startsWith('/quick-add')
       ? 'onQuickAddPage'
+      : pathname.startsWith('/leads/')
+        ? 'onLeadDetail'
       : isLoading || !user
         ? 'noUser'
         : null

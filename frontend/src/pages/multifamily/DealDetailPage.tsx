@@ -137,12 +137,12 @@ export function DealDetailPage() {
   }
 
   return (
-    <Box>
+    <Box sx={{ maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}>
       {/* Breadcrumb */}
       <Breadcrumbs
         separator={<NavigateNextIcon fontSize="small" />}
         aria-label="breadcrumb"
-        sx={{ mb: 2 }}
+        sx={{ mb: 2, maxWidth: '100%', '& .MuiBreadcrumbs-ol': { flexWrap: 'wrap' } }}
       >
         <Typography
           component={Link}
@@ -152,7 +152,14 @@ export function DealDetailPage() {
         >
           Multifamily Deals
         </Typography>
-        <Typography color="text.primary" noWrap sx={{ maxWidth: 300 }}>
+        <Typography
+          color="text.primary"
+          sx={{
+            maxWidth: { xs: '100%', sm: 300 },
+            overflowWrap: 'anywhere',
+            wordBreak: 'break-word',
+          }}
+        >
           {deal.property_address}
         </Typography>
       </Breadcrumbs>
@@ -160,16 +167,29 @@ export function DealDetailPage() {
       {/* Deal header */}
       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2, mb: 3, flexWrap: 'wrap' }}>
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="h5" component="h1" fontWeight={600} noWrap>
+          <Typography
+            variant="h5"
+            component="h1"
+            fontWeight={600}
+            sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+          >
             {deal.property_address}
           </Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
             {[deal.property_city, deal.property_state, deal.property_zip]
               .filter(Boolean)
               .join(', ') || 'No location details'}
           </Typography>
         </Box>
-        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Box
+          sx={{
+            display: 'flex',
+            gap: 1,
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            width: { xs: '100%', sm: 'auto' },
+          }}
+        >
           <Chip label={`${deal.unit_count} units`} size="small" variant="outlined" />
           <Chip
             label={formatCurrency(deal.purchase_price)}

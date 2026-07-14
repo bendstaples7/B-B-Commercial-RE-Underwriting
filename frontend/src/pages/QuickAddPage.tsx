@@ -98,9 +98,15 @@ export function QuickAddPage() {
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'loading' | 'ok' | 'error'>('idle')
   const [gpsLabel, setGpsLabel] = useState<string | null>(null)
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null)
+  const [parsedAddress, setParsedAddress] = useState<{
+    city: string | null
+    state: string | null
+    zip: string | null
+  }>({ city: null, state: null, zip: null })
   const [successResult, setSuccessResult] = useState<QuickAddResponse | null>(null)
 
   const {
+    ready,
     value: address,
     suggestions: { status, data },
     setValue: setAddress,
@@ -129,6 +135,12 @@ export function QuickAddPage() {
   useEffect(() => {
     if (mapsLoaded) init()
   }, [mapsLoaded, init])
+
+  const addressHelperText = addressError
+    ? addressError
+    : !mapsLoaded || !ready
+      ? 'Address suggestions loading… (you can still type a full address and save)'
+      : 'Start typing for Google address suggestions'
 
   useEffect(() => {
     if (!navigator.geolocation) {
@@ -179,7 +191,7 @@ export function QuickAddPage() {
         document.createElement('div'),
       )
       service.getDetails(
-        { placeId, fields: ['geometry'] },
+        { placeId, fields: ['geometry', 'address_components'] },
         (result: any, placeStatus: any) => {
           if (
             placeStatus === (window as any).google.maps.places.PlacesServiceStatus.OK &&
@@ -190,6 +202,18 @@ export function QuickAddPage() {
               lng: result.geometry.location.lng(),
             })
           }
+          const components: Array<{ long_name: string; short_name: string; types: string[] }> =
+            result?.address_components ?? []
+          const find = (type: string) =>
+            components.find((c) => c.types.includes(type))
+          const city =
+            find('locality')?.long_name ??
+            find('sublocality')?.long_name ??
+            find('neighborhood')?.long_name ??
+            null
+          const state = find('administrative_area_level_1')?.short_name ?? null
+          const zip = find('postal_code')?.long_name ?? null
+          setParsedAddress({ city, state, zip })
         },
       )
     } catch {
@@ -214,6 +238,9 @@ export function QuickAddPage() {
       capture_latitude: coords?.lat ?? null,
       capture_longitude: coords?.lng ?? null,
       capture_location_label: gpsLabel,
+      property_city: parsedAddress.city,
+      property_state: parsedAddress.state,
+      property_zip: parsedAddress.zip,
     })
   }
 
@@ -225,6 +252,7 @@ export function QuickAddPage() {
     setDateIdentified(todayIsoDate())
     setSuccessResult(null)
     setAddressError('')
+    setParsedAddress({ city: null, state: null, zip: null })
     quickAddMutation.reset()
     clearSuggestions()
   }
@@ -298,17 +326,19 @@ export function QuickAddPage() {
           value={address}
           onChange={(e) => {
             setAddress(e.target.value)
+            setParsedAddress({ city: null, state: null, zip: null })
             if (e.target.value.trim()) setAddressError('')
           }}
           onKeyDown={(e) => {
             if (e.key === 'Escape') clearSuggestions()
           }}
           error={!!addressError}
-          helperText={addressError || 'Start typing for suggestions'}
+          helperText={addressHelperText}
           required
           fullWidth
           autoComplete="off"
           placeholder="123 Main St, Chicago, IL"
+          disabled={quickAddMutation.isPending}
           inputProps={{
             'aria-label': 'Property address',
             'aria-autocomplete': 'list',
@@ -316,6 +346,12 @@ export function QuickAddPage() {
             'aria-expanded': status === 'OK',
           }}
         />
+        {!mapsLoaded && (
+          <Alert severity="warning" sx={{ mt: 1 }} data-testid="quick-add-maps-unavailable">
+            Google address suggestions are unavailable (Maps API key not loaded). You can still
+            enter a full street address and save.
+          </Alert>
+        )}
         {status === 'OK' && data.length > 0 && (
           <List
             id="quick-add-suggestions"

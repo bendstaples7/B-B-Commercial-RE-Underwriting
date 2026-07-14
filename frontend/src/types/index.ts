@@ -1666,6 +1666,9 @@ export interface QuickAddPayload {
   capture_latitude?: number | null
   capture_longitude?: number | null
   capture_location_label?: string | null
+  property_city?: string | null
+  property_state?: string | null
+  property_zip?: string | null
 }
 
 export interface QuickAddResponse {

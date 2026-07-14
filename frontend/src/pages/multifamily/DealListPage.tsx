@@ -129,31 +129,32 @@ function CreateDealDialog({ open, onClose, onCreated }: CreateDealDialogProps) {
             inputProps={{ 'aria-label': 'Property address' }}
           />
 
-          <Box sx={{ display: 'flex', gap: 2 }}>
+          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
             <TextField
               label="City"
               value={form.property_city ?? ''}
               onChange={(e) => setForm((f) => ({ ...f, property_city: e.target.value }))}
               fullWidth
               inputProps={{ 'aria-label': 'City' }}
+              sx={{ flex: '1 1 140px' }}
             />
             <TextField
               label="State"
               value={form.property_state ?? ''}
               onChange={(e) => setForm((f) => ({ ...f, property_state: e.target.value }))}
-              sx={{ width: 100 }}
+              sx={{ width: 100, flex: '0 0 auto' }}
               inputProps={{ 'aria-label': 'State', maxLength: 2 }}
             />
             <TextField
               label="ZIP"
               value={form.property_zip ?? ''}
               onChange={(e) => setForm((f) => ({ ...f, property_zip: e.target.value }))}
-              sx={{ width: 120 }}
+              sx={{ width: 120, flex: '0 0 auto' }}
               inputProps={{ 'aria-label': 'ZIP code' }}
             />
           </Box>
 
-          <Box sx={{ display: 'flex', gap: 2 }}>
+          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
             <TextField
               label="Unit Count"
               type="number"
@@ -165,7 +166,7 @@ function CreateDealDialog({ open, onClose, onCreated }: CreateDealDialogProps) {
               helperText={fieldErrors.unit_count ?? 'Minimum 5'}
               required
               inputProps={{ min: 5, 'aria-label': 'Unit count' }}
-              sx={{ flex: 1 }}
+              sx={{ flex: '1 1 140px' }}
             />
             <TextField
               label="Purchase Price ($)"
@@ -178,7 +179,7 @@ function CreateDealDialog({ open, onClose, onCreated }: CreateDealDialogProps) {
               helperText={fieldErrors.purchase_price}
               required
               inputProps={{ min: 1, step: 1000, 'aria-label': 'Purchase price' }}
-              sx={{ flex: 2 }}
+              sx={{ flex: '2 1 180px' }}
             />
           </Box>
 
@@ -231,8 +232,8 @@ function DealTable({ deals, onOpen }: DealTableProps) {
   }
 
   return (
-    <TableContainer component={Paper} variant="outlined">
-      <Table aria-label="Multifamily deals table">
+    <TableContainer component={Paper} variant="outlined" sx={{ overflowX: 'auto' }}>
+      <Table aria-label="Multifamily deals table" sx={{ minWidth: 720 }}>
         <TableHead>
           <TableRow>
             <TableCell>Address</TableCell>
@@ -253,7 +254,11 @@ function DealTable({ deals, onOpen }: DealTableProps) {
               onClick={() => onOpen(deal.id)}
             >
               <TableCell>
-                <Typography variant="body2" fontWeight={500}>
+                <Typography
+                  variant="body2"
+                  fontWeight={500}
+                  sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                >
                   {deal.property_address}
                 </Typography>
               </TableCell>
@@ -324,12 +329,19 @@ export function DealListPage() {
   }
 
   return (
-    <Box>
+    <Box sx={{ maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}>
       {/* Header */}
       <Box
-        sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}
+        sx={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: { xs: 'stretch', sm: 'center' },
+          mb: 3,
+          flexDirection: { xs: 'column', sm: 'row' },
+          gap: 1.5,
+        }}
       >
-        <Box>
+        <Box sx={{ minWidth: 0 }}>
           <Typography variant="h5" component="h1" fontWeight={600}>
             Multifamily Deals
           </Typography>
@@ -337,12 +349,21 @@ export function DealListPage() {
             Underwrite apartment properties (5+ units)
           </Typography>
         </Box>
-        <Box sx={{ display: 'flex', gap: 1 }}>
+        <Box
+          sx={{
+            display: 'flex',
+            gap: 1,
+            flexWrap: 'wrap',
+            flexDirection: { xs: 'column', sm: 'row' },
+            width: { xs: '100%', sm: 'auto' },
+          }}
+        >
           <Button
             variant="outlined"
             startIcon={<UploadFileIcon />}
             onClick={() => navigate('/multifamily/om-intake')}
             aria-label="Upload OM PDF"
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
             Upload OM
           </Button>
@@ -351,6 +372,7 @@ export function DealListPage() {
             startIcon={<AddIcon />}
             onClick={() => setCreateOpen(true)}
             aria-label="Create new deal"
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
             Create Deal
           </Button>

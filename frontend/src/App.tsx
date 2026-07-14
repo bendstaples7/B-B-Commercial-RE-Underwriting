@@ -1755,9 +1755,12 @@ function App() {
         role="main"
         sx={{
           flexGrow: 1,
-          p: { xs: 2, sm: 3 },
+          minWidth: 0,
+          maxWidth: '100%',
+          overflowX: 'hidden',
+          p: { xs: 1, sm: 3 },
           mt: '64px', // AppBar height
-          width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
+          width: { xs: '100%', md: `calc(100% - ${DRAWER_WIDTH}px)` },
         }}
       >
         <Routes>

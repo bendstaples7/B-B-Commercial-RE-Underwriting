@@ -18,6 +18,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableContainer,
   TableHead,
   TableRow,
   TextField,
@@ -224,9 +225,9 @@ export const OpenLetterSetupPanel: React.FC = () => {
   }
 
   return (
-    <Box sx={{ maxWidth: 900 }}>
-      <Paper sx={{ p: 2, mb: 2 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+    <Box sx={{ maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}>
+      <Paper sx={{ p: { xs: 1.5, sm: 2 }, mb: 2 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
           <Typography variant="subtitle1">Setup checklist</Typography>
           {readyToSend ? (
             <Chip label="Ready to send" color="success" size="small" />
@@ -318,26 +319,28 @@ export const OpenLetterSetupPanel: React.FC = () => {
                   handwritten aesthetic is worth the extra cost; pick Live for routine outreach at
                   scale.
                 </Typography>
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Postage</TableCell>
-                      <TableCell>What it is</TableCell>
-                      <TableCell>Typical cost</TableCell>
-                      <TableCell>Best for</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {POSTAGE_COMPARISON.map((row) => (
-                      <TableRow key={row.postage}>
-                        <TableCell>{row.postage}</TableCell>
-                        <TableCell>{row.summary}</TableCell>
-                        <TableCell>{row.cost}</TableCell>
-                        <TableCell>{row.bestFor}</TableCell>
+                <TableContainer sx={{ overflowX: 'auto' }}>
+                  <Table size="small" sx={{ minWidth: 480 }}>
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Postage</TableCell>
+                        <TableCell>What it is</TableCell>
+                        <TableCell>Typical cost</TableCell>
+                        <TableCell>Best for</TableCell>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHead>
+                    <TableBody>
+                      {POSTAGE_COMPARISON.map((row) => (
+                        <TableRow key={row.postage}>
+                          <TableCell>{row.postage}</TableCell>
+                          <TableCell>{row.summary}</TableCell>
+                          <TableCell>{row.cost}</TableCell>
+                          <TableCell>{row.bestFor}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
                 <Button
                   href={OLC_PRICING_URL}
                   target="_blank"
@@ -460,12 +463,22 @@ export const OpenLetterSetupPanel: React.FC = () => {
               })}
             </TextField>
 
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1 }}>
+            <Box
+              sx={{
+                display: 'flex',
+                flexDirection: { xs: 'column', sm: 'row' },
+                flexWrap: 'wrap',
+                gap: 1,
+                mt: 1,
+                width: '100%',
+              }}
+            >
               <Button
                 href={OLC_TEMPLATE_URL}
                 target="_blank"
                 rel="noopener noreferrer"
                 endIcon={<OpenInNewIcon />}
+                sx={{ width: { xs: '100%', sm: 'auto' } }}
               >
                 Create or edit templates in Open Letter Connect
               </Button>
@@ -474,6 +487,7 @@ export const OpenLetterSetupPanel: React.FC = () => {
                 size="small"
                 onClick={() => refetchTemplates()}
                 disabled={templatesFetching}
+                sx={{ width: { xs: '100%', sm: 'auto' } }}
               >
                 {templatesFetching ? 'Refreshing…' : 'Refresh templates'}
               </Button>
@@ -569,6 +583,7 @@ export const OpenLetterSetupPanel: React.FC = () => {
             size="large"
             onClick={() => saveMutation.mutate()}
             disabled={saveMutation.isPending || !canSaveMailSettings}
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
             Save mail settings
           </Button>

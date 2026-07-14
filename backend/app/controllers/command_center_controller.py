@@ -888,10 +888,24 @@ def create_task(lead_id: int):
         return denied
     data = LeadTaskCreateSchema().load(request.get_json() or {})
     actor = getattr(g, 'user_id', 'anonymous')
-    # Pass recompute_action=False: refresh_lead_scoring below recomputes the
-    # recommended_action itself (after rescoring), so letting the service ALSO
-    # recompute would do it twice (duplicate DB work / timeline churn).
-    task = _lead_task_service.create(lead_id, data, actor=actor, recompute_action=False)
+    # Skip-trace handoff must go through SkipTraceEnqueue so needs_skip_trace
+    # is set alongside the open skip_trace_owner task (canonical writer).
+    if data.get('task_type') == 'skip_trace_owner':
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+        task = SkipTraceEnqueue().enqueue(
+            lead_id,
+            actor=actor,
+            reason=data.get('title') or 'Run skip trace on owner',
+            due_date=data.get('due_date'),
+            recompute_action=False,
+        )
+        if task is None:
+            return jsonify({'error': 'Lead not found'}), 404
+    else:
+        # Pass recompute_action=False: refresh_lead_scoring below recomputes the
+        # recommended_action itself (after rescoring), so letting the service ALSO
+        # recompute would do it twice (duplicate DB work / timeline churn).
+        task = _lead_task_service.create(lead_id, data, actor=actor, recompute_action=False)
     # Refresh lead_score + recommended_action exactly once: rescore first (so a
     # stale score is corrected) then recompute the action on the fresh score.
     from app.services.lead_refresh import refresh_lead_scoring

@@ -208,8 +208,8 @@ export const ComparableReviewTable: React.FC<ComparableReviewTableProps> = ({
           Review the comparable sales below. You can remove comparables or add new ones manually.
         </Typography>
 
-        <TableContainer sx={{ mt: 2, maxHeight: 600 }}>
-          <Table stickyHeader size="small">
+        <TableContainer sx={{ mt: 2, maxHeight: 600, overflowX: 'auto' }}>
+          <Table stickyHeader size="small" sx={{ minWidth: 900 }}>
             <TableHead>
               <TableRow>
                 <TableCell sx={{ fontWeight: 'bold', minWidth: 200 }}>Address</TableCell>
@@ -254,7 +254,9 @@ export const ComparableReviewTable: React.FC<ComparableReviewTableProps> = ({
             <TableBody>
               {comparables.map((comp) => (
                 <TableRow key={comp.id} hover>
-                  <TableCell>{comp.address}</TableCell>
+                  <TableCell sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
+                    {comp.address}
+                  </TableCell>
                   <TableCell>{formatDate(comp.saleDate)}</TableCell>
                   <TableCell align="right">{formatCurrency(comp.salePrice)}</TableCell>
                   <TableCell>{formatPropertyType(comp.propertyType)}</TableCell>

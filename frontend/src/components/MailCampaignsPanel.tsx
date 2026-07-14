@@ -79,34 +79,53 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
   }
 
   return (
-    <Box>
+    <Box sx={{ maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}>
       {!embedded && (
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+        <Box
+          sx={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            mb: 2,
+            flexWrap: 'wrap',
+            gap: 1,
+            alignItems: { xs: 'stretch', sm: 'center' },
+            flexDirection: { xs: 'column', sm: 'row' },
+          }}
+        >
           <Typography variant="h6">Campaign History</Typography>
           <Button
             size="small"
             startIcon={<RefreshIcon />}
             onClick={handleRefresh}
             disabled={isFetching}
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
             Refresh analytics
           </Button>
         </Box>
       )}
       {embedded && (
-        <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 1 }}>
+        <Box
+          sx={{
+            display: 'flex',
+            justifyContent: { xs: 'stretch', sm: 'flex-end' },
+            mb: 1,
+            flexWrap: 'wrap',
+          }}
+        >
           <Button
             size="small"
             startIcon={<RefreshIcon />}
             onClick={handleRefresh}
             disabled={isFetching}
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
             Refresh analytics
           </Button>
         </Box>
       )}
-      <TableContainer component={Paper}>
-        <Table size="small">
+      <TableContainer component={Paper} sx={{ overflowX: 'auto', maxWidth: '100%' }}>
+        <Table size="small" sx={{ minWidth: 640 }}>
           <TableHead>
             <TableRow>
               <TableCell>Date</TableCell>

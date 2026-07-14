@@ -11,6 +11,14 @@ _STREET_TYPE_SUFFIXES = (
     'STREET', 'DRIVE', 'ROAD', 'COURT', 'LANE', 'PLACE',
 )
 
+# Cardinal direction as the token immediately after the house number.
+_CARDINAL_TO_ABBREV = {
+    'NORTH': 'N',
+    'SOUTH': 'S',
+    'EAST': 'E',
+    'WEST': 'W',
+}
+
 # Higher rank = more advanced pipeline stage (winner preference).
 LEAD_STATUS_RANK: dict[str, int] = {
     'deal_won': 100,
@@ -29,6 +37,36 @@ LEAD_STATUS_RANK: dict[str, int] = {
 }
 
 
+def street_line_from_address(address: Optional[str]) -> str:
+    """Return the street line from a Places-style full address (before first comma)."""
+    text = (address or '').strip()
+    if not text:
+        return ''
+    return text.split(',', 1)[0].strip()
+
+
+def cities_compatible(a: Optional[str], b: Optional[str]) -> bool:
+    """True when cities match, or when either side is missing (incomplete data)."""
+    left = (a or '').strip().lower()
+    right = (b or '').strip().lower()
+    if not left or not right:
+        return True
+    return left == right
+
+
+def _collapse_cardinal_after_house(norm: str) -> str:
+    """Collapse NORTH/SOUTH/EAST/WEST when it is the token after the house number."""
+    parts = norm.split()
+    if (
+        len(parts) >= 3
+        and parts[1] in _CARDINAL_TO_ABBREV
+        and parts[2] not in _STREET_TYPE_SUFFIXES
+    ):
+        parts[1] = _CARDINAL_TO_ABBREV[parts[1]]
+        return ' '.join(parts)
+    return norm
+
+
 def normalized_street_key(street: Optional[str]) -> str:
     """Return normalized address for grouping duplicate leads."""
     return HubSpotMatcherService.normalize_address(street or '')
@@ -36,7 +74,9 @@ def normalized_street_key(street: Optional[str]) -> str:
 
 def dedup_street_key(street: Optional[str]) -> str:
     """Building-level street key used for DB uniqueness (strips trailing street type)."""
-    norm = normalized_street_key(street)
+    # Prefer the street line when callers pass a Places "street, city, state ZIP" value.
+    line = street_line_from_address(street) or (street or '')
+    norm = _collapse_cardinal_after_house(normalized_street_key(line))
     if not norm:
         return ''
     for suffix in _STREET_TYPE_SUFFIXES:

@@ -688,6 +688,33 @@ class TestCreateTask:
             )
             assert response.status_code == 404
 
+    def test_create_skip_trace_task_preserves_due_date_and_refreshes_once(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '14c Skip Trace Due Date St')
+
+            with (
+                patch('app.services.action_engine_service.ActionEngineService.recompute_and_persist') as recompute,
+                patch('app.services.lead_refresh.refresh_lead_scoring') as refresh_scoring,
+            ):
+                response = client.post(
+                    f'/api/leads/{lead.id}/tasks',
+                    data=json.dumps({
+                        'title': 'Run skip trace',
+                        'task_type': 'skip_trace_owner',
+                        'due_date': '2026-08-15',
+                    }),
+                    content_type='application/json',
+                    headers=_AUTH_HEADERS,
+                )
+
+            assert response.status_code == 201
+            data = json.loads(response.data)
+            assert data['due_date'] == '2026-08-15'
+            task = LeadTask.query.filter_by(lead_id=lead.id, task_type='skip_trace_owner').one()
+            assert task.due_date == date(2026, 8, 15)
+            recompute.assert_not_called()
+            refresh_scoring.assert_called_once_with(lead.id)
+
 
 class TestUpdateTaskHubSpotWriteback:
     def test_update_task_rejects_non_owner(self, client, app):

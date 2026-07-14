@@ -7,9 +7,11 @@ from typing import Any
 
 from app import db
 from app.models import Lead, LeadTimelineEntry
+from app.services.gis.routing import parse_city_state_zip_from_address
 from app.services.google_sheets_importer import GoogleSheetsImporter
 from app.services.helpers.deal_source import DEAL_SOURCE_OPTIONS
 from app.services.hubspot_writeback_service import DEFAULT_QUICK_ADD_DEAL_SOURCE
+from app.services.skip_trace_enqueue import SkipTraceEnqueue
 
 logger = logging.getLogger(__name__)
 
@@ -106,24 +108,69 @@ class QuickAddService:
         limit: int = 5,
     ) -> list[dict[str, Any]]:
         """Find leads owned by the user whose address matches the query."""
+        from app.services.gis.routing import parse_city_state_zip_from_address
+        from app.services.lead_merge_utils import (
+            cities_compatible,
+            dedup_street_key,
+            street_line_from_address,
+        )
+
         needle = query.strip()
         if len(needle) < 2:
             return []
 
-        rows = (
-            Lead.query.filter(Lead.owner_user_id == user_id)
-            .filter(Lead.property_street.isnot(None))
-            .filter(Lead.property_street.ilike(f'%{_escape_like_pattern(needle)}%', escape='\\'))
-            .order_by(Lead.updated_at.desc())
-            .limit(limit)
-            .all()
-        )
+        street_line = street_line_from_address(needle) or needle
+        query_city, _, _ = parse_city_state_zip_from_address(needle)
+        search_needles = [needle]
+        if street_line != needle:
+            search_needles.append(street_line)
+
+        seen_ids: set[int] = set()
+        rows: list[Lead] = []
+
+        def _extend(candidates: list[Lead]) -> None:
+            for lead in candidates:
+                if lead.id in seen_ids:
+                    continue
+                if not cities_compatible(query_city, lead.property_city):
+                    continue
+                seen_ids.add(lead.id)
+                rows.append(lead)
+                if len(rows) >= limit:
+                    return
+
+        for search in search_needles:
+            if len(rows) >= limit:
+                break
+            matches = (
+                Lead.query.filter(Lead.owner_user_id == user_id)
+                .filter(Lead.property_street.isnot(None))
+                .filter(Lead.property_street.ilike(f'%{_escape_like_pattern(search)}%', escape='\\'))
+                .order_by(Lead.updated_at.desc())
+                .limit(limit * 3)
+                .all()
+            )
+            _extend(matches)
+
+        street_key = dedup_street_key(street_line)
+        if street_key and len(rows) < limit:
+            norm_matches = (
+                Lead.query.filter(Lead.owner_user_id == user_id)
+                .filter(Lead.normalized_street == street_key)
+                .order_by(Lead.updated_at.desc())
+                .limit(limit * 3)
+                .all()
+            )
+            _extend(norm_matches)
 
         exact = self._importer._find_duplicate(  # noqa: SLF001
-            {'property_street': needle},
+            {
+                'property_street': needle,
+                'property_city': query_city,
+            },
             owner_user_id=user_id,
         )
-        if exact and exact not in rows:
+        if exact and exact.id not in seen_ids:
             rows = [exact, *rows[: max(limit - 1, 0)]]
 
         return [
@@ -134,7 +181,7 @@ class QuickAddService:
                 'deal_source': lead.deal_source,
                 'date_identified': lead.date_identified.isoformat() if lead.date_identified else None,
             }
-            for lead in rows
+            for lead in rows[:limit]
         ]
 
     def create_lead(
@@ -149,6 +196,9 @@ class QuickAddService:
         capture_latitude: float | None = None,
         capture_longitude: float | None = None,
         capture_location_label: str | None = None,
+        property_city: str | None = None,
+        property_state: str | None = None,
+        property_zip: str | None = None,
     ) -> tuple[Lead, bool]:
         """Create or update a lead from a quick-add submission."""
         street = property_street.strip()
@@ -176,8 +226,18 @@ class QuickAddService:
         if priority:
             manual_priority = PRIORITY_TO_MANUAL.get(priority.strip().lower())
 
+        parsed_city, parsed_state, parsed_zip = parse_city_state_zip_from_address(street)
+        city = (property_city or '').strip() or parsed_city
+        state = (property_state or '').strip() or parsed_state
+        zip_code = (property_zip or '').strip() or parsed_zip
+
         existing = self._importer._find_duplicate(  # noqa: SLF001
-            {'property_street': street},
+            {
+                'property_street': street,
+                'property_city': city,
+                'property_state': state,
+                'property_zip': zip_code,
+            },
             owner_user_id=user_id,
         )
         created = existing is None
@@ -191,6 +251,12 @@ class QuickAddService:
                 'lead_status': QUICK_ADD_STATUS,
                 'date_identified': identified_on,
             }
+            if city:
+                payload['property_city'] = city
+            if state:
+                payload['property_state'] = state
+            if zip_code:
+                payload['property_zip'] = zip_code
             if manual_priority is not None:
                 payload['manual_priority'] = manual_priority
 
@@ -206,6 +272,12 @@ class QuickAddService:
                 'property_street': street,
                 'source': QUICK_ADD_SOURCE,
             }
+            if city and not lead.property_city:
+                upsert_payload['property_city'] = city
+            if state and not lead.property_state:
+                upsert_payload['property_state'] = state
+            if zip_code and not lead.property_zip:
+                upsert_payload['property_zip'] = zip_code
             self._importer._update_lead_fields(lead, upsert_payload, changed_by='quick_add')  # noqa: SLF001
             lead.data_source = QUICK_ADD_DATA_SOURCE
             lead.deal_source = resolved_deal_source
@@ -228,6 +300,27 @@ class QuickAddService:
             created=created,
         )
         db.session.commit()
+
+        if created:
+            try:
+                SkipTraceEnqueue().enqueue(
+                    lead.id,
+                    actor='quick_add',
+                    reason='Quick add — run skip trace on owner',
+                )
+            except Exception:
+                logger.exception('Could not enqueue skip trace for quick-add lead %s', lead.id)
+                db.session.rollback()
+                fallback_lead = db.session.get(Lead, lead.id)
+                if fallback_lead is not None:
+                    fallback_lead.needs_skip_trace = True
+                    try:
+                        db.session.commit()
+                    except Exception:
+                        logger.exception('Could not mark quick-add lead %s for skip trace retry', lead.id)
+                        db.session.rollback()
+            lead = db.session.get(Lead, lead.id) or lead
+
         return lead, created
 
     @staticmethod

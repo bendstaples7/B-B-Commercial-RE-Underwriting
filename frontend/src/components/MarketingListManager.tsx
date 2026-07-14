@@ -368,24 +368,41 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
 
   if (selectedList) {
     return (
-      <Box component="section" aria-labelledby="member-list-heading" sx={{ px: embedded ? 0 : { xs: 1, sm: 2 } }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2, flexWrap: 'wrap' }}>
-          <IconButton onClick={handleBackToLists} aria-label="Back to marketing lists" size="small">
-            <ArrowBackIcon />
-          </IconButton>
-          <Box sx={{ flex: 1 }}>
-            <Typography variant="h5" id="member-list-heading" component="h2">
-              {selectedList.name}
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              {membersTotal} member{membersTotal !== 1 ? 's' : ''}
-            </Typography>
+      <Box component="section" aria-labelledby="member-list-heading" sx={{ px: embedded ? 0 : { xs: 1, sm: 2 }, maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}>
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: { xs: 'stretch', sm: 'center' },
+            gap: 1,
+            mb: 2,
+            flexWrap: 'wrap',
+            flexDirection: { xs: 'column', sm: 'row' },
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0, flex: 1 }}>
+            <IconButton onClick={handleBackToLists} aria-label="Back to marketing lists" size="small">
+              <ArrowBackIcon />
+            </IconButton>
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography
+                variant="h5"
+                id="member-list-heading"
+                component="h2"
+                sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+              >
+                {selectedList.name}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {membersTotal} member{membersTotal !== 1 ? 's' : ''}
+              </Typography>
+            </Box>
           </Box>
           <Button
             variant="outlined"
             size="small"
             disabled={enqueueing || membersLoading || members.length === 0}
             onClick={handleAddPageToMailQueue}
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
             {enqueueing ? 'Adding…' : 'Add page to mail queue'}
           </Button>
@@ -420,11 +437,11 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
 
         <TableContainer
           component={Paper}
-          sx={{ overflowX: 'auto' }}
+          sx={{ overflowX: 'auto', maxWidth: '100%' }}
           role="region"
           aria-labelledby="member-list-heading"
         >
-          <Table size="small" aria-label="Marketing list members table">
+          <Table size="small" aria-label="Marketing list members table" sx={{ minWidth: 720 }}>
             <TableHead>
               <TableRow>
                 <TableCell sx={{ fontWeight: 'bold', minWidth: 200 }} scope="col">
@@ -468,7 +485,10 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
                   return (
                     <TableRow key={member.id} hover>
                       <TableCell>
-                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                        <Typography
+                          variant="body2"
+                          sx={{ fontWeight: 500, overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                        >
                           {lead?.property_street || `Lead #${member.lead_id}`}
                         </Typography>
                       </TableCell>
@@ -571,22 +591,48 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
   // ---------------------------------------------------------------------------
 
   return (
-    <Box component="section" aria-labelledby="marketing-lists-heading" sx={{ px: embedded ? 0 : { xs: 1, sm: 2 } }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Box>
+    <Box
+      component="section"
+      aria-labelledby="marketing-lists-heading"
+      sx={{ px: embedded ? 0 : { xs: 1, sm: 2 }, maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}
+    >
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: { xs: 'stretch', sm: 'center' },
+          mb: 2,
+          flexDirection: { xs: 'column', sm: 'row' },
+          gap: 1.5,
+        }}
+      >
+        <Box sx={{ minWidth: 0 }}>
           <Typography variant="h5" id="marketing-lists-heading" component="h2">
             {embedded ? 'Marketing Lists' : 'Outreach Lists'}
           </Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+          >
             Audience membership only. Ready to Mail is the batch queue for Open Letter sends.
           </Typography>
         </Box>
-        <Box sx={{ display: 'flex', gap: 1 }}>
+        <Box
+          sx={{
+            display: 'flex',
+            gap: 1,
+            flexWrap: 'wrap',
+            flexDirection: { xs: 'column', sm: 'row' },
+            width: { xs: '100%', sm: 'auto' },
+          }}
+        >
           <Button
             variant="outlined"
             startIcon={<FilterListIcon />}
             onClick={openFilterDialog}
             aria-label="Create list from filter criteria"
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
             From Filters
           </Button>
@@ -595,6 +641,7 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
             startIcon={<AddIcon />}
             onClick={openCreateDialog}
             aria-label="Create new marketing list"
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
             New List
           </Button>
@@ -642,11 +689,11 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
       ) : (
         <TableContainer
           component={Paper}
-          sx={{ overflowX: 'auto' }}
+          sx={{ overflowX: 'auto', maxWidth: '100%' }}
           role="region"
           aria-labelledby="marketing-lists-heading"
         >
-          <Table size="small" aria-label="Marketing lists table">
+          <Table size="small" aria-label="Marketing lists table" sx={{ minWidth: 560 }}>
             <TableHead>
               <TableRow>
                 <TableCell sx={{ fontWeight: 'bold', minWidth: 200 }} scope="col">

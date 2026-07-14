@@ -362,7 +362,7 @@ export default function DataSourcesPanel() {
                    (!data.gis_connectors || data.gis_connectors.length === 0)
 
   return (
-    <Box sx={{ p: 2 }}>
+    <Box sx={{ p: { xs: 1, sm: 2 }, maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}>
       <Typography variant="h5" gutterBottom>Data Sources</Typography>
 
       {allEmpty ? (

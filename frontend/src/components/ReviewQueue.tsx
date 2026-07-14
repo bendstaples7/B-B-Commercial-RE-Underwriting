@@ -282,9 +282,18 @@ const ReviewRow: React.FC<ReviewRowProps> = ({
 
         {/* Action buttons (Req 13.3) */}
         <TableCell align="right">
-          <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <Box
+            sx={{
+              display: 'flex',
+              gap: 1,
+              justifyContent: 'flex-end',
+              flexWrap: 'wrap',
+              flexDirection: { xs: 'column', sm: 'row' },
+              alignItems: { xs: 'stretch', sm: 'center' },
+            }}
+          >
             <Tooltip title="Confirm this match">
-              <span>
+              <Box component="span" sx={{ width: { xs: '100%', sm: 'auto' } }}>
                 <Button
                   size="small"
                   variant="contained"
@@ -299,14 +308,15 @@ const ReviewRow: React.FC<ReviewRowProps> = ({
                   onClick={() => onConfirm(match.id)}
                   disabled={isBusy}
                   aria-label={`Confirm match for ${match.hubspot_id}`}
+                  sx={{ width: { xs: '100%', sm: 'auto' } }}
                 >
                   Confirm
                 </Button>
-              </span>
+              </Box>
             </Tooltip>
 
             <Tooltip title="Reject and link to a different record">
-              <span>
+              <Box component="span" sx={{ width: { xs: '100%', sm: 'auto' } }}>
                 <Button
                   size="small"
                   variant="outlined"
@@ -321,14 +331,15 @@ const ReviewRow: React.FC<ReviewRowProps> = ({
                   onClick={() => onRelink(match.id)}
                   disabled={isBusy}
                   aria-label={`Reject and re-link ${match.hubspot_id}`}
+                  sx={{ width: { xs: '100%', sm: 'auto' } }}
                 >
                   Reject + Re-link
                 </Button>
-              </span>
+              </Box>
             </Tooltip>
 
             <Tooltip title="Mark as a brand-new record (no existing match)">
-              <span>
+              <Box component="span" sx={{ width: { xs: '100%', sm: 'auto' } }}>
                 <Button
                   size="small"
                   variant="outlined"
@@ -343,10 +354,11 @@ const ReviewRow: React.FC<ReviewRowProps> = ({
                   onClick={() => onMarkNew(match.id)}
                   disabled={isBusy}
                   aria-label={`Mark ${match.hubspot_id} as new record`}
+                  sx={{ width: { xs: '100%', sm: 'auto' } }}
                 >
                   Mark as New Record
                 </Button>
-              </span>
+              </Box>
             </Tooltip>
           </Box>
         </TableCell>
@@ -519,10 +531,18 @@ export const ReviewQueue: React.FC<ReviewQueueProps> = ({ standalone = true }) =
     confirmMutation.error || rejectMutation.error || markNewMutation.error
 
   return (
-    <Box>
+    <Box sx={{ maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}>
       {/* Header with pending count badge (Req 13.6) */}
       {standalone && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            mb: 3,
+            flexWrap: 'wrap',
+          }}
+        >
           <Typography variant="h5" component="h1">
             Review Queue
           </Typography>
@@ -535,7 +555,7 @@ export const ReviewQueue: React.FC<ReviewQueueProps> = ({ standalone = true }) =
             <PendingActionsIcon color="action" />
           </Badge>
           {pendingCount > 0 && (
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
               {pendingCount} item{pendingCount !== 1 ? 's' : ''} pending review
             </Typography>
           )}
@@ -543,7 +563,7 @@ export const ReviewQueue: React.FC<ReviewQueueProps> = ({ standalone = true }) =
       )}
 
       {/* Filters (Req 13.7) */}
-      <Paper sx={{ p: 2, mb: 2 }}>
+      <Paper sx={{ p: { xs: 1.5, sm: 2 }, mb: 2 }}>
         <Box
           sx={{
             display: 'grid',
@@ -625,8 +645,8 @@ export const ReviewQueue: React.FC<ReviewQueueProps> = ({ standalone = true }) =
       {/* Table */}
       {!isLoading && data && (
         <>
-          <TableContainer component={Paper}>
-            <Table aria-label="HubSpot review queue">
+          <TableContainer component={Paper} sx={{ overflowX: 'auto', maxWidth: '100%' }}>
+            <Table aria-label="HubSpot review queue" sx={{ minWidth: 800 }}>
               <TableHead>
                 <TableRow>
                   <TableCell sx={{ width: 48 }} />

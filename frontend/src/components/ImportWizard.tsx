@@ -714,13 +714,18 @@ export const ImportWizard: React.FC<ImportWizardProps> = ({ onComplete, onCancel
     <Box
       component="section"
       aria-labelledby="import-wizard-heading"
-      sx={{ maxWidth: 720, mx: 'auto', px: { xs: 1, sm: 2 } }}
+      sx={{ maxWidth: 720, width: '100%', mx: 'auto', px: { xs: 1, sm: 2 }, minWidth: 0, overflowX: 'hidden' }}
     >
       <Typography variant="h5" id="import-wizard-heading" component="h2" sx={{ mb: 2 }}>
         Import from Google Sheets
       </Typography>
 
-      <Stepper activeStep={activeStep} alternativeLabel sx={{ mb: 3 }} aria-label="Import wizard steps">
+      <Stepper
+        activeStep={activeStep}
+        alternativeLabel
+        sx={{ mb: 3, maxWidth: '100%', overflowX: 'auto' }}
+        aria-label="Import wizard steps"
+      >
         {STEP_LABELS.map((label) => (
           <Step key={label}>
             <StepLabel>{label}</StepLabel>

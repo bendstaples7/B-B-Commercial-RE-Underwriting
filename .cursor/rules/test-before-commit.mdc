@@ -12,9 +12,11 @@ change works. Committing prematurely wastes the user's time.
 ## Workflow
 
 1. Implement the change and get it running locally (apply migrations, restart
-   servers, etc. as needed).
+   servers, etc. as needed). For **UI** changes, follow
+   `run-local-for-ui-verify` — servers must be up and reachable before you ask
+   the user to test in a browser.
 2. **Stop before committing.** Tell the user it's ready to test and say exactly
-   what to check and where (which page/lead/flow in the browser, which command).
+   what to check and where (which page/lead/flow in the browser).
 3. **Wait for the user to explicitly confirm** it works before doing anything
    that triggers the pre-commit hook.
 4. Only after their OK: `git add` / `git commit` / `git push` / open the PR.

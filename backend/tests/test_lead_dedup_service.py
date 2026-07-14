@@ -21,6 +21,32 @@ class TestDedupStreetKey:
     def test_abbreviation_variants_share_key(self):
         assert dedup_street_key('4263 W Montrose') == dedup_street_key('4263 W Montrose Ave Apt 1')
 
+    def test_places_full_address_shares_key_with_street(self):
+        assert dedup_street_key('4903 N Hermitage') == dedup_street_key(
+            '4903 N Hermitage Ave, Chicago, IL 60640, USA',
+        )
+
+    def test_north_and_n_share_key(self):
+        assert dedup_street_key('4903 North Hermitage') == dedup_street_key('4903 N Hermitage')
+
+    def test_cardinal_street_name_is_not_collapsed(self):
+        assert dedup_street_key('123 North Street') != dedup_street_key('123 N Street')
+
+
+class TestCitiesCompatible:
+    def test_missing_either_side_is_compatible(self):
+        from app.services.lead_merge_utils import cities_compatible
+
+        assert cities_compatible(None, 'Chicago') is True
+        assert cities_compatible('Chicago', None) is True
+        assert cities_compatible('', '') is True
+
+    def test_distinct_cities_incompatible(self):
+        from app.services.lead_merge_utils import cities_compatible
+
+        assert cities_compatible('Chicago', 'Evanston') is False
+        assert cities_compatible('Chicago', 'chicago') is True
+
 
 class TestLeadDedupFields:
     def test_refresh_sets_normalized_street(self, app):
@@ -107,6 +133,32 @@ class TestFindLeadByIdentity:
             )
             assert hit is not None
             assert hit.id == existing.id
+
+    def test_importer_identity_hit_respects_city_without_pin(self, app):
+        from app.services.google_sheets_importer import GoogleSheetsImporter
+
+        with app.app_context():
+            existing = Lead(
+                property_street='123 Main St',
+                property_city='Chicago',
+                owner_first_name='Jane',
+                owner_last_name='Owner',
+                owner_user_id='user-abc',
+            )
+            db.session.add(existing)
+            db.session.commit()
+
+            hit = GoogleSheetsImporter._find_duplicate(  # noqa: SLF001
+                {
+                    'property_street': '123 Main St, Evanston, IL 60201',
+                    'property_city': 'Evanston',
+                    'owner_first_name': 'Jane',
+                    'owner_last_name': 'Owner',
+                },
+                owner_user_id='user-abc',
+            )
+
+            assert hit is None
 
 
 class TestDuplicateSentinel:

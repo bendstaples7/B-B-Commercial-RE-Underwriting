@@ -1,11 +1,59 @@
-"""Celery tasks for quick-add post-processing (enrichment + HubSpot push)."""
+"""Celery tasks for quick-add post-processing (GIS match, enrichment + HubSpot push)."""
 import logging
 
 logger = logging.getLogger(__name__)
 
 
+def _run_gis_match(lead_id: int) -> tuple[bool, bool]:
+    """Attempt county GIS parcel match.
+
+    Returns ``(matched, cook_enrichment_already_scheduled)``.
+    When a *new* match is found, ``_enrich_with_gis`` schedules Cook enrichment
+    via ``maybe_dispatch_after_gis_match``; the follow-up task should not queue
+    a second enrichment. When the lead was already matched, enrichment still
+    needs a follow-up dispatch.
+    """
+    from app import db
+    from app.models import Lead
+    from app.services.deduplication_engine import DeduplicationEngine
+    from app.services.gis.base import GISConnectorRegistry
+    from app.services.lead_ingestion_service import LeadIngestionService
+
+    lead = db.session.get(Lead, lead_id)
+    if lead is None:
+        return False, False
+    if lead.has_property_match:
+        return True, False
+
+    ingestion = LeadIngestionService(
+        dedup_engine=DeduplicationEngine(),
+        gis_registry=GISConnectorRegistry,
+    )
+    connector = ingestion._gis_connector_for_lead(lead)  # noqa: SLF001
+    if connector is None:
+        logger.info(
+            'Quick-add GIS: no connector for lead %s city=%r state=%r',
+            lead_id,
+            lead.property_city,
+            lead.property_state,
+        )
+        db.session.commit()  # persist any city/state/zip backfill from parser
+        return False, False
+
+    outcome = ingestion._enrich_with_gis(lead, connector, import_job_id=None)  # noqa: SLF001
+    db.session.commit()
+    matched = bool(outcome.get('match_found'))
+    logger.info(
+        'Quick-add GIS for lead %s: match_found=%s connector=%s',
+        lead_id,
+        matched,
+        outcome.get('connector_name'),
+    )
+    return matched, matched
+
+
 def run_quick_add_followup_inner(lead_id: int) -> dict:
-    """Enrich a quick-added lead and push to HubSpot when write-back is enabled."""
+    """Match property via GIS, enrich, and push to HubSpot when write-back is enabled."""
     from app import create_app, db
     from app.models import Lead, LeadTimelineEntry
     from app.services.hubspot_writeback_service import HubSpotWriteBackService
@@ -13,19 +61,32 @@ def run_quick_add_followup_inner(lead_id: int) -> dict:
 
     app = create_app()
     with app.app_context():
-        enrich_result = False
+        gis_matched = False
+        cook_already_scheduled = False
         try:
-            from app.services.cook_county_enrichment_service import (
-                dispatch_cook_county_enrichment,
-            )
-            enrich_result = dispatch_cook_county_enrichment(lead_id)
+            gis_matched, cook_already_scheduled = _run_gis_match(lead_id)
         except Exception as exc:
-            logger.warning('Quick-add Cook County enrichment failed for lead %s: %s', lead_id, exc)
+            logger.warning('Quick-add GIS match failed for lead %s: %s', lead_id, exc)
+            db.session.rollback()
+
+        enrich_result = False
+        if cook_already_scheduled:
+            enrich_result = True
+        else:
+            try:
+                from app.services.cook_county_enrichment_service import (
+                    dispatch_cook_county_enrichment,
+                )
+                enrich_result = dispatch_cook_county_enrichment(lead_id)
+            except Exception as exc:
+                logger.warning('Quick-add Cook County enrichment failed for lead %s: %s', lead_id, exc)
+                db.session.rollback()
 
         try:
             push_result = HubSpotWriteBackService().push_lead_as_deal(lead_id)
         except Exception as exc:
             logger.exception('Quick-add HubSpot push failed for lead %s', lead_id)
+            db.session.rollback()
             push_result = {
                 'synced': False,
                 'action': 'failed',
@@ -63,6 +124,7 @@ def run_quick_add_followup_inner(lead_id: int) -> dict:
 
         return {
             'lead_id': lead_id,
+            'gis_matched': gis_matched,
             'enriched': enrich_result is True,
             'hubspot': push_result,
         }

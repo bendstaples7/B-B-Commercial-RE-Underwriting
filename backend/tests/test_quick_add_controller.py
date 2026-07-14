@@ -1,11 +1,12 @@
 """Tests for POST /api/leads/quick-add."""
 import json
 from datetime import date
+from unittest.mock import patch
 
 import pytest
 
 from app import db
-from app.models import Lead, LeadTimelineEntry
+from app.models import Lead, LeadTask, LeadTimelineEntry
 from app.services.quick_add_service import merge_deal_description
 
 _AUTH_HEADERS = {'X-User-Id': 'test-user'}
@@ -45,9 +46,79 @@ class TestQuickAddEndpoint:
             assert lead.date_identified is not None
             assert lead.manual_priority == 5
             assert lead.owner_user_id == 'test-user'
+            assert lead.property_city == 'Chicago'
+            assert lead.property_state == 'IL'
+            assert lead.needs_skip_trace is True
+            assert LeadTask.query.filter_by(
+                lead_id=lead.id, task_type='skip_trace_owner', status='open',
+            ).first() is not None
 
             entries = LeadTimelineEntry.query.filter_by(lead_id=lead.id).all()
             assert len(entries) >= 2
+
+    def test_parses_places_address_with_zip_and_country(self, quick_add_client, app):
+        with app.app_context():
+            response = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_street': '100 W Randolph St, Chicago, IL 60601, USA',
+                }),
+                content_type='application/json',
+            )
+            assert response.status_code == 201
+            lead = db.session.get(Lead, response.get_json()['lead_id'])
+            assert lead.property_city == 'Chicago'
+            assert lead.property_state == 'IL'
+            assert lead.property_zip == '60601'
+
+    def test_accepts_structured_city_state_zip(self, quick_add_client, app):
+        with app.app_context():
+            response = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_street': 'Ambiguous capture line',
+                    'property_city': 'Wheaton',
+                    'property_state': 'IL',
+                    'property_zip': '60187',
+                }),
+                content_type='application/json',
+            )
+            assert response.status_code == 201
+            lead = db.session.get(Lead, response.get_json()['lead_id'])
+            assert lead.property_city == 'Wheaton'
+            assert lead.property_state == 'IL'
+            assert lead.property_zip == '60187'
+
+    def test_dedup_does_not_enqueue_skip_trace(self, quick_add_client, app):
+        with app.app_context():
+            payload = {'property_street': '555 Dedup Skip Trace St, Chicago, IL'}
+            r1 = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps(payload),
+                content_type='application/json',
+            )
+            lead_id = r1.get_json()['lead_id']
+            LeadTask.query.filter_by(lead_id=lead_id).delete()
+            lead = db.session.get(Lead, lead_id)
+            lead.needs_skip_trace = False
+            db.session.commit()
+
+            r2 = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({**payload, 'note': 'Second walk-by'}),
+                content_type='application/json',
+            )
+            assert r2.status_code == 201
+            assert r2.get_json()['created'] is False
+            lead = db.session.get(Lead, lead_id)
+            assert lead.needs_skip_trace is False
+            assert LeadTask.query.filter_by(
+                lead_id=lead_id, task_type='skip_trace_owner', status='open',
+            ).count() == 0
 
     def test_custom_deal_source_and_date_identified(self, quick_add_client, app):
         with app.app_context():
@@ -140,6 +211,100 @@ class TestQuickAddEndpoint:
             assert len(body['matches']) >= 1
             assert any('Lookup Test' in (m['property_street'] or '') for m in body['matches'])
 
+    def test_lookup_keeps_match_after_places_selection(self, quick_add_client, app):
+        """Typing may ILIKE-match briefly; Places fill must still surface the lead."""
+        with app.app_context():
+            lead = Lead(
+                property_street='4903 N Hermitage',
+                owner_user_id='test-user',
+                lead_status='skip_trace',
+                source='walk_by',
+            )
+            db.session.add(lead)
+            db.session.commit()
+            lead_id = lead.id
+
+            places = '4903 N Hermitage Ave, Chicago, IL 60640, USA'
+            response = quick_add_client.get(
+                '/api/leads/quick-add/lookup',
+                headers=_AUTH_HEADERS,
+                query_string={'q': places},
+            )
+            assert response.status_code == 200
+            matches = response.get_json()['matches']
+            assert any(m['lead_id'] == lead_id for m in matches)
+
+            north_places = '4903 North Hermitage Avenue, Chicago, IL 60640, USA'
+            response = quick_add_client.get(
+                '/api/leads/quick-add/lookup',
+                headers=_AUTH_HEADERS,
+                query_string={'q': north_places},
+            )
+            assert response.status_code == 200
+            matches = response.get_json()['matches']
+            assert any(m['lead_id'] == lead_id for m in matches)
+
+    def test_dedup_places_address_against_abbreviated_street(self, quick_add_client, app):
+        with app.app_context():
+            lead = Lead(
+                property_street='4903 N Hermitage',
+                owner_user_id='test-user',
+                lead_status='negotiating_remote',
+                source='walk_by',
+                deal_description='Existing CRM notes',
+            )
+            db.session.add(lead)
+            db.session.commit()
+            lead_id = lead.id
+
+            response = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_street': '4903 North Hermitage Ave, Chicago, IL 60640, USA',
+                    'note': 'Walk-by after Places select',
+                }),
+                content_type='application/json',
+            )
+            assert response.status_code == 201
+            body = response.get_json()
+            assert body['created'] is False
+            assert body['lead_id'] == lead_id
+            db.session.refresh(lead)
+            assert lead.property_city == 'Chicago'
+            assert lead.property_state == 'IL'
+            assert lead.property_zip == '60640'
+
+    def test_dedup_does_not_collide_across_cities(self, quick_add_client, app):
+        with app.app_context():
+            chicago = Lead(
+                property_street='123 Main St',
+                property_city='Chicago',
+                property_state='IL',
+                owner_user_id='test-user',
+                lead_status='skip_trace',
+                source='walk_by',
+            )
+            db.session.add(chicago)
+            db.session.commit()
+            chicago_id = chicago.id
+
+            response = quick_add_client.post(
+                '/api/leads/quick-add',
+                headers=_AUTH_HEADERS,
+                data=json.dumps({
+                    'property_street': '123 Main St, Evanston, IL 60201, USA',
+                    'property_city': 'Evanston',
+                    'property_state': 'IL',
+                    'property_zip': '60201',
+                }),
+                content_type='application/json',
+            )
+            assert response.status_code == 201
+            body = response.get_json()
+            assert body['created'] is True
+            assert body['lead_id'] != chicago_id
+
     def test_lookup_requires_min_query_length(self, quick_add_client, app):
         with app.app_context():
             response = quick_add_client.get(
@@ -194,6 +359,45 @@ class TestQuickAddEndpoint:
             body = response.get_json()
             assert body['hubspot_push_status'] in ('disabled', 'queued', 'queue_failed')
             assert isinstance(body['hubspot_write_back_enabled'], bool)
+
+    def test_enqueue_failure_reports_queue_failed_when_writeback_disabled(self, quick_add_client, app):
+        with app.app_context():
+            with (
+                patch('app.controllers.quick_add_controller.hubspot_write_back_enabled', return_value=False),
+                patch('celery_worker.run_quick_add_followup.delay', side_effect=RuntimeError('broker down')),
+            ):
+                response = quick_add_client.post(
+                    '/api/leads/quick-add',
+                    headers=_AUTH_HEADERS,
+                    data=json.dumps({
+                        'property_street': '222 Queue Failure Ave, Chicago, IL',
+                    }),
+                    content_type='application/json',
+                )
+
+            assert response.status_code == 201
+            body = response.get_json()
+            assert body['hubspot_write_back_enabled'] is False
+            assert body['hubspot_push_status'] == 'queue_failed'
+
+    def test_skip_trace_enqueue_failure_marks_lead_for_retry(self, quick_add_client, app):
+        with app.app_context():
+            with patch(
+                'app.services.quick_add_service.SkipTraceEnqueue.enqueue',
+                side_effect=RuntimeError('task write failed'),
+            ):
+                response = quick_add_client.post(
+                    '/api/leads/quick-add',
+                    headers=_AUTH_HEADERS,
+                    data=json.dumps({
+                        'property_street': '333 Skip Trace Retry Ave, Chicago, IL',
+                    }),
+                    content_type='application/json',
+                )
+
+            assert response.status_code == 201
+            lead = db.session.get(Lead, response.get_json()['lead_id'])
+            assert lead.needs_skip_trace is True
 
 
 class TestMergeDealDescription:

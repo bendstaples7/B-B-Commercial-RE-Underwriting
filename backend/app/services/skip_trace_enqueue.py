@@ -7,6 +7,7 @@ replace only the body of :meth:`SkipTraceEnqueue.enqueue` — callers stay the s
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Optional
 
 from sqlalchemy import text
@@ -45,6 +46,8 @@ class SkipTraceEnqueue:
         *,
         actor: str = "entity_resolution",
         reason: str = "Entity manager resolved — run skip trace on person",
+        due_date: Optional[date] = None,
+        recompute_action: bool = True,
     ) -> Optional[LeadTask]:
         """Enqueue skip-trace work for *lead_id* / optional *contact_id*.
 
@@ -64,6 +67,8 @@ class SkipTraceEnqueue:
         )
         if existing is not None:
             lead.needs_skip_trace = True
+            if due_date is not None:
+                existing.due_date = due_date
             db.session.commit()
             logger.info(
                 "SkipTraceEnqueue: open skip_trace_owner task already exists "
@@ -88,9 +93,10 @@ class SkipTraceEnqueue:
             {
                 "task_type": "skip_trace_owner",
                 "title": title,
+                "due_date": due_date,
             },
             actor=actor,
-            recompute_action=True,
+            recompute_action=recompute_action,
         )
         logger.info(
             "SkipTraceEnqueue: created skip_trace_owner task_id=%s lead_id=%s "

@@ -321,6 +321,9 @@ function TimelineEntryRow({ entry, highlighted = false }: TimelineEntryRowProps)
       data-testid={`timeline-entry-${entry.id}`}
       sx={{
         px: 0,
+        minWidth: 0,
+        maxWidth: '100%',
+        overflow: 'hidden',
         borderRadius: 1,
         transition: 'background-color 0.3s ease',
         ...(highlighted && {
@@ -349,15 +352,16 @@ function TimelineEntryRow({ entry, highlighted = false }: TimelineEntryRowProps)
       </ListItemAvatar>
 
       <ListItemText
+        sx={{ minWidth: 0, overflow: 'hidden' }}
         primary={
-          <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap">
-            <Typography variant="body2" fontWeight="medium" data-testid={`entry-event-type-${entry.id}`}>
+          <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap" useFlexGap sx={{ maxWidth: '100%' }}>
+            <Typography variant="body2" fontWeight="medium" data-testid={`entry-event-type-${entry.id}`} sx={{ overflowWrap: 'anywhere' }}>
               {getTimelineEventLabel(entry)}
             </Typography>
-            <Typography variant="caption" color="text.secondary" data-testid={`entry-timestamp-${entry.id}`}>
+            <Typography variant="caption" color="text.secondary" data-testid={`entry-timestamp-${entry.id}`} sx={{ flexShrink: 0 }}>
               {formatLocalTimestamp(entry.occurred_at)}
             </Typography>
-            <Typography variant="caption" color="text.secondary" data-testid={`entry-actor-${entry.id}`}>
+            <Typography variant="caption" color="text.secondary" data-testid={`entry-actor-${entry.id}`} sx={{ overflowWrap: 'anywhere' }}>
               — {entry.actor}
             </Typography>
             {isHubSpot && (

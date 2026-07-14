@@ -176,11 +176,18 @@ export function ReadyToMailQueue() {
   const previewWouldAdd = preview?.would_add ?? 0
 
   return (
-    <Box data-testid="ready-to-mail-queue" sx={{ p: 2 }}>
-      <Typography variant="h5" component="h1" gutterBottom>
+    <Box
+      data-testid="ready-to-mail-queue"
+      sx={{ p: { xs: 1.5, sm: 2 }, maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}
+    >
+      <Typography variant="h5" component="h1" gutterBottom sx={{ overflowWrap: 'anywhere' }}>
         Ready to Mail
       </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography
+        variant="body2"
+        color="text.secondary"
+        sx={{ mb: 2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+      >
         Batch queue for your next Open Letter send. Marketing / outreach lists are audience membership
         only — add members here (or via &quot;Add to mail queue&quot;) when they are ready to mail.
         Stage leads, send when you hit your minimum, and review recent sends.
@@ -213,13 +220,20 @@ export function ReadyToMailQueue() {
       </Typography>
 
       {candidateTotal > 0 && (
-        <Stack direction="row" spacing={1} sx={{ mb: 2 }} flexWrap="wrap" useFlexGap>
+        <Stack
+          direction={{ xs: 'column', sm: 'row' }}
+          spacing={1}
+          sx={{ mb: 2, width: '100%' }}
+          flexWrap="wrap"
+          useFlexGap
+        >
           <Button
             variant="outlined"
             size="small"
             disabled={isEnqueueing}
             onClick={() => void requestEnqueueCandidates(undefined)}
             data-testid="add-all-candidates-button"
+            sx={{ width: { xs: '100%', sm: 'auto' } }}
           >
             {isEnqueueing ? 'Checking…' : `Add all ${candidateTotal} to batch`}
           </Button>
@@ -230,6 +244,7 @@ export function ReadyToMailQueue() {
               disabled={isEnqueueing}
               onClick={() => void requestEnqueueCandidates(neededForMinimum)}
               data-testid="add-to-minimum-button"
+              sx={{ width: { xs: '100%', sm: 'auto' } }}
             >
               Add {neededForMinimum} to reach minimum
             </Button>

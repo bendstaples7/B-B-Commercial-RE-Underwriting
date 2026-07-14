@@ -135,11 +135,18 @@ export function ProspectReviewQueue() {
   }
 
   return (
-    <Box data-testid="prospect-review-queue" sx={{ p: 2 }}>
-      <Typography variant="h5" component="h1" gutterBottom>
+    <Box
+      data-testid="prospect-review-queue"
+      sx={{ p: { xs: 1.5, sm: 2 }, maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}
+    >
+      <Typography variant="h5" component="h1" gutterBottom sx={{ overflowWrap: 'anywhere' }}>
         Prospect Review Queue
       </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography
+        variant="body2"
+        color="text.secondary"
+        sx={{ mb: 2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+      >
         Cook County distress signals stacked by PIN with a resolved address and at least 60%
         motivation. Approve to create a lead and run enrichment. Scheduled pull:{' '}
         {FEED_SCHEDULE_LABEL}.
@@ -157,7 +164,16 @@ export function ProspectReviewQueue() {
         </Alert>
       )}
 
-      <Box sx={{ display: 'flex', gap: 1, mb: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+      <Box
+        sx={{
+          display: 'flex',
+          gap: 1,
+          mb: 2,
+          alignItems: { xs: 'flex-start', sm: 'center' },
+          flexDirection: { xs: 'column', sm: 'row' },
+          flexWrap: 'wrap',
+        }}
+      >
         <Button
           variant="outlined"
           size="small"
@@ -204,8 +220,8 @@ export function ProspectReviewQueue() {
         }}
       />
 
-      <TableContainer component={Paper} variant="outlined">
-        <Table size="small">
+      <TableContainer component={Paper} variant="outlined" sx={{ overflowX: 'auto' }}>
+        <Table size="small" sx={{ minWidth: 720 }}>
           <TableHead>
             <TableRow>
               <TableCell>Address</TableCell>
@@ -257,7 +273,7 @@ export function ProspectReviewQueue() {
                     sx={{ cursor: 'pointer' }}
                     selected={selectedCandidate?.id === row.id}
                   >
-                    <TableCell>
+                    <TableCell sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: 220 }}>
                       <Typography variant="body2">{address.primary}</Typography>
                       {address.secondary && (
                         <Typography variant="caption" color="text.secondary" display="block">
@@ -283,30 +299,38 @@ export function ProspectReviewQueue() {
                       {formatDateTime(row.created_at)}
                     </TableCell>
                     <TableCell align="right" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-                      <Button
-                        size="small"
-                        color="success"
-                        startIcon={<CheckIcon />}
-                        disabled={approveMutation.isPending}
-                        onClick={() => approveMutation.mutate(row.id)}
-                        sx={{ mr: 1 }}
+                      <Box
+                        sx={{
+                          display: 'inline-flex',
+                          flexWrap: 'wrap',
+                          gap: 0.5,
+                          justifyContent: 'flex-end',
+                        }}
                       >
-                        Approve
-                      </Button>
-                      <Button
-                        size="small"
-                        color="inherit"
-                        startIcon={<CloseIcon />}
-                        disabled={rejectMutation.isPending}
-                        onClick={() => rejectMutation.mutate(row.id)}
-                      >
-                        Reject
-                      </Button>
-                      {row.imported_lead_id && (
-                        <Link component={RouterLink} to={`/leads/${row.imported_lead_id}`} sx={{ ml: 1 }}>
-                          View lead
-                        </Link>
-                      )}
+                        <Button
+                          size="small"
+                          color="success"
+                          startIcon={<CheckIcon />}
+                          disabled={approveMutation.isPending}
+                          onClick={() => approveMutation.mutate(row.id)}
+                        >
+                          Approve
+                        </Button>
+                        <Button
+                          size="small"
+                          color="inherit"
+                          startIcon={<CloseIcon />}
+                          disabled={rejectMutation.isPending}
+                          onClick={() => rejectMutation.mutate(row.id)}
+                        >
+                          Reject
+                        </Button>
+                        {row.imported_lead_id && (
+                          <Link component={RouterLink} to={`/leads/${row.imported_lead_id}`} sx={{ alignSelf: 'center' }}>
+                            View lead
+                          </Link>
+                        )}
+                      </Box>
                     </TableCell>
                   </TableRow>
                 )
@@ -323,7 +347,16 @@ export function ProspectReviewQueue() {
       />
 
       {totalPages > 1 && (
-        <Box sx={{ display: 'flex', justifyContent: 'center', gap: 1, mt: 2 }}>
+        <Box
+          sx={{
+            display: 'flex',
+            justifyContent: 'center',
+            gap: 1,
+            mt: 2,
+            flexWrap: 'wrap',
+            alignItems: 'center',
+          }}
+        >
           <Button disabled={page <= 1} onClick={() => setPage((p) => clampPage(p - 1, totalPages))}>
             Previous
           </Button>

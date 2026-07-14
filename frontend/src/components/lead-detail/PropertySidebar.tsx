@@ -1,6 +1,9 @@
-import { useState, type ReactNode } from 'react'
+import { createContext, useContext, useState, type ReactNode } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Box,
   Chip,
   IconButton,
@@ -11,6 +14,7 @@ import {
 } from '@mui/material'
 import EmailIcon from '@mui/icons-material/Email'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import type { CommandCenterPayload, LeadPhone, PropertyContactSummary } from '@/types'
 import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
 import {
@@ -20,6 +24,8 @@ import {
 import { formatImportNote } from './leadDetailFormatters'
 import { PhoneRow } from '@/components/PhoneRow'
 import { ccCardSx } from '@/components/lead-detail/commandCenterChrome'
+
+const SidebarStackedContext = createContext(false)
 
 const SIDEBAR_LABEL_SX = {
   flexShrink: 0,
@@ -61,21 +67,35 @@ function SidebarRow({
   testId?: string
   valueFontWeight?: number
 }) {
+  const stacked = useContext(SidebarStackedContext)
   const isEmpty = value == null || value === ''
   if (isEmpty && !alwaysShow) return null
   return (
     <Box
-      sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1, mb: 0.5 }}
+      sx={{
+        display: 'flex',
+        flexDirection: stacked ? 'column' : 'row',
+        alignItems: stacked ? 'stretch' : 'flex-start',
+        justifyContent: 'space-between',
+        gap: stacked ? 0.25 : 1,
+        mb: stacked ? 1 : 0.5,
+      }}
       data-testid={testId}
     >
-      <Typography variant="caption" color="text.secondary" sx={SIDEBAR_LABEL_SX}>
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={stacked ? { width: 'auto', textAlign: 'left' } : SIDEBAR_LABEL_SX}
+      >
         {label}
       </Typography>
       <Typography
         variant="caption"
         fontWeight={valueFontWeight}
         sx={{
-          ...SIDEBAR_VALUE_SX,
+          ...(stacked
+            ? { flex: 1, minWidth: 0, textAlign: 'left', wordBreak: 'break-word' }
+            : SIDEBAR_VALUE_SX),
           whiteSpace: 'pre-line',
           color: isEmpty ? 'text.disabled' : 'text.primary',
         }}
@@ -96,20 +116,34 @@ function SidebarLabeledContent({
   children: ReactNode
   testId?: string
 }) {
+  const stacked = useContext(SidebarStackedContext)
   return (
     <Box
-      sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1, mb: 0.75 }}
+      sx={{
+        display: 'flex',
+        flexDirection: stacked ? 'column' : 'row',
+        alignItems: stacked ? 'stretch' : 'flex-start',
+        justifyContent: 'space-between',
+        gap: stacked ? 0.35 : 1,
+        mb: 0.75,
+      }}
       data-testid={testId}
     >
-      <Typography variant="caption" color="text.secondary" sx={{ ...SIDEBAR_LABEL_SX, pt: 0.15 }}>
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={stacked ? { width: 'auto', textAlign: 'left' } : { ...SIDEBAR_LABEL_SX, pt: 0.15 }}
+      >
         {label}
       </Typography>
       <Box
         sx={{
-          ...SIDEBAR_VALUE_SX,
+          ...(stacked
+            ? { flex: 1, minWidth: 0, textAlign: 'left' }
+            : SIDEBAR_VALUE_SX),
           display: 'flex',
           flexDirection: 'column',
-          alignItems: 'flex-end',
+          alignItems: stacked ? 'stretch' : 'flex-end',
           gap: 0.35,
         }}
       >
@@ -143,9 +177,14 @@ function CopyableEmail({ email }: { email: string }) {
 
 export interface PropertySidebarProps {
   commandCenterData: CommandCenterPayload
+  /** `sidebar` sticky lg+ panel; `inline` accordion for viewports below lg. */
+  variant?: 'sidebar' | 'inline'
 }
 
-export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
+export function PropertySidebar({
+  commandCenterData,
+  variant = 'sidebar',
+}: PropertySidebarProps) {
   type SidebarExtras = {
     phones?: LeadPhone[]
     emails?: string[]
@@ -234,22 +273,9 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
   const mailRecommended =
     contactMethod === 'direct_mail' || actionValue === 'mail_ready'
 
-  return (
-    <Paper
-      data-testid="property-sidebar"
-      sx={{
-        ...ccCardSx,
-        mb: 0,
-        position: 'sticky',
-        top: 80,
-        maxHeight: 'calc(100vh - 100px)',
-        overflowY: 'auto',
-        display: { xs: 'none', sm: 'none', md: 'none', lg: 'block' },
-        minWidth: 340,
-        maxWidth: 400,
-        flexShrink: 0,
-      }}
-    >
+  const stacked = variant === 'inline'
+  const sections = (
+    <SidebarStackedContext.Provider value={stacked}>
       <SidebarSection title="Contact Info">
         {ownerEntries.map((entry, idx) => (
           <SidebarRow
@@ -285,7 +311,7 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
         {phones.length > 0 && (
           <SidebarLabeledContent label="Phone" testId="sidebar-phones">
             {phones.map((p, i) => (
-              <PhoneRow key={p.id ?? `${p.value}-${i}`} phone={p} />
+              <PhoneRow key={p.id ?? `${p.value}-${i}`} phone={p} dense={!stacked} />
             ))}
           </SidebarLabeledContent>
         )}
@@ -605,6 +631,59 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
           </>
         )}
       </SidebarSection>
+    </SidebarStackedContext.Provider>
+  )
+
+  if (variant === 'inline') {
+    const ownerSummary = ownerEntries[0]?.name
+    return (
+      <Accordion
+        defaultExpanded={false}
+        disableGutters
+        data-testid="property-sidebar-mobile"
+        sx={{
+          ...ccCardSx,
+          mb: 2,
+          display: { xs: 'block', lg: 'none' },
+          '&:before': { display: 'none' },
+        }}
+      >
+        <AccordionSummary
+          expandIcon={<ExpandMoreIcon />}
+          aria-controls="property-contacts-content"
+          id="property-contacts-header"
+        >
+          <Box sx={{ minWidth: 0 }}>
+            <Typography fontWeight={600}>Property & contacts</Typography>
+            {ownerSummary ? (
+              <Typography variant="caption" color="text.secondary" noWrap display="block">
+                {ownerSummary}
+              </Typography>
+            ) : null}
+          </Box>
+        </AccordionSummary>
+        <AccordionDetails id="property-contacts-content" sx={{ pt: 0 }}>{sections}</AccordionDetails>
+      </Accordion>
+    )
+  }
+
+  return (
+    <Paper
+      data-testid="property-sidebar"
+      sx={{
+        ...ccCardSx,
+        mb: 0,
+        position: 'sticky',
+        top: 80,
+        maxHeight: 'calc(100vh - 100px)',
+        overflowY: 'auto',
+        display: { xs: 'none', sm: 'none', md: 'none', lg: 'block' },
+        minWidth: 340,
+        maxWidth: 400,
+        flexShrink: 0,
+      }}
+    >
+      {sections}
     </Paper>
   )
 }

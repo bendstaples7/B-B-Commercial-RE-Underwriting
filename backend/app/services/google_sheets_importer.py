@@ -724,7 +724,9 @@ class GoogleSheetsImporter:
         Dedup priority (checked in order):
         1. ``county_assessor_pin`` — unambiguous parcel identifier.
         2. Exact ``property_street`` match (current behaviour).
-        2b. Normalized ``property_street`` for same owner (e.g. Schiller vs Schiller St).
+        2a. Normalized street for same ``owner_user_id`` (no owner names needed) —
+            catches Places full addresses vs abbreviated DB streets.
+        2b. Normalized ``property_street`` for same owner name (e.g. Schiller vs Schiller St).
         3. Same owner name + same *base* street (strip unit suffix from both
            sides) — catches "2553 N Drake Ave" vs "2553 N Drake Ave 1".
 
@@ -733,12 +735,24 @@ class GoogleSheetsImporter:
         """
         from sqlalchemy import func as sa_func
         from app.services.lead_dedup_service import find_lead_by_identity
+        from app.services.lead_merge_utils import (
+            cities_compatible,
+            dedup_street_key,
+            street_line_from_address,
+            streets_match_normalized,
+        )
 
         # 1. PIN + owner/street identity (PIN, exact street, normalized street)
         pin = validated_data.get("county_assessor_pin")
         street = validated_data.get("property_street")
         first = validated_data.get("owner_first_name")
         last = validated_data.get("owner_last_name")
+        incoming_city = (validated_data.get("property_city") or "").strip() or None
+        if not incoming_city and street:
+            from app.services.gis.routing import parse_city_state_zip_from_address
+
+            parsed_city, _parsed_state, _parsed_zip = parse_city_state_zip_from_address(street)
+            incoming_city = (parsed_city or "").strip() or None
 
         hit = find_lead_by_identity(
             owner_user_id=owner_user_id,
@@ -748,21 +762,64 @@ class GoogleSheetsImporter:
             county_assessor_pin=pin,
         )
         if hit:
-            return hit
+            # PIN matches are unambiguous; street-identity hits must still respect city.
+            # Do not treat "pin present on the request" as a match — verify digits.
+            pin_matched = False
+            if pin:
+                from app.services.plugins.pin_utils import normalize_pin_for_socrata
+
+                incoming_pin = normalize_pin_for_socrata(pin)
+                existing_pin = normalize_pin_for_socrata(hit.county_assessor_pin or '')
+                pin_matched = bool(incoming_pin and existing_pin and incoming_pin == existing_pin)
+            if pin_matched or cities_compatible(incoming_city, hit.property_city):
+                return hit
 
         # 2. Exact street match (legacy path when owner names missing)
         if street:
             q = Lead.query.filter(Lead.property_street == street)
             if owner_user_id:
                 q = q.filter(Lead.owner_user_id == owner_user_id)
-            hit = q.first()
-            if hit:
-                return hit
+            for candidate in q.limit(20).all():
+                if cities_compatible(incoming_city, candidate.property_city):
+                    return candidate
+
+        # 2a. Owner-scoped normalized street (Quick Add / ownerless imports)
+        if street and owner_user_id:
+            street_line = street_line_from_address(street) or street.strip()
+            street_key = dedup_street_key(street_line)
+            if street_key:
+                for candidate in (
+                    Lead.query
+                    .filter(Lead.owner_user_id == owner_user_id)
+                    .filter(Lead.normalized_street == street_key)
+                    .limit(20)
+                    .all()
+                ):
+                    if cities_compatible(incoming_city, candidate.property_city):
+                        return candidate
+            tokens = street_line.split()
+            house = tokens[0] if tokens else ''
+            if house and house[0].isdigit() and len(tokens) >= 2:
+                escaped_house = (
+                    house.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+                )
+                candidates = (
+                    Lead.query
+                    .filter(Lead.owner_user_id == owner_user_id)
+                    .filter(Lead.property_street.isnot(None))
+                    .filter(Lead.property_street.ilike(f"{escaped_house} %", escape='\\'))
+                    .limit(40)
+                    .all()
+                )
+                for candidate in candidates:
+                    if not cities_compatible(incoming_city, candidate.property_city):
+                        continue
+                    if streets_match_normalized(street_line, candidate.property_street):
+                        return candidate
 
         # 2b. Normalized street match (e.g. "Schiller" vs "Schiller St")
         if street and first and last:
-            from app.services.lead_merge_utils import streets_match_normalized
-
+            street_line = street_line_from_address(street) or street.strip()
             q = (
                 Lead.query
                 .filter(Lead.owner_first_name.ilike(first))
@@ -772,7 +829,9 @@ class GoogleSheetsImporter:
             if owner_user_id:
                 q = q.filter(Lead.owner_user_id == owner_user_id)
             for candidate in q:
-                if streets_match_normalized(street, candidate.property_street):
+                if not cities_compatible(incoming_city, candidate.property_city):
+                    continue
+                if streets_match_normalized(street_line, candidate.property_street):
                     return candidate
 
         # 3. Same owner + same base street (unit-stripped), bidirectional.
@@ -807,18 +866,28 @@ class GoogleSheetsImporter:
                     Lead.query
                     .filter(Lead.owner_first_name.ilike(first))
                     .filter(Lead.owner_last_name.ilike(last))
-                    .filter(
+                )
+                if owner_user_id:
+                    q = q.filter(Lead.owner_user_id == owner_user_id)
+                bind = db.session.get_bind()
+                if bind is not None and bind.dialect.name == 'postgresql':
+                    hit = q.filter(
                         db.or_(
                             Lead.property_street == base_street,
                             Lead.property_street.op('~*')(unit_pattern),
                         )
-                    )
-                )
-                if owner_user_id:
-                    q = q.filter(Lead.owner_user_id == owner_user_id)
-                hit = q.first()
-                if hit:
-                    return hit
+                    ).first()
+                    if hit and cities_compatible(incoming_city, hit.property_city):
+                        return hit
+                else:
+                    for candidate in q.filter(Lead.property_street.isnot(None)).limit(50).all():
+                        if not cities_compatible(incoming_city, candidate.property_city):
+                            continue
+                        if candidate.property_street == base_street or streets_match_normalized(
+                            base_street,
+                            candidate.property_street,
+                        ):
+                            return candidate
 
         return None
 

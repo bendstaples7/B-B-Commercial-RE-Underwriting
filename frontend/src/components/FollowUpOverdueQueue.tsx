@@ -109,7 +109,7 @@ export function FollowUpOverdueQueue() {
   const bulkActions = resolveBulkActions(['add_to_mail_batch', 'create_task'], bulkCtx)
 
   return (
-    <Box data-testid="follow-up-overdue-queue">
+    <Box data-testid="follow-up-overdue-queue" sx={{ maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}>
       <Typography variant="h6" gutterBottom>
         Follow-Up Overdue
       </Typography>

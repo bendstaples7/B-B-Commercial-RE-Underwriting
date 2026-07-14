@@ -85,7 +85,11 @@ export const AdminPanel: React.FC = () => {
 
   // ── Table ──────────────────────────────────────────────────────────────────
   return (
-    <Box component="section" aria-labelledby="admin-panel-heading" sx={{ p: 2 }}>
+    <Box
+      component="section"
+      aria-labelledby="admin-panel-heading"
+      sx={{ p: { xs: 1.5, sm: 2 }, maxWidth: '100%', minWidth: 0, overflowX: 'hidden' }}
+    >
       <Box sx={{ mb: 2 }}>
         <Typography variant="h5" component="h1" id="admin-panel-heading" fontWeight={600}>
           Admin Panel
@@ -95,8 +99,8 @@ export const AdminPanel: React.FC = () => {
         </Typography>
       </Box>
 
-      <TableContainer component={Paper} sx={{ overflowX: 'auto' }}>
-        <Table size="small" aria-label="Users table">
+      <TableContainer component={Paper} sx={{ overflowX: 'auto', maxWidth: '100%' }}>
+        <Table size="small" aria-label="Users table" sx={{ minWidth: 720 }}>
           <TableHead>
             <TableRow>
               <TableCell sx={{ fontWeight: 'bold' }} scope="col">
@@ -152,10 +156,14 @@ export const AdminPanel: React.FC = () => {
                   aria-label={`View details for ${user.display_name}`}
                 >
                   <TableCell>
-                    <Typography variant="body2">{user.display_name}</Typography>
+                    <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>
+                      {user.display_name}
+                    </Typography>
                   </TableCell>
                   <TableCell>
-                    <Typography variant="body2">{user.email}</Typography>
+                    <Typography variant="body2" sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
+                      {user.email}
+                    </Typography>
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2">

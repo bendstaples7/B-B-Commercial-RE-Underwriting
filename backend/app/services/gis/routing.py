@@ -23,12 +23,20 @@ Adding a new county:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.services.gis.base import GISConnector
 
 logger = logging.getLogger(__name__)
+
+# Matches "IL", "Illinois", "IL 60647", "IL 60647-1234"
+_STATE_ZIP_RE = re.compile(
+    r'^(?P<state>IL|ILLINOIS)\b(?:\s+(?P<zip>\d{5}(?:-\d{4})?))?$',
+    re.IGNORECASE,
+)
+_COUNTRY_TOKENS = frozenset({'USA', 'US', 'UNITED STATES'})
 
 # ---------------------------------------------------------------------------
 # Cities/townships that are in Cook County, IL (non-exhaustive; covers the
@@ -105,15 +113,37 @@ def _ensure_connectors_loaded() -> None:
     import app.services.gis.lake_county_gis_connector  # noqa: F401
 
 
-def parse_city_state_from_address(address: str) -> tuple[Optional[str], Optional[str]]:
-    """Infer city and IL state from a comma-separated address string."""
+def parse_city_state_zip_from_address(
+    address: str,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Infer city, IL state, and optional ZIP from a comma-separated address.
+
+    Accepts common Google Places shapes, e.g.:
+      - ``123 Main St, Chicago, IL``
+      - ``123 Main St, Chicago, IL 60647``
+      - ``123 Main St, Chicago, IL 60647, USA``
+    """
     parts = [p.strip() for p in (address or "").split(",") if p.strip()]
     if len(parts) < 2:
-        return None, None
-    state = parts[-1].strip().upper()
-    if state not in ("IL", "ILLINOIS"):
-        return None, None
-    return parts[-2].strip(), "IL"
+        return None, None, None
+
+    if parts[-1].upper() in _COUNTRY_TOKENS:
+        parts = parts[:-1]
+    if len(parts) < 2:
+        return None, None, None
+
+    match = _STATE_ZIP_RE.match(parts[-1].strip())
+    if not match:
+        return None, None, None
+
+    city = parts[-2]
+    return city, "IL", match.group("zip")
+
+
+def parse_city_state_from_address(address: str) -> tuple[Optional[str], Optional[str]]:
+    """Infer city and IL state from a comma-separated address string."""
+    city, state, _zip_code = parse_city_state_zip_from_address(address)
+    return city, state
 
 
 def _resolve_market(lead) -> Optional[str]:

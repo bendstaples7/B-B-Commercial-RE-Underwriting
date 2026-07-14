@@ -64,7 +64,15 @@ function FilterBar({
 
   return (
     <Box>
-      <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1 }}>
+      <Box
+        sx={{
+          display: 'flex',
+          gap: 1,
+          alignItems: 'center',
+          mb: 1,
+          flexWrap: 'wrap',
+        }}
+      >
         <Tooltip title="Toggle filters">
           <IconButton
             size="small"
@@ -75,7 +83,7 @@ function FilterBar({
           </IconButton>
         </Tooltip>
 
-        <FormControl size="small" sx={{ minWidth: 140 }}>
+        <FormControl size="small" sx={{ minWidth: { xs: 120, sm: 140 }, flex: { xs: '1 1 auto', sm: '0 0 auto' } }}>
           <InputLabel id="kanban-sort-label">Sort by</InputLabel>
           <Select
             labelId="kanban-sort-label"
@@ -110,7 +118,7 @@ function FilterBar({
       </Box>
 
       <Collapse in={showFilters}>
-        <Stack direction="row" spacing={2} sx={{ mb: 2 }} flexWrap="wrap">
+        <Stack direction="row" spacing={2} useFlexGap sx={{ mb: 2 }} flexWrap="wrap">
           <TextField
             size="small"
             label="Min Score"
@@ -122,7 +130,7 @@ function FilterBar({
                 valueMin: e.target.value ? Number(e.target.value) : undefined,
               })
             }
-            sx={{ minWidth: 120 }}
+            sx={{ minWidth: 120, flex: { xs: '1 1 120px', sm: '0 0 auto' } }}
           />
           <TextField
             size="small"
@@ -135,7 +143,7 @@ function FilterBar({
                 valueMax: e.target.value ? Number(e.target.value) : undefined,
               })
             }
-            sx={{ minWidth: 120 }}
+            sx={{ minWidth: 120, flex: { xs: '1 1 120px', sm: '0 0 auto' } }}
           />
         </Stack>
       </Collapse>
@@ -261,19 +269,26 @@ function KanbanBoardInner() {
   }
 
   return (
-    <Box sx={{ width: '100%', overflow: 'hidden' }}>
+    <Box sx={{ width: '100%', maxWidth: '100%', minWidth: 0, overflow: 'hidden' }}>
       {/* Header */}
       <Box
         sx={{
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center',
+          alignItems: { xs: 'flex-start', sm: 'center' },
           mb: 2,
+          flexWrap: 'wrap',
+          gap: 1,
         }}
       >
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0, flex: 1 }}>
           <ViewKanbanIcon color="primary" />
-          <Typography variant="h5" component="h1" fontWeight={600}>
+          <Typography
+            variant="h5"
+            component="h1"
+            fontWeight={600}
+            sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+          >
             Lead Pipeline Kanban
           </Typography>
         </Box>
@@ -306,8 +321,16 @@ function KanbanBoardInner() {
             display: 'flex',
             gap: 2,
             overflowX: 'auto',
+            overflowY: 'auto',
             pb: 2,
             flexWrap: 'nowrap',
+            WebkitOverflowScrolling: 'touch',
+            maxWidth: '100%',
+            minWidth: 0,
+            maxHeight: {
+              xs: 'calc(100vh - 220px)',
+              sm: 'calc(100vh - 200px)',
+            },
           }}
         >
           {filteredColumns
