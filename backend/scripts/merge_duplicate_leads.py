@@ -28,6 +28,7 @@ from app.services.lead_merge_utils import (  # noqa: E402
     merge_mailer_history,
     owner_group_key,
     pick_merge_winner,
+    prefer_higher_lead_score,
 )
 from app.services.plugins.pin_utils import normalize_pin_for_socrata  # noqa: E402
 
@@ -172,10 +173,9 @@ def _merge_loser_into_winner(cur, winner: dict, loser: dict) -> None:
                     if merged is not None and merged != w_val:
                         updates[field] = Json(merged)
                 elif field == 'lead_score':
-                    w_score = float(w_val) if w_val is not None else 0.0
-                    l_score = float(l_val) if l_val is not None else 0.0
-                    if l_score > w_score:
-                        updates[field] = l_val
+                    preferred = prefer_higher_lead_score(w_val, l_val)
+                    if preferred is not None:
+                        updates[field] = preferred
                 elif (w_val is None or w_val == '') and l_val not in (None, ''):
                     updates[field] = l_val
 

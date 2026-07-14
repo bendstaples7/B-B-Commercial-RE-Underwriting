@@ -209,6 +209,49 @@ class TestRelatedProperties:
             svc.link_contact_to_property(b.id, contact.id, role='owner', is_primary=False)
             assert svc.get_related_properties(a.id) == []
 
+    def test_attorney_role_does_not_create_related_properties(self, app):
+        with app.app_context():
+            svc = ContactService()
+            a = _make_lead(
+                property_street='10 Alpha St',
+                owner_user_id='user-1',
+                owner_first_name='Pat',
+                owner_last_name='Lee',
+            )
+            b = _make_lead(
+                property_street='20 Beta St',
+                owner_user_id='user-1',
+                owner_first_name='Other',
+                owner_last_name='Name',
+            )
+            db.session.commit()
+            contact = svc.create_contact({'first_name': 'Pat', 'last_name': 'Lee'})
+            svc.link_contact_to_property(a.id, contact.id, role='owner', is_primary=True)
+            svc.link_contact_to_property(b.id, contact.id, role='attorney', is_primary=False)
+            assert svc.get_related_properties(a.id) == []
+
+    def test_shared_owner_contact_does_not_leak_other_user_property(self, app):
+        with app.app_context():
+            svc = ContactService()
+            a = _make_lead(
+                property_street='10 Alpha St',
+                owner_user_id='user-1',
+                owner_first_name='Pat',
+                owner_last_name='Lee',
+            )
+            b = _make_lead(
+                property_street='20 Beta St',
+                owner_user_id='user-2',
+                owner_first_name='Pat',
+                owner_last_name='Lee',
+            )
+            db.session.commit()
+            contact = svc.create_contact({'first_name': 'Pat', 'last_name': 'Lee'})
+            svc.link_contact_to_property(a.id, contact.id, role='owner', is_primary=True)
+            svc.link_contact_to_property(b.id, contact.id, role='owner', is_primary=True)
+            assert svc.get_related_properties(a.id) == []
+            assert all(r['id'] != b.id for r in svc.get_related_properties(a.id))
+
     def test_reuse_already_linked_contact_does_not_raise(self, app):
         with app.app_context():
             svc = ContactService()

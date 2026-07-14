@@ -217,7 +217,7 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
         w_val = getattr(winner, field, None)
         l_val = getattr(loser, field, None)
         if field == 'lead_score':
-            # Scoring has a single writer — refresh after merge instead of copying.
+            # Scoring has a single writer — caller must rescore after commit.
             continue
         if (w_val is None or w_val == '') and l_val not in (None, ''):
             setattr(winner, field, l_val)
@@ -230,12 +230,6 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
         changed_by=changed_by,
     ))
     db.session.delete(loser)
-    db.session.flush()
-    try:
-        from app.services.lead_refresh import refresh_lead_scoring
-        refresh_lead_scoring(winner_id)
-    except Exception:  # noqa: BLE001 — never fail a merge on rescoring
-        logger.exception('refresh_lead_scoring failed after merging %s into %s', loser_id, winner_id)
     logger.info("Merged lead %s into %s", loser_id, winner_id)
 
 
@@ -262,9 +256,7 @@ def find_duplicate_clusters() -> list[list[Lead]]:
         )
         if not first or not last:
             continue
-        street_key = (lead.normalized_street or '').strip() or dedup_street_key(
-            lead.property_street,
-        )
+        street_key = dedup_street_key(lead.property_street)
         if not street_key:
             continue
         key = (
@@ -292,6 +284,7 @@ def run_duplicate_sentinel(
         'flagged': 0,
         'skipped': 0,
     }
+    winners_to_rescore: set[int] = set()
 
     for cluster in clusters:
         if stats['merged'] >= max_merges:
@@ -321,9 +314,15 @@ def run_duplicate_sentinel(
         for loser in losers:
             merge_lead_into_winner(winner, loser)
             stats['merged'] += 1
+            winners_to_rescore.add(winner.id)
 
     if not dry_run:
+        # Commit merges before rescoring — refresh_lead_scoring rolls back the
+        # shared session on failure and must not undo an in-flight merge.
         db.session.commit()
+        from app.services.lead_refresh import refresh_lead_scoring
+        for winner_id in winners_to_rescore:
+            refresh_lead_scoring(winner_id)
     else:
         db.session.rollback()
 

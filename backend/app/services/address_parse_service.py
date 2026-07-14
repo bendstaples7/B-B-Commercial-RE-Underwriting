@@ -12,6 +12,16 @@ from app.services.plugins.cook_county_sheriff_foreclosure import (
 _ZIP_RE = re.compile(r'^(\d{5})(?:-\d{4})?$')
 _STATE_ZIP_RE = re.compile(r'^([A-Z]{2})\s*(\d{5})(?:-\d{4})?$', re.IGNORECASE)
 
+# USPS state / DC / territory abbreviations — reject street suffixes like ST/DR.
+_US_STATE_CODES = frozenset({
+    'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
+    'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
+    'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+    'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
+    'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
+    'DC', 'PR', 'VI', 'GU', 'AS', 'MP',
+})
+
 
 def parse_embedded_us_address(raw: str) -> tuple[str, str, str, str] | None:
     """Parse (street, city, state, zip) from a one-line US address, or None if ambiguous."""
@@ -85,7 +95,7 @@ def _parse_space_separated_with_state(raw: str) -> tuple[str, str, str, str] | N
     zip_code = zip_match.group(1)
 
     state = parts[-2].upper()
-    if len(state) != 2 or not state.isalpha():
+    if len(state) != 2 or not state.isalpha() or state not in _US_STATE_CODES:
         return None
 
     if (

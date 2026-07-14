@@ -190,6 +190,23 @@ def merge_mailer_history(winner_val: Any, loser_val: Any) -> Any:
     return winner_entries + loser_entries
 
 
+def prefer_higher_lead_score(winner_val: Any, loser_val: Any) -> Any | None:
+    """Return loser score when it is strictly higher; else None (keep winner).
+
+    Application merge paths must not write ``lead_score`` (single writer:
+    scoring engine / ``refresh_lead_scoring``). Offline cleanup scripts may use
+    this helper only when they intentionally copy the higher persisted score.
+    """
+    try:
+        w_score = float(winner_val) if winner_val is not None else 0.0
+        l_score = float(loser_val) if loser_val is not None else 0.0
+    except (TypeError, ValueError):
+        return None
+    if l_score > w_score:
+        return loser_val
+    return None
+
+
 def owner_names_from_deal_props(props: dict) -> tuple[str, str]:
     """Extract owner first/last from HubSpot deal properties when present."""
     first = (

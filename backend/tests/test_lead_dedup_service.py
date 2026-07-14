@@ -44,6 +44,12 @@ class TestDedupStreetKey:
         assert dedup_street_key('1719 W Barry 60657') == dedup_street_key('1719 W Barry')
         assert 'BARRY' in dedup_street_key('1719 W Barry 60657')
 
+    def test_street_suffix_st_is_not_treated_as_state(self):
+        """``1719 W Barry St 60657`` must not parse ST as the US state."""
+        assert 'BARRY' in dedup_street_key('1719 W Barry St 60657')
+        assert dedup_street_key('1719 W Barry St 60657') == dedup_street_key('1719 W Barry St')
+        assert dedup_street_key('1719 W Barry St 60657') != dedup_street_key('1719 W')
+
     def test_north_and_n_share_key(self):
         assert dedup_street_key('4903 North Hermitage') == dedup_street_key('4903 N Hermitage')
 
