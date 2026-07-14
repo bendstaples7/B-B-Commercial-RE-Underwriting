@@ -72,6 +72,9 @@ export function LeadBriefingPanel({ leadId, initialBriefing = null }: LeadBriefi
   leadIdRef.current = leadId
 
   useEffect(() => {
+    // Reset request UI when navigating between leads so a stale Generate cannot
+    // leave the new lead's CTA permanently disabled.
+    setLoading(false)
     setError(null)
     setBriefing((prev) => {
       const next = toState(initialBriefing, leadId)

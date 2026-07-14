@@ -136,7 +136,10 @@ def test_rejects_open_task_page_echo():
     contact_note = 'Left a voicemail for Gilberto Olivares about scheduling a walkthrough.'
     assert svc._is_page_echo(contact_note, context) is False
     filtered = svc._filter_usable_bullets([echo, echo2, good], context)
-    assert filtered == [good]
+    assert filtered[0] is None
+    assert filtered[1] is None
+    assert filtered[2] == good
+    assert [b for b in filtered if b] == [good]
 
 
 def test_truncate_at_word_boundary():

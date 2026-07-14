@@ -225,6 +225,8 @@ class HubSpotTimelineImportService:
                         occurred_at_raw,
                     )
                     continue
+                if occurred_at.tzinfo is None:
+                    occurred_at = occurred_at.replace(tzinfo=timezone.utc)
             else:
                 logger.warning(
                     "HubSpot activity %s missing occurred_at — skipping",
@@ -265,8 +267,10 @@ class HubSpotTimelineImportService:
             if occurred_at >= review_cutoff:
                 recent_new_entries += 1
 
-        # Update lead signals
-        lead.last_hubspot_sync_at = now
+        # Update lead signals — only touch sync timestamp when we actually wrote rows
+        # so idempotent re-runs do not mark every lead as freshly HubSpot-synced.
+        if new_entries_count > 0:
+            lead.last_hubspot_sync_at = now
         if latest_deal_stage:
             # Read-only HubSpot stage mirror; primary pipeline status is lead_status.
             lead.hubspot_deal_stage = latest_deal_stage
@@ -403,7 +407,7 @@ class HubSpotTimelineImportService:
                     "sync_leads_from_interactions: lead_id=%s failed: %s",
                     lid, exc,
                 )
-                results[lid] = 0
+                results[lid] = -1  # sentinel: failed (distinct from 0 = already current)
         return results
 
     def scrub_html_from_hubspot_entries(self, lead_id: Optional[int] = None) -> int:
@@ -423,74 +427,119 @@ class HubSpotTimelineImportService:
             q = q.filter(LeadTimelineEntry.lead_id == lead_id)
 
         updated = 0
-        for entry in q.yield_per(200):
-            changed = False
-            summary = entry.summary or ''
-            meta = dict(entry.event_metadata) if isinstance(entry.event_metadata, dict) else {}
+        batch: list = []
+        BATCH_SIZE = 200
 
-            if '<' in summary:
-                cleaned = strip_html_tags(summary)
-                if cleaned != summary:
-                    entry.summary = cleaned[:500] if cleaned else entry.summary
-                    summary = entry.summary or ''
-                    changed = True
-
-            body = meta.get('body')
-            if isinstance(body, str) and '<' in body:
-                cleaned_body = strip_html_tags(body)
-                if cleaned_body != body:
-                    meta['body'] = cleaned_body
-                    changed = True
-
-            needs_call_rewrite = (
-                entry.event_type == 'hubspot_call'
-                and (
-                    looks_like_uuid(summary)
-                    or looks_like_uuid(meta.get('body'))
-                    or looks_like_uuid(meta.get('disposition'))
-                    or looks_like_uuid(meta.get('outcome'))
+        def _flush_batch(entries: list) -> int:
+            if not entries:
+                return 0
+            rewrite_ids = [
+                str(e.hubspot_activity_id)
+                for e in entries
+                if (
+                    e.event_type == 'hubspot_call'
+                    and e.hubspot_activity_id
+                    and (
+                        looks_like_uuid(e.summary or '')
+                        or looks_like_uuid(
+                            (e.event_metadata or {}).get('body')
+                            if isinstance(e.event_metadata, dict) else None
+                        )
+                        or looks_like_uuid(
+                            (e.event_metadata or {}).get('disposition')
+                            if isinstance(e.event_metadata, dict) else None
+                        )
+                        or looks_like_uuid(
+                            (e.event_metadata or {}).get('outcome')
+                            if isinstance(e.event_metadata, dict) else None
+                        )
+                    )
                 )
-            )
-            if needs_call_rewrite and entry.hubspot_activity_id:
-                interaction = Interaction.query.filter_by(
-                    hubspot_engagement_id=str(entry.hubspot_activity_id),
-                ).first()
-                raw = (interaction.raw_payload if interaction else None) or {}
-                metadata = raw.get('metadata') if isinstance(raw, dict) else {}
-                if not isinstance(metadata, dict):
-                    metadata = {}
-                engagement_obj = raw.get('engagement') if isinstance(raw, dict) else {}
-                if not isinstance(engagement_obj, dict):
-                    engagement_obj = {}
-                disposition = metadata.get('disposition') or meta.get('disposition')
-                new_summary = format_hubspot_call_summary(
-                    body=strip_html_tags(metadata.get('body') or '') or None,
-                    title=metadata.get('title'),
-                    disposition=disposition,
-                    direction=metadata.get('direction'),
-                    body_preview=strip_html_tags(engagement_obj.get('bodyPreview') or '') or None,
-                )
-                if new_summary and new_summary != entry.summary:
-                    entry.summary = new_summary[:500]
-                    changed = True
-                label = resolve_call_disposition_label(disposition)
-                if label and (
-                    meta.get('disposition') != label or meta.get('outcome') != label
+            ]
+            by_engagement: dict[str, object] = {}
+            if rewrite_ids:
+                for interaction in (
+                    Interaction.query
+                    .filter(Interaction.hubspot_engagement_id.in_(rewrite_ids))
+                    .all()
                 ):
-                    meta['disposition'] = label
-                    meta['outcome'] = label
-                    changed = True
-                if entry.summary and meta.get('body') != entry.summary:
-                    meta['body'] = entry.summary
-                    changed = True
+                    by_engagement[str(interaction.hubspot_engagement_id)] = interaction
 
-            if changed:
-                entry.event_metadata = meta or entry.event_metadata
-                db.session.add(entry)
-                updated += 1
+            batch_updated = 0
+            for entry in entries:
+                changed = False
+                summary = entry.summary or ''
+                meta = dict(entry.event_metadata) if isinstance(entry.event_metadata, dict) else {}
 
-        if updated:
-            db.session.commit()
+                if '<' in summary:
+                    cleaned = strip_html_tags(summary)
+                    if cleaned != summary:
+                        entry.summary = cleaned[:500] if cleaned else entry.summary
+                        summary = entry.summary or ''
+                        changed = True
+
+                body = meta.get('body')
+                if isinstance(body, str) and '<' in body:
+                    cleaned_body = strip_html_tags(body)
+                    if cleaned_body != body:
+                        meta['body'] = cleaned_body
+                        changed = True
+
+                needs_call_rewrite = (
+                    entry.event_type == 'hubspot_call'
+                    and entry.hubspot_activity_id
+                    and (
+                        looks_like_uuid(summary)
+                        or looks_like_uuid(meta.get('body'))
+                        or looks_like_uuid(meta.get('disposition'))
+                        or looks_like_uuid(meta.get('outcome'))
+                    )
+                )
+                if needs_call_rewrite:
+                    interaction = by_engagement.get(str(entry.hubspot_activity_id))
+                    raw = (getattr(interaction, 'raw_payload', None) if interaction else None) or {}
+                    metadata = raw.get('metadata') if isinstance(raw, dict) else {}
+                    if not isinstance(metadata, dict):
+                        metadata = {}
+                    engagement_obj = raw.get('engagement') if isinstance(raw, dict) else {}
+                    if not isinstance(engagement_obj, dict):
+                        engagement_obj = {}
+                    disposition = metadata.get('disposition') or meta.get('disposition')
+                    new_summary = format_hubspot_call_summary(
+                        body=strip_html_tags(metadata.get('body') or '') or None,
+                        title=metadata.get('title'),
+                        disposition=disposition,
+                        direction=metadata.get('direction'),
+                        body_preview=strip_html_tags(engagement_obj.get('bodyPreview') or '') or None,
+                    )
+                    if new_summary and new_summary != entry.summary:
+                        entry.summary = new_summary[:500]
+                        changed = True
+                    label = resolve_call_disposition_label(disposition)
+                    if label and (
+                        meta.get('disposition') != label or meta.get('outcome') != label
+                    ):
+                        meta['disposition'] = label
+                        meta['outcome'] = label
+                        changed = True
+                    if entry.summary and meta.get('body') != entry.summary:
+                        meta['body'] = entry.summary
+                        changed = True
+
+                if changed:
+                    entry.event_metadata = meta or entry.event_metadata
+                    db.session.add(entry)
+                    batch_updated += 1
+            if batch_updated:
+                db.session.commit()
+            return batch_updated
+
+        for entry in q.yield_per(BATCH_SIZE):
+            batch.append(entry)
+            if len(batch) >= BATCH_SIZE:
+                updated += _flush_batch(batch)
+                batch = []
+        updated += _flush_batch(batch)
         return updated
 
     def derive_is_warm(self, lead_id: int) -> bool:

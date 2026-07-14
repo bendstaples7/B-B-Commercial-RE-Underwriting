@@ -50,30 +50,67 @@ function decodeHtmlEntities(text: string): string {
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
     .replace(/&#x27;/gi, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (match, hex) => {
+      const code = Number.parseInt(hex, 16)
+      return Number.isFinite(code) && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : match
+    })
     .replace(/&#(\d+);/g, (match, n) => {
       const code = Number(n)
-      return Number.isFinite(code) ? String.fromCharCode(code) : match
+      return Number.isFinite(code) && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : match
     })
+}
+
+/** Strip tags with quoted attributes; leave comparisons like "x < y" alone. */
+function stripAngleTags(text: string): string {
+  let out = text.replace(/<\s*br\b[^>]*>/gi, '\n')
+  out = out.replace(/<\/\s*(p|div|li|tr|h[1-6])\s*>/gi, ' ')
+  out = out.replace(/<\/?[a-zA-Z][^>]*?(?:"[^"]*"|'[^']*'|[^>'"])*>/g, '')
+  out = out.replace(/<[a-zA-Z/][^>]*$/g, '')
+  return out
 }
 
 /**
  * Strip HTML tags to plain text for timeline / CRM bodies that arrive as markup.
- * Block closers and <br> become spaces; entities are decoded; whitespace collapsed.
- * Safe for use with untrusted CRM HTML (no DOM innerHTML).
+ * Uses DOMParser when available so attributes containing '>' are handled correctly.
+ * Safe for untrusted CRM HTML (no textarea.innerHTML).
  */
-export function stripHtmlTags(rawHtml: string | null | undefined): string {
+export function stripHtmlTags(
+  rawHtml: string | null | undefined,
+  options?: { preserveNewlines?: boolean },
+): string {
   if (!rawHtml) return ''
+  const preserveNewlines = Boolean(options?.preserveNewlines)
   let text = String(rawHtml)
-  // Unescape then strip up to 3 times so encoded tags (&lt;b&gt;) cannot survive
+
   for (let i = 0; i < 3; i += 1) {
-    text = text.replace(/<\s*br\s*\/?>/gi, ' ')
-    text = text.replace(/<\/\s*(p|div|li|tr|h[1-6])\s*>/gi, ' ')
-    text = text.replace(/<[^>]+>/g, '')
-    // Truncated CRM bodies may leave an unterminated '<' fragment
-    text = text.replace(/<[^>]*$/g, '')
-    const decoded = decodeHtmlEntities(text)
-    if (decoded === text) break
-    text = decoded
+    const before = text
+    if (typeof DOMParser !== 'undefined') {
+      const doc = new DOMParser().parseFromString(
+        `<!DOCTYPE html><body>${text}</body>`,
+        'text/html',
+      )
+      doc.body.querySelectorAll('br').forEach((br) => {
+        br.replaceWith(doc.createTextNode('\n'))
+      })
+      ;['p', 'div', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'].forEach((tag) => {
+        doc.body.querySelectorAll(tag).forEach((el) => {
+          el.appendChild(doc.createTextNode(' '))
+        })
+      })
+      text = doc.body.textContent || ''
+    }
+    // Always strip leftover / entity-rehydrated angle tags as text
+    text = stripAngleTags(text)
+    text = decodeHtmlEntities(text)
+    if (text === before) break
+  }
+
+  if (preserveNewlines) {
+    return text.replace(/[^\S\n]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
   }
   return text.replace(/\s+/g, ' ').trim()
 }

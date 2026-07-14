@@ -38,15 +38,22 @@ const SUMMARY_COLLAPSE_THRESHOLD = 120
 /**
  * Derive display text for a timeline entry, falling back to metadata when summary is empty.
  * HubSpot bodies often include HTML wrappers — always show plain text.
+ * Plain-text notes keep their original newlines; HTML is stripped with newlines preserved from <br>.
  */
 function getEntryDisplayText(entry: LeadTimelineEntry): string {
-  if (entry.summary?.trim()) return stripHtmlTags(entry.summary)
-  const metadata = entry.metadata
-  if (!metadata) return ''
-  const body = metadata.body
-  if (typeof body === 'string' && body.trim()) return stripHtmlTags(body)
-  const notes = metadata.notes
-  if (typeof notes === 'string' && notes.trim()) return stripHtmlTags(notes)
+  const candidates = [
+    entry.summary,
+    entry.metadata?.body,
+    entry.metadata?.notes,
+  ]
+  for (const raw of candidates) {
+    if (typeof raw !== 'string' || !raw.trim()) continue
+    // Plain text (no tags / entities): preserve multi-line notes as authored
+    if (!/<[^>]*>|&[a-zA-Z#]+;/i.test(raw)) {
+      return raw.trim()
+    }
+    return stripHtmlTags(raw, { preserveNewlines: true })
+  }
   return ''
 }
 
@@ -118,8 +125,10 @@ function extractEmailMessageBody(body: string): string {
  */
 function getFullNoteBody(entry: LeadTimelineEntry): string {
   const body = entry.metadata?.body
-  if (typeof body === 'string' && body.trim()) return stripHtmlTags(body)
-  return stripHtmlTags(entry.summary?.trim() ?? '')
+  if (typeof body === 'string' && body.trim()) {
+    return stripHtmlTags(body, { preserveNewlines: true })
+  }
+  return stripHtmlTags(entry.summary?.trim() ?? '', { preserveNewlines: true })
 }
 
 function isEmailEntry(entry: LeadTimelineEntry): boolean {
@@ -442,20 +451,7 @@ function TimelineEntryRow({ entry, highlighted = false }: TimelineEntryRowProps)
                       pl: 0.5,
                       borderLeft: 2,
                       borderColor: 'divider',
-                      cursor: 'pointer',
-                      '&:hover': { borderColor: 'text.disabled' },
                     }}
-                    onClick={handleToggleDetails}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault()
-                        handleToggleDetails(event)
-                      }
-                    }}
-                    role="button"
-                    tabIndex={0}
-                    aria-expanded={detailsExpanded}
-                    aria-label="Hide details"
                     data-testid={`entry-details-${entry.id}`}
                   >
                     {detailRows.map((row) => (

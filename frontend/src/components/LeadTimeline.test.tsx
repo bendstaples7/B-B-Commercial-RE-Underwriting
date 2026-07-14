@@ -640,7 +640,7 @@ describe('LeadTimeline', () => {
       expect(screen.getByTestId('entry-detail-value-1-note')).toHaveTextContent(longNote)
     })
 
-    it('collapses when the expanded note body is clicked', async () => {
+    it('does not collapse when clicking expanded note body (allows text select/copy)', async () => {
       const longNote = 'A'.repeat(200)
       render(
         <LeadTimeline
@@ -659,6 +659,9 @@ describe('LeadTimeline', () => {
       expect(screen.getByTestId('entry-details-1')).toBeVisible()
 
       await user.click(screen.getByTestId('entry-details-1'))
+      expect(screen.getByTestId('entry-detail-value-1-note')).toBeVisible()
+
+      await user.click(screen.getByTestId('entry-details-toggle-1'))
       await waitFor(() => {
         expect(screen.getByTestId('entry-detail-value-1-note')).not.toBeVisible()
       })

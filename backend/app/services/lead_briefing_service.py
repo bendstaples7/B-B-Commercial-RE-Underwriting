@@ -39,6 +39,12 @@ _TIMELINE_LIMIT = 40
 _BULLET_COUNT = 5
 _MAX_BULLET_CHARS = 180
 
+# Timeline event types that count as real contact (not admin/status/task chatter)
+_CONTACT_EVENT_TYPES = frozenset({
+    'hubspot_call', 'hubspot_note', 'call_logged', 'note_logged',
+    'email_logged', 'meeting_logged', 'sms_logged', 'voicemail_logged',
+})
+
 _DANGLING_END_WORDS = frozenset({
     'a', 'an', 'the', 'and', 'or', 'but', 'for', 'with', 'to', 'of', 'in',
     'on', 'at', 'by', 'from', 'as', 'was', 'were', 'is', 'are', 'be', 'been',
@@ -161,7 +167,7 @@ class LeadBriefingService:
 
         prompt = self._build_prompt(mode, context, previous)
         previous_updated_at = (previous or {}).get('updated_at') if previous else None
-        bullets: list[str] = []
+        bullets: list[Optional[str]] = []
         try:
             raw = self._call_gemini_api(prompt)
             bullets = self._filter_usable_bullets(self._parse_bullets(raw), context)
@@ -173,13 +179,14 @@ class LeadBriefingService:
             )
             bullets = []
 
-        if len(bullets) < _BULLET_COUNT:
+        usable_count = sum(1 for b in bullets if b)
+        if usable_count < _BULLET_COUNT:
             retry_prompt = prompt + "\n\n" + _RETRY_NUDGE
             try:
                 raw = self._call_gemini_api(retry_prompt)
                 bullets = self._filter_usable_bullets(self._parse_bullets(raw), context)
             except (GeminiParseError, GeminiResponseError) as retry_exc:
-                if not bullets:
+                if usable_count == 0:
                     raise retry_exc
 
         bullets = self._ensure_five(bullets, context=context)
@@ -200,8 +207,13 @@ class LeadBriefingService:
         }
 
         if persist:
-            # Re-read under short lock so a concurrent Refresh does not wipe a newer briefing
-            fresh = Lead.query.get(lead_id)
+            # Lock the row so a concurrent Refresh cannot overwrite a newer briefing
+            fresh = (
+                db.session.query(Lead)
+                .filter(Lead.id == lead_id)
+                .with_for_update()
+                .one_or_none()
+            )
             if fresh is None:
                 raise ValueError(f"Lead {lead_id} not found")
             current = self._coerce_saved_briefing(getattr(fresh, 'quick_briefing', None))
@@ -313,7 +325,20 @@ class LeadBriefingService:
             })
 
         now = datetime.now(timezone.utc)
-        last = timeline[0] if timeline else None
+        # Prefer a real contact event over admin/status/task timeline noise
+        last = next(
+            (
+                e for e in timeline
+                if (e.event_type or '') in _CONTACT_EVENT_TYPES
+                and strip_html_tags(e.summary or "")
+            ),
+            None,
+        )
+        if last is None:
+            last = next(
+                (e for e in timeline if strip_html_tags(e.summary or "")),
+                None,
+            )
         last_at = last.occurred_at if last else None
         if last_at is not None and last_at.tzinfo is None:
             last_at = last_at.replace(tzinfo=timezone.utc)
@@ -395,7 +420,7 @@ class LeadBriefingService:
         data = None
         try:
             data = json.loads(text)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as decode_exc:
             salvaged = re.findall(r'"((?:\\.|[^"\\]){8,})"', text)
             cleaned_salvage: list[str] = []
             for s in salvaged:
@@ -409,7 +434,7 @@ class LeadBriefingService:
             else:
                 raise GeminiParseError(
                     f"Gemini briefing response was not valid JSON. Raw: {raw[:400]}"
-                )
+                ) from decode_exc
 
         bullets = data.get("bullets") if isinstance(data, dict) else None
         if not isinstance(bullets, list) or not bullets:
@@ -471,6 +496,9 @@ class LeadBriefingService:
             return False
         if line[-1] not in '.?!':
             return False
+        # One-sentence contract — reject multi-sentence model output
+        if re.search(r'[.!?]\s+\S', line):
+            return False
         words = line[:-1].split()
         if not words:
             return False
@@ -486,11 +514,24 @@ class LeadBriefingService:
         self,
         bullets: list[str],
         context: Optional[dict[str, Any]] = None,
-    ) -> list[str]:
-        return [
-            b for b in bullets
-            if self._is_complete_bullet(b) and not self._is_page_echo(b, context)
+    ) -> list[Optional[str]]:
+        """Preserve Gemini's five-slot order; rejected slots become None."""
+        slots: list[Optional[str]] = [None] * _BULLET_COUNT
+        for i, b in enumerate(bullets[:_BULLET_COUNT]):
+            if isinstance(b, str) and self._is_complete_bullet(b) and not self._is_page_echo(b, context):
+                slots[i] = b
+        # Extra usable bullets beyond 5 fill leading empty slots
+        extras = [
+            b for b in bullets[_BULLET_COUNT:]
+            if isinstance(b, str) and self._is_complete_bullet(b) and not self._is_page_echo(b, context)
         ]
+        for extra in extras:
+            try:
+                empty_idx = slots.index(None)
+            except ValueError:
+                break
+            slots[empty_idx] = extra
+        return slots
 
     @classmethod
     def _is_page_echo(cls, text: str, context: Optional[dict[str, Any]] = None) -> bool:
@@ -572,10 +613,15 @@ class LeadBriefingService:
 
     def _ensure_five(
         self,
-        bullets: list[str],
+        bullets: list[Optional[str]] | list[str],
         context: Optional[dict[str, Any]] = None,
     ) -> list[str]:
-        cleaned = self._filter_usable_bullets(bullets, context)
+        slots: list[Optional[str]] = list(bullets[:_BULLET_COUNT])  # type: ignore[arg-type]
+        while len(slots) < _BULLET_COUNT:
+            slots.append(None)
+        # Normalize any densely-packed string list into slots
+        if all(isinstance(b, str) for b in slots if b is not None) and None not in slots:
+            pass
         fillers = [
             "Last outreach timing is unclear from the log — confirm before dialing.",
             "Next step is not obvious from recent notes — ask what would make a walkthrough useful.",
@@ -583,11 +629,16 @@ class LeadBriefingService:
             "Verify the best phone or email before the next attempt.",
             "Keep the next ask small and concrete.",
         ]
-        for filler in fillers:
-            if len(cleaned) >= _BULLET_COUNT:
-                break
-            if filler not in cleaned and not self._is_page_echo(filler, context):
-                cleaned.append(filler)
+        used = {b for b in slots if isinstance(b, str)}
+        for i in range(_BULLET_COUNT):
+            if slots[i] is not None:
+                continue
+            for filler in fillers:
+                if filler not in used and not self._is_page_echo(filler, context):
+                    slots[i] = filler
+                    used.add(filler)
+                    break
+        cleaned = [b for b in slots if isinstance(b, str) and self._is_complete_bullet(b)]
         if len(cleaned) < _BULLET_COUNT:
             raise GeminiResponseError(
                 f"Gemini briefing returned only {len(cleaned)} usable bullets "

@@ -1639,6 +1639,7 @@ def run_convert_hubspot_activities(run_id: int = None) -> None:
                     synced += 1
                     new_entries += count
                 except Exception as exc:
+                    db.session.rollback()
                     logger.warning(
                         "run_convert_hubspot_activities: timeline sync error "
                         "lead_id=%s: %s",

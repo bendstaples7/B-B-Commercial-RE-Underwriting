@@ -130,16 +130,22 @@ def main() -> None:
 
         svc = HubSpotTimelineImportService()
         results = svc.sync_leads_from_interactions(lead_ids, mark_review=False)
-        created = sum(results.values())
+        failed_ids = [lid for lid, count in results.items() if count < 0]
+        created = sum(count for count in results.values() if count > 0)
         logger.info(
-            'Done (applied): leads=%s new_entries=%s',
+            'Done (applied): leads=%s new_entries=%s failed=%s',
             len(results),
             created,
+            len(failed_ids),
         )
         print(
-            f'Done (applied): leads={len(results)} new_entries={created}',
+            f'Done (applied): leads={len(results)} new_entries={created} '
+            f'failed={len(failed_ids)}',
             flush=True,
         )
+        if failed_ids:
+            print(f'Failed lead ids: {failed_ids[:50]}', flush=True)
+            sys.exit(1)
 
 
 if __name__ == '__main__':

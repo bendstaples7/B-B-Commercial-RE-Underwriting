@@ -859,11 +859,13 @@ def run_convert_incremental_activity(engagement_id: str) -> None:
                         hubspot_engagement_ids=[str(engagement_id)],
                     )
                 except Exception as exc:
-                    logger.warning(
+                    db.session.rollback()
+                    logger.error(
                         "run_convert_incremental_activity: timeline sync failed "
                         "for already-converted engagement_id=%s lead_id=%s: %s",
                         engagement_id, lead_id, exc,
                     )
+                    raise
             return
 
         engagement = HubSpotEngagement.query.filter_by(
@@ -909,11 +911,13 @@ def run_convert_incremental_activity(engagement_id: str) -> None:
                         hubspot_engagement_ids=[str(engagement_id)],
                     )
                 except Exception as exc:
-                    logger.warning(
+                    db.session.rollback()
+                    logger.error(
                         "run_convert_incremental_activity: timeline sync failed "
                         "for engagement_id=%s lead_id=%s: %s",
                         engagement_id, lead_id, exc,
                     )
+                    raise
                 try:
                     from celery_worker import extract_incremental_signals
                     extract_incremental_signals.delay(engagement_id, lead_id)

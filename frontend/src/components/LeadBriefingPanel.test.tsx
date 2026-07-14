@@ -76,5 +76,6 @@ describe('LeadBriefingPanel', () => {
 
     expect(screen.getByTestId('lead-briefing-bullet-0')).toHaveTextContent('Last contact was Monday.')
     expect(screen.getByTestId('lead-briefing-generate')).toHaveTextContent('Refresh')
+    expect(commandCenterService.generateBriefing).not.toHaveBeenCalled()
   })
 })

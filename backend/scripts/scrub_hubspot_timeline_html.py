@@ -29,14 +29,22 @@ from app.services.hubspot_timeline_import_service import HubSpotTimelineImportSe
 
 
 def _needs_scrub(entry: LeadTimelineEntry) -> bool:
-    if entry.summary and ('<' in entry.summary or looks_like_uuid(entry.summary)):
+    """Match apply-path eligibility in scrub_html_from_hubspot_entries."""
+    summary = entry.summary or ''
+    if '<' in summary:
         return True
-    meta = entry.event_metadata
-    if isinstance(meta, dict):
-        body = meta.get('body')
-        if isinstance(body, str) and ('<' in body or looks_like_uuid(body)):
-            return True
-        if looks_like_uuid(meta.get('disposition')) or looks_like_uuid(meta.get('outcome')):
+    meta = entry.event_metadata if isinstance(entry.event_metadata, dict) else {}
+    body = meta.get('body')
+    if isinstance(body, str) and '<' in body:
+        return True
+    # UUID rewrite only runs for hubspot_call entries (service guard)
+    if entry.event_type == 'hubspot_call' and entry.hubspot_activity_id:
+        if (
+            looks_like_uuid(summary)
+            or looks_like_uuid(body)
+            or looks_like_uuid(meta.get('disposition'))
+            or looks_like_uuid(meta.get('outcome'))
+        ):
             return True
     return False
 
@@ -65,7 +73,8 @@ def main() -> None:
                 sample_after = strip_html_tags(entry.summary or '')[:100]
 
         print(
-            f'Found {need_count} HubSpot timeline entr(ies) with HTML or bare disposition UUID',
+            f'Found {need_count} HubSpot timeline entr(ies) with HTML or '
+            f'rewritable call disposition UUID',
             flush=True,
         )
         if sample_before is not None:
