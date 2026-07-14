@@ -15,7 +15,6 @@ import * as fc from 'fast-check'
 import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom'
-import { deriveQueueContext } from '@/utils/deriveQueueContext'
 import { primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import { UnifiedLeadCommandCenter, ALL_LEAD_STATUSES } from './UnifiedLeadCommandCenter'
 import { QueueTable } from './QueueTable'
@@ -322,7 +321,7 @@ const commandCenterPayloadArb = fc.record({
       per_page: fc.constant(20),
     })
   ),
-  // Fields used by deriveQueueContext (server work_queues)
+  // Fields used by work-queue membership strip (server work_queues)
   work_queues: fc.array(
     fc.record({
       key: fc.constantFrom(
@@ -782,25 +781,60 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
     )
   }, 30000)
 
-  // Feature: unified-lead-command-center, Property 8: Queue context banner count matches derived queue count
-  it('Property 8: Queue context banner count matches derived queue count', () => {
-    fc.assert(
-      fc.property(commandCenterPayloadArb, (payload) => {
-        const queues = deriveQueueContext(payload)
-        // Pure function test — the number of QueueContext items returned
-        // must match what we'd render as banners (one per queue entry)
-        expect(queues.length).toBeGreaterThanOrEqual(0)
-        expect(Array.isArray(queues)).toBe(true)
-        // Each queue entry must have required fields
-        queues.forEach(q => {
-          expect(typeof q.label).toBe('string')
-          expect(typeof q.path).toBe('string')
-          expect(typeof q.reason).toBe('string')
-          expect(['error', 'warning', 'info', 'success', 'default']).toContain(q.color)
-        })
-      }),
-      { numRuns: 100 }
+  // Feature: unified-lead-command-center, Property 8: Work-queue chips render without alert banners
+  it('Property 8: Work-queue membership strip renders chips without banners', async () => {
+    const { commandCenterService } = await import('@/services/api')
+    const { leadService } = await import('@/services/leadApi')
+    const payload = {
+      id: 42,
+      owner_first_name: 'Test',
+      owner_last_name: 'Owner',
+      property_street: '1 Main',
+      property_city: 'Chicago',
+      property_state: 'IL',
+      lead_score: 50,
+      lead_status: 'mailing_no_contact_made' as const,
+      open_tasks: [],
+      timeline: { entries: [], total: 0, page: 1, per_page: 20 },
+      recommended_action: {
+        value: 'follow_up_now',
+        label: 'Follow Up',
+        explanation: null,
+        signals: {},
+      },
+      has_property_match: true,
+      analysis_session_id: null,
+      work_queues: [
+        { key: 'follow-up-overdue', label: 'Follow-Up Overdue', path: '/queues/follow-up-overdue' },
+        { key: 'needs-review', label: 'Needs Review', path: '/queues/needs-review' },
+      ],
+    }
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(payload as never)
+    vi.mocked(leadService.getLeadDetail).mockResolvedValue(minimalPropertyDetail(42))
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const theme = createTheme()
+    render(
+      <ThemeProvider theme={theme}>
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/leads/42']}>
+            <Routes>
+              <Route path="/leads/:leadId" element={<UnifiedLeadCommandCenter leadId={42} />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>
+      </ThemeProvider>,
     )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('work-queue-membership-strip')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('work-queue-strip-follow-up-overdue')).toBeInTheDocument()
+    expect(screen.getByTestId('work-queue-strip-needs-review')).toBeInTheDocument()
+    expect(screen.queryByTestId('work-queue-banner-follow-up-overdue')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('work-queue-banner-needs-review')).not.toBeInTheDocument()
   })
 
   // Feature: unified-lead-command-center, Property 9: Loading state hides data panels; loaded state shows them

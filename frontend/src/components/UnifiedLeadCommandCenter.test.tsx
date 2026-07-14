@@ -299,11 +299,12 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     })
   })
 
-  it('renders queue context banners from server work queue membership', async () => {
+  it('renders work-queue membership chips without alert banners', async () => {
     vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
       makeCommandCenterPayload({
         work_queues: [
           { key: 'needs-review', label: 'Needs Review', path: '/queues/needs-review' },
+          { key: 'follow-up-overdue', label: 'Follow-Up Overdue', path: '/queues/follow-up-overdue' },
           { key: 'previously-warm', label: 'Previously Warm', path: '/queues/previously-warm' },
         ],
         review_reason: 'Manual review needed',
@@ -313,12 +314,13 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     renderComponent()
 
     await waitFor(() => {
-      expect(screen.getByTestId('work-queue-banner-needs-review')).toBeInTheDocument()
+      expect(screen.getByTestId('work-queue-membership-strip')).toBeInTheDocument()
     })
-    expect(screen.getByTestId('work-queue-banner-needs-review')).toHaveTextContent(
-      'Manual review needed',
-    )
+    expect(screen.getByTestId('work-queue-strip-needs-review')).toBeInTheDocument()
+    expect(screen.getByTestId('work-queue-strip-follow-up-overdue')).toBeInTheDocument()
     expect(screen.getByTestId('work-queue-strip-previously-warm')).toBeInTheDocument()
+    expect(screen.queryByTestId('work-queue-banner-needs-review')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('work-queue-banner-follow-up-overdue')).not.toBeInTheDocument()
   })
 
   it('shows the primary owner under the property address in the sticky header', async () => {

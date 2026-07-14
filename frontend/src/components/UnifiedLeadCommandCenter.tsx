@@ -43,7 +43,6 @@ import openLetterService from '@/services/openLetterApi'
 import { primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import { parseLogActivityParam, buildLeadUrl } from '@/utils/queueLogNavigation'
 import { isFromQueueState, fromQueueFromKey, queuePath, type FromQueueState } from '@/utils/fromQueue'
-import { deriveQueueContext, type QueueContext } from '@/utils/deriveQueueContext'
 import {
   LEAD_WORKSPACE_STALE_MS,
   prefetchAdjacentQueueLeads,
@@ -356,32 +355,6 @@ function WorkQueueMembershipStrip({ commandCenterData }: WorkQueueMembershipStri
           Not in an active work queue
         </Typography>
       )}
-    </Box>
-  )
-}
-
-function queueAlertSeverity(color: QueueContext['color']): 'error' | 'warning' | 'info' | 'success' {
-  return color === 'default' ? 'info' : color
-}
-
-function WorkQueueBanners({ commandCenterData }: WorkQueueMembershipStripProps) {
-  const banners = deriveQueueContext(commandCenterData)
-  if (banners.length === 0) return null
-
-  return (
-    <Box sx={{ px: { xs: 1, sm: 2 }, pt: 1, display: 'grid', gap: 1 }}>
-      {banners.map((banner) => (
-        <Alert
-          key={banner.path}
-          severity={queueAlertSeverity(banner.color)}
-          data-testid={`work-queue-banner-${banner.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
-        >
-          <Typography component="span" fontWeight={600}>
-            {banner.label}
-          </Typography>
-          {` — ${banner.reason}`}
-        </Alert>
-      ))}
     </Box>
   )
 }
@@ -1003,7 +976,6 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         />
       </Box>
 
-      <WorkQueueBanners commandCenterData={commandCenterData!} />
       <WorkQueueMembershipStrip commandCenterData={commandCenterData!} />
 
       {/* Two-column flex layout: activity column (left) + property sidebar (right, hidden below lg) */}
