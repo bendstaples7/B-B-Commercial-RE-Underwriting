@@ -57,6 +57,7 @@ import type { ScoreTier } from '@/components/LeadScoreBadge'
 import { LeadStatusSelector } from '@/components/LeadStatusSelector'
 import { LeadTaskList, type LeadTaskListHandle } from '@/components/LeadTaskList'
 import { LeadTimeline } from '@/components/LeadTimeline'
+import { LeadBriefingPanel } from '@/components/LeadBriefingPanel'
 import { LogActivityModal, type ActivityLogType } from '@/components/LogActivityModal'
 import { ScoreBreakdownDialog } from '@/components/ScoreBreakdownDialog'
 import { RecommendedActionPanel } from '@/components/RecommendedActionPanel'
@@ -1097,6 +1098,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           <BuildingOwnershipSection
             leadId={leadId}
             commandCenterData={commandCenterData!}
+          />
+
+          <LeadBriefingPanel
+            leadId={leadId}
+            initialBriefing={commandCenterData!.quick_briefing ?? null}
           />
 
           {/* ActivityPanel — third in ActivityColumn (Req 8.1–8.3) */}

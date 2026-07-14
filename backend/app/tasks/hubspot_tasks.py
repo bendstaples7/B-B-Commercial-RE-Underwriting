@@ -1549,6 +1549,9 @@ def run_convert_hubspot_activities(run_id: int = None) -> None:
                             interaction.is_orphaned = False
                             db.session.commit()
                             re_pointed += 1
+                            for a in resolved:
+                                if a.get('target_type') == 'lead' and a.get('target_id'):
+                                    note_pipeline_affected_leads([a['target_id']])
                             logger.debug(
                                 "run_convert_hubspot_activities: re-pointed stranded "
                                 "interaction id=%s off deleted lead", interaction.id,
@@ -1615,6 +1618,37 @@ def run_convert_hubspot_activities(run_id: int = None) -> None:
             "re_pointed=%d errors=%d",
             re_pointed, re_point_errors,
         )
+
+        # --- Bridge HubSpot Interactions → Command Center timeline ----------
+        # Live convert writes Interaction; CC Activity only reads LeadTimelineEntry
+        # via HubSpotTimelineImportService. Sync affected leads after convert /
+        # orphan re-link / stranded re-point so notes & call summaries appear.
+        from app.services.hubspot_pipeline_runner import get_pipeline_affected_leads
+        from app.services.hubspot_timeline_import_service import HubSpotTimelineImportService
+
+        timeline_leads = get_pipeline_affected_leads()
+        if timeline_leads:
+            timeline_svc = HubSpotTimelineImportService()
+            synced = 0
+            new_entries = 0
+            for lead_id in timeline_leads:
+                try:
+                    count = timeline_svc.sync_lead_from_interactions(
+                        lead_id, mark_review=True
+                    )
+                    synced += 1
+                    new_entries += count
+                except Exception as exc:
+                    logger.warning(
+                        "run_convert_hubspot_activities: timeline sync error "
+                        "lead_id=%s: %s",
+                        lead_id, exc,
+                    )
+            logger.info(
+                "run_convert_hubspot_activities: CC timeline sync — "
+                "leads=%d new_entries=%d",
+                synced, new_entries,
+            )
 
 
 # ---------------------------------------------------------------------------

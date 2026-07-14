@@ -236,3 +236,260 @@ def test_derive_is_warm_false_with_voicemail_calls_only(app):
 
         assert svc.derive_is_warm(lead.id) is False
 
+
+# ---------------------------------------------------------------------------
+# Interaction → LeadTimelineEntry bridge
+# ---------------------------------------------------------------------------
+
+def _make_hubspot_interaction(lead_id, engagement_id, itype='note', body='Note body',
+                              disposition=None, occurred_at=None):
+    from app import db
+    from app.models import Interaction, InteractionAssociation
+
+    raw = {}
+    if disposition:
+        raw = {'metadata': {'disposition': disposition}}
+    interaction = Interaction(
+        interaction_type=itype,
+        body=body,
+        occurred_at=occurred_at or datetime.now(timezone.utc).replace(tzinfo=None),
+        source='hubspot_import',
+        hubspot_engagement_id=engagement_id,
+        raw_payload=raw or None,
+        is_orphaned=False,
+    )
+    db.session.add(interaction)
+    db.session.flush()
+    db.session.add(InteractionAssociation(
+        interaction_id=interaction.id,
+        target_type='lead',
+        target_id=lead_id,
+    ))
+    db.session.commit()
+    return interaction
+
+
+def test_interaction_to_activity_maps_note_and_call(app):
+    """interaction_to_activity maps Interaction fields to HubSpot activity dicts."""
+    with app.app_context():
+        lead = _make_lead(app, '11 Bridge St')
+        note = _make_hubspot_interaction(lead.id, 'eng-note-1', 'note', 'Hello note')
+        call = _make_hubspot_interaction(
+            lead.id, 'eng-call-1', 'call', 'Spoke with owner', disposition='CONNECTED'
+        )
+        svc = HubSpotTimelineImportService()
+
+        note_act = svc.interaction_to_activity(note)
+        call_act = svc.interaction_to_activity(call)
+
+        assert note_act['id'] == 'eng-note-1'
+        assert note_act['type'] == 'NOTE'
+        assert note_act['body'] == 'Hello note'
+        assert isinstance(note_act['occurred_at'], str)
+
+        assert call_act['type'] == 'CALL'
+        assert call_act['outcome'] == 'CONNECTED'
+        assert call_act['disposition'] == 'CONNECTED'
+
+
+def test_sync_lead_from_interactions_creates_timeline_entries(app):
+    """sync_lead_from_interactions bridges HubSpot Interactions into timeline."""
+    from app.models import LeadTimelineEntry
+
+    with app.app_context():
+        lead = _make_lead(app, '12 Bridge St')
+        _make_hubspot_interaction(lead.id, 'eng-sync-1', 'note', 'Past HubSpot note')
+        _make_hubspot_interaction(lead.id, 'eng-sync-2', 'call', 'Past HubSpot call')
+        svc = HubSpotTimelineImportService()
+
+        count = svc.sync_lead_from_interactions(lead.id, mark_review=True)
+
+        assert count == 2
+        entries = LeadTimelineEntry.query.filter_by(
+            lead_id=lead.id, source='hubspot'
+        ).order_by(LeadTimelineEntry.hubspot_activity_id).all()
+        assert len(entries) == 2
+        types = {e.event_type for e in entries}
+        assert types == {'hubspot_note', 'hubspot_call'}
+        assert {e.hubspot_activity_id for e in entries} == {'eng-sync-1', 'eng-sync-2'}
+
+
+def test_sync_lead_from_interactions_idempotent(app):
+    """Re-syncing the same interactions creates zero new entries."""
+    with app.app_context():
+        lead = _make_lead(app, '13 Bridge St')
+        _make_hubspot_interaction(lead.id, 'eng-idemp-1', 'note', 'Once')
+        svc = HubSpotTimelineImportService()
+
+        first = svc.sync_lead_from_interactions(lead.id, mark_review=False)
+        second = svc.sync_lead_from_interactions(lead.id, mark_review=False)
+
+        assert first == 1
+        assert second == 0
+
+
+def test_mark_review_false_skips_review_required(app):
+    """Historical backfill with mark_review=False leaves review_required alone."""
+    from app.models import Lead
+
+    with app.app_context():
+        lead = _make_lead(app, '14 Bridge St')
+        assert lead.review_required is not True
+        _make_hubspot_interaction(lead.id, 'eng-review-1', 'note', 'Old note')
+        svc = HubSpotTimelineImportService()
+
+        svc.sync_lead_from_interactions(lead.id, mark_review=False)
+
+        refreshed = Lead.query.get(lead.id)
+        assert refreshed.review_required is not True
+
+
+def test_mark_review_skips_old_history_flood(app):
+    """mark_review=True only flags Needs Review for newly imported recent entries."""
+    from app.models import Lead
+    from datetime import timedelta
+
+    with app.app_context():
+        lead = _make_lead(app, '14b Bridge St')
+        old = datetime.now(timezone.utc) - timedelta(days=400)
+        _make_hubspot_interaction(
+            lead.id, 'eng-old-hist-1', 'note', 'Ancient note', occurred_at=old
+        )
+        svc = HubSpotTimelineImportService()
+        count = svc.sync_lead_from_interactions(lead.id, mark_review=True)
+        assert count == 1
+        refreshed = Lead.query.get(lead.id)
+        assert refreshed.review_required is not True
+        assert refreshed.review_reason is None
+
+
+def test_global_hubspot_activity_id_dedupe_skips_other_lead(app):
+    """Skip insert when hubspot_activity_id already exists on another lead."""
+    from app import db
+    from app.models import InteractionAssociation, LeadTimelineEntry
+
+    with app.app_context():
+        lead_a = _make_lead(app, '15a Bridge St')
+        lead_b = _make_lead(app, '15b Bridge St')
+        interaction = _make_hubspot_interaction(lead_a.id, 'eng-shared-1', 'note', 'Shared')
+        # Same engagement associated to a second lead (multi-match)
+        db.session.add(InteractionAssociation(
+            interaction_id=interaction.id,
+            target_type='lead',
+            target_id=lead_b.id,
+        ))
+        db.session.commit()
+        svc = HubSpotTimelineImportService()
+
+        assert svc.sync_lead_from_interactions(lead_a.id, mark_review=False) == 1
+        assert svc.sync_lead_from_interactions(lead_b.id, mark_review=False) == 0
+        assert LeadTimelineEntry.query.filter_by(
+            hubspot_activity_id='eng-shared-1'
+        ).count() == 1
+
+
+def test_sync_strips_html_from_summary(app):
+    """HubSpot HTML bodies become plain-text timeline summaries."""
+    from app.models import LeadTimelineEntry
+
+    with app.app_context():
+        lead = _make_lead(app, '16 Html St')
+        html_body = (
+            '<div style="" dir="auto" data-top-level="true">'
+            '<p style="margin:0;">Left a voicemail.</p></div>'
+        )
+        _make_hubspot_interaction(lead.id, 'eng-html-1', 'call', html_body)
+        svc = HubSpotTimelineImportService()
+
+        assert svc.sync_lead_from_interactions(lead.id, mark_review=False) == 1
+        entry = LeadTimelineEntry.query.filter_by(
+            hubspot_activity_id='eng-html-1'
+        ).first()
+        assert entry is not None
+        assert entry.summary == 'Left a voicemail.'
+        assert '<' not in entry.summary
+        assert entry.event_metadata.get('body') == 'Left a voicemail.'
+
+
+def test_scrub_html_from_hubspot_entries(app):
+    """scrub_html_from_hubspot_entries rewrites existing HTML summaries."""
+    from app import db
+    from app.models import LeadTimelineEntry
+
+    with app.app_context():
+        lead = _make_lead(app, '17 Scrub St')
+        dirty = (
+            '<div style="" dir="auto"><p style="margin:0;">Called owner.</p></div>'
+        )
+        entry = LeadTimelineEntry(
+            lead_id=lead.id,
+            event_type='hubspot_call',
+            occurred_at=datetime.now(timezone.utc),
+            source='hubspot',
+            actor='HubSpot',
+            summary=dirty,
+            event_metadata={'id': 'eng-scrub-1', 'type': 'CALL', 'body': dirty},
+            hubspot_activity_id='eng-scrub-1',
+        )
+        db.session.add(entry)
+        db.session.commit()
+
+        svc = HubSpotTimelineImportService()
+        updated = svc.scrub_html_from_hubspot_entries(lead_id=lead.id)
+        assert updated == 1
+        refreshed = LeadTimelineEntry.query.get(entry.id)
+        assert refreshed.summary == 'Called owner.'
+        assert refreshed.event_metadata['body'] == 'Called owner.'
+
+
+def test_scrub_rewrites_disposition_uuid_summary(app):
+    """Bare HubSpot disposition GUIDs become readable call summaries."""
+    from app import db
+    from app.models import Interaction, LeadTimelineEntry
+
+    with app.app_context():
+        lead = _make_lead(app, '18 Guid St')
+        disposition = '73a0d17f-1163-4015-bdd5-ec830791da20'
+        interaction = Interaction(
+            interaction_type='call',
+            body=disposition,
+            occurred_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            source='hubspot_import',
+            hubspot_engagement_id='eng-guid-1',
+            raw_payload={
+                'metadata': {
+                    'disposition': disposition,
+                    'title': 'Call with Gilberto Olivares',
+                    'direction': 'OUTBOUND',
+                    'status': 'COMPLETED',
+                },
+                'engagement': {},
+            },
+            is_orphaned=False,
+        )
+        db.session.add(interaction)
+        entry = LeadTimelineEntry(
+            lead_id=lead.id,
+            event_type='hubspot_call',
+            occurred_at=datetime.now(timezone.utc),
+            source='hubspot',
+            actor='HubSpot',
+            summary=disposition,
+            event_metadata={
+                'id': 'eng-guid-1',
+                'type': 'CALL',
+                'body': disposition,
+                'disposition': disposition,
+                'outcome': disposition,
+            },
+            hubspot_activity_id='eng-guid-1',
+        )
+        db.session.add(entry)
+        db.session.commit()
+
+        svc = HubSpotTimelineImportService()
+        assert svc.scrub_html_from_hubspot_entries(lead_id=lead.id) == 1
+        refreshed = LeadTimelineEntry.query.get(entry.id)
+        assert refreshed.summary == 'Call with Gilberto Olivares — No answer'
+        assert refreshed.event_metadata['outcome'] == 'No answer'
+

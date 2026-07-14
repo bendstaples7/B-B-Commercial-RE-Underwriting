@@ -1,7 +1,5 @@
 """HubSpotActivityConverterService — converts raw HubSpot engagements to internal records."""
-import html as html_lib
 import logging
-import re
 from datetime import datetime, timezone
 
 from app import db
@@ -10,27 +8,10 @@ from app.models.interaction_association import InteractionAssociation
 from app.models.task import Task
 from app.models.task_association import TaskAssociation
 from app.models.hubspot_match import HubSpotMatch
+from app.services.helpers.html_text import strip_html_tags
+from app.services.helpers.hubspot_call_disposition import format_hubspot_call_summary
 
 logger = logging.getLogger(__name__)
-
-_HTML_TAG_RE = re.compile(r'<[^>]+>')
-
-
-def _strip_html_tags(raw_html):
-    """Strip HTML tags from a string and return collapsed plain text.
-
-    Block-level closers and <br> are turned into spaces so adjacent words don't
-    run together, remaining tags are removed, HTML entities are unescaped, and
-    runs of whitespace are collapsed. Returns '' for falsy input.
-    """
-    if not raw_html:
-        return ''
-    text = re.sub(r'(?i)<\s*br\s*/?>', ' ', raw_html)
-    text = re.sub(r'(?i)</\s*(p|div|li|tr|h[1-6])\s*>', ' ', text)
-    text = _HTML_TAG_RE.sub('', text)
-    text = html_lib.unescape(text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
 
 
 class HubSpotActivityConverterService:
@@ -607,12 +588,12 @@ class HubSpotActivityConverterService:
         metadata = raw_payload.get('metadata', {})
         body = metadata.get('body')
         if body:
-            return body
+            return strip_html_tags(body)
         # Fallback to bodyPreview on the engagement object
         engagement_obj = raw_payload.get('engagement', {})
         preview = engagement_obj.get('bodyPreview')
         if preview:
-            return preview
+            return strip_html_tags(preview)
         return ''
 
     @staticmethod
@@ -631,29 +612,30 @@ class HubSpotActivityConverterService:
             return text
         html = metadata.get('html')
         if html:
-            return _strip_html_tags(html)
+            return strip_html_tags(html)
         preview = metadata.get('bodyPreview')
         if preview:
-            return preview
+            return strip_html_tags(preview)
         return ''
 
     @staticmethod
     def _extract_call_body(raw_payload):
-        """Extract body text from a CALL engagement payload."""
-        metadata = raw_payload.get('metadata', {})
+        """Extract body text from a CALL engagement payload.
+
+        Prefers note body / bodyPreview, then a mapped disposition label (HubSpot
+        stores outcomes as stable GUIDs), then title — never a bare UUID.
+        """
+        metadata = raw_payload.get('metadata', {}) or {}
+        engagement_obj = raw_payload.get('engagement', {}) or {}
         body = metadata.get('body')
-        if body:
-            return body
-        # Fallback to disposition (e.g. "CONNECTED", "LEFT_VOICEMAIL")
-        disposition = metadata.get('disposition')
-        if disposition:
-            return disposition
-        # Final fallback to bodyPreview
-        engagement_obj = raw_payload.get('engagement', {})
         preview = engagement_obj.get('bodyPreview')
-        if preview:
-            return preview
-        return ''
+        return format_hubspot_call_summary(
+            body=strip_html_tags(body) if body else None,
+            title=metadata.get('title'),
+            disposition=metadata.get('disposition'),
+            direction=metadata.get('direction'),
+            body_preview=strip_html_tags(preview) if preview else None,
+        )
 
     @staticmethod
     def _parse_hubspot_due_date(value):

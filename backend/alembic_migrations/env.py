@@ -102,6 +102,8 @@ _KNOWN_REVISIONS = frozenset({
     'n3o4p5q6r7s8',
     # nonprofit org_type + IRS EO BMF lookup table
     'o6p7q8r9s0t1',
+    # Command Center quick briefing persistence
+    'p7q8r9s0t1u2',
 })
 
 

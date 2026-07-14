@@ -706,6 +706,7 @@ def get_command_center(lead_id: int):
         'hubspot_deal_last_updated_at': hubspot_sync['hubspot_deal_last_updated_at'],
         'review_required': lead.review_required,
         'review_reason': lead.review_reason,
+        'quick_briefing': lead.quick_briefing if isinstance(lead.quick_briefing, dict) else None,
         'recommended_action': {
             'value': ra,
             'recommended_contact_method': contact_method,
@@ -1030,6 +1031,27 @@ def complete_task(lead_id: int, task_id: int):
         'status': task.status,
         'completed_at': task.completed_at.isoformat() if task.completed_at else None,
     }), 200
+
+
+@command_center_bp.route('/<int:lead_id>/briefing', methods=['POST'])
+@handle_errors
+@require_auth
+def generate_lead_briefing(lead_id: int):
+    """
+    POST /api/leads/<lead_id>/briefing
+
+    On-demand Gemini briefing: five short keep-in-mind bullets from timeline,
+    open tasks, and lead context. Persists latest on the lead; Refresh revises
+    from the previous briefing when one exists.
+    """
+    lead, err = _load_authorized_lead(lead_id)
+    if err is not None:
+        return err
+
+    from app.services.lead_briefing_service import LeadBriefingService
+
+    result = LeadBriefingService().generate(lead.id, persist=True)
+    return jsonify(result), 200
 
 
 @command_center_bp.route('/<int:lead_id>/timeline', methods=['GET'])
