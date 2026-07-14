@@ -821,7 +821,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         <QueryClientProvider client={queryClient}>
           <MemoryRouter initialEntries={['/leads/42']}>
             <Routes>
-              <Route path="/leads/:leadId" element={<UnifiedLeadCommandCenter />} />
+              <Route path="/leads/:leadId" element={<UnifiedLeadCommandCenter leadId={42} />} />
             </Routes>
           </MemoryRouter>
         </QueryClientProvider>
