@@ -225,6 +225,7 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
     commandCenterData.mailing_state,
     commandCenterData.mailing_zip,
   ]
+    .map((part) => part?.trim() || '')
     .filter(Boolean)
     .join(', ')
   const hasOwnerMailing = Boolean(mailingStreet || mailingCityLine)

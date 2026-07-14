@@ -227,6 +227,48 @@ describe('PropertySidebar phone confidence', () => {
     expect(screen.getByTestId('skip-trace-needed-caption')).toBeInTheDocument()
   })
 
+  it('treats whitespace-only owner mailing fields as missing for mail recommendations', () => {
+    renderSidebar(
+      makePayload({
+        mailing_address: '   ',
+        mailing_city: ' ',
+        mailing_state: '\t',
+        mailing_zip: '  ',
+        recommended_action: {
+          value: 'mail_ready',
+          recommended_contact_method: 'direct_mail',
+          label: 'Mail Ready',
+          explanation: null,
+          signals: {},
+        },
+      } as Partial<CommandCenterPayload>),
+    )
+
+    expect(screen.getByTestId('owner-mailing-empty')).toHaveTextContent('Not on file')
+    expect(screen.getByTestId('owner-mailing-missing-for-mail')).toBeInTheDocument()
+  })
+
+  it('omits mail-missing warning when missing address is not recommended for mail', () => {
+    renderSidebar(
+      makePayload({
+        mailing_address: null,
+        mailing_city: null,
+        mailing_state: null,
+        mailing_zip: null,
+        recommended_action: {
+          value: 'call_ready',
+          recommended_contact_method: 'phone',
+          label: 'Call Ready',
+          explanation: null,
+          signals: {},
+        },
+      } as Partial<CommandCenterPayload>),
+    )
+
+    expect(screen.getByTestId('owner-mailing-empty')).toHaveTextContent('Not on file')
+    expect(screen.queryByTestId('owner-mailing-missing-for-mail')).not.toBeInTheDocument()
+  })
+
   it('shows owner mailing lines when present and omits mail-missing warning', () => {
     renderSidebar(
       makePayload({
