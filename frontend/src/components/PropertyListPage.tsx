@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   Box,
   Paper,
@@ -227,6 +227,7 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = () => {
   const [analysisRunning, setAnalysisRunning] = useState(false)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
   const [analysisSuccess, setAnalysisSuccess] = useState<string | null>(null)
+  const fetchRequestIdRef = useRef(0)
 
   // Filter state
   const [filtersOpen, setFiltersOpen] = useState(false)
@@ -330,17 +331,23 @@ export const PropertyListPage: React.FC<PropertyListPageProps> = () => {
   }, [page, sortBy, sortOrder, leadCategory, propertyType, sourceType, ownerUserId, city, state, zip, ownerName, scoreRange, marketingListId])
 
   const fetchLeads = useCallback(async () => {
+    const requestId = fetchRequestIdRef.current + 1
+    fetchRequestIdRef.current = requestId
     setLoading(true)
     setError(null)
     try {
       const response: PropertyListResponse = await leadService.listLeads(buildFilters())
+      if (requestId !== fetchRequestIdRef.current) return
       setLeads(response.leads)
       setTotalLeads(response.total)
       setTotalPages(response.pages)
     } catch (err: any) {
+      if (requestId !== fetchRequestIdRef.current) return
       setError(err.message || 'Failed to load properties.')
     } finally {
-      setLoading(false)
+      if (requestId === fetchRequestIdRef.current) {
+        setLoading(false)
+      }
     }
   }, [buildFilters])
 

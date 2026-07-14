@@ -311,6 +311,14 @@ class QuickAddService:
             except Exception:
                 logger.exception('Could not enqueue skip trace for quick-add lead %s', lead.id)
                 db.session.rollback()
+                fallback_lead = db.session.get(Lead, lead.id)
+                if fallback_lead is not None:
+                    fallback_lead.needs_skip_trace = True
+                    try:
+                        db.session.commit()
+                    except Exception:
+                        logger.exception('Could not mark quick-add lead %s for skip trace retry', lead.id)
+                        db.session.rollback()
             lead = db.session.get(Lead, lead.id) or lead
 
         return lead, created

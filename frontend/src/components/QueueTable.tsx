@@ -100,7 +100,7 @@ function getAddress(row: QueueRow): string {
 }
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
-  return target instanceof HTMLElement && Boolean(target.closest('a,button,input,textarea,select,label'))
+  return target instanceof Element && Boolean(target.closest('a,button,input,textarea,select,label'))
 }
 
 // ---------------------------------------------------------------------------

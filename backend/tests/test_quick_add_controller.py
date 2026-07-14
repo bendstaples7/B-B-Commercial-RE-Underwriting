@@ -380,6 +380,25 @@ class TestQuickAddEndpoint:
             assert body['hubspot_write_back_enabled'] is False
             assert body['hubspot_push_status'] == 'queue_failed'
 
+    def test_skip_trace_enqueue_failure_marks_lead_for_retry(self, quick_add_client, app):
+        with app.app_context():
+            with patch(
+                'app.services.quick_add_service.SkipTraceEnqueue.enqueue',
+                side_effect=RuntimeError('task write failed'),
+            ):
+                response = quick_add_client.post(
+                    '/api/leads/quick-add',
+                    headers=_AUTH_HEADERS,
+                    data=json.dumps({
+                        'property_street': '333 Skip Trace Retry Ave, Chicago, IL',
+                    }),
+                    content_type='application/json',
+                )
+
+            assert response.status_code == 201
+            lead = db.session.get(Lead, response.get_json()['lead_id'])
+            assert lead.needs_skip_trace is True
+
 
 class TestMergeDealDescription:
     def test_appends_without_discarding_existing(self):
