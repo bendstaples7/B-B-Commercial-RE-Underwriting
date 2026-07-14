@@ -219,6 +219,20 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
 
   const marketingMemberships = data.marketing_memberships
 
+  const mailingStreet = commandCenterData.mailing_address?.trim() || ''
+  const mailingCityLine = [
+    commandCenterData.mailing_city,
+    commandCenterData.mailing_state,
+    commandCenterData.mailing_zip,
+  ]
+    .filter(Boolean)
+    .join(', ')
+  const hasOwnerMailing = Boolean(mailingStreet || mailingCityLine)
+  const contactMethod = commandCenterData.recommended_action?.recommended_contact_method
+  const actionValue = commandCenterData.recommended_action?.value
+  const mailRecommended =
+    contactMethod === 'direct_mail' || actionValue === 'mail_ready'
+
   return (
     <Paper
       data-testid="property-sidebar"
@@ -389,39 +403,59 @@ export function PropertySidebar({ commandCenterData }: PropertySidebarProps) {
         )}
       </SidebarSection>
 
-      {(commandCenterData.mailing_address || commandCenterData.mailing_city) && (
-        <SidebarSection title="Owner Mailing Address">
-          <SidebarRow
-            label="Mailing"
-            value={
+      <SidebarSection title="Owner Mailing Address">
+        <SidebarRow
+          label="Mailing"
+          value={
+            hasOwnerMailing ? (
               <>
-                {commandCenterData.mailing_address}
-                {(commandCenterData.mailing_city ||
-                  commandCenterData.mailing_state ||
-                  commandCenterData.mailing_zip) && (
+                {mailingStreet}
+                {mailingCityLine && (
                   <>
-                    {commandCenterData.mailing_address ? '\n' : ''}
-                    {[
-                      commandCenterData.mailing_city,
-                      commandCenterData.mailing_state,
-                      commandCenterData.mailing_zip,
-                    ]
-                      .filter(Boolean)
-                      .join(', ')}
+                    {mailingStreet ? '\n' : ''}
+                    {mailingCityLine}
                   </>
                 )}
               </>
-            }
-          />
-        </SidebarSection>
-      )}
+            ) : (
+              <Typography
+                component="span"
+                variant="caption"
+                color="text.secondary"
+                data-testid="owner-mailing-empty"
+              >
+                Not on file
+              </Typography>
+            )
+          }
+        />
+        {!hasOwnerMailing && mailRecommended && (
+          <Typography
+            variant="caption"
+            color="warning.main"
+            data-testid="owner-mailing-missing-for-mail"
+            sx={{ display: 'block', mt: 0.5 }}
+          >
+            No mailing address on file for this lead. Skip trace or add an owner mailing
+            address before sending mail.
+          </Typography>
+        )}
+      </SidebarSection>
 
       {(data.needs_skip_trace != null || data.skip_tracer || data.date_skip_traced) && (
         <SidebarSection title="Skip Trace">
           <SidebarRow
-            label="Needed"
+            label="Needed (phone/email)"
             value={data.needs_skip_trace != null ? (data.needs_skip_trace ? 'Yes' : 'No') : null}
           />
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            data-testid="skip-trace-needed-caption"
+            sx={{ display: 'block', mb: 0.5 }}
+          >
+            Based on phone/email at ingest — not owner mailing address.
+          </Typography>
           <SidebarRow label="Tracer" value={data.skip_tracer} />
           <SidebarRow label="Date" value={data.date_skip_traced} />
         </SidebarSection>

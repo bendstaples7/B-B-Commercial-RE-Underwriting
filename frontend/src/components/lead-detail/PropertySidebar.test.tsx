@@ -201,4 +201,51 @@ describe('PropertySidebar phone confidence', () => {
       'Not in an active work queue.',
     )
   })
+
+  it('always shows Owner Mailing Address with Not on file when empty', () => {
+    renderSidebar(
+      makePayload({
+        mailing_address: null,
+        mailing_city: null,
+        mailing_state: null,
+        mailing_zip: null,
+        recommended_action: {
+          value: 'mail_ready',
+          recommended_contact_method: 'direct_mail',
+          label: 'Mail Ready',
+          explanation: null,
+          signals: {},
+        },
+        needs_skip_trace: false,
+      } as Partial<CommandCenterPayload>),
+    )
+
+    expect(screen.getByText('Owner Mailing Address')).toBeInTheDocument()
+    expect(screen.getByTestId('owner-mailing-empty')).toHaveTextContent('Not on file')
+    expect(screen.getByTestId('owner-mailing-missing-for-mail')).toBeInTheDocument()
+    expect(screen.getByText('Needed (phone/email)')).toBeInTheDocument()
+    expect(screen.getByTestId('skip-trace-needed-caption')).toBeInTheDocument()
+  })
+
+  it('shows owner mailing lines when present and omits mail-missing warning', () => {
+    renderSidebar(
+      makePayload({
+        mailing_address: '100 Main St',
+        mailing_city: 'Chicago',
+        mailing_state: 'IL',
+        mailing_zip: '60618',
+        recommended_action: {
+          value: 'mail_ready',
+          recommended_contact_method: 'direct_mail',
+          label: 'Mail Ready',
+          explanation: null,
+          signals: {},
+        },
+      } as Partial<CommandCenterPayload>),
+    )
+
+    expect(screen.getByText(/100 Main St/)).toBeInTheDocument()
+    expect(screen.queryByTestId('owner-mailing-empty')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('owner-mailing-missing-for-mail')).not.toBeInTheDocument()
+  })
 })
