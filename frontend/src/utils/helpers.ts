@@ -64,7 +64,11 @@ function decodeHtmlEntities(text: string): string {
     })
 }
 
-/** Strip tags with quoted attributes; leave comparisons like "x < y" alone. */
+/**
+ * Strip tags with quoted attributes (may contain '>').
+ * Leaves comparisons like "x < y" / "Cost < $500" alone.
+ * Does not use DOMParser/innerHTML — those can request URLs from imgs/iframes.
+ */
 function stripAngleTags(text: string): string {
   let out = text.replace(/<\s*br\b[^>]*>/gi, '\n')
   out = out.replace(/<\/\s*(p|div|li|tr|h[1-6])\s*>/gi, ' ')
@@ -75,8 +79,7 @@ function stripAngleTags(text: string): string {
 
 /**
  * Strip HTML tags to plain text for timeline / CRM bodies that arrive as markup.
- * Uses DOMParser when available so attributes containing '>' are handled correctly.
- * Safe for untrusted CRM HTML (no textarea.innerHTML).
+ * Regex-only (no DOMParser) so HubSpot tracking pixels / remote resources are never fetched.
  */
 export function stripHtmlTags(
   rawHtml: string | null | undefined,
@@ -88,22 +91,6 @@ export function stripHtmlTags(
 
   for (let i = 0; i < 3; i += 1) {
     const before = text
-    if (typeof DOMParser !== 'undefined') {
-      const doc = new DOMParser().parseFromString(
-        `<!DOCTYPE html><body>${text}</body>`,
-        'text/html',
-      )
-      doc.body.querySelectorAll('br').forEach((br) => {
-        br.replaceWith(doc.createTextNode('\n'))
-      })
-      ;['p', 'div', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'].forEach((tag) => {
-        doc.body.querySelectorAll(tag).forEach((el) => {
-          el.appendChild(doc.createTextNode(' '))
-        })
-      })
-      text = doc.body.textContent || ''
-    }
-    // Always strip leftover / entity-rehydrated angle tags as text
     text = stripAngleTags(text)
     text = decodeHtmlEntities(text)
     if (text === before) break

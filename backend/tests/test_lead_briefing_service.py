@@ -79,7 +79,7 @@ def test_parse_bullets_rejects_incomplete_sentence():
             'Extra complete filler sentence for padding.',
         ]
     })
-    bullets = svc._parse_bullets(raw)
+    bullets = [b for b in svc._parse_bullets(raw) if b]
     assert all(svc._is_complete_bullet(b) for b in bullets)
     assert not any(b.endswith('was') for b in bullets)
     assert not any(b.lower().startswith('about') for b in bullets)
@@ -97,8 +97,8 @@ def test_parse_bullets_strips_slot_labels():
         ]
     })
     bullets = svc._parse_bullets(raw)
-    assert len(bullets) == 5
-    assert not any('LAST CONTACT' in b.upper() for b in bullets)
+    assert len([b for b in bullets if b]) == 5
+    assert not any(b and 'LAST CONTACT' in b.upper() for b in bullets)
     assert bullets[0].startswith('Called yesterday')
 
 
@@ -110,7 +110,7 @@ def test_parse_keeps_complete_sentence_instead_of_hard_slice():
         'was not a deal breaker at all for him personally.'
     )
     assert len(long) > 180
-    bullets = svc._parse_bullets(json.dumps({'bullets': [long] + _five_bullets()[1:]}))
+    bullets = [b for b in svc._parse_bullets(json.dumps({'bullets': [long] + _five_bullets()[1:]})) if b]
     assert bullets
     assert all(svc._is_complete_bullet(b) for b in bullets)
     assert all(len(b) <= 180 for b in bullets)
@@ -142,7 +142,14 @@ def test_rejects_open_task_page_echo():
     assert [b for b in filtered if b] == [good]
 
 
-def test_truncate_at_word_boundary():
+def test_abbreviation_not_treated_as_multi_sentence():
+    svc = LeadBriefingService(api_key='test-key')
+    assert svc._is_complete_bullet(
+        'Spoke with Mr. Smith on St. Clair Ave. about pricing.'
+    ) is True
+    assert svc._is_complete_bullet(
+        'Called yesterday. Ask about walkthrough next.'
+    ) is False
     svc = LeadBriefingService(api_key='test-key')
     long = 'Word ' * 50
     truncated = svc._truncate_at_word(long, 40)

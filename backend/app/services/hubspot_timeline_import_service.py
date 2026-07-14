@@ -427,40 +427,24 @@ class HubSpotTimelineImportService:
             q = q.filter(LeadTimelineEntry.lead_id == lead_id)
 
         updated = 0
-        batch: list = []
         BATCH_SIZE = 200
 
         def _flush_batch(entries: list) -> int:
             if not entries:
                 return 0
-            rewrite_ids = [
+            # Prefetch all HubSpot call engagements in the batch so cleanup +
+            # disposition rewrite share one query (and UUID detection runs after
+            # HTML cleanup below).
+            call_ids = [
                 str(e.hubspot_activity_id)
                 for e in entries
-                if (
-                    e.event_type == 'hubspot_call'
-                    and e.hubspot_activity_id
-                    and (
-                        looks_like_uuid(e.summary or '')
-                        or looks_like_uuid(
-                            (e.event_metadata or {}).get('body')
-                            if isinstance(e.event_metadata, dict) else None
-                        )
-                        or looks_like_uuid(
-                            (e.event_metadata or {}).get('disposition')
-                            if isinstance(e.event_metadata, dict) else None
-                        )
-                        or looks_like_uuid(
-                            (e.event_metadata or {}).get('outcome')
-                            if isinstance(e.event_metadata, dict) else None
-                        )
-                    )
-                )
+                if e.event_type == 'hubspot_call' and e.hubspot_activity_id
             ]
             by_engagement: dict[str, object] = {}
-            if rewrite_ids:
+            if call_ids:
                 for interaction in (
                     Interaction.query
-                    .filter(Interaction.hubspot_engagement_id.in_(rewrite_ids))
+                    .filter(Interaction.hubspot_engagement_id.in_(call_ids))
                     .all()
                 ):
                     by_engagement[str(interaction.hubspot_engagement_id)] = interaction
@@ -534,12 +518,19 @@ class HubSpotTimelineImportService:
                 db.session.commit()
             return batch_updated
 
-        for entry in q.yield_per(BATCH_SIZE):
-            batch.append(entry)
-            if len(batch) >= BATCH_SIZE:
-                updated += _flush_batch(batch)
-                batch = []
-        updated += _flush_batch(batch)
+        # Keyset pagination — never commit while a yield_per stream cursor is open
+        last_id = 0
+        while True:
+            page = (
+                q.filter(LeadTimelineEntry.id > last_id)
+                .order_by(LeadTimelineEntry.id.asc())
+                .limit(BATCH_SIZE)
+                .all()
+            )
+            if not page:
+                break
+            updated += _flush_batch(page)
+            last_id = page[-1].id
         return updated
 
     def derive_is_warm(self, lead_id: int) -> bool:

@@ -41,7 +41,7 @@ _MAX_BULLET_CHARS = 180
 
 # Timeline event types that count as real contact (not admin/status/task chatter)
 _CONTACT_EVENT_TYPES = frozenset({
-    'hubspot_call', 'hubspot_note', 'call_logged', 'note_logged',
+    'note_added', 'hubspot_call', 'hubspot_note', 'call_logged', 'note_logged',
     'email_logged', 'meeting_logged', 'sms_logged', 'voicemail_logged',
 })
 
@@ -58,6 +58,14 @@ _DANGLING_START_WORDS = frozenset({
     'on', 'at', 'by', 'from', 'as', 'was', 'were', 'is', 'are', 'be', 'been',
     'about', 'which', 'that', 'this', 'these', 'those', 'meh',
 })
+
+_ABBREVIATION_RE = re.compile(
+    r'\b(?:'
+    r'Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Ave|Blvd|Rd|Ln|Hwy|Inc|Ltd|Corp|Co|Dept|'
+    r'vs|etc|No|Nos|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec'
+    r')\.',
+    re.IGNORECASE,
+)
 
 _CREATE_PROMPT = """You help a real-estate investor scan a lead before calling.
 
@@ -207,10 +215,12 @@ class LeadBriefingService:
         }
 
         if persist:
-            # Lock the row so a concurrent Refresh cannot overwrite a newer briefing
+            # Expire the identity-mapped Lead so with_for_update reloads fresh DB state
+            db.session.expire(lead)
             fresh = (
                 db.session.query(Lead)
                 .filter(Lead.id == lead_id)
+                .populate_existing()
                 .with_for_update()
                 .one_or_none()
             )
@@ -411,7 +421,7 @@ class LeadBriefingService:
                 f"Response body: {response.text[:500]}"
             ) from exc
 
-    def _parse_bullets(self, raw: str) -> list[str]:
+    def _parse_bullets(self, raw: str) -> list[Optional[str]]:
         text = (raw or "").strip()
         fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL | re.IGNORECASE)
         if fence:
@@ -442,21 +452,22 @@ class LeadBriefingService:
                 "Gemini briefing response missing a non-empty 'bullets' array."
             )
 
-        cleaned: list[str] = []
+        # Preserve Gemini slot order — rejected items become None, never compacted
+        slots: list[Optional[str]] = []
         for item in bullets:
             if not isinstance(item, str):
+                slots.append(None)
                 continue
             line = strip_html_tags(item).strip(" \t\r\n-•*")
             if not line:
+                slots.append(None)
                 continue
             line = self._strip_slot_label(line)
-            # Prefer an intact complete sentence ≤ max over truncate-then-reject
             if len(line) > _MAX_BULLET_CHARS:
                 shortened = self._truncate_at_word(line, _MAX_BULLET_CHARS)
                 if self._is_complete_bullet(shortened):
                     line = shortened
                 else:
-                    # Keep last complete sentence that fits, else drop
                     sentences = re.findall(r'[^.!?]+[.!?]', line)
                     line = ''
                     for sentence in sentences:
@@ -464,10 +475,10 @@ class LeadBriefingService:
                         if len(candidate) <= _MAX_BULLET_CHARS and self._is_complete_bullet(candidate):
                             line = candidate
                     if not line:
+                        slots.append(None)
                         continue
-            if self._is_complete_bullet(line):
-                cleaned.append(line)
-        return cleaned
+            slots.append(line if self._is_complete_bullet(line) else None)
+        return slots
 
     @staticmethod
     def _strip_slot_label(text: str) -> str:
@@ -496,8 +507,10 @@ class LeadBriefingService:
             return False
         if line[-1] not in '.?!':
             return False
-        # One-sentence contract — reject multi-sentence model output
-        if re.search(r'[.!?]\s+\S', line):
+        # One-sentence contract — ignore common abbreviations when detecting
+        # a second sentence (Mr. / St. / Ave. / Inc. etc.).
+        without_abbrev = _ABBREVIATION_RE.sub('ABB', line)
+        if re.search(r'[.!?]\s+[A-Z0-9"$]', without_abbrev):
             return False
         words = line[:-1].split()
         if not words:
@@ -512,17 +525,16 @@ class LeadBriefingService:
 
     def _filter_usable_bullets(
         self,
-        bullets: list[str],
+        bullets: list[Optional[str]] | list[str],
         context: Optional[dict[str, Any]] = None,
     ) -> list[Optional[str]]:
         """Preserve Gemini's five-slot order; rejected slots become None."""
         slots: list[Optional[str]] = [None] * _BULLET_COUNT
-        for i, b in enumerate(bullets[:_BULLET_COUNT]):
+        for i, b in enumerate(list(bullets)[:_BULLET_COUNT]):
             if isinstance(b, str) and self._is_complete_bullet(b) and not self._is_page_echo(b, context):
                 slots[i] = b
-        # Extra usable bullets beyond 5 fill leading empty slots
         extras = [
-            b for b in bullets[_BULLET_COUNT:]
+            b for b in list(bullets)[_BULLET_COUNT:]
             if isinstance(b, str) and self._is_complete_bullet(b) and not self._is_page_echo(b, context)
         ]
         for extra in extras:
