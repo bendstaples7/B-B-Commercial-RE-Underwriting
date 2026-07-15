@@ -214,13 +214,14 @@ export function QuickAddPage() {
     },
     onSuccess: (message) => {
       setExistingActionFeedback({ severity: 'success', message })
-      void queryClient.invalidateQueries({ queryKey: ['quick-add-property-lookup'] })
     },
     onError: (error: Error) => {
       setExistingActionFeedback({
         severity: 'error',
         message: error.message || 'Could not reactivate this lead.',
       })
+    },
+    onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ['quick-add-property-lookup'] })
     },
   })
@@ -484,12 +485,14 @@ export function QuickAddPage() {
                         secondaryTypographyProps={{ variant: 'caption' }}
                       />
                     </ListItemButton>
-                    {match.lead_status === 'deprioritize' && (
+                    {match.lead_status === 'deprioritize' &&
+                      address.trim() === debouncedAddress && (
                       <Box
                         sx={{ display: 'flex', gap: 1, px: 2, pb: 1, flexWrap: 'wrap' }}
                         data-testid={`quick-add-reactivation-actions-${match.lead_id}`}
                       >
                         <Button
+                          aria-label={`Reactivate ${match.property_street || `lead ${match.lead_id}`} for outreach`}
                           size="small"
                           variant="outlined"
                           disabled={existingLeadActionMutation.isPending}
@@ -504,6 +507,7 @@ export function QuickAddPage() {
                           Reactivate for outreach
                         </Button>
                         <Button
+                          aria-label={`Reactivate ${match.property_street || `lead ${match.lead_id}`} and add to mail`}
                           size="small"
                           variant="contained"
                           disabled={existingLeadActionMutation.isPending}

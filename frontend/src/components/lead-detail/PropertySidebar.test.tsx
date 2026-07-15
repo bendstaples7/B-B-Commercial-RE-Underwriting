@@ -198,6 +198,17 @@ describe('PropertySidebar phone confidence', () => {
     )
   })
 
+  it('does not render an empty phone group for blank values', () => {
+    renderSidebar(
+      makePayload({
+        contacts: [],
+        phones: [{ value: '   ', confidence_score: 50 }],
+      }),
+    )
+
+    expect(screen.queryByTestId('sidebar-phones')).not.toBeInTheDocument()
+  })
+
   it('shows work queue chips and data quality breakdown', () => {
     renderSidebar(
       makePayload({

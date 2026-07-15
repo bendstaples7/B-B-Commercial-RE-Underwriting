@@ -173,7 +173,89 @@ describe('GlobalSearchBar', () => {
     await screen.findByText('Ronald Jutkins')
 
     fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(screen.getByRole('option', { name: /Ronald Jutkins/i })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(mockNavigate).toHaveBeenCalledWith('/leads/11129')
+  })
+
+  it('limits keyboard navigation to the rendered result options', async () => {
+    vi.mocked(searchService.search).mockResolvedValue({
+      q: 'result',
+      page: 1,
+      per_page: 10,
+      leads_total: 11,
+      sessions_total: 6,
+      leads: Array.from({ length: 11 }, (_, index) => ({
+        id: index + 1,
+        type: 'lead' as const,
+        label: `Lead ${index + 1}`,
+        nav_path: `/leads/${index + 1}`,
+      })),
+      sessions: Array.from({ length: 6 }, (_, index) => ({
+        id: index + 1,
+        type: 'session' as const,
+        label: `Session ${index + 1}`,
+        nav_path: `/sessions/${index + 1}`,
+      })),
+    })
+    const { container } = render(<GlobalSearchBar />, { wrapper: TestWrapper })
+    const input = getSearchInput(container)
+    fireEvent.focus(input)
+    setInputValue(input, 'result')
+
+    expect(await screen.findAllByRole('option')).toHaveLength(15)
+    for (let index = 0; index < 20; index += 1) {
+      fireEvent.keyDown(input, { key: 'ArrowDown' })
+    }
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(mockNavigate).toHaveBeenCalledWith('/sessions/5')
+  })
+
+  it('does not open a selected result from the previous query', async () => {
+    vi.mocked(searchService.search).mockResolvedValue({
+      q: 'old',
+      page: 1,
+      per_page: 10,
+      leads_total: 1,
+      sessions_total: 0,
+      leads: [{ id: 7, type: 'lead', label: 'Old Result', nav_path: '/leads/7' }],
+      sessions: [],
+    })
+    const { container } = render(<GlobalSearchBar />, { wrapper: TestWrapper })
+    const input = getSearchInput(container)
+    fireEvent.focus(input)
+    setInputValue(input, 'old')
+    await screen.findByText('Old Result')
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+
+    setInputValue(input, 'new query')
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(mockNavigate).toHaveBeenCalledWith('/search?q=new%20query&page=1')
+    expect(mockNavigate).not.toHaveBeenCalledWith('/leads/7')
+  })
+
+  it('shows an error when a result has no navigation path', async () => {
+    vi.mocked(searchService.search).mockResolvedValue({
+      q: 'broken',
+      page: 1,
+      per_page: 10,
+      leads_total: 1,
+      sessions_total: 0,
+      leads: [{ id: 9, type: 'lead', label: 'Broken Result', nav_path: '' }],
+      sessions: [],
+    })
+    const { container } = render(<GlobalSearchBar />, { wrapper: TestWrapper })
+    const input = getSearchInput(container)
+    fireEvent.focus(input)
+    setInputValue(input, 'broken')
+
+    fireEvent.click(await screen.findByText('Broken Result'))
+
+    expect(screen.getByText('Search failed. Please try again.')).toBeInTheDocument()
   })
 })

@@ -88,7 +88,10 @@ const GlobalSearchBar = () => {
   }, [focused, trimmedQuery])
 
   const resultItems = useMemo(
-    () => [...(searchData?.leads ?? []), ...(searchData?.sessions ?? [])],
+    () => [
+      ...(searchData?.leads.slice(0, 10) ?? []),
+      ...(searchData?.sessions.slice(0, 5) ?? []),
+    ],
     [searchData?.leads, searchData?.sessions],
   )
   const isDebouncing = trimmedQuery.length >= 2 && debouncedQuery !== trimmedQuery
@@ -99,7 +102,10 @@ const GlobalSearchBar = () => {
   }, [debouncedQuery])
 
   const navigateToResult = (item: SearchResultItem) => {
-    if (!item.nav_path) return
+    if (!item.nav_path) {
+      setSearchError(true)
+      return
+    }
     navigate(item.nav_path)
     setQuery('')
     setDebouncedQuery('')
@@ -198,6 +204,7 @@ const GlobalSearchBar = () => {
             value={query}
             onChange={(e) => {
               setQuery(e.target.value)
+              setHighlightedIndex(-1)
               setFocused(true)
             }}
             onFocus={() => setFocused(true)}
@@ -275,6 +282,7 @@ const GlobalSearchBar = () => {
                         id={`global-search-result-${index}`}
                         role="option"
                         selected={highlightedIndex === index}
+                        aria-selected={highlightedIndex === index}
                         onMouseEnter={() => setHighlightedIndex(index)}
                         onClick={() => navigateToResult(item)}
                       >
@@ -305,6 +313,7 @@ const GlobalSearchBar = () => {
                         id={`global-search-result-${index}`}
                         role="option"
                         selected={highlightedIndex === index}
+                        aria-selected={highlightedIndex === index}
                         onMouseEnter={() => setHighlightedIndex(index)}
                         onClick={() => navigateToResult(item)}
                       >

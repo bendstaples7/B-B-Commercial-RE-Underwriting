@@ -154,6 +154,10 @@ describe('SearchResultsPage', () => {
     })
 
     renderPage('/search?q=old&page=1')
+    await act(async () => {
+      await vi.runAllTimersAsync()
+    })
+    expect(screen.getByTestId('search-empty')).toBeInTheDocument()
     const input = screen.getByTestId('search-page-input')
     fireEvent.change(input, { target: { value: 'a' } })
     await act(async () => {
@@ -162,5 +166,6 @@ describe('SearchResultsPage', () => {
 
     expect(input).toHaveValue('a')
     expect(screen.getByTestId('search-query-hint')).toBeInTheDocument()
+    expect(screen.queryByTestId('search-empty')).not.toBeInTheDocument()
   })
 })

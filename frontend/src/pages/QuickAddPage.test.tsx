@@ -89,7 +89,9 @@ describe('QuickAddPage deprioritized matches', () => {
   it('reactivates an existing lead for outreach', async () => {
     renderPage()
 
-    const action = await screen.findByRole('button', { name: 'Reactivate for outreach' })
+    const action = await screen.findByRole('button', {
+      name: 'Reactivate 123 Main St for outreach',
+    })
     fireEvent.click(action)
 
     await waitFor(() => {
@@ -126,12 +128,35 @@ describe('QuickAddPage deprioritized matches', () => {
     })
     renderPage()
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Reactivate + add to mail' }))
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Reactivate 123 Main St and add to mail',
+      }),
+    )
 
     await waitFor(() => {
       expect(openLetterService.enqueue).toHaveBeenCalledWith([42])
     })
     expect(order).toEqual(['reactivate', 'mail'])
     expect(await screen.findByText(/added to the mail queue/i)).toBeInTheDocument()
+  })
+
+  it('hides stale reactivation actions while a new address is debouncing', async () => {
+    renderPage()
+    expect(
+      await screen.findByRole('button', {
+        name: 'Reactivate 123 Main St for outreach',
+      }),
+    ).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Property address'), {
+      target: { value: '456 Other St' },
+    })
+
+    expect(
+      screen.queryByRole('button', {
+        name: 'Reactivate 123 Main St for outreach',
+      }),
+    ).not.toBeInTheDocument()
   })
 })

@@ -41,6 +41,17 @@ class TestPhoneQueryDetection:
         assert phone_query_digits('(312) 543-2084') == '3125432084'
 
 
+class TestPostgresRelevanceSql:
+    def test_normalizes_name_case_and_treats_like_wildcards_literally(self):
+        from app.services.search_service import SearchService
+
+        sql = SearchService(session=object())._relevance_score_sql()
+
+        assert "lower(regexp_replace(trim(" in sql
+        assert "strpos(" in sql
+        assert "LIKE :q_normalized" not in sql
+
+
 class TestBuildSearchDocument:
     def test_concatenates_fields(self):
         row = FakeRow(

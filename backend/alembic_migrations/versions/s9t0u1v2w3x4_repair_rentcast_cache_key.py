@@ -19,19 +19,21 @@ depends_on = None
 def upgrade():
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    columns = {column["name"] for column in inspector.get_columns("rentcast_cache")}
-
-    # Fresh databases already have cache_key because the original create-table
-    # migration was corrected. Older databases recorded that revision before
-    # the correction and need this repair.
-    if "cache_key" in columns:
-        return
+    columns = {
+        column["name"]: column
+        for column in inspector.get_columns("rentcast_cache")
+    }
 
     constraints = {
         constraint["name"]: constraint
         for constraint in inspector.get_unique_constraints("rentcast_cache")
     }
-    if "uq_rentcast_cache_key" in constraints:
+    cache_constraint = constraints.get("uq_rentcast_cache_key")
+    has_cache_key_constraint = (
+        cache_constraint is not None
+        and cache_constraint.get("column_names") == ["cache_key"]
+    )
+    if cache_constraint is not None and not has_cache_key_constraint:
         op.drop_constraint(
             "uq_rentcast_cache_key",
             "rentcast_cache",
@@ -43,10 +45,12 @@ def upgrade():
         "ADD COLUMN IF NOT EXISTS cache_key VARCHAR(700)"
     )
 
+    # Legacy rows predate property_type-aware keys. Multi-Family is the
+    # application's default and preserves cache hits for the common path.
     rows = bind.execute(
         sa.text(
             "SELECT id, address_key, unit_type_label, bedrooms, bathrooms, "
-            "square_footage FROM rentcast_cache"
+            "square_footage FROM rentcast_cache WHERE cache_key IS NULL"
         )
     )
     for row in rows.mappings():
@@ -54,7 +58,7 @@ def upgrade():
             [
                 row["address_key"],
                 row["unit_type_label"],
-                "",
+                "Multi-Family",
                 row["bedrooms"],
                 float(row["bathrooms"]) if row["bathrooms"] is not None else None,
                 row["square_footage"],
@@ -68,12 +72,33 @@ def upgrade():
             {"cache_key": cache_key, "id": row["id"]},
         )
 
-    op.alter_column("rentcast_cache", "cache_key", nullable=False)
-    op.create_unique_constraint(
-        "uq_rentcast_cache_key",
-        "rentcast_cache",
-        ["cache_key"],
+    # Nullable key fields allowed duplicate legacy rows. Keep the newest cache
+    # entry for each generated key before enforcing uniqueness.
+    bind.execute(
+        sa.text(
+            """
+            DELETE FROM rentcast_cache AS older
+            USING rentcast_cache AS newer
+            WHERE older.cache_key = newer.cache_key
+              AND (
+                    older.fetched_at < newer.fetched_at
+                    OR (
+                        older.fetched_at = newer.fetched_at
+                        AND older.id < newer.id
+                    )
+              )
+            """
+        )
     )
+
+    if "cache_key" not in columns or columns["cache_key"].get("nullable", True):
+        op.alter_column("rentcast_cache", "cache_key", nullable=False)
+    if not has_cache_key_constraint:
+        op.create_unique_constraint(
+            "uq_rentcast_cache_key",
+            "rentcast_cache",
+            ["cache_key"],
+        )
 
 
 def downgrade():

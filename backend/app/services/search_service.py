@@ -608,7 +608,7 @@ class SearchService:
             "lower(regexp_replace(trim(COALESCE(l.property_street, '')), '\\s+', ' ', 'g'))"
         )
         normalized_name = (
-            f"regexp_replace(trim({FULL_NAME_EXPR.strip()}), '\\s+', ' ', 'g')"
+            f"lower(regexp_replace(trim({FULL_NAME_EXPR.strip()}), '\\s+', ' ', 'g'))"
         )
         return f"""
         (
@@ -616,11 +616,11 @@ class SearchService:
                 WHEN {normalized_street} = :q_normalized
                      OR {normalized_name} = :q_normalized
                     THEN {WEIGHT_EXACT_FIELD_MATCH}
-                WHEN {normalized_street} LIKE :q_normalized || '%'
-                     OR {normalized_name} LIKE :q_normalized || '%'
+                WHEN strpos({normalized_street}, :q_normalized) = 1
+                     OR strpos({normalized_name}, :q_normalized) = 1
                     THEN {WEIGHT_PREFIX_FIELD_MATCH}
-                WHEN {normalized_street} LIKE '%' || :q_normalized || '%'
-                     OR {normalized_name} LIKE '%' || :q_normalized || '%'
+                WHEN strpos({normalized_street}, :q_normalized) > 0
+                     OR strpos({normalized_name}, :q_normalized) > 0
                     THEN {WEIGHT_CONTAINS_FIELD_MATCH}
                 ELSE 0
             END

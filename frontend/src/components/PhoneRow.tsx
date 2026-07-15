@@ -24,6 +24,13 @@ export function isHighConfidencePhone(phone: PhoneRowPhone): boolean {
   return typeof phone !== 'string' && (phone.confidence_score ?? 50) >= HIGH_PHONE_CONFIDENCE
 }
 
+export function hasNonBlankPhones(phones: PhoneRowPhone[]): boolean {
+  return phones.some((phone) => {
+    const value = typeof phone === 'string' ? phone : phone.value
+    return Boolean(value?.trim())
+  })
+}
+
 export interface PhoneRowProps {
   phone: PhoneRowPhone
   /** Show label next to the number when not `other`. */

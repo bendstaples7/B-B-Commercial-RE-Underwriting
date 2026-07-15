@@ -40,7 +40,7 @@ import { RecalculateButton } from '@/components/RecalculateButton'
 import { ScoreBreakdownCard } from '@/components/ScoreBreakdownCard'
 import { ScoreHistoryTimeline } from '@/components/ScoreHistoryTimeline'
 import { ScoreLegend } from '@/components/ScoreLegend'
-import { PhoneList } from '@/components/PhoneRow'
+import { hasNonBlankPhones, PhoneList } from '@/components/PhoneRow'
 import { MotivationSignalsPanel } from '@/components/lead-detail/MotivationSignalsPanel'
 import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
 import { contactDisplayName } from '@/utils/propertyContacts'
@@ -251,7 +251,7 @@ export function LeadDetailTabPanel({
                       } ${idx + 1}${contact.is_primary ? ' (Primary)' : ''}`,
                       [
                         ['Name', name || null],
-                        ...(contact.phones?.length
+                        ...(contact.phones && hasNonBlankPhones(contact.phones)
                           ? [[
                               'Phone',
                               <PhoneList
