@@ -66,7 +66,7 @@ def get_counts():
 def get_todays_action():
     """GET /api/queues/todays-action — paginated Today's Action queue.
 
-    Optional query param ``outreach``: mail_now | call_now | email_now | text_now
+    Optional query param ``outreach``: direct_mail | call_now | email_now | text_now
     filters by outreach display label (same as UI Next Action column).
     """
     page, per_page, sort_by, sort_order = _parse_pagination_params()
@@ -86,7 +86,7 @@ def get_todays_action():
 @queue_bp.route('/todays-action/outreach-counts', methods=['GET'])
 @handle_errors
 def get_todays_action_outreach_counts():
-    """GET /api/queues/todays-action/outreach-counts — Mail Now / Call Now facet counts."""
+    """GET /api/queues/todays-action/outreach-counts — outreach facet counts."""
     counts = _get_queue_service().get_todays_action_outreach_counts()
     return jsonify(counts), 200
 

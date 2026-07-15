@@ -121,6 +121,19 @@ describe('QueueTable', () => {
       expect(cell).toHaveTextContent('Call Now')
       expect(cell).toHaveTextContent('(555) 123-4567')
     })
+
+    it('shows a due task when no recommended action exists', () => {
+      render(
+        <QueueTable
+          rows={[makeRow(1, { due_task_title: 'Research owner entity' })]}
+          total={1}
+        />,
+      )
+
+      expect(screen.getByTestId('row-action-1')).toHaveTextContent(
+        'Due task: Research owner entity',
+      )
+    })
   })
 
   // -------------------------------------------------------------------------
@@ -530,6 +543,57 @@ describe('QueueTable', () => {
   // -------------------------------------------------------------------------
 
   describe('bulk partial failure summary', () => {
+    it('shows durable direct-mail details and issue drill-down', async () => {
+      const mailAction = {
+        label: 'Add to mail batch',
+        testId: 'bulk-mail',
+        onClick: vi.fn().mockResolvedValue({
+          successes: 1,
+          failures: 1,
+          mail_enqueue: {
+            attempt_id: 42,
+            added: 1,
+            skipped: 0,
+            invalid: 1,
+            results: [
+              {
+                lead_id: 1,
+                status: 'queued',
+                owner_name: 'Owner One',
+                property_street: '1 Main St',
+              },
+              {
+                lead_id: 2,
+                status: 'invalid_address',
+                error: 'Incomplete owner mailing city/state/zip',
+                owner_name: 'Owner Two',
+                property_street: '2 Main St',
+              },
+            ],
+          },
+        } satisfies BulkActionResult),
+      }
+      render(
+        <QueueTable
+          rows={[makeRow(1), makeRow(2)]}
+          total={2}
+          selectedIds={[1, 2]}
+          onSelectionChange={vi.fn()}
+          bulkActions={[mailAction]}
+        />,
+      )
+
+      await user.click(screen.getByTestId('bulk-mail'))
+      expect(await screen.findByText('1 staged · 1 need attention')).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Review results' }))
+      expect(await screen.findByText('Invalid addresses (1)')).toBeInTheDocument()
+      expect(screen.getByText('Incomplete owner mailing city/state/zip')).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: 'Owner Two' })).toHaveAttribute(
+        'href',
+        '/leads/2',
+      )
+    })
+
     it('shows "X succeeded, Y failed" message on partial bulk action failure', async () => {
       const partialBulkAction = {
         label: 'Suppress',

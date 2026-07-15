@@ -678,6 +678,10 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     queryFn: () => commandCenterService.getCommandCenter(leadId),
     staleTime: LEAD_WORKSPACE_STALE_MS,
   })
+  const openTasks = useMemo(
+    () => commandCenterData?.open_tasks ?? [],
+    [commandCenterData?.open_tasks],
+  )
 
   const {
     data: queueNavigation,
@@ -908,14 +912,22 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         return
       }
       case 'skip_trace':
-        await leadTaskService.createTask(leadId, {
-          title: 'Run skip trace on owner',
-          task_type: 'skip_trace_owner',
-        })
+      case 'move_to_skip_trace': {
+        const currentTaskId = openTasks[0]?.id
+        const result = await commandCenterService.moveToSkipTrace(
+          leadId,
+          currentTaskId == null ? undefined : Number(currentTaskId),
+        )
         tasksPanelRef.current?.scrollIntoView()
-        setActivitySnackbar({ open: true, message: 'Skip trace task created' })
-        await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+        setActivitySnackbar({
+          open: true,
+          message: result.completed_task_id
+            ? 'Current task completed and lead moved to Skip Trace'
+            : 'Lead moved to Skip Trace',
+        })
+        await handleStatusChanged()
         return
+      }
       case 'add_contact_info':
         navigate(`${location.pathname}?tab=contacts`, { replace: true })
         window.setTimeout(() => {
@@ -943,7 +955,17 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       default:
         await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
     }
-  }, [queryClient, leadId, navigate, location.pathname, leadData, leadLoading, leadDetailError])
+  }, [
+    queryClient,
+    leadId,
+    navigate,
+    location.pathname,
+    leadData,
+    leadLoading,
+    leadDetailError,
+    openTasks,
+    handleStatusChanged,
+  ])
 
   const handleCreateTask = useCallback(() => {
     tasksPanelRef.current?.scrollIntoView()
@@ -1004,7 +1026,6 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
 
   // Main layout
   const outreachContact = resolveOutreachContactFromCommandCenter(commandCenterData!)
-  const openTasks = commandCenterData!.open_tasks ?? []
   const recommendedActionValue = commandCenterData!.recommended_action?.value ?? null
   const contactMethod = commandCenterData!.recommended_action?.recommended_contact_method ?? null
   const placement = outreachContactPlacement(openTasks, outreachContact, recommendedActionValue)

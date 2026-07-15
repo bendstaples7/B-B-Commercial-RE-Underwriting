@@ -21,6 +21,11 @@ def _lead(**kwargs):
     lead.is_warm = kwargs.get('is_warm', False)
     lead.follow_up_overdue = kwargs.get('follow_up_overdue', False)
     lead.unanswered_call_count = kwargs.get('unanswered_call_count', 0)
+    lead.mailing_address = kwargs.get('mailing_address', '123 Owner Mail St')
+    lead.mailing_city = kwargs.get('mailing_city', 'Chicago')
+    lead.mailing_state = kwargs.get('mailing_state', 'IL')
+    lead.mailing_zip = kwargs.get('mailing_zip', '60601')
+    lead.returned_addresses = kwargs.get('returned_addresses')
     return lead
 
 
@@ -149,8 +154,9 @@ def test_outreach_action_label_call_now():
     assert outreach_action_label('follow_up_now', 'phone') == 'Call Now'
 
 
-def test_outreach_action_label_mail_now():
-    assert outreach_action_label('follow_up_now', 'direct_mail') == 'Mail Now'
+def test_outreach_action_label_direct_mail_has_no_urgency():
+    assert outreach_action_label('follow_up_now', 'direct_mail') == 'Direct Mail'
+    assert outreach_action_label('nurture', 'direct_mail') == 'Direct Mail'
 
 
 def _lead_with_contact(**kwargs):
@@ -215,7 +221,7 @@ def test_resolve_outreach_contact_mail_prefers_mailing():
     assert result['lines'] == ['123 Mail St', 'Springfield, IL 62701']
 
 
-def test_resolve_outreach_contact_mail_falls_back_to_property():
+def test_resolve_outreach_contact_mail_does_not_fall_back_to_property():
     lead = _lead_with_contact(
         property_street='789 Oak Rd',
         property_city='Chicago',
@@ -223,8 +229,7 @@ def test_resolve_outreach_contact_mail_falls_back_to_property():
         property_zip='60601',
     )
     result = resolve_outreach_contact(lead, 'direct_mail')
-    assert result is not None
-    assert result['lines'][0] == '789 Oak Rd'
+    assert result is None
 
 
 def test_resolve_outreach_contact_none_for_missing_channel():

@@ -455,7 +455,11 @@ def bulk_rescore_task(user_id: str, lead_ids: list[int] | None = None) -> int:
     app = create_app()
     with app.app_context():
         engine = LeadScoringEngine()
-        return engine.bulk_rescore(user_id, lead_ids)
+        return engine.bulk_rescore(
+            user_id,
+            lead_ids,
+            continue_on_error=True,
+        )
 
 
 @celery.task(name='leads.run_duplicate_sentinel')

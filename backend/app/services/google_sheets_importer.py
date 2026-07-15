@@ -1236,7 +1236,6 @@ class GoogleSheetsImporter:
                 gis_matched = 0
                 gis_errors = 0
                 gis_no_connector = 0
-                matched_lead_ids = []
                 for lead in unmatched:
                     connector = connector_for_lead(lead)
                     if not connector:
@@ -1247,7 +1246,6 @@ class GoogleSheetsImporter:
                         gis_errors += 1
                     elif outcome.get('match_found'):
                         gis_matched += 1
-                        matched_lead_ids.append(lead.id)
                 if unmatched:
                     db.session.commit()
                     logger.info(
@@ -1256,20 +1254,33 @@ class GoogleSheetsImporter:
                         job_id, gis_matched, len(unmatched), gis_errors,
                         gis_no_connector,
                     )
-                    # Bug 8: GIS enrichment just changed scoring inputs
-                    # (has_property_match / county_assessor_pin) for the matched
-                    # leads. Refresh lead_score + recommended_action now so they
-                    # reflect the enrichment instead of going stale until the
-                    # nightly bulk rescore. refresh_lead_scoring is per-lead and
-                    # error-isolated (never raises into this best-effort block).
-                    if matched_lead_ids:
-                        from app.services.lead_refresh import refresh_lead_scoring
-                        for matched_lead_id in matched_lead_ids:
-                            refresh_lead_scoring(matched_lead_id)
-                        logger.info(
-                            "ImportJob %s GIS enrichment: refreshed scoring for %d lead(s)",
-                            job_id, len(matched_lead_ids),
-                        )
+                # Mailing fields and other scoring inputs can change even when
+                # GIS was already matched. Refresh every lead touched by this
+                # import once, after all fill-missing enrichment is complete.
+                touched_lead_ids = [
+                    row[0]
+                    for row in (
+                        db.session.query(Lead.id)
+                        .filter(Lead.last_import_job_id == job_id)
+                        .all()
+                    )
+                ]
+                if touched_lead_ids:
+                    from app.services.lead_scoring_engine import LeadScoringEngine
+                    failed_rescore_ids: list[int] = []
+                    refreshed_count = LeadScoringEngine().bulk_rescore(
+                        'default',
+                        lead_ids=touched_lead_ids,
+                        continue_on_error=True,
+                        failure_ids=failed_rescore_ids,
+                    )
+                    logger.info(
+                        "ImportJob %s: refreshed scoring for %d touched lead(s); "
+                        "%d failed",
+                        job_id,
+                        refreshed_count,
+                        len(failed_rescore_ids),
+                    )
             except Exception as gis_exc:
                 # GIS enrichment is best-effort — never fail a completed import.
                 # The import data was already committed above, so roll back only

@@ -464,9 +464,10 @@ def _make_mail_ready_lead(app, street, **kwargs):
     defaults = dict(
         lead_status='mailing_no_contact_made',
         recommended_action='mail_ready',
-        property_city='Chicago',
-        property_state='IL',
-        property_zip='60601',
+        mailing_address=street,
+        mailing_city='Chicago',
+        mailing_state='IL',
+        mailing_zip='60601',
     )
     defaults.update(kwargs)
     return _make_lead(app, street, **defaults)

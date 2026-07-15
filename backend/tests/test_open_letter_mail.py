@@ -9,8 +9,10 @@ from app.services.mail_queue_service import MailQueueService
 from app.services.open_letter_config_service import OpenLetterConfigService
 from app.services.open_letter_contact_mapper import (
     lead_to_olc_contact,
+    is_owner_mailable_lead,
     persist_embedded_address_fields,
     validate_lead_mail_address,
+    validate_owner_mailing_address,
 )
 
 BEN_USER_ID = 'e5bc61c7-4db1-4307-a7b6-0a6b5a3d84c9'
@@ -62,6 +64,31 @@ class TestOpenLetterContactMapper:
             property_city=None, property_state=None, property_zip=None,
         )
         assert validate_lead_mail_address(lead) is not None
+
+    def test_owner_mail_readiness_rejects_property_fallback(self):
+        lead = _make_lead(
+            mailing_address=None,
+            mailing_city=None,
+            mailing_state=None,
+            mailing_zip=None,
+        )
+        assert is_owner_mailable_lead(lead) is False
+        assert validate_owner_mailing_address(lead) == 'No owner mailing street address'
+
+    def test_owner_mail_readiness_parses_embedded_address(self):
+        lead = _make_lead(
+            mailing_address='123 Main St Chicago IL 60601',
+            mailing_city=None,
+            mailing_state=None,
+            mailing_zip=None,
+        )
+        assert is_owner_mailable_lead(lead) is True
+
+    def test_owner_mail_readiness_rejects_returned_address(self):
+        lead = _make_lead(returned_addresses='123 Main St returned')
+        assert validate_owner_mailing_address(lead) == (
+            'Owner mailing address was previously returned'
+        )
 
     def test_does_not_mix_partial_mailing_with_property(self):
         lead = _make_lead(
@@ -155,6 +182,10 @@ class TestOpenLetterContactMapper:
                 property_city='Chicago',
                 property_state='IL',
                 property_zip='60601',
+                mailing_address='1 Owner Mail St',
+                mailing_city='Chicago',
+                mailing_state='IL',
+                mailing_zip='60601',
                 lead_status='mailing_no_contact_made',
             )
             bad = Lead(
@@ -165,6 +196,10 @@ class TestOpenLetterContactMapper:
                 property_city='Chicago',
                 property_state='IL',
                 property_zip='60602',
+                mailing_address='2 Owner Mail St',
+                mailing_city='Chicago',
+                mailing_state='IL',
+                mailing_zip='60602',
                 lead_status='mailing_no_contact_made',
             )
             good_b = Lead(
@@ -175,6 +210,10 @@ class TestOpenLetterContactMapper:
                 property_city='Chicago',
                 property_state='IL',
                 property_zip='60603',
+                mailing_address='3 Owner Mail St',
+                mailing_city='Chicago',
+                mailing_state='IL',
+                mailing_zip='60603',
                 lead_status='mailing_no_contact_made',
             )
             db.session.add_all([good_a, bad, good_b])
@@ -225,6 +264,7 @@ class TestOpenLetterContactMapper:
                 owner_first_name='Joseph',
                 owner_last_name='Zajac',
                 property_street='3446 N Harding Ave Chicago IL 60618',
+                mailing_address='3446 N Harding Ave Chicago IL 60618',
                 lead_status='mailing_no_contact_made',
             )
             db.session.add_all([existing, embedded])
@@ -238,6 +278,8 @@ class TestOpenLetterContactMapper:
             assert embedded.property_city == 'Chicago'
             assert embedded.property_state == 'IL'
             assert embedded.property_zip == '60618'
+            assert embedded.mailing_address == '3446 N Harding Ave Chicago IL 60618'
+            assert embedded.mailing_city == 'Chicago'
 
 
 class TestOpenLetterPerUserConfig:

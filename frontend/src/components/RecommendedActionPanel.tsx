@@ -37,6 +37,12 @@ const UNIVERSAL_ACTIONS: ActionButton[] = [
   { label: 'Log Call', action: 'log_call', isOutreach: true },
   { label: 'Log Note', action: 'log_note' },
   { label: 'Log Email', action: 'log_email', isOutreach: true },
+  {
+    label: 'Move to Skip Trace',
+    action: 'move_to_skip_trace',
+    isOutreach: true,
+    title: 'Complete the current task, change status to Skip Trace, and create awaiting skip-trace work',
+  },
 ]
 
 const MAIL_QUEUE_BUTTON: ActionButton = {
@@ -45,17 +51,9 @@ const MAIL_QUEUE_BUTTON: ActionButton = {
   isOutreach: true,
 }
 
-/** Show mail in Quick actions when address is mailable, or the RA/method is already mail. */
-function shouldIncludeMailQueue(
-  isMailable: boolean,
-  raValue?: string | null,
-  contactMethod?: string | null,
-): boolean {
-  return (
-    isMailable
-    || raValue === 'mail_ready'
-    || contactMethod === 'direct_mail'
-  )
+/** Show mail controls only when the owner destination passed backend readiness. */
+function shouldIncludeMailQueue(isMailable: boolean): boolean {
+  return isMailable
 }
 
 function getUniversalActions(includeMail: boolean, promoteMail = false): ActionButton[] {
@@ -111,7 +109,7 @@ const ACTION_BUTTONS: Record<CRMRecommendedAction, ActionButton[]> = {
     { label: 'Create Task', action: 'create_task' },
   ],
   enrich_data: [
-    { label: 'Run Skip Trace', action: 'skip_trace' },
+    { label: 'Move to Skip Trace', action: 'move_to_skip_trace' },
     { label: 'Add Contact Info', action: 'add_contact_info' },
     { label: 'Research Property', action: 'research_property' },
   ],
@@ -134,7 +132,7 @@ const ACTION_BUTTONS: Record<CRMRecommendedAction, ActionButton[]> = {
   ]),
   add_contact_info: [
     { label: 'Add Contact Info', action: 'add_contact_info' },
-    { label: 'Run Skip Trace', action: 'skip_trace' },
+    { label: 'Move to Skip Trace', action: 'move_to_skip_trace' },
   ],
   create_task: [
     { label: 'Create Task', action: 'create_task' },
@@ -194,15 +192,31 @@ export function RecommendedActionPanel({
   const [pendingAction, setPendingAction] = useState<string | null>(null)
 
   const isDNC = leadStatus === 'do_not_contact'
+  const isTerminal = [
+    'deprioritize',
+    'deal_won',
+    'deal_lost',
+    'suppressed',
+    'do_not_contact',
+  ].includes(leadStatus)
   const isInMailBatch = mailQueueStatus === 'queued'
   const raValue = recommendedAction?.value ?? null
   const contactMethodHint = recommendedAction?.recommended_contact_method ?? null
   const includeMailQueue =
     isInMailBatch
-    || shouldIncludeMailQueue(isMailable, raValue, contactMethodHint)
+    || shouldIncludeMailQueue(isMailable)
   const promoteMailQueue =
     raValue === 'mail_ready' || contactMethodHint === 'direct_mail'
-  const universalActions = getUniversalActions(includeMailQueue, promoteMailQueue)
+  const canMoveToSkipTrace = (
+    !isTerminal
+    && !['skip_trace', 'awaiting_skip_trace'].includes(leadStatus)
+  )
+  const universalActions = getUniversalActions(includeMailQueue, promoteMailQueue).filter(
+    (action) => (
+      action.action !== 'move_to_skip_trace'
+      || canMoveToSkipTrace
+    ),
+  )
   const panelSx = embedded
     ? { p: 0, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }
     : { p: 2, border: 1, borderColor: 'divider', borderRadius: 1, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }
@@ -332,9 +346,20 @@ export function RecommendedActionPanel({
             data-testid="dnc-badge"
           />
         )}
-        <Typography variant="body2" color="text.secondary">
-          No recommended action at this time.
-        </Typography>
+        {openTasks.length > 0 ? (
+          <>
+            <Typography variant="body2" fontWeight={700}>
+              Follow up on next task
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {openTasks[0].title}
+            </Typography>
+          </>
+        ) : (
+          <Typography variant="body2" color="text.secondary">
+            No recommended action at this time.
+          </Typography>
+        )}
         {actionError && (
           <Alert
             severity="error"
@@ -351,13 +376,19 @@ export function RecommendedActionPanel({
   }
 
   const { value, label, explanation, recommended_contact_method: contactMethod, outreach_contact: outreachContact, winning_rule_label: winningRuleLabel } = recommendedAction
-  const displayLabel = label ?? (value ? outreachDisplayLabel(value, contactMethod) : 'No recommended action')
-  const hideRaHeading = value === 'nurture'
+  const hasOpenTasks = openTasks.length > 0
+  const showTaskFallback = value === 'nurture' && hasOpenTasks
+  const displayLabel = showTaskFallback
+    ? 'Follow up on next task'
+    : label ?? (value ? outreachDisplayLabel(value, contactMethod) : 'No recommended action')
+  const hideRaHeading = value === 'nurture' && !showTaskFallback
   const raButtons = (ACTION_BUTTONS[value] ?? []).filter(
-    (btn) => !universalActions.some((u) => u.action === btn.action),
+    (btn) => (
+      !universalActions.some((u) => u.action === btn.action)
+      && (btn.action !== 'move_to_skip_trace' || canMoveToSkipTrace)
+    ),
   )
   const prioritizedRaButtons = prioritizeButtonsForMethod(raButtons, contactMethod)
-  const hasOpenTasks = openTasks.length > 0
   const showCreateTaskCTA = value === 'create_task' && !hasOpenTasks && typeof onCreateTask === 'function'
 
   return (
@@ -393,6 +424,17 @@ export function RecommendedActionPanel({
         </Typography>
       )}
 
+      {showTaskFallback && (
+        <Typography
+          variant="body2"
+          color="text.secondary"
+          sx={{ mb: 2 }}
+          data-testid="ra-next-task-title"
+        >
+          {openTasks[0].title}
+        </Typography>
+      )}
+
       {!hideRaHeading && showOutreachContact && outreachContact && (
         <OutreachContactInline contact={outreachContact} />
       )}
@@ -401,7 +443,7 @@ export function RecommendedActionPanel({
         <OutreachContactMissingHint channel={contactMethod as OutreachContact['channel']} />
       )}
 
-      {!hideRaHeading && explanation && (
+      {!hideRaHeading && !showTaskFallback && explanation && (
         <Typography
           variant="body2"
           color="text.secondary"
@@ -412,7 +454,7 @@ export function RecommendedActionPanel({
         </Typography>
       )}
 
-      {!hideRaHeading && winningRuleLabel && (
+      {!hideRaHeading && !showTaskFallback && winningRuleLabel && (
         <Alert
           severity="info"
           variant="outlined"

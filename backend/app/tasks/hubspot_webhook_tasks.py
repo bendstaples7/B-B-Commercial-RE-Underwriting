@@ -622,6 +622,8 @@ def run_handle_association_event(
                     enriched = matcher.enrich_lead_from_contact(lead, hs_contact)
                     if enriched:
                         db.session.commit()
+                        from app.services.lead_refresh import refresh_lead_scoring
+                        refresh_lead_scoring(lead.id)
                         logger.info(
                             "run_handle_association_event: enriched lead_id=%d from "
                             "contact %s fields=%s",

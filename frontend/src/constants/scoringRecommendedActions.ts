@@ -35,18 +35,15 @@ export function outreachDisplayLabel(
 ): string {
   if (!action) return '—'
 
+  if (method === 'direct_mail') return 'Direct Mail'
   if (action === 'call_ready' || (action === 'follow_up_now' && method === 'phone')) {
     return 'Call Now'
-  }
-  if (action === 'mail_ready' || (action === 'follow_up_now' && method === 'direct_mail')) {
-    return 'Mail Now'
   }
   if (action === 'follow_up_now' && method === 'email') return 'Email Now'
   if (action === 'follow_up_now' && method === 'text') return 'Text Now'
   if (action === 'ready_for_outreach' && method === 'phone') return 'Ready to Call'
   if (action === 'ready_for_outreach' && method === 'email') return 'Ready to Email'
   if (action === 'ready_for_outreach' && method === 'text') return 'Ready to Text'
-  if (action === 'ready_for_outreach' && method === 'direct_mail') return 'Ready to Mail'
   if (action === 'review_now' && method) {
     return `Review — ${CONTACT_METHOD_LABELS[method as ContactMethod] ?? method}`
   }

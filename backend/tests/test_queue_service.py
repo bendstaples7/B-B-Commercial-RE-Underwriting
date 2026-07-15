@@ -42,9 +42,11 @@ def _make_mail_ready_lead(app, street, **kwargs):
     defaults = dict(
         lead_status='mailing_no_contact_made',
         recommended_action='mail_ready',
-        property_city='Chicago',
-        property_state='IL',
-        property_zip='60601',
+        recommended_contact_method='direct_mail',
+        mailing_address=street,
+        mailing_city='Chicago',
+        mailing_state='IL',
+        mailing_zip='60601',
         owner_user_id='test-owner',
     )
     defaults.update(kwargs)
@@ -209,14 +211,18 @@ def test_todays_action_includes_due_task_even_if_recently_sold(app):
         assert lead.id in [r['id'] for r in rows]
 
 
-def test_todays_action_filters_mail_now(app):
-    """outreach=mail_now returns only Mail Now display-label leads."""
+def test_todays_action_filters_direct_mail(app):
+    """outreach=direct_mail returns eligible direct-mail leads."""
     with app.app_context():
         mail_lead = _make_lead(
             app,
             '40 Mail Now St',
             recommended_action='mail_ready',
             recommended_contact_method='direct_mail',
+            mailing_address='40 Mail St',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60601',
             lead_score=90,
         )
         call_lead = _make_lead(
@@ -230,14 +236,99 @@ def test_todays_action_filters_mail_now(app):
         _make_task(app, call_lead.id, due_date=date.today())
 
         svc = QueueService()
-        rows, total = svc.get_todays_action(outreach='mail_now')
+        rows, total = svc.get_todays_action(outreach='direct_mail')
         ids = [r['id'] for r in rows]
         assert mail_lead.id in ids
         assert call_lead.id not in ids
         assert total >= 1
-        assert svc.get_todays_action_outreach_counts()['mail_now'] >= 1
-        assert mail_lead.id in svc.get_todays_action_lead_ids(outreach='mail_now')
-        assert call_lead.id not in svc.get_todays_action_lead_ids(outreach='mail_now')
+        assert svc.get_todays_action_outreach_counts()['direct_mail'] >= 1
+        assert mail_lead.id in svc.get_todays_action_lead_ids(outreach='direct_mail')
+        assert call_lead.id not in svc.get_todays_action_lead_ids(outreach='direct_mail')
+
+
+def test_todays_action_direct_mail_consolidates_nurture_and_excludes_bad_mail(app):
+    with app.app_context():
+        nurture_mail = _make_lead(
+            app,
+            '42 Nurture Mail St',
+            recommended_action='nurture',
+            recommended_contact_method='direct_mail',
+            mailing_address='500 Owner St',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60601',
+        )
+        incomplete = _make_lead(
+            app,
+            '43 Incomplete Mail St',
+            recommended_action='mail_ready',
+            recommended_contact_method='direct_mail',
+            mailing_address='501 Owner St',
+            mailing_city=None,
+            mailing_state='IL',
+            mailing_zip='60601',
+        )
+        returned = _make_lead(
+            app,
+            '44 Returned Mail St',
+            recommended_action='mail_ready',
+            recommended_contact_method='direct_mail',
+            mailing_address='502 Owner St',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60601',
+            returned_addresses='502 Owner St',
+        )
+        for lead in (nurture_mail, incomplete, returned):
+            _make_task(
+                app,
+                lead.id,
+                due_date=date.today(),
+                title=f'Work {lead.property_street}',
+            )
+
+        rows, _ = QueueService().get_todays_action(outreach='direct_mail')
+        by_id = {row['id']: row for row in rows}
+        assert nurture_mail.id in by_id
+        assert by_id[nurture_mail.id]['outreach_action_label'] == 'Direct Mail'
+        assert by_id[nurture_mail.id]['due_task_title'] == 'Work 42 Nurture Mail St'
+        assert incomplete.id not in by_id
+        assert returned.id not in by_id
+
+
+def test_todays_action_includes_associated_crm_task_title(app):
+    from app import db
+    from app.models.task import Task
+    from app.models.task_association import TaskAssociation
+
+    with app.app_context():
+        lead = _make_lead(app, '43 HubSpot Task Context St')
+        direct_task = Task(
+            title='Later direct CRM task',
+            due_date=datetime.combine(date.today(), datetime.max.time()),
+            status='open',
+            source='manual',
+            lead_id=lead.id,
+            task_type='custom',
+        )
+        task = Task(
+            title='Follow up on imported HubSpot task',
+            due_date=datetime.combine(date.today(), datetime.min.time()),
+            status='open',
+            source='hubspot_import',
+        )
+        db.session.add_all([direct_task, task])
+        db.session.flush()
+        db.session.add(TaskAssociation(
+            task_id=task.id,
+            target_type='lead',
+            target_id=lead.id,
+        ))
+        db.session.commit()
+
+        rows, _ = QueueService().get_todays_action()
+        row = next(item for item in rows if item['id'] == lead.id)
+        assert row['due_task_title'] == task.title
 
 
 def test_todays_action_outreach_counts_buckets(app):
@@ -248,6 +339,10 @@ def test_todays_action_outreach_counts_buckets(app):
             '50 Mail Bucket St',
             recommended_action='mail_ready',
             recommended_contact_method='direct_mail',
+            mailing_address='50 Mail St',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60601',
             lead_score=90,
         )
         call_lead = _make_lead(
@@ -276,20 +371,20 @@ def test_todays_action_outreach_counts_buckets(app):
 
         svc = QueueService()
         counts = svc.get_todays_action_outreach_counts()
-        assert set(counts) == {'all', 'mail_now', 'call_now', 'email_now', 'text_now'}
+        assert set(counts) == {'all', 'direct_mail', 'call_now', 'email_now', 'text_now'}
         assert counts['all'] >= 4
-        assert counts['mail_now'] >= 1
+        assert counts['direct_mail'] >= 1
         assert counts['call_now'] >= 1
         assert counts['email_now'] >= 1
         assert counts['text_now'] >= 1
 
-        assert counts['mail_now'] == svc._todays_action_query(outreach='mail_now').count()
+        assert counts['direct_mail'] == svc._todays_action_query(outreach='direct_mail').count()
         assert counts['call_now'] == svc._todays_action_query(outreach='call_now').count()
         assert counts['email_now'] == svc._todays_action_query(outreach='email_now').count()
         assert counts['text_now'] == svc._todays_action_query(outreach='text_now').count()
         assert counts['all'] == svc._todays_action_query().count()
 
-        mail_ids = set(svc.get_todays_action_lead_ids(outreach='mail_now'))
+        mail_ids = set(svc.get_todays_action_lead_ids(outreach='direct_mail'))
         call_ids = set(svc.get_todays_action_lead_ids(outreach='call_now'))
         email_ids = set(svc.get_todays_action_lead_ids(outreach='email_now'))
         text_ids = set(svc.get_todays_action_lead_ids(outreach='text_now'))
@@ -315,7 +410,7 @@ def test_todays_action_outreach_counts_empty(app):
         counts = svc.get_todays_action_outreach_counts()
         assert counts == {
             'all': 0,
-            'mail_now': 0,
+            'direct_mail': 0,
             'call_now': 0,
             'email_now': 0,
             'text_now': 0,
@@ -557,6 +652,29 @@ def test_mail_candidates_excludes_recently_sold(app):
         svc = QueueService(owner_user_id='test-owner')
         rows, total = svc.get_mail_candidates('test-owner')
         assert lead.id not in [r['id'] for r in rows]
+
+
+def test_mail_candidates_accepts_parseable_one_line_owner_address(app):
+    from app import db
+
+    with app.app_context():
+        lead = _make_mail_ready_lead(
+            app,
+            '20a Embedded Owner Mail St',
+            mailing_address='20a Embedded Owner Mail St, Chicago, IL 60601',
+            mailing_city=None,
+            mailing_state=None,
+            mailing_zip=None,
+        )
+        from app.services.open_letter_contact_mapper import (
+            persist_embedded_address_fields,
+        )
+        assert persist_embedded_address_fields(lead) is True
+        db.session.commit()
+        rows, _ = QueueService(owner_user_id='test-owner').get_mail_candidates(
+            'test-owner',
+        )
+        assert lead.id in [row['id'] for row in rows]
 
 
 def test_mail_candidates_includes_last_sale_at(app):

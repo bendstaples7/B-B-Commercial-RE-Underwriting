@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
 
 from app import db
-from app.models import Lead, LeadTask, LeadTimelineEntry
+from app.models import Lead, LeadTask, LeadTimelineEntry, Task
 from app.models.user import User
 from app.services.auth_service import AuthService
 from app.services.hubspot_timeline_import_service import HubSpotTimelineImportService
@@ -608,6 +608,211 @@ class TestUpdateStatus:
             assert response.status_code == 400
 
 
+class TestMoveToSkipTrace:
+    @patch(
+        'app.services.hubspot_writeback_service.HubSpotWriteBackService.'
+        'push_deal_stage_for_lead'
+    )
+    def test_completes_current_task_and_creates_skip_trace_handoff(
+        self,
+        mock_push,
+        client,
+        app,
+    ):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '822 N Winchester Ave',
+                lead_status='mailing_no_contact_made',
+                mailing_address='822 N Winchester Ave',
+                mailing_city='Chicago',
+                mailing_state='IL',
+                mailing_zip='60622',
+            )
+            current = _make_task(
+                app,
+                lead.id,
+                due_date=date.today() - timedelta(days=1),
+                title='Manually skip trace returned letter',
+                hubspot_task_id='hs-skip-17',
+            )
+            crm_task = Task(
+                title=current.title,
+                status='open',
+                source='hubspot_import',
+                lead_id=lead.id,
+                task_type='custom',
+                due_date=datetime.now() - timedelta(days=1),
+                hubspot_task_id='hs-skip-17',
+            )
+            db.session.add(crm_task)
+            db.session.commit()
+
+            response = client.post(
+                f'/api/leads/{lead.id}/move-to-skip-trace',
+                headers=_AUTH_HEADERS,
+                json={'complete_task_id': current.id},
+            )
+            assert response.status_code == 200
+            body = json.loads(response.data)
+            assert body['lead_status'] == 'skip_trace'
+            assert body['completed_task_id'] == current.id
+
+            db.session.refresh(lead)
+            db.session.refresh(current)
+            db.session.refresh(crm_task)
+            assert lead.lead_status == 'skip_trace'
+            assert lead.needs_skip_trace is True
+            assert current.status == 'completed'
+            assert crm_task.status == 'completed'
+
+            handoffs = LeadTask.query.filter_by(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                status='open',
+            ).all()
+            assert len(handoffs) == 1
+            assert handoffs[0].title == 'Awaiting skip trace'
+            assert handoffs[0].due_date is None
+            mock_push.assert_called_once_with(lead.id, 'skip_trace')
+
+    def test_reuses_existing_skip_trace_task(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '823 N Winchester Ave')
+            current = _make_task(app, lead.id, title='Review returned mail')
+            mirror = Task(
+                title=current.title,
+                status='open',
+                source='manual',
+                lead_id=lead.id,
+                task_type=current.task_type,
+                due_date=None,
+            )
+            db.session.add(mirror)
+            db.session.commit()
+            existing = _make_task(
+                app,
+                lead.id,
+                task_type='skip_trace_owner',
+                title='Awaiting skip trace',
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/move-to-skip-trace',
+                headers=_AUTH_HEADERS,
+                json={'complete_task_id': current.id},
+            )
+            assert response.status_code == 200
+            assert json.loads(response.data)['skip_trace_task_id'] == existing.id
+            db.session.refresh(mirror)
+            assert mirror.status == 'completed'
+            assert LeadTask.query.filter_by(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                status='open',
+            ).count() == 1
+
+    def test_rejects_other_users_lead(self, client, app):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '824 N Winchester Ave',
+                owner_user_id='other-user',
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/move-to-skip-trace',
+                headers=_AUTH_HEADERS,
+                json={},
+            )
+            assert response.status_code == 404
+
+    def test_rejects_non_object_payload(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '824a Invalid Payload St')
+            response = client.post(
+                f'/api/leads/{lead.id}/move-to-skip-trace',
+                headers=_AUTH_HEADERS,
+                json=[],
+            )
+            assert response.status_code == 400
+
+    def test_does_not_complete_existing_skip_trace_handoff(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '824b Existing Skip Trace St')
+            handoff = _make_task(
+                app,
+                lead.id,
+                task_type='skip_trace_owner',
+                title='Awaiting skip trace',
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/move-to-skip-trace',
+                headers=_AUTH_HEADERS,
+                json={'complete_task_id': handoff.id},
+            )
+            assert response.status_code == 400
+            db.session.refresh(handoff)
+            assert handoff.status == 'open'
+
+    def test_completed_analysis_task_preserves_analysis_side_effect(
+        self,
+        client,
+        app,
+    ):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '824c Analysis Complete St',
+                analysis_complete=False,
+            )
+            analysis_task = _make_task(
+                app,
+                lead.id,
+                task_type='run_property_analysis',
+                title='Run property analysis',
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/move-to-skip-trace',
+                headers=_AUTH_HEADERS,
+                json={'complete_task_id': analysis_task.id},
+            )
+            assert response.status_code == 200
+            db.session.refresh(lead)
+            assert lead.analysis_complete is True
+            assert LeadTimelineEntry.query.filter_by(
+                lead_id=lead.id,
+                event_type='property_analysis_completed',
+            ).count() == 1
+
+    @pytest.mark.parametrize(
+        'terminal_status',
+        ['deprioritize', 'deal_won', 'deal_lost', 'suppressed', 'do_not_contact'],
+    )
+    def test_rejects_terminal_lead_status(
+        self,
+        terminal_status,
+        client,
+        app,
+    ):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                f'825 {terminal_status} St',
+                lead_status=terminal_status,
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/move-to-skip-trace',
+                headers=_AUTH_HEADERS,
+                json={},
+            )
+            assert response.status_code == 422
+            db.session.refresh(lead)
+            assert lead.lead_status == terminal_status
+            assert LeadTask.query.filter_by(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+            ).count() == 0
+
+
 # ---------------------------------------------------------------------------
 # 34.2 — POST /api/leads/<id>/tasks
 # ---------------------------------------------------------------------------
@@ -862,6 +1067,107 @@ class TestCompleteTask:
             )
             data = json.loads(response.data)
             assert data['status'] == 'completed'
+
+    def test_completing_skip_trace_task_clears_handoff_flag(self, client, app):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '18a Skip Trace Complete St',
+                lead_status='skip_trace',
+                needs_skip_trace=True,
+            )
+            task = _make_task(
+                app,
+                lead.id,
+                task_type='skip_trace_owner',
+                title='Awaiting skip trace',
+            )
+            mirror = Task(
+                title=task.title,
+                status='open',
+                source='manual',
+                lead_id=lead.id,
+                task_type=task.task_type,
+            )
+            db.session.add(mirror)
+            db.session.commit()
+            response = client.post(
+                f'/api/leads/{lead.id}/tasks/{task.id}/complete',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            db.session.refresh(lead)
+            db.session.refresh(mirror)
+            assert lead.needs_skip_trace is False
+            assert lead.date_skip_traced == date.today()
+            assert mirror.status == 'completed'
+
+    def test_completing_one_duplicate_skip_trace_task_keeps_handoff_open(
+        self,
+        client,
+        app,
+    ):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '18aa Duplicate Skip Trace St',
+                lead_status='skip_trace',
+                needs_skip_trace=True,
+            )
+            first = _make_task(
+                app,
+                lead.id,
+                task_type='skip_trace_owner',
+                title='Awaiting skip trace one',
+            )
+            second = _make_task(
+                app,
+                lead.id,
+                task_type='skip_trace_owner',
+                title='Awaiting skip trace two',
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/tasks/{first.id}/complete',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            db.session.refresh(lead)
+            db.session.refresh(second)
+            assert second.status == 'open'
+            assert lead.needs_skip_trace is True
+            assert lead.date_skip_traced is None
+
+    def test_duplicate_tasks_complete_their_exact_mirror(self, client, app):
+        from app.services.lead_task_service import LeadTaskService
+
+        with app.app_context():
+            lead = _make_lead(app, '18ab Exact Mirror St')
+            service = LeadTaskService()
+            first = service.create(
+                lead.id,
+                {'title': 'Same-day follow up', 'task_type': 'custom'},
+                actor='test-user',
+                recompute_action=False,
+            )
+            second = service.create(
+                lead.id,
+                {'title': 'Same-day follow up', 'task_type': 'custom'},
+                actor='test-user',
+                recompute_action=False,
+            )
+            first_mirror_id = first.mirror_task_id
+            second_mirror_id = second.mirror_task_id
+            assert first_mirror_id != second_mirror_id
+
+            response = client.post(
+                f'/api/leads/{lead.id}/tasks/{second.id}/complete',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            first_mirror = db.session.get(Task, first_mirror_id)
+            second_mirror = db.session.get(Task, second_mirror_id)
+            assert first_mirror.status == 'open'
+            assert second_mirror.status == 'completed'
 
     def test_complete_task_rejects_non_owner(self, client, app):
         with app.app_context():

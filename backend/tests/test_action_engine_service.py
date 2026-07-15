@@ -2,6 +2,7 @@
 Unit tests for ActionEngineService.compute_recommended_action and recompute_and_persist.
 """
 import pytest
+from datetime import date, timedelta
 from unittest.mock import MagicMock, patch, call
 
 from app.services.action_engine_service import ActionEngineService
@@ -67,10 +68,15 @@ def make_lead(
     lead.suppression_flag = False
     lead.lead_category = lead_category
     lead.unanswered_call_count = unanswered_call_count
-    lead.mailing_address = None
-    lead.mailing_city = None
-    lead.mailing_state = None
-    lead.mailing_zip = None
+    lead.mailing_address = '123 Owner Mail St'
+    lead.mailing_city = 'Chicago'
+    lead.mailing_state = 'IL'
+    lead.mailing_zip = '60601'
+    lead.returned_addresses = None
+    lead.needs_skip_trace = False
+    lead.property_city = 'Chicago'
+    lead.property_state = 'IL'
+    lead.property_zip = '60601'
     lead.condo_risk_status = None
     lead.motivation_score = 0
     lead.acquisition_date = None
@@ -353,6 +359,47 @@ def test_priority_8_high_score_no_tasks_returns_mail_ready_for_residential_early
     with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'mail_ready'
+
+
+def test_incomplete_owner_mail_falls_back_to_phone_instead_of_mail_ready():
+    lead = make_lead(
+        lead_score=70.0,
+        data_completeness_score=60.0,
+        has_phone=True,
+        has_email=False,
+    )
+    lead.mailing_city = None
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
+         patch('app.services.lead_scoring_engine._mail_work_in_flight', return_value=False):
+        result = ActionEngineService.compute_recommended_action(lead)
+    assert result == 'call_ready'
+
+
+def test_incomplete_owner_mail_without_digital_contact_requests_contact_data():
+    lead = make_lead(
+        lead_score=70.0,
+        data_completeness_score=60.0,
+        has_phone=False,
+        has_email=False,
+    )
+    lead.mailing_city = None
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
+        result = ActionEngineService.compute_recommended_action(lead)
+    assert result == 'add_contact_info'
+
+
+def test_recently_sold_hold_is_preserved_when_owner_mail_is_incomplete():
+    lead = make_lead(
+        lead_score=85.0,
+        data_completeness_score=80.0,
+        has_phone=True,
+        has_email=False,
+    )
+    lead.acquisition_date = date.today() - timedelta(days=30)
+    lead.mailing_city = None
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
+        result = ActionEngineService.compute_recommended_action(lead)
+    assert result == 'nurture'
 
 
 def test_priority_7_high_score_with_open_tasks_skips_ready_for_outreach():

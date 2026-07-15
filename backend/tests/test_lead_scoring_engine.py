@@ -41,6 +41,51 @@ def app_ctx():
         del os.environ['DATABASE_URL']
 
 
+def test_bulk_rescore_can_isolate_one_bad_lead(app_ctx, monkeypatch):
+    from app.models.lead import Lead
+
+    first = Lead(
+        property_street='1 Broken Score St',
+        normalized_street='1 broken score st',
+        owner_user_id='test-user',
+    )
+    second = Lead(
+        property_street='2 Healthy Score St',
+        normalized_street='2 healthy score st',
+        owner_user_id='test-user',
+    )
+    db.session.add_all([first, second])
+    db.session.commit()
+
+    engine = LeadScoringEngine()
+    successful_result = MagicMock()
+
+    def compute(lead, *_args, **_kwargs):
+        if lead.id == first.id:
+            raise ValueError('malformed scoring data')
+        return successful_result
+
+    persist = MagicMock()
+    monkeypatch.setattr(engine, 'compute', compute)
+    monkeypatch.setattr(engine, 'persist', persist)
+    monkeypatch.setattr(
+        'app.services.lead_scoring_engine.rubric.batch_contact_reachability_scores',
+        lambda leads: {lead.id: None for lead in leads},
+    )
+    failures: list[int] = []
+
+    rescored = engine.bulk_rescore(
+        'test-user',
+        lead_ids=[first.id, second.id],
+        continue_on_error=True,
+        failure_ids=failures,
+    )
+
+    assert rescored == 1
+    assert failures == [first.id]
+    persist.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

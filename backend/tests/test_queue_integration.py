@@ -465,9 +465,10 @@ class TestActionEngineIntegration:
             lead = _make_lead(
                 app,
                 '6 Mailable St',
-                property_city='Chicago',
-                property_state='IL',
-                property_zip='60601',
+                mailing_address='6 Mailable St',
+                mailing_city='Chicago',
+                mailing_state='IL',
+                mailing_zip='60601',
                 has_phone=False,
                 has_email=False,
                 has_property_match=True,

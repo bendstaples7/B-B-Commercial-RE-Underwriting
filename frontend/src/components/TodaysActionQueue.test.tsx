@@ -94,7 +94,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(queueService.getTodaysActionOutreachCounts).mockResolvedValue({
     all: 5,
-    mail_now: 2,
+    direct_mail: 2,
     call_now: 1,
     email_now: 0,
     text_now: 0,
@@ -176,13 +176,13 @@ describe('TodaysActionQueue', () => {
     })
   })
 
-  it('renders next-action filter and selects all Mail Now leads', async () => {
+  it('renders next-action filter and selects all Direct Mail leads', async () => {
     const user = userEvent.setup()
     vi.mocked(queueService.getTodaysAction).mockResolvedValue(makeQueuePage(2, 20, 1, 2))
     vi.mocked(queueService.getTodaysActionLeadIds).mockResolvedValue({
       lead_ids: [1, 2],
       total: 2,
-      outreach: 'mail_now',
+      outreach: 'direct_mail',
     })
 
     renderComponent()
@@ -192,16 +192,16 @@ describe('TodaysActionQueue', () => {
     })
 
     await user.click(screen.getByLabelText('Next action'))
-    await user.click(await screen.findByText('Mail Now (2)'))
+    await user.click(await screen.findByText('Direct Mail (2)'))
 
     await waitFor(() => {
-      expect(queueService.getTodaysAction).toHaveBeenCalledWith(1, 20, 'mail_now')
+      expect(queueService.getTodaysAction).toHaveBeenCalledWith(1, 20, 'direct_mail')
     })
 
     await user.click(screen.getByTestId('todays-action-select-all-matching'))
 
     await waitFor(() => {
-      expect(queueService.getTodaysActionLeadIds).toHaveBeenCalledWith('mail_now')
+      expect(queueService.getTodaysActionLeadIds).toHaveBeenCalledWith('direct_mail')
       expect(screen.getByTestId('bulk-action-bar')).toBeInTheDocument()
     })
   })
@@ -271,7 +271,10 @@ describe('TodaysActionQueue', () => {
     await user.click(screen.getByTestId('add-to-batch-bulk-action'))
 
     await waitFor(() => {
-      expect(openLetterService.enqueue).toHaveBeenCalledWith([1, 2])
+      expect(openLetterService.enqueue).toHaveBeenCalledWith(
+        [1, 2],
+        'queue-todays-action',
+      )
     })
   })
 

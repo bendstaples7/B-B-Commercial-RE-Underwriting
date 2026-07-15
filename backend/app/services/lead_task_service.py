@@ -2,6 +2,7 @@
 import logging
 from datetime import datetime, date, timezone
 
+from flask import has_app_context
 from sqlalchemy import asc, nullslast
 
 from app import db
@@ -14,6 +15,59 @@ from app.exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def complete_native_task_mirror(
+    lead_task: LeadTask,
+    completed_at: datetime,
+) -> None:
+    """Complete the manual ``tasks`` row mirrored from a native LeadTask."""
+    if not has_app_context():
+        return
+    if lead_task.mirror_task_id is not None:
+        mirror = db.session.get(Task, lead_task.mirror_task_id)
+        if (
+            mirror is not None
+            and mirror.lead_id == lead_task.lead_id
+            and mirror.status in ('open', 'overdue')
+        ):
+            mirror.status = 'completed'
+            mirror.completion_timestamp = completed_at
+            mirror.updated_at = completed_at
+            db.session.add(mirror)
+        return
+    candidates = (
+        Task.query
+        .filter(
+            Task.lead_id == lead_task.lead_id,
+            Task.status.in_(('open', 'overdue')),
+            Task.source == 'manual',
+            Task.title == lead_task.title,
+            Task.task_type == lead_task.task_type,
+        )
+        .order_by(Task.id.asc())
+        .all()
+    )
+    matching = []
+    for mirror in candidates:
+        mirror_due = mirror.due_date.date() if mirror.due_date else None
+        if mirror_due != lead_task.due_date:
+            continue
+        matching.append(mirror)
+    if len(matching) != 1:
+        if len(matching) > 1:
+            logger.warning(
+                'Cannot safely identify legacy mirror for LeadTask %s; '
+                '%d candidates matched',
+                lead_task.id,
+                len(matching),
+            )
+        return
+    mirror = matching[0]
+    mirror.status = 'completed'
+    mirror.completion_timestamp = completed_at
+    mirror.updated_at = completed_at
+    db.session.add(mirror)
 
 
 def _coerce_due_date(value) -> date | None:
@@ -97,6 +151,15 @@ class LeadTaskService:
                     task.completed_at = None
             db.session.add(task)
 
+        if task.mirror_task_id is None:
+            mirror = Task.query.filter_by(
+                lead_id=lead_id,
+                hubspot_task_id=hs_id,
+            ).first()
+            if mirror is not None:
+                task.mirror_task_id = mirror.id
+                db.session.add(task)
+
         if commit:
             db.session.commit()
         else:
@@ -104,8 +167,14 @@ class LeadTaskService:
 
         return task
 
-    def create(self, lead_id: int, data: dict, actor: str = 'anonymous',
-               recompute_action: bool = True) -> LeadTask:
+    def create(
+        self,
+        lead_id: int,
+        data: dict,
+        actor: str = 'anonymous',
+        recompute_action: bool = True,
+        commit: bool = True,
+    ) -> LeadTask:
         """Create a new LeadTask for a lead.
 
         - Validates title (1–255 chars)
@@ -157,6 +226,9 @@ class LeadTaskService:
             due_date=datetime.combine(data['due_date'], datetime.min.time()) if data.get('due_date') else None,
         )
         db.session.add(mirror_task)
+        db.session.flush()
+        task.mirror_task_id = mirror_task.id
+        db.session.add(task)
 
         # Append timeline entry
         entry = LeadTimelineEntry(
@@ -169,11 +241,14 @@ class LeadTaskService:
             event_metadata={'task_id': task.id, 'task_type': task.task_type, 'title': title},
         )
         db.session.add(entry)
-        db.session.commit()
+        if commit:
+            db.session.commit()
+        else:
+            db.session.flush()
 
         # Trigger RA recomputation (skipped when the caller will refresh the
         # lead itself, so the action is recomputed once per op rather than twice).
-        if recompute_action:
+        if recompute_action and commit:
             try:
                 from app.services.action_engine_service import ActionEngineService
                 ActionEngineService.recompute_and_persist(lead_id)
@@ -214,9 +289,31 @@ class LeadTaskService:
                 attempted_status='completed',
             )
 
+        lead = None
+        if task.task_type == 'skip_trace_owner':
+            lead = (
+                Lead.query
+                .filter_by(id=lead_id)
+                .with_for_update()
+                .first()
+            )
+
         task.status = 'completed'
         task.completed_at = datetime.now(timezone.utc)
         db.session.add(task)
+        complete_native_task_mirror(task, task.completed_at)
+        if task.task_type == 'skip_trace_owner':
+            if lead is not None:
+                another_open_handoff = LeadTask.query.filter(
+                    LeadTask.lead_id == lead_id,
+                    LeadTask.task_type == 'skip_trace_owner',
+                    LeadTask.status == 'open',
+                    LeadTask.id != task.id,
+                ).first()
+                lead.needs_skip_trace = another_open_handoff is not None
+                if not lead.needs_skip_trace and lead.date_skip_traced is None:
+                    lead.date_skip_traced = date.today()
+                db.session.add(lead)
 
         entry = LeadTimelineEntry(
             lead_id=lead_id,

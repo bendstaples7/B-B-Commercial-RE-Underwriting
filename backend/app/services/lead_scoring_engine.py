@@ -22,7 +22,10 @@ from app.models.lead_task import LeadTask
 from app.models.lead_timeline_entry import LeadTimelineEntry
 from app.models.lead_crm_flags_view import LeadCRMFlagsView
 from app.services import scoring_rubric as rubric
-from app.services.open_letter_contact_mapper import is_mailable_lead
+from app.services.open_letter_contact_mapper import (
+    is_owner_mailable_lead,
+    persist_embedded_address_fields,
+)
 from app.services.outreach_method_service import (
     ENGAGED_PIPELINE_STATUSES,
     evaluate_contact_method,
@@ -31,6 +34,10 @@ from app.services.outreach_method_service import (
 )
 from app.services.entity_owner_policy import cold_mail_block_reason
 logger = logging.getLogger(__name__)
+
+# Backward-compatible patch target for tests and integrations; semantics are now
+# owner-mailing-only rather than property-address fallback.
+is_mailable_lead = is_owner_mailable_lead
 
 
 def _cold_mail_ready_outcome(lead: Lead) -> tuple[str, str, dict] | None:
@@ -68,6 +75,57 @@ def _apply_cold_mail_block_to_action(
         return recommended_action, winning_rule, action_signals
     blocked_action, blocked_rule, blocked_signals = blocked
     return blocked_action, blocked_rule, blocked_signals
+
+
+def _apply_owner_mail_gate(
+    lead: Lead,
+    action: str | None,
+    method: str | None,
+    winning_rule: str,
+    action_signals: dict,
+) -> tuple[str | None, str | None, str, dict]:
+    """Prevent direct-mail recommendations without complete owner mailing data."""
+    if action_signals.get('cold_mail_blocked') and method == 'direct_mail':
+        return action, None, winning_rule, action_signals
+    missing_only_channel = (
+        method is None
+        and action in OUTREACH_ACTIONS
+        and action != 'nurture'
+        and not is_owner_mailable_lead(lead)
+    )
+    if action != 'mail_ready' and method != 'direct_mail' and not missing_only_channel:
+        return action, method, winning_rule, action_signals
+    if is_owner_mailable_lead(lead):
+        return action, method, winning_rule, action_signals
+
+    has_phone, has_email, _has_match = _resolve_crm_flags(lead)
+    signals = {
+        **action_signals,
+        'owner_mailing_complete': False,
+        'mail_action_blocked': True,
+    }
+    if has_phone:
+        fallback_action = 'call_ready' if action == 'mail_ready' else action
+        return (
+            fallback_action,
+            'phone',
+            'incomplete_owner_mail_phone_fallback',
+            {**signals, 'has_phone': True},
+        )
+    if has_email:
+        fallback_action = 'ready_for_outreach' if action == 'mail_ready' else action
+        return (
+            fallback_action,
+            'email',
+            'incomplete_owner_mail_email_fallback',
+            {**signals, 'has_email': True},
+        )
+    return (
+        'add_contact_info',
+        None,
+        'incomplete_owner_mailing_address',
+        signals,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -220,9 +278,8 @@ def _resolve_crm_flags(lead: Lead) -> tuple[bool, bool, bool]:
 
 
 def _has_mailing_address(lead: Lead) -> bool:
-    """True when the lead has a non-empty owner mailing street (data-quality bar)."""
-    addr = getattr(lead, 'mailing_address', None)
-    return bool(addr and str(addr).strip())
+    """True when the owner mailing destination is complete."""
+    return is_owner_mailable_lead(lead)
 
 
 def _is_commercial_lead(lead: Lead) -> bool:
@@ -237,6 +294,8 @@ def _maybe_promote_skip_trace_to_mailing(lead: Lead) -> str | None:
     if _is_commercial_lead(lead):
         return None
     if lead.lead_status not in ('skip_trace', 'awaiting_skip_trace'):
+        return None
+    if bool(getattr(lead, 'needs_skip_trace', False)):
         return None
     if not _has_mailing_address(lead):
         return None
@@ -314,6 +373,8 @@ class LeadScoringEngine:
         contact_reachability: tuple[float, dict] | None = None,
     ) -> ScoringResult:
         from app.services.motivation_signal_service import MotivationSignalService
+
+        persist_embedded_address_fields(lead)
 
         if getattr(lead, 'id', None) is not None:
             try:
@@ -398,8 +459,20 @@ class LeadScoringEngine:
         recommended_action, winning_rule, action_signals = _apply_cold_mail_block_to_action(
             lead, recommended_action, winning_rule, action_signals,
         )
-        if pre_block_action == 'mail_ready' and recommended_action != 'mail_ready':
+        if recommended_action != pre_block_action:
             recommended_contact_method = None
+        (
+            recommended_action,
+            recommended_contact_method,
+            winning_rule,
+            action_signals,
+        ) = _apply_owner_mail_gate(
+            lead,
+            recommended_action,
+            recommended_contact_method,
+            winning_rule,
+            action_signals,
+        )
         if recommended_contact_method:
             action_signals['recommended_contact_method'] = recommended_contact_method
         top_signals = rubric.extract_top_signals(score_details, lead=lead)
@@ -882,10 +955,18 @@ class LeadScoringEngine:
     # Bulk rescoring
     # ------------------------------------------------------------------
 
-    def bulk_rescore(self, user_id: str, lead_ids: Optional[list[int]] = None) -> int:
-        """Refresh live scores without append-only history rows (batched commits)."""
+    def bulk_rescore(
+        self,
+        user_id: str,
+        lead_ids: Optional[list[int]] = None,
+        *,
+        continue_on_error: bool = False,
+        failure_ids: Optional[list[int]] = None,
+    ) -> int:
+        """Refresh live scores in batches, optionally isolating bad lead rows."""
         rescored = 0
         pending_commits = 0
+        weights_by_user: dict[str, ScoringWeights] = {}
 
         def _flush_batch() -> None:
             nonlocal pending_commits
@@ -898,7 +979,8 @@ class LeadScoringEngine:
             contact_reachability: tuple[float, dict] | None = None,
         ) -> None:
             nonlocal rescored, pending_commits
-            weights = self.get_weights(lead.owner_user_id or user_id)
+            weight_user_id = lead.owner_user_id or user_id
+            weights = weights_by_user[weight_user_id]
             signals = (
                 HubSpotSignal.query
                 .filter_by(lead_id=lead.id)
@@ -914,20 +996,60 @@ class LeadScoringEngine:
             self.persist(lead, result, write_history=False, commit=False)
             rescored += 1
             pending_commits += 1
-            if pending_commits >= BULK_RESCORE_BATCH_SIZE:
+            if (
+                pending_commits >= BULK_RESCORE_BATCH_SIZE
+                and not continue_on_error
+            ):
                 _flush_batch()
+
+        def _attempt_rescore(
+            lead: Lead,
+            contact_reachability: tuple[float, dict] | None = None,
+        ) -> None:
+            nonlocal rescored, pending_commits
+            if not continue_on_error:
+                _rescore_one(lead, contact_reachability)
+                return
+            before_rescored = rescored
+            before_pending = pending_commits
+            try:
+                with db.session.begin_nested():
+                    _rescore_one(lead, contact_reachability)
+            except Exception as exc:
+                rescored = before_rescored
+                pending_commits = before_pending
+                if failure_ids is not None:
+                    failure_ids.append(lead.id)
+                logger.warning(
+                    'Bulk rescore skipped lead %s after scoring error: %s',
+                    lead.id,
+                    exc,
+                    exc_info=True,
+                )
 
         def _lead_query():
             return Lead.query.options(selectinload(Lead.analysis_session))
+
+        def _prepare_weights(leads: list[Lead]) -> None:
+            """Create/cache weights before entering per-lead savepoints."""
+            for lead in leads:
+                weight_user_id = lead.owner_user_id or user_id
+                if weight_user_id not in weights_by_user:
+                    weights_by_user[weight_user_id] = self.get_weights(
+                        weight_user_id,
+                    )
 
         try:
             if lead_ids is not None:
                 for i in range(0, len(lead_ids), BULK_RESCORE_BATCH_SIZE):
                     batch_ids = lead_ids[i:i + BULK_RESCORE_BATCH_SIZE]
                     leads = _lead_query().filter(Lead.id.in_(batch_ids)).all()
+                    _prepare_weights(leads)
                     reachability = rubric.batch_contact_reachability_scores(leads)
                     for lead in leads:
-                        _rescore_one(lead, reachability.get(lead.id))
+                        _attempt_rescore(lead, reachability.get(lead.id))
+                    if continue_on_error:
+                        _flush_batch()
             else:
                 offset = 0
                 while True:
@@ -937,9 +1059,12 @@ class LeadScoringEngine:
                     )
                     if not leads:
                         break
+                    _prepare_weights(leads)
                     reachability = rubric.batch_contact_reachability_scores(leads)
                     for lead in leads:
-                        _rescore_one(lead, reachability.get(lead.id))
+                        _attempt_rescore(lead, reachability.get(lead.id))
+                    if continue_on_error:
+                        _flush_batch()
                     offset += BULK_RESCORE_BATCH_SIZE
             _flush_batch()
         except Exception:
@@ -1119,24 +1244,31 @@ class LeadScoringEngine:
     @staticmethod
     def get_action_decision(lead: Lead) -> tuple[str | None, str, dict]:
         """Return (recommended_action, winning_rule, action_signals) for display."""
+        persist_embedded_address_fields(lead)
         total = float(getattr(lead, 'lead_score', 0) or 0)
         data_quality = float(getattr(lead, 'data_completeness_score', 0) or 0)
         tier = rubric.calculate_score_tier(total)
         action, winning_rule, signals = LeadScoringEngine.evaluate_recommended_action(
             lead, total, data_quality, tier,
         )
-        pre_block, method = LeadScoringEngine()._apply_outreach_method(
+        refined, method = LeadScoringEngine()._apply_outreach_method(
             lead, action, signals, winning_rule=winning_rule,
         )
+        pre_block = refined
         refined, winning_rule, signals = _apply_cold_mail_block_to_action(
-            lead, pre_block, winning_rule, signals,
+            lead, refined, winning_rule, signals,
         )
+        if refined != pre_block:
+            method = None
+        refined, method, winning_rule, signals = _apply_owner_mail_gate(
+            lead, refined, method, winning_rule, signals,
+        )
+        signals = {
+            k: v for k, v in signals.items()
+            if k != 'recommended_contact_method'
+        }
         if method:
             signals = {**signals, 'recommended_contact_method': method}
-        if refined != pre_block:
-            signals = {
-                k: v for k, v in signals.items() if k != 'recommended_contact_method'
-            }
         return refined, winning_rule, signals
 
     # ------------------------------------------------------------------

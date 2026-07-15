@@ -2,7 +2,7 @@
  * TodaysActionQueue — Today's Action queue view.
  *
  * Due open tasks (due today or earlier), sorted by lead score.
- * Optional next-action (outreach) filter for Mail Now / Call Now bulk workflows.
+ * Optional next-action (outreach) filter for Direct Mail / Call Now workflows.
  */
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -36,16 +36,17 @@ import {
 import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 import { queueListQueryDefaults, queuePlaceholderTableSx } from '@/utils/queueQueryDefaults'
+import { MailEnqueueHistoryButton } from './MailEnqueueHistoryButton'
 
 export interface TodaysActionQueueProps {
   extraQueryKeys?: string[]
 }
 
-type OutreachFilter = '' | 'mail_now' | 'call_now' | 'email_now' | 'text_now'
+type OutreachFilter = '' | 'direct_mail' | 'call_now' | 'email_now' | 'text_now'
 
 const OUTREACH_OPTIONS: { value: OutreachFilter; label: string }[] = [
   { value: '', label: 'All next actions' },
-  { value: 'mail_now', label: 'Mail Now' },
+  { value: 'direct_mail', label: 'Direct Mail' },
   { value: 'call_now', label: 'Call Now' },
   { value: 'email_now', label: 'Email Now' },
   { value: 'text_now', label: 'Text Now' },
@@ -194,6 +195,7 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
             ))}
           </Select>
         </FormControl>
+        <MailEnqueueHistoryButton />
         {outreach !== '' && total > 0 && data != null && !isPlaceholderData && (
           <Button
             size="small"

@@ -11,6 +11,10 @@ from collections import defaultdict
 from typing import Optional
 
 from app.models.lead import Lead
+from app.services.open_letter_contact_mapper import (
+    is_owner_mailable_lead,
+    owner_mailing_address,
+)
 
 OUTREACH_ACTIONS = frozenset({
     'follow_up_now',
@@ -61,6 +65,10 @@ def evaluate_contact_method(
     """Return the best outreach channel, or None for non-outreach actions."""
     if not recommended_action or recommended_action not in OUTREACH_ACTIONS:
         return None
+    if recommended_action == 'nurture':
+        from app.services.scoring_rubric import is_recently_sold
+        if is_recently_sold(lead):
+            return None
 
     category = getattr(lead, 'lead_category', 'residential') or 'residential'
     if category == 'commercial':
@@ -73,11 +81,11 @@ def evaluate_contact_method(
     )
 
 
-def _commercial_contact_method(lead: Lead, *, has_phone: bool) -> str:
+def _commercial_contact_method(lead: Lead, *, has_phone: bool) -> str | None:
     unanswered = getattr(lead, 'unanswered_call_count', 0) or 0
     if has_phone and unanswered < 3:
         return 'phone'
-    return 'direct_mail'
+    return 'direct_mail' if is_owner_mailable_lead(lead) else None
 
 
 def _residential_contact_method(
@@ -86,7 +94,7 @@ def _residential_contact_method(
     has_phone: bool,
     has_email: bool,
     recent_email: bool,
-) -> str:
+) -> str | None:
     status = getattr(lead, 'lead_status', None)
     engaged_or_follow_up = (
         status in ENGAGED_PIPELINE_STATUSES
@@ -100,9 +108,9 @@ def _residential_contact_method(
             return 'phone'
         if has_email:
             return 'email'
-        return 'direct_mail'
+        return 'direct_mail' if is_owner_mailable_lead(lead) else None
 
-    if status in RESIDENTIAL_DIRECT_MAIL_STATUSES:
+    if status in RESIDENTIAL_DIRECT_MAIL_STATUSES and is_owner_mailable_lead(lead):
         return 'direct_mail'
 
     if recent_email and has_email:
@@ -114,7 +122,7 @@ def _residential_contact_method(
         return 'email'
     if has_phone:
         return 'text'
-    return 'direct_mail'
+    return 'direct_mail' if is_owner_mailable_lead(lead) else None
 
 
 # Only these nurture outcomes should surface as Call Ready after channel refine.
@@ -165,10 +173,10 @@ def outreach_action_label(action: str | None, method: str | None) -> str | None:
 
     method_label = contact_method_label(method)
 
+    if method == 'direct_mail':
+        return 'Direct Mail'
     if action == 'call_ready' or (action == 'follow_up_now' and method == 'phone'):
         return 'Call Now'
-    if action == 'mail_ready' or (action == 'follow_up_now' and method == 'direct_mail'):
-        return 'Mail Now'
     if action == 'follow_up_now' and method == 'email':
         return 'Email Now'
     if action == 'follow_up_now' and method == 'text':
@@ -179,8 +187,6 @@ def outreach_action_label(action: str | None, method: str | None) -> str | None:
         return 'Ready to Email'
     if action == 'ready_for_outreach' and method == 'text':
         return 'Ready to Text'
-    if action == 'ready_for_outreach' and method == 'direct_mail':
-        return 'Ready to Mail'
     if action == 'review_now' and method_label:
         return f'Review — {method_label}'
     if action == 'nurture' and method_label:
@@ -347,18 +353,19 @@ def _batch_best_phone_by_lead(leads: list[Lead]) -> dict[int, str]:
     if not lead_ids:
         return {}
 
-    from sqlalchemy import text
+    from sqlalchemy import bindparam, text
 
     from app import db
     from app.services.phone_confidence_service import DEFAULT_CONFIDENCE
 
-    rows = db.session.execute(
-        text("""
+    statement = text("""
             SELECT pc.property_id, cp.value, cp.confidence_score
             FROM contact_phones cp
             JOIN property_contacts pc ON pc.contact_id = cp.contact_id
-            WHERE pc.property_id = ANY(:lead_ids)
-        """),
+            WHERE pc.property_id IN :lead_ids
+        """).bindparams(bindparam('lead_ids', expanding=True))
+    rows = db.session.execute(
+        statement,
         {'lead_ids': lead_ids},
     ).fetchall()
 
@@ -392,18 +399,19 @@ def _batch_first_email_by_lead(leads: list[Lead]) -> dict[int, str]:
     if not lead_ids:
         return {}
 
-    from sqlalchemy import text
+    from sqlalchemy import bindparam, text
 
     from app import db
 
-    rows = db.session.execute(
-        text("""
+    statement = text("""
             SELECT pc.property_id, ce.value
             FROM contact_emails ce
             JOIN property_contacts pc ON pc.contact_id = ce.contact_id
-            WHERE pc.property_id = ANY(:lead_ids)
+            WHERE pc.property_id IN :lead_ids
             ORDER BY pc.property_id, ce.id
-        """),
+        """).bindparams(bindparam('lead_ids', expanding=True))
+    rows = db.session.execute(
+        statement,
         {'lead_ids': lead_ids},
     ).fetchall()
 
@@ -499,18 +507,10 @@ def _resolve_email_contact(lead: Lead) -> dict | None:
 
 
 def _resolve_mail_contact(lead: Lead) -> dict | None:
-    street = getattr(lead, 'mailing_address', None)
-    city = getattr(lead, 'mailing_city', None)
-    state = getattr(lead, 'mailing_state', None)
-    zip_code = getattr(lead, 'mailing_zip', None)
+    if not is_owner_mailable_lead(lead):
+        return None
+    street, city, state, zip_code = owner_mailing_address(lead)
     lines = _format_address_lines(street, city, state, zip_code)
-    if not lines:
-        lines = _format_address_lines(
-            getattr(lead, 'property_street', None),
-            getattr(lead, 'property_city', None),
-            getattr(lead, 'property_state', None),
-            getattr(lead, 'property_zip', None),
-        )
     if not lines:
         return None
     display = lines[0] if len(lines) == 1 else ' — '.join(lines)

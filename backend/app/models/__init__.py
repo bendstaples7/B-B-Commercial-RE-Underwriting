@@ -128,6 +128,7 @@ from app.models.hubspot_platform_write import HubSpotPlatformWrite
 from app.models.open_letter_config import OpenLetterConfig
 from app.models.mail_queue_item import MailQueueItem
 from app.models.mail_campaign import MailCampaign
+from app.models.mail_enqueue_attempt import MailEnqueueAttempt
 
 __all__ = [
     # Authentication
@@ -236,4 +237,5 @@ __all__ = [
     'OpenLetterConfig',
     'MailQueueItem',
     'MailCampaign',
+    'MailEnqueueAttempt',
 ]

@@ -1958,6 +1958,8 @@ export interface QueueRow {
   recommended_contact_method?: ContactMethod | null;
   outreach_action_label?: string | null;
   outreach_contact?: OutreachContact | null;
+  due_task_title?: string | null;
+  due_task_due_date?: string | null;
   has_property_match: boolean;
   last_contact_date: string | null;
   last_hubspot_sync_at: string | null;
@@ -2227,6 +2229,20 @@ export interface BulkActionResult {
   failures: number;
   /** Optional detailed breakdown shown instead of the generic failure message. */
   message?: string;
+  mail_enqueue?: {
+    attempt_id?: number;
+    added: number;
+    skipped: number;
+    invalid: number;
+    results: Array<{
+      lead_id: number;
+      status: string;
+      error?: string;
+      owner_name?: string | null;
+      property_street?: string | null;
+      sale_date?: string | null;
+    }>;
+  };
 }
 
 // ---------------------------------------------------------------------------
