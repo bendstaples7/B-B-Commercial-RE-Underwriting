@@ -39,6 +39,31 @@ const UNIVERSAL_ACTIONS: ActionButton[] = [
   { label: 'Log Email', action: 'log_email', isOutreach: true },
 ]
 
+const MAIL_QUEUE_BUTTON: ActionButton = {
+  label: 'Add to Mail Queue',
+  action: 'add_to_mail_batch',
+  isOutreach: true,
+}
+
+/** Show mail in Quick actions when address is mailable, or the RA/method is already mail. */
+function shouldIncludeMailQueue(
+  isMailable: boolean,
+  raValue?: string | null,
+  contactMethod?: string | null,
+): boolean {
+  return (
+    isMailable
+    || raValue === 'mail_ready'
+    || contactMethod === 'direct_mail'
+  )
+}
+
+function getUniversalActions(includeMail: boolean, promoteMail = false): ActionButton[] {
+  if (!includeMail) return UNIVERSAL_ACTIONS
+  if (promoteMail) return [MAIL_QUEUE_BUTTON, ...UNIVERSAL_ACTIONS]
+  return [...UNIVERSAL_ACTIONS, MAIL_QUEUE_BUTTON]
+}
+
 const RUN_ANALYSIS_BUTTON: ActionButton = { label: 'Run Analysis', action: 'run_analysis' }
 
 function withRunAnalysis(buttons: ActionButton[]): ActionButton[] {
@@ -49,7 +74,6 @@ function withRunAnalysis(buttons: ActionButton[]): ActionButton[] {
 const METHOD_PRIMARY_ACTIONS: Record<string, string> = {
   phone: 'log_call',
   email: 'log_email',
-  direct_mail: 'add_to_mail_batch',
   text: 'log_call',
 }
 
@@ -72,7 +96,6 @@ const ACTION_BUTTONS: Record<CRMRecommendedAction, ActionButton[]> = {
     { label: 'Create Task', action: 'create_task' },
   ]),
   mail_ready: withRunAnalysis([
-    { label: 'Add to Mail Queue', action: 'add_to_mail_batch', isOutreach: true },
     { label: 'Log Note', action: 'log_note' },
   ]),
   call_ready: withRunAnalysis([
@@ -106,7 +129,6 @@ const ACTION_BUTTONS: Record<CRMRecommendedAction, ActionButton[]> = {
   ]),
   ready_for_outreach: withRunAnalysis([
     { label: 'Log Call', action: 'log_call', isOutreach: true },
-    { label: 'Add to Mail Queue', action: 'add_to_mail_batch', isOutreach: true },
     { label: 'Log Note', action: 'log_note', isOutreach: true },
     { label: 'Create Task', action: 'create_task' },
   ]),
@@ -173,7 +195,12 @@ export function RecommendedActionPanel({
 
   const isDNC = leadStatus === 'do_not_contact'
   const isInMailBatch = mailQueueStatus === 'queued'
-  const wasSentRecently = mailQueueStatus === 'sent_recently'
+  const raValue = recommendedAction?.value ?? null
+  const contactMethodHint = recommendedAction?.recommended_contact_method ?? null
+  const includeMailQueue = shouldIncludeMailQueue(isMailable, raValue, contactMethodHint)
+  const promoteMailQueue =
+    raValue === 'mail_ready' || contactMethodHint === 'direct_mail'
+  const universalActions = getUniversalActions(includeMailQueue, promoteMailQueue)
   const panelSx = embedded
     ? { p: 0, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }
     : { p: 2, border: 1, borderColor: 'divider', borderRadius: 1, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }
@@ -231,6 +258,38 @@ export function RecommendedActionPanel({
     maxWidth: '100%',
   } as const
 
+  const renderInMailBatchControls = (testIdPrefix: string) => (
+    <Stack
+      key="in-mail-batch"
+      direction={{ xs: 'column', sm: 'row' }}
+      spacing={1}
+      alignItems={{ xs: 'stretch', sm: 'center' }}
+      flexWrap="wrap"
+      useFlexGap
+      sx={{ width: { xs: '100%', sm: 'auto' } }}
+    >
+      <Button
+        variant="outlined"
+        size="small"
+        disabled
+        data-testid={`${testIdPrefix}-in-mail-batch`}
+        sx={{ width: { xs: '100%', sm: 'auto' } }}
+      >
+        In mail batch
+      </Button>
+      <Button
+        component={Link}
+        to="/queues/ready-to-mail"
+        variant="text"
+        size="small"
+        data-testid={`${testIdPrefix}-view-mail-batch`}
+        sx={{ width: { xs: '100%', sm: 'auto' } }}
+      >
+        View batch
+      </Button>
+    </Stack>
+  )
+
   const renderUniversalActions = (raButtons: ActionButton[] = []) => (
     <Box sx={{ mb: raButtons.length > 0 ? 2 : 0, mt: 2, maxWidth: '100%' }}>
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
@@ -244,7 +303,12 @@ export function RecommendedActionPanel({
         sx={actionStackSx}
         data-testid="ra-universal-actions"
       >
-        {UNIVERSAL_ACTIONS.map((btn) => renderActionButton(btn, 'ra-universal-btn'))}
+        {universalActions.map((btn) => {
+          if (btn.action === 'add_to_mail_batch' && isInMailBatch) {
+            return renderInMailBatchControls('ra-universal-btn')
+          }
+          return renderActionButton(btn, 'ra-universal-btn')
+        })}
       </Stack>
     </Box>
   )
@@ -269,6 +333,16 @@ export function RecommendedActionPanel({
         <Typography variant="body2" color="text.secondary">
           No recommended action at this time.
         </Typography>
+        {actionError && (
+          <Alert
+            severity="error"
+            sx={{ mt: 2, mb: 0 }}
+            onClose={() => setActionError(null)}
+            data-testid="ra-action-error"
+          >
+            {actionError}
+          </Alert>
+        )}
         {renderUniversalActions()}
       </Box>
     )
@@ -278,21 +352,9 @@ export function RecommendedActionPanel({
   const displayLabel = label ?? (value ? outreachDisplayLabel(value, contactMethod) : 'No recommended action')
   const hideRaHeading = value === 'nurture'
   const raButtons = (ACTION_BUTTONS[value] ?? []).filter(
-    (btn) => !UNIVERSAL_ACTIONS.some((u) => u.action === btn.action),
+    (btn) => !universalActions.some((u) => u.action === btn.action),
   )
-  let prioritizedRaButtons = prioritizeButtonsForMethod(raButtons, contactMethod)
-  if (
-    isMailable
-    && !isInMailBatch
-    && !wasSentRecently
-    && (value === 'add_contact_info' || value === 'needs_manual_review')
-    && !prioritizedRaButtons.some((btn) => btn.action === 'add_to_mail_batch')
-  ) {
-    prioritizedRaButtons = [
-      { label: 'Add to Mail Queue', action: 'add_to_mail_batch', isOutreach: true },
-      ...prioritizedRaButtons,
-    ]
-  }
+  const prioritizedRaButtons = prioritizeButtonsForMethod(raButtons, contactMethod)
   const hasOpenTasks = openTasks.length > 0
   const showCreateTaskCTA = value === 'create_task' && !hasOpenTasks && typeof onCreateTask === 'function'
 
@@ -407,42 +469,7 @@ export function RecommendedActionPanel({
           useFlexGap
           sx={actionStackSx}
         >
-          {prioritizedRaButtons.map((btn) => {
-            if (btn.action === 'add_to_mail_batch' && isInMailBatch) {
-              return (
-                <Stack
-                  key="in-mail-batch"
-                  direction={{ xs: 'column', sm: 'row' }}
-                  spacing={1}
-                  alignItems={{ xs: 'stretch', sm: 'center' }}
-                  flexWrap="wrap"
-                  useFlexGap
-                  sx={{ width: { xs: '100%', sm: 'auto' } }}
-                >
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    disabled
-                    data-testid="ra-action-btn-in-mail-batch"
-                    sx={{ width: { xs: '100%', sm: 'auto' } }}
-                  >
-                    In mail batch
-                  </Button>
-                  <Button
-                    component={Link}
-                    to="/queues/ready-to-mail"
-                    variant="text"
-                    size="small"
-                    data-testid="ra-action-btn-view-mail-batch"
-                    sx={{ width: { xs: '100%', sm: 'auto' } }}
-                  >
-                    View batch
-                  </Button>
-                </Stack>
-              )
-            }
-            return renderActionButton(btn)
-          })}
+          {prioritizedRaButtons.map((btn) => renderActionButton(btn))}
         </Stack>
       )}
     </Box>
