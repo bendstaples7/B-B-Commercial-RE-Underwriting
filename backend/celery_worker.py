@@ -458,7 +458,7 @@ def bulk_rescore_task(user_id: str, lead_ids: list[int] | None = None) -> int:
         return engine.bulk_rescore(
             user_id,
             lead_ids,
-            continue_on_error=lead_ids is not None,
+            continue_on_error=True,
         )
 
 

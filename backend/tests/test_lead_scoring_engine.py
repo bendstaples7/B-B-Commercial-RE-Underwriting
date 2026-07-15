@@ -58,7 +58,6 @@ def test_bulk_rescore_can_isolate_one_bad_lead(app_ctx, monkeypatch):
     db.session.commit()
 
     engine = LeadScoringEngine()
-    monkeypatch.setattr(engine, 'get_weights', lambda _user_id: MagicMock())
     successful_result = MagicMock()
 
     def compute(lead, *_args, **_kwargs):

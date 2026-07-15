@@ -1137,6 +1137,38 @@ class TestCompleteTask:
             assert lead.needs_skip_trace is True
             assert lead.date_skip_traced is None
 
+    def test_duplicate_tasks_complete_their_exact_mirror(self, client, app):
+        from app.services.lead_task_service import LeadTaskService
+
+        with app.app_context():
+            lead = _make_lead(app, '18ab Exact Mirror St')
+            service = LeadTaskService()
+            first = service.create(
+                lead.id,
+                {'title': 'Same-day follow up', 'task_type': 'custom'},
+                actor='test-user',
+                recompute_action=False,
+            )
+            second = service.create(
+                lead.id,
+                {'title': 'Same-day follow up', 'task_type': 'custom'},
+                actor='test-user',
+                recompute_action=False,
+            )
+            first_mirror_id = first.mirror_task_id
+            second_mirror_id = second.mirror_task_id
+            assert first_mirror_id != second_mirror_id
+
+            response = client.post(
+                f'/api/leads/{lead.id}/tasks/{second.id}/complete',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            first_mirror = db.session.get(Task, first_mirror_id)
+            second_mirror = db.session.get(Task, second_mirror_id)
+            assert first_mirror.status == 'open'
+            assert second_mirror.status == 'completed'
+
     def test_complete_task_rejects_non_owner(self, client, app):
         with app.app_context():
             lead = _make_lead(app, '18b Complete Other Owner St', owner_user_id='other-user')

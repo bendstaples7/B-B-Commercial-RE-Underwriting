@@ -308,14 +308,6 @@ def _complete_owner_mail_clause():
     )
 
 
-def _owner_mail_candidate_clause():
-    """Broad SQL prefilter; Python validation handles embedded one-line mail."""
-    return and_(
-        func.nullif(func.trim(Lead.mailing_address), '').isnot(None),
-        func.nullif(func.trim(Lead.returned_addresses), '').is_(None),
-    )
-
-
 def _outreach_filter_clause(outreach: str | None):
     """SQLAlchemy clause for Direct Mail / Call Now / etc. display labels."""
     if not outreach:
@@ -921,7 +913,7 @@ class QueueService:
             .filter(
                 Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
                 Lead.recommended_action == 'mail_ready',
-                _owner_mail_candidate_clause(),
+                _complete_owner_mail_clause(),
                 ~already_queued,
             )
         )

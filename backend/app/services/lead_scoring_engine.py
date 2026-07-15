@@ -966,6 +966,7 @@ class LeadScoringEngine:
         """Refresh live scores in batches, optionally isolating bad lead rows."""
         rescored = 0
         pending_commits = 0
+        weights_by_user: dict[str, ScoringWeights] = {}
 
         def _flush_batch() -> None:
             nonlocal pending_commits
@@ -978,7 +979,8 @@ class LeadScoringEngine:
             contact_reachability: tuple[float, dict] | None = None,
         ) -> None:
             nonlocal rescored, pending_commits
-            weights = self.get_weights(lead.owner_user_id or user_id)
+            weight_user_id = lead.owner_user_id or user_id
+            weights = weights_by_user[weight_user_id]
             signals = (
                 HubSpotSignal.query
                 .filter_by(lead_id=lead.id)
@@ -1028,11 +1030,21 @@ class LeadScoringEngine:
         def _lead_query():
             return Lead.query.options(selectinload(Lead.analysis_session))
 
+        def _prepare_weights(leads: list[Lead]) -> None:
+            """Create/cache weights before entering per-lead savepoints."""
+            for lead in leads:
+                weight_user_id = lead.owner_user_id or user_id
+                if weight_user_id not in weights_by_user:
+                    weights_by_user[weight_user_id] = self.get_weights(
+                        weight_user_id,
+                    )
+
         try:
             if lead_ids is not None:
                 for i in range(0, len(lead_ids), BULK_RESCORE_BATCH_SIZE):
                     batch_ids = lead_ids[i:i + BULK_RESCORE_BATCH_SIZE]
                     leads = _lead_query().filter(Lead.id.in_(batch_ids)).all()
+                    _prepare_weights(leads)
                     reachability = rubric.batch_contact_reachability_scores(leads)
                     for lead in leads:
                         _attempt_rescore(lead, reachability.get(lead.id))
@@ -1047,6 +1059,7 @@ class LeadScoringEngine:
                     )
                     if not leads:
                         break
+                    _prepare_weights(leads)
                     reachability = rubric.batch_contact_reachability_scores(leads)
                     for lead in leads:
                         _attempt_rescore(lead, reachability.get(lead.id))

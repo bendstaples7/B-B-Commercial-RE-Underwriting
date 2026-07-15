@@ -34,6 +34,12 @@ class LeadTask(db.Model):
     # HubSpot engagement/task id when this LeadTask was imported or synced from HubSpot.
     # Partial unique index on (hubspot_task_id, lead_id) — one row per lead per HubSpot task.
     hubspot_task_id = db.Column(db.String(50), nullable=True)
+    mirror_task_id = db.Column(
+        db.Integer,
+        db.ForeignKey('tasks.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
 
     # Relationship — use 'Property' because the SQLAlchemy class is named Property
     # (Lead is a Python alias, not the registered mapper name)

@@ -11,6 +11,16 @@ from app.models.mail_queue_item import MailQueueItem
 _AUTH_HEADERS = {'X-User-Id': 'test-user'}
 
 
+@pytest.mark.parametrize('limit', [0, -1, -100])
+def test_non_positive_candidate_limits_use_safe_cap(limit):
+    from app.services.mail_queue_service import (
+        MAX_MAIL_ENQUEUE_LEADS,
+        _candidate_limit,
+    )
+
+    assert _candidate_limit(limit) == MAX_MAIL_ENQUEUE_LEADS
+
+
 def _make_lead(app, street, **kwargs):
     from app import db
 

@@ -655,6 +655,8 @@ def test_mail_candidates_excludes_recently_sold(app):
 
 
 def test_mail_candidates_accepts_parseable_one_line_owner_address(app):
+    from app import db
+
     with app.app_context():
         lead = _make_mail_ready_lead(
             app,
@@ -664,6 +666,11 @@ def test_mail_candidates_accepts_parseable_one_line_owner_address(app):
             mailing_state=None,
             mailing_zip=None,
         )
+        from app.services.open_letter_contact_mapper import (
+            persist_embedded_address_fields,
+        )
+        assert persist_embedded_address_fields(lead) is True
+        db.session.commit()
         rows, _ = QueueService(owner_user_id='test-owner').get_mail_candidates(
             'test-owner',
         )

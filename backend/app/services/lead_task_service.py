@@ -24,6 +24,18 @@ def complete_native_task_mirror(
     """Complete the manual ``tasks`` row mirrored from a native LeadTask."""
     if not has_app_context():
         return
+    if lead_task.mirror_task_id is not None:
+        mirror = db.session.get(Task, lead_task.mirror_task_id)
+        if (
+            mirror is not None
+            and mirror.lead_id == lead_task.lead_id
+            and mirror.status in ('open', 'overdue')
+        ):
+            mirror.status = 'completed'
+            mirror.completion_timestamp = completed_at
+            mirror.updated_at = completed_at
+            db.session.add(mirror)
+        return
     candidates = (
         Task.query
         .filter(
@@ -36,15 +48,26 @@ def complete_native_task_mirror(
         .order_by(Task.id.asc())
         .all()
     )
+    matching = []
     for mirror in candidates:
         mirror_due = mirror.due_date.date() if mirror.due_date else None
         if mirror_due != lead_task.due_date:
             continue
-        mirror.status = 'completed'
-        mirror.completion_timestamp = completed_at
-        mirror.updated_at = completed_at
-        db.session.add(mirror)
+        matching.append(mirror)
+    if len(matching) != 1:
+        if len(matching) > 1:
+            logger.warning(
+                'Cannot safely identify legacy mirror for LeadTask %s; '
+                '%d candidates matched',
+                lead_task.id,
+                len(matching),
+            )
         return
+    mirror = matching[0]
+    mirror.status = 'completed'
+    mirror.completion_timestamp = completed_at
+    mirror.updated_at = completed_at
+    db.session.add(mirror)
 
 
 def _coerce_due_date(value) -> date | None:
@@ -128,6 +151,15 @@ class LeadTaskService:
                     task.completed_at = None
             db.session.add(task)
 
+        if task.mirror_task_id is None:
+            mirror = Task.query.filter_by(
+                lead_id=lead_id,
+                hubspot_task_id=hs_id,
+            ).first()
+            if mirror is not None:
+                task.mirror_task_id = mirror.id
+                db.session.add(task)
+
         if commit:
             db.session.commit()
         else:
@@ -194,6 +226,9 @@ class LeadTaskService:
             due_date=datetime.combine(data['due_date'], datetime.min.time()) if data.get('due_date') else None,
         )
         db.session.add(mirror_task)
+        db.session.flush()
+        task.mirror_task_id = mirror_task.id
+        db.session.add(task)
 
         # Append timeline entry
         entry = LeadTimelineEntry(
@@ -254,12 +289,20 @@ class LeadTaskService:
                 attempted_status='completed',
             )
 
+        lead = None
+        if task.task_type == 'skip_trace_owner':
+            lead = (
+                Lead.query
+                .filter_by(id=lead_id)
+                .with_for_update()
+                .first()
+            )
+
         task.status = 'completed'
         task.completed_at = datetime.now(timezone.utc)
         db.session.add(task)
         complete_native_task_mirror(task, task.completed_at)
         if task.task_type == 'skip_trace_owner':
-            lead = db.session.get(Lead, lead_id)
             if lead is not None:
                 another_open_handoff = LeadTask.query.filter(
                     LeadTask.lead_id == lead_id,

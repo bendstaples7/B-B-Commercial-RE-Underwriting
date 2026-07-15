@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 MAX_MAIL_ENQUEUE_LEADS = 1000
 
 
+def _candidate_limit(limit: int | None) -> int:
+    """Return a positive candidate limit capped at the enqueue maximum."""
+    if limit is None or limit <= 0:
+        return MAX_MAIL_ENQUEUE_LEADS
+    return min(limit, MAX_MAIL_ENQUEUE_LEADS)
+
+
 def _refresh_rejected_leads(user_id: str, lead_ids: list[int]) -> None:
     """Rescore rejected leads without blocking production enqueue requests."""
     if not lead_ids:
@@ -368,8 +375,7 @@ class MailQueueService:
         from app.services.queue_service import QueueService
 
         ids = QueueService().get_mail_candidate_ids(user_id)
-        effective_limit = min(limit or MAX_MAIL_ENQUEUE_LEADS, MAX_MAIL_ENQUEUE_LEADS)
-        ids = ids[:effective_limit]
+        ids = ids[:_candidate_limit(limit)]
 
         would_add = 0
         would_skip = 0
@@ -441,8 +447,7 @@ class MailQueueService:
         from app.services.queue_service import QueueService
 
         ids = QueueService().get_mail_candidate_ids(user_id)
-        effective_limit = min(limit or MAX_MAIL_ENQUEUE_LEADS, MAX_MAIL_ENQUEUE_LEADS)
-        ids = ids[:effective_limit]
+        ids = ids[:_candidate_limit(limit)]
         if not ids:
             return {
                 'added': 0,
