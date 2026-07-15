@@ -17,6 +17,7 @@ from app.services.building_ownership_backfill import (
     maybe_schedule_building_ownership_analysis,
 )
 from app.services.lead_refresh import refresh_lead_scoring
+from app.services.open_letter_contact_mapper import is_owner_mailable_lead
 from app.services.plugins.address_utils import is_chicago_address
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ def plugins_for_lead(lead: Lead) -> list[str]:
     plugins: list[str] = []
     if has_pin:
         plugins.extend(_PIN_PLUGINS)
-        if _owner_names_missing(lead):
+        if _owner_names_missing(lead) or not is_owner_mailable_lead(lead):
             plugins.append("cook_county_owner_lookup")
     elif chicago:
         plugins.append("cook_county_assessor")

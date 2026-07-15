@@ -270,7 +270,14 @@ class LeadIngestionService:
             for field in _GIS_FIELDS:
                 parcel_value = getattr(parcel, field, None)
                 current_value = getattr(lead, field, None)
-                if parcel_value is not None and current_value is None:
+                current_missing = (
+                    current_value is None
+                    or (
+                        isinstance(current_value, str)
+                        and not current_value.strip()
+                    )
+                )
+                if parcel_value is not None and current_missing:
                     setattr(lead, field, parcel_value)
                     fields_populated += 1
 

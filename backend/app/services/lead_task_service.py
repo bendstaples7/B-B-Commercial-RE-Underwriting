@@ -104,8 +104,14 @@ class LeadTaskService:
 
         return task
 
-    def create(self, lead_id: int, data: dict, actor: str = 'anonymous',
-               recompute_action: bool = True) -> LeadTask:
+    def create(
+        self,
+        lead_id: int,
+        data: dict,
+        actor: str = 'anonymous',
+        recompute_action: bool = True,
+        commit: bool = True,
+    ) -> LeadTask:
         """Create a new LeadTask for a lead.
 
         - Validates title (1–255 chars)
@@ -169,11 +175,14 @@ class LeadTaskService:
             event_metadata={'task_id': task.id, 'task_type': task.task_type, 'title': title},
         )
         db.session.add(entry)
-        db.session.commit()
+        if commit:
+            db.session.commit()
+        else:
+            db.session.flush()
 
         # Trigger RA recomputation (skipped when the caller will refresh the
         # lead itself, so the action is recomputed once per op rather than twice).
-        if recompute_action:
+        if recompute_action and commit:
             try:
                 from app.services.action_engine_service import ActionEngineService
                 ActionEngineService.recompute_and_persist(lead_id)
@@ -217,6 +226,13 @@ class LeadTaskService:
         task.status = 'completed'
         task.completed_at = datetime.now(timezone.utc)
         db.session.add(task)
+        if task.task_type == 'skip_trace_owner':
+            lead = db.session.get(Lead, lead_id)
+            if lead is not None:
+                lead.needs_skip_trace = False
+                if lead.date_skip_traced is None:
+                    lead.date_skip_traced = date.today()
+                db.session.add(lead)
 
         entry = LeadTimelineEntry(
             lead_id=lead_id,

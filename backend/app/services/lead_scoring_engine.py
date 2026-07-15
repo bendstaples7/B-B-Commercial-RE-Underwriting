@@ -22,7 +22,10 @@ from app.models.lead_task import LeadTask
 from app.models.lead_timeline_entry import LeadTimelineEntry
 from app.models.lead_crm_flags_view import LeadCRMFlagsView
 from app.services import scoring_rubric as rubric
-from app.services.open_letter_contact_mapper import is_mailable_lead
+from app.services.open_letter_contact_mapper import (
+    is_owner_mailable_lead,
+    persist_embedded_address_fields,
+)
 from app.services.outreach_method_service import (
     ENGAGED_PIPELINE_STATUSES,
     evaluate_contact_method,
@@ -31,6 +34,10 @@ from app.services.outreach_method_service import (
 )
 from app.services.entity_owner_policy import cold_mail_block_reason
 logger = logging.getLogger(__name__)
+
+# Backward-compatible patch target for tests and integrations; semantics are now
+# owner-mailing-only rather than property-address fallback.
+is_mailable_lead = is_owner_mailable_lead
 
 
 def _cold_mail_ready_outcome(lead: Lead) -> tuple[str, str, dict] | None:
@@ -68,6 +75,55 @@ def _apply_cold_mail_block_to_action(
         return recommended_action, winning_rule, action_signals
     blocked_action, blocked_rule, blocked_signals = blocked
     return blocked_action, blocked_rule, blocked_signals
+
+
+def _apply_owner_mail_gate(
+    lead: Lead,
+    action: str | None,
+    method: str | None,
+    winning_rule: str,
+    action_signals: dict,
+) -> tuple[str | None, str | None, str, dict]:
+    """Prevent direct-mail recommendations without complete owner mailing data."""
+    missing_only_channel = (
+        method is None
+        and action in OUTREACH_ACTIONS
+        and action != 'nurture'
+        and not is_owner_mailable_lead(lead)
+    )
+    if action != 'mail_ready' and method != 'direct_mail' and not missing_only_channel:
+        return action, method, winning_rule, action_signals
+    if is_owner_mailable_lead(lead):
+        return action, method, winning_rule, action_signals
+
+    has_phone, has_email, _has_match = _resolve_crm_flags(lead)
+    signals = {
+        **action_signals,
+        'owner_mailing_complete': False,
+        'mail_action_blocked': True,
+    }
+    if has_phone:
+        fallback_action = 'call_ready' if action == 'mail_ready' else action
+        return (
+            fallback_action,
+            'phone',
+            'incomplete_owner_mail_phone_fallback',
+            {**signals, 'has_phone': True},
+        )
+    if has_email:
+        fallback_action = 'ready_for_outreach' if action == 'mail_ready' else action
+        return (
+            fallback_action,
+            'email',
+            'incomplete_owner_mail_email_fallback',
+            {**signals, 'has_email': True},
+        )
+    return (
+        'add_contact_info',
+        None,
+        'incomplete_owner_mailing_address',
+        signals,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -220,9 +276,8 @@ def _resolve_crm_flags(lead: Lead) -> tuple[bool, bool, bool]:
 
 
 def _has_mailing_address(lead: Lead) -> bool:
-    """True when the lead has a non-empty owner mailing street (data-quality bar)."""
-    addr = getattr(lead, 'mailing_address', None)
-    return bool(addr and str(addr).strip())
+    """True when the owner mailing destination is complete."""
+    return is_owner_mailable_lead(lead)
 
 
 def _is_commercial_lead(lead: Lead) -> bool:
@@ -237,6 +292,8 @@ def _maybe_promote_skip_trace_to_mailing(lead: Lead) -> str | None:
     if _is_commercial_lead(lead):
         return None
     if lead.lead_status not in ('skip_trace', 'awaiting_skip_trace'):
+        return None
+    if bool(getattr(lead, 'needs_skip_trace', False)):
         return None
     if not _has_mailing_address(lead):
         return None
@@ -315,6 +372,8 @@ class LeadScoringEngine:
     ) -> ScoringResult:
         from app.services.motivation_signal_service import MotivationSignalService
 
+        persist_embedded_address_fields(lead)
+
         if getattr(lead, 'id', None) is not None:
             try:
                 MotivationSignalService().sync_from_lead(lead, commit=False)
@@ -391,15 +450,24 @@ class LeadScoringEngine:
         recommended_action, winning_rule, action_signals = self.evaluate_recommended_action(
             lead, total, data_quality_score, score_tier,
         )
-        recommended_action, recommended_contact_method = self._apply_outreach_method(
-            lead, recommended_action, action_signals, winning_rule=winning_rule,
-        )
-        pre_block_action = recommended_action
         recommended_action, winning_rule, action_signals = _apply_cold_mail_block_to_action(
             lead, recommended_action, winning_rule, action_signals,
         )
-        if pre_block_action == 'mail_ready' and recommended_action != 'mail_ready':
-            recommended_contact_method = None
+        recommended_action, recommended_contact_method = self._apply_outreach_method(
+            lead, recommended_action, action_signals, winning_rule=winning_rule,
+        )
+        (
+            recommended_action,
+            recommended_contact_method,
+            winning_rule,
+            action_signals,
+        ) = _apply_owner_mail_gate(
+            lead,
+            recommended_action,
+            recommended_contact_method,
+            winning_rule,
+            action_signals,
+        )
         if recommended_contact_method:
             action_signals['recommended_contact_method'] = recommended_contact_method
         top_signals = rubric.extract_top_signals(score_details, lead=lead)
@@ -1119,24 +1187,28 @@ class LeadScoringEngine:
     @staticmethod
     def get_action_decision(lead: Lead) -> tuple[str | None, str, dict]:
         """Return (recommended_action, winning_rule, action_signals) for display."""
+        persist_embedded_address_fields(lead)
         total = float(getattr(lead, 'lead_score', 0) or 0)
         data_quality = float(getattr(lead, 'data_completeness_score', 0) or 0)
         tier = rubric.calculate_score_tier(total)
         action, winning_rule, signals = LeadScoringEngine.evaluate_recommended_action(
             lead, total, data_quality, tier,
         )
-        pre_block, method = LeadScoringEngine()._apply_outreach_method(
-            lead, action, signals, winning_rule=winning_rule,
-        )
         refined, winning_rule, signals = _apply_cold_mail_block_to_action(
-            lead, pre_block, winning_rule, signals,
+            lead, action, winning_rule, signals,
         )
+        refined, method = LeadScoringEngine()._apply_outreach_method(
+            lead, refined, signals, winning_rule=winning_rule,
+        )
+        refined, method, winning_rule, signals = _apply_owner_mail_gate(
+            lead, refined, method, winning_rule, signals,
+        )
+        signals = {
+            k: v for k, v in signals.items()
+            if k != 'recommended_contact_method'
+        }
         if method:
             signals = {**signals, 'recommended_contact_method': method}
-        if refined != pre_block:
-            signals = {
-                k: v for k, v in signals.items() if k != 'recommended_contact_method'
-            }
         return refined, winning_rule, signals
 
     # ------------------------------------------------------------------

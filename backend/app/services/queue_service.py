@@ -9,10 +9,13 @@ from app.models import Lead, LeadTask, LeadTimelineEntry, MailQueueItem
 from app.models.task import Task
 from app.models.task_association import TaskAssociation
 from app.services.queue_order_cache import queue_order_cache
-from app.services.open_letter_contact_mapper import is_mailable_lead
+from app.services.open_letter_contact_mapper import is_owner_mailable_lead
 from app.services.recommended_action_metadata import get_recommended_action_display
 from app.services.outreach_method_service import resolve_outreach_contacts_for_leads
-from app.services.scoring_rubric import format_last_sale_at, is_recently_sold
+from app.services.scoring_rubric import (
+    format_last_sale_at,
+    is_recently_sold,
+)
 from app.services.entity_owner_policy import cold_mail_block_reasons_for_leads
 
 # Statuses that represent active outreach pipeline (not terminal or suppressed)
@@ -109,6 +112,78 @@ def _leads_to_queue_rows(leads: list) -> list[dict]:
         _lead_to_queue_row(lead, contacts, owner_displays=owner_displays)
         for lead in leads
     ]
+
+
+def _due_task_context(lead_ids: list[int], cutoff: date) -> dict[int, dict]:
+    """Return the oldest due task from native and CRM task stores."""
+    if not lead_ids:
+        return {}
+    tasks = (
+        LeadTask.query
+        .filter(
+            LeadTask.lead_id.in_(lead_ids),
+            LeadTask.status == 'open',
+            LeadTask.due_date.isnot(None),
+            LeadTask.due_date <= cutoff,
+        )
+        .order_by(LeadTask.due_date.asc(), LeadTask.id.asc())
+        .all()
+    )
+    context: dict[int, dict] = {}
+    for task in tasks:
+        context.setdefault(task.lead_id, {
+            'due_task_title': task.title,
+            'due_task_due_date': task.due_date.isoformat() if task.due_date else None,
+        })
+    cutoff_dt = datetime.combine(cutoff, datetime.max.time())
+    direct_tasks = (
+        Task.query
+        .filter(
+            Task.lead_id.in_(lead_ids),
+            Task.status.in_(['open', 'overdue']),
+            Task.due_date <= cutoff_dt,
+        )
+        .order_by(Task.due_date.asc(), Task.id.asc())
+        .all()
+    )
+    for task in direct_tasks:
+        task_date = task.due_date.date()
+        current = context.get(task.lead_id)
+        if current is None or task_date < date.fromisoformat(
+            current['due_task_due_date']
+        ):
+            context[task.lead_id] = {
+                'due_task_title': task.title,
+                'due_task_due_date': task_date.isoformat(),
+            }
+
+    associated_tasks = (
+        db.session.query(Task, TaskAssociation.target_id)
+        .join(TaskAssociation, TaskAssociation.task_id == Task.id)
+        .filter(
+            TaskAssociation.target_type == 'lead',
+            TaskAssociation.target_id.in_(lead_ids),
+            Task.status.in_(['open', 'overdue']),
+            Task.due_date <= cutoff_dt,
+        )
+        .order_by(
+            TaskAssociation.target_id.asc(),
+            Task.due_date.asc(),
+            Task.id.asc(),
+        )
+        .all()
+    )
+    for task, lead_id in associated_tasks:
+        task_date = task.due_date.date()
+        current = context.get(lead_id)
+        if current is None or task_date < date.fromisoformat(
+            current['due_task_due_date']
+        ):
+            context[lead_id] = {
+                'due_task_title': task.title,
+                'due_task_due_date': task_date.isoformat(),
+            }
+    return context
 
 
 def _apply_queue_sort(query, sort_by: str, sort_order: str, default_col=None):
@@ -209,24 +284,32 @@ def _hubspot_task_overdue_excluding_mail_awaiting(cutoff_date):
     )
 
 
-# Outreach display filters for Today's Action (match frontend outreachDisplayLabel).
+# Outreach display filters for Today's Action.
 TODAYS_ACTION_OUTREACH_FILTERS = frozenset({
-    'mail_now', 'call_now', 'email_now', 'text_now',
+    'direct_mail', 'call_now', 'email_now', 'text_now',
 })
 
 
+def _complete_owner_mail_clause():
+    """SQL predicate matching owner-only direct-mail readiness."""
+    return and_(
+        func.nullif(func.trim(Lead.mailing_address), '').isnot(None),
+        func.nullif(func.trim(Lead.mailing_city), '').isnot(None),
+        func.nullif(func.trim(Lead.mailing_state), '').isnot(None),
+        func.nullif(func.trim(Lead.mailing_zip), '').isnot(None),
+        func.nullif(func.trim(Lead.returned_addresses), '').is_(None),
+    )
+
+
 def _outreach_filter_clause(outreach: str | None):
-    """SQLAlchemy clause for Mail Now / Call Now / etc. display labels."""
+    """SQLAlchemy clause for Direct Mail / Call Now / etc. display labels."""
     if not outreach:
         return None
     key = outreach.strip().lower()
-    if key == 'mail_now':
-        return or_(
-            Lead.recommended_action == 'mail_ready',
-            and_(
-                Lead.recommended_action == 'follow_up_now',
-                Lead.recommended_contact_method == 'direct_mail',
-            ),
+    if key == 'direct_mail':
+        return and_(
+            Lead.recommended_contact_method == 'direct_mail',
+            _complete_owner_mail_clause(),
         )
     if key == 'call_now':
         return or_(
@@ -263,7 +346,7 @@ def _filter_mail_eligible_leads(leads: list) -> list:
         lead for lead in leads
         if (
             not is_recently_sold(lead)
-            and is_mailable_lead(lead)
+            and is_owner_mailable_lead(lead)
             and lead.id not in blocked
         )
     ]
@@ -436,20 +519,20 @@ class QueueService:
         """
         today = date.today()
         base = self._todays_action_query(today)
-        mail_clause = _outreach_filter_clause('mail_now')
+        mail_clause = _outreach_filter_clause('direct_mail')
         call_clause = _outreach_filter_clause('call_now')
         email_clause = _outreach_filter_clause('email_now')
         text_clause = _outreach_filter_clause('text_now')
         row = base.with_entities(
             func.count(Lead.id).label('all_count'),
-            func.coalesce(func.sum(case((mail_clause, 1), else_=0)), 0).label('mail_now'),
+            func.coalesce(func.sum(case((mail_clause, 1), else_=0)), 0).label('direct_mail'),
             func.coalesce(func.sum(case((call_clause, 1), else_=0)), 0).label('call_now'),
             func.coalesce(func.sum(case((email_clause, 1), else_=0)), 0).label('email_now'),
             func.coalesce(func.sum(case((text_clause, 1), else_=0)), 0).label('text_now'),
         ).one()
         return {
             'all': int(row.all_count or 0),
-            'mail_now': int(row.mail_now or 0),
+            'direct_mail': int(row.direct_mail or 0),
             'call_now': int(row.call_now or 0),
             'email_now': int(row.email_now or 0),
             'text_now': int(row.text_now or 0),
@@ -474,7 +557,11 @@ class QueueService:
         total = query.count()
         query = _apply_queue_sort(query, sort_by, sort_order)
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
-        return [_leads_to_queue_rows(leads), total]
+        rows = _leads_to_queue_rows(leads)
+        task_context = _due_task_context([lead.id for lead in leads], date.today())
+        for row in rows:
+            row.update(task_context.get(row['id'], {}))
+        return [rows, total]
 
     def _count_previously_warm(self) -> int:
         """Previously Warm: leads where is_warm = True."""
@@ -814,21 +901,13 @@ class QueueService:
                 MailQueueItem.status == 'queued',
             )
         )
-        recent_invalid = exists().where(
-            and_(
-                MailQueueItem.lead_id == Lead.id,
-                MailQueueItem.user_id == mail_user_id,
-                MailQueueItem.status == 'invalid_address',
-                MailQueueItem.created_at >= datetime.utcnow() - timedelta(days=30),
-            )
-        )
         q = (
             Lead.query.filter(Lead.owner_user_id == mail_user_id)
             .filter(
                 Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
                 Lead.recommended_action == 'mail_ready',
+                _complete_owner_mail_clause(),
                 ~already_queued,
-                ~recent_invalid,
             )
         )
         return q

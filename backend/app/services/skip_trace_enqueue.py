@@ -7,7 +7,7 @@ replace only the body of :meth:`SkipTraceEnqueue.enqueue` — callers stay the s
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from sqlalchemy import text
@@ -16,6 +16,9 @@ from app import db
 from app.models.contact import Contact
 from app.models.lead import Lead
 from app.models.lead_task import LeadTask
+from app.models.lead_timeline_entry import LeadTimelineEntry
+from app.models.task import Task
+from app.exceptions import InvalidLeadStatusTransitionError
 from app.services.lead_task_service import LeadTaskService
 
 logger = logging.getLogger(__name__)
@@ -104,6 +107,205 @@ class SkipTraceEnqueue:
             task.id, lead_id, contact_id,
         )
         return task
+
+    def move_to_skip_trace(
+        self,
+        lead_id: int,
+        *,
+        actor: str,
+        complete_task_id: Optional[int] = None,
+    ) -> dict:
+        """Atomically complete current work and hand the lead to skip trace."""
+        self._serialize_lead_enqueue(lead_id)
+        lead = Lead.query.filter_by(id=lead_id).with_for_update().first()
+        if lead is None:
+            raise ValueError(f"Lead {lead_id} not found")
+        if lead.lead_status in {
+            "deprioritize",
+            "deal_won",
+            "deal_lost",
+            "suppressed",
+            "do_not_contact",
+        }:
+            raise InvalidLeadStatusTransitionError(
+                lead.lead_status,
+                "skip_trace",
+            )
+
+        completed_task: Optional[LeadTask] = None
+        if complete_task_id is not None:
+            completed_task = LeadTask.query.filter_by(
+                id=complete_task_id,
+                lead_id=lead_id,
+            ).first()
+            if completed_task is None:
+                raise ValueError(
+                    f"Task {complete_task_id} not found for lead {lead_id}"
+                )
+        else:
+            completed_task = (
+                LeadTask.query
+                .filter(
+                    LeadTask.lead_id == lead_id,
+                    LeadTask.status == "open",
+                    LeadTask.task_type != "skip_trace_owner",
+                )
+                .order_by(
+                    LeadTask.due_date.asc().nullslast(),
+                    LeadTask.id.asc(),
+                )
+                .first()
+            )
+
+        now = datetime.now(timezone.utc)
+        completed_task_id_out: Optional[int] = None
+        pending_hubspot_id: Optional[str] = None
+        if completed_task is not None and completed_task.status == "open":
+            completed_task_id_out = completed_task.id
+            if completed_task.hubspot_task_id:
+                from app.services.hubspot_task_completion_service import (
+                    mark_hubspot_task_completed_local,
+                )
+
+                local_completion = mark_hubspot_task_completed_local(
+                    lead_id,
+                    completed_task.id,
+                    actor=actor,
+                    reason="moved_to_skip_trace",
+                )
+                if local_completion is not None:
+                    pending_hubspot_id = local_completion.hubspot_task_id
+                else:
+                    completed_task.status = "completed"
+                    completed_task.completed_at = now
+                    self._complete_native_task_mirror(completed_task, now)
+                    db.session.add(LeadTimelineEntry(
+                        lead_id=lead_id,
+                        event_type="task_completed",
+                        occurred_at=now,
+                        source="manual",
+                        actor=actor,
+                        summary=f"Task completed: {completed_task.title}",
+                        event_metadata={
+                            "task_id": completed_task.id,
+                            "task_type": completed_task.task_type,
+                            "title": completed_task.title,
+                            "reason": "moved_to_skip_trace",
+                        },
+                    ))
+            else:
+                completed_task.status = "completed"
+                completed_task.completed_at = now
+                self._complete_native_task_mirror(completed_task, now)
+                db.session.add(LeadTimelineEntry(
+                    lead_id=lead_id,
+                    event_type="task_completed",
+                    occurred_at=now,
+                    source="manual",
+                    actor=actor,
+                    summary=f"Task completed: {completed_task.title}",
+                    event_metadata={
+                        "task_id": completed_task.id,
+                        "task_type": completed_task.task_type,
+                        "title": completed_task.title,
+                        "reason": "moved_to_skip_trace",
+                    },
+                ))
+
+        old_status = lead.lead_status
+        lead.lead_status = "skip_trace"
+        lead.needs_skip_trace = True
+        if old_status != "skip_trace":
+            db.session.add(LeadTimelineEntry(
+                lead_id=lead_id,
+                event_type="status_changed",
+                occurred_at=now,
+                source="manual",
+                actor=actor,
+                summary=(
+                    f"Status changed from '{old_status}' to 'skip_trace'. "
+                    "Moved to skip trace from quick actions."
+                ),
+                event_metadata={
+                    "previous_status": old_status,
+                    "new_status": "skip_trace",
+                    "reason": "quick_action_move_to_skip_trace",
+                },
+            ))
+
+        skip_trace_task = (
+            LeadTask.query
+            .filter_by(
+                lead_id=lead_id,
+                task_type="skip_trace_owner",
+                status="open",
+            )
+            .first()
+        )
+        if skip_trace_task is None:
+            skip_trace_task = self._tasks.create(
+                lead_id,
+                {
+                    "task_type": "skip_trace_owner",
+                    "title": "Awaiting skip trace",
+                    "due_date": None,
+                },
+                actor=actor,
+                recompute_action=False,
+                commit=False,
+            )
+
+        db.session.commit()
+
+        if pending_hubspot_id:
+            from app.services.hubspot_task_completion_service import (
+                sync_pending_hubspot_completions,
+            )
+            sync_pending_hubspot_completions([pending_hubspot_id])
+
+        from app.services.lead_refresh import refresh_lead_scoring
+        from app.services.queue_order_cache import queue_order_cache
+
+        queue_order_cache.clear()
+        refresh_lead_scoring(lead_id)
+        return {
+            "lead_id": lead_id,
+            "lead_status": "skip_trace",
+            "completed_task_id": completed_task_id_out,
+            "skip_trace_task_id": skip_trace_task.id,
+        }
+
+    @staticmethod
+    def _complete_native_task_mirror(
+        lead_task: LeadTask,
+        completed_at: datetime,
+    ) -> None:
+        """Complete the manual ``tasks`` row created with a native LeadTask."""
+        candidates = (
+            Task.query
+            .filter(
+                Task.lead_id == lead_task.lead_id,
+                Task.status.in_(("open", "overdue")),
+                Task.source == "manual",
+                Task.title == lead_task.title,
+                Task.task_type == lead_task.task_type,
+            )
+            .order_by(Task.id.asc())
+            .all()
+        )
+        for mirror in candidates:
+            mirror_due = (
+                mirror.due_date.date()
+                if mirror.due_date is not None
+                else None
+            )
+            if mirror_due != lead_task.due_date:
+                continue
+            mirror.status = "completed"
+            mirror.completion_timestamp = completed_at
+            mirror.updated_at = completed_at
+            db.session.add(mirror)
+            return
 
     @staticmethod
     def _serialize_lead_enqueue(lead_id: int) -> None:

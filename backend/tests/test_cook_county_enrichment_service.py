@@ -50,10 +50,22 @@ class TestPluginsForLead:
         lead = _cook_lead(property_city="Wheaton")
         assert plugins_for_lead(lead) == []
 
-    def test_skips_owner_lookup_when_names_present(self):
+    def test_runs_owner_lookup_when_names_present_but_mail_incomplete(self):
         lead = _cook_lead(
             owner_first_name="Jane",
             owner_last_name="Doe",
+        )
+        names = plugins_for_lead(lead)
+        assert "cook_county_owner_lookup" in names
+
+    def test_skips_owner_lookup_when_owner_mail_is_complete(self):
+        lead = _cook_lead(
+            owner_first_name="Jane",
+            owner_last_name="Doe",
+            mailing_address="456 Oak St",
+            mailing_city="Chicago",
+            mailing_state="IL",
+            mailing_zip="60601",
         )
         names = plugins_for_lead(lead)
         assert "cook_county_owner_lookup" not in names

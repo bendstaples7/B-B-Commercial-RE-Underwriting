@@ -26,6 +26,7 @@ vi.mock('@/services/api', () => ({
   commandCenterService: {
     getCommandCenter: vi.fn(),
     updateStatus: vi.fn(),
+    moveToSkipTrace: vi.fn(),
     getTimeline: vi.fn(),
   },
   leadTaskService: {
@@ -471,6 +472,50 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
     } finally {
       Element.prototype.scrollIntoView = original
     }
+  })
+
+  it('moves the lead and current task to skip trace from quick actions', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        recommended_action: {
+          value: 'nurture',
+          label: 'Nurture',
+          explanation: null,
+          signals: {},
+        },
+        open_tasks: [{
+          id: 17,
+          lead_id: 1,
+          task_type: 'custom',
+          title: 'Manually skip trace returned letter',
+          status: 'open',
+          due_date: '2023-01-27',
+          created_at: '2023-01-01T00:00:00Z',
+          completed_at: null,
+          created_by: 'user',
+          source: 'native',
+        }],
+      }),
+    )
+    vi.mocked(commandCenterService.moveToSkipTrace).mockResolvedValue({
+      lead_id: 1,
+      lead_status: 'skip_trace',
+      completed_task_id: 17,
+      skip_trace_task_id: 18,
+    })
+
+    renderComponent()
+    await user.click(
+      await screen.findByTestId('ra-universal-btn-move_to_skip_trace'),
+    )
+
+    expect(commandCenterService.moveToSkipTrace).toHaveBeenCalledWith(1, 17)
+    expect(
+      await screen.findByText(
+        'Current task completed and lead moved to Skip Trace',
+      ),
+    ).toBeInTheDocument()
   })
 
   it('shows success snackbar and timeline entry text after saving a note', async () => {

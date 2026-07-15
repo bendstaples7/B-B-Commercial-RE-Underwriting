@@ -63,7 +63,7 @@ export async function enqueueLeadsAsBulkResult(
   ctx: QueueBulkActionContext,
 ): Promise<BulkActionResult> {
   try {
-    const result = await openLetterService.enqueue(leadIds)
+    const result = await openLetterService.enqueue(leadIds, ctx.queryKey)
     invalidateMailQueries(ctx.queryClient)
     invalidateQueueQueries(ctx.queryClient, ctx.queryKey, ctx.extraQueryKeys)
     ctx.onEnqueueResult?.(result)
@@ -72,6 +72,13 @@ export async function enqueueLeadsAsBulkResult(
       successes: result.added,
       failures: result.skipped + result.invalid,
       message: formatEnqueueSummary(result),
+      mail_enqueue: {
+        attempt_id: result.attempt_id,
+        added: result.added,
+        skipped: result.skipped,
+        invalid: result.invalid,
+        results: result.results ?? [],
+      },
     }
   } catch (err) {
     ctx.onEnqueueError?.(err)

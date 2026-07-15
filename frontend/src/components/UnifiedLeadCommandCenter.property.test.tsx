@@ -33,6 +33,7 @@ vi.mock('@/services/api', async (importOriginal) => {
       getCommandCenter: vi.fn(),
       getTimeline: vi.fn(),
       updateStatus: vi.fn(),
+      moveToSkipTrace: vi.fn(),
     },
     leadTaskService: {
       createTask: vi.fn(),

@@ -3,7 +3,9 @@ import json
 
 import pytest
 
+from app import db
 from app.models.lead import Lead
+from app.models.mail_queue_item import MailQueueItem
 
 _AUTH_HEADERS = {'X-User-Id': 'test-user'}
 
@@ -87,6 +89,42 @@ class TestEnqueueMailQueue:
             )
             assert response.status_code == 400
 
+    def test_enqueue_rejects_oversized_source_queue(self, client, app):
+        with app.app_context():
+            lead = _make_mail_ready_lead(app, '8 Source Queue St')
+            response = client.post(
+                '/api/mail-queue/',
+                headers=_AUTH_HEADERS,
+                json={
+                    'lead_ids': [lead.id],
+                    'source_queue': 'q' * 101,
+                },
+            )
+            assert response.status_code == 400
+            assert MailQueueItem.query.filter_by(lead_id=lead.id).count() == 0
+
+    def test_enqueue_limits_batch_size(self, client, app):
+        with app.app_context():
+            response = client.post(
+                '/api/mail-queue/',
+                headers=_AUTH_HEADERS,
+                json={'lead_ids': list(range(1, 1002))},
+            )
+            assert response.status_code == 400
+
+    def test_enqueue_deduplicates_lead_ids(self, client, app):
+        with app.app_context():
+            lead = _make_mail_ready_lead(app, '8 Duplicate Request St')
+            response = client.post(
+                '/api/mail-queue/',
+                headers=_AUTH_HEADERS,
+                json={'lead_ids': [lead.id, lead.id]},
+            )
+            assert response.status_code == 201
+            data = json.loads(response.data)
+            assert data['added'] == 1
+            assert len(data['results']) == 1
+
     def test_enqueue_rejects_other_users_lead(self, client, app):
         with app.app_context():
             lead = _make_lead(app, '9 Other Owner St', owner_user_id='other-user')
@@ -98,7 +136,11 @@ class TestEnqueueMailQueue:
             assert response.status_code == 201
             data = json.loads(response.data)
             assert data['added'] == 0
-            assert data['results'][0]['status'] == 'not_authorized'
+            outcome = data['results'][0]
+            assert outcome == {
+                'lead_id': lead.id,
+                'status': 'not_authorized',
+            }
 
     def test_enqueue_rejects_recently_sold_lead(self, client, app):
         from datetime import date, timedelta
@@ -118,6 +160,60 @@ class TestEnqueueMailQueue:
             data = json.loads(response.data)
             assert data['added'] == 0
             assert data['results'][0]['status'] == 'recently_sold'
+            assert data['results'][0]['sale_date'] is not None
+
+    def test_enqueue_persists_detailed_attempt_for_invalid_owner_mail(self, client, app):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '11 Property Only St',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60601',
+            )
+            response = client.post(
+                '/api/mail-queue/',
+                headers=_AUTH_HEADERS,
+                json={'lead_ids': [lead.id], 'source_queue': 'queue-todays-action'},
+            )
+            assert response.status_code == 201
+            data = json.loads(response.data)
+            assert data['invalid'] == 1
+            assert data['results'][0]['status'] == 'invalid_address'
+            assert data['results'][0]['property_street'] == '11 Property Only St'
+            assert data['attempt_id']
+            from app.models.mail_enqueue_attempt import MailEnqueueAttempt
+            stored = db.session.get(MailEnqueueAttempt, data['attempt_id'])
+            assert 'property_street' not in stored.results[0]
+            assert 'owner_name' not in stored.results[0]
+
+            attempt = client.get(
+                f"/api/mail-queue/attempts/{data['attempt_id']}",
+                headers=_AUTH_HEADERS,
+            )
+            assert attempt.status_code == 200
+            attempt_data = json.loads(attempt.data)
+            assert attempt_data['source_queue'] == 'queue-todays-action'
+            assert attempt_data['results'][0]['lead_id'] == lead.id
+            assert (
+                attempt_data['results'][0]['property_street']
+                == '11 Property Only St'
+            )
+
+            attempts = client.get('/api/mail-queue/attempts', headers=_AUTH_HEADERS)
+            assert attempts.status_code == 200
+            matching_attempt = next(
+                row
+                for row in json.loads(attempts.data)['attempts']
+                if row['id'] == data['attempt_id']
+            )
+            assert 'results' not in matching_attempt
+
+            unauthorized = client.get(
+                f"/api/mail-queue/attempts/{data['attempt_id']}",
+                headers={'X-User-Id': 'other-user'},
+            )
+            assert unauthorized.status_code == 404
 
 
 def _make_mail_ready_lead(app, street, **kwargs):
@@ -125,9 +221,11 @@ def _make_mail_ready_lead(app, street, **kwargs):
     defaults = dict(
         lead_status='mailing_no_contact_made',
         recommended_action='mail_ready',
-        property_city='Chicago',
-        property_state='IL',
-        property_zip='60601',
+        recommended_contact_method='direct_mail',
+        mailing_address=street,
+        mailing_city='Chicago',
+        mailing_state='IL',
+        mailing_zip='60601',
         owner_user_id='test-user',
     )
     defaults.update(kwargs)
@@ -207,7 +305,7 @@ class TestEnqueueCandidates:
             assert data['added'] == 0
             assert data['queued_count'] == 0
 
-    def test_skips_recent_invalid_address_queue_items(self, client, app):
+    def test_revalidates_prior_invalid_address_queue_items(self, client, app):
         from app import db
         from app.models.mail_queue_item import MailQueueItem
 
@@ -223,7 +321,7 @@ class TestEnqueueCandidates:
 
             candidates = client.get('/api/queues/mail-candidates', headers=_AUTH_HEADERS)
             candidate_ids = [row['id'] for row in json.loads(candidates.data)['rows']]
-            assert suppressed.id not in candidate_ids
+            assert suppressed.id in candidate_ids
             assert eligible.id in candidate_ids
 
             response = client.post(
@@ -233,10 +331,42 @@ class TestEnqueueCandidates:
             )
             assert response.status_code == 201
             data = json.loads(response.data)
-            assert data['added'] == 1
+            assert data['added'] == 2
             queued_ids = [r['lead_id'] for r in data['results'] if r['status'] == 'queued']
             assert eligible.id in queued_ids
-            assert suppressed.id not in queued_ids
+            assert suppressed.id in queued_ids
+
+    def test_corrected_address_can_reenter_candidates_after_invalid_attempt(
+        self,
+        client,
+        app,
+    ):
+        from datetime import datetime, timedelta
+        from app import db
+
+        with app.app_context():
+            lead = _make_mail_ready_lead(app, '11 Corrected Invalid St')
+            invalid = MailQueueItem(
+                lead_id=lead.id,
+                user_id='test-user',
+                status='invalid_address',
+                validation_error='Incomplete owner mailing city/state/zip',
+            )
+            db.session.add(invalid)
+            db.session.commit()
+
+            lead.mailing_zip = '60699'
+            lead.updated_at = datetime.utcnow() + timedelta(seconds=1)
+            db.session.commit()
+
+            response = client.get(
+                '/api/queues/mail-candidates',
+                headers=_AUTH_HEADERS,
+            )
+            candidate_ids = [
+                row['id'] for row in json.loads(response.data)['rows']
+            ]
+            assert lead.id in candidate_ids
 
     def test_dry_run_preflight_does_not_write(self, client, app):
         with app.app_context():

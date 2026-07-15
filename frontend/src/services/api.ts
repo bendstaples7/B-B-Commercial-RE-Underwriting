@@ -1309,6 +1309,18 @@ export const commandCenterService = {
     api.get(`/leads/${leadId}/recommended-action`).then(r => r.data),
   updateStatus: (leadId: number, status: LeadStatus, reason?: string): Promise<unknown> =>
     api.patch(`/leads/${leadId}/status`, { status, reason: reason || undefined }).then(r => r.data),
+  moveToSkipTrace: (
+    leadId: number,
+    completeTaskId?: number,
+  ): Promise<{
+    lead_id: number
+    lead_status: 'skip_trace'
+    completed_task_id: number | null
+    skip_trace_task_id: number
+  }> =>
+    api.post(`/leads/${leadId}/move-to-skip-trace`, {
+      complete_task_id: completeTaskId ?? null,
+    }).then(r => r.data),
   doNotContact: (leadId: number): Promise<unknown> =>
     api.post(`/leads/${leadId}/do-not-contact`).then(r => r.data),
   park: (leadId: number, reactivationDate?: string): Promise<unknown> =>

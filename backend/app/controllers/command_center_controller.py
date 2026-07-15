@@ -31,7 +31,7 @@ from app.services.recommended_action_metadata import (
 from app.services.outreach_method_service import resolve_outreach_contact
 from app.services.lead_scoring_engine import LeadScoringEngine
 from app.services.mail_task_lifecycle_service import resolve_mail_queue_status
-from app.services.open_letter_contact_mapper import is_mailable_lead
+from app.services.open_letter_contact_mapper import is_owner_mailable_lead
 from app.services.scoring_rubric import display_most_recent_sale, resolve_sale_date_meta
 
 logger = logging.getLogger(__name__)
@@ -364,7 +364,10 @@ def get_command_center(lead_id: int):
     if HubSpotDealSyncService.auto_sync_lead_if_stale(lead_id):
         lead = Lead.query.get(lead_id)
 
-    if lead.recommended_action == 'add_contact_info' and is_mailable_lead(lead):
+    if (
+        lead.recommended_action == 'add_contact_info'
+        and is_owner_mailable_lead(lead)
+    ):
         from app.services.lead_refresh import refresh_lead_scoring
         refresh_lead_scoring(lead_id)
         lead = Lead.query.get(lead_id)
@@ -665,7 +668,7 @@ def get_command_center(lead_id: int):
         'most_recent_sale': lead.most_recent_sale,
         'most_recent_sale_display': display_most_recent_sale(lead),
         'sale_date_meta': resolve_sale_date_meta(lead),
-        'is_mailable': is_mailable_lead(lead),
+        'is_mailable': is_owner_mailable_lead(lead),
         'address_2': lead.address_2,
         'returned_addresses': lead.returned_addresses,
         # Research / workflow tracking
@@ -875,6 +878,44 @@ def update_status(lead_id: int):
         'recommended_action': lead.recommended_action,
         'lead_score': lead.lead_score,
     }), 200
+
+
+@command_center_bp.route('/<int:lead_id>/move-to-skip-trace', methods=['POST'])
+@handle_errors
+@require_auth
+def move_to_skip_trace(lead_id: int):
+    """Complete the current task and atomically hand the lead to skip trace."""
+    _lead, denied = _load_authorized_lead(lead_id)
+    if denied is not None:
+        return denied
+
+    data = request.get_json(silent=True) or {}
+    complete_task_id = data.get('complete_task_id')
+    if complete_task_id is not None:
+        try:
+            complete_task_id = int(complete_task_id)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'complete_task_id must be an integer'}), 400
+
+    from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+    result = SkipTraceEnqueue().move_to_skip_trace(
+        lead_id,
+        actor=getattr(g, 'user_id', 'anonymous'),
+        complete_task_id=complete_task_id,
+    )
+
+    try:
+        from app.services.hubspot_writeback_service import HubSpotWriteBackService
+        HubSpotWriteBackService().push_deal_stage_for_lead(lead_id, 'skip_trace')
+    except Exception as exc:
+        logger.warning(
+            'HubSpot stage push after skip-trace handoff failed for lead %s: %s',
+            lead_id,
+            exc,
+        )
+
+    return jsonify(result), 200
 
 
 @command_center_bp.route('/<int:lead_id>/tasks', methods=['POST'])

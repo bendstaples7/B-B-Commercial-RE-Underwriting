@@ -6,15 +6,15 @@ from datetime import datetime
 
 from app import db
 from app.exceptions import MailQueueError
-from app.models import Lead, MailQueueItem
+from app.models import Lead, MailEnqueueAttempt, MailQueueItem
 from app.models.lead_timeline_entry import LeadTimelineEntry
 from app.services.lead_timeline_service import LeadTimelineService
 from app.services.open_letter_config_service import OpenLetterConfigService
 from app.services.open_letter_contact_mapper import (
     persist_embedded_address_fields,
-    validate_lead_mail_address,
+    validate_owner_mailing_address,
 )
-from app.services.scoring_rubric import is_recently_sold
+from app.services.scoring_rubric import effective_acquisition_date, is_recently_sold
 from app.services.mail_task_lifecycle_service import (
     cancel_pending_mail_follow_up_tasks,
     complete_tasks_superseded_by_mail,
@@ -24,6 +24,8 @@ from app.services.mail_task_lifecycle_service import (
 from app.services.hubspot_task_completion_service import sync_pending_hubspot_completions
 
 logger = logging.getLogger(__name__)
+
+MAX_MAIL_ENQUEUE_LEADS = 1000
 
 
 class MailQueueService:
@@ -73,19 +75,111 @@ class MailQueueService:
             .all()
         )
 
-    def enqueue_leads(self, lead_ids: list[int], user_id: str) -> dict:
+    @staticmethod
+    def serialize_attempt(
+        attempt: MailEnqueueAttempt,
+        *,
+        include_results: bool = True,
+    ) -> dict:
+        payload = {
+            'id': attempt.id,
+            'source_queue': attempt.source_queue,
+            'requested_count': attempt.requested_count,
+            'added': attempt.added_count,
+            'skipped': attempt.skipped_count,
+            'invalid': attempt.invalid_count,
+            'created_at': attempt.created_at.isoformat() if attempt.created_at else None,
+        }
+        if include_results:
+            stored_results = [dict(item) for item in (attempt.results or [])]
+            lead_ids = [
+                item.get('lead_id')
+                for item in stored_results
+                if isinstance(item.get('lead_id'), int)
+            ]
+            leads = (
+                Lead.query
+                .filter(
+                    Lead.id.in_(lead_ids),
+                    Lead.owner_user_id == attempt.user_id,
+                )
+                .all()
+                if lead_ids
+                else []
+            )
+            leads_by_id = {lead.id: lead for lead in leads}
+            for item in stored_results:
+                lead = leads_by_id.get(item.get('lead_id'))
+                if lead is None:
+                    continue
+                item.update({
+                    'property_street': lead.property_street,
+                    'owner_name': ' '.join(filter(None, (
+                        lead.owner_first_name,
+                        lead.owner_last_name,
+                    ))) or None,
+                })
+            payload['results'] = stored_results
+        return payload
+
+    def list_attempts(self, user_id: str, *, limit: int = 20) -> list[dict]:
+        attempts = (
+            MailEnqueueAttempt.query
+            .filter_by(user_id=user_id)
+            .order_by(
+                MailEnqueueAttempt.created_at.desc(),
+                MailEnqueueAttempt.id.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        return [
+            self.serialize_attempt(attempt, include_results=False)
+            for attempt in attempts
+        ]
+
+    def get_attempt(self, attempt_id: int, user_id: str) -> dict:
+        attempt = MailEnqueueAttempt.query.filter_by(
+            id=attempt_id,
+            user_id=user_id,
+        ).first()
+        if attempt is None:
+            raise MailQueueError('Mail enqueue attempt not found', status_code=404)
+        return self.serialize_attempt(attempt)
+
+    def enqueue_leads(
+        self,
+        lead_ids: list[int],
+        user_id: str,
+        *,
+        source_queue: str | None = None,
+    ) -> dict:
+        lead_ids = list(dict.fromkeys(lead_ids))
         if not lead_ids:
             raise MailQueueError('lead_ids is required')
+        if len(lead_ids) > MAX_MAIL_ENQUEUE_LEADS:
+            raise MailQueueError(
+                f'No more than {MAX_MAIL_ENQUEUE_LEADS} leads may be queued at once',
+                status_code=400,
+            )
+        normalized_source_queue = (source_queue or '').strip() or None
+        if normalized_source_queue and len(normalized_source_queue) > 100:
+            raise MailQueueError(
+                'source_queue must be 100 characters or fewer',
+                status_code=400,
+            )
 
         added = 0
         skipped = 0
         invalid = 0
         results = []
         queued_lead_ids: list[int] = []
+        rejected_lead_ids: list[int] = []
         hubspot_sync_ids: list[str] = []
 
         for lead_id in lead_ids:
             outcome: dict | None = None
+            lead: Lead | None = None
             try:
                 with db.session.begin_nested():
                     lead = Lead.query.get(lead_id)
@@ -94,14 +188,19 @@ class MailQueueService:
                     elif lead.owner_user_id != user_id:
                         outcome = {'lead_id': lead_id, 'status': 'not_authorized'}
                     elif is_recently_sold(lead):
-                        outcome = {'lead_id': lead_id, 'status': 'recently_sold'}
+                        sale_date = effective_acquisition_date(lead)
+                        outcome = {
+                            'lead_id': lead_id,
+                            'status': 'recently_sold',
+                            'sale_date': sale_date.isoformat() if sale_date else None,
+                        }
                     elif MailQueueItem.query.filter_by(
                         lead_id=lead_id, status='queued', user_id=user_id,
                     ).first():
                         outcome = {'lead_id': lead_id, 'status': 'already_queued'}
                     else:
                         persist_embedded_address_fields(lead)
-                        error = validate_lead_mail_address(lead)
+                        error = validate_owner_mailing_address(lead)
                         if error:
                             item = MailQueueItem(
                                 lead_id=lead_id,
@@ -117,9 +216,25 @@ class MailQueueService:
                                 'error': error,
                             }
                         else:
-                            item = MailQueueItem(
-                                lead_id=lead_id, user_id=user_id, status='queued',
+                            item = (
+                                MailQueueItem.query
+                                .filter_by(
+                                    lead_id=lead_id,
+                                    user_id=user_id,
+                                    status='invalid_address',
+                                )
+                                .order_by(MailQueueItem.created_at.desc())
+                                .first()
                             )
+                            if item is None:
+                                item = MailQueueItem(
+                                    lead_id=lead_id,
+                                    user_id=user_id,
+                                    status='queued',
+                                )
+                            else:
+                                item.status = 'queued'
+                                item.validation_error = None
                             db.session.add(item)
                             db.session.flush()
                             # Canonical readiness: recommended_action == mail_ready +
@@ -149,6 +264,14 @@ class MailQueueService:
                 # Savepoint released successfully — record a single outcome.
                 if outcome is None:
                     continue
+                if lead is not None and lead.owner_user_id == user_id:
+                    outcome.update({
+                        'property_street': lead.property_street,
+                        'owner_name': ' '.join(filter(None, (
+                            lead.owner_first_name,
+                            lead.owner_last_name,
+                        ))) or None,
+                    })
                 status = outcome['status']
                 if status == 'queued':
                     added += 1
@@ -156,8 +279,11 @@ class MailQueueService:
                     hubspot_sync_ids.extend(outcome.get('hubspot_sync') or [])
                 elif status == 'invalid_address':
                     invalid += 1
+                    rejected_lead_ids.append(lead_id)
                 else:
                     skipped += 1
+                    if status == 'recently_sold':
+                        rejected_lead_ids.append(lead_id)
                 results.append(outcome)
             except Exception as exc:
                 # Soft-fail: one bad lead must never 500 the whole batch.
@@ -169,10 +295,44 @@ class MailQueueService:
                     'error': 'Could not queue lead',
                 })
 
+        audit_result_fields = {
+            'lead_id',
+            'status',
+            'error',
+            'sale_date',
+        }
+        audit_results = [
+            {
+                key: value
+                for key, value in outcome.items()
+                if key in audit_result_fields
+            }
+            for outcome in results
+        ]
+        attempt = MailEnqueueAttempt(
+            user_id=user_id,
+            source_queue=normalized_source_queue,
+            requested_count=len(lead_ids),
+            added_count=added,
+            skipped_count=skipped,
+            invalid_count=invalid,
+            results=audit_results,
+        )
+        db.session.add(attempt)
         db.session.commit()
         sync_pending_hubspot_completions(hubspot_sync_ids)
         refresh_leads_after_mail_task_changes(queued_lead_ids)
-        return {'added': added, 'skipped': skipped, 'invalid': invalid, 'results': results}
+        if rejected_lead_ids:
+            from app.services.lead_refresh import refresh_lead_scoring
+            for rejected_lead_id in rejected_lead_ids:
+                refresh_lead_scoring(rejected_lead_id)
+        return {
+            'attempt_id': attempt.id,
+            'added': added,
+            'skipped': skipped,
+            'invalid': invalid,
+            'results': results,
+        }
 
     def preview_enqueue_candidates(self, user_id: str, *, limit: int | None = None) -> dict:
         """Dry-run validation for recommended mail candidates (no DB writes)."""
@@ -199,7 +359,13 @@ class MailQueueService:
                 continue
             if is_recently_sold(lead):
                 would_skip += 1
-                results.append({'lead_id': lead_id, 'status': 'recently_sold'})
+                sale_date = effective_acquisition_date(lead)
+                results.append({
+                    'lead_id': lead_id,
+                    'status': 'recently_sold',
+                    'sale_date': sale_date.isoformat() if sale_date else None,
+                    'property_street': lead.property_street,
+                })
                 continue
             existing = MailQueueItem.query.filter_by(
                 lead_id=lead_id, status='queued', user_id=user_id,
@@ -209,7 +375,7 @@ class MailQueueService:
                 results.append({'lead_id': lead_id, 'status': 'already_queued'})
                 continue
 
-            error = validate_lead_mail_address(lead)
+            error = validate_owner_mailing_address(lead)
             if error:
                 would_fail += 1
                 results.append({

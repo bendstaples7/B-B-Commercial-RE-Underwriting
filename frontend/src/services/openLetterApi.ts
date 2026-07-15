@@ -51,22 +51,42 @@ export interface EnqueueLeadResult {
   lead_id: number
   status: string
   error?: string
+  owner_name?: string | null
+  property_street?: string | null
+  sale_date?: string | null
 }
 
-export type EnqueueResult = MailQueueSummary & {
+export type EnqueueResult = Omit<MailQueueSummary, 'items'> & {
+  attempt_id?: number
   added: number
   skipped: number
   invalid: number
   results?: EnqueueLeadResult[]
+  items?: MailQueueItem[]
 }
 
-export type EnqueuePreviewResult = MailQueueSummary & {
+export interface MailEnqueueAttemptSummary {
+  id: number
+  requested_count: number
+  added: number
+  skipped: number
+  invalid: number
+  source_queue?: string | null
+  created_at?: string | null
+}
+
+export interface MailEnqueueAttempt extends MailEnqueueAttemptSummary {
+  results: EnqueueLeadResult[]
+}
+
+export type EnqueuePreviewResult = Omit<MailQueueSummary, 'items'> & {
   dry_run: true
   would_add: number
   would_skip: number
   would_fail: number
   candidate_count: number
   results?: EnqueueLeadResult[]
+  items?: MailQueueItem[]
 }
 
 export interface MailCampaign {
@@ -110,8 +130,17 @@ export const openLetterService = {
   getQueue: (): Promise<MailQueueSummary> =>
     api.get('/mail-queue/').then((r) => r.data),
 
-  enqueue: (leadIds: number[]): Promise<EnqueueResult> =>
-    api.post('/mail-queue/', { lead_ids: leadIds }).then((r) => r.data),
+  enqueue: (leadIds: number[], sourceQueue?: string): Promise<EnqueueResult> =>
+    api.post('/mail-queue/', {
+      lead_ids: leadIds,
+      ...(sourceQueue ? { source_queue: sourceQueue } : {}),
+    }).then((r) => r.data),
+
+  listEnqueueAttempts: (limit = 20): Promise<{ attempts: MailEnqueueAttemptSummary[] }> =>
+    api.get('/mail-queue/attempts', { params: { limit } }).then((r) => r.data),
+
+  getEnqueueAttempt: (attemptId: number): Promise<MailEnqueueAttempt> =>
+    api.get(`/mail-queue/attempts/${attemptId}`).then((r) => r.data),
 
   enqueueCandidates: (limit?: number): Promise<EnqueueResult> =>
     api.post('/mail-queue/enqueue-candidates', { limit: limit ?? null }).then((r) => r.data),

@@ -10,7 +10,11 @@ from app.exceptions import ExternalServiceError, MailQueueError
 from app.models import Lead, MailCampaign, MailQueueItem, MarketingListMember
 from app.services.lead_timeline_service import LeadTimelineService
 from app.services.open_letter_config_service import OpenLetterConfigService
-from app.services.open_letter_contact_mapper import lead_to_olc_contact
+from app.services.open_letter_contact_mapper import (
+    lead_to_owner_olc_contact,
+    persist_embedded_address_fields,
+    validate_owner_mailing_address,
+)
 from app.services.mail_task_lifecycle_service import (
     cancel_pending_mail_follow_up_tasks,
     complete_tasks_superseded_by_mail,
@@ -86,19 +90,33 @@ class MailCampaignService:
 
         contacts = []
         lead_by_item: dict[int, Lead] = {}
+        invalid_lead_ids: list[int] = []
         for item in items:
             lead = Lead.query.get(item.lead_id)
             if lead is None:
                 item.status = 'failed'
                 item.validation_error = 'Lead not found'
                 continue
-            contacts.append(lead_to_olc_contact(lead, user_id=item.user_id))
+            persist_embedded_address_fields(lead)
+            validation_error = validate_owner_mailing_address(lead)
+            if validation_error:
+                item.status = 'invalid_address'
+                item.validation_error = validation_error
+                cancel_pending_mail_follow_up_tasks(
+                    lead.id,
+                    actor=campaign.created_by,
+                    reason='owner_mailing_address_invalid',
+                )
+                invalid_lead_ids.append(lead.id)
+                continue
+            contacts.append(lead_to_owner_olc_contact(lead, user_id=item.user_id))
             lead_by_item[item.id] = lead
 
         if not contacts:
             campaign.status = 'failed'
             campaign.error_message = 'No valid contacts to send'
             db.session.commit()
+            refresh_leads_after_mail_task_changes(invalid_lead_ids)
             return campaign
 
         campaign.lead_count = len(contacts)
@@ -131,7 +149,7 @@ class MailCampaignService:
                         )
                         failed_lead_ids.append(lead.id)
             db.session.commit()
-            refresh_leads_after_mail_task_changes(failed_lead_ids)
+            refresh_leads_after_mail_task_changes(failed_lead_ids + invalid_lead_ids)
             raise
 
         data = result.get('data') or {}
@@ -202,7 +220,7 @@ class MailCampaignService:
 
         db.session.commit()
         sync_pending_hubspot_completions(hubspot_sync_ids)
-        refresh_leads_after_mail_task_changes(sent_lead_ids)
+        refresh_leads_after_mail_task_changes(sent_lead_ids + invalid_lead_ids)
         return campaign
 
     def sync_campaign_analytics(self, campaign_id: int) -> MailCampaign:

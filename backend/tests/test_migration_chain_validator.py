@@ -115,8 +115,8 @@ class TestRealChainValidator:
         """The single head must be the latest migration revision."""
         from app.migration_utils import assert_single_head_and_root
         result = assert_single_head_and_root()
-        assert result["head_revisions"] == ["s9t0u1v2w3x4"], (
-            f"Expected head revision 's9t0u1v2w3x4', got {result['head_revisions']}"
+        assert result["head_revisions"] == ["t9u0v1w2x3y4"], (
+            f"Expected head revision 't9u0v1w2x3y4', got {result['head_revisions']}"
         )
 
     def test_real_chain_result_has_required_keys(self):
@@ -265,8 +265,8 @@ class TestCheckMigrationChainScript:
         assert "000000000000" in output, (
             f"Expected root '000000000000' in script output, got: {output!r}"
         )
-        assert "s9t0u1v2w3x4" in output, (
-            f"Expected head 's9t0u1v2w3x4' in script output, got: {output!r}"
+        assert "t9u0v1w2x3y4" in output, (
+            f"Expected head 't9u0v1w2x3y4' in script output, got: {output!r}"
         )
 
 

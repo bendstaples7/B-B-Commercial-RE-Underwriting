@@ -112,7 +112,7 @@ describe('RecommendedActionPanel', () => {
         />
       )
 
-      expect(screen.getByTestId('ra-action-btn-skip_trace')).toBeInTheDocument()
+      expect(screen.getByTestId('ra-universal-btn-move_to_skip_trace')).toBeInTheDocument()
       expect(screen.getByTestId('ra-action-btn-add_contact_info')).toBeInTheDocument()
       expect(screen.getByTestId('ra-action-btn-research_property')).toBeInTheDocument()
     })
@@ -268,6 +268,72 @@ describe('RecommendedActionPanel', () => {
       )
 
       expect(screen.getByText('No recommended action at this time.')).toBeInTheDocument()
+    })
+
+    it('shows the next task instead of a blank nurture heading', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('nurture', 'Nurture')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[{ ...makeTask(1), title: 'Manually skip trace returned letter' }]}
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('ra-label')).toHaveTextContent('Follow up on next task')
+      expect(screen.getByTestId('ra-next-task-title')).toHaveTextContent(
+        'Manually skip trace returned letter',
+      )
+    })
+
+    it('shows next task fallback when no recommended action exists', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={null}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[makeTask(2)]}
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByText('Follow up on next task')).toBeInTheDocument()
+      expect(screen.getByText('Task 2')).toBeInTheDocument()
+    })
+
+    it('offers Move to Skip Trace as a standardized quick action', async () => {
+      const onAction = vi.fn().mockResolvedValue(undefined)
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('follow_up_now')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[makeTask(3)]}
+          onAction={onAction}
+        />,
+      )
+
+      await user.click(screen.getByTestId('ra-universal-btn-move_to_skip_trace'))
+      expect(onAction).toHaveBeenCalledWith('move_to_skip_trace')
+    })
+
+    it.each([
+      'deprioritize',
+      'deal_won',
+      'deal_lost',
+      'suppressed',
+      'do_not_contact',
+    ] as const)('hides Move to Skip Trace for terminal status %s', (leadStatus) => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('nurture')}
+          leadStatus={leadStatus}
+          openTasks={[]}
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(
+        screen.queryByTestId('ra-universal-btn-move_to_skip_trace'),
+      ).not.toBeInTheDocument()
     })
   })
 
@@ -615,7 +681,7 @@ describe('RecommendedActionPanel', () => {
       expect(screen.queryByTestId('ra-action-btn-add_to_mail_batch')).not.toBeInTheDocument()
     })
 
-    it('shows Add to Mail Queue for mail_ready even when isMailable is false', () => {
+    it('hides Add to Mail Queue for stale mail_ready when owner mail is invalid', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('mail_ready', 'Ready to Mail')}
@@ -625,10 +691,10 @@ describe('RecommendedActionPanel', () => {
         />,
       )
 
-      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeInTheDocument()
+      expect(screen.queryByTestId('ra-universal-btn-add_to_mail_batch')).not.toBeInTheDocument()
     })
 
-    it('shows Add to Mail Queue when contact method is direct_mail even if not isMailable', () => {
+    it('hides Add to Mail Queue for stale direct_mail method when owner mail is invalid', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={{
@@ -641,9 +707,7 @@ describe('RecommendedActionPanel', () => {
         />,
       )
 
-      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeInTheDocument()
-      const buttons = screen.getByTestId('ra-universal-actions').querySelectorAll('button')
-      expect(buttons[0]).toHaveAttribute('data-testid', 'ra-universal-btn-add_to_mail_batch')
+      expect(screen.queryByTestId('ra-universal-btn-add_to_mail_batch')).not.toBeInTheDocument()
     })
 
     it('promotes Add to Mail Queue first when RA is mail_ready', () => {

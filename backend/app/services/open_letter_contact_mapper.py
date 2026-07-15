@@ -50,6 +50,33 @@ def is_mailable_lead(lead: Lead) -> bool:
     return validate_lead_mail_address(lead) is None
 
 
+def owner_mailing_address(lead: Lead) -> tuple[str, str, str, str]:
+    """Return the parsed owner mailing address without property fallback."""
+    street = _clean(getattr(lead, 'mailing_address', None))
+    city = _clean(getattr(lead, 'mailing_city', None))
+    state = _clean(getattr(lead, 'mailing_state', None))
+    zip_code = _clean(getattr(lead, 'mailing_zip', None))
+    return _merge_parsed_fields(street, city, state, zip_code, street)
+
+
+def validate_owner_mailing_address(lead: Lead) -> str | None:
+    """Return an owner-mailing validation error, or None when complete."""
+    returned = _clean(getattr(lead, 'returned_addresses', None))
+    if returned:
+        return 'Owner mailing address was previously returned'
+    street, city, state, zip_code = owner_mailing_address(lead)
+    if not street:
+        return 'No owner mailing street address'
+    if not city or not state or not zip_code:
+        return 'Incomplete owner mailing city/state/zip'
+    return None
+
+
+def is_owner_mailable_lead(lead: Lead) -> bool:
+    """True only when the owner mailing address is complete."""
+    return validate_owner_mailing_address(lead) is None
+
+
 # Identity / dedup keys — never mutate during mail address backfill.
 _IDENTITY_FIELDS = ('property_street', 'mailing_address', 'normalized_street')
 
@@ -184,3 +211,20 @@ def lead_to_olc_contact(lead: Lead, *, user_id: str | None = None) -> dict[str, 
         'campaign_phone': phone,
         'meta_data': meta,
     }
+
+
+def lead_to_owner_olc_contact(
+    lead: Lead,
+    *,
+    user_id: str | None = None,
+) -> dict[str, Any]:
+    """Build an OLC payload using only the owner mailing destination."""
+    contact = lead_to_olc_contact(lead, user_id=user_id)
+    street, city, state, zip_code = owner_mailing_address(lead)
+    contact.update({
+        'address1': street,
+        'city': city,
+        'state': state,
+        'zip': zip_code,
+    })
+    return contact

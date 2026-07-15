@@ -519,6 +519,11 @@ class TestScoringMailGate:
         lead.follow_up_overdue = False
         lead.is_warm = False
         lead.property_street = '1 Main'
+        lead.mailing_address = '1 Main'
+        lead.mailing_city = 'Chicago'
+        lead.mailing_state = 'IL'
+        lead.mailing_zip = '60601'
+        lead.returned_addresses = None
         lead.unanswered_call_count = 0
 
         assert LeadScoringEngine.compute_recommended_action(lead) == 'nurture'

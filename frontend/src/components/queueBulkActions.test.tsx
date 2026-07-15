@@ -72,7 +72,10 @@ describe('queueBulkActions', () => {
       onEnqueueResult,
     })
 
-    expect(openLetterService.enqueue).toHaveBeenCalledWith([1, 2, 3])
+    expect(openLetterService.enqueue).toHaveBeenCalledWith(
+      [1, 2, 3],
+      'queue-todays-action',
+    )
     expect(result.successes).toBe(2)
     expect(result.failures).toBe(1)
     expect(result.message).toContain('Added 2')
@@ -123,7 +126,10 @@ describe('queueBulkActions', () => {
     })
     const action = createAddToMailBatchBulkAction(baseCtx())
     const result = await action.onClick([9, 10])
-    expect(openLetterService.enqueue).toHaveBeenCalledWith([9, 10])
+    expect(openLetterService.enqueue).toHaveBeenCalledWith(
+      [9, 10],
+      'queue-todays-action',
+    )
     expect(result.successes).toBe(1)
   })
 

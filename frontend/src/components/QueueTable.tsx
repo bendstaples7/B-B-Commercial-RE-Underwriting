@@ -35,6 +35,7 @@ import { buildLeadUrl } from '@/utils/queueLogNavigation'
 import { LeadStatusChip } from './LeadStatusChip'
 import { OutreachContactCallout } from './OutreachContactCallout'
 import { outreachDisplayLabel } from '@/constants/scoringRecommendedActions'
+import { MailEnqueueResultDialog } from './MailEnqueueResultDialog'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -145,6 +146,9 @@ export function QueueTable({
   const [rowStates, setRowStates] = useState<Record<number, { pending: boolean; error: string | null }>>({})
   // Bulk action result message
   const [bulkMessage, setBulkMessage] = useState<string | null>(null)
+  const [bulkMailResult, setBulkMailResult] =
+    useState<NonNullable<BulkActionResult['mail_enqueue']> | null>(null)
+  const [mailResultOpen, setMailResultOpen] = useState(false)
   const [isBulkProcessing, setIsBulkProcessing] = useState(false)
   const navigate = useNavigate()
   const theme = useTheme()
@@ -218,10 +222,18 @@ export function QueueTable({
   const handleBulkAction = async (action: BulkAction) => {
     if (disabled || isBulkProcessing) return
     setBulkMessage(null)
+    setBulkMailResult(null)
     setIsBulkProcessing(true)
     try {
       const result = await action.onClick(selectedIds)
-      if (result.failures > 0) {
+      if (result.mail_enqueue) {
+        setBulkMailResult(result.mail_enqueue)
+        setBulkMessage(
+          `${result.mail_enqueue.added} staged · ${
+            result.mail_enqueue.invalid + result.mail_enqueue.skipped
+          } need attention`,
+        )
+      } else if (result.failures > 0) {
         setBulkMessage(
           result.message ?? `${result.successes} succeeded, ${result.failures} failed`,
         )
@@ -252,6 +264,15 @@ export function QueueTable({
   // ---------------------------------------------------------------------------
 
   const hasSelection = onSelectionChange !== undefined
+  const bulkMessageSeverity = bulkMailResult
+    ? (
+        bulkMailResult.invalid + bulkMailResult.skipped === 0
+          ? 'success'
+          : bulkMailResult.added === 0
+            ? 'error'
+            : 'warning'
+      )
+    : 'warning'
   // Always show the actions column — at minimum the built-in View button is shown
   const hasActions = true
 
@@ -293,14 +314,42 @@ export function QueueTable({
       {/* Bulk action result message */}
       {bulkMessage && (
         <Alert
-          severity="warning"
+          severity={bulkMessageSeverity}
           sx={{ mb: 1 }}
           onClose={() => setBulkMessage(null)}
           data-testid="bulk-action-message"
         >
-          {bulkMessage}
+          <Stack
+            direction={{ xs: 'column', sm: 'row' }}
+            spacing={1}
+            alignItems={{ xs: 'flex-start', sm: 'center' }}
+          >
+            <Typography variant="body2">{bulkMessage}</Typography>
+            {bulkMailResult && (
+              <>
+                <Button size="small" onClick={() => setMailResultOpen(true)}>
+                  Review results
+                </Button>
+                {bulkMailResult.added > 0 && (
+                  <Button
+                    size="small"
+                    component={RouterLink}
+                    to="/queues/ready-to-mail"
+                  >
+                    View staged batch
+                  </Button>
+                )}
+              </>
+            )}
+          </Stack>
         </Alert>
       )}
+
+      <MailEnqueueResultDialog
+        open={mailResultOpen}
+        onClose={() => setMailResultOpen(false)}
+        result={bulkMailResult}
+      />
 
       {/* Empty state */}
       {rows.length === 0 ? (
@@ -430,6 +479,15 @@ export function QueueTable({
                       </Typography>
                     )}
                   </Stack>
+                  {row.due_task_title && (
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      data-testid={`row-due-task-mobile-${row.id}`}
+                    >
+                      Due task: {row.due_task_title}
+                    </Typography>
+                  )}
                   {row.recommended_action && (
                     <OutreachContactCallout contact={row.outreach_contact} compact />
                   )}
@@ -628,6 +686,16 @@ export function QueueTable({
                               ?? outreachDisplayLabel(row.recommended_action, row.recommended_contact_method)}
                           </Typography>
                           <OutreachContactCallout contact={row.outreach_contact} compact />
+                          {row.due_task_title && (
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              display="block"
+                              data-testid={`row-due-task-${row.id}`}
+                            >
+                              Due task: {row.due_task_title}
+                            </Typography>
+                          )}
                         </Box>
                       ) : (
                         '—'

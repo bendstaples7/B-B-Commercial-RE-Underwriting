@@ -10,7 +10,10 @@ from app.controllers.mail_api_errors import handle_mail_api_errors as handle_err
 from app.controllers.request_parsing import parse_bool, parse_positive_int
 from app.models import MailQueueItem
 from app.services.mail_campaign_service import MailCampaignService
-from app.services.mail_queue_service import MailQueueService
+from app.services.mail_queue_service import (
+    MAX_MAIL_ENQUEUE_LEADS,
+    MailQueueService,
+)
 from app.services.scoring_rubric import format_last_sale_at
 
 logger = logging.getLogger(__name__)
@@ -77,11 +80,29 @@ def enqueue():
     lead_ids = data.get('lead_ids') or []
     if not isinstance(lead_ids, list):
         return jsonify({'error': 'lead_ids must be a list'}), 400
+    if len(lead_ids) > MAX_MAIL_ENQUEUE_LEADS:
+        return jsonify({
+            'error': (
+                f'No more than {MAX_MAIL_ENQUEUE_LEADS} leads '
+                'may be queued at once'
+            ),
+        }), 400
     try:
-        parsed_ids = [int(x) for x in lead_ids]
+        parsed_ids = list(dict.fromkeys(int(x) for x in lead_ids))
     except (TypeError, ValueError):
         return jsonify({'error': 'lead_ids must contain integers'}), 400
-    result = _queue_service.enqueue_leads(parsed_ids, g.user_id)
+    source_queue = data.get('source_queue')
+    if source_queue is not None and not isinstance(source_queue, str):
+        return jsonify({'error': 'source_queue must be a string'}), 400
+    if isinstance(source_queue, str):
+        source_queue = source_queue.strip() or None
+        if source_queue and len(source_queue) > 100:
+            return jsonify({'error': 'source_queue must be 100 characters or fewer'}), 400
+    result = _queue_service.enqueue_leads(
+        parsed_ids,
+        g.user_id,
+        source_queue=source_queue,
+    )
     summary = _queue_service.get_summary(g.user_id)
     return jsonify({**result, **summary}), 201
 
@@ -100,6 +121,29 @@ def enqueue_candidates():
     dry_run = parse_bool(data.get('dry_run'))
     result = _queue_service.enqueue_candidates(g.user_id, limit=limit, dry_run=dry_run)
     return jsonify(result), 200 if dry_run else 201
+
+
+@mail_queue_bp.route('/attempts', methods=['GET'])
+@require_auth
+@handle_errors
+def list_enqueue_attempts():
+    try:
+        limit = parse_positive_int(
+            request.args.get('limit'),
+            default=20,
+            maximum=100,
+            field_name='limit',
+        )
+    except ValueError as exc:
+        return jsonify({'error': 'Invalid request', 'message': str(exc)}), 400
+    return jsonify({'attempts': _queue_service.list_attempts(g.user_id, limit=limit)}), 200
+
+
+@mail_queue_bp.route('/attempts/<int:attempt_id>', methods=['GET'])
+@require_auth
+@handle_errors
+def get_enqueue_attempt(attempt_id: int):
+    return jsonify(_queue_service.get_attempt(attempt_id, g.user_id)), 200
 
 
 @mail_queue_bp.route('/<int:item_id>', methods=['DELETE'])
