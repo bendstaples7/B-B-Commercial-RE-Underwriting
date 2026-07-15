@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { PropertySidebar } from '@/components/lead-detail/PropertySidebar'
 import type { CommandCenterPayload } from '@/types'
@@ -69,7 +69,7 @@ describe('PropertySidebar phone confidence', () => {
     expect(screen.queryByText('(630) 999-0000')).not.toBeInTheDocument()
   })
 
-  it('lists multiple phones under a single Phone label', () => {
+  it('collapses lower-confidence phones when a high-confidence phone exists', () => {
     renderSidebar(
       makePayload({
         contacts: [
@@ -93,8 +93,37 @@ describe('PropertySidebar phone confidence', () => {
     const phonesBlock = screen.getByTestId('sidebar-phones')
     expect(phonesBlock).toHaveTextContent('Phone')
     expect(phonesBlock.querySelectorAll('[data-testid^="phone-confidence-"]')).toHaveLength(3)
+    const summary = screen.getByRole('button', { name: 'Other phone numbers (2)' })
+    expect(summary).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(summary)
+    expect(summary).toHaveAttribute('aria-expanded', 'true')
     // Label appears once for the group, not once per number
     expect(phonesBlock.textContent?.match(/\bPhone\b/g)).toHaveLength(1)
+  })
+
+  it('keeps every phone visible when none are high confidence', () => {
+    renderSidebar(
+      makePayload({
+        contacts: [
+          {
+            id: 10,
+            first_name: 'Bob',
+            last_name: 'Weinstein',
+            role: 'owner',
+            is_primary: true,
+            phones: [
+              { id: 2, value: '(206) 504-9119', confidence_score: 50 },
+              { id: 3, value: '(206) 719-9119', confidence_score: 10 },
+            ],
+            emails: [],
+          },
+        ],
+      }),
+    )
+
+    expect(screen.queryByRole('button', { name: /Other phone numbers/i })).not.toBeInTheDocument()
+    expect(screen.getByTestId('phone-confidence-(206) 504-9119')).toBeVisible()
+    expect(screen.getByTestId('phone-confidence-(206) 719-9119')).toBeVisible()
   })
 
   it('labels flat owner name as Owner when contacts are empty', () => {

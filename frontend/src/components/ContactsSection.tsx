@@ -37,7 +37,7 @@ import {
   personIdentityKey,
   personIdentityKeyFromFullName,
 } from '@/utils/propertyContacts'
-import { PhoneRow } from '@/components/PhoneRow'
+import { PhoneList } from '@/components/PhoneRow'
 import type {
   CommandCenterPayload,
   ContactRole,
@@ -718,9 +718,9 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
                               : ''}
                           </Typography>
                         )}
-                        {row.contact?.phones?.map((phone) => (
-                          <PhoneRow key={phone.id} phone={phone} showLabel dense={false} />
-                        ))}
+                        {row.contact?.phones?.length ? (
+                          <PhoneList phones={row.contact.phones} showLabel dense={false} />
+                        ) : null}
                         {row.contact?.emails?.map((email) => (
                           <Typography
                             key={email.id}
@@ -847,9 +847,9 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
                             />
                           )}
                         </Box>
-                        {contact.phones?.map((phone) => (
-                          <PhoneRow key={phone.id} phone={phone} showLabel dense={false} />
-                        ))}
+                        {contact.phones?.length ? (
+                          <PhoneList phones={contact.phones} showLabel dense={false} />
+                        ) : null}
                         {contact.emails?.map((email) => (
                           <Typography key={email.id} variant="body2" color="text.secondary">
                             {email.value}

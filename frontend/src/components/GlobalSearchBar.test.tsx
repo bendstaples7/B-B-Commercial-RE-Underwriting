@@ -1,10 +1,11 @@
 /**
  * Component tests for GlobalSearchBar — navigates to full search results page.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { ThemeProvider, createTheme } from '@mui/material'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import GlobalSearchBar from './GlobalSearchBar'
 
 const mockNavigate = vi.fn()
@@ -17,13 +18,24 @@ vi.mock('react-router-dom', async (importOriginal) => {
   }
 })
 
+vi.mock('@/services/api', () => ({
+  searchService: {
+    search: vi.fn(),
+  },
+}))
+
+import { searchService } from '@/services/api'
+
 const theme = createTheme()
 
 function TestWrapper({ children, initialEntries = ['/kanban'] }: { children: React.ReactNode; initialEntries?: string[] }) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return (
-    <MemoryRouter initialEntries={initialEntries}>
-      <ThemeProvider theme={theme}>{children}</ThemeProvider>
-    </MemoryRouter>
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={initialEntries}>
+        <ThemeProvider theme={theme}>{children}</ThemeProvider>
+      </MemoryRouter>
+    </QueryClientProvider>
   )
 }
 
@@ -56,6 +68,10 @@ function setInputValue(input: HTMLInputElement, value: string) {
 beforeEach(() => {
   vi.clearAllMocks()
   mockDesktop()
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('GlobalSearchBar', () => {
@@ -99,8 +115,65 @@ describe('GlobalSearchBar', () => {
     })
   })
 
-  it('does not render a results dropdown', () => {
-    render(<GlobalSearchBar />, { wrapper: TestWrapper })
-    expect(screen.queryByTestId('search-dropdown')).not.toBeInTheDocument()
+  it('shows matching results under the search bar while typing', async () => {
+    vi.mocked(searchService.search).mockResolvedValue({
+      q: 'jutkins',
+      page: 1,
+      per_page: 10,
+      leads_total: 1,
+      sessions_total: 0,
+      leads: [
+        {
+          id: 11129,
+          type: 'lead',
+          label: 'Ronald Jutkins · 1915 W Schiller',
+          nav_path: '/leads/11129',
+          match_context: { type: 'name', value: 'Ronald Jutkins' },
+        },
+      ],
+      sessions: [],
+    })
+    const { container } = render(<GlobalSearchBar />, { wrapper: TestWrapper })
+    const input = getSearchInput(container)
+    fireEvent.focus(input)
+    setInputValue(input, 'jutkins')
+
+    await waitFor(() => {
+      expect(searchService.search).toHaveBeenCalledWith(
+        expect.objectContaining({ q: 'jutkins', page: 1, per_page: 10 }),
+      )
+    })
+    expect(screen.getByTestId('search-dropdown')).toBeInTheDocument()
+    expect(
+      await screen.findByText('Ronald Jutkins · 1915 W Schiller'),
+    ).toBeInTheDocument()
+  })
+
+  it('navigates directly to a keyboard-selected result', async () => {
+    vi.mocked(searchService.search).mockResolvedValue({
+      q: 'jutkins',
+      page: 1,
+      per_page: 10,
+      leads_total: 1,
+      sessions_total: 0,
+      leads: [
+        {
+          id: 11129,
+          type: 'lead',
+          label: 'Ronald Jutkins',
+          nav_path: '/leads/11129',
+        },
+      ],
+      sessions: [],
+    })
+    const { container } = render(<GlobalSearchBar />, { wrapper: TestWrapper })
+    const input = getSearchInput(container)
+    fireEvent.focus(input)
+    setInputValue(input, 'jutkins')
+    await screen.findByText('Ronald Jutkins')
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(mockNavigate).toHaveBeenCalledWith('/leads/11129')
   })
 })

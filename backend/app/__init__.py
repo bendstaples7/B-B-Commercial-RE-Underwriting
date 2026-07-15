@@ -501,6 +501,21 @@ def create_app(config_name='development'):
         with app.app_context():
             _assert_not_superuser(app)
 
+    # Every normal process (web, worker, or beat) must fail before serving work
+    # if an ORM table/view or column is absent. Migration commands are exempt so
+    # they can repair the schema, and SQLite-backed unit tests remain lightweight.
+    if effective_env != 'testing' and not _is_migration_context():
+        from app.services.schema_contract_service import (
+            assert_model_schema_matches_database,
+        )
+
+        with app.app_context():
+            try:
+                assert_model_schema_matches_database(db.engine, db.metadata)
+            except RuntimeError as exc:
+                app.logger.error("*** SCHEMA CONTRACT ERROR: %s", exc)
+                raise
+
     # Warn about missing env vars that will cause mid-workflow failures
     if effective_env == 'development':
         _warn_missing_optional_keys(app)
