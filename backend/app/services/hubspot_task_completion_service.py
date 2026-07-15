@@ -325,10 +325,17 @@ def sync_hubspot_task_properties(
 
 def mirror_crm_task_from_lead_task(lead_task) -> None:
     """Keep parallel CRM ``tasks`` row in sync when present (best-effort)."""
-    hs_id = getattr(lead_task, 'hubspot_task_id', None)
-    if not hs_id:
-        return
-    crm_task = Task.query.filter_by(hubspot_task_id=str(hs_id)).first()
+    crm_task = None
+    mirror_task_id = getattr(lead_task, 'mirror_task_id', None)
+    if mirror_task_id is not None:
+        candidate = db.session.get(Task, mirror_task_id)
+        if candidate is not None and candidate.lead_id == lead_task.lead_id:
+            crm_task = candidate
+    if crm_task is None:
+        hs_id = getattr(lead_task, 'hubspot_task_id', None)
+        if not hs_id:
+            return
+        crm_task = Task.query.filter_by(hubspot_task_id=str(hs_id)).first()
     if crm_task is None:
         return
     crm_task.title = lead_task.title

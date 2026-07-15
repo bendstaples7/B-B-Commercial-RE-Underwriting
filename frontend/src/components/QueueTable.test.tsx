@@ -584,7 +584,7 @@ describe('QueueTable', () => {
       )
 
       await user.click(screen.getByTestId('bulk-mail'))
-      expect(await screen.findByText('1 staged · 1 need attention')).toBeInTheDocument()
+      expect(await screen.findByText('Added 1 · 1 invalid address')).toBeInTheDocument()
       await user.click(screen.getByRole('button', { name: 'Review results' }))
       expect(await screen.findByText('Invalid addresses (1)')).toBeInTheDocument()
       expect(screen.getByText('Incomplete owner mailing city/state/zip')).toBeInTheDocument()

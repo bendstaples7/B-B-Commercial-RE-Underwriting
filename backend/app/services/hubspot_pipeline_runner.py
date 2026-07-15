@@ -94,6 +94,17 @@ def run_post_import_pipeline_sync(force_full_rescore: bool = False) -> None:
         run_sync_hubspot_tasks_for_confirmed_leads()
         logger.info("Post-import pipeline: HubSpot task sync complete")
 
+        from app.services.mail_task_lifecycle_service import (
+            reconcile_recent_sale_mail_tasks,
+        )
+        reconciliation = reconcile_recent_sale_mail_tasks(
+            actor='hubspot_post_import',
+        )
+        logger.info(
+            "Post-import pipeline: deferred %s recent-sale mail task(s)",
+            reconciliation['rescheduled_task_count'],
+        )
+
         run_extract_hubspot_signals()
         logger.info("Post-import pipeline: signal extraction complete")
 

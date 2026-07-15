@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { formatEnqueuePreview, formatEnqueueSummary } from './formatEnqueueSummary'
+import {
+  enqueueResultSeverity,
+  formatEnqueuePreview,
+  formatEnqueueSummary,
+} from './formatEnqueueSummary'
 
 describe('formatEnqueueSummary', () => {
   it('formats per-status breakdown from results', () => {
@@ -52,6 +56,21 @@ describe('formatEnqueueSummary', () => {
         ],
       }),
     ).toBe('Added 2 · 1 could not queue')
+  })
+
+  it('surfaces a recent-sale rejection as an error, not success', () => {
+    const result = {
+      added: 0,
+      skipped: 1,
+      invalid: 0,
+      results: [{ lead_id: 1, status: 'recently_sold' }],
+    }
+    expect(formatEnqueueSummary(result)).toBe('1 recently sold')
+    expect(enqueueResultSeverity(result)).toBe('error')
+  })
+
+  it('uses warning severity for mixed outcomes', () => {
+    expect(enqueueResultSeverity({ added: 1, skipped: 1, invalid: 0 })).toBe('warning')
   })
 })
 

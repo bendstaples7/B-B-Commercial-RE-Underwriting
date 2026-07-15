@@ -129,7 +129,7 @@ class Property(db.Model):
     # Action Engine output (unified recommended-action vocabulary)
     recommended_action = db.Column(db.Enum(
         'enrich_data', 'resolve_match', 'analyze_property', 'follow_up_now',
-        'ready_for_outreach', 'add_contact_info', 'create_task', 'nurture',
+        'ready_for_outreach', 'add_contact_info', 'create_task', 'nurture', 'hold',
         'suppress', 'do_not_contact',
         'review_now', 'mail_ready', 'call_ready', 'valuation_needed',
         'needs_manual_review',

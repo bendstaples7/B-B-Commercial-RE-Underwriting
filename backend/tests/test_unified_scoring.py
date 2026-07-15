@@ -610,6 +610,46 @@ class TestMotivationScoreAttribution:
 
 
 class TestRecentlySoldMailGuard:
+    def test_newer_imported_sale_overrides_stale_acquisition_date(self):
+        from unittest.mock import MagicMock
+
+        lead = MagicMock()
+        lead.lead_status = 'mailing_no_contact_made'
+        lead.lead_category = 'residential'
+        lead.do_not_contact = False
+        lead.acquisition_date = date(2010, 1, 1)
+        lead.most_recent_sale = (
+            date.today() - timedelta(days=30)
+        ).strftime('%m/%d/%Y')
+
+        action, reason, details = LeadScoringEngine.evaluate_recommended_action(
+            lead,
+            total_score=80,
+            data_quality_score=80,
+            score_tier='A',
+        )
+
+        assert action == 'hold'
+        assert reason == 'recent_sale_hold'
+        assert details['requires_skip_trace'] is False
+
+    def test_final_contact_method_guard_cannot_restore_mail_ready(self):
+        from unittest.mock import MagicMock
+
+        lead = MagicMock()
+        lead.acquisition_date = date.today() - timedelta(days=60)
+        lead.most_recent_sale = None
+
+        action, method = LeadScoringEngine()._apply_outreach_method(
+            lead,
+            'mail_ready',
+            {},
+            winning_rule='mailable_no_digital_contact',
+        )
+
+        assert action == 'hold'
+        assert method is None
+
     def test_recent_sale_suppresses_mail_ready(self, monkeypatch):
         from unittest.mock import MagicMock
 
@@ -636,10 +676,10 @@ class TestRecentlySoldMailGuard:
         action, reason, _meta = LeadScoringEngine.evaluate_recommended_action(
             lead, total_score=85.0, data_quality_score=80.0, score_tier='A',
         )
-        assert action == 'nurture'
-        assert reason == 'recently_sold'
+        assert action == 'hold'
+        assert reason == 'recent_sale_hold'
 
-    def test_tier_b_recently_sold_downgrades_to_nurture(self, monkeypatch):
+    def test_tier_b_recently_sold_uses_skip_trace_hold_action(self, monkeypatch):
         def _flags(lead):
             return True, True, True
 
@@ -663,5 +703,5 @@ class TestRecentlySoldMailGuard:
         action, reason, _meta = LeadScoringEngine.evaluate_recommended_action(
             lead, total_score=75.0, data_quality_score=80.0, score_tier='B',
         )
-        assert action == 'nurture'
-        assert reason == 'recently_sold'
+        assert action == 'hold'
+        assert reason == 'recent_sale_hold'

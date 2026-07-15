@@ -108,6 +108,34 @@ def test_search_response_shape(client, q):
                 assert False, f"created_at is not ISO 8601: {session.get('created_at')}"
 
 
+def test_search_finds_exact_lead_id(client, app):
+    with app.app_context():
+        lead = Lead(
+            id=91811,
+            owner_first_name='Exact',
+            owner_last_name='Identifier',
+            property_street='1 Lead ID Search St',
+            owner_user_id=_TEST_USER_ID,
+            lead_status='skip_trace',
+        )
+        db.session.add(lead)
+        db.session.commit()
+        lead_id = lead.id
+
+    response = client.get(
+        '/api/search?q=811',
+        headers=_AUTH_HEADERS,
+    )
+
+    assert response.status_code == 200
+    result = next(item for item in response.get_json()['leads'] if item['id'] == lead_id)
+    assert result['nav_path'] == f'/leads/{lead_id}'
+    assert result['match_context'] == {
+        'type': 'lead_id',
+        'value': str(lead_id),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Pagination: all matching leads are reachable across pages
 # ---------------------------------------------------------------------------

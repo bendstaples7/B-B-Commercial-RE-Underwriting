@@ -42,6 +42,15 @@ import type {
 } from '@/types'
 import { leadService } from '@/services/leadApi'
 import openLetterService from '@/services/openLetterApi'
+import {
+  enqueueResultSeverity,
+  formatEnqueueSummary,
+  type EnqueueSeverity,
+} from '@/utils/formatEnqueueSummary'
+import {
+  MailEnqueueResultDialog,
+  type MailEnqueueDisplayResult,
+} from '@/components/MailEnqueueResultDialog'
 
 const OUTREACH_STATUS_OPTIONS: { value: OutreachStatus; label: string }[] = [
   { value: 'not_contacted' as OutreachStatus, label: 'Not Contacted' },
@@ -135,6 +144,11 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
   // Success feedback
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [showMailQueueLink, setShowMailQueueLink] = useState(false)
+  const [mailFeedbackSeverity, setMailFeedbackSeverity] =
+    useState<EnqueueSeverity>('success')
+  const [mailEnqueueResult, setMailEnqueueResult] =
+    useState<MailEnqueueDisplayResult | null>(null)
+  const [mailEnqueueResultOpen, setMailEnqueueResultOpen] = useState(false)
 
   // ---------------------------------------------------------------------------
   // Data fetching
@@ -331,6 +345,8 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
     setMembersPage(1)
     setMembersError(null)
     setSuccessMessage(null)
+    setMailEnqueueResult(null)
+    setMailEnqueueResultOpen(false)
   }
 
   const handleBackToLists = () => {
@@ -338,6 +354,8 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
     setMembers([])
     setMembersError(null)
     setSuccessMessage(null)
+    setMailEnqueueResult(null)
+    setMailEnqueueResultOpen(false)
   }
 
   const handleAddPageToMailQueue = async () => {
@@ -346,11 +364,23 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
     setSuccessMessage(null)
     setShowMailQueueLink(false)
     try {
-      const result = await openLetterService.enqueue(members.map((m) => m.lead_id))
-      setSuccessMessage(
-        `Added ${result.added} to mail queue (${result.queued_count}/${result.batch_minimum}).`,
+      const result = await openLetterService.enqueue(
+        members.map((m) => m.lead_id),
+        `marketing-list:${selectedList.id}`,
       )
-      setShowMailQueueLink(true)
+      setSuccessMessage(formatEnqueueSummary(result))
+      setMailFeedbackSeverity(enqueueResultSeverity(result))
+      setShowMailQueueLink(result.added > 0)
+      if (result.results) {
+        setMailEnqueueResult({
+          attempt_id: result.attempt_id,
+          added: result.added,
+          skipped: result.skipped,
+          invalid: result.invalid,
+          results: result.results,
+        })
+        setMailEnqueueResultOpen(true)
+      }
       await queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
       await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
       await queryClient.invalidateQueries({ queryKey: ['queue-mail-candidates'] })
@@ -416,7 +446,7 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
 
         {successMessage && (
           <Alert
-            severity="success"
+            severity={mailFeedbackSeverity}
             sx={{ mb: 2 }}
             role="status"
             onClose={() => {
@@ -582,6 +612,12 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
             />
           </Box>
         )}
+        <MailEnqueueResultDialog
+          open={mailEnqueueResultOpen}
+          onClose={() => setMailEnqueueResultOpen(false)}
+          result={mailEnqueueResult}
+          title="Marketing list direct mail results"
+        />
       </Box>
     )
   }
@@ -656,7 +692,7 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
 
       {successMessage && (
         <Alert
-          severity="success"
+          severity={mailFeedbackSeverity}
           sx={{ mb: 2 }}
           role="status"
           onClose={() => {

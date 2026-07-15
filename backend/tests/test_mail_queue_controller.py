@@ -155,13 +155,25 @@ class TestEnqueueMailQueue:
 
     def test_enqueue_rejects_recently_sold_lead(self, client, app):
         from datetime import date, timedelta
+        from app.models.lead_task import LeadTask
 
         with app.app_context():
-            recent_sale = (date.today() - timedelta(days=30)).strftime('%m/%d/%Y')
+            sale_date = date.today() - timedelta(days=30)
+            recent_sale = sale_date.strftime('%m/%d/%Y')
             lead = _make_lead(
                 app, '10 Recent Sale St',
                 most_recent_sale=recent_sale,
             )
+            task = LeadTask(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title='Add to mail queue',
+                status='open',
+                due_date=date.today(),
+                created_by='test',
+            )
+            db.session.add(task)
+            db.session.commit()
             response = client.post(
                 '/api/mail-queue/',
                 headers=_AUTH_HEADERS,
@@ -172,6 +184,21 @@ class TestEnqueueMailQueue:
             assert data['added'] == 0
             assert data['results'][0]['status'] == 'recently_sold'
             assert data['results'][0]['sale_date'] is not None
+            assert data['results'][0]['rescheduled_to'] == (
+                sale_date + timedelta(days=730)
+            ).isoformat()
+            assert data['results'][0]['rescheduled_task_count'] == 1
+            assert data['results'][0]['skip_trace_scheduled'] is True
+            assert data['results'][0]['skip_trace_task_id'] is not None
+            assert LeadTask.query.get(task.id).due_date == (
+                sale_date + timedelta(days=730)
+            )
+            assert db.session.get(Lead, lead.id).lead_status == 'skip_trace'
+            assert db.session.get(Lead, lead.id).needs_skip_trace is False
+            skip_task = LeadTask.query.get(
+                data['results'][0]['skip_trace_task_id'],
+            )
+            assert skip_task.due_date == sale_date + timedelta(days=730)
 
     def test_enqueue_persists_detailed_attempt_for_invalid_owner_mail(self, client, app):
         with app.app_context():

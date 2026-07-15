@@ -13,6 +13,8 @@ export function matchTypeLabel(type: SearchMatchContext['type']): string {
       return 'Address'
     case 'name':
       return 'Name'
+    case 'lead_id':
+      return 'Lead ID'
   }
 }
 

@@ -22,7 +22,7 @@ from app.services.lead_scoring_engine import LeadScoringEngine
 
 ALLOWED_ACTIONS = {
     "review_now", "enrich_data", "mail_ready", "call_ready",
-    "valuation_needed", "suppress", "nurture", "needs_manual_review",
+    "valuation_needed", "suppress", "nurture", "hold", "needs_manual_review",
     "follow_up_now", "ready_for_outreach", "add_contact_info", "create_task",
     "resolve_match", "analyze_property", "do_not_contact",
 }

@@ -813,6 +813,64 @@ class TestMoveToSkipTrace:
             ).count() == 0
 
 
+class TestAdjustForRecentSale:
+    def test_moves_selected_task_due_date_without_changing_task(self, client, app):
+        with app.app_context():
+            sale_date = date.today() - timedelta(days=30)
+            lead = _make_lead(
+                app,
+                '826 Recent Sale Adjustment St',
+                acquisition_date=sale_date,
+            )
+            task = _make_task(
+                app,
+                lead.id,
+                task_type='research_missing_pin',
+                title='Keep this task unchanged',
+                due_date=date.today(),
+            )
+
+            response = client.post(
+                f'/api/leads/{lead.id}/adjust-for-recent-sale',
+                headers=_AUTH_HEADERS,
+                json={'task_id': task.id},
+            )
+
+            assert response.status_code == 200
+            body = json.loads(response.data)
+            db.session.refresh(task)
+            assert body['task_id'] == task.id
+            assert body['task_created'] is False
+            assert task.title == 'Keep this task unchanged'
+            assert task.task_type == 'research_missing_pin'
+            assert task.due_date == sale_date + timedelta(days=730)
+
+    def test_rejects_lead_without_recent_sale(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '827 No Recent Sale St')
+            response = client.post(
+                f'/api/leads/{lead.id}/adjust-for-recent-sale',
+                headers=_AUTH_HEADERS,
+                json={},
+            )
+            assert response.status_code == 409
+
+    def test_rejects_non_object_json_body(self, client, app):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '828 Recent Sale Invalid Body St',
+                acquisition_date=date.today() - timedelta(days=30),
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/adjust-for-recent-sale',
+                headers=_AUTH_HEADERS,
+                json=[],
+            )
+            assert response.status_code == 400
+            assert response.get_json()['error'] == 'Request body must be a JSON object'
+
+
 # ---------------------------------------------------------------------------
 # 34.2 — POST /api/leads/<id>/tasks
 # ---------------------------------------------------------------------------

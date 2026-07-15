@@ -1140,6 +1140,7 @@ export type UnifiedRecommendedAction =
   | 'add_contact_info'
   | 'create_task'
   | 'nurture'
+  | 'hold'
   | 'suppress'
   | 'do_not_contact'
   | 'review_now'
@@ -2154,6 +2155,9 @@ export interface CommandCenterPayload {
   up_next_to_mail?: boolean | null;
   mail_queue_status?: 'queued' | 'sent_recently' | null;
   is_mailable?: boolean;
+  mail_eligible?: boolean;
+  mail_ineligible_reason?: 'recently_sold' | 'invalid_owner_address' | null;
+  mail_eligible_date?: string | null;
   most_recent_sale_display?: string | null;
   sale_date_meta?: {
     last_updated_at?: string | null;
@@ -2241,6 +2245,11 @@ export interface BulkActionResult {
       owner_name?: string | null;
       property_street?: string | null;
       sale_date?: string | null;
+      rescheduled_to?: string | null;
+      rescheduled_task_count?: number;
+      skip_trace_scheduled?: boolean;
+      skip_trace_task_id?: number | null;
+      removed_queue_item_count?: number;
     }>;
   };
 }
@@ -2430,7 +2439,7 @@ export interface LeadKanbanResponse {
 // ---------------------------------------------------------------------------
 
 export interface SearchMatchContext {
-  type: 'phone' | 'email' | 'name' | 'address'
+  type: 'phone' | 'email' | 'name' | 'address' | 'lead_id'
   value: string
 }
 

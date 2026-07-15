@@ -21,7 +21,9 @@ from app.services.mail_task_lifecycle_service import (
     cancel_pending_mail_follow_up_tasks,
     complete_tasks_superseded_by_mail,
     create_pending_mail_follow_up_task,
+    reconcile_recent_sale_mail_tasks_for_lead,
     refresh_leads_after_mail_task_changes,
+    sync_recent_sale_hubspot_due_dates,
 )
 from app.services.hubspot_task_completion_service import sync_pending_hubspot_completions
 
@@ -215,6 +217,7 @@ class MailQueueService:
         queued_lead_ids: list[int] = []
         rejected_lead_ids: list[int] = []
         hubspot_sync_ids: list[str] = []
+        recent_sale_hubspot_sync: dict[str, str] = {}
 
         for lead_id in lead_ids:
             outcome: dict | None = None
@@ -228,10 +231,29 @@ class MailQueueService:
                         outcome = {'lead_id': lead_id, 'status': 'not_authorized'}
                     elif is_recently_sold(lead):
                         sale_date = effective_acquisition_date(lead)
+                        reconciliation = reconcile_recent_sale_mail_tasks_for_lead(
+                            lead,
+                            actor=user_id,
+                            commit=False,
+                        )
                         outcome = {
                             'lead_id': lead_id,
                             'status': 'recently_sold',
                             'sale_date': sale_date.isoformat() if sale_date else None,
+                            'rescheduled_to': reconciliation['rescheduled_to'],
+                            'rescheduled_task_count': reconciliation[
+                                'rescheduled_task_count'
+                            ],
+                            'skip_trace_scheduled': reconciliation[
+                                'skip_trace_scheduled'
+                            ],
+                            'skip_trace_task_id': reconciliation[
+                                'skip_trace_task_id'
+                            ],
+                            'removed_queue_item_count': reconciliation[
+                                'removed_queue_item_count'
+                            ],
+                            'hubspot_due_sync': reconciliation['hubspot_task_ids'],
                         }
                     elif MailQueueItem.query.filter_by(
                         lead_id=lead_id, status='queued', user_id=user_id,
@@ -323,6 +345,10 @@ class MailQueueService:
                     skipped += 1
                     if status == 'recently_sold':
                         rejected_lead_ids.append(lead_id)
+                        for task_id in outcome.get('hubspot_due_sync') or []:
+                            if outcome.get('rescheduled_to'):
+                                recent_sale_hubspot_sync[task_id] = outcome['rescheduled_to']
+                        outcome.pop('hubspot_due_sync', None)
                 results.append(outcome)
             except Exception as exc:
                 # Soft-fail: one bad lead must never 500 the whole batch.
@@ -339,6 +365,11 @@ class MailQueueService:
             'status',
             'error',
             'sale_date',
+            'rescheduled_to',
+            'rescheduled_task_count',
+            'skip_trace_scheduled',
+            'skip_trace_task_id',
+            'removed_queue_item_count',
         }
         audit_results = [
             {
@@ -360,6 +391,11 @@ class MailQueueService:
         db.session.add(attempt)
         db.session.commit()
         sync_pending_hubspot_completions(hubspot_sync_ids)
+        for task_id, due_date in recent_sale_hubspot_sync.items():
+            sync_recent_sale_hubspot_due_dates(
+                [task_id],
+                datetime.fromisoformat(due_date).date(),
+            )
         refresh_leads_after_mail_task_changes(queued_lead_ids)
         _refresh_rejected_leads(user_id, rejected_lead_ids)
         return {

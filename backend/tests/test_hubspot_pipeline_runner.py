@@ -134,16 +134,31 @@ class TestRunPostImportPipelineSync:
                 calls.append(name)
             return _fn
 
+        def _track_recent_sale(**_kwargs):
+            calls.append('recent_sale')
+            return {'rescheduled_task_count': 0}
+
         with patch('app.tasks.hubspot_tasks.run_hubspot_matching', _track('matching')), \
              patch('app.tasks.hubspot_tasks.run_enrich_leads_from_hubspot', _track('enrich')), \
              patch('app.tasks.hubspot_tasks.run_sync_hubspot_tasks_for_confirmed_leads', _track('sync_tasks')), \
              patch('app.tasks.hubspot_tasks.run_convert_hubspot_activities', _track('convert')), \
              patch('app.tasks.hubspot_tasks.run_extract_hubspot_signals', _track('signals')), \
+             patch(
+                 'app.services.mail_task_lifecycle_service.reconcile_recent_sale_mail_tasks',
+                 side_effect=_track_recent_sale,
+             ), \
              patch('app.tasks.hubspot_tasks.run_rescore_leads_after_import', return_value=5), \
              patch('app.services.deploy_sync_policy.record_pipeline_completed') as mock_record:
             run_post_import_pipeline_sync()
 
-        assert calls == ['matching', 'enrich', 'convert', 'sync_tasks', 'signals']
+        assert calls == [
+            'matching',
+            'enrich',
+            'convert',
+            'sync_tasks',
+            'recent_sale',
+            'signals',
+        ]
         mock_record.assert_called_once_with(rescore_count=5)
 
     def test_passes_affected_lead_ids_to_rescore(self, app_ctx):
@@ -160,6 +175,10 @@ class TestRunPostImportPipelineSync:
              patch('app.tasks.hubspot_tasks.run_sync_hubspot_tasks_for_confirmed_leads'), \
              patch('app.tasks.hubspot_tasks.run_convert_hubspot_activities'), \
              patch('app.tasks.hubspot_tasks.run_extract_hubspot_signals'), \
+             patch(
+                 'app.services.mail_task_lifecycle_service.reconcile_recent_sale_mail_tasks',
+                 return_value={'rescheduled_task_count': 0},
+             ), \
              patch('app.tasks.hubspot_tasks.run_rescore_leads_after_import') as mock_rescore, \
              patch('app.services.deploy_sync_policy.record_pipeline_completed'):
             run_post_import_pipeline_sync()

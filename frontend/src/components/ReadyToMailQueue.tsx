@@ -28,6 +28,7 @@ import openLetterService from '@/services/openLetterApi'
 import { computeTotalPages, clampPage } from '@/utils/pagination'
 import { formatLastMailedDate, formatLastSaleDate } from '@/utils/formatLastMailedDate'
 import {
+  enqueueResultSeverity,
   formatEnqueuePreview,
   formatEnqueueSummary,
   type EnqueueCounts,
@@ -46,7 +47,8 @@ export function ReadyToMailQueue() {
   const { selectedIds, onSelectionChange, onPageChangeWithClear, clearSelection } =
     useQueueSelection()
   const [snackbarMessage, setSnackbarMessage] = useState<string | null>(null)
-  const [snackbarSeverity, setSnackbarSeverity] = useState<'success' | 'error'>('success')
+  const [snackbarSeverity, setSnackbarSeverity] =
+    useState<'success' | 'warning' | 'error'>('success')
   const [confirmAdd, setConfirmAdd] = useState<{
     limit?: number
     preview: EnqueuePreviewResult
@@ -66,7 +68,7 @@ export function ReadyToMailQueue() {
   })
 
   const showEnqueueFeedback = (result: EnqueueCounts) => {
-    setSnackbarSeverity('success')
+    setSnackbarSeverity(enqueueResultSeverity(result))
     setSnackbarMessage(formatEnqueueSummary(result))
   }
 

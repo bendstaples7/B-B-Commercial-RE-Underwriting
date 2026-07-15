@@ -100,7 +100,7 @@ export function createAddToMailBatchRowAction(ctx: QueueBulkActionContext): RowA
     icon: <PostAddIcon fontSize="small" />,
     testId: 'add-to-batch-row-action',
     onClick: async (row) => {
-      await enqueueLeadsAsBulkResult([row.id], ctx)
+      return enqueueLeadsAsBulkResult([row.id], ctx)
     },
   }
 }

@@ -1714,6 +1714,10 @@ class TestBug6PipelineAutoAdvance:
                  patch('app.tasks.hubspot_tasks.run_convert_hubspot_activities') as m_convert, \
                  patch('app.tasks.hubspot_tasks.run_extract_hubspot_signals') as m_signals, \
                  patch('app.tasks.hubspot_tasks.run_rescore_leads_after_import') as m_rescore, \
+                 patch(
+                     'app.services.mail_task_lifecycle_service.reconcile_recent_sale_mail_tasks',
+                     return_value={'rescheduled_task_count': 0},
+                 ), \
                  patch('time.sleep', side_effect=fake_sleep) as m_sleep:
                 run_pipeline_after_imports(app, run_ids)
 
@@ -1790,6 +1794,10 @@ class TestBug6PipelineAutoAdvance:
                  patch('app.tasks.hubspot_tasks.run_convert_hubspot_activities') as m_convert, \
                  patch('app.tasks.hubspot_tasks.run_extract_hubspot_signals') as m_signals, \
                  patch('app.tasks.hubspot_tasks.run_rescore_leads_after_import') as m_rescore, \
+                 patch(
+                     'app.services.mail_task_lifecycle_service.reconcile_recent_sale_mail_tasks',
+                     return_value={'rescheduled_task_count': 0},
+                 ), \
                  patch('time.sleep', side_effect=fake_sleep) as m_sleep:
                 run_post_import_pipeline(run_ids)
 

@@ -14,11 +14,14 @@ from app.services.mail_campaign_service import MailCampaignService
 from app.services.mail_queue_service import MailQueueService
 from app.services.mail_task_lifecycle_service import (
     MAIL_FOLLOW_UP_OFFSET_DAYS,
+    adjust_earliest_task_for_recent_sale,
     complete_mail_prep_tasks,
     complete_tasks_superseded_by_mail,
     count_superseded_tasks_for_lead,
     create_pending_mail_follow_up_task,
     find_mail_awaiting_lead_ids,
+    reconcile_recent_sale_mail_tasks_for_lead,
+    recent_sale_mail_eligible_date,
     resolve_mail_queue_status,
     schedule_mail_follow_up_task,
 )
@@ -93,6 +96,252 @@ class TestCompleteMailPrepTasks:
             db_task = LeadTask.query.get(task.id)
             assert db_task.status == 'completed'
             assert db_task.completed_at is not None
+
+
+class TestRecentSaleMailReconciliation:
+    def test_manual_adjustment_moves_earliest_task_without_changing_it(self, app):
+        from app import db
+
+        with app.app_context():
+            sale_date = date.today() - timedelta(days=45)
+            lead = _make_lead(
+                app,
+                '0 Recent Sale Manual Adjust St',
+                acquisition_date=sale_date,
+            )
+            task = LeadTask(
+                lead_id=lead.id,
+                task_type='research_missing_pin',
+                title='Research the existing PIN',
+                status='open',
+                due_date=date.today(),
+                created_by='test',
+            )
+            db.session.add(task)
+            db.session.commit()
+
+            result = adjust_earliest_task_for_recent_sale(
+                lead,
+                actor='test',
+            )
+
+            refreshed = db.session.get(LeadTask, task.id)
+            assert result['task_id'] == task.id
+            assert result['task_created'] is False
+            assert refreshed.title == 'Research the existing PIN'
+            assert refreshed.task_type == 'research_missing_pin'
+            assert refreshed.due_date == sale_date + timedelta(days=730)
+            assert LeadTask.query.filter_by(lead_id=lead.id).count() == 1
+
+    def test_manual_adjustment_creates_task_when_none_exists(self, app):
+        from app import db
+
+        with app.app_context():
+            sale_date = date.today() - timedelta(days=20)
+            lead = _make_lead(
+                app,
+                '0 Recent Sale Manual Create St',
+                acquisition_date=sale_date,
+            )
+
+            result = adjust_earliest_task_for_recent_sale(
+                lead,
+                actor='test',
+            )
+
+            task = db.session.get(LeadTask, result['task_id'])
+            assert result['task_created'] is True
+            assert task.task_type == 'skip_trace_owner'
+            assert task.due_date == sale_date + timedelta(days=730)
+
+    def test_manual_adjustment_rejects_stale_explicit_task(self, app):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '0 Recent Sale Stale Task St',
+                acquisition_date=date.today() - timedelta(days=20),
+            )
+            earliest = _make_task(app, lead.id)
+
+            with pytest.raises(ValueError, match='Selected task is not open'):
+                adjust_earliest_task_for_recent_sale(
+                    lead,
+                    actor='test',
+                    task_id=earliest.id + 9999,
+                )
+
+            assert LeadTask.query.get(earliest.id).due_date == date.today()
+
+    def test_reused_skip_trace_task_updates_crm_mirror(self, app):
+        from app import db
+        from app.models.task import Task
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        with app.app_context():
+            sale_date = date.today() - timedelta(days=20)
+            eligible_date = sale_date + timedelta(days=730)
+            lead = _make_lead(
+                app,
+                '0 Recent Sale Mirror St',
+                acquisition_date=sale_date,
+            )
+            mirror = Task(
+                title='Old skip trace title',
+                status='open',
+                source='manual',
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                due_date=datetime.utcnow(),
+            )
+            db.session.add(mirror)
+            db.session.flush()
+            task = LeadTask(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                title='Old skip trace title',
+                status='open',
+                due_date=date.today(),
+                created_by='test',
+                mirror_task_id=mirror.id,
+            )
+            db.session.add(task)
+            db.session.commit()
+
+            SkipTraceEnqueue().schedule_recent_sale(
+                lead.id,
+                due_date=eligible_date,
+                actor='test',
+            )
+
+            refreshed = db.session.get(Task, mirror.id)
+            assert refreshed.title.startswith('Recent-sale hold ended')
+            assert refreshed.due_date.date() == eligible_date
+
+    def test_reschedules_native_and_crm_mirror_to_end_of_hold(self, app):
+        from app import db
+        from app.models.task import Task
+
+        with app.app_context():
+            sale_date = date.today() - timedelta(days=30)
+            lead = _make_lead(
+                app,
+                '1 Recent Sale Reconcile St',
+                acquisition_date=sale_date,
+                recommended_contact_method='direct_mail',
+            )
+            mirror = Task(
+                title='Follow up on property',
+                status='overdue',
+                source='hubspot_import',
+                lead_id=lead.id,
+                task_type='custom',
+                hubspot_task_id='recent-sale-hs-1',
+                due_date=datetime.utcnow() - timedelta(days=10),
+            )
+            db.session.add(mirror)
+            db.session.flush()
+            native = LeadTask(
+                lead_id=lead.id,
+                task_type='custom',
+                title=mirror.title,
+                status='open',
+                due_date=date.today() - timedelta(days=10),
+                created_by='test',
+                hubspot_task_id=mirror.hubspot_task_id,
+                mirror_task_id=mirror.id,
+            )
+            research = LeadTask(
+                lead_id=lead.id,
+                task_type='research_missing_pin',
+                title='Research missing PIN',
+                status='open',
+                due_date=date.today(),
+                created_by='test',
+            )
+            queued_item = MailQueueItem(
+                lead_id=lead.id,
+                user_id=USER_ID,
+                status='queued',
+            )
+            db.session.add_all([native, research, queued_item])
+            db.session.commit()
+
+            result = reconcile_recent_sale_mail_tasks_for_lead(
+                lead,
+                actor='test',
+                commit=False,
+            )
+            db.session.commit()
+
+            expected = sale_date + timedelta(days=730)
+            assert recent_sale_mail_eligible_date(lead) == expected
+            assert result['rescheduled_to'] == expected.isoformat()
+            assert result['rescheduled_task_count'] == 1
+            assert result['hubspot_task_ids'] == ['recent-sale-hs-1']
+            assert result['skip_trace_scheduled'] is True
+            assert result['skip_trace_task_id'] is not None
+            assert result['removed_queue_item_count'] == 1
+            assert db.session.get(Lead, lead.id).lead_status == 'skip_trace'
+            assert db.session.get(Lead, lead.id).needs_skip_trace is False
+            skip_task = LeadTask.query.filter_by(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                status='open',
+            ).one()
+            assert skip_task.due_date == expected
+            assert LeadTask.query.get(native.id).due_date == expected
+            assert LeadTask.query.get(research.id).due_date == date.today()
+            refreshed_mirror = Task.query.get(mirror.id)
+            assert refreshed_mirror.due_date.date() == expected
+            assert refreshed_mirror.status == 'open'
+            assert db.session.get(MailQueueItem, queued_item.id).status == 'removed'
+
+    def test_is_idempotent_after_due_date_moves_to_future(self, app):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '2 Recent Sale Idempotent St',
+                acquisition_date=date.today() - timedelta(days=5),
+                recommended_contact_method='direct_mail',
+            )
+            _make_task(app, lead.id)
+
+            first = reconcile_recent_sale_mail_tasks_for_lead(lead, commit=True)
+            second = reconcile_recent_sale_mail_tasks_for_lead(lead, commit=True)
+
+            assert first['rescheduled_task_count'] == 1
+            assert second['rescheduled_task_count'] == 0
+            assert first['skip_trace_scheduled'] is True
+            assert second['skip_trace_scheduled'] is False
+
+    def test_activates_skip_trace_only_when_scheduled_date_arrives(self, app):
+        from app import db
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '3 Recent Sale Activation St',
+                acquisition_date=date.today() - timedelta(days=30),
+            )
+            service = SkipTraceEnqueue()
+            scheduled = service.schedule_recent_sale(
+                lead.id,
+                due_date=date.today(),
+                actor='test',
+            )
+
+            before = db.session.get(Lead, lead.id)
+            assert before.lead_status == 'skip_trace'
+            assert before.needs_skip_trace is False
+
+            result = service.activate_due_recent_sale_tasks(actor='test')
+
+            activated = db.session.get(Lead, lead.id)
+            assert scheduled['scheduled'] is True
+            assert result['activated_lead_ids'] == [lead.id]
+            assert activated.lead_status == 'awaiting_skip_trace'
+            assert activated.needs_skip_trace is True
 
 
 class TestCompleteTasksSupersededByMail:

@@ -156,7 +156,7 @@ def parse_sale_date_string(value: Optional[str]) -> Optional[date]:
             return datetime.strptime(text, fmt).date()
         except ValueError:
             continue
-    match = re.search(r'(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})', text)
+    match = re.fullmatch(r'(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})', text)
     if match:
         month, day, year = match.groups()
         year_int = int(year)
@@ -171,12 +171,18 @@ def parse_sale_date_string(value: Optional[str]) -> Optional[date]:
 
 def effective_acquisition_date(lead: Lead) -> Optional[date]:
     acquisition = getattr(lead, 'acquisition_date', None)
-    if isinstance(acquisition, date):
-        return acquisition
     sale_text = getattr(lead, 'most_recent_sale', None)
-    if isinstance(sale_text, str):
-        return parse_sale_date_string(sale_text)
-    return None
+    imported_sale = (
+        parse_sale_date_string(sale_text)
+        if isinstance(sale_text, str)
+        else None
+    )
+    candidates = [
+        candidate
+        for candidate in (acquisition, imported_sale)
+        if isinstance(candidate, date) and candidate <= date.today()
+    ]
+    return max(candidates) if candidates else None
 
 
 RECENT_SALE_SUPPRESSION_DAYS = 730  # 24 months
@@ -199,16 +205,13 @@ def format_last_sale_at(lead: Lead) -> str | None:
 
 
 def display_most_recent_sale(lead: Lead) -> str | None:
-    """Single UI display value: prefer acquisition_date, else import most_recent_sale."""
-    acquisition = getattr(lead, 'acquisition_date', None)
-    if isinstance(acquisition, date):
-        return acquisition.strftime('%m/%d/%Y')
+    """Single UI display value using the newest valid sale date."""
+    effective = effective_acquisition_date(lead)
+    if effective is not None:
+        return effective.strftime('%m/%d/%Y')
     sale_text = getattr(lead, 'most_recent_sale', None)
     if not sale_text or not str(sale_text).strip():
         return None
-    parsed = parse_sale_date_string(str(sale_text))
-    if parsed:
-        return parsed.strftime('%m/%d/%Y')
     return str(sale_text).strip()
 
 
@@ -241,10 +244,15 @@ def resolve_sale_date_meta(lead: Lead) -> dict:
     if not isinstance(lead_id, int):
         return null_meta
 
+    acquisition = getattr(lead, 'acquisition_date', None)
+    imported_sale = parse_sale_date_string(
+        str(getattr(lead, 'most_recent_sale', '') or ''),
+    )
     preferred_field = (
-        'acquisition_date'
-        if isinstance(getattr(lead, 'acquisition_date', None), date)
-        else 'most_recent_sale'
+        'most_recent_sale'
+        if not isinstance(acquisition, date)
+        or (imported_sale is not None and imported_sale > acquisition)
+        else 'acquisition_date'
     )
     row = (
         LeadAuditTrail.query
@@ -266,39 +274,132 @@ def resolve_sale_date_meta(lead: Lead) -> dict:
 
 def effective_acquisition_date_sql():
     """SQL expression matching effective_acquisition_date() on PostgreSQL."""
-    from sqlalchemy import Date, Integer, and_, case, cast
+    from sqlalchemy import Date, Integer, and_, case, cast, or_
     from sqlalchemy.sql import func
 
-    mrs = Lead.most_recent_sale
-    parts = func.regexp_match(mrs, r'(\d{1,2})/(\d{1,2})/(\d{2,4})')
-    month = cast(parts[1], Integer)
-    day = cast(parts[2], Integer)
-    year_raw = cast(parts[3], Integer)
-    year = case(
-        (year_raw < 100, case((year_raw >= 50, year_raw + 1900), else_=year_raw + 2000)),
-        else_=year_raw,
-    )
-    valid_us = and_(month >= 1, month <= 12, day >= 1, day <= 31)
-    us_date = case((valid_us, func.make_date(year, month, day)), else_=None)
+    mrs = func.btrim(Lead.most_recent_sale)
 
-    dash_parts = func.regexp_match(mrs, r'(\d{1,2})-(\d{1,2})-(\d{2,4})')
-    dash_month = cast(dash_parts[1], Integer)
-    dash_day = cast(dash_parts[2], Integer)
-    dash_year_raw = cast(dash_parts[3], Integer)
-    dash_year = case(
-        (dash_year_raw < 100, case((dash_year_raw >= 50, dash_year_raw + 1900), else_=dash_year_raw + 2000)),
-        else_=dash_year_raw,
-    )
-    valid_dash = and_(dash_month >= 1, dash_month <= 12, dash_day >= 1, dash_day <= 31)
-    dash_date = case((valid_dash, func.make_date(dash_year, dash_month, dash_day)), else_=None)
+    def _calendar_date(year, month, day):
+        """Build a date without letting malformed input abort the query."""
+        is_leap_year = or_(
+            year % 400 == 0,
+            and_(year % 4 == 0, year % 100 != 0),
+        )
+        max_day = case(
+            (month.in_([1, 3, 5, 7, 8, 10, 12]), 31),
+            (month.in_([4, 6, 9, 11]), 30),
+            (month == 2, case((is_leap_year, 29), else_=28)),
+            else_=0,
+        )
+        is_real_date = and_(
+            year >= 1,
+            month.between(1, 12),
+            day >= 1,
+            day <= max_day,
+        )
+        return case(
+            (is_real_date, func.make_date(year, month, day)),
+            else_=None,
+        )
 
-    parsed = case(
-        (mrs.op('~')(r'^\d{4}-\d{2}-\d{2}'), cast(func.substring(mrs, 1, 10), Date)),
-        (mrs.op('~')(r'\d{1,2}/\d{1,2}/\d{2,4}'), us_date),
-        (mrs.op('~')(r'\d{1,2}-\d{1,2}-\d{2,4}'), dash_date),
+    numeric_month = cast(
+        func.substring(mrs, r'^\s*([0-9]{1,2})[/-]'),
+        Integer,
+    )
+    numeric_day = cast(
+        func.substring(mrs, r'^\s*[0-9]{1,2}[/-]([0-9]{1,2})[/-]'),
+        Integer,
+    )
+    numeric_year_raw = cast(
+        func.substring(mrs, r'([0-9]{2,4})\s*$'),
+        Integer,
+    )
+    numeric_year = case(
+        (
+            numeric_year_raw < 100,
+            case(
+                (numeric_year_raw >= 50, numeric_year_raw + 1900),
+                else_=numeric_year_raw + 2000,
+            ),
+        ),
+        else_=numeric_year_raw,
+    )
+    numeric_date = _calendar_date(
+        numeric_year,
+        numeric_month,
+        numeric_day,
+    )
+
+    iso_year = cast(func.substring(mrs, r'^([0-9]{4})-'), Integer)
+    iso_month = cast(
+        func.substring(mrs, r'^[0-9]{4}-([0-9]{2})-'),
+        Integer,
+    )
+    iso_day = cast(func.substring(mrs, r'([0-9]{2})$'), Integer)
+    iso_date = _calendar_date(iso_year, iso_month, iso_day)
+
+    month_name = func.lower(func.substring(mrs, r'^([A-Za-z]+)\s+'))
+    named_month = case(
+        (month_name.in_(['january', 'jan']), 1),
+        (month_name.in_(['february', 'feb']), 2),
+        (month_name.in_(['march', 'mar']), 3),
+        (month_name.in_(['april', 'apr']), 4),
+        (month_name == 'may', 5),
+        (month_name.in_(['june', 'jun']), 6),
+        (month_name.in_(['july', 'jul']), 7),
+        (month_name.in_(['august', 'aug']), 8),
+        (month_name.in_(['september', 'sep']), 9),
+        (month_name.in_(['october', 'oct']), 10),
+        (month_name.in_(['november', 'nov']), 11),
+        (month_name.in_(['december', 'dec']), 12),
         else_=None,
     )
-    return func.coalesce(Lead.acquisition_date, parsed)
+    named_day = cast(
+        func.substring(mrs, r'^[A-Za-z]+\s+([0-9]{1,2})'),
+        Integer,
+    )
+    named_year = cast(func.substring(mrs, r'([0-9]{4})\s*$'), Integer)
+    named_date = _calendar_date(named_year, named_month, named_day)
+
+    parsed = case(
+        (
+            mrs.op('~')(
+                r'^[0-9]{4}-(0[1-9]|1[0-2])-'
+                r'(0[1-9]|[12][0-9]|3[01])$'
+            ),
+            iso_date,
+        ),
+        (
+            mrs.op('~')(
+                r'^(0?[1-9]|1[0-2])/(0?[1-9]|[12][0-9]|3[01])/'
+                r'([0-9]{2}|[0-9]{4})$'
+            ),
+            numeric_date,
+        ),
+        (
+            mrs.op('~')(
+                r'^(0?[1-9]|1[0-2])-(0?[1-9]|[12][0-9]|3[01])-'
+                r'([0-9]{2}|[0-9]{4})$'
+            ),
+            numeric_date,
+        ),
+        (
+            mrs.op('~*')(
+                r'^(January|Jan|February|Feb|March|Mar|April|Apr|May|'
+                r'June|Jun|July|Jul|August|Aug|September|Sep|October|Oct|'
+                r'November|Nov|December|Dec) '
+                r'(0?[1-9]|[12][0-9]|3[01]),? [0-9]{4}$'
+            ),
+            named_date,
+        ),
+        else_=None,
+    )
+    valid_acquisition = case(
+        (Lead.acquisition_date <= date.today(), Lead.acquisition_date),
+        else_=None,
+    )
+    valid_imported = case((parsed <= date.today(), parsed), else_=None)
+    return cast(func.greatest(valid_acquisition, valid_imported), Date)
 
 
 def sql_not_recently_sold(cutoff: date | None = None):

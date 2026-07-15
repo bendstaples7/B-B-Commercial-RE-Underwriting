@@ -11,6 +11,12 @@ from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry, MailQueueItem
 from app.models.task import Task
 from app.models.task_association import TaskAssociation
+from app.services.scoring_rubric import (
+    RECENT_SALE_SUPPRESSION_DAYS,
+    effective_acquisition_date,
+    is_recently_sold,
+    sql_not_recently_sold,
+)
 from app.utils.call_completable_task import is_superseded_by_mail_task
 
 logger = logging.getLogger(__name__)
@@ -18,6 +24,503 @@ logger = logging.getLogger(__name__)
 MAIL_FOLLOW_UP_OFFSET_DAYS = 7
 FOLLOW_UP_AFTER_MAIL_TITLE_RE = re.compile(r'follow up after mail', re.IGNORECASE)
 SENT_RECENTLY_DAYS = 14
+
+
+def recent_sale_mail_eligible_date(lead: Lead) -> date | None:
+    """Return the first date direct mail is allowed after a recent sale."""
+    sale_date = effective_acquisition_date(lead)
+    if sale_date is None or not is_recently_sold(lead):
+        return None
+    return sale_date + timedelta(days=RECENT_SALE_SUPPRESSION_DAYS)
+
+
+def _is_recent_sale_defer_task(
+    lead: Lead,
+    task_type: str | None,
+    title: str | None,
+) -> bool:
+    """True for due outreach work that should wait until mail is eligible."""
+    if is_mail_follow_up_title(title):
+        return False
+    if task_type == 'add_to_mail_batch':
+        return True
+    return (
+        lead.recommended_contact_method == 'direct_mail'
+        and is_superseded_by_mail_task(task_type, title)
+    )
+
+
+def _append_recent_sale_snooze_timeline(
+    lead_id: int,
+    *,
+    task_id: int,
+    task_type: str | None,
+    title: str,
+    old_due_date: date | None,
+    eligible_date: date,
+    actor: str,
+    hubspot_task_id: str | None = None,
+) -> None:
+    db.session.add(
+        LeadTimelineEntry(
+            lead_id=lead_id,
+            event_type='task_snoozed',
+            occurred_at=datetime.now(timezone.utc),
+            source='system',
+            actor=actor,
+            summary=f'Task deferred after recent sale: {title}',
+            event_metadata={
+                'task_id': task_id,
+                'task_type': task_type,
+                'title': title,
+                'reason': 'recently_sold',
+                'old_due_date': old_due_date.isoformat() if old_due_date else None,
+                'due_date': eligible_date.isoformat(),
+                'hubspot_task_id': hubspot_task_id,
+            },
+        ),
+    )
+
+
+def reconcile_recent_sale_mail_tasks_for_lead(
+    lead: Lead,
+    *,
+    actor: str = 'recent_sale_mail_reconciliation',
+    commit: bool = False,
+) -> dict:
+    """Move due direct-mail work to the end of the recent-sale hold.
+
+    LeadTask and CRM Task mirrors are updated as one logical operation. The
+    returned HubSpot IDs must be synced only after the surrounding transaction
+    commits.
+    """
+    eligible_date = recent_sale_mail_eligible_date(lead)
+    if eligible_date is None:
+        return {
+            'rescheduled_to': None,
+            'rescheduled_task_count': 0,
+            'hubspot_task_ids': [],
+            'skip_trace_scheduled': False,
+            'skip_trace_task_id': None,
+            'removed_queue_item_count': 0,
+        }
+
+    today = date.today()
+    from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+    skip_trace = SkipTraceEnqueue().schedule_recent_sale(
+        lead.id,
+        due_date=eligible_date,
+        actor=actor,
+        commit=False,
+    )
+    queued_items = MailQueueItem.query.filter_by(
+        lead_id=lead.id,
+        status='queued',
+    ).all()
+    for item in queued_items:
+        item.status = 'removed'
+        item.updated_at = datetime.utcnow()
+        db.session.add(item)
+    if queued_items:
+        lead.up_next_to_mail = False
+        db.session.add(lead)
+        cancel_pending_mail_follow_up_tasks(
+            lead.id,
+            actor=actor,
+            reason='recent_sale_hold',
+        )
+    due_at = datetime.combine(eligible_date, datetime.min.time())
+    represented_crm_ids: set[int] = set()
+    represented_hubspot_ids: set[str] = set()
+    hubspot_task_ids: set[str] = set()
+    rescheduled = 0
+
+    native_tasks = LeadTask.query.filter(
+        LeadTask.lead_id == lead.id,
+        LeadTask.status == 'open',
+        LeadTask.due_date.isnot(None),
+        LeadTask.due_date <= today,
+    ).all()
+    for task in native_tasks:
+        if not _is_recent_sale_defer_task(lead, task.task_type, task.title):
+            continue
+        old_due_date = task.due_date
+        task.due_date = eligible_date
+        db.session.add(task)
+        rescheduled += 1
+        if task.mirror_task_id:
+            represented_crm_ids.add(task.mirror_task_id)
+        if task.hubspot_task_id:
+            hs_id = str(task.hubspot_task_id)
+            represented_hubspot_ids.add(hs_id)
+            hubspot_task_ids.add(hs_id)
+
+        mirrors: list[Task] = []
+        if task.mirror_task_id:
+            mirror = Task.query.get(task.mirror_task_id)
+            if mirror is not None:
+                mirrors.append(mirror)
+        if task.hubspot_task_id:
+            mirror = Task.query.filter_by(
+                hubspot_task_id=str(task.hubspot_task_id),
+            ).first()
+            if mirror is not None and mirror not in mirrors:
+                mirrors.append(mirror)
+        for mirror in mirrors:
+            represented_crm_ids.add(mirror.id)
+            mirror.due_date = due_at
+            if mirror.status == 'overdue':
+                mirror.status = 'open'
+            mirror.updated_at = datetime.utcnow()
+            db.session.add(mirror)
+
+        _append_recent_sale_snooze_timeline(
+            lead.id,
+            task_id=task.id,
+            task_type=task.task_type,
+            title=task.title,
+            old_due_date=old_due_date,
+            eligible_date=eligible_date,
+            actor=actor,
+            hubspot_task_id=task.hubspot_task_id,
+        )
+
+    for task in _open_hubspot_tasks_for_lead(lead.id) + _open_mirrored_tasks_for_lead(lead.id):
+        if task.id in represented_crm_ids:
+            continue
+        if task.due_date is None or task.due_date.date() > today:
+            continue
+        hs_id = str(task.hubspot_task_id) if task.hubspot_task_id else None
+        if hs_id and hs_id in represented_hubspot_ids:
+            continue
+        if not _is_recent_sale_defer_task(lead, task.task_type, task.title):
+            continue
+        old_due_date = task.due_date.date()
+        task.due_date = due_at
+        if task.status == 'overdue':
+            task.status = 'open'
+        task.updated_at = datetime.utcnow()
+        db.session.add(task)
+        rescheduled += 1
+        if hs_id:
+            represented_hubspot_ids.add(hs_id)
+            hubspot_task_ids.add(hs_id)
+        _append_recent_sale_snooze_timeline(
+            lead.id,
+            task_id=task.id,
+            task_type=task.task_type,
+            title=task.title,
+            old_due_date=old_due_date,
+            eligible_date=eligible_date,
+            actor=actor,
+            hubspot_task_id=hs_id,
+        )
+
+    if commit:
+        db.session.commit()
+        if hubspot_task_ids:
+            sync_recent_sale_hubspot_due_dates(hubspot_task_ids, eligible_date)
+
+    return {
+        'rescheduled_to': eligible_date.isoformat(),
+        'rescheduled_task_count': rescheduled,
+        'hubspot_task_ids': sorted(hubspot_task_ids),
+        'skip_trace_scheduled': skip_trace['scheduled'],
+        'skip_trace_task_id': skip_trace['task_id'],
+        'removed_queue_item_count': len(queued_items),
+    }
+
+
+def sync_recent_sale_hubspot_due_dates(
+    hubspot_task_ids: set[str] | list[str],
+    eligible_date: date,
+) -> dict[str, bool]:
+    """Push reconciled due dates to HubSpot after local commit."""
+    from app.services.hubspot_task_completion_service import sync_hubspot_task_properties
+
+    return {
+        task_id: sync_hubspot_task_properties(task_id, due_date=eligible_date)
+        for task_id in sorted(set(hubspot_task_ids))
+    }
+
+
+def adjust_earliest_task_for_recent_sale(
+    lead: Lead,
+    *,
+    actor: str,
+    task_id: int | None = None,
+    hubspot_task_id: str | None = None,
+) -> dict:
+    """Move one selected/earliest open task to the recent-sale eligibility date."""
+    eligible_date = recent_sale_mail_eligible_date(lead)
+    if eligible_date is None:
+        raise ValueError('Lead does not have an active recent-sale hold')
+
+    native: LeadTask | None = None
+    crm_task: Task | None = None
+    selector_requested = task_id is not None or bool(hubspot_task_id)
+    if hubspot_task_id:
+        native = LeadTask.query.filter_by(
+            lead_id=lead.id,
+            hubspot_task_id=str(hubspot_task_id),
+            status='open',
+        ).first()
+        if native is None:
+            crm_task = Task.query.filter_by(
+                lead_id=lead.id,
+                hubspot_task_id=str(hubspot_task_id),
+            ).filter(Task.status.in_(['open', 'overdue'])).first()
+    if native is None and crm_task is None and task_id is not None:
+        native = LeadTask.query.filter_by(
+            id=task_id,
+            lead_id=lead.id,
+            status='open',
+        ).first()
+        if native is None:
+            crm_task = Task.query.filter(
+                Task.id == task_id,
+                Task.lead_id == lead.id,
+                Task.status.in_(['open', 'overdue']),
+            ).first()
+
+    if native is None and crm_task is None and selector_requested:
+        raise ValueError('Selected task is not open or does not belong to this lead')
+
+    if native is None and crm_task is None:
+        native = (
+            LeadTask.query
+            .filter_by(lead_id=lead.id, status='open')
+            .order_by(LeadTask.due_date.asc().nullslast(), LeadTask.id.asc())
+            .first()
+        )
+        crm_candidates = (
+            _open_hubspot_tasks_for_lead(lead.id)
+            + _open_mirrored_tasks_for_lead(lead.id)
+        )
+        if crm_candidates:
+            earliest_crm = min(
+                crm_candidates,
+                key=lambda task: (
+                    task.due_date is None,
+                    task.due_date or datetime.max,
+                    task.id,
+                ),
+            )
+            native_due = (
+                datetime.combine(native.due_date, datetime.min.time())
+                if native is not None and native.due_date is not None
+                else None
+            )
+            if native is None or (
+                earliest_crm.due_date is not None
+                and (native_due is None or earliest_crm.due_date < native_due)
+            ):
+                native = None
+                crm_task = earliest_crm
+
+    if native is None and crm_task is None:
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        scheduled = SkipTraceEnqueue().schedule_recent_sale(
+            lead.id,
+            due_date=eligible_date,
+            actor=actor,
+            commit=False,
+        )
+        db.session.commit()
+        return {
+            'task_id': scheduled['task_id'],
+            'task_created': True,
+            'due_date': eligible_date.isoformat(),
+            'title': 'Recent-sale hold ended — verify new owner and contact information',
+        }
+
+    hubspot_ids: set[str] = set()
+    if native is not None:
+        old_due_date = native.due_date
+        native.due_date = eligible_date
+        db.session.add(native)
+        if native.hubspot_task_id:
+            hubspot_ids.add(str(native.hubspot_task_id))
+        mirrors: list[Task] = []
+        if native.mirror_task_id:
+            mirror = db.session.get(Task, native.mirror_task_id)
+            if mirror is not None:
+                mirrors.append(mirror)
+        if native.hubspot_task_id:
+            mirror = Task.query.filter_by(
+                hubspot_task_id=str(native.hubspot_task_id),
+            ).first()
+            if mirror is not None and mirror not in mirrors:
+                mirrors.append(mirror)
+        for mirror in mirrors:
+            mirror.due_date = datetime.combine(eligible_date, datetime.min.time())
+            if mirror.status == 'overdue':
+                mirror.status = 'open'
+            mirror.updated_at = datetime.utcnow()
+            db.session.add(mirror)
+        selected_id = native.id
+        selected_type = native.task_type
+        selected_title = native.title
+    else:
+        assert crm_task is not None
+        old_due_date = crm_task.due_date.date() if crm_task.due_date else None
+        crm_task.due_date = datetime.combine(eligible_date, datetime.min.time())
+        if crm_task.status == 'overdue':
+            crm_task.status = 'open'
+        crm_task.updated_at = datetime.utcnow()
+        db.session.add(crm_task)
+        if crm_task.hubspot_task_id:
+            hubspot_ids.add(str(crm_task.hubspot_task_id))
+        selected_id = crm_task.id
+        selected_type = crm_task.task_type
+        selected_title = crm_task.title
+
+    _append_recent_sale_snooze_timeline(
+        lead.id,
+        task_id=selected_id,
+        task_type=selected_type,
+        title=selected_title,
+        old_due_date=old_due_date,
+        eligible_date=eligible_date,
+        actor=actor,
+        hubspot_task_id=next(iter(hubspot_ids), None),
+    )
+    db.session.commit()
+    if hubspot_ids:
+        sync_recent_sale_hubspot_due_dates(hubspot_ids, eligible_date)
+    return {
+        'task_id': selected_id,
+        'task_created': False,
+        'due_date': eligible_date.isoformat(),
+        'title': selected_title,
+    }
+
+
+def reconcile_recent_sale_mail_tasks(
+    *,
+    actor: str = 'recent_sale_mail_reconciliation',
+    limit: int | None = None,
+    commit: bool = True,
+) -> dict:
+    """Reconcile all due direct-mail work; safe to run repeatedly."""
+    today = date.today()
+    end_of_today = datetime.combine(today + timedelta(days=1), datetime.min.time())
+    lead_ids = {
+        row[0]
+        for row in LeadTask.query.filter(
+            LeadTask.status == 'open',
+            LeadTask.due_date.isnot(None),
+            LeadTask.due_date <= today,
+        ).with_entities(LeadTask.lead_id).distinct().all()
+    }
+    lead_ids.update(
+        row[0]
+        for row in Task.query.filter(
+            Task.lead_id.isnot(None),
+            Task.status.in_(['open', 'overdue']),
+            Task.due_date.isnot(None),
+            Task.due_date < end_of_today,
+        ).with_entities(Task.lead_id).distinct().all()
+    )
+    associated = (
+        db.session.query(TaskAssociation.target_id)
+        .join(Task, Task.id == TaskAssociation.task_id)
+        .filter(
+            TaskAssociation.target_type == 'lead',
+            Task.status.in_(['open', 'overdue']),
+            Task.due_date.isnot(None),
+            Task.due_date < end_of_today,
+        )
+        .distinct()
+        .all()
+    )
+    lead_ids.update(row[0] for row in associated)
+    scheduled_skip_trace_exists = db.session.query(LeadTask.id).filter(
+        LeadTask.lead_id == Lead.id,
+        LeadTask.task_type == 'skip_trace_owner',
+        LeadTask.status == 'open',
+        LeadTask.title.like('Recent-sale hold ended%'),
+    ).exists()
+    recent_sale_ids = {
+        row[0]
+        for row in (
+        Lead.query
+        .filter(
+            ~sql_not_recently_sold(),
+            ~Lead.lead_status.in_([
+                'deprioritize',
+                'deal_won',
+                'deal_lost',
+                'suppressed',
+                'do_not_contact',
+            ]),
+            ~scheduled_skip_trace_exists,
+        )
+        .with_entities(Lead.id)
+        .all()
+        )
+    }
+    lead_ids.update(recent_sale_ids)
+
+    ordered_ids = sorted(lead_ids)
+    if limit is not None:
+        ordered_ids = ordered_ids[:limit]
+
+    if not commit:
+        preview_handoffs = [lead_id for lead_id in ordered_ids if lead_id in recent_sale_ids]
+        return {
+            'affected_lead_count': len(preview_handoffs),
+            'skip_trace_scheduled_count': len(preview_handoffs),
+            'rescheduled_task_count': 0,
+            'results': [
+                {
+                    'lead_id': lead_id,
+                    'skip_trace_scheduled': True,
+                }
+                for lead_id in preview_handoffs
+            ],
+        }
+
+    affected_leads: list[int] = []
+    skip_trace_scheduled_count = 0
+    task_count = 0
+    hubspot_due_dates: dict[str, date] = {}
+    results: list[dict] = []
+    for lead in Lead.query.filter(Lead.id.in_(ordered_ids)).all() if ordered_ids else []:
+        outcome = reconcile_recent_sale_mail_tasks_for_lead(
+            lead, actor=actor, commit=False,
+        )
+        if outcome['rescheduled_task_count'] or outcome['skip_trace_scheduled']:
+            affected_leads.append(lead.id)
+            task_count += outcome['rescheduled_task_count']
+            if outcome['skip_trace_scheduled']:
+                skip_trace_scheduled_count += 1
+            eligible = date.fromisoformat(outcome['rescheduled_to'])
+            for task_id in outcome['hubspot_task_ids']:
+                hubspot_due_dates[task_id] = eligible
+            results.append({'lead_id': lead.id, **outcome})
+
+    if commit and affected_leads:
+        db.session.commit()
+        for task_id, due_date in hubspot_due_dates.items():
+            sync_recent_sale_hubspot_due_dates([task_id], due_date)
+        refresh_leads_after_mail_task_changes(affected_leads)
+
+    from app.services.skip_trace_enqueue import SkipTraceEnqueue
+    activation = SkipTraceEnqueue().activate_due_recent_sale_tasks(
+        actor=actor,
+        commit=commit,
+    )
+
+    return {
+        'affected_lead_count': len(affected_leads),
+        'skip_trace_scheduled_count': skip_trace_scheduled_count,
+        **activation,
+        'rescheduled_task_count': task_count,
+        'results': results,
+    }
 
 
 def _lead_address_label(lead: Lead) -> str:

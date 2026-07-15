@@ -202,13 +202,21 @@ export function QuickAddPage() {
         return 'Lead reactivated. Scoring will place it in the appropriate outreach flow.'
       }
 
-      const result = await openLetterService.enqueue([leadId])
+      const result = await openLetterService.enqueue([leadId], 'quick-add')
       if (result.added > 0) {
         return 'Lead reactivated and added to the mail queue.'
       }
       const outcome = result.results?.find((item) => item.lead_id === leadId)
       if (outcome?.status === 'already_queued') {
         return 'Lead reactivated and was already in the mail queue.'
+      }
+      if (outcome?.status === 'recently_sold') {
+        const eligible = outcome.rescheduled_to
+          ? new Date(`${outcome.rescheduled_to}T00:00:00`).toLocaleDateString()
+          : 'the end of the two-year hold'
+        throw new Error(
+          `Lead was reactivated, but a recent sale was detected. Direct mail is deferred until ${eligible}.`,
+        )
       }
       throw new Error(outcome?.error || 'Lead was reactivated, but could not be added to mail.')
     },

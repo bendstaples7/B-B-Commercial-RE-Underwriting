@@ -138,6 +138,9 @@ const ACTION_BUTTONS: Record<CRMRecommendedAction, ActionButton[]> = {
     { label: 'Create Task', action: 'create_task' },
   ],
   nurture: [],
+  hold: [
+    { label: 'Adjust for Recent Sale', action: 'adjust_for_recent_sale' },
+  ],
   suppress: [
     { label: 'Suppress Lead', action: 'suppress' },
   ],
@@ -156,6 +159,9 @@ export interface RecommendedActionPanelProps {
   openTasks: LeadTask[]
   mailQueueStatus?: 'queued' | 'sent_recently' | null
   isMailable?: boolean
+  mailEligible?: boolean
+  mailIneligibleReason?: string | null
+  mailEligibleDate?: string | null
   /** When true, show outreach contact inline under the action label */
   showOutreachContact?: boolean
   /** Drop outer border when nested inside a shared action card. */
@@ -183,6 +189,9 @@ export function RecommendedActionPanel({
   openTasks,
   mailQueueStatus = null,
   isMailable = false,
+  mailEligible,
+  mailIneligibleReason = null,
+  mailEligibleDate = null,
   showOutreachContact = false,
   embedded = false,
   onAction,
@@ -204,7 +213,7 @@ export function RecommendedActionPanel({
   const contactMethodHint = recommendedAction?.recommended_contact_method ?? null
   const includeMailQueue =
     isInMailBatch
-    || shouldIncludeMailQueue(isMailable)
+    || shouldIncludeMailQueue(mailEligible ?? isMailable)
   const promoteMailQueue =
     raValue === 'mail_ready' || contactMethodHint === 'direct_mail'
   const canMoveToSkipTrace = (
@@ -220,6 +229,15 @@ export function RecommendedActionPanel({
   const panelSx = embedded
     ? { p: 0, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }
     : { p: 2, border: 1, borderColor: 'divider', borderRadius: 1, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }
+  const mailHoldAlert = mailIneligibleReason === 'recently_sold' ? (
+    <Alert severity="warning" sx={{ mb: 2 }} data-testid="recent-sale-mail-hold">
+      Recent sale detected. Held in Skip Trace
+      {mailEligibleDate
+        ? ` until ${new Date(`${mailEligibleDate}T00:00:00`).toLocaleDateString()}.`
+        : ' until the two-year hold ends.'}
+      {' '}It will move to Awaiting Skip Trace when the hold expires.
+    </Alert>
+  ) : null
 
   const handleAction = async (action: string) => {
     setActionError(null)
@@ -336,6 +354,7 @@ export function RecommendedActionPanel({
         data-testid="recommended-action-panel"
         sx={panelSx}
       >
+        {mailHoldAlert}
         {isDNC && (
           <Chip
             icon={<BlockIcon />}
@@ -396,6 +415,7 @@ export function RecommendedActionPanel({
       data-testid="recommended-action-panel"
       sx={panelSx}
     >
+      {mailHoldAlert}
       {/* DNC badge — shown when lead is do_not_contact */}
       {isDNC && (
         <Chip
