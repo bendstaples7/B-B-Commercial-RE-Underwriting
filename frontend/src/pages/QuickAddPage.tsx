@@ -26,10 +26,12 @@ import {
 import MyLocationIcon from '@mui/icons-material/MyLocation'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import usePlacesAutocomplete from 'use-places-autocomplete'
 import { useGoogleMapsLoaded } from '@/context/GoogleMapsContext'
 import { leadService } from '@/services/leadApi'
+import { commandCenterService } from '@/services/api'
+import openLetterService from '@/services/openLetterApi'
 import type { QuickAddPayload, QuickAddResponse } from '@/types'
 import { QUICK_ADD_DEAL_SOURCES } from '@/types'
 
@@ -87,6 +89,7 @@ function hubspotSuccessMessage(result: QuickAddResponse): string | null {
 
 export function QuickAddPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const mapsLoaded = useGoogleMapsLoaded()
   const suggestionsRef = useRef<HTMLUListElement>(null)
 
@@ -104,6 +107,10 @@ export function QuickAddPage() {
     zip: string | null
   }>({ city: null, state: null, zip: null })
   const [successResult, setSuccessResult] = useState<QuickAddResponse | null>(null)
+  const [existingActionFeedback, setExistingActionFeedback] = useState<{
+    severity: 'success' | 'error'
+    message: string
+  } | null>(null)
 
   const {
     ready,
@@ -182,6 +189,43 @@ export function QuickAddPage() {
     },
   })
 
+  const existingLeadActionMutation = useMutation({
+    mutationFn: async ({
+      leadId,
+      action,
+    }: {
+      leadId: number
+      action: 'outreach' | 'mail'
+    }) => {
+      await commandCenterService.updateStatus(leadId, 'mailing_no_contact_made')
+      if (action === 'outreach') {
+        return 'Lead reactivated. Scoring will place it in the appropriate outreach flow.'
+      }
+
+      const result = await openLetterService.enqueue([leadId])
+      if (result.added > 0) {
+        return 'Lead reactivated and added to the mail queue.'
+      }
+      const outcome = result.results?.find((item) => item.lead_id === leadId)
+      if (outcome?.status === 'already_queued') {
+        return 'Lead reactivated and was already in the mail queue.'
+      }
+      throw new Error(outcome?.error || 'Lead was reactivated, but could not be added to mail.')
+    },
+    onSuccess: (message) => {
+      setExistingActionFeedback({ severity: 'success', message })
+    },
+    onError: (error: Error) => {
+      setExistingActionFeedback({
+        severity: 'error',
+        message: error.message || 'Could not reactivate this lead.',
+      })
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['quick-add-property-lookup'] })
+    },
+  })
+
   const handleSelect = (description: string, placeId: string) => {
     setAddress(description, false)
     clearSuggestions()
@@ -251,6 +295,7 @@ export function QuickAddPage() {
     setDealSource(QUICK_ADD_DEAL_SOURCES[0])
     setDateIdentified(todayIsoDate())
     setSuccessResult(null)
+    setExistingActionFeedback(null)
     setAddressError('')
     setParsedAddress({ city: null, state: null, zip: null })
     quickAddMutation.reset()
@@ -326,6 +371,7 @@ export function QuickAddPage() {
           value={address}
           onChange={(e) => {
             setAddress(e.target.value)
+            setExistingActionFeedback(null)
             setParsedAddress({ city: null, state: null, zip: null })
             if (e.target.value.trim()) setAddressError('')
           }}
@@ -417,7 +463,12 @@ export function QuickAddPage() {
             <Paper variant="outlined" sx={{ maxHeight: 200, overflowY: 'auto' }}>
               <List dense disablePadding>
                 {existingMatches.map((match) => (
-                  <ListItem key={match.lead_id} disablePadding divider>
+                  <ListItem
+                    key={match.lead_id}
+                    disablePadding
+                    divider
+                    sx={{ display: 'block' }}
+                  >
                     <ListItemButton
                       component={RouterLink}
                       to={`/leads/${match.lead_id}`}
@@ -434,10 +485,53 @@ export function QuickAddPage() {
                         secondaryTypographyProps={{ variant: 'caption' }}
                       />
                     </ListItemButton>
+                    {match.lead_status === 'deprioritize' &&
+                      address.trim() === debouncedAddress && (
+                      <Box
+                        sx={{ display: 'flex', gap: 1, px: 2, pb: 1, flexWrap: 'wrap' }}
+                        data-testid={`quick-add-reactivation-actions-${match.lead_id}`}
+                      >
+                        <Button
+                          aria-label={`Reactivate ${match.property_street || `lead ${match.lead_id}`} for outreach`}
+                          size="small"
+                          variant="outlined"
+                          disabled={existingLeadActionMutation.isPending}
+                          onClick={() => {
+                            setExistingActionFeedback(null)
+                            existingLeadActionMutation.mutate({
+                              leadId: match.lead_id,
+                              action: 'outreach',
+                            })
+                          }}
+                        >
+                          Reactivate for outreach
+                        </Button>
+                        <Button
+                          aria-label={`Reactivate ${match.property_street || `lead ${match.lead_id}`} and add to mail`}
+                          size="small"
+                          variant="contained"
+                          disabled={existingLeadActionMutation.isPending}
+                          onClick={() => {
+                            setExistingActionFeedback(null)
+                            existingLeadActionMutation.mutate({
+                              leadId: match.lead_id,
+                              action: 'mail',
+                            })
+                          }}
+                        >
+                          Reactivate + add to mail
+                        </Button>
+                      </Box>
+                    )}
                   </ListItem>
                 ))}
               </List>
             </Paper>
+          )}
+          {existingActionFeedback && (
+            <Alert severity={existingActionFeedback.severity} sx={{ mt: 1 }}>
+              {existingActionFeedback.message}
+            </Alert>
           )}
         </Box>
       )}

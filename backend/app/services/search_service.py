@@ -34,6 +34,9 @@ WEIGHT_WARM = 1.0
 WEIGHT_CONTACTED_STATUS = 0.5
 WEIGHT_RECENT_HUBSPOT = 0.2
 WEIGHT_LEAD_SCORE_FACTOR = 0.3
+WEIGHT_EXACT_FIELD_MATCH = 12.0
+WEIGHT_PREFIX_FIELD_MATCH = 9.0
+WEIGHT_CONTAINS_FIELD_MATCH = 7.0
 TOKEN_SIMILARITY_THRESHOLD = 0.25
 
 CONTACTED_STATUSES = (
@@ -112,6 +115,22 @@ def build_search_document_from_row(row: Any) -> str:
 
 def _digits_only(value: str) -> str:
     return re.sub(r'\D', '', value or '')
+
+
+def _normalize_search_text(value: str | None) -> str:
+    return ' '.join((value or '').lower().split())
+
+
+def phone_query_digits(query: str) -> str:
+    """Return digits only when the query is plausibly a phone number.
+
+    Address searches such as ``3208 W Wabansia`` must not match every phone
+    containing 3208 merely because the query includes a street number.
+    """
+    if re.search(r'[A-Za-z@]', query or ''):
+        return ''
+    digits = _digits_only(query)
+    return digits if len(digits) >= 4 else ''
 
 
 def _token_matches_text(token: str, text_value: str, fuzzy: bool = False) -> bool:
@@ -232,7 +251,7 @@ def compute_python_relevance_score(
     fuzzy: bool = False,
 ) -> float:
     """Compute relevance score for SQLite / Python fallback path."""
-    q_lower = query.lower()
+    q_lower = _normalize_search_text(query)
     doc = build_search_document_from_row(row)
     full_name = ' '.join(
         p for p in [
@@ -240,9 +259,16 @@ def compute_python_relevance_score(
             (getattr(row, 'owner_last_name', None) or '').strip(),
         ] if p
     ).lower()
-    street = (getattr(row, 'property_street', None) or '').lower()
+    street = _normalize_search_text(getattr(row, 'property_street', None))
 
     score = 0.0
+    if full_name == q_lower or street == q_lower:
+        score += WEIGHT_EXACT_FIELD_MATCH
+    elif full_name.startswith(q_lower) or street.startswith(q_lower):
+        score += WEIGHT_PREFIX_FIELD_MATCH
+    elif q_lower in full_name or q_lower in street:
+        score += WEIGHT_CONTAINS_FIELD_MATCH
+
     if full_name and q_lower in full_name:
         score += WEIGHT_FULL_NAME_SIM
     elif full_name and any(_token_matches_text(t, full_name, fuzzy=fuzzy) for t in tokens):
@@ -303,6 +329,34 @@ def build_match_context(row: Any, q_trimmed: str, q_digits: str) -> dict | None:
     matched_email = getattr(row, 'matched_email', None)
     if matched_email:
         return {'type': 'email', 'value': matched_email}
+
+    query = _normalize_search_text(q_trimmed)
+    tokens = tokenize_query(query)
+    street = (getattr(row, 'property_street', None) or '').strip()
+    normalized_street = _normalize_search_text(street)
+    if street and (
+        query in normalized_street
+        or (tokens and all(_token_matches_text(token, normalized_street) for token in tokens))
+    ):
+        return {'type': 'address', 'value': street}
+
+    name = ' '.join(
+        part for part in (
+            (getattr(row, 'primary_contact_first_name', None) or '').strip(),
+            (getattr(row, 'primary_contact_last_name', None) or '').strip(),
+        ) if part
+    ) or ' '.join(
+        part for part in (
+            (getattr(row, 'owner_first_name', None) or '').strip(),
+            (getattr(row, 'owner_last_name', None) or '').strip(),
+        ) if part
+    )
+    normalized_name = _normalize_search_text(name)
+    if name and (
+        query in normalized_name
+        or (tokens and all(_token_matches_text(token, normalized_name) for token in tokens))
+    ):
+        return {'type': 'name', 'value': name}
 
     return None
 
@@ -368,7 +422,7 @@ class SearchService:
         if not tokens:
             tokens = [q_trimmed]
 
-        q_digits = _digits_only(q_trimmed)
+        q_digits = phone_query_digits(q_trimmed)
         offset = (page - 1) * per_page
 
         dialect = self._dialect_name()
@@ -550,9 +604,27 @@ class SearchService:
     def _relevance_score_sql(self) -> str:
         doc = self._document_sql()
         contacted = ', '.join(f"'{s}'" for s in CONTACTED_STATUSES)
+        normalized_street = (
+            "lower(regexp_replace(trim(COALESCE(l.property_street, '')), '\\s+', ' ', 'g'))"
+        )
+        normalized_name = (
+            f"lower(regexp_replace(trim({FULL_NAME_EXPR.strip()}), '\\s+', ' ', 'g'))"
+        )
         return f"""
         (
-            {WEIGHT_FULL_NAME_SIM} * similarity({FULL_NAME_EXPR.strip()}, lower(:q))
+            CASE
+                WHEN {normalized_street} = :q_normalized
+                     OR {normalized_name} = :q_normalized
+                    THEN {WEIGHT_EXACT_FIELD_MATCH}
+                WHEN strpos({normalized_street}, :q_normalized) = 1
+                     OR strpos({normalized_name}, :q_normalized) = 1
+                    THEN {WEIGHT_PREFIX_FIELD_MATCH}
+                WHEN strpos({normalized_street}, :q_normalized) > 0
+                     OR strpos({normalized_name}, :q_normalized) > 0
+                    THEN {WEIGHT_CONTAINS_FIELD_MATCH}
+                ELSE 0
+            END
+            + {WEIGHT_FULL_NAME_SIM} * similarity({FULL_NAME_EXPR.strip()}, lower(:q))
             + {WEIGHT_STREET_SIM} * similarity(COALESCE(l.property_street, ''), lower(:q))
             + {WEIGHT_DOCUMENT_SIM} * similarity({doc}, lower(:q))
             + CASE WHEN COALESCE(l.is_warm, FALSE) THEN {WEIGHT_WARM} ELSE 0 END
@@ -591,6 +663,7 @@ class SearchService:
             'user_id': user_id,
             'is_admin': is_admin,
             'q': q_trimmed,
+            'q_normalized': _normalize_search_text(q_trimmed),
             'pattern': f'%{q_trimmed}%',
             'phone_digits_pattern': f'%{q_digits}%' if len(q_digits) >= 4 else None,
             'token_threshold': TOKEN_SIMILARITY_THRESHOLD,
@@ -665,9 +738,14 @@ class SearchService:
                     )
                 END AS matched_email
             FROM leads l
-            LEFT JOIN property_contacts pc_primary
-                ON pc_primary.property_id = l.id AND pc_primary.is_primary = TRUE
-            LEFT JOIN contacts primary_c ON primary_c.id = pc_primary.contact_id
+            LEFT JOIN LATERAL (
+                SELECT c.first_name, c.last_name
+                FROM property_contacts pc
+                JOIN contacts c ON c.id = pc.contact_id
+                WHERE pc.property_id = l.id AND pc.is_primary = TRUE
+                ORDER BY pc.id
+                LIMIT 1
+            ) primary_c ON TRUE
             WHERE
                 (l.owner_user_id = :user_id OR :is_admin = TRUE)
                 AND (l.owner_user_id IS NOT NULL OR :is_admin = TRUE)

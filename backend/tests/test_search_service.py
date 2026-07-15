@@ -2,8 +2,10 @@
 import pytest
 
 from app.services.search_service import (
+    build_match_context,
     build_search_document_from_row,
     compute_python_relevance_score,
+    phone_query_digits,
     tokenize_query,
 )
 
@@ -29,6 +31,25 @@ class TestTokenizeQuery:
 
     def test_strips_punctuation(self):
         assert tokenize_query('Ronald, Jutkins') == ['Ronald', 'Jutkins']
+
+
+class TestPhoneQueryDetection:
+    def test_address_number_does_not_become_phone_search(self):
+        assert phone_query_digits('3208 W Wabansia') == ''
+
+    def test_formatted_phone_query_keeps_digits(self):
+        assert phone_query_digits('(312) 543-2084') == '3125432084'
+
+
+class TestPostgresRelevanceSql:
+    def test_normalizes_name_case_and_treats_like_wildcards_literally(self):
+        from app.services.search_service import SearchService
+
+        sql = SearchService(session=object())._relevance_score_sql()
+
+        assert "lower(regexp_replace(trim(" in sql
+        assert "strpos(" in sql
+        assert "LIKE :q_normalized" not in sql
 
 
 class TestBuildSearchDocument:
@@ -109,3 +130,45 @@ class TestPythonRelevanceScore:
             FakeRow(**base, is_warm=True), 'Ronald', ['Ronald'],
         )
         assert warm > cold
+
+    def test_exact_address_prefix_outranks_unrelated_warm_lead(self):
+        query = '3208 W Wabansia'
+        tokens = tokenize_query(query)
+        address_match = compute_python_relevance_score(
+            FakeRow(
+                owner_first_name='Jess',
+                owner_last_name='Martin',
+                property_street='3208 W Wabansia Ave',
+                lead_score=20,
+                is_warm=False,
+                lead_status='mailing_no_contact_made',
+            ),
+            query,
+            tokens,
+        )
+        unrelated_warm = compute_python_relevance_score(
+            FakeRow(
+                owner_first_name='Other',
+                owner_last_name='Owner',
+                property_street='4144 N Southport Ave',
+                lead_score=100,
+                is_warm=True,
+                lead_status='mailing_contacted_interested',
+            ),
+            query,
+            tokens,
+        )
+        assert address_match > unrelated_warm
+
+    def test_address_match_context_is_returned(self):
+        row = FakeRow(
+            property_street='3208 W Wabansia Ave',
+            owner_first_name='Jess',
+            owner_last_name='Martin',
+            matched_phone=None,
+            matched_email=None,
+        )
+        assert build_match_context(row, '3208 W Wabansia', '') == {
+            'type': 'address',
+            'value': '3208 W Wabansia Ave',
+        }

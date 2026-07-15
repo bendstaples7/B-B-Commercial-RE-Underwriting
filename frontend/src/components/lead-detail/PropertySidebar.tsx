@@ -28,7 +28,7 @@ import {
   ownerDisplayEntries,
 } from '@/utils/propertyContacts'
 import { formatImportNote } from './leadDetailFormatters'
-import { PhoneRow } from '@/components/PhoneRow'
+import { hasNonBlankPhones, PhoneList } from '@/components/PhoneRow'
 import { ccCardSx } from '@/components/lead-detail/commandCenterChrome'
 
 const SidebarStackedContext = createContext(false)
@@ -314,11 +314,9 @@ export function PropertySidebar({
             }
           />
         ))}
-        {phones.length > 0 && (
+        {hasNonBlankPhones(phones) && (
           <SidebarLabeledContent label="Phone" testId="sidebar-phones">
-            {phones.map((p, i) => (
-              <PhoneRow key={p.id ?? `${p.value}-${i}`} phone={p} dense={!stacked} />
-            ))}
+            <PhoneList phones={phones} dense={!stacked} />
           </SidebarLabeledContent>
         )}
         {emails.length > 0 && (

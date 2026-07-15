@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Alert,
@@ -27,7 +27,6 @@ import ApartmentIcon from '@mui/icons-material/Apartment'
 import { multifamilyService } from '@/services/api'
 import { leadService } from '@/services/leadApi'
 import { formatPhoneNumber } from '@/utils/phone'
-import { formatPhoneConfidence } from '@/utils/helpers'
 import {
   formatDate,
   formatDateTime,
@@ -41,6 +40,7 @@ import { RecalculateButton } from '@/components/RecalculateButton'
 import { ScoreBreakdownCard } from '@/components/ScoreBreakdownCard'
 import { ScoreHistoryTimeline } from '@/components/ScoreHistoryTimeline'
 import { ScoreLegend } from '@/components/ScoreLegend'
+import { hasNonBlankPhones, PhoneList } from '@/components/PhoneRow'
 import { MotivationSignalsPanel } from '@/components/lead-detail/MotivationSignalsPanel'
 import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
 import { contactDisplayName } from '@/utils/propertyContacts'
@@ -184,7 +184,7 @@ export function LeadDetailTabPanel({
     }
   }
 
-  const fieldGroup = (title: string, fields: [string, string | number | null | undefined][]) => (
+  const fieldGroup = (title: string, fields: [string, ReactNode][]) => (
     <Box sx={{ mb: 3 }}>
       <Typography sx={ccSubsectionTitleSx}>
         {title}
@@ -237,20 +237,10 @@ export function LeadDetailTabPanel({
             <>
               {infoContacts.map((contact, idx) => {
                 const name = contactDisplayName(contact)
-                const phoneRows = (contact.phones ?? []).map((p, i) => {
-                  const confidence = formatPhoneConfidence(p.confidence_score, p.notes)
-                  const display = confidence
-                    ? `${formatPhoneNumber(p.value)} · ${confidence}`
-                    : formatPhoneNumber(p.value)
-                  return [
-                    `Phone${(contact.phones?.length ?? 0) > 1 ? ` ${i + 1}` : ''}`,
-                    display,
-                  ] as [string, string | null]
-                })
                 const emailRows = (contact.emails ?? []).map((e, i) => [
                   `Email${(contact.emails?.length ?? 0) > 1 ? ` ${i + 1}` : ''}`,
                   e.value,
-                ] as [string, string | null])
+                ] as [string, ReactNode])
                 return (
                   <Box key={contact.id}>
                     {fieldGroup(
@@ -261,7 +251,17 @@ export function LeadDetailTabPanel({
                       } ${idx + 1}${contact.is_primary ? ' (Primary)' : ''}`,
                       [
                         ['Name', name || null],
-                        ...phoneRows,
+                        ...(contact.phones && hasNonBlankPhones(contact.phones)
+                          ? [[
+                              'Phone',
+                              <PhoneList
+                                key={`phones-${contact.id}`}
+                                phones={contact.phones}
+                                showLabel
+                                dense={false}
+                              />,
+                            ] as [string, ReactNode]]
+                          : []),
                         ...emailRows,
                       ],
                     )}

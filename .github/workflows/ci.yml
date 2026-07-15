@@ -335,6 +335,32 @@ jobs:
           CELERY_BROKER_URL: redis://localhost:6379/0
           KIRO_MIGRATION: "1"
 
+      - name: Schema drift gate — ORM tables and columns
+        run: python scripts/check_model_schema.py
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migration_test_db
+          FLASK_ENV: testing
+          SECRET_KEY: ci-test-secret-key
+          JWT_SECRET_KEY: ci-test-jwt-secret
+          FLASK_APP: app
+          REDIS_URL: redis://localhost:6379/0
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          KIRO_MIGRATION: "1"
+
+      - name: Fresh PostgreSQL runtime smoke — multifamily deals
+        run: pytest -q tests/test_fresh_postgres_runtime_contract.py
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migration_test_db
+          MIGRATION_TEST_DB_URL: postgresql://postgres:postgres@localhost:5432/migration_test_db
+          FLASK_ENV: testing
+          SECRET_KEY: ci-test-secret-key
+          JWT_SECRET_KEY: ci-test-jwt-secret
+          REDIS_URL: redis://localhost:6379/0
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          KIRO_MIGRATION: "1"
+
       - name: Dedup migration gate regression (f9 blocked without merge)
         # Production deploy failed when f9 ran against legacy duplicate clusters.
         # CI fresh-DB upgrades never hit this — seed dupes at f8, assert f9 fails,

@@ -1,7 +1,7 @@
 /**
  * SearchResultsPage — full-page paginated search results for leads and sessions.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link as RouterLink, useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -29,6 +29,7 @@ import { groupSearchLeadsByPerson } from '@/utils/groupSearchLeadsByPerson'
 import { clampPage, computeTotalPages } from '@/utils/pagination'
 
 const PER_PAGE = 25
+const SEARCH_DEBOUNCE_MS = 300
 
 export function SearchResultsPage() {
   const navigate = useNavigate()
@@ -36,14 +37,36 @@ export function SearchResultsPage() {
   const q = (searchParams.get('q') ?? '').trim()
   const page = Math.max(1, parseInt(searchParams.get('page') ?? '1', 10) || 1)
   const [draftQuery, setDraftQuery] = useState(q)
+  const preserveShortDraftRef = useRef(false)
 
   useEffect(() => {
+    if (preserveShortDraftRef.current && q === '') {
+      preserveShortDraftRef.current = false
+      return
+    }
+    preserveShortDraftRef.current = false
     setDraftQuery(q)
   }, [q])
 
+  useEffect(() => {
+    const trimmed = draftQuery.trim()
+    if (trimmed === q) return
+
+    const timeoutId = window.setTimeout(() => {
+      if (trimmed.length >= 2) {
+        navigate(`/search?q=${encodeURIComponent(trimmed)}&page=1`, { replace: true })
+      } else {
+        preserveShortDraftRef.current = true
+        setSearchParams({}, { replace: true })
+      }
+    }, SEARCH_DEBOUNCE_MS)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [draftQuery, navigate, q, setSearchParams])
+
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['search-results', q, page],
-    queryFn: () => searchService.search({ q, page, per_page: PER_PAGE }),
+    queryFn: ({ signal }) => searchService.search({ q, page, per_page: PER_PAGE, signal }),
     enabled: q.length >= 2,
   })
 
