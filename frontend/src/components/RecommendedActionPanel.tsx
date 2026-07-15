@@ -197,7 +197,9 @@ export function RecommendedActionPanel({
   const isInMailBatch = mailQueueStatus === 'queued'
   const raValue = recommendedAction?.value ?? null
   const contactMethodHint = recommendedAction?.recommended_contact_method ?? null
-  const includeMailQueue = shouldIncludeMailQueue(isMailable, raValue, contactMethodHint)
+  const includeMailQueue =
+    isInMailBatch
+    || shouldIncludeMailQueue(isMailable, raValue, contactMethodHint)
   const promoteMailQueue =
     raValue === 'mail_ready' || contactMethodHint === 'direct_mail'
   const universalActions = getUniversalActions(includeMailQueue, promoteMailQueue)

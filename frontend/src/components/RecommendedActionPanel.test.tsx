@@ -642,6 +642,8 @@ describe('RecommendedActionPanel', () => {
       )
 
       expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeInTheDocument()
+      const buttons = screen.getByTestId('ra-universal-actions').querySelectorAll('button')
+      expect(buttons[0]).toHaveAttribute('data-testid', 'ra-universal-btn-add_to_mail_batch')
     })
 
     it('promotes Add to Mail Queue first when RA is mail_ready', () => {
@@ -667,6 +669,24 @@ describe('RecommendedActionPanel', () => {
             leadStatus="mailing_no_contact_made"
             openTasks={[]}
             isMailable
+            mailQueueStatus="queued"
+            onAction={vi.fn()}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.getByTestId('ra-universal-btn-in-mail-batch')).toBeDisabled()
+      expect(screen.getByTestId('ra-universal-btn-view-mail-batch')).toBeInTheDocument()
+      expect(screen.queryByTestId('ra-universal-btn-add_to_mail_batch')).not.toBeInTheDocument()
+    })
+
+    it('shows queued controls even when no longer mailable or mail-recommended', () => {
+      render(
+        <MemoryRouter>
+          <RecommendedActionPanel
+            recommendedAction={makeRA('call_ready', 'Call Now')}
+            leadStatus="mailing_no_contact_made"
+            openTasks={[]}
             mailQueueStatus="queued"
             onAction={vi.fn()}
           />
