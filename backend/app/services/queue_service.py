@@ -130,11 +130,34 @@ def _due_task_context(lead_ids: list[int], cutoff: date) -> dict[int, dict]:
         .all()
     )
     context: dict[int, dict] = {}
+    sort_keys: dict[int, tuple[datetime, int, int]] = {}
+
+    def consider(
+        lead_id: int,
+        title: str,
+        due_at: datetime,
+        source_rank: int,
+        task_id: int,
+    ) -> None:
+        """Keep the earliest due task while returning a date-only API field."""
+        comparable_due = due_at.replace(tzinfo=None)
+        candidate_key = (comparable_due, source_rank, task_id)
+        if lead_id in sort_keys and candidate_key >= sort_keys[lead_id]:
+            return
+        sort_keys[lead_id] = candidate_key
+        context[lead_id] = {
+            'due_task_title': title,
+            'due_task_due_date': comparable_due.date().isoformat(),
+        }
+
     for task in tasks:
-        context.setdefault(task.lead_id, {
-            'due_task_title': task.title,
-            'due_task_due_date': task.due_date.isoformat() if task.due_date else None,
-        })
+        consider(
+            task.lead_id,
+            task.title,
+            datetime.combine(task.due_date, datetime.min.time()),
+            0,
+            task.id,
+        )
     cutoff_dt = datetime.combine(cutoff, datetime.max.time())
     direct_tasks = (
         Task.query
@@ -147,15 +170,7 @@ def _due_task_context(lead_ids: list[int], cutoff: date) -> dict[int, dict]:
         .all()
     )
     for task in direct_tasks:
-        task_date = task.due_date.date()
-        current = context.get(task.lead_id)
-        if current is None or task_date < date.fromisoformat(
-            current['due_task_due_date']
-        ):
-            context[task.lead_id] = {
-                'due_task_title': task.title,
-                'due_task_due_date': task_date.isoformat(),
-            }
+        consider(task.lead_id, task.title, task.due_date, 1, task.id)
 
     associated_tasks = (
         db.session.query(Task, TaskAssociation.target_id)
@@ -174,15 +189,7 @@ def _due_task_context(lead_ids: list[int], cutoff: date) -> dict[int, dict]:
         .all()
     )
     for task, lead_id in associated_tasks:
-        task_date = task.due_date.date()
-        current = context.get(lead_id)
-        if current is None or task_date < date.fromisoformat(
-            current['due_task_due_date']
-        ):
-            context[lead_id] = {
-                'due_task_title': task.title,
-                'due_task_due_date': task_date.isoformat(),
-            }
+        consider(lead_id, task.title, task.due_date, 1, task.id)
     return context
 
 
@@ -297,6 +304,14 @@ def _complete_owner_mail_clause():
         func.nullif(func.trim(Lead.mailing_city), '').isnot(None),
         func.nullif(func.trim(Lead.mailing_state), '').isnot(None),
         func.nullif(func.trim(Lead.mailing_zip), '').isnot(None),
+        func.nullif(func.trim(Lead.returned_addresses), '').is_(None),
+    )
+
+
+def _owner_mail_candidate_clause():
+    """Broad SQL prefilter; Python validation handles embedded one-line mail."""
+    return and_(
+        func.nullif(func.trim(Lead.mailing_address), '').isnot(None),
         func.nullif(func.trim(Lead.returned_addresses), '').is_(None),
     )
 
@@ -906,7 +921,7 @@ class QueueService:
             .filter(
                 Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
                 Lead.recommended_action == 'mail_ready',
-                _complete_owner_mail_clause(),
+                _owner_mail_candidate_clause(),
                 ~already_queued,
             )
         )

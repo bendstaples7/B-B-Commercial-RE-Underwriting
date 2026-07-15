@@ -303,13 +303,21 @@ def test_todays_action_includes_associated_crm_task_title(app):
 
     with app.app_context():
         lead = _make_lead(app, '43 HubSpot Task Context St')
+        direct_task = Task(
+            title='Later direct CRM task',
+            due_date=datetime.combine(date.today(), datetime.max.time()),
+            status='open',
+            source='manual',
+            lead_id=lead.id,
+            task_type='custom',
+        )
         task = Task(
             title='Follow up on imported HubSpot task',
-            due_date=datetime.now() - timedelta(days=1),
+            due_date=datetime.combine(date.today(), datetime.min.time()),
             status='open',
             source='hubspot_import',
         )
-        db.session.add(task)
+        db.session.add_all([direct_task, task])
         db.session.flush()
         db.session.add(TaskAssociation(
             task_id=task.id,
@@ -644,6 +652,22 @@ def test_mail_candidates_excludes_recently_sold(app):
         svc = QueueService(owner_user_id='test-owner')
         rows, total = svc.get_mail_candidates('test-owner')
         assert lead.id not in [r['id'] for r in rows]
+
+
+def test_mail_candidates_accepts_parseable_one_line_owner_address(app):
+    with app.app_context():
+        lead = _make_mail_ready_lead(
+            app,
+            '20a Embedded Owner Mail St',
+            mailing_address='20a Embedded Owner Mail St, Chicago, IL 60601',
+            mailing_city=None,
+            mailing_state=None,
+            mailing_zip=None,
+        )
+        rows, _ = QueueService(owner_user_id='test-owner').get_mail_candidates(
+            'test-owner',
+        )
+        assert lead.id in [row['id'] for row in rows]
 
 
 def test_mail_candidates_includes_last_sale_at(app):

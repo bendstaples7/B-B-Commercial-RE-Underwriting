@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+
+from flask import current_app
 
 from app import db
 from app.exceptions import MailQueueError
@@ -26,6 +28,30 @@ from app.services.hubspot_task_completion_service import sync_pending_hubspot_co
 logger = logging.getLogger(__name__)
 
 MAX_MAIL_ENQUEUE_LEADS = 1000
+
+
+def _refresh_rejected_leads(user_id: str, lead_ids: list[int]) -> None:
+    """Rescore rejected leads without blocking production enqueue requests."""
+    if not lead_ids:
+        return
+    if current_app.config.get('TESTING'):
+        from app.services.lead_scoring_engine import LeadScoringEngine
+        LeadScoringEngine().bulk_rescore(
+            user_id,
+            lead_ids=lead_ids,
+            continue_on_error=True,
+        )
+        return
+    try:
+        from celery_worker import bulk_rescore_task
+        bulk_rescore_task.delay(user_id, lead_ids)
+    except Exception as exc:
+        logger.warning(
+            'Could not dispatch rejected mail lead rescore for %d leads: %s',
+            len(lead_ids),
+            exc,
+            exc_info=True,
+        )
 
 
 class MailQueueService:
@@ -88,7 +114,13 @@ class MailQueueService:
             'added': attempt.added_count,
             'skipped': attempt.skipped_count,
             'invalid': attempt.invalid_count,
-            'created_at': attempt.created_at.isoformat() if attempt.created_at else None,
+            'created_at': (
+                attempt.created_at.replace(tzinfo=timezone.utc)
+                .isoformat()
+                .replace('+00:00', 'Z')
+                if attempt.created_at
+                else None
+            ),
         }
         if include_results:
             stored_results = [dict(item) for item in (attempt.results or [])]
@@ -322,10 +354,7 @@ class MailQueueService:
         db.session.commit()
         sync_pending_hubspot_completions(hubspot_sync_ids)
         refresh_leads_after_mail_task_changes(queued_lead_ids)
-        if rejected_lead_ids:
-            from app.services.lead_refresh import refresh_lead_scoring
-            for rejected_lead_id in rejected_lead_ids:
-                refresh_lead_scoring(rejected_lead_id)
+        _refresh_rejected_leads(user_id, rejected_lead_ids)
         return {
             'attempt_id': attempt.id,
             'added': added,
@@ -339,8 +368,8 @@ class MailQueueService:
         from app.services.queue_service import QueueService
 
         ids = QueueService().get_mail_candidate_ids(user_id)
-        if limit is not None:
-            ids = ids[:limit]
+        effective_limit = min(limit or MAX_MAIL_ENQUEUE_LEADS, MAX_MAIL_ENQUEUE_LEADS)
+        ids = ids[:effective_limit]
 
         would_add = 0
         would_skip = 0
@@ -412,8 +441,8 @@ class MailQueueService:
         from app.services.queue_service import QueueService
 
         ids = QueueService().get_mail_candidate_ids(user_id)
-        if limit is not None:
-            ids = ids[:limit]
+        effective_limit = min(limit or MAX_MAIL_ENQUEUE_LEADS, MAX_MAIL_ENQUEUE_LEADS)
+        ids = ids[:effective_limit]
         if not ids:
             return {
                 'added': 0,

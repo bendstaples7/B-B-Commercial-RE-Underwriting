@@ -85,6 +85,8 @@ def _apply_owner_mail_gate(
     action_signals: dict,
 ) -> tuple[str | None, str | None, str, dict]:
     """Prevent direct-mail recommendations without complete owner mailing data."""
+    if action_signals.get('cold_mail_blocked') and method == 'direct_mail':
+        return action, None, winning_rule, action_signals
     missing_only_channel = (
         method is None
         and action in OUTREACH_ACTIONS
@@ -450,12 +452,15 @@ class LeadScoringEngine:
         recommended_action, winning_rule, action_signals = self.evaluate_recommended_action(
             lead, total, data_quality_score, score_tier,
         )
-        recommended_action, winning_rule, action_signals = _apply_cold_mail_block_to_action(
-            lead, recommended_action, winning_rule, action_signals,
-        )
         recommended_action, recommended_contact_method = self._apply_outreach_method(
             lead, recommended_action, action_signals, winning_rule=winning_rule,
         )
+        pre_block_action = recommended_action
+        recommended_action, winning_rule, action_signals = _apply_cold_mail_block_to_action(
+            lead, recommended_action, winning_rule, action_signals,
+        )
+        if recommended_action != pre_block_action:
+            recommended_contact_method = None
         (
             recommended_action,
             recommended_contact_method,
@@ -950,8 +955,15 @@ class LeadScoringEngine:
     # Bulk rescoring
     # ------------------------------------------------------------------
 
-    def bulk_rescore(self, user_id: str, lead_ids: Optional[list[int]] = None) -> int:
-        """Refresh live scores without append-only history rows (batched commits)."""
+    def bulk_rescore(
+        self,
+        user_id: str,
+        lead_ids: Optional[list[int]] = None,
+        *,
+        continue_on_error: bool = False,
+        failure_ids: Optional[list[int]] = None,
+    ) -> int:
+        """Refresh live scores in batches, optionally isolating bad lead rows."""
         rescored = 0
         pending_commits = 0
 
@@ -982,8 +994,36 @@ class LeadScoringEngine:
             self.persist(lead, result, write_history=False, commit=False)
             rescored += 1
             pending_commits += 1
-            if pending_commits >= BULK_RESCORE_BATCH_SIZE:
+            if (
+                pending_commits >= BULK_RESCORE_BATCH_SIZE
+                and not continue_on_error
+            ):
                 _flush_batch()
+
+        def _attempt_rescore(
+            lead: Lead,
+            contact_reachability: tuple[float, dict] | None = None,
+        ) -> None:
+            nonlocal rescored, pending_commits
+            if not continue_on_error:
+                _rescore_one(lead, contact_reachability)
+                return
+            before_rescored = rescored
+            before_pending = pending_commits
+            try:
+                with db.session.begin_nested():
+                    _rescore_one(lead, contact_reachability)
+            except Exception as exc:
+                rescored = before_rescored
+                pending_commits = before_pending
+                if failure_ids is not None:
+                    failure_ids.append(lead.id)
+                logger.warning(
+                    'Bulk rescore skipped lead %s after scoring error: %s',
+                    lead.id,
+                    exc,
+                    exc_info=True,
+                )
 
         def _lead_query():
             return Lead.query.options(selectinload(Lead.analysis_session))
@@ -995,7 +1035,9 @@ class LeadScoringEngine:
                     leads = _lead_query().filter(Lead.id.in_(batch_ids)).all()
                     reachability = rubric.batch_contact_reachability_scores(leads)
                     for lead in leads:
-                        _rescore_one(lead, reachability.get(lead.id))
+                        _attempt_rescore(lead, reachability.get(lead.id))
+                    if continue_on_error:
+                        _flush_batch()
             else:
                 offset = 0
                 while True:
@@ -1007,7 +1049,9 @@ class LeadScoringEngine:
                         break
                     reachability = rubric.batch_contact_reachability_scores(leads)
                     for lead in leads:
-                        _rescore_one(lead, reachability.get(lead.id))
+                        _attempt_rescore(lead, reachability.get(lead.id))
+                    if continue_on_error:
+                        _flush_batch()
                     offset += BULK_RESCORE_BATCH_SIZE
             _flush_batch()
         except Exception:
@@ -1194,12 +1238,15 @@ class LeadScoringEngine:
         action, winning_rule, signals = LeadScoringEngine.evaluate_recommended_action(
             lead, total, data_quality, tier,
         )
-        refined, winning_rule, signals = _apply_cold_mail_block_to_action(
-            lead, action, winning_rule, signals,
-        )
         refined, method = LeadScoringEngine()._apply_outreach_method(
-            lead, refined, signals, winning_rule=winning_rule,
+            lead, action, signals, winning_rule=winning_rule,
         )
+        pre_block = refined
+        refined, winning_rule, signals = _apply_cold_mail_block_to_action(
+            lead, refined, winning_rule, signals,
+        )
+        if refined != pre_block:
+            method = None
         refined, method, winning_rule, signals = _apply_owner_mail_gate(
             lead, refined, method, winning_rule, signals,
         )

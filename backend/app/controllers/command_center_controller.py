@@ -889,7 +889,11 @@ def move_to_skip_trace(lead_id: int):
     if denied is not None:
         return denied
 
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    elif not isinstance(data, dict):
+        return jsonify({'error': 'Request body must be a JSON object'}), 400
     complete_task_id = data.get('complete_task_id')
     if complete_task_id is not None:
         try:

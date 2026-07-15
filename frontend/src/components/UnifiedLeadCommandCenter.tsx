@@ -925,10 +925,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             ? 'Current task completed and lead moved to Skip Trace'
             : 'Lead moved to Skip Trace',
         })
-        await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
-        await queryClient.invalidateQueries({ queryKey: ['leadScore', leadId] })
-        await queryClient.invalidateQueries({ queryKey: ['queue-todays-action'] })
-        await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+        await handleStatusChanged()
         return
       }
       case 'add_contact_info':
@@ -967,6 +964,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     leadLoading,
     leadDetailError,
     openTasks,
+    handleStatusChanged,
   ])
 
   const handleCreateTask = useCallback(() => {

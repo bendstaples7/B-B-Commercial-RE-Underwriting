@@ -528,6 +528,41 @@ class TestScoringMailGate:
 
         assert LeadScoringEngine.compute_recommended_action(lead) == 'nurture'
 
+    def test_ready_for_outreach_refined_to_mail_is_still_blocked(
+        self,
+        monkeypatch,
+    ):
+        lead = MagicMock()
+        lead.id = 103
+        lead.lead_score = 75.0
+        lead.data_completeness_score = 50.0
+        lead.motivation_score = 0.0
+        lead.mailing_address = '1 Main'
+        lead.mailing_city = 'Chicago'
+        lead.mailing_state = 'IL'
+        lead.mailing_zip = '60601'
+        lead.returned_addresses = None
+        monkeypatch.setattr(
+            LeadScoringEngine,
+            'evaluate_recommended_action',
+            staticmethod(lambda *_args, **_kwargs: (
+                'ready_for_outreach',
+                'high_score_outreach',
+                {},
+            )),
+        )
+        monkeypatch.setattr(
+            LeadScoringEngine,
+            '_apply_outreach_method',
+            lambda *_args, **_kwargs: ('mail_ready', 'direct_mail'),
+        )
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine.cold_mail_block_reason',
+            lambda _lead: 'institutional_owner',
+        )
+
+        assert LeadScoringEngine.compute_recommended_action(lead) == 'nurture'
+
 
 @pytest.mark.usefixtures("app")
 class TestEntityResolutionNonprofitPath:

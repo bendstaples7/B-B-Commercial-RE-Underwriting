@@ -65,9 +65,9 @@ def upgrade():
         _street, city, state, zip_code = parsed
         updates.append({
             'lead_id': row['id'],
-            'city': row['mailing_city'] or city,
-            'state': row['mailing_state'] or state,
-            'zip_code': row['mailing_zip'] or zip_code,
+            'city': (row['mailing_city'] or '').strip() or city,
+            'state': (row['mailing_state'] or '').strip() or state,
+            'zip_code': (row['mailing_zip'] or '').strip() or zip_code,
         })
     if updates:
         bind.execute(

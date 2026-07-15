@@ -369,7 +369,8 @@ def test_incomplete_owner_mail_falls_back_to_phone_instead_of_mail_ready():
         has_email=False,
     )
     lead.mailing_city = None
-    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
+         patch('app.services.lead_scoring_engine._mail_work_in_flight', return_value=False):
         result = ActionEngineService.compute_recommended_action(lead)
     assert result == 'call_ready'
 

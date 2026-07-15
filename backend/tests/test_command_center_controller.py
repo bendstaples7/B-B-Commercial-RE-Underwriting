@@ -725,6 +725,64 @@ class TestMoveToSkipTrace:
             )
             assert response.status_code == 404
 
+    def test_rejects_non_object_payload(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '824a Invalid Payload St')
+            response = client.post(
+                f'/api/leads/{lead.id}/move-to-skip-trace',
+                headers=_AUTH_HEADERS,
+                json=[],
+            )
+            assert response.status_code == 400
+
+    def test_does_not_complete_existing_skip_trace_handoff(self, client, app):
+        with app.app_context():
+            lead = _make_lead(app, '824b Existing Skip Trace St')
+            handoff = _make_task(
+                app,
+                lead.id,
+                task_type='skip_trace_owner',
+                title='Awaiting skip trace',
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/move-to-skip-trace',
+                headers=_AUTH_HEADERS,
+                json={'complete_task_id': handoff.id},
+            )
+            assert response.status_code == 400
+            db.session.refresh(handoff)
+            assert handoff.status == 'open'
+
+    def test_completed_analysis_task_preserves_analysis_side_effect(
+        self,
+        client,
+        app,
+    ):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '824c Analysis Complete St',
+                analysis_complete=False,
+            )
+            analysis_task = _make_task(
+                app,
+                lead.id,
+                task_type='run_property_analysis',
+                title='Run property analysis',
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/move-to-skip-trace',
+                headers=_AUTH_HEADERS,
+                json={'complete_task_id': analysis_task.id},
+            )
+            assert response.status_code == 200
+            db.session.refresh(lead)
+            assert lead.analysis_complete is True
+            assert LeadTimelineEntry.query.filter_by(
+                lead_id=lead.id,
+                event_type='property_analysis_completed',
+            ).count() == 1
+
     @pytest.mark.parametrize(
         'terminal_status',
         ['deprioritize', 'deal_won', 'deal_lost', 'suppressed', 'do_not_contact'],
@@ -1024,14 +1082,60 @@ class TestCompleteTask:
                 task_type='skip_trace_owner',
                 title='Awaiting skip trace',
             )
+            mirror = Task(
+                title=task.title,
+                status='open',
+                source='manual',
+                lead_id=lead.id,
+                task_type=task.task_type,
+            )
+            db.session.add(mirror)
+            db.session.commit()
             response = client.post(
                 f'/api/leads/{lead.id}/tasks/{task.id}/complete',
                 headers=_AUTH_HEADERS,
             )
             assert response.status_code == 200
             db.session.refresh(lead)
+            db.session.refresh(mirror)
             assert lead.needs_skip_trace is False
             assert lead.date_skip_traced == date.today()
+            assert mirror.status == 'completed'
+
+    def test_completing_one_duplicate_skip_trace_task_keeps_handoff_open(
+        self,
+        client,
+        app,
+    ):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '18aa Duplicate Skip Trace St',
+                lead_status='skip_trace',
+                needs_skip_trace=True,
+            )
+            first = _make_task(
+                app,
+                lead.id,
+                task_type='skip_trace_owner',
+                title='Awaiting skip trace one',
+            )
+            second = _make_task(
+                app,
+                lead.id,
+                task_type='skip_trace_owner',
+                title='Awaiting skip trace two',
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/tasks/{first.id}/complete',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            db.session.refresh(lead)
+            db.session.refresh(second)
+            assert second.status == 'open'
+            assert lead.needs_skip_trace is True
+            assert lead.date_skip_traced is None
 
     def test_complete_task_rejects_non_owner(self, client, app):
         with app.app_context():

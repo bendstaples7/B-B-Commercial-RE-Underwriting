@@ -80,17 +80,17 @@ def enqueue():
     lead_ids = data.get('lead_ids') or []
     if not isinstance(lead_ids, list):
         return jsonify({'error': 'lead_ids must be a list'}), 400
-    if len(lead_ids) > MAX_MAIL_ENQUEUE_LEADS:
+    try:
+        parsed_ids = list(dict.fromkeys(int(x) for x in lead_ids))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'lead_ids must contain integers'}), 400
+    if len(parsed_ids) > MAX_MAIL_ENQUEUE_LEADS:
         return jsonify({
             'error': (
                 f'No more than {MAX_MAIL_ENQUEUE_LEADS} leads '
                 'may be queued at once'
             ),
         }), 400
-    try:
-        parsed_ids = list(dict.fromkeys(int(x) for x in lead_ids))
-    except (TypeError, ValueError):
-        return jsonify({'error': 'lead_ids must contain integers'}), 400
     source_queue = data.get('source_queue')
     if source_queue is not None and not isinstance(source_queue, str):
         return jsonify({'error': 'source_queue must be a string'}), 400

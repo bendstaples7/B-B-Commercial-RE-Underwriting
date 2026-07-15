@@ -321,10 +321,12 @@ describe('RecommendedActionPanel', () => {
       'deal_lost',
       'suppressed',
       'do_not_contact',
+      'skip_trace',
+      'awaiting_skip_trace',
     ] as const)('hides Move to Skip Trace for terminal status %s', (leadStatus) => {
       render(
         <RecommendedActionPanel
-          recommendedAction={makeRA('nurture')}
+          recommendedAction={makeRA('enrich_data')}
           leadStatus={leadStatus}
           openTasks={[]}
           onAction={vi.fn()}
@@ -332,7 +334,7 @@ describe('RecommendedActionPanel', () => {
       )
 
       expect(
-        screen.queryByTestId('ra-universal-btn-move_to_skip_trace'),
+        screen.queryByRole('button', { name: 'Move to Skip Trace' }),
       ).not.toBeInTheDocument()
     })
   })

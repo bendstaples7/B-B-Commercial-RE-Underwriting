@@ -2,6 +2,7 @@
 import logging
 from datetime import datetime, date, timezone
 
+from flask import has_app_context
 from sqlalchemy import asc, nullslast
 
 from app import db
@@ -14,6 +15,36 @@ from app.exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def complete_native_task_mirror(
+    lead_task: LeadTask,
+    completed_at: datetime,
+) -> None:
+    """Complete the manual ``tasks`` row mirrored from a native LeadTask."""
+    if not has_app_context():
+        return
+    candidates = (
+        Task.query
+        .filter(
+            Task.lead_id == lead_task.lead_id,
+            Task.status.in_(('open', 'overdue')),
+            Task.source == 'manual',
+            Task.title == lead_task.title,
+            Task.task_type == lead_task.task_type,
+        )
+        .order_by(Task.id.asc())
+        .all()
+    )
+    for mirror in candidates:
+        mirror_due = mirror.due_date.date() if mirror.due_date else None
+        if mirror_due != lead_task.due_date:
+            continue
+        mirror.status = 'completed'
+        mirror.completion_timestamp = completed_at
+        mirror.updated_at = completed_at
+        db.session.add(mirror)
+        return
 
 
 def _coerce_due_date(value) -> date | None:
@@ -226,11 +257,18 @@ class LeadTaskService:
         task.status = 'completed'
         task.completed_at = datetime.now(timezone.utc)
         db.session.add(task)
+        complete_native_task_mirror(task, task.completed_at)
         if task.task_type == 'skip_trace_owner':
             lead = db.session.get(Lead, lead_id)
             if lead is not None:
-                lead.needs_skip_trace = False
-                if lead.date_skip_traced is None:
+                another_open_handoff = LeadTask.query.filter(
+                    LeadTask.lead_id == lead_id,
+                    LeadTask.task_type == 'skip_trace_owner',
+                    LeadTask.status == 'open',
+                    LeadTask.id != task.id,
+                ).first()
+                lead.needs_skip_trace = another_open_handoff is not None
+                if not lead.needs_skip_trace and lead.date_skip_traced is None:
                     lead.date_skip_traced = date.today()
                 db.session.add(lead)
 

@@ -207,13 +207,14 @@ export function RecommendedActionPanel({
     || shouldIncludeMailQueue(isMailable)
   const promoteMailQueue =
     raValue === 'mail_ready' || contactMethodHint === 'direct_mail'
+  const canMoveToSkipTrace = (
+    !isTerminal
+    && !['skip_trace', 'awaiting_skip_trace'].includes(leadStatus)
+  )
   const universalActions = getUniversalActions(includeMailQueue, promoteMailQueue).filter(
     (action) => (
       action.action !== 'move_to_skip_trace'
-      || (
-        !isTerminal
-        && !['skip_trace', 'awaiting_skip_trace'].includes(leadStatus)
-      )
+      || canMoveToSkipTrace
     ),
   )
   const panelSx = embedded
@@ -382,7 +383,10 @@ export function RecommendedActionPanel({
     : label ?? (value ? outreachDisplayLabel(value, contactMethod) : 'No recommended action')
   const hideRaHeading = value === 'nurture' && !showTaskFallback
   const raButtons = (ACTION_BUTTONS[value] ?? []).filter(
-    (btn) => !universalActions.some((u) => u.action === btn.action),
+    (btn) => (
+      !universalActions.some((u) => u.action === btn.action)
+      && (btn.action !== 'move_to_skip_trace' || canMoveToSkipTrace)
+    ),
   )
   const prioritizedRaButtons = prioritizeButtonsForMethod(raButtons, contactMethod)
   const showCreateTaskCTA = value === 'create_task' && !hasOpenTasks && typeof onCreateTask === 'function'

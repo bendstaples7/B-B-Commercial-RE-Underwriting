@@ -1,5 +1,6 @@
 """HTTP smoke tests for /api/mail-queue endpoints."""
 import json
+from unittest.mock import patch
 
 import pytest
 
@@ -118,7 +119,7 @@ class TestEnqueueMailQueue:
             response = client.post(
                 '/api/mail-queue/',
                 headers=_AUTH_HEADERS,
-                json={'lead_ids': [lead.id, lead.id]},
+                json={'lead_ids': [lead.id] * 1001},
             )
             assert response.status_code == 201
             data = json.loads(response.data)
@@ -194,6 +195,7 @@ class TestEnqueueMailQueue:
             assert attempt.status_code == 200
             attempt_data = json.loads(attempt.data)
             assert attempt_data['source_queue'] == 'queue-todays-action'
+            assert attempt_data['created_at'].endswith('Z')
             assert attempt_data['results'][0]['lead_id'] == lead.id
             assert (
                 attempt_data['results'][0]['property_street']
@@ -233,6 +235,35 @@ def _make_mail_ready_lead(app, street, **kwargs):
 
 
 class TestEnqueueCandidates:
+    @patch(
+        'app.services.queue_service.QueueService.get_mail_candidate_ids',
+        return_value=list(range(1, 1002)),
+    )
+    @patch('app.services.mail_queue_service.MailQueueService.enqueue_leads')
+    def test_default_candidate_enqueue_caps_at_service_limit(
+        self,
+        mock_enqueue,
+        _mock_ids,
+        client,
+        app,
+    ):
+        mock_enqueue.return_value = {
+            'attempt_id': 1,
+            'added': 1000,
+            'skipped': 0,
+            'invalid': 0,
+            'results': [],
+        }
+        with app.app_context():
+            response = client.post(
+                '/api/mail-queue/enqueue-candidates',
+                headers=_AUTH_HEADERS,
+                json={},
+            )
+            assert response.status_code == 201
+            queued_ids = mock_enqueue.call_args.args[0]
+            assert len(queued_ids) == 1000
+
     def test_enqueues_all_mail_ready_candidates(self, client, app):
         with app.app_context():
             lead_a = _make_mail_ready_lead(app, '1 Candidate St', lead_score=90.0)
@@ -345,7 +376,11 @@ class TestEnqueueCandidates:
         from app import db
 
         with app.app_context():
-            lead = _make_mail_ready_lead(app, '11 Corrected Invalid St')
+            lead = _make_mail_ready_lead(
+                app,
+                '11 Corrected Invalid St',
+                mailing_zip=None,
+            )
             invalid = MailQueueItem(
                 lead_id=lead.id,
                 user_id='test-user',
@@ -354,6 +389,14 @@ class TestEnqueueCandidates:
             )
             db.session.add(invalid)
             db.session.commit()
+
+            before = client.get(
+                '/api/queues/mail-candidates',
+                headers=_AUTH_HEADERS,
+            )
+            assert lead.id not in [
+                row['id'] for row in json.loads(before.data)['rows']
+            ]
 
             lead.mailing_zip = '60699'
             lead.updated_at = datetime.utcnow() + timedelta(seconds=1)

@@ -1267,10 +1267,19 @@ class GoogleSheetsImporter:
                 ]
                 if touched_lead_ids:
                     from app.services.lead_scoring_engine import LeadScoringEngine
-                    LeadScoringEngine().bulk_recompute_actions(touched_lead_ids)
+                    failed_rescore_ids: list[int] = []
+                    refreshed_count = LeadScoringEngine().bulk_rescore(
+                        'default',
+                        lead_ids=touched_lead_ids,
+                        continue_on_error=True,
+                        failure_ids=failed_rescore_ids,
+                    )
                     logger.info(
-                        "ImportJob %s: refreshed scoring for %d touched lead(s)",
-                        job_id, len(touched_lead_ids),
+                        "ImportJob %s: refreshed scoring for %d touched lead(s); "
+                        "%d failed",
+                        job_id,
+                        refreshed_count,
+                        len(failed_rescore_ids),
                     )
             except Exception as gis_exc:
                 # GIS enrichment is best-effort — never fail a completed import.

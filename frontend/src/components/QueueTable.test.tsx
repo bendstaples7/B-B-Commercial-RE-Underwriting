@@ -121,6 +121,19 @@ describe('QueueTable', () => {
       expect(cell).toHaveTextContent('Call Now')
       expect(cell).toHaveTextContent('(555) 123-4567')
     })
+
+    it('shows a due task when no recommended action exists', () => {
+      render(
+        <QueueTable
+          rows={[makeRow(1, { due_task_title: 'Research owner entity' })]}
+          total={1}
+        />,
+      )
+
+      expect(screen.getByTestId('row-action-1')).toHaveTextContent(
+        'Due task: Research owner entity',
+      )
+    })
   })
 
   // -------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Alert,
@@ -25,6 +25,7 @@ export function MailEnqueueHistoryButton() {
   const [selected, setSelected] = useState<MailEnqueueAttempt | null>(null)
   const [detailLoadingId, setDetailLoadingId] = useState<number | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const detailRequestId = useRef(0)
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['mail-enqueue-attempts'],
     queryFn: () => openLetterService.listEnqueueAttempts(),
@@ -32,17 +33,28 @@ export function MailEnqueueHistoryButton() {
   })
 
   const openAttempt = async (attempt: MailEnqueueAttemptSummary) => {
+    const requestId = ++detailRequestId.current
     setDetailError(null)
     setDetailLoadingId(attempt.id)
     try {
       const detail = await openLetterService.getEnqueueAttempt(attempt.id)
+      if (requestId !== detailRequestId.current) return
       setSelected(detail)
       setOpen(false)
     } catch {
+      if (requestId !== detailRequestId.current) return
       setDetailError('Could not load that mail attempt.')
     } finally {
-      setDetailLoadingId(null)
+      if (requestId === detailRequestId.current) {
+        setDetailLoadingId(null)
+      }
     }
+  }
+
+  const closeHistory = () => {
+    detailRequestId.current += 1
+    setDetailLoadingId(null)
+    setOpen(false)
   }
 
   return (
@@ -50,7 +62,7 @@ export function MailEnqueueHistoryButton() {
       <Button size="small" variant="text" onClick={() => setOpen(true)}>
         Recent mail attempts
       </Button>
-      <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm">
+      <Dialog open={open} onClose={closeHistory} fullWidth maxWidth="sm">
         <DialogTitle>Recent direct mail attempts</DialogTitle>
         <DialogContent dividers>
           {isLoading ? (
@@ -102,7 +114,7 @@ export function MailEnqueueHistoryButton() {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpen(false)}>Close</Button>
+          <Button onClick={closeHistory}>Close</Button>
         </DialogActions>
       </Dialog>
       <MailEnqueueResultDialog

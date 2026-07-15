@@ -679,13 +679,17 @@ export function QueueTable({
 
                     {/* Recommended action */}
                     <TableCell data-testid={`row-action-${row.id}`}>
-                      {row.recommended_action ? (
+                      {row.recommended_action || row.due_task_title ? (
                         <Box>
-                          <Typography variant="body2" component="span">
-                            {row.outreach_action_label
-                              ?? outreachDisplayLabel(row.recommended_action, row.recommended_contact_method)}
-                          </Typography>
-                          <OutreachContactCallout contact={row.outreach_contact} compact />
+                          {row.recommended_action && (
+                            <>
+                              <Typography variant="body2" component="span">
+                                {row.outreach_action_label
+                                  ?? outreachDisplayLabel(row.recommended_action, row.recommended_contact_method)}
+                              </Typography>
+                              <OutreachContactCallout contact={row.outreach_contact} compact />
+                            </>
+                          )}
                           {row.due_task_title && (
                             <Typography
                               variant="caption"
