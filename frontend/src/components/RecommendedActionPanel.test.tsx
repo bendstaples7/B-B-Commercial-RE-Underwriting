@@ -439,12 +439,13 @@ describe('RecommendedActionPanel', () => {
           recommendedAction={makeRA('ready_for_outreach')}
           leadStatus="do_not_contact"
           openTasks={[]}
+          isMailable
           onAction={vi.fn()}
         />
       )
 
       expect(screen.getByTestId('ra-universal-btn-log_call')).toBeDisabled()
-      expect(screen.getByTestId('ra-action-btn-add_to_mail_batch')).toBeDisabled()
+      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeDisabled()
       expect(screen.getByTestId('ra-universal-btn-log_email')).toBeDisabled()
       expect(screen.getByTestId('ra-universal-btn-log_note')).not.toBeDisabled()
       // create_task is not outreach — should be enabled
@@ -515,28 +516,64 @@ describe('RecommendedActionPanel', () => {
     })
   })
 
-  describe('mail batch state', () => {
-    it('shows In mail batch instead of Add to Mail Queue when queued', () => {
+  describe('mailable universal Quick actions', () => {
+    it('shows Add to Mail Queue in Quick actions for call_ready when isMailable', () => {
       render(
-        <MemoryRouter>
-          <RecommendedActionPanel
-            recommendedAction={makeRA('mail_ready', 'Ready to Mail')}
-            leadStatus="mailing_no_contact_made"
-            openTasks={[]}
-            mailQueueStatus="queued"
-            onAction={vi.fn()}
-          />
-        </MemoryRouter>,
+        <RecommendedActionPanel
+          recommendedAction={makeRA('call_ready', 'Call Now')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          isMailable
+          onAction={vi.fn()}
+        />,
       )
 
-      expect(screen.getByTestId('ra-action-btn-in-mail-batch')).toBeDisabled()
-      expect(screen.getByTestId('ra-action-btn-view-mail-batch')).toBeInTheDocument()
-      expect(screen.queryByTestId('ra-action-btn-add_to_mail_batch')).not.toBeInTheDocument()
+      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeInTheDocument()
     })
-  })
 
-  describe('mailable add_contact_info mail CTA', () => {
-    it('shows Add to Mail Queue when add_contact_info and isMailable', () => {
+    it('shows Add to Mail Queue in Quick actions for follow_up_now when isMailable', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('follow_up_now')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          isMailable
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeInTheDocument()
+    })
+
+    it('shows Add to Mail Queue in Quick actions for nurture when isMailable', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('nurture')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          isMailable
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeInTheDocument()
+    })
+
+    it('shows Add to Mail Queue in Quick actions when RA is null and isMailable', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={null}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          isMailable
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeInTheDocument()
+    })
+
+    it('shows Add to Mail Queue for add_contact_info when isMailable', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('add_contact_info', 'Add Contact Info')}
@@ -547,27 +584,88 @@ describe('RecommendedActionPanel', () => {
         />,
       )
 
-      expect(screen.getByTestId('ra-action-btn-add_to_mail_batch')).toBeInTheDocument()
+      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeInTheDocument()
     })
 
-    it('does not inject mail CTA when not mailable', () => {
+    it('shows Add to Mail Queue for needs_manual_review when isMailable', () => {
       render(
         <RecommendedActionPanel
-          recommendedAction={makeRA('add_contact_info', 'Add Contact Info')}
+          recommendedAction={makeRA('needs_manual_review', 'Needs Manual Review')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          isMailable
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeInTheDocument()
+    })
+
+    it('does not show Add to Mail Queue when not mailable', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('call_ready', 'Call Now')}
           leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={vi.fn()}
         />,
       )
 
+      expect(screen.queryByTestId('ra-universal-btn-add_to_mail_batch')).not.toBeInTheDocument()
       expect(screen.queryByTestId('ra-action-btn-add_to_mail_batch')).not.toBeInTheDocument()
     })
 
-    it('does not inject mail CTA when already in mail batch', () => {
+    it('shows Add to Mail Queue for mail_ready even when isMailable is false', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('mail_ready', 'Ready to Mail')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeInTheDocument()
+    })
+
+    it('shows Add to Mail Queue when contact method is direct_mail even if not isMailable', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={{
+            ...makeRA('ready_for_outreach', 'Ready for Outreach'),
+            recommended_contact_method: 'direct_mail',
+          }}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeInTheDocument()
+      const buttons = screen.getByTestId('ra-universal-actions').querySelectorAll('button')
+      expect(buttons[0]).toHaveAttribute('data-testid', 'ra-universal-btn-add_to_mail_batch')
+    })
+
+    it('promotes Add to Mail Queue first when RA is mail_ready', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('mail_ready', 'Ready to Mail')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          isMailable
+          onAction={vi.fn()}
+        />,
+      )
+
+      const buttons = screen.getByTestId('ra-universal-actions').querySelectorAll('button')
+      expect(buttons[0]).toHaveAttribute('data-testid', 'ra-universal-btn-add_to_mail_batch')
+    })
+
+    it('shows In mail batch in Quick actions when queued and mailable', () => {
       render(
         <MemoryRouter>
           <RecommendedActionPanel
-            recommendedAction={makeRA('add_contact_info', 'Add Contact Info')}
+            recommendedAction={makeRA('mail_ready', 'Ready to Mail')}
             leadStatus="mailing_no_contact_made"
             openTasks={[]}
             isMailable
@@ -577,13 +675,33 @@ describe('RecommendedActionPanel', () => {
         </MemoryRouter>,
       )
 
-      expect(screen.queryByTestId('ra-action-btn-add_to_mail_batch')).not.toBeInTheDocument()
+      expect(screen.getByTestId('ra-universal-btn-in-mail-batch')).toBeDisabled()
+      expect(screen.getByTestId('ra-universal-btn-view-mail-batch')).toBeInTheDocument()
+      expect(screen.queryByTestId('ra-universal-btn-add_to_mail_batch')).not.toBeInTheDocument()
     })
 
-    it('does not inject mail CTA when mail was sent recently', () => {
+    it('shows queued controls even when no longer mailable or mail-recommended', () => {
+      render(
+        <MemoryRouter>
+          <RecommendedActionPanel
+            recommendedAction={makeRA('call_ready', 'Call Now')}
+            leadStatus="mailing_no_contact_made"
+            openTasks={[]}
+            mailQueueStatus="queued"
+            onAction={vi.fn()}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.getByTestId('ra-universal-btn-in-mail-batch')).toBeDisabled()
+      expect(screen.getByTestId('ra-universal-btn-view-mail-batch')).toBeInTheDocument()
+      expect(screen.queryByTestId('ra-universal-btn-add_to_mail_batch')).not.toBeInTheDocument()
+    })
+
+    it('still shows Add to Mail Queue when mail was sent recently and isMailable', () => {
       render(
         <RecommendedActionPanel
-          recommendedAction={makeRA('add_contact_info', 'Add Contact Info')}
+          recommendedAction={makeRA('call_ready', 'Call Now')}
           leadStatus="mailing_no_contact_made"
           openTasks={[]}
           isMailable
@@ -592,35 +710,25 @@ describe('RecommendedActionPanel', () => {
         />,
       )
 
-      expect(screen.queryByTestId('ra-action-btn-add_to_mail_batch')).not.toBeInTheDocument()
+      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeInTheDocument()
     })
 
-    it('shows Add to Mail Queue for needs_manual_review when mailable and likely_not_condo', () => {
+    it('shows inline error on null RA when Quick action fails', async () => {
+      const onAction = vi.fn().mockRejectedValue(new Error('Invalid mailing address'))
+
       render(
         <RecommendedActionPanel
-          recommendedAction={makeRA('needs_manual_review', 'Needs Manual Review')}
+          recommendedAction={null}
           leadStatus="mailing_no_contact_made"
           openTasks={[]}
           isMailable
-          onAction={vi.fn()}
+          onAction={onAction}
         />,
       )
 
-      expect(screen.getByTestId('ra-action-btn-add_to_mail_batch')).toBeInTheDocument()
-    })
+      await user.click(screen.getByTestId('ra-universal-btn-add_to_mail_batch'))
 
-    it('shows Add to Mail Queue for needs_manual_review when mailable even if condo still needs review', () => {
-      render(
-        <RecommendedActionPanel
-          recommendedAction={makeRA('needs_manual_review', 'Needs Manual Review')}
-          leadStatus="mailing_no_contact_made"
-          openTasks={[]}
-          isMailable
-          onAction={vi.fn()}
-        />,
-      )
-
-      expect(screen.getByTestId('ra-action-btn-add_to_mail_batch')).toBeInTheDocument()
+      expect(await screen.findByTestId('ra-action-error')).toHaveTextContent('Invalid mailing address')
     })
 
     it('does not show Confirm Building Ownership for needs_manual_review', () => {
