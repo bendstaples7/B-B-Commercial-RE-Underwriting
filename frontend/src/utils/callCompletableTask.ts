@@ -39,11 +39,11 @@ export function isCallCompletableTask(
   return CALL_TITLE_RE.test(text) || FOLLOW_UP_TITLE_RE.test(text)
 }
 
-/** Parse numeric HubSpot task id from `hs-{id}` or plain number. */
+/** Resolve numeric LeadTask id (HubSpot-linked rows use LeadTask PK). */
 export function parseHubSpotTaskId(id: number | string): number | null {
   if (typeof id === 'number' && Number.isFinite(id)) return id
-  const match = String(id).match(/^hs-(\d+)$/)
-  return match ? Number(match[1]) : null
+  const n = Number.parseInt(String(id), 10)
+  return Number.isFinite(n) ? n : null
 }
 
 const DUE_STATUS_ORDER: Record<string, number> = {

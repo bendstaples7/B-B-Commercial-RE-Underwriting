@@ -1,0 +1,27 @@
+---
+description: Investigate with real data — no assumptions; check local and prod before asking
+alwaysApply: true
+---
+
+# Investigate With Real Data
+
+When diagnosing bugs, lead behavior, due dates, scores, queues, or “what happened on X”:
+
+## Hard rules
+
+1. **Do not invent a story from code alone.** Code paths are hypotheses. Confirm with actual rows (DB, timeline, audit, API payload, logs).
+2. **Check data before asking the user.** Query the relevant environment(s) yourself first. Prefer read-only probes.
+3. **Local ≠ prod.** This project’s local `DATABASE_URL` is usually localhost. Prod lives on the VPS (`deploy@bbanalyzer.duckdns.org`, SSH key `~/.ssh/bbanalyzer_deploy`). If the user is testing in the browser and you have not confirmed which DB that UI hits, **check both** (or prod first when they name a live lead).
+4. **Only then ask** “Are you looking at local or prod?” — and only if the data still conflicts or the environment is ambiguous after you looked.
+
+## Workflow
+
+1. Reproduce the claimed fields on the named lead/id (status, sale dates, task due dates, timeline events, actors).
+2. State what the data shows vs what the code can do — cite the rows/events, not guesses.
+3. If local and prod disagree, say so explicitly and trust the environment the user is using.
+
+## Avoid
+
+- Explaining an incident with “most likely recent-sale hold / scoring / cadence” without querying that lead
+- Treating a stale local dump as production truth
+- Asking the user to run diagnostic SQL you could run yourself

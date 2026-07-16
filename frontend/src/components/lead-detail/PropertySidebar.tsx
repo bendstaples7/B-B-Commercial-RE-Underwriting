@@ -5,16 +5,20 @@ import {
   AccordionDetails,
   AccordionSummary,
   Box,
+  Button,
   Chip,
+  CircularProgress,
   IconButton,
   Link,
   Paper,
   Tooltip,
   Typography,
 } from '@mui/material'
+import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import EmailIcon from '@mui/icons-material/Email'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import { useQueryClient } from '@tanstack/react-query'
 import type {
   CommandCenterPayload,
   LeadPhone,
@@ -22,7 +26,11 @@ import type {
   RelatedPropertySummary,
 } from '@/types'
 import { RelatedPropertyRow } from '@/components/RelatedPropertyRow'
-import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
+import {
+  formatSaleDateFreshness,
+  isSaleDateVerifiedWithinDays,
+} from '@/utils/saleDateFreshness'
+import { commandCenterService } from '@/services/api'
 import {
   isEntityContactName,
   ownerDisplayEntries,
@@ -64,12 +72,15 @@ function SidebarRow({
   label,
   value,
   alwaysShow = false,
+  emptyLabel = '—',
   testId,
   valueFontWeight,
 }: {
   label: string
   value: ReactNode
   alwaysShow?: boolean
+  /** Shown when value is empty and alwaysShow is true (default em dash). */
+  emptyLabel?: string
   testId?: string
   valueFontWeight?: number
 }) {
@@ -106,7 +117,7 @@ function SidebarRow({
           color: isEmpty ? 'text.disabled' : 'text.primary',
         }}
       >
-        {isEmpty ? '—' : value}
+        {isEmpty ? emptyLabel : value}
       </Typography>
     </Box>
   )
@@ -191,6 +202,9 @@ export function PropertySidebar({
   commandCenterData,
   variant = 'sidebar',
 }: PropertySidebarProps) {
+  const queryClient = useQueryClient()
+  const [saleVerifyPending, setSaleVerifyPending] = useState(false)
+  const [saleVerifyMessage, setSaleVerifyMessage] = useState<string | null>(null)
   type SidebarExtras = {
     phones?: LeadPhone[]
     emails?: string[]
@@ -278,6 +292,39 @@ export function PropertySidebar({
   const actionValue = commandCenterData.recommended_action?.value
   const mailRecommended =
     contactMethod === 'direct_mail' || actionValue === 'mail_ready'
+  const saleFreshness = formatSaleDateFreshness(commandCenterData.sale_date_meta)
+  const saleDateDisplay =
+    commandCenterData.most_recent_sale_display ?? data.most_recent_sale ?? null
+  const saleRecentlyVerified = isSaleDateVerifiedWithinDays(
+    commandCenterData.sale_date_meta,
+  )
+
+  const handleVerifySaleDate = async () => {
+    setSaleVerifyPending(true)
+    setSaleVerifyMessage(null)
+    try {
+      const result = await commandCenterService.verifySaleDate(commandCenterData.id)
+      if (result.message) {
+        setSaleVerifyMessage(result.message)
+      } else if (result.summary?.skipped) {
+        const reason = result.summary.skip_reason || 'unknown'
+        setSaleVerifyMessage(
+          reason === 'not_eligible'
+            ? 'Not eligible for Cook County enrichment.'
+            : `Verification skipped (${reason}).`,
+        )
+      } else if (result.queued) {
+        setSaleVerifyMessage('Verification queued.')
+      } else {
+        setSaleVerifyMessage('Verification checked.')
+      }
+      await queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
+    } catch (error) {
+      setSaleVerifyMessage(error instanceof Error ? error.message : 'Verification failed.')
+    } finally {
+      setSaleVerifyPending(false)
+    }
+  }
 
   const stacked = variant === 'inline'
   const sections = (
@@ -387,27 +434,108 @@ export function PropertySidebar({
         <SidebarRow label="Units" value={data.units} />
         <SidebarRow label="Units Allowed" value={data.units_allowed} />
         <SidebarRow label="Zoning" value={data.zoning} />
-        <SidebarRow label="PIN" value={commandCenterData.county_assessor_pin} />
+        <SidebarRow
+          label="PIN"
+          value={commandCenterData.county_assessor_pin}
+          alwaysShow
+          emptyLabel="None"
+          testId="sidebar-county-assessor-pin"
+        />
         <SidebarRow
           label="Tax Bill"
           value={
             data.tax_bill_2021 != null ? `$${Number(data.tax_bill_2021).toLocaleString()}` : null
           }
         />
-        <Box sx={{ mb: 0.5 }} data-testid="sidebar-most-recent-sale">
+        <Box data-testid="sidebar-most-recent-sale">
           <SidebarRow
             label="Most Recent Sale"
-            value={commandCenterData.most_recent_sale_display ?? data.most_recent_sale}
+            value={(() => {
+              const dateDisplay = saleDateDisplay
+              if (!dateDisplay) return null
+              const price = commandCenterData.most_recent_sale_price
+              const text =
+                price != null
+                  ? `${dateDisplay} · $${Number(price).toLocaleString()}`
+                  : dateDisplay
+              if (!saleRecentlyVerified && !saleVerifyPending) return text
+              return (
+                <Box
+                  component="span"
+                  sx={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'flex-end',
+                    gap: 0.5,
+                  }}
+                >
+                  {text}
+                  {saleVerifyPending ? (
+                    <CircularProgress
+                      size={12}
+                      thickness={5}
+                      aria-label="Verifying sale date"
+                      data-testid="sidebar-sale-verify-spinner"
+                    />
+                  ) : (
+                    <Tooltip title="Verified within the last month">
+                      <CheckCircleIcon
+                        sx={{ fontSize: 14, color: 'success.main' }}
+                        aria-label="Verified within the last month"
+                        data-testid="sidebar-sale-verified-check"
+                      />
+                    </Tooltip>
+                  )}
+                </Box>
+              )
+            })()}
+            alwaysShow
+            emptyLabel="None"
           />
-          {formatSaleDateFreshness(commandCenterData.sale_date_meta) && (
+          {saleFreshness ? (
             <Typography
               variant="caption"
-              color="text.disabled"
-              sx={{ display: 'block', textAlign: 'right', pl: '108px' }}
+              color="text.secondary"
+              sx={{ display: 'block', textAlign: 'right', pl: '108px', mt: -0.25, mb: 0.5 }}
+              data-testid="sidebar-sale-last-checked"
             >
-              {formatSaleDateFreshness(commandCenterData.sale_date_meta)}
+              {saleFreshness}
             </Typography>
-          )}
+          ) : saleDateDisplay ? (
+            <Box sx={{ textAlign: 'right', mt: -0.25, mb: 0.5 }}>
+              <Typography
+                variant="caption"
+                color="text.disabled"
+                sx={{ display: 'block', pl: '108px' }}
+              >
+                Sale date not verified yet
+              </Typography>
+              <Button
+                size="small"
+                variant="text"
+                onClick={handleVerifySaleDate}
+                disabled={saleVerifyPending}
+                data-testid="sidebar-verify-sale-date"
+                startIcon={
+                  saleVerifyPending ? (
+                    <CircularProgress size={12} color="inherit" aria-hidden />
+                  ) : undefined
+                }
+                sx={{ minWidth: 0, px: 0.5, py: 0, fontSize: '0.7rem' }}
+              >
+                {saleVerifyPending ? 'Verifying…' : 'Verify sale date'}
+              </Button>
+              {saleVerifyMessage ? (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ display: 'block', pl: '108px' }}
+                >
+                  {saleVerifyMessage}
+                </Typography>
+              ) : null}
+            </Box>
+          ) : null}
         </Box>
         <SidebarRow
           label="Deal Source"

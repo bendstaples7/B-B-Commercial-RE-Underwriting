@@ -45,6 +45,47 @@ logger = logging.getLogger(__name__)
 # is immediately reflected in lead_score without waiting for a nightly batch.
 # ---------------------------------------------------------------------------
 
+def _format_lead_score(value) -> str | None:
+    """Format a lead_score for timeline copy (one decimal)."""
+    if value is None:
+        return None
+    try:
+        return f'{float(value):.1f}'
+    except (TypeError, ValueError):
+        return None
+
+
+def _status_change_summary(
+    old_status: str | None,
+    new_status: str,
+    reason: str = '',
+    *,
+    previous_score=None,
+    new_score=None,
+    include_score: bool = False,
+) -> str:
+    """Build status_changed timeline summary, optionally with score delta."""
+    if reason:
+        summary = f"Status changed from '{old_status}' to '{new_status}'. {reason}"
+    else:
+        summary = f"Status changed from '{old_status}' to '{new_status}'."
+    if not include_score:
+        return summary
+    prev_s = _format_lead_score(previous_score)
+    new_s = _format_lead_score(new_score)
+    if prev_s is None and new_s is None:
+        return summary
+    if (
+        previous_score is not None
+        and new_score is not None
+        and abs(float(previous_score) - float(new_score)) < 0.05
+    ):
+        return f"{summary} Score unchanged ({new_s or prev_s})."
+    left = prev_s if prev_s is not None else '—'
+    right = new_s if new_s is not None else '—'
+    return f"{summary} Score {left} → {right}."
+
+
 def _rescore_after_status_change(lead_id: int) -> None:
     """Refresh lead_score + recommended_action after a pipeline stage change.
 
@@ -362,10 +403,11 @@ def get_command_center(lead_id: int):
         db.session.add(lead)
         db.session.commit()
 
+    # Do not auto-sync HubSpot on Command Center GET. Sync-on-read can complete
+    # open LeadTasks as a side effect of opening a lead or cache invalidation,
+    # which breaks the next-action chain. Historical catch-up stays on Celery
+    # Beat / webhooks / explicit POST .../hubspot-sync.
     from app.services.hubspot_deal_sync_service import HubSpotDealSyncService
-
-    if HubSpotDealSyncService.auto_sync_lead_if_stale(lead_id):
-        lead = Lead.query.get(lead_id)
 
     if (
         lead.recommended_action == 'add_contact_info'
@@ -673,6 +715,7 @@ def get_command_center(lead_id: int):
         'tax_bill_2021': lead.tax_bill_2021,
         'most_recent_sale': lead.most_recent_sale,
         'most_recent_sale_display': display_most_recent_sale(lead),
+        'most_recent_sale_price': getattr(lead, 'most_recent_sale_price', None),
         'sale_date_meta': resolve_sale_date_meta(lead),
         'is_mailable': is_mailable,
         'mail_eligible': is_mailable and mail_eligible_date is None,
@@ -825,8 +868,10 @@ def update_status(lead_id: int):
     PATCH /api/leads/<lead_id>/status
 
     Update the lead_status of a lead. Handles DNC and suppressed special cases
-    (null RA, cancel open tasks). Appends a status_changed timeline entry.
-    Triggers RA recomputation for non-terminal statuses.
+    (null RA). Open-task cancellation is owned by the dedicated DNC action —
+    status PATCH must not clear next-action tasks.
+    Appends a status_changed timeline entry. Triggers RA recomputation for
+    non-terminal statuses.
     """
     from app import db
     import datetime as _dt
@@ -840,37 +885,33 @@ def update_status(lead_id: int):
     new_status = data['status']
     reason = data.get('reason') or ''
     actor_raw = getattr(g, 'user_id', None) or data.get('actor') or 'anonymous'
+    previous_score = lead.lead_score
 
     lead.lead_status = new_status
 
-    # DNC special case: set RA to null, cancel all open tasks
-    if new_status == 'do_not_contact':
-        lead.recommended_action = None
-        LeadTask.query.filter_by(lead_id=lead_id, status='open').update({'status': 'cancelled'})
-    elif new_status == 'suppressed':
+    # Terminal-ish statuses clear RA only. Dedicated POST .../do-not-contact
+    # owns cancelling open LeadTasks so a status dropdown change cannot break
+    # the next-action chain.
+    if new_status in ('do_not_contact', 'suppressed'):
         lead.recommended_action = None
 
     db.session.add(lead)
 
-    # Build summary — include reason when provided (Requirements 2.5)
-    if reason:
-        summary = f"Status changed from '{old_status}' to '{new_status}'. {reason}"
-    else:
-        summary = f"Status changed from '{old_status}' to '{new_status}'."
-
     # Append status_changed timeline entry — store raw actor_raw (canonical user_id)
-    # so the DB retains the canonical ID; _resolve_actor is called at read/serialization time
+    # so the DB retains the canonical ID; _resolve_actor is called at read/serialization time.
+    # Score delta is filled in after rescoring (below) when applicable.
     entry = LeadTimelineEntry(
         lead_id=lead_id,
         event_type='status_changed',
         occurred_at=_dt.datetime.now(_dt.timezone.utc),
         source='manual',
         actor=actor_raw,
-        summary=summary,
+        summary=_status_change_summary(old_status, new_status, reason),
         event_metadata={
             'previous_status': old_status,
             'new_status': new_status,
             'reason': reason or None,
+            'previous_score': float(previous_score) if previous_score is not None else None,
         },
     )
     db.session.add(entry)
@@ -880,10 +921,28 @@ def update_status(lead_id: int):
     queue_order_cache.clear()
 
     # Rescore first, then recompute RA (inside _rescore_after_status_change)
-    # so the action reflects the updated score.
+    # so the action reflects the updated score. Enrich the timeline entry with
+    # the score delta so Activity history shows how the change moved the score.
     if new_status not in ('do_not_contact', 'suppressed'):
         _rescore_after_status_change(lead_id)
         db.session.refresh(lead)
+        new_score = lead.lead_score
+        entry.summary = _status_change_summary(
+            old_status,
+            new_status,
+            reason,
+            previous_score=previous_score,
+            new_score=new_score,
+            include_score=True,
+        )
+        meta = dict(entry.event_metadata or {})
+        meta['previous_score'] = float(previous_score) if previous_score is not None else None
+        meta['new_score'] = float(new_score) if new_score is not None else None
+        entry.event_metadata = meta
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(entry, 'event_metadata')
+        db.session.add(entry)
+        db.session.commit()
 
     try:
         from app.services.hubspot_writeback_service import HubSpotWriteBackService
@@ -894,10 +953,12 @@ def update_status(lead_id: int):
             lead_id, exc,
         )
 
+    db.session.refresh(entry)
     return jsonify({
         'lead_status': lead.lead_status,
         'recommended_action': lead.recommended_action,
         'lead_score': lead.lead_score,
+        'timeline_entry': _serialize_timeline_entry(entry),
     }), 200
 
 
@@ -1454,7 +1515,12 @@ def sync_lead_from_hubspot(lead_id: int):
             return jsonify({'error': 'Not found'}), 404
 
     try:
-        result = HubSpotDealSyncService().refresh_and_enrich_lead(lead_id)
+        # Explicit user/admin sync may pull tasks; open LeadTasks stay protected
+        # by LeadTaskService.upsert_from_hubspot (next-action SoT).
+        result = HubSpotDealSyncService().refresh_and_enrich_lead(
+            lead_id,
+            include_tasks=True,
+        )
     except RuntimeError as exc:
         return jsonify({'error': str(exc)}), 500
 
@@ -1466,6 +1532,83 @@ def sync_lead_from_hubspot(lead_id: int):
 
     health = HubSpotDealSyncService.get_lead_sync_health(lead_id)
     return jsonify({**result, **health}), 200
+
+
+@command_center_bp.route('/<int:lead_id>/sale-date-verification', methods=['POST'])
+@require_auth
+@handle_errors
+def verify_sale_date(lead_id: int):
+    """Verify sale-date fields through Cook County enrichment.
+
+    Enqueues the canonical one-lead Cook County task when workers are available.
+    In local/dev with Redis but no worker, runs synchronously so the user can
+    verify one lead without waiting for Celery.
+    """
+    from app.controllers.property_controller import _current_user_is_admin
+    from app.services.cook_county_enrichment_service import (
+        enrich_cook_county_lead,
+        enqueue_cook_county_enrichment,
+        ensure_automated_data_sources,
+    )
+
+    lead = Lead.query.get(lead_id)
+    if lead is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    if not _current_user_is_admin():
+        current_user_id = getattr(g, 'user_id', None)
+        if not current_user_id or current_user_id == 'anonymous' or lead.owner_user_id != current_user_id:
+            return jsonify({'error': 'Not found'}), 404
+
+    ensure_automated_data_sources()
+
+    workers_available = False
+    try:
+        from celery_worker import celery as celery_app
+        inspect = celery_app.control.inspect(timeout=0.75)
+        workers_available = bool(inspect and inspect.ping())
+    except Exception:
+        workers_available = False
+
+    queued = False
+    ran_sync = False
+    summary = None
+    if workers_available:
+        queued = enqueue_cook_county_enrichment(lead_id)
+
+    if not queued:
+        summary = enrich_cook_county_lead(lead_id)
+        ran_sync = True
+
+    from app import db as _db
+    _db.session.refresh(lead)
+
+    message = 'Verification queued.'
+    if ran_sync and summary is not None:
+        if summary.get('skipped'):
+            reason = summary.get('skip_reason') or 'unknown'
+            if reason == 'not_eligible':
+                message = 'Not eligible for Cook County enrichment.'
+            elif reason == 'lead_not_found':
+                message = 'Lead not found.'
+            else:
+                message = f'Verification skipped ({reason}).'
+        else:
+            message = 'Verification checked.'
+    elif not queued and not ran_sync:
+        message = 'Verification could not be queued or run.'
+
+    return jsonify({
+        'lead_id': lead_id,
+        'queued': queued,
+        'ran_sync': ran_sync,
+        'summary': summary,
+        'message': message,
+        'county_assessor_pin': lead.county_assessor_pin,
+        'most_recent_sale_display': display_most_recent_sale(lead),
+        'most_recent_sale_price': getattr(lead, 'most_recent_sale_price', None),
+        'sale_date_meta': resolve_sale_date_meta(lead),
+    }), 200
 
 
 @command_center_bp.route('/<int:lead_id>/hubspot-tasks/<int:task_id>/done', methods=['POST'])

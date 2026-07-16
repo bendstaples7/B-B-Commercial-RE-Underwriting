@@ -122,9 +122,14 @@ class HubSpotDealSyncService:
         self,
         lead_id: int,
         *,
-        include_tasks: bool = True,
+        include_tasks: bool = False,
     ) -> dict[str, Any]:
-        """Refresh all confirmed deals for a lead; enrich lead fields from the newest deal."""
+        """Refresh all confirmed deals for a lead; enrich lead fields from the newest deal.
+
+        ``include_tasks`` defaults to False so deal refresh cannot silently mutate
+        open LeadTasks. Pass True only for explicit sync (POST .../hubspot-sync)
+        or intentional background catch-up callers.
+        """
         from app.models.hubspot_deal import HubSpotDeal
 
         matches = HubSpotMatch.query.filter_by(
@@ -597,42 +602,20 @@ class HubSpotDealSyncService:
 
     @staticmethod
     def auto_sync_lead_if_stale(lead_id: int) -> bool:
-        """Refresh and enrich from HubSpot when data is stale or deal context is incomplete."""
+        """Retired: never auto-pull HubSpot from user/view paths.
+
+        Opening Command Center, changing status, or other interactive flows must
+        not refresh deals or sync tasks as a side effect. Historical catch-up
+        stays on Celery Beat, webhooks, or explicit ``POST .../hubspot-sync``.
+
+        Kept as a no-op so any leftover callers fail closed. ``lead_id`` is
+        accepted for call-site compatibility.
+        """
         import os
-        if os.environ.get('HUBSPOT_AUTO_SYNC_ON_VIEW', 'true').lower() == 'false':
-            return False
-
-        health = HubSpotDealSyncService.get_lead_sync_health(lead_id)
-        if not health['hubspot_has_confirmed_deal']:
-            return False
-
-        needs_refresh = health['hubspot_sync_stale']
-        lead = Lead.query.get(lead_id)
-        if not needs_refresh and HubSpotDealSyncService.lead_needs_deal_context_enrichment(lead):
-            needs_refresh = True
-        if not needs_refresh:
-            match = HubSpotMatch.query.filter_by(
-                hubspot_record_type='deal',
-                internal_record_type='lead',
-                internal_record_id=lead_id,
-                status='confirmed',
-            ).first()
-            if match:
-                deal = HubSpotDeal.query.filter_by(hubspot_id=match.hubspot_id).first()
-                needs_refresh = HubSpotDealSyncService.deal_missing_context_properties(deal)
-
-        if not needs_refresh:
-            return False
-
-        try:
-            result = HubSpotDealSyncService().refresh_and_enrich_lead(
+        if os.environ.get('HUBSPOT_AUTO_SYNC_ON_VIEW', 'false').lower() == 'true':
+            logger.warning(
+                'HUBSPOT_AUTO_SYNC_ON_VIEW=true is ignored; auto_sync_lead_if_stale '
+                'is retired (lead_id=%s). Use POST .../hubspot-sync or Beat/webhooks.',
                 lead_id,
-                include_tasks=True,
             )
-            if result.get('synced'):
-                logger.info('Auto-synced HubSpot deal for lead_id=%s', lead_id)
-                return True
-        except Exception as exc:
-            logger.warning('Auto HubSpot sync failed for lead_id=%s: %s', lead_id, exc)
-            db.session.rollback()
         return False

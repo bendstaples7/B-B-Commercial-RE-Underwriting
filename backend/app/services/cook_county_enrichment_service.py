@@ -2,14 +2,15 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import event
+from sqlalchemy import event, func, or_
 
 from app import db
 from app.models.enrichment import DataSource, EnrichmentRecord
 from app.models.lead import Lead
+from app.models.lead_task import LeadTask
 from app.services.data_source_connector import DataSourceConnector
 from app.services.gis.routing import _resolve_market
 from app.services.building_ownership_backfill import (
@@ -19,6 +20,7 @@ from app.services.building_ownership_backfill import (
 from app.services.lead_refresh import refresh_lead_scoring
 from app.services.open_letter_contact_mapper import is_owner_mailable_lead
 from app.services.plugins.address_utils import is_chicago_address
+from app.services.scoring_rubric import is_recently_sold
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,7 @@ BACKFILL_BATCH_SIZE = 75
 BACKFILL_SOCATA_CALL_CAP = 200
 BACKFILL_STALE_DAYS = 30
 COMMERCIAL_VALUATION_SOURCE = "cook_county_commercial_valuation"
+ASSESSOR_SOURCE = "cook_county_assessor"
 
 _PIN_PLUGINS = (
     "cook_county_assessor",
@@ -94,6 +97,146 @@ def is_cook_county_lead(lead: Lead) -> bool:
     return _resolve_market(lead) == COOK_COUNTY_MARKET
 
 
+def ensure_automated_data_sources() -> list[DataSource]:
+    """Seed/repair the enrichment catalog for all built-in automated plugins."""
+    return DataSourceConnector().ensure_registered_data_sources()
+
+
+def check_enrichment_catalog_health(*, heal: bool = True) -> dict:
+    """Ensure required DataSource rows exist; return health summary.
+
+    When ``heal`` is True, missing catalog rows are created from built-in plugins.
+    """
+    if heal:
+        ensure_automated_data_sources()
+
+    present = {
+        name
+        for (name,) in (
+            DataSource.query
+            .with_entities(DataSource.name)
+            .filter(DataSource.name.in_(tuple(AUTOMATED_ENRICHMENT_SOURCES)))
+            .all()
+        )
+    }
+    missing = sorted(AUTOMATED_ENRICHMENT_SOURCES - present)
+    return {
+        'ok': len(missing) == 0,
+        'required_count': len(AUTOMATED_ENRICHMENT_SOURCES),
+        'present_count': len(present),
+        'missing': missing,
+    }
+
+
+def _lead_has_due_open_task(lead_id: int, today: date | None = None) -> bool:
+    """True when the lead has an open LeadTask due today or earlier."""
+    if today is None:
+        today = date.today()
+    return (
+        db.session.query(LeadTask.id)
+        .filter(
+            LeadTask.lead_id == lead_id,
+            LeadTask.status == 'open',
+            LeadTask.due_date.isnot(None),
+            LeadTask.due_date <= today,
+        )
+        .first()
+        is not None
+    )
+
+
+def _due_open_task_exists_clause(today: date):
+    return (
+        db.session.query(LeadTask.id)
+        .filter(
+            LeadTask.lead_id == Lead.id,
+            LeadTask.status == 'open',
+            LeadTask.due_date.isnot(None),
+            LeadTask.due_date <= today,
+        )
+        .exists()
+    )
+
+
+def collect_enrichment_supporting_data_invariants() -> dict:
+    """Read-only counts for catalog/enrichment gaps (observability only)."""
+    catalog = check_enrichment_catalog_health(heal=True)
+    since_7d = datetime.utcnow() - timedelta(days=7)
+    today = date.today()
+    due_exists = _due_open_task_exists_clause(today)
+
+    enrichment_last_7d = (
+        db.session.query(func.count(EnrichmentRecord.id))
+        .filter(EnrichmentRecord.created_at >= since_7d)
+        .scalar()
+        or 0
+    )
+    chicago_no_pin_with_sale = (
+        db.session.query(func.count(Lead.id))
+        .filter(
+            func.lower(Lead.property_city) == 'chicago',
+            or_(Lead.county_assessor_pin.is_(None), Lead.county_assessor_pin == ''),
+            or_(Lead.most_recent_sale.isnot(None), Lead.acquisition_date.isnot(None)),
+        )
+        .scalar()
+        or 0
+    )
+    working_set_sale_no_enrichment = (
+        db.session.query(func.count(Lead.id))
+        .filter(
+            due_exists,
+            or_(Lead.most_recent_sale.isnot(None), Lead.acquisition_date.isnot(None)),
+            ~db.session.query(EnrichmentRecord.id)
+            .filter(EnrichmentRecord.lead_id == Lead.id)
+            .exists(),
+        )
+        .scalar()
+        or 0
+    )
+
+    return {
+        'catalog_ok': catalog['ok'],
+        'catalog_present_count': catalog['present_count'],
+        'catalog_required_count': catalog['required_count'],
+        'catalog_missing': catalog['missing'],
+        'enrichment_records_last_7d': enrichment_last_7d,
+        'chicago_no_pin_with_sale': chicago_no_pin_with_sale,
+        'working_set_sale_no_enrichment': working_set_sale_no_enrichment,
+    }
+
+
+def _ensure_pin_from_gis(lead: Lead) -> bool:
+    """Try to recover/persist Cook County PIN before PIN-based enrichments."""
+    if _has_pin(lead) or _resolve_market(lead) != COOK_COUNTY_MARKET:
+        return False
+    try:
+        from app.services.gis.routing import connector_for_lead
+        connector = connector_for_lead(lead)
+        if connector is None:
+            return False
+        parcel = connector.lookup_by_address(lead.property_street or "")
+        pin = getattr(parcel, "county_assessor_pin", None) if parcel else None
+        if not pin:
+            return False
+        lead.county_assessor_pin = str(pin).strip()
+        db.session.add(lead)
+        db.session.flush()
+        logger.info(
+            "Cook County enrichment recovered PIN for lead %s: %s",
+            lead.id,
+            lead.county_assessor_pin,
+        )
+        return True
+    except Exception as exc:
+        logger.warning(
+            "Cook County enrichment PIN recovery failed for lead %s: %s",
+            getattr(lead, "id", None),
+            exc,
+        )
+        db.session.rollback()
+        return False
+
+
 def enrich_cook_county_lead(lead_id: int) -> dict:
     """Run all applicable Cook County plugins for one lead; rescore once."""
     summary = {
@@ -113,6 +256,7 @@ def enrich_cook_county_lead(lead_id: int) -> dict:
         summary["skip_reason"] = "lead_not_found"
         return summary
 
+    _ensure_pin_from_gis(lead)
     plugin_names = plugins_for_lead(lead)
     if not plugin_names:
         summary["skipped"] = True
@@ -235,7 +379,14 @@ def maybe_dispatch_after_gis_match(lead: Lead, connector) -> None:
 
 
 def _commercial_valuation_source_id() -> Optional[int]:
+    ensure_automated_data_sources()
     source = DataSource.query.filter_by(name=COMMERCIAL_VALUATION_SOURCE).first()
+    return source.id if source else None
+
+
+def _assessor_source_id() -> Optional[int]:
+    ensure_automated_data_sources()
+    source = DataSource.query.filter_by(name=ASSESSOR_SOURCE).first()
     return source.id if source else None
 
 
@@ -253,15 +404,39 @@ def lead_recently_fully_enriched(lead_id: int, source_id: int, since: datetime) 
     )
 
 
+def lead_recently_sale_checked(lead_id: int, since: datetime) -> bool:
+    """Return True when assessor sale verification was attempted recently."""
+    source_id = _assessor_source_id()
+    if source_id is None:
+        return False
+    return (
+        db.session.query(EnrichmentRecord.id)
+        .filter(
+            EnrichmentRecord.lead_id == lead_id,
+            EnrichmentRecord.data_source_id == source_id,
+            EnrichmentRecord.status.in_(("success", "no_results", "failed")),
+            EnrichmentRecord.created_at >= since,
+        )
+        .first()
+        is not None
+    )
+
+
 def backfill_cook_county_enrichment(
     *,
     batch_size: int = BACKFILL_BATCH_SIZE,
     socrata_call_cap: int = BACKFILL_SOCATA_CALL_CAP,
     last_id: int = 0,
 ) -> dict:
-    """Enrich Cook County leads that lack a recent commercial-valuation run."""
+    """Enrich Cook County leads that lack recent Cook County verification.
+
+    Prioritizes leads with open due LeadTasks. Skips proactive enrichment for
+    recently-sold leads that have no due open task (explicit Verify still runs).
+    """
     since = datetime.utcnow() - timedelta(days=BACKFILL_STALE_DAYS)
+    today = date.today()
     commercial_source_id = _commercial_valuation_source_id()
+    due_exists = _due_open_task_exists_clause(today)
 
     summary = {
         "status": "completed",
@@ -287,11 +462,16 @@ def backfill_cook_county_enrichment(
             db.session.query(Lead)
             .filter(
                 Lead.id > cursor,
-                Lead.county_assessor_pin.isnot(None),
-                Lead.county_assessor_pin != "",
                 Lead.property_state.in_(("IL", "Illinois", "il")),
+                or_(
+                    (
+                        Lead.county_assessor_pin.isnot(None)
+                        & (Lead.county_assessor_pin != "")
+                    ),
+                    func.lower(Lead.property_city) == "chicago",
+                ),
             )
-            .order_by(Lead.id)
+            .order_by(due_exists.desc(), Lead.id)
             .limit(batch_size * 2)
             .all()
         )
@@ -306,7 +486,15 @@ def backfill_cook_county_enrichment(
                 summary["skipped"] += 1
                 continue
 
+            has_due = _lead_has_due_open_task(lead.id, today)
+            if is_recently_sold(lead) and not has_due:
+                summary["skipped"] += 1
+                continue
+
             if lead_recently_fully_enriched(lead.id, commercial_source_id, since):
+                summary["skipped"] += 1
+                continue
+            if not _has_pin(lead) and lead_recently_sale_checked(lead.id, since):
                 summary["skipped"] += 1
                 continue
 

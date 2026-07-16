@@ -473,6 +473,26 @@ class InvalidLeadStatusTransitionError(RealEstateAnalysisException):
         }
 
 
+class ActionNotApplicableError(RealEstateAnalysisException):
+    """Raised when a Quick Action is forced while ineligible (not already-done)."""
+
+    def __init__(
+        self,
+        action: str,
+        reason_code: str,
+        message: str,
+        *,
+        already_done: bool = False,
+    ):
+        super().__init__(message, status_code=422)
+        self.payload = {
+            'error_type': 'action_not_applicable',
+            'action': action,
+            'reason_code': reason_code,
+            'already_done': already_done,
+        }
+
+
 class InvalidTaskStatusTransitionError(RealEstateAnalysisException):
     """Raised when a LeadTask status transition is not permitted (e.g. re-completing a completed task)."""
 

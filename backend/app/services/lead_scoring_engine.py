@@ -185,33 +185,9 @@ class ScoringResult:
 # ---------------------------------------------------------------------------
 
 def _count_open_tasks(lead_id: int) -> int:
-    from sqlalchemy import text as _text
+    """Count open LeadTasks — sole source of truth for next-action membership."""
     try:
-        native = LeadTask.query.filter_by(lead_id=lead_id, status='open').count()
-        # Count HubSpot CRM tasks not already mirrored onto LeadTask for this lead.
-        hs = db.session.execute(_text("""
-            SELECT COUNT(DISTINCT t.id) FROM (
-              SELECT t.id, t.hubspot_task_id
-              FROM tasks t
-              JOIN task_associations ta ON ta.task_id = t.id
-              WHERE ta.target_type = 'lead' AND ta.target_id = :lid
-                AND t.status IN ('open', 'overdue')
-                AND t.source = 'hubspot_import'
-              UNION
-              SELECT t.id, t.hubspot_task_id
-              FROM tasks t
-              WHERE t.lead_id = :lid
-                AND t.status IN ('open', 'overdue')
-                AND t.source = 'hubspot_import'
-            ) t
-            WHERE t.hubspot_task_id IS NULL
-               OR NOT EXISTS (
-                 SELECT 1 FROM lead_tasks lt
-                 WHERE lt.lead_id = :lid
-                   AND lt.hubspot_task_id = t.hubspot_task_id
-               )
-        """), {'lid': lead_id}).scalar() or 0
-        return native + int(hs)
+        return LeadTask.query.filter_by(lead_id=lead_id, status='open').count()
     except Exception as exc:
         logger.warning("open task count query failed for lead_id=%s: %s", lead_id, exc)
         return 0
@@ -228,29 +204,21 @@ def _mail_work_in_flight(lead_id: int) -> bool:
 
 
 def _has_overdue_hubspot_task(lead_id: int) -> bool:
-    from sqlalchemy import text as _hs_text
+    """True when the lead has an open overdue LeadTask (due on/before today)."""
     try:
-        row = db.session.execute(_hs_text("""
-            SELECT 1 FROM tasks t
-            JOIN task_associations ta ON ta.task_id = t.id
-            WHERE ta.target_type = 'lead' AND ta.target_id = :lid
-              AND t.status IN ('open', 'overdue')
-              AND (t.due_date <= :now OR (t.due_date IS NULL AND t.status = 'overdue'))
-              AND t.source = 'hubspot_import'
-            LIMIT 1
-        """), {'lid': lead_id, 'now': datetime.utcnow()}).fetchone()
-        if not row:
-            row = db.session.execute(_hs_text("""
-                SELECT 1 FROM tasks
-                WHERE lead_id = :lid
-                  AND status IN ('open', 'overdue')
-                  AND (due_date <= :now OR (due_date IS NULL AND status = 'overdue'))
-                  AND source = 'hubspot_import'
-                LIMIT 1
-            """), {'lid': lead_id, 'now': datetime.utcnow()}).fetchone()
-        return row is not None
+        today = date.today()
+        return (
+            LeadTask.query
+            .filter(
+                LeadTask.lead_id == lead_id,
+                LeadTask.status == 'open',
+                LeadTask.due_date.isnot(None),
+                LeadTask.due_date <= today,
+            )
+            .first()
+        ) is not None
     except Exception as exc:
-        logger.warning("overdue HubSpot task query failed for lead_id=%s: %s", lead_id, exc)
+        logger.warning("overdue LeadTask query failed for lead_id=%s: %s", lead_id, exc)
         return False
 
 

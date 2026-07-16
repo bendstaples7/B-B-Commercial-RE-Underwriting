@@ -152,6 +152,9 @@ def health_check():
       5. Lead visibility — can ben.d.staples.7@gmail.com see leads?
          (fails if the user or assigned leads are missing)
       6. Async stack — Redis reachable? Celery worker responding? (warn only)
+      7. Open Letter / mail queue schema
+      8. Enrichment catalog — required data_sources present after self-heal (FAIL if not)
+         plus supporting-data invariant counts (WARN when no recent enrichment)
     """
     import os
     from app import db
@@ -323,6 +326,41 @@ def health_check():
         checks['open_letter_encryption'] = 'ok'
     else:
         checks['open_letter_encryption'] = 'skipped (OPEN_LETTER_API_TOKEN not set)'
+
+    # ------------------------------------------------------------------
+    # Check 8: Enrichment catalog (Cook County / Chicago plugins)
+    # ------------------------------------------------------------------
+    try:
+        from app.services.cook_county_enrichment_service import (
+            check_enrichment_catalog_health,
+            collect_enrichment_supporting_data_invariants,
+        )
+        catalog = check_enrichment_catalog_health(heal=True)
+        if catalog['ok']:
+            checks['enrichment_catalog'] = (
+                f"ok ({catalog['present_count']}/{catalog['required_count']} sources)"
+            )
+        else:
+            checks['enrichment_catalog'] = (
+                f"FAIL: missing data_sources after heal: {catalog['missing']}"
+            )
+            degraded = True
+
+        invariants = collect_enrichment_supporting_data_invariants()
+        checks['enrichment_invariants'] = (
+            f"ok (enrichment_7d={invariants['enrichment_records_last_7d']}, "
+            f"chicago_no_pin_sale={invariants['chicago_no_pin_with_sale']}, "
+            f"working_set_sale_no_enrichment={invariants['working_set_sale_no_enrichment']})"
+        )
+        if invariants['enrichment_records_last_7d'] == 0:
+            checks['enrichment_invariants'] = (
+                f"WARN: no enrichment_records in last 7d; "
+                f"chicago_no_pin_sale={invariants['chicago_no_pin_with_sale']}, "
+                f"working_set_sale_no_enrichment={invariants['working_set_sale_no_enrichment']}"
+            )
+    except Exception as e:
+        checks['enrichment_catalog'] = f'FAIL: {e}'
+        degraded = True
 
     status = 'degraded' if degraded else 'healthy'
     http_status = 503 if degraded else 200

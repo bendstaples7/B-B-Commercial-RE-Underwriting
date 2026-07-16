@@ -154,6 +154,17 @@ class LeadTaskService:
             # Never reopen a locally completed HubSpot LeadTask from stale sync.
             if task.status == 'completed' and mapped_status != 'completed':
                 pass
+            # LeadTask is next-action SoT. Inbound HubSpot COMPLETED must not
+            # silently close an already-open working task (status-change sync,
+            # Celery Beat, webhooks). Completions of open tasks belong to the
+            # platform complete path / explicit HubSpot complete API.
+            elif task.status == 'open' and mapped_status == 'completed':
+                logger.info(
+                    'Preserving open LeadTask id=%s despite HubSpot completed '
+                    'hubspot_task_id=%s (LeadTask is next-action SoT)',
+                    task.id,
+                    hs_id,
+                )
             else:
                 task.status = mapped_status
                 if mapped_status == 'completed' and task.completed_at is None:
@@ -175,6 +186,12 @@ class LeadTaskService:
             db.session.commit()
         else:
             db.session.flush()
+
+        # Only when this call owns the transaction — batch HubSpot sync callers
+        # recompute via ActionEngine after the full task upsert batch.
+        if commit and mapped_status in ('completed', 'cancelled'):
+            from app.services.next_action_invariant import ensure_next_action_after_task_change
+            ensure_next_action_after_task_change(lead_id)
 
         return task
 
@@ -362,6 +379,9 @@ class LeadTaskService:
                     "ActionEngineService.recompute_and_persist failed for lead %s: %s",
                     lead_id, exc, exc_info=True,
                 )
+
+        from app.services.next_action_invariant import ensure_next_action_after_task_change
+        ensure_next_action_after_task_change(lead_id)
 
         return task
 

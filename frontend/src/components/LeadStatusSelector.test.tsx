@@ -65,6 +65,6 @@ describe('LeadStatusSelector', () => {
     await vi.waitFor(() => {
       expect(screen.getByTestId('lead-status-selector')).toHaveTextContent('Skip Trace')
     })
-    expect(onStatusChanged).toHaveBeenCalled()
+    expect(onStatusChanged).toHaveBeenCalledWith('skip_trace', { lead_status: 'skip_trace' })
   })
 })

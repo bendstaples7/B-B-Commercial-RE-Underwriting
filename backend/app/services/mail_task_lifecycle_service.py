@@ -18,6 +18,7 @@ from app.services.scoring_rubric import (
     sql_not_recently_sold,
 )
 from app.utils.call_completable_task import is_superseded_by_mail_task
+from app.services.lead_task_service import complete_native_task_mirror
 
 logger = logging.getLogger(__name__)
 
@@ -190,36 +191,8 @@ def reconcile_recent_sale_mail_tasks_for_lead(
             hubspot_task_id=task.hubspot_task_id,
         )
 
-    for task in _open_hubspot_tasks_for_lead(lead.id) + _open_mirrored_tasks_for_lead(lead.id):
-        if task.id in represented_crm_ids:
-            continue
-        if task.due_date is None or task.due_date.date() > today:
-            continue
-        hs_id = str(task.hubspot_task_id) if task.hubspot_task_id else None
-        if hs_id and hs_id in represented_hubspot_ids:
-            continue
-        if not _is_recent_sale_defer_task(lead, task.task_type, task.title):
-            continue
-        old_due_date = task.due_date.date()
-        task.due_date = due_at
-        if task.status == 'overdue':
-            task.status = 'open'
-        task.updated_at = datetime.utcnow()
-        db.session.add(task)
-        rescheduled += 1
-        if hs_id:
-            represented_hubspot_ids.add(hs_id)
-            hubspot_task_ids.add(hs_id)
-        _append_recent_sale_snooze_timeline(
-            lead.id,
-            task_id=task.id,
-            task_type=task.task_type,
-            title=task.title,
-            old_due_date=old_due_date,
-            eligible_date=eligible_date,
-            actor=actor,
-            hubspot_task_id=hs_id,
-        )
+    # CRM ``tasks`` are write-through mirrors only — do not discover open work
+    # from HubSpot/mirrored rows that lack a LeadTask.
 
     if commit:
         db.session.commit()
@@ -297,36 +270,13 @@ def adjust_earliest_task_for_recent_sale(
         raise ValueError('Selected task is not open or does not belong to this lead')
 
     if native is None and crm_task is None:
+        # LeadTask is the sole source of truth for open next actions.
         native = (
             LeadTask.query
             .filter_by(lead_id=lead.id, status='open')
             .order_by(LeadTask.due_date.asc().nullslast(), LeadTask.id.asc())
             .first()
         )
-        crm_candidates = (
-            _open_hubspot_tasks_for_lead(lead.id)
-            + _open_mirrored_tasks_for_lead(lead.id)
-        )
-        if crm_candidates:
-            earliest_crm = min(
-                crm_candidates,
-                key=lambda task: (
-                    task.due_date is None,
-                    task.due_date or datetime.max,
-                    task.id,
-                ),
-            )
-            native_due = (
-                datetime.combine(native.due_date, datetime.min.time())
-                if native is not None and native.due_date is not None
-                else None
-            )
-            if native is None or (
-                earliest_crm.due_date is not None
-                and (native_due is None or earliest_crm.due_date < native_due)
-            ):
-                native = None
-                crm_task = earliest_crm
 
     if native is None and crm_task is None:
         from app.services.skip_trace_enqueue import SkipTraceEnqueue
@@ -635,26 +585,10 @@ def _open_mirrored_tasks_for_lead(lead_id: int) -> list[Task]:
 
 
 def count_superseded_tasks_for_lead(lead_id: int) -> int:
-    """Count outreach tasks that would be completed when a lead enters the mail batch."""
+    """Count outreach LeadTasks that would be completed when a lead enters the mail batch."""
     count = 0
-    counted_hubspot_ids: set[str] = set()
     for task in LeadTask.query.filter_by(lead_id=lead_id, status='open').all():
         if is_mail_follow_up_task(task):
-            continue
-        if is_superseded_by_mail_task(task.task_type, task.title):
-            count += 1
-            if task.hubspot_task_id:
-                counted_hubspot_ids.add(str(task.hubspot_task_id))
-    for task in _open_hubspot_tasks_for_lead(lead_id):
-        # Skip CRM Task rows already represented by a LeadTask with same hubspot_task_id
-        if task.hubspot_task_id and str(task.hubspot_task_id) in counted_hubspot_ids:
-            continue
-        if is_mail_follow_up_title(task.title):
-            continue
-        if is_superseded_by_mail_task(task.task_type, task.title):
-            count += 1
-    for task in _open_mirrored_tasks_for_lead(lead_id):
-        if is_mail_follow_up_title(task.title):
             continue
         if is_superseded_by_mail_task(task.task_type, task.title):
             count += 1
@@ -667,15 +601,15 @@ def complete_tasks_superseded_by_mail(
     *,
     commit: bool = False,
 ) -> tuple[int, list[str]]:
-    """Complete outreach tasks superseded when a lead is staged for mail.
+    """Complete outreach LeadTasks superseded when a lead is staged for mail.
 
     Returns (completed_count, hubspot_task_ids_pending_api_sync).
     Never completes follow-up-after-mailer tasks (pending or dated) or their mirrors.
+    CRM ``tasks`` rows are write-through mirrors only — discovery is LeadTask-only.
     """
     now = datetime.now(timezone.utc)
     completed = 0
     hubspot_ids_to_sync: list[str] = []
-    completed_hubspot_ids: set[str] = set()
 
     from app.services.hubspot_task_completion_service import mark_hubspot_task_completed_local
 
@@ -697,46 +631,18 @@ def complete_tasks_superseded_by_mail(
                 completed += 1
                 if local.hubspot_task_id:
                     hubspot_ids_to_sync.append(local.hubspot_task_id)
-                    completed_hubspot_ids.add(str(local.hubspot_task_id))
             continue
         task.status = 'completed'
         task.completed_at = now
         db.session.add(task)
+        complete_native_task_mirror(task, now)
         _append_native_task_completed_timeline(lead_id, task, actor, now)
-        completed += 1
-
-    hubspot_tasks = _open_hubspot_tasks_for_lead(lead_id)
-    for hs_task in hubspot_tasks:
-        if hs_task.hubspot_task_id and str(hs_task.hubspot_task_id) in completed_hubspot_ids:
-            continue
-        if is_mail_follow_up_title(hs_task.title):
-            continue
-        if not is_superseded_by_mail_task(hs_task.task_type, hs_task.title):
-            continue
-        local = mark_hubspot_task_completed_local(
-                lead_id,
-                hs_task.id,
-                actor=actor,
-                reason='mail_queued',
-                id_namespace='crm_task',
-            )
-        if local:
-            completed += 1
-            if local.hubspot_task_id:
-                hubspot_ids_to_sync.append(local.hubspot_task_id)
-                completed_hubspot_ids.add(str(local.hubspot_task_id))
-
-    mirrored = _open_mirrored_tasks_for_lead(lead_id)
-    for mirror in mirrored:
-        if is_mail_follow_up_title(mirror.title):
-            continue
-        if not is_superseded_by_mail_task(mirror.task_type, mirror.title):
-            continue
-        _complete_native_task_mirror(mirror, now)
         completed += 1
 
     if commit and completed:
         db.session.commit()
+        from app.services.next_action_invariant import ensure_next_action_after_task_change
+        ensure_next_action_after_task_change(lead_id)
 
     return completed, hubspot_ids_to_sync
 

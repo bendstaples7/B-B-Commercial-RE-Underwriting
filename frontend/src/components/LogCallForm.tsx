@@ -17,10 +17,9 @@ import {
   InputLabel,
   MenuItem,
   Select,
+  Grid,
   Stack,
   TextField,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
 } from '@mui/material'
 import type { LeadTask, LeadTimelineEntry, LogCallPayload, PropertyContact } from '@/types'
@@ -33,26 +32,20 @@ import {
   type ContactMethodValue,
   contactMethodToCallPayload,
 } from '@/components/ContactMethodFields'
+import { FollowUpHorizonControls } from '@/components/FollowUpHorizonControls'
 import { findCallCompletableTask, parseHubSpotTaskId } from '@/utils/callCompletableTask'
-import { addDaysIso } from '@/utils/fromQueue'
+import {
+  type FollowUpPreset,
+  formatFollowUpPresetLabel,
+  followUpDueForPreset,
+  resolveFollowUpDueDate,
+} from '@/utils/followUpPresets'
 
 const MAX_NOTES_LENGTH = 2000
-
-type FollowUpPreset = '1' | '3' | '7' | 'custom'
 
 export type LogCallSavedMeta = {
   completedTaskId?: number
   completedHubSpotTaskId?: number
-}
-
-function formatFollowUpPresetLabel(preset: Exclude<FollowUpPreset, 'custom'>, dueDate: string): string {
-  const labels: Record<Exclude<FollowUpPreset, 'custom'>, string> = {
-    '1': 'Tomorrow',
-    '3': 'In 3 days',
-    '7': 'In 1 week',
-  }
-  const day = new Date(`${dueDate}T00:00:00`).toLocaleDateString(undefined, { weekday: 'long' })
-  return `${labels[preset]} (${day})`
 }
 
 function resolveContactName(
@@ -126,7 +119,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
   const [mailCampaignId, setMailCampaignId] = useState<number | ''>('')
   const [contactMethod, setContactMethod] = useState<ContactMethodValue>(EMPTY_CONTACT_METHOD)
   const [completeTask, setCompleteTask] = useState(true)
-  const [createFollowUp, setCreateFollowUp] = useState(false)
+  const [createFollowUp, setCreateFollowUp] = useState(true)
   const [followUpPreset, setFollowUpPreset] = useState<FollowUpPreset>('3')
   const [customDueDate, setCustomDueDate] = useState('')
 
@@ -163,15 +156,14 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
     return null
   }
 
-  const resolveFollowUpDueDate = (): string | null => {
+  const getFollowUpDueDate = (): string | null => {
     if (!createFollowUp) return null
-    if (followUpPreset === 'custom') return customDueDate || null
-    return addDaysIso(Number(followUpPreset))
+    return resolveFollowUpDueDate(followUpPreset, customDueDate)
   }
 
   const followUpDuePreview =
     createFollowUp && followUpPreset !== 'custom'
-      ? addDaysIso(Number(followUpPreset))
+      ? followUpDueForPreset(followUpPreset)
       : null
 
   const validateAll = (): boolean => {
@@ -214,12 +206,13 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
     setSubmitError(null)
     setSubmitting(true)
 
-    const followUpDue = resolveFollowUpDueDate()
+    const followUpDue = getFollowUpDueDate()
     const completingNativeTask =
       completeTask && callTask && callTask.source !== 'hubspot' && typeof callTask.id === 'number'
     const completedTaskId = completingNativeTask ? callTask.id as number : null
     const completingHubSpotTask =
       completeTask && callTask && callTask.source === 'hubspot'
+    // Optimistic placeholders are not completable HubSpot tasks.
     const hubSpotTaskId = completingHubSpotTask ? parseHubSpotTaskId(callTask.id) : null
 
     const payload: LogCallPayload = {
@@ -244,9 +237,8 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
       let completedHubSpotTaskId: number | undefined
       if (hubSpotTaskId != null) {
         try {
-          const rawTaskId = String(callTask?.id ?? '')
           await callLogService.markHubSpotTaskDone(leadId, hubSpotTaskId, {
-            idNamespace: rawTaskId.startsWith('hs-') ? 'crm_task' : 'lead_task',
+            idNamespace: 'lead_task',
           })
           completedHubSpotTaskId = hubSpotTaskId
         } catch (hubSpotErr) {
@@ -283,7 +275,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
       setMailCampaignId('')
       setContactMethod(EMPTY_CONTACT_METHOD)
       setCompleteTask(true)
-      setCreateFollowUp(false)
+      setCreateFollowUp(true)
       setFollowUpPreset('3')
       setCustomDueDate('')
     } catch (err) {
@@ -307,7 +299,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
       {submitError && (
         <Alert
           severity="error"
-          sx={{ mb: 2 }}
+          sx={{ mb: 1.25 }}
           onClose={() => setSubmitError(null)}
           data-testid="call-submit-error"
         >
@@ -315,217 +307,226 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
         </Alert>
       )}
 
-      <ContactMethodFields
-        mode="phone"
-        contacts={contacts}
-        contactsLoading={contactsLoading}
-        value={contactMethod}
-        onChange={setContactMethod}
-      />
+      <Grid container spacing={2} alignItems="stretch">
+        {/* Left: what happened on the call */}
+        <Grid item xs={12} md={7}>
+          <ContactMethodFields
+            dense
+            mode="phone"
+            contacts={contacts}
+            contactsLoading={contactsLoading}
+            value={contactMethod}
+            onChange={setContactMethod}
+          />
 
-      <FormControl fullWidth error={!!outcomeError} sx={{ mb: 2 }}>
-        <InputLabel id="call-outcome-label">Outcome *</InputLabel>
-        <Select
-          inputRef={outcomeInputRef}
-          labelId="call-outcome-label"
-          label="Outcome *"
-          value={outcome}
-          onChange={(e) => handleOutcomeChange(e.target.value)}
-          SelectDisplayProps={{ 'data-testid': 'call-outcome-select' } as React.HTMLAttributes<HTMLDivElement>}
-        >
-          {OUTCOME_OPTIONS.map((opt) => (
-            <MenuItem key={opt.value} value={opt.value}>
-              {opt.label}
-            </MenuItem>
-          ))}
-        </Select>
-        {outcomeError && (
-          <FormHelperText data-testid="call-outcome-error">{outcomeError}</FormHelperText>
-        )}
-      </FormControl>
-
-      <TextField
-        label="Duration (minutes, optional)"
-        type="number"
-        value={duration}
-        onChange={handleDurationChange}
-        error={!!durationError}
-        fullWidth
-        size="small"
-        sx={{ mb: 2 }}
-        inputProps={{
-          min: 1,
-          max: 999,
-          step: 1,
-          'data-testid': 'call-duration-input',
-        }}
-      />
-      {durationError && (
-        <Typography
-          variant="caption"
-          color="error"
-          display="block"
-          sx={{ mt: -1.5, mb: 2, ml: 1.75 }}
-          data-testid="call-duration-error"
-        >
-          {durationError}
-        </Typography>
-      )}
-
-      <TextField
-        label="Notes (optional)"
-        multiline
-        minRows={3}
-        value={notes}
-        onChange={handleNotesChange}
-        error={!!notesError || isNotesOverLimit}
-        helperText={
-          notesError ?? (
-            <Typography
-              component="span"
-              variant="caption"
-              color={isNotesOverLimit ? 'error' : 'text.secondary'}
-              data-testid="call-notes-char-count"
+          <FormControl fullWidth error={!!outcomeError} size="small" sx={{ mb: 1.25 }}>
+            <InputLabel id="call-outcome-label">Outcome *</InputLabel>
+            <Select
+              inputRef={outcomeInputRef}
+              labelId="call-outcome-label"
+              label="Outcome *"
+              value={outcome}
+              onChange={(e) => handleOutcomeChange(e.target.value)}
+              SelectDisplayProps={
+                { 'data-testid': 'call-outcome-select' } as React.HTMLAttributes<HTMLDivElement>
+              }
             >
-              {notes.length}/{MAX_NOTES_LENGTH.toLocaleString()}
-            </Typography>
-          )
-        }
-        fullWidth
-        sx={{ mb: 2 }}
-        inputProps={{ 'data-testid': 'call-notes-input' }}
-      />
+              {OUTCOME_OPTIONS.map((opt) => (
+                <MenuItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </MenuItem>
+              ))}
+            </Select>
+            {outcomeError && (
+              <FormHelperText data-testid="call-outcome-error">{outcomeError}</FormHelperText>
+            )}
+          </FormControl>
 
-      {mailCampaignOptions.length > 0 && (
-        <FormControl fullWidth sx={{ mb: 2 }} size="small">
-          <InputLabel id="mail-campaign-label">Response to mailer? (optional)</InputLabel>
-          <Select
-            labelId="mail-campaign-label"
-            label="Response to mailer? (optional)"
-            value={mailCampaignId}
-            onChange={(e) =>
-              setMailCampaignId(e.target.value === '' ? '' : Number(e.target.value))
-            }
-          >
-            <MenuItem value="">— Not mail-related —</MenuItem>
-            {mailCampaignOptions.map((c) => (
-              <MenuItem key={c.id} value={c.id}>
-                {c.submitted_at
-                  ? new Date(c.submitted_at).toLocaleDateString()
-                  : 'Campaign'}{' '}
-                — {c.template_name || `Template ${c.template_id}`}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-      )}
-
-      <Box sx={{ mb: 2, pt: 1, borderTop: 1, borderColor: 'divider' }} data-testid="call-task-actions">
-        {callTask ? (
-          <FormControlLabel
-            sx={{ alignItems: 'flex-start', m: 0, mb: 1.5, display: 'flex' }}
-            control={
-              <Checkbox
-                checked={completeTask}
-                onChange={(e) => setCompleteTask(e.target.checked)}
-                data-testid="complete-call-task-checkbox"
-                sx={{ pt: 0.25 }}
-              />
-            }
-            label={
-              <Box data-testid="complete-call-task-section">
-                <Typography variant="body2">
-                  Complete task:{' '}
-                  <Typography component="span" variant="body2" fontWeight={600}>
-                    {callTask.title}
-                  </Typography>
-                </Typography>
-                {callTask.source === 'hubspot' && (
-                  <Typography variant="caption" color="text.secondary" display="block">
-                    Marks done in HubSpot when possible.
-                  </Typography>
-                )}
-              </Box>
+          <TextField
+            label="Duration (min)"
+            type="number"
+            value={duration}
+            onChange={handleDurationChange}
+            error={!!durationError}
+            helperText={durationError ?? undefined}
+            fullWidth
+            size="small"
+            sx={{ mb: 1.25 }}
+            inputProps={{
+              min: 1,
+              max: 999,
+              step: 1,
+              'data-testid': 'call-duration-input',
+            }}
+            FormHelperTextProps={
+              durationError
+                ? ({ 'data-testid': 'call-duration-error' } as Record<string, string>)
+                : undefined
             }
           />
-        ) : openTasks.some((t) => t.status === 'open' || t.status === 'overdue') ? (
-          <Alert severity="info" sx={{ mb: 1.5 }} data-testid="no-call-task-hint">
-            No open call or follow-up task to complete. Mail or email outreach tasks are not completed from a call log.
-          </Alert>
-        ) : null}
 
-        <FormControlLabel
-          sx={{ alignItems: 'flex-start', m: 0, display: 'flex' }}
-          control={
-            <Checkbox
-              checked={createFollowUp}
-              onChange={(e) => setCreateFollowUp(e.target.checked)}
-              data-testid="create-follow-up-checkbox"
-              sx={{ pt: 0.25 }}
-            />
-          }
-          label={
-            <Typography variant="body2" data-testid="call-follow-up-section">
-              Create a follow-up task
-              {followUpDuePreview && (
-                <>
-                  {' — '}
-                  <Typography component="span" variant="body2" color="primary.main">
-                    {formatFollowUpPresetLabel(
-                      followUpPreset as Exclude<FollowUpPreset, 'custom'>,
-                      followUpDuePreview,
-                    )}
-                  </Typography>
-                </>
-              )}
-            </Typography>
-          }
-        />
+          <TextField
+            label="Notes (optional)"
+            multiline
+            minRows={3}
+            maxRows={5}
+            value={notes}
+            onChange={handleNotesChange}
+            error={!!notesError || isNotesOverLimit}
+            size="small"
+            helperText={
+              notesError ?? (
+                <Typography
+                  component="span"
+                  variant="caption"
+                  color={isNotesOverLimit ? 'error' : 'text.secondary'}
+                  data-testid="call-notes-char-count"
+                >
+                  {notes.length}/{MAX_NOTES_LENGTH.toLocaleString()}
+                </Typography>
+              )
+            }
+            fullWidth
+            sx={{ mb: 1.25 }}
+            inputProps={{ 'data-testid': 'call-notes-input' }}
+          />
 
-        {createFollowUp && (
-          <Box sx={{ pl: 4, mt: 1 }}>
-            <ToggleButtonGroup
-              exclusive
-              size="small"
-              value={followUpPreset}
-              onChange={(_e, value: FollowUpPreset | null) => {
-                if (value != null) {
-                  setFollowUpPreset(value)
-                  setFollowUpError(null)
+          {mailCampaignOptions.length > 0 && (
+            <FormControl fullWidth sx={{ mb: 0 }} size="small">
+              <InputLabel id="mail-campaign-label">Response to mailer? (optional)</InputLabel>
+              <Select
+                labelId="mail-campaign-label"
+                label="Response to mailer? (optional)"
+                value={mailCampaignId}
+                onChange={(e) =>
+                  setMailCampaignId(e.target.value === '' ? '' : Number(e.target.value))
                 }
-              }}
-              aria-label="Follow-up interval"
+              >
+                <MenuItem value="">— Not mail-related —</MenuItem>
+                {mailCampaignOptions.map((c) => (
+                  <MenuItem key={c.id} value={c.id}>
+                    {c.submitted_at
+                      ? new Date(c.submitted_at).toLocaleDateString()
+                      : 'Campaign'}{' '}
+                    — {c.template_name || `Template ${c.template_id}`}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          )}
+        </Grid>
+
+        {/* Right: next step */}
+        <Grid item xs={12} md={5}>
+          <Box
+            data-testid="call-task-actions"
+            sx={{
+              height: '100%',
+              px: 1.5,
+              py: 1.25,
+              borderRadius: 1,
+              bgcolor: 'action.hover',
+              border: 1,
+              borderColor: 'divider',
+            }}
+          >
+            <Typography
+              variant="subtitle2"
+              sx={{ mb: 1, fontWeight: 600, letterSpacing: 0.01 }}
             >
-              <ToggleButton value="1" data-testid="follow-up-1d">Tomorrow</ToggleButton>
-              <ToggleButton value="3" data-testid="follow-up-3d">3 days</ToggleButton>
-              <ToggleButton value="7" data-testid="follow-up-7d">1 week</ToggleButton>
-              <ToggleButton value="custom" data-testid="follow-up-custom">Custom</ToggleButton>
-            </ToggleButtonGroup>
-            {followUpPreset === 'custom' && (
-              <TextField
-                type="date"
-                size="small"
-                label="Follow-up date"
-                value={customDueDate}
-                onChange={(e) => {
-                  setCustomDueDate(e.target.value)
-                  setFollowUpError(null)
-                }}
-                error={!!followUpError}
-                helperText={followUpError}
-                InputLabelProps={{ shrink: true }}
-                sx={{ mt: 1.5, display: 'block' }}
-                inputProps={{ 'data-testid': 'follow-up-custom-date' }}
+              Next step
+            </Typography>
+
+            {callTask ? (
+              <FormControlLabel
+                sx={{ alignItems: 'flex-start', m: 0, mb: 1, display: 'flex' }}
+                control={
+                  <Checkbox
+                    checked={completeTask}
+                    onChange={(e) => setCompleteTask(e.target.checked)}
+                    data-testid="complete-call-task-checkbox"
+                    sx={{ pt: 0.25 }}
+                  />
+                }
+                label={
+                  <Box data-testid="complete-call-task-section">
+                    <Typography variant="body2">
+                      Complete task:{' '}
+                      <Typography component="span" variant="body2" fontWeight={600}>
+                        {callTask.title}
+                      </Typography>
+                    </Typography>
+                    {callTask.source === 'hubspot' && (
+                      <Typography variant="caption" color="text.secondary" display="block">
+                        Marks done in HubSpot when possible.
+                      </Typography>
+                    )}
+                  </Box>
+                }
               />
-            )}
-            {followUpError && followUpPreset !== 'custom' && (
-              <FormHelperText error>{followUpError}</FormHelperText>
+            ) : openTasks.some((t) => t.status === 'open' || t.status === 'overdue') ? (
+              <Alert severity="info" sx={{ mb: 1, py: 0.5 }} data-testid="no-call-task-hint">
+                No open call or follow-up task to complete. Mail or email outreach tasks are not
+                completed from a call log.
+              </Alert>
+            ) : null}
+
+            <FormControlLabel
+              sx={{ alignItems: 'flex-start', m: 0, mb: createFollowUp ? 0.75 : 0, display: 'flex' }}
+              control={
+                <Checkbox
+                  checked={createFollowUp}
+                  onChange={(e) => setCreateFollowUp(e.target.checked)}
+                  data-testid="create-follow-up-checkbox"
+                  sx={{ pt: 0.25 }}
+                />
+              }
+              label={
+                <Typography variant="body2" data-testid="call-follow-up-section">
+                  Create a follow-up task
+                  {followUpDuePreview && (
+                    <>
+                      {' — '}
+                      <Typography component="span" variant="body2" color="primary.main">
+                        {formatFollowUpPresetLabel(
+                          followUpPreset as Exclude<FollowUpPreset, 'custom'>,
+                          followUpDuePreview,
+                        )}
+                      </Typography>
+                    </>
+                  )}
+                </Typography>
+              }
+            />
+
+            {createFollowUp && (
+              <Box sx={{ width: '100%', minWidth: 0 }}>
+                <FollowUpHorizonControls
+                  variant="list"
+                  preset={followUpPreset}
+                  customDueDate={customDueDate}
+                  error={followUpError}
+                  onPresetChange={(value) => {
+                    setFollowUpPreset(value)
+                    setFollowUpError(null)
+                  }}
+                  onCustomDueDateChange={(value) => {
+                    setCustomDueDate(value)
+                    setFollowUpError(null)
+                  }}
+                />
+              </Box>
             )}
           </Box>
-        )}
-      </Box>
+        </Grid>
+      </Grid>
 
-      <Stack direction="row" spacing={1} justifyContent="flex-end">
+      <Stack
+        direction="row"
+        spacing={1}
+        justifyContent="flex-end"
+        sx={{ pt: 1.25, mt: 1.5, borderTop: 1, borderColor: 'divider' }}
+      >
         {onCancel && (
           <Button
             size="small"

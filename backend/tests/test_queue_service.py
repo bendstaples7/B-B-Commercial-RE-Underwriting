@@ -296,40 +296,48 @@ def test_todays_action_direct_mail_consolidates_nurture_and_excludes_bad_mail(ap
         assert returned.id not in by_id
 
 
-def test_todays_action_includes_associated_crm_task_title(app):
+def test_todays_action_due_title_from_lead_task_only(app):
+    """Today's Action due-task context comes from LeadTask, not CRM tasks."""
     from app import db
+    from app.models import LeadTask
     from app.models.task import Task
     from app.models.task_association import TaskAssociation
 
     with app.app_context():
         lead = _make_lead(app, '43 HubSpot Task Context St')
-        direct_task = Task(
-            title='Later direct CRM task',
-            due_date=datetime.combine(date.today(), datetime.max.time()),
-            status='open',
-            source='manual',
-            lead_id=lead.id,
-            task_type='custom',
-        )
-        task = Task(
+        # CRM-only open task must NOT put the lead in Today's Action.
+        crm_only = Task(
             title='Follow up on imported HubSpot task',
             due_date=datetime.combine(date.today(), datetime.min.time()),
             status='open',
             source='hubspot_import',
         )
-        db.session.add_all([direct_task, task])
+        db.session.add(crm_only)
         db.session.flush()
         db.session.add(TaskAssociation(
-            task_id=task.id,
+            task_id=crm_only.id,
             target_type='lead',
             target_id=lead.id,
         ))
         db.session.commit()
 
         rows, _ = QueueService().get_todays_action()
-        row = next(item for item in rows if item['id'] == lead.id)
-        assert row['due_task_title'] == task.title
+        assert all(item['id'] != lead.id for item in rows)
 
+        lead_task = LeadTask(
+            lead_id=lead.id,
+            task_type='custom',
+            title='Native due task title',
+            status='open',
+            due_date=date.today(),
+            created_by='test',
+        )
+        db.session.add(lead_task)
+        db.session.commit()
+
+        rows, _ = QueueService().get_todays_action()
+        row = next(item for item in rows if item['id'] == lead.id)
+        assert row['due_task_title'] == 'Native due task title'
 
 def test_todays_action_outreach_counts_buckets(app):
     """Outreach facet counts match filtered list membership for each bucket."""

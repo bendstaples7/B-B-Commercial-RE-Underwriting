@@ -171,6 +171,8 @@ export interface ContactMethodFieldsProps {
   contactsLoading?: boolean
   value: ContactMethodValue
   onChange: (value: ContactMethodValue) => void
+  /** Tighter vertical spacing for modals (fields still stack full-width). */
+  dense?: boolean
 }
 
 export function ContactMethodFields({
@@ -179,6 +181,7 @@ export function ContactMethodFields({
   contactsLoading = false,
   value,
   onChange,
+  dense = false,
 }: ContactMethodFieldsProps) {
   const methodOptions = useMemo(
     () => buildMethodOptions(contacts, mode, value.contactId),
@@ -262,69 +265,78 @@ export function ContactMethodFields({
     })
   }
 
+  const fieldMb = dense ? 1.25 : 2
+
+  const contactSelect = (
+    <FormControl fullWidth size="small" sx={{ mb: fieldMb }}>
+      <InputLabel id="contact-method-contact-label" shrink>
+        Contact (optional)
+      </InputLabel>
+      <Select
+        labelId="contact-method-contact-label"
+        label="Contact (optional)"
+        value={value.contactId != null ? String(value.contactId) : CONTACT_NONE}
+        onChange={(e) => handleContactChange(e.target.value)}
+        disabled={contactsLoading}
+        data-testid="contact-method-contact-select"
+        renderValue={(selected) => {
+          if (selected === CONTACT_NONE) return '— None —'
+          const contact = contacts.find((c) => String(c.id) === selected)
+          return contact ? formatContactShortLabel(contact) : selected
+        }}
+        sx={selectWrapSx}
+      >
+        <MenuItem value={CONTACT_NONE}>— None —</MenuItem>
+        {contacts.map((contact) => (
+          <MenuItem key={contact.id} value={String(contact.id)}>
+            {formatContactLabel(contact)}
+          </MenuItem>
+        ))}
+      </Select>
+    </FormControl>
+  )
+
+  const methodSelect = (
+    <FormControl fullWidth size="small" sx={{ mb: fieldMb }}>
+      <InputLabel id="contact-method-method-label" shrink>
+        {methodLabel} (optional)
+      </InputLabel>
+      <Select
+        labelId="contact-method-method-label"
+        label={`${methodLabel} (optional)`}
+        value={value.methodKey}
+        onChange={(e) => handleMethodChange(e.target.value)}
+        disabled={contactsLoading}
+        data-testid="contact-method-method-select"
+        renderValue={(selected) => {
+          if (selected === METHOD_NONE) return '— None —'
+          if (selected === METHOD_OTHER) return 'Other…'
+          const opt = methodOptions.find((o) => o.key === selected)
+          return opt?.label ?? selected
+        }}
+        sx={selectWrapSx}
+      >
+        <MenuItem value={METHOD_NONE}>— None —</MenuItem>
+        {methodOptions.map((opt) => (
+          <MenuItem key={opt.key} value={opt.key}>
+            {opt.label}
+          </MenuItem>
+        ))}
+        <MenuItem value={METHOD_OTHER}>Other…</MenuItem>
+      </Select>
+    </FormControl>
+  )
+
   return (
     <>
-      <FormControl fullWidth size="small" sx={{ mb: 2 }}>
-        <InputLabel id="contact-method-contact-label" shrink>
-          Contact (optional)
-        </InputLabel>
-        <Select
-          labelId="contact-method-contact-label"
-          label="Contact (optional)"
-          value={value.contactId != null ? String(value.contactId) : CONTACT_NONE}
-          onChange={(e) => handleContactChange(e.target.value)}
-          disabled={contactsLoading}
-          data-testid="contact-method-contact-select"
-          renderValue={(selected) => {
-            if (selected === CONTACT_NONE) return '— None —'
-            const contact = contacts.find((c) => String(c.id) === selected)
-            return contact ? formatContactShortLabel(contact) : selected
-          }}
-          sx={selectWrapSx}
-        >
-          <MenuItem value={CONTACT_NONE}>— None —</MenuItem>
-          {contacts.map((contact) => (
-            <MenuItem key={contact.id} value={String(contact.id)}>
-              {formatContactLabel(contact)}
-            </MenuItem>
-          ))}
-        </Select>
-      </FormControl>
+      {contactSelect}
+      {methodSelect}
 
       {contacts.length === 0 && !contactsLoading && (
-        <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 2 }}>
+        <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: fieldMb }}>
           No contacts linked to this property. Add contacts on the Contacts tab, or enter a method below.
         </Typography>
       )}
-
-      <FormControl fullWidth size="small" sx={{ mb: 2 }}>
-        <InputLabel id="contact-method-method-label" shrink>
-          {methodLabel} (optional)
-        </InputLabel>
-        <Select
-          labelId="contact-method-method-label"
-          label={`${methodLabel} (optional)`}
-          value={value.methodKey}
-          onChange={(e) => handleMethodChange(e.target.value)}
-          disabled={contactsLoading}
-          data-testid="contact-method-method-select"
-          renderValue={(selected) => {
-            if (selected === METHOD_NONE) return '— None —'
-            if (selected === METHOD_OTHER) return 'Other…'
-            const opt = methodOptions.find((o) => o.key === selected)
-            return opt?.label ?? selected
-          }}
-          sx={selectWrapSx}
-        >
-          <MenuItem value={METHOD_NONE}>— None —</MenuItem>
-          {methodOptions.map((opt) => (
-            <MenuItem key={opt.key} value={opt.key}>
-              {opt.label}
-            </MenuItem>
-          ))}
-          <MenuItem value={METHOD_OTHER}>Other…</MenuItem>
-        </Select>
-      </FormControl>
 
       {value.methodKey === METHOD_OTHER && (
         <TextField
@@ -340,7 +352,7 @@ export function ContactMethodFields({
           }
           fullWidth
           size="small"
-          sx={{ mb: 2 }}
+          sx={{ mb: fieldMb }}
           inputProps={{ 'data-testid': 'contact-method-other-input' }}
         />
       )}

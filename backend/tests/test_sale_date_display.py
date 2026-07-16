@@ -124,7 +124,55 @@ def test_resolve_sale_date_meta_returns_null_without_preferred_field_audit(app):
         db.session.commit()
 
         meta = resolve_sale_date_meta(lead)
-        assert meta == {'last_updated_at': None, 'source': None}
+        assert meta == {
+            'last_updated_at': None,
+            'last_checked_at': None,
+            'source': None,
+        }
+
+
+def test_resolve_sale_date_meta_same_run_success_wins_over_no_results(app):
+    with app.app_context():
+        from app import db
+        from app.models.enrichment import DataSource, EnrichmentRecord
+
+        lead = Lead(
+            property_street='4 Same Run St',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            most_recent_sale='6/12/2018',
+        )
+        assessor = DataSource.query.filter_by(name='cook_county_assessor').first()
+        if assessor is None:
+            assessor = DataSource(name='cook_county_assessor', is_active=True)
+            db.session.add(assessor)
+        commercial = DataSource.query.filter_by(name='cook_county_commercial_valuation').first()
+        if commercial is None:
+            commercial = DataSource(name='cook_county_commercial_valuation', is_active=True)
+            db.session.add(commercial)
+        db.session.add(lead)
+        db.session.flush()
+        checked_at = datetime(2026, 7, 16, 12, 0, 0)
+        db.session.add_all([
+            EnrichmentRecord(
+                lead_id=lead.id,
+                data_source_id=assessor.id,
+                status='success',
+                created_at=checked_at,
+            ),
+            EnrichmentRecord(
+                lead_id=lead.id,
+                data_source_id=commercial.id,
+                status='no_results',
+                created_at=checked_at,
+            ),
+        ])
+        db.session.commit()
+
+        meta = resolve_sale_date_meta(lead)
+        assert meta['status'] == 'success'
+        assert meta['last_checked_at'].startswith('2026-07-16')
 
 
 def test_resolve_sale_date_meta_ignores_future_imported_sale(app):
@@ -166,4 +214,8 @@ def test_resolve_sale_date_meta_ignores_future_imported_sale(app):
 
 def test_resolve_sale_date_meta_returns_null_without_app_context():
     lead = Lead(property_street='4 Main St', most_recent_sale='1/1/2000')
-    assert resolve_sale_date_meta(lead) == {'last_updated_at': None, 'source': None}
+    assert resolve_sale_date_meta(lead) == {
+        'last_updated_at': None,
+        'last_checked_at': None,
+        'source': None,
+    }

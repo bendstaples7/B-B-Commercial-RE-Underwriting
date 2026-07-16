@@ -231,13 +231,14 @@ def humanize_sale_date_source(changed_by: str | None) -> str | None:
 
 
 def resolve_sale_date_meta(lead: Lead) -> dict:
-    """Latest audit metadata for sale-date fields shown in Command Center."""
-    null_meta = {'last_updated_at': None, 'source': None}
+    """Audit + enrichment freshness for sale-date fields shown in Command Center."""
+    null_meta = {'last_updated_at': None, 'last_checked_at': None, 'source': None}
     from flask import has_app_context
 
     if not has_app_context():
         return null_meta
 
+    from app.models.enrichment import DataSource, EnrichmentRecord
     from app.models.lead import LeadAuditTrail
 
     lead_id = getattr(lead, 'id', None)
@@ -276,13 +277,71 @@ def resolve_sale_date_meta(lead: Lead) -> dict:
         .order_by(LeadAuditTrail.changed_at.desc())
         .first()
     )
-    if row is None:
+
+    last_updated_at = row.changed_at.isoformat() if row and row.changed_at else None
+    source = humanize_sale_date_source(row.changed_by) if row else None
+
+    # Enrichment probe timestamp (even when sale fields did not change).
+    # ``no_results`` should still show as "checked" rather than "never verified".
+    assessor_source_ids = [
+        sid for (sid,) in (
+            DataSource.query
+            .with_entities(DataSource.id)
+            .filter(DataSource.name.in_((
+                'cook_county_assessor',
+                'cook_county_commercial_valuation',
+            )))
+            .all()
+        )
+    ]
+    last_checked_at = None
+    enrichment_status = None
+    enrichment_error = None
+    if assessor_source_ids:
+        enrich = (
+            EnrichmentRecord.query
+            .filter(
+                EnrichmentRecord.lead_id == lead_id,
+                EnrichmentRecord.data_source_id.in_(assessor_source_ids),
+            )
+            .order_by(EnrichmentRecord.created_at.desc())
+            .first()
+        )
+        if enrich and enrich.created_at:
+            last_checked_at = enrich.created_at.isoformat()
+            enrichment_status = enrich.status
+            enrichment_error = getattr(enrich, 'error_reason', None)
+            if source is None:
+                source = 'Cook County records'
+            same_run_success = (
+                EnrichmentRecord.query
+                .filter(
+                    EnrichmentRecord.lead_id == lead_id,
+                    EnrichmentRecord.data_source_id.in_(assessor_source_ids),
+                    EnrichmentRecord.status == 'success',
+                    EnrichmentRecord.created_at >= enrich.created_at - timedelta(minutes=5),
+                    EnrichmentRecord.created_at <= enrich.created_at + timedelta(minutes=5),
+                )
+                .order_by(EnrichmentRecord.created_at.desc())
+                .first()
+            )
+            if same_run_success is not None:
+                enrichment_status = 'success'
+                enrichment_error = None
+
+    if last_updated_at is None and last_checked_at is None:
         return null_meta
 
-    return {
-        'last_updated_at': row.changed_at.isoformat() if row.changed_at else None,
-        'source': humanize_sale_date_source(row.changed_by),
+    meta = {
+        'last_updated_at': last_updated_at,
+        'last_checked_at': last_checked_at or last_updated_at,
+        'source': source,
     }
+    if enrichment_status is not None:
+        meta['status'] = enrichment_status
+    if enrichment_error is not None:
+        meta['error_reason'] = enrichment_error
+    return meta
 
 
 def effective_acquisition_date_sql():

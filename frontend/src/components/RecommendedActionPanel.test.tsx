@@ -324,7 +324,7 @@ describe('RecommendedActionPanel', () => {
       'do_not_contact',
       'skip_trace',
       'awaiting_skip_trace',
-    ] as const)('hides Move to Skip Trace for terminal status %s', (leadStatus) => {
+    ] as const)('grays out Move to Skip Trace for status %s', (leadStatus) => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('enrich_data')}
@@ -334,9 +334,31 @@ describe('RecommendedActionPanel', () => {
         />,
       )
 
-      expect(
-        screen.queryByRole('button', { name: 'Move to Skip Trace' }),
-      ).not.toBeInTheDocument()
+      expect(screen.getByTestId('ra-universal-btn-move_to_skip_trace')).toBeDisabled()
+    })
+
+    it('keeps Quick actions in a fixed order across leads', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('mail_ready', 'Ready to Mail')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          isMailable
+          onAction={vi.fn()}
+        />,
+      )
+
+      const buttons = Array.from(
+        screen.getByTestId('ra-universal-actions').querySelectorAll('button'),
+      ).map((btn) => btn.getAttribute('data-testid'))
+
+      expect(buttons).toEqual([
+        'ra-universal-btn-log_call',
+        'ra-universal-btn-log_note',
+        'ra-universal-btn-log_email',
+        'ra-universal-btn-add_to_mail_batch',
+        'ra-universal-btn-move_to_skip_trace',
+      ])
     })
   })
 
@@ -670,7 +692,7 @@ describe('RecommendedActionPanel', () => {
       expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeInTheDocument()
     })
 
-    it('does not show Add to Mail Queue when not mailable', () => {
+    it('shows Add to Mail Queue grayed out when not mailable', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('call_ready', 'Call Now')}
@@ -680,11 +702,10 @@ describe('RecommendedActionPanel', () => {
         />,
       )
 
-      expect(screen.queryByTestId('ra-universal-btn-add_to_mail_batch')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('ra-action-btn-add_to_mail_batch')).not.toBeInTheDocument()
+      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeDisabled()
     })
 
-    it('explains a recent-sale hold and hides Add to Mail Queue', () => {
+    it('explains a recent-sale hold and grays out Add to Mail Queue', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('hold')}
@@ -708,10 +729,14 @@ describe('RecommendedActionPanel', () => {
         formatDateOnly('2027-03-31'),
       )
       expect(screen.getByRole('button', { name: 'Adjust for Recent Sale' })).toBeInTheDocument()
-      expect(screen.queryByTestId('ra-universal-btn-add_to_mail_batch')).not.toBeInTheDocument()
+      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeDisabled()
+      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toHaveAttribute(
+        'title',
+        `Held after recent sale until ${formatDateOnly('2027-03-31')}`,
+      )
     })
 
-    it('hides Add to Mail Queue for stale mail_ready when owner mail is invalid', () => {
+    it('grays out Add to Mail Queue for stale mail_ready when owner mail is invalid', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('mail_ready', 'Ready to Mail')}
@@ -721,10 +746,10 @@ describe('RecommendedActionPanel', () => {
         />,
       )
 
-      expect(screen.queryByTestId('ra-universal-btn-add_to_mail_batch')).not.toBeInTheDocument()
+      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeDisabled()
     })
 
-    it('hides Add to Mail Queue for stale direct_mail method when owner mail is invalid', () => {
+    it('grays out Add to Mail Queue for stale direct_mail method when owner mail is invalid', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={{
@@ -737,10 +762,10 @@ describe('RecommendedActionPanel', () => {
         />,
       )
 
-      expect(screen.queryByTestId('ra-universal-btn-add_to_mail_batch')).not.toBeInTheDocument()
+      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeDisabled()
     })
 
-    it('promotes Add to Mail Queue first when RA is mail_ready', () => {
+    it('keeps Add to Mail Queue in fixed position when RA is mail_ready', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('mail_ready', 'Ready to Mail')}
@@ -752,7 +777,7 @@ describe('RecommendedActionPanel', () => {
       )
 
       const buttons = screen.getByTestId('ra-universal-actions').querySelectorAll('button')
-      expect(buttons[0]).toHaveAttribute('data-testid', 'ra-universal-btn-add_to_mail_batch')
+      expect(buttons[3]).toHaveAttribute('data-testid', 'ra-universal-btn-add_to_mail_batch')
     })
 
     it('shows In mail batch in Quick actions when queued and mailable', () => {

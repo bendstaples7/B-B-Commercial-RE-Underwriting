@@ -18,7 +18,8 @@ from app.models.lead import Lead
 from app.models.lead_task import LeadTask
 from app.models.lead_timeline_entry import LeadTimelineEntry
 from app.models.task import Task
-from app.exceptions import InvalidLeadStatusTransitionError
+from app.exceptions import ActionNotApplicableError
+from app.services.action_eligibility import evaluate_move_to_skip_trace
 from app.services.lead_task_service import (
     LeadTaskService,
     complete_native_task_mirror,
@@ -123,30 +124,61 @@ class SkipTraceEnqueue:
         lead = Lead.query.filter_by(id=lead_id).with_for_update().first()
         if lead is None:
             raise ValueError(f"Lead {lead_id} not found")
-        if lead.lead_status in {
-            "deprioritize",
-            "deal_won",
-            "deal_lost",
-            "suppressed",
-            "do_not_contact",
-        }:
-            raise InvalidLeadStatusTransitionError(
-                lead.lead_status,
-                "skip_trace",
+
+        eligibility = evaluate_move_to_skip_trace(lead)
+        if eligibility.already_done:
+            skip_trace_task = (
+                LeadTask.query
+                .filter_by(
+                    lead_id=lead_id,
+                    task_type="skip_trace_owner",
+                    status="open",
+                )
+                .first()
+            )
+            if skip_trace_task is None:
+                skip_trace_task = self._tasks.create(
+                    lead_id,
+                    {
+                        "task_type": "skip_trace_owner",
+                        "title": "Awaiting skip trace",
+                        "due_date": None,
+                    },
+                    actor=actor,
+                    recompute_action=False,
+                    commit=False,
+                )
+                db.session.commit()
+            return {
+                "lead_id": lead_id,
+                "lead_status": lead.lead_status,
+                "completed_task_id": None,
+                "skip_trace_task_id": skip_trace_task.id,
+                "changed": False,
+                "already_done": True,
+                "reason_code": eligibility.reason_code,
+            }
+        if not eligibility.ok:
+            raise ActionNotApplicableError(
+                'move_to_skip_trace',
+                eligibility.reason_code or 'terminal_status',
+                eligibility.message or 'Move to Skip Trace is not available',
+                already_done=False,
             )
 
         completed_task: Optional[LeadTask] = None
         if complete_task_id is not None:
-            completed_task = LeadTask.query.filter(
-                LeadTask.id == complete_task_id,
-                LeadTask.lead_id == lead_id,
-                LeadTask.task_type != 'skip_trace_owner',
-            ).first()
-            if completed_task is None:
-                raise ValueError(
-                    f"Task {complete_task_id} not found for lead {lead_id}"
-                )
-        else:
+            candidate = (
+                LeadTask.query
+                .filter_by(id=complete_task_id, lead_id=lead_id)
+                .first()
+            )
+            # Never complete the skip-trace handoff itself; ignore stale/missing
+            # client ids so the handoff still succeeds instead of "Invalid request".
+            if candidate is not None and candidate.task_type != "skip_trace_owner":
+                completed_task = candidate
+
+        if completed_task is None:
             completed_task = (
                 LeadTask.query
                 .filter(
@@ -256,6 +288,9 @@ class SkipTraceEnqueue:
             "lead_status": "skip_trace",
             "completed_task_id": completed_task_id_out,
             "skip_trace_task_id": skip_trace_task.id,
+            "changed": True,
+            "already_done": False,
+            "reason_code": None,
         }
 
     def schedule_recent_sale(

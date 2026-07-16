@@ -119,12 +119,24 @@ def _make_warm_signal(app, lead_id: int):
 # ---------------------------------------------------------------------------
 
 class TestTodaysActionQueue:
-    def test_lead_with_overdue_hubspot_task_appears(self, app, client):
-        """A lead with an overdue HubSpot task appears in Today's Action."""
+    def test_crm_hubspot_task_alone_does_not_appear(self, app, client):
+        """CRM Task rows are mirrors only — Today's Action is LeadTask-based."""
         with app.app_context():
             lead = _make_lead(app, '1 Todays Action St')
             _make_hubspot_task(lead.id, status='overdue',
                                due_date=datetime.now(timezone.utc) - timedelta(days=1))
+
+            svc = QueueService()
+            rows, _ = svc.get_todays_action()
+            ids = [r['id'] for r in rows]
+            assert lead.id not in ids
+
+    def test_lead_with_due_lead_task_appears(self, app, client):
+        """A lead with an open due LeadTask appears in Today's Action."""
+        with app.app_context():
+            lead = _make_lead(app, '1b Todays Action St',
+                              lead_status='mailing_no_contact_made')
+            _make_lead_task(lead.id, status='open', due_date=date.today())
 
             svc = QueueService()
             rows, total = svc.get_todays_action()
@@ -231,18 +243,17 @@ class TestPreviouslyWarmQueue:
 # ---------------------------------------------------------------------------
 
 class TestFollowUpOverdueQueue:
-    def test_lead_with_overdue_hubspot_task_appears(self, app, client):
-        """A lead with an overdue HubSpot task appears in Follow-Up Overdue."""
+    def test_crm_hubspot_task_alone_does_not_appear(self, app, client):
+        """CRM Task rows are mirrors only — Follow-Up Overdue is LeadTask-based."""
         with app.app_context():
             lead = _make_lead(app, '1 Overdue St')
             _make_hubspot_task(lead.id, status='overdue',
                                due_date=datetime.now(timezone.utc) - timedelta(days=2))
 
             svc = QueueService()
-            rows, total = svc.get_follow_up_overdue()
+            rows, _ = svc.get_follow_up_overdue()
             ids = [r['id'] for r in rows]
-            assert lead.id in ids
-            assert total >= 1
+            assert lead.id not in ids
 
     def test_lead_with_overdue_lead_task_appears(self, app, client):
         """A lead with an overdue CRM lead_task appears in Follow-Up Overdue."""
@@ -290,8 +301,8 @@ class TestNoNextActionQueue:
             assert lead.id in ids
             assert total >= 1
 
-    def test_lead_with_open_hubspot_task_does_not_appear(self, app, client):
-        """A lead with an open HubSpot task does not appear in No Next Action."""
+    def test_open_hubspot_task_alone_still_appears(self, app, client):
+        """CRM Task mirrors do not satisfy next-action — lead stays in No Next Action."""
         with app.app_context():
             lead = _make_lead(app, '2 No Action St', lead_status='awaiting_skip_trace')
             _make_hubspot_task(lead.id, status='open',
@@ -300,7 +311,7 @@ class TestNoNextActionQueue:
             svc = QueueService()
             rows, _ = svc.get_no_next_action()
             ids = [r['id'] for r in rows]
-            assert lead.id not in ids
+            assert lead.id in ids
 
     def test_lead_with_open_lead_task_does_not_appear(self, app, client):
         """A lead with an open CRM lead_task does not appear in No Next Action."""

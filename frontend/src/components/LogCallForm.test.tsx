@@ -52,7 +52,7 @@ function makeTimelineEntry(overrides: Partial<LeadTimelineEntry> = {}): LeadTime
 
 function makeOpenHubSpotTask(): LeadTask {
   return {
-    id: 'hs-42',
+    id: 42,
     lead_id: 1,
     title: 'Follow up on 1726 W Roscoe St',
     task_type: 'custom',
@@ -492,7 +492,7 @@ describe('LogCallForm', () => {
       await waitFor(() => {
         expect(mockLogCall).toHaveBeenCalled()
         expect(mockMarkHubSpotTaskDone).toHaveBeenCalledWith(1, 42, {
-          idNamespace: 'crm_task',
+          idNamespace: 'lead_task',
         })
         expect(onSaved).toHaveBeenCalledWith(
           expect.objectContaining({ event_type: 'call_logged' }),
@@ -509,7 +509,8 @@ describe('LogCallForm', () => {
       render(<LogCallForm leadId={1} onSaved={onSaved} />)
 
       selectOutcome('voicemail')
-      await user.click(screen.getByTestId('create-follow-up-checkbox'))
+      // Follow-up is enabled by default — pick the 3-day horizon and save.
+      expect(screen.getByTestId('follow-up-3d')).toBeInTheDocument()
       await user.click(screen.getByTestId('follow-up-3d'))
       await user.click(screen.getByTestId('call-save-btn'))
 

@@ -40,8 +40,9 @@ describe('isCallCompletableTask', () => {
 })
 
 describe('parseHubSpotTaskId', () => {
-  it('parses hs-prefixed ids', () => {
-    expect(parseHubSpotTaskId('hs-42')).toBe(42)
+  it('parses numeric LeadTask ids', () => {
+    expect(parseHubSpotTaskId(42)).toBe(42)
+    expect(parseHubSpotTaskId('42')).toBe(42)
   })
 
   it('returns null for invalid ids', () => {
@@ -54,7 +55,7 @@ describe('findCallCompletableTask', () => {
     const tasks = [
       makeTask({ id: 1, title: 'Email outreach', task_type: 'custom' }),
       makeTask({ id: 2, title: 'Call owner', task_type: 'call_owner_today' }),
-      makeTask({ id: 'hs-1', title: 'Follow up on address', task_type: 'custom', source: 'hubspot' }),
+      makeTask({ id: 10, title: 'Follow up on address', task_type: 'custom', source: 'hubspot' }),
     ]
     const found = findCallCompletableTask(tasks)
     expect(found?.id).toBe(2)
@@ -73,13 +74,13 @@ describe('findCallCompletableTask', () => {
   it('matches sole open hubspot follow-up task', () => {
     const tasks = [
       makeTask({
-        id: 'hs-99',
+        id: 99,
         title: 'Follow up on 1726 W Roscoe St',
         task_type: 'custom',
         source: 'hubspot',
         status: 'overdue',
       }),
     ]
-    expect(findCallCompletableTask(tasks)?.id).toBe('hs-99')
+    expect(findCallCompletableTask(tasks)?.id).toBe(99)
   })
 })

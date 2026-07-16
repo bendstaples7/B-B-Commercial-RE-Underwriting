@@ -82,7 +82,9 @@ beforeEach(() => {
       },
     ],
   })
-  vi.mocked(commandCenterService.updateStatus).mockResolvedValue({})
+  vi.mocked(commandCenterService.updateStatus).mockResolvedValue({
+    lead_status: 'mailing_no_contact_made',
+  })
 })
 
 describe('QuickAddPage deprioritized matches', () => {
@@ -110,7 +112,7 @@ describe('QuickAddPage deprioritized matches', () => {
     const order: string[] = []
     vi.mocked(commandCenterService.updateStatus).mockImplementation(async () => {
       order.push('reactivate')
-      return {}
+      return { lead_status: 'mailing_no_contact_made' }
     })
     vi.mocked(openLetterService.enqueue).mockImplementation(async () => {
       order.push('mail')

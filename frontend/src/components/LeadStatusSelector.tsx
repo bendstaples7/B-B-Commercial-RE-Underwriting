@@ -16,12 +16,23 @@ import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown'
 import type { LeadStatus } from '@/types'
 import { LEAD_STATUS_LABELS, getLeadStatusColor } from '@/components/LeadStatusChip'
 import { commandCenterService } from '@/services/api'
+import type { LeadTimelineEntry } from '@/types'
+
+export interface StatusChangeResult {
+  lead_status: LeadStatus
+  recommended_action?: string | null
+  lead_score?: number | null
+  timeline_entry?: LeadTimelineEntry
+}
 
 export interface LeadStatusSelectorProps {
   leadId: number
   status: LeadStatus
   allStatuses: LeadStatus[]
-  onStatusChanged: () => void | Promise<void>
+  onStatusChanged: (
+    nextStatus: LeadStatus,
+    result?: StatusChangeResult,
+  ) => void | Promise<void>
 }
 
 export function LeadStatusSelector({
@@ -72,14 +83,18 @@ export function LeadStatusSelector({
     setStatusChanging(true)
     setStatusError(null)
     let saved = false
+    let savedStatus: LeadStatus | null = null
+    let savedResult: StatusChangeResult | undefined
     try {
       const result = await commandCenterService.updateStatus(
         leadId,
         pendingStatus,
         statusReason || undefined,
-      ) as { lead_status?: LeadStatus }
+      ) as StatusChangeResult
       const nextStatus = result.lead_status ?? pendingStatus
       setDisplayStatus(nextStatus)
+      savedStatus = nextStatus
+      savedResult = result
       setPendingStatus(null)
       setStatusReason('')
       saved = true
@@ -89,9 +104,9 @@ export function LeadStatusSelector({
       setStatusChanging(false)
     }
 
-    if (saved) {
+    if (saved && savedStatus) {
       try {
-        await onStatusChanged()
+        await onStatusChanged(savedStatus, savedResult)
       } catch {
         // Status is saved; parent queue refresh failures are non-blocking here.
       }

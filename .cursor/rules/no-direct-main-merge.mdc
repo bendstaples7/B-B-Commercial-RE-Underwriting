@@ -15,11 +15,16 @@ alwaysApply: true
 
 ## When planning a new feature
 
-Default for any new feature (or non-trivial fix) plan: **include creating a new branch off latest `main` as step 0** before implementation. Do not plan work that commits on `main`, continues an unrelated branch, or leaves branching as optional unless the user explicitly says to reuse a branch or work on an existing PR.
+Choose the branch per the global **branch-lifecycle** rule, not "always branch":
+
+- If the previous branch is **already merged into `main`** → create a new `feat/<topic>` branch off latest `main` as step 0.
+- If the existing branch is **uncommitted or not yet merged into `main`** → continue on that existing branch; do **not** cut a new branch off `main` and do **not** stash WIP onto a fresh branch.
+
+Never plan work that commits directly on `main`. When unsure which case applies, ask before branching.
 
 ## Required workflow
 
-1. Create a feature branch from `main`
+1. Resolve the branch per branch-lifecycle (new `feat/*` off `main`, or continue the existing branch)
 2. Implement changes and open a PR with a clear summary and test plan
 3. **Stop** — wait for the user to review and merge
 4. Do not re-trigger deploy after opening the PR unless the user asks

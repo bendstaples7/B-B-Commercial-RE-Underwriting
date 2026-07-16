@@ -52,12 +52,29 @@ api.interceptors.response.use(
       //   { error: { message: "..." } }  — structured error object
       //   { error: "..." }               — plain string error (auth endpoints)
       //   { message: "..." }             — direct message field
+      // Prefer `message` when `error` is a generic label like "Invalid request".
       const errorField = (errorData as any)?.error
+      const detailedMessage =
+        typeof (errorData as any)?.message === 'string'
+          ? (errorData as any).message
+          : null
+      const genericErrorLabels = new Set([
+        'Invalid request',
+        'Validation error',
+        'An error occurred',
+        'Internal server error',
+        'HTTP error',
+      ])
       const message =
-        errorField?.message ||
-        (typeof errorField === 'string' ? errorField : null) ||
-        errorData?.message ||
-        'An error occurred'
+        errorField?.message
+        || (typeof errorField === 'string'
+          && genericErrorLabels.has(errorField)
+          && detailedMessage
+          ? detailedMessage
+          : null)
+        || (typeof errorField === 'string' ? errorField : null)
+        || detailedMessage
+        || 'An error occurred'
 
       console.error(`[API] ${status} ${url}:`, message, errorData)
 

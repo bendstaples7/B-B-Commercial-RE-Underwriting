@@ -11,7 +11,7 @@ Long-running bulk enrichment is offloaded to the Celery task queue.
 import abc
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from flask import has_app_context
@@ -115,6 +115,8 @@ class DataSourceConnector:
     def __init__(self) -> None:
         self._plugins: dict[str, DataSourcePlugin] = {}
         _register_default_plugins(self)
+        if has_app_context():
+            self.ensure_registered_data_sources()
 
     # ------------------------------------------------------------------
     # Plugin management
@@ -164,6 +166,13 @@ class DataSourceConnector:
             db.session.commit()
             logger.info("Registered new data source: %s (id=%d)", ds.name, ds.id)
         return ds
+
+    def ensure_registered_data_sources(self) -> list[DataSource]:
+        """Ensure every built-in plugin has an active DataSource catalog row."""
+        rows: list[DataSource] = []
+        for name in sorted(self._plugins):
+            rows.append(self._ensure_data_source_row(name))
+        return rows
 
     def _register_plugin_in_memory(self, plugin: DataSourcePlugin) -> None:
         """Attach a plugin to the in-memory registry without touching the DB."""
@@ -278,7 +287,7 @@ class DataSourceConnector:
         self._apply_enrichment(lead, result, source_name)
 
         record.status = "success"
-        record.retrieved_data = result.fields
+        record.retrieved_data = self._json_safe(result.fields)
         db.session.commit()
 
         logger.info(
@@ -424,6 +433,22 @@ class DataSourceConnector:
         if isinstance(existing, list) and isinstance(incoming, list):
             return merge_records(existing, incoming)
         return incoming
+
+    @staticmethod
+    def _json_safe(value):
+        """Return a JSON-serializable copy of plugin data."""
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {
+                str(key): DataSourceConnector._json_safe(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [DataSourceConnector._json_safe(item) for item in value]
+        if isinstance(value, tuple):
+            return [DataSourceConnector._json_safe(item) for item in value]
+        return value
 
     def _resolve_plugin(
         self, source_name: str

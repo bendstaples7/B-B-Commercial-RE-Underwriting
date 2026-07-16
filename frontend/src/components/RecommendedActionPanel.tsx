@@ -4,7 +4,7 @@
  *
  * Requirements: 7.2, 7.3, 7.4, 4.3
  */
-import { useState } from 'react'
+import { useState, type ReactElement } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Alert,
@@ -17,10 +17,26 @@ import {
 } from '@mui/material'
 import BlockIcon from '@mui/icons-material/Block'
 import AddTaskIcon from '@mui/icons-material/AddTask'
+import PhoneIcon from '@mui/icons-material/Phone'
+import StickyNote2OutlinedIcon from '@mui/icons-material/StickyNote2Outlined'
+import EmailOutlinedIcon from '@mui/icons-material/EmailOutlined'
+import LocalPostOfficeOutlinedIcon from '@mui/icons-material/LocalPostOfficeOutlined'
+import PersonSearchOutlinedIcon from '@mui/icons-material/PersonSearchOutlined'
+import TravelExploreOutlinedIcon from '@mui/icons-material/TravelExploreOutlined'
+import AnalyticsOutlinedIcon from '@mui/icons-material/AnalyticsOutlined'
+import ContactMailOutlinedIcon from '@mui/icons-material/ContactMailOutlined'
+import PinDropOutlinedIcon from '@mui/icons-material/PinDropOutlined'
+import EventAvailableOutlinedIcon from '@mui/icons-material/EventAvailableOutlined'
+import DoNotDisturbOnOutlinedIcon from '@mui/icons-material/DoNotDisturbOnOutlined'
 import type { RecommendedActionMeta, LeadStatus, LeadTask, CRMRecommendedAction, OutreachContact } from '@/types'
 import { outreachDisplayLabel } from '@/constants/scoringRecommendedActions'
 import { OutreachContactInline, OutreachContactMissingHint } from '@/components/OutreachContactCallout'
 import { formatDateOnly } from '@/utils/helpers'
+import {
+  type QuickActionId,
+  evaluateMoveToSkipTrace,
+  unavailableReasonForQuickAction,
+} from '@/utils/actionEligibility'
 
 // ---------------------------------------------------------------------------
 // Action button definitions per RA type
@@ -34,10 +50,33 @@ interface ActionButton {
   title?: string
 }
 
+const ACTION_ICONS: Record<string, ReactElement> = {
+  log_call: <PhoneIcon fontSize="small" />,
+  log_note: <StickyNote2OutlinedIcon fontSize="small" />,
+  log_email: <EmailOutlinedIcon fontSize="small" />,
+  add_to_mail_batch: <LocalPostOfficeOutlinedIcon fontSize="small" />,
+  move_to_skip_trace: <PersonSearchOutlinedIcon fontSize="small" />,
+  create_task: <AddTaskIcon fontSize="small" />,
+  run_analysis: <AnalyticsOutlinedIcon fontSize="small" />,
+  research_property: <TravelExploreOutlinedIcon fontSize="small" />,
+  add_contact_info: <ContactMailOutlinedIcon fontSize="small" />,
+  search_property: <TravelExploreOutlinedIcon fontSize="small" />,
+  research_pin: <PinDropOutlinedIcon fontSize="small" />,
+  adjust_for_recent_sale: <EventAvailableOutlinedIcon fontSize="small" />,
+  suppress: <DoNotDisturbOnOutlinedIcon fontSize="small" />,
+  do_not_contact: <BlockIcon fontSize="small" />,
+}
+
+/** Fixed Quick actions order for every lead — unavailable actions stay visible but disabled. */
 const UNIVERSAL_ACTIONS: ActionButton[] = [
   { label: 'Log Call', action: 'log_call', isOutreach: true },
   { label: 'Log Note', action: 'log_note' },
   { label: 'Log Email', action: 'log_email', isOutreach: true },
+  {
+    label: 'Add to Mail Queue',
+    action: 'add_to_mail_batch',
+    isOutreach: true,
+  },
   {
     label: 'Move to Skip Trace',
     action: 'move_to_skip_trace',
@@ -45,23 +84,6 @@ const UNIVERSAL_ACTIONS: ActionButton[] = [
     title: 'Complete the current task, change status to Skip Trace, and create awaiting skip-trace work',
   },
 ]
-
-const MAIL_QUEUE_BUTTON: ActionButton = {
-  label: 'Add to Mail Queue',
-  action: 'add_to_mail_batch',
-  isOutreach: true,
-}
-
-/** Show mail controls only when the owner destination passed backend readiness. */
-function shouldIncludeMailQueue(isMailable: boolean): boolean {
-  return isMailable
-}
-
-function getUniversalActions(includeMail: boolean, promoteMail = false): ActionButton[] {
-  if (!includeMail) return UNIVERSAL_ACTIONS
-  if (promoteMail) return [MAIL_QUEUE_BUTTON, ...UNIVERSAL_ACTIONS]
-  return [...UNIVERSAL_ACTIONS, MAIL_QUEUE_BUTTON]
-}
 
 const RUN_ANALYSIS_BUTTON: ActionButton = { label: 'Run Analysis', action: 'run_analysis' }
 
@@ -202,31 +224,16 @@ export function RecommendedActionPanel({
   const [pendingAction, setPendingAction] = useState<string | null>(null)
 
   const isDNC = leadStatus === 'do_not_contact'
-  const isTerminal = [
-    'deprioritize',
-    'deal_won',
-    'deal_lost',
-    'suppressed',
-    'do_not_contact',
-  ].includes(leadStatus)
   const isInMailBatch = mailQueueStatus === 'queued'
-  const raValue = recommendedAction?.value ?? null
-  const contactMethodHint = recommendedAction?.recommended_contact_method ?? null
-  const includeMailQueue =
-    isInMailBatch
-    || shouldIncludeMailQueue(mailEligible ?? isMailable)
-  const promoteMailQueue =
-    raValue === 'mail_ready' || contactMethodHint === 'direct_mail'
-  const canMoveToSkipTrace = (
-    !isTerminal
-    && !['skip_trace', 'awaiting_skip_trace'].includes(leadStatus)
-  )
-  const universalActions = getUniversalActions(includeMailQueue, promoteMailQueue).filter(
-    (action) => (
-      action.action !== 'move_to_skip_trace'
-      || canMoveToSkipTrace
-    ),
-  )
+  const universalActions = UNIVERSAL_ACTIONS
+  const eligibilityCtx = {
+    leadStatus,
+    mailQueueStatus,
+    mailEligible,
+    isMailable,
+    mailIneligibleReason,
+    mailEligibleDate,
+  }
   const panelSx = embedded
     ? { p: 0, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }
     : { p: 2, border: 1, borderColor: 'divider', borderRadius: 1, maxWidth: '100%', minWidth: 0, overflow: 'hidden' }
@@ -254,12 +261,31 @@ export function RecommendedActionPanel({
     }
   }
 
+  const unavailableReasonFor = (btn: ActionButton): string | null => {
+    if (
+      btn.action === 'log_call'
+      || btn.action === 'log_note'
+      || btn.action === 'log_email'
+      || btn.action === 'add_to_mail_batch'
+      || btn.action === 'move_to_skip_trace'
+    ) {
+      return unavailableReasonForQuickAction(btn.action as QuickActionId, eligibilityCtx)
+    }
+    return null
+  }
+
   const renderActionButton = (btn: ActionButton, testIdPrefix = 'ra-action-btn') => {
-    const isDisabled = isDNC && btn.isOutreach === true
+    const unavailableReason = unavailableReasonFor(btn)
+    const isDisabled =
+      (isDNC && btn.isOutreach === true)
+      || unavailableReason != null
     const isLoading = pendingAction === btn.action
-    const title = btn.title ?? (btn.action === 'park'
-      ? 'Hide this lead from active queues until a future re-activation date'
-      : undefined)
+    const title =
+      unavailableReason
+      ?? btn.title
+      ?? (btn.action === 'park'
+        ? 'Hide this lead from active queues until a future re-activation date'
+        : undefined)
 
     return (
       <Button
@@ -272,7 +298,9 @@ export function RecommendedActionPanel({
         startIcon={
           isLoading ? (
             <CircularProgress size={14} color="inherit" />
-          ) : undefined
+          ) : (
+            ACTION_ICONS[btn.action] ?? undefined
+          )
         }
         data-testid={`${testIdPrefix}-${btn.action}`}
         aria-label={btn.label}
@@ -405,7 +433,7 @@ export function RecommendedActionPanel({
   const raButtons = (ACTION_BUTTONS[value] ?? []).filter(
     (btn) => (
       !universalActions.some((u) => u.action === btn.action)
-      && (btn.action !== 'move_to_skip_trace' || canMoveToSkipTrace)
+      && (btn.action !== 'move_to_skip_trace' || evaluateMoveToSkipTrace(leadStatus).ok)
     ),
   )
   const prioritizedRaButtons = prioritizeButtonsForMethod(raButtons, contactMethod)
