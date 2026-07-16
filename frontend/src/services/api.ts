@@ -1321,20 +1321,6 @@ export const commandCenterService = {
     api.post(`/leads/${leadId}/move-to-skip-trace`, {
       complete_task_id: completeTaskId ?? null,
     }).then(r => r.data),
-  adjustForRecentSale: (
-    leadId: number,
-    taskId?: number,
-    hubspotTaskId?: number | string | null,
-  ): Promise<{
-    task_id: number
-    task_created: boolean
-    due_date: string
-    title: string
-  }> =>
-    api.post(`/leads/${leadId}/adjust-for-recent-sale`, {
-      task_id: taskId ?? null,
-      hubspot_task_id: hubspotTaskId ?? null,
-    }).then(r => r.data),
   doNotContact: (leadId: number): Promise<unknown> =>
     api.post(`/leads/${leadId}/do-not-contact`).then(r => r.data),
   park: (leadId: number, reactivationDate?: string): Promise<unknown> =>

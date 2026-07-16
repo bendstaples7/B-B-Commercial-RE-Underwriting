@@ -54,6 +54,23 @@ export const leadService = {
     return response.data
   },
 
+  async adjustForRecentSale(
+    leadId: number,
+    taskId?: number,
+    hubspotTaskId?: number | string | null,
+  ): Promise<{
+    task_id: number
+    task_created: boolean
+    due_date: string
+    title: string
+  }> {
+    const response = await api.post(`/leads/${leadId}/adjust-for-recent-sale`, {
+      task_id: taskId ?? null,
+      hubspot_task_id: hubspotTaskId ?? null,
+    })
+    return response.data
+  },
+
   /**
    * Quick-add a walk-by lead (Skip Trace + HubSpot push queued).
    */

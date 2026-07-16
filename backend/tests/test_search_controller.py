@@ -123,7 +123,7 @@ def test_search_finds_exact_lead_id(client, app):
         lead_id = lead.id
 
     response = client.get(
-        '/api/search?q=811',
+        '/api/search?q=91811',
         headers=_AUTH_HEADERS,
     )
 

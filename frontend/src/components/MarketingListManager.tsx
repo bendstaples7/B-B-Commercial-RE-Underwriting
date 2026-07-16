@@ -246,6 +246,7 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
 
     setDialogSaving(true)
     setDialogError(null)
+    setMailFeedbackSeverity('success')
     try {
       if (dialogMode === 'create') {
         await leadService.createMarketingList({ name: trimmedName })
@@ -292,6 +293,7 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
   const handleDelete = async () => {
     if (deleteListId === null) return
     setDeleting(true)
+    setMailFeedbackSeverity('success')
     try {
       await leadService.deleteMarketingList(deleteListId)
       setSuccessMessage(`List "${deleteListName}" deleted.`)
@@ -345,6 +347,7 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
     setMembersPage(1)
     setMembersError(null)
     setSuccessMessage(null)
+    setMailFeedbackSeverity('success')
     setMailEnqueueResult(null)
     setMailEnqueueResultOpen(false)
   }
@@ -354,6 +357,7 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
     setMembers([])
     setMembersError(null)
     setSuccessMessage(null)
+    setMailFeedbackSeverity('success')
     setMailEnqueueResult(null)
     setMailEnqueueResultOpen(false)
   }
@@ -362,6 +366,7 @@ export const MarketingListManager: React.FC<{ embedded?: boolean }> = ({ embedde
     if (!selectedList || members.length === 0) return
     setEnqueueing(true)
     setSuccessMessage(null)
+    setMailFeedbackSeverity('success')
     setShowMailQueueLink(false)
     try {
       const result = await openLetterService.enqueue(

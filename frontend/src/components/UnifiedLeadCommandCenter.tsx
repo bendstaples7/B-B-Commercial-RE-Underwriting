@@ -79,6 +79,7 @@ import {
   enqueueResultSeverity,
   formatEnqueueSummary,
 } from '@/utils/formatEnqueueSummary'
+import { formatDateOnly } from '@/utils/helpers'
 
 export { ALL_LEAD_STATUSES } from '@/constants/leadStatuses'
 export { tabParamToIndex } from '@/components/lead-detail/LeadDetailTabPanel'
@@ -953,7 +954,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       }
       case 'adjust_for_recent_sale': {
         const currentTask = openTasks[0]
-        const result = await commandCenterService.adjustForRecentSale(
+        const result = await leadService.adjustForRecentSale(
           leadId,
           currentTask?.id == null ? undefined : Number(currentTask.id),
           currentTask?.hubspot_task_id,
@@ -961,8 +962,8 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         setActivitySnackbar({
           open: true,
           message: result.task_created
-            ? `Task created for ${new Date(`${result.due_date}T00:00:00`).toLocaleDateString()}`
-            : `Task moved to ${new Date(`${result.due_date}T00:00:00`).toLocaleDateString()}`,
+            ? `Task created for ${formatDateOnly(result.due_date)}`
+            : `Task moved to ${formatDateOnly(result.due_date)}`,
         })
         await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
         await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })

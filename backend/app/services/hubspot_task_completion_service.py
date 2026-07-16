@@ -323,7 +323,7 @@ def sync_hubspot_task_properties(
         return False
 
 
-def mirror_crm_task_from_lead_task(lead_task) -> None:
+def mirror_crm_task_from_lead_task(lead_task) -> bool:
     """Keep parallel CRM ``tasks`` row in sync when present (best-effort)."""
     crm_task = None
     mirror_task_id = getattr(lead_task, 'mirror_task_id', None)
@@ -334,17 +334,26 @@ def mirror_crm_task_from_lead_task(lead_task) -> None:
     if crm_task is None:
         hs_id = getattr(lead_task, 'hubspot_task_id', None)
         if not hs_id:
-            return
+            return False
         crm_task = Task.query.filter_by(hubspot_task_id=str(hs_id)).first()
     if crm_task is None:
-        return
+        return False
+    expected_due = (
+        None
+        if lead_task.due_date is None
+        else datetime.combine(lead_task.due_date, time(13, 0, 0))
+    )
+    changed = (
+        crm_task.title != lead_task.title
+        or crm_task.due_date != expected_due
+    )
+    if not changed:
+        return False
     crm_task.title = lead_task.title
-    if lead_task.due_date is None:
-        crm_task.due_date = None
-    else:
-        crm_task.due_date = datetime.combine(lead_task.due_date, time(13, 0, 0))
+    crm_task.due_date = expected_due
     crm_task.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.session.add(crm_task)
+    return True
 
 
 def sync_pending_hubspot_completions(hubspot_task_ids: list[str]) -> None:

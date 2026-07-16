@@ -20,6 +20,7 @@ import AddTaskIcon from '@mui/icons-material/AddTask'
 import type { RecommendedActionMeta, LeadStatus, LeadTask, CRMRecommendedAction, OutreachContact } from '@/types'
 import { outreachDisplayLabel } from '@/constants/scoringRecommendedActions'
 import { OutreachContactInline, OutreachContactMissingHint } from '@/components/OutreachContactCallout'
+import { formatDateOnly } from '@/utils/helpers'
 
 // ---------------------------------------------------------------------------
 // Action button definitions per RA type
@@ -233,7 +234,7 @@ export function RecommendedActionPanel({
     <Alert severity="warning" sx={{ mb: 2 }} data-testid="recent-sale-mail-hold">
       Recent sale detected. Held in Skip Trace
       {mailEligibleDate
-        ? ` until ${new Date(`${mailEligibleDate}T00:00:00`).toLocaleDateString()}.`
+        ? ` until ${formatDateOnly(mailEligibleDate)}.`
         : ' until the two-year hold ends.'}
       {' '}It will move to Awaiting Skip Trace when the hold expires.
     </Alert>

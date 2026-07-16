@@ -248,10 +248,23 @@ def resolve_sale_date_meta(lead: Lead) -> dict:
     imported_sale = parse_sale_date_string(
         str(getattr(lead, 'most_recent_sale', '') or ''),
     )
+    valid_acquisition = (
+        acquisition
+        if isinstance(acquisition, date) and acquisition <= date.today()
+        else None
+    )
+    valid_imported_sale = (
+        imported_sale
+        if imported_sale is not None and imported_sale <= date.today()
+        else None
+    )
     preferred_field = (
         'most_recent_sale'
-        if not isinstance(acquisition, date)
-        or (imported_sale is not None and imported_sale > acquisition)
+        if valid_acquisition is None
+        or (
+            valid_imported_sale is not None
+            and valid_imported_sale > valid_acquisition
+        )
         else 'acquisition_date'
     )
     row = (

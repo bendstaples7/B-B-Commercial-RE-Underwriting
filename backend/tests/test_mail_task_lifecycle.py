@@ -20,6 +20,7 @@ from app.services.mail_task_lifecycle_service import (
     count_superseded_tasks_for_lead,
     create_pending_mail_follow_up_task,
     find_mail_awaiting_lead_ids,
+    reconcile_recent_sale_mail_tasks,
     reconcile_recent_sale_mail_tasks_for_lead,
     recent_sale_mail_eligible_date,
     resolve_mail_queue_status,
@@ -171,6 +172,124 @@ class TestRecentSaleMailReconciliation:
                 )
 
             assert LeadTask.query.get(earliest.id).due_date == date.today()
+
+    def test_manual_adjustment_rejects_terminal_lead_without_task(self, app):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '0 Recent Sale Terminal St',
+                acquisition_date=date.today() - timedelta(days=20),
+                lead_status='deal_lost',
+            )
+
+            with pytest.raises(ValueError, match='cannot be moved'):
+                adjust_earliest_task_for_recent_sale(lead, actor='test')
+
+            assert LeadTask.query.filter_by(lead_id=lead.id).count() == 0
+
+    def test_bulk_dry_run_reports_changes_without_persisting(self, app):
+        from app import db
+
+        with app.app_context():
+            sale_date = date.today() - timedelta(days=20)
+            lead = _make_lead(
+                app,
+                '0 Recent Sale Dry Run St',
+                acquisition_date=sale_date,
+            )
+            task = _make_task(app, lead.id)
+            queued_item = MailQueueItem(
+                lead_id=lead.id,
+                user_id=USER_ID,
+                status='queued',
+            )
+            db.session.add(queued_item)
+            db.session.commit()
+
+            with patch(
+                'app.services.mail_task_lifecycle_service.sql_not_recently_sold',
+                return_value=Lead.acquisition_date <= date.today() - timedelta(days=730),
+            ):
+                result = reconcile_recent_sale_mail_tasks(
+                    actor='test',
+                    commit=False,
+                )
+
+            assert result['affected_lead_count'] == 1
+            assert result['rescheduled_task_count'] == 1
+            assert result['skip_trace_scheduled_count'] == 1
+            assert result['results'][0]['removed_queue_item_count'] == 1
+            assert db.session.get(LeadTask, task.id).due_date == date.today()
+            assert db.session.get(MailQueueItem, queued_item.id).status == 'queued'
+            assert LeadTask.query.filter_by(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+            ).count() == 0
+
+    def test_bulk_reconciliation_commits_queue_only_change(self, app):
+        from app import db
+
+        with app.app_context():
+            sale_date = date.today() - timedelta(days=20)
+            eligible_date = sale_date + timedelta(days=730)
+            lead = _make_lead(
+                app,
+                '0 Recent Sale Queue Only St',
+                acquisition_date=sale_date,
+                lead_status='skip_trace',
+            )
+            hold_task = LeadTask(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                title='Recent-sale hold ended — verify new owner and contact information',
+                status='open',
+                due_date=eligible_date,
+                created_by='test',
+            )
+            queued_item = MailQueueItem(
+                lead_id=lead.id,
+                user_id=USER_ID,
+                status='queued',
+            )
+            db.session.add_all([hold_task, queued_item])
+            db.session.commit()
+
+            with patch(
+                'app.services.mail_task_lifecycle_service.sql_not_recently_sold',
+                return_value=Lead.acquisition_date <= date.today() - timedelta(days=730),
+            ), patch(
+                'app.services.mail_task_lifecycle_service.refresh_leads_after_mail_task_changes',
+            ):
+                result = reconcile_recent_sale_mail_tasks(actor='test')
+
+            assert result['affected_lead_count'] == 1
+            assert result['rescheduled_task_count'] == 0
+            assert result['skip_trace_scheduled_count'] == 0
+            assert db.session.get(MailQueueItem, queued_item.id).status == 'removed'
+
+    def test_bulk_reconciliation_excludes_terminal_recent_sale(self, app):
+        from app import db
+
+        with app.app_context():
+            terminal = _make_lead(
+                app,
+                '0 Recent Sale Excluded Terminal St',
+                acquisition_date=date.today() - timedelta(days=20),
+                lead_status='deal_lost',
+            )
+            task = _make_task(app, terminal.id)
+
+            with patch(
+                'app.services.mail_task_lifecycle_service.sql_not_recently_sold',
+                return_value=Lead.acquisition_date <= date.today() - timedelta(days=730),
+            ):
+                result = reconcile_recent_sale_mail_tasks(
+                    actor='test',
+                    commit=False,
+                )
+
+            assert result['affected_lead_count'] == 0
+            assert db.session.get(LeadTask, task.id).due_date == date.today()
 
     def test_reused_skip_trace_task_updates_crm_mirror(self, app):
         from app import db

@@ -103,6 +103,7 @@ def reconcile_recent_sale_mail_tasks_for_lead(
             'skip_trace_scheduled': False,
             'skip_trace_task_id': None,
             'removed_queue_item_count': 0,
+            'changed': False,
         }
 
     today = date.today()
@@ -229,6 +230,11 @@ def reconcile_recent_sale_mail_tasks_for_lead(
         'skip_trace_scheduled': skip_trace['scheduled'],
         'skip_trace_task_id': skip_trace['task_id'],
         'removed_queue_item_count': len(queued_items),
+        'changed': (
+            bool(skip_trace.get('changed'))
+            or bool(queued_items)
+            or rescheduled > 0
+        ),
     }
 
 
@@ -328,6 +334,9 @@ def adjust_earliest_task_for_recent_sale(
             actor=actor,
             commit=False,
         )
+        if scheduled['task_id'] is None:
+            db.session.rollback()
+            raise ValueError('Lead cannot be moved into a recent-sale hold')
         db.session.commit()
         return {
             'task_id': scheduled['task_id'],
@@ -405,102 +414,71 @@ def reconcile_recent_sale_mail_tasks(
     commit: bool = True,
 ) -> dict:
     """Reconcile all due direct-mail work; safe to run repeatedly."""
-    today = date.today()
-    end_of_today = datetime.combine(today + timedelta(days=1), datetime.min.time())
-    lead_ids = {
-        row[0]
-        for row in LeadTask.query.filter(
-            LeadTask.status == 'open',
-            LeadTask.due_date.isnot(None),
-            LeadTask.due_date <= today,
-        ).with_entities(LeadTask.lead_id).distinct().all()
-    }
-    lead_ids.update(
-        row[0]
-        for row in Task.query.filter(
-            Task.lead_id.isnot(None),
-            Task.status.in_(['open', 'overdue']),
-            Task.due_date.isnot(None),
-            Task.due_date < end_of_today,
-        ).with_entities(Task.lead_id).distinct().all()
-    )
-    associated = (
-        db.session.query(TaskAssociation.target_id)
-        .join(Task, Task.id == TaskAssociation.task_id)
-        .filter(
-            TaskAssociation.target_type == 'lead',
-            Task.status.in_(['open', 'overdue']),
-            Task.due_date.isnot(None),
-            Task.due_date < end_of_today,
-        )
-        .distinct()
-        .all()
-    )
-    lead_ids.update(row[0] for row in associated)
-    scheduled_skip_trace_exists = db.session.query(LeadTask.id).filter(
-        LeadTask.lead_id == Lead.id,
-        LeadTask.task_type == 'skip_trace_owner',
-        LeadTask.status == 'open',
-        LeadTask.title.like('Recent-sale hold ended%'),
-    ).exists()
-    recent_sale_ids = {
-        row[0]
-        for row in (
+    terminal_statuses = [
+        'deprioritize',
+        'deal_won',
+        'deal_lost',
+        'suppressed',
+        'do_not_contact',
+    ]
+    candidates = (
         Lead.query
         .filter(
             ~sql_not_recently_sold(),
-            ~Lead.lead_status.in_([
-                'deprioritize',
-                'deal_won',
-                'deal_lost',
-                'suppressed',
-                'do_not_contact',
-            ]),
-            ~scheduled_skip_trace_exists,
+            ~Lead.lead_status.in_(terminal_statuses),
         )
         .with_entities(Lead.id)
-        .all()
-        )
-    }
-    lead_ids.update(recent_sale_ids)
-
-    ordered_ids = sorted(lead_ids)
+        .order_by(Lead.id.asc())
+    )
     if limit is not None:
-        ordered_ids = ordered_ids[:limit]
-
-    if not commit:
-        preview_handoffs = [lead_id for lead_id in ordered_ids if lead_id in recent_sale_ids]
-        return {
-            'affected_lead_count': len(preview_handoffs),
-            'skip_trace_scheduled_count': len(preview_handoffs),
-            'rescheduled_task_count': 0,
-            'results': [
-                {
-                    'lead_id': lead_id,
-                    'skip_trace_scheduled': True,
-                }
-                for lead_id in preview_handoffs
-            ],
-        }
+        candidates = candidates.limit(max(limit, 0))
+    ordered_ids = [row[0] for row in candidates.all()]
 
     affected_leads: list[int] = []
     skip_trace_scheduled_count = 0
     task_count = 0
     hubspot_due_dates: dict[str, date] = {}
     results: list[dict] = []
-    for lead in Lead.query.filter(Lead.id.in_(ordered_ids)).all() if ordered_ids else []:
-        outcome = reconcile_recent_sale_mail_tasks_for_lead(
-            lead, actor=actor, commit=False,
-        )
-        if outcome['rescheduled_task_count'] or outcome['skip_trace_scheduled']:
-            affected_leads.append(lead.id)
+
+    def record_outcome(lead_id: int, outcome: dict) -> None:
+        nonlocal skip_trace_scheduled_count, task_count
+        if outcome['changed']:
+            affected_leads.append(lead_id)
             task_count += outcome['rescheduled_task_count']
             if outcome['skip_trace_scheduled']:
                 skip_trace_scheduled_count += 1
-            eligible = date.fromisoformat(outcome['rescheduled_to'])
-            for task_id in outcome['hubspot_task_ids']:
-                hubspot_due_dates[task_id] = eligible
-            results.append({'lead_id': lead.id, **outcome})
+            if commit:
+                eligible = date.fromisoformat(outcome['rescheduled_to'])
+                for task_id in outcome['hubspot_task_ids']:
+                    hubspot_due_dates[task_id] = eligible
+            results.append({'lead_id': lead_id, **outcome})
+
+    for lead_id in ordered_ids:
+        if commit:
+            lead = db.session.get(Lead, lead_id)
+            if lead is None:
+                continue
+            outcome = reconcile_recent_sale_mail_tasks_for_lead(
+                lead, actor=actor, commit=False,
+            )
+            record_outcome(lead_id, outcome)
+            continue
+
+        savepoint = db.session.begin_nested()
+        try:
+            lead = db.session.get(Lead, lead_id)
+            if lead is None:
+                outcome = None
+            else:
+                outcome = reconcile_recent_sale_mail_tasks_for_lead(
+                    lead, actor=actor, commit=False,
+                )
+                db.session.flush()
+        finally:
+            savepoint.rollback()
+            db.session.expire_all()
+        if outcome is not None:
+            record_outcome(lead_id, outcome)
 
     if commit and affected_leads:
         db.session.commit()
@@ -509,10 +487,30 @@ def reconcile_recent_sale_mail_tasks(
         refresh_leads_after_mail_task_changes(affected_leads)
 
     from app.services.skip_trace_enqueue import SkipTraceEnqueue
-    activation = SkipTraceEnqueue().activate_due_recent_sale_tasks(
-        actor=actor,
-        commit=commit,
+
+    activation_limit = (
+        None
+        if limit is None
+        else max(limit - len(ordered_ids), 0)
     )
+    if commit:
+        activation = SkipTraceEnqueue().activate_due_recent_sale_tasks(
+            actor=actor,
+            commit=True,
+            limit=activation_limit,
+        )
+    else:
+        savepoint = db.session.begin_nested()
+        try:
+            activation = SkipTraceEnqueue().activate_due_recent_sale_tasks(
+                actor=actor,
+                commit=False,
+                limit=activation_limit,
+            )
+            db.session.flush()
+        finally:
+            savepoint.rollback()
+            db.session.expire_all()
 
     return {
         'affected_lead_count': len(affected_leads),

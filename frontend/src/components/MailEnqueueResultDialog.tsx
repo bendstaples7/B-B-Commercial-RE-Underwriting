@@ -13,6 +13,7 @@ import {
 } from '@mui/material'
 import { Link as RouterLink } from 'react-router-dom'
 import type { EnqueueLeadResult, EnqueueResult } from '@/services/openLetterApi'
+import { formatDateOnly } from '@/utils/helpers'
 
 export type MailEnqueueDisplayResult = Pick<
   EnqueueResult,
@@ -43,9 +44,9 @@ const STATUS_LABELS: Record<string, string> = {
 function outcomeDetail(outcome: Outcome): string | null {
   if (outcome.error) return outcome.error
   if (outcome.status === 'recently_sold' && outcome.sale_date) {
-    const saleDate = new Date(`${outcome.sale_date}T00:00:00`).toLocaleDateString()
+    const saleDate = formatDateOnly(outcome.sale_date)
     if (outcome.rescheduled_to) {
-      const eligibleDate = new Date(`${outcome.rescheduled_to}T00:00:00`).toLocaleDateString()
+      const eligibleDate = formatDateOnly(outcome.rescheduled_to)
       const queueRemoval = outcome.removed_queue_item_count
         ? ' Removed from the existing mail queue.'
         : ''

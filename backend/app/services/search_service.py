@@ -138,13 +138,13 @@ def phone_query_digits(query: str) -> str:
 def lead_id_query(query: str) -> int | None:
     """Return an exact lead ID for an all-digit query."""
     normalized = (query or '').strip()
-    return int(normalized) if normalized.isdigit() else None
+    return int(normalized) if normalized.isdecimal() else None
 
 
 def lead_id_search_text(query: str) -> str | None:
     """Return numeric text suitable for partial lead-ID matching."""
     normalized = (query or '').strip()
-    return normalized if len(normalized) >= 2 and normalized.isdigit() else None
+    return normalized if len(normalized) >= 2 and normalized.isdecimal() else None
 
 
 def _token_matches_text(token: str, text_value: str, fuzzy: bool = False) -> bool:
@@ -339,7 +339,7 @@ def build_match_context(row: Any, q_trimmed: str, q_digits: str) -> dict | None:
     requested_lead_id = lead_id_search_text(q_trimmed)
     row_id = str(getattr(row, 'id', ''))
     if requested_lead_id is not None and requested_lead_id in row_id:
-        return {'type': 'lead_id', 'value': str(row.id)}
+        return {'type': 'lead_id', 'value': row_id}
 
     matched_phone = getattr(row, 'matched_phone', None)
     if matched_phone:

@@ -50,6 +50,10 @@ class TestLeadIdQuery:
     def test_rejects_mixed_query(self):
         assert lead_id_query('lead 11181') is None
 
+    def test_rejects_non_decimal_unicode_digits(self):
+        assert lead_id_query('²') is None
+        assert lead_id_search_text('²²') is None
+
     def test_partial_numeric_query_is_available_for_incremental_search(self):
         assert lead_id_search_text('181') == '181'
         assert lead_id_search_text('1') is None

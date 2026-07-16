@@ -34,6 +34,7 @@ import { commandCenterService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
 import type { QuickAddPayload, QuickAddResponse } from '@/types'
 import { QUICK_ADD_DEAL_SOURCES } from '@/types'
+import { formatDateOnly } from '@/utils/helpers'
 
 type Priority = 'high' | 'medium' | 'low'
 
@@ -212,7 +213,7 @@ export function QuickAddPage() {
       }
       if (outcome?.status === 'recently_sold') {
         const eligible = outcome.rescheduled_to
-          ? new Date(`${outcome.rescheduled_to}T00:00:00`).toLocaleDateString()
+          ? formatDateOnly(outcome.rescheduled_to)
           : 'the end of the two-year hold'
         throw new Error(
           `Lead was reactivated, but a recent sale was detected. Direct mail is deferred until ${eligible}.`,

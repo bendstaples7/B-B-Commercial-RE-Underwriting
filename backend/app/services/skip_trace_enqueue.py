@@ -273,7 +273,7 @@ class SkipTraceEnqueue:
         self._serialize_lead_enqueue(lead_id)
         lead = Lead.query.filter_by(id=lead_id).with_for_update().first()
         if lead is None:
-            return {'scheduled': False, 'task_id': None}
+            return {'scheduled': False, 'task_id': None, 'changed': False}
         if lead.lead_status in {
             "deprioritize",
             "deal_won",
@@ -281,7 +281,7 @@ class SkipTraceEnqueue:
             "suppressed",
             "do_not_contact",
         }:
-            return {'scheduled': False, 'task_id': None}
+            return {'scheduled': False, 'task_id': None, 'changed': False}
 
         task = (
             LeadTask.query
@@ -292,13 +292,19 @@ class SkipTraceEnqueue:
             )
             .first()
         )
+        title = "Recent-sale hold ended — verify new owner and contact information"
+        task_changed = (
+            task is None
+            or task.due_date != due_date
+            or task.title != title
+        )
         scheduled = task is None or task.due_date != due_date
         if task is None:
             task = self._tasks.create(
                 lead_id,
                 {
                     "task_type": "skip_trace_owner",
-                    "title": "Recent-sale hold ended — verify new owner and contact information",
+                    "title": title,
                     "due_date": due_date,
                 },
                 actor=actor,
@@ -306,18 +312,17 @@ class SkipTraceEnqueue:
                 commit=False,
             )
         else:
-            task.title = (
-                "Recent-sale hold ended — verify new owner and contact information"
-            )
+            task.title = title
             task.due_date = due_date
             db.session.add(task)
         from app.services.hubspot_task_completion_service import (
             mirror_crm_task_from_lead_task,
         )
-        mirror_crm_task_from_lead_task(task)
+        mirror_changed = mirror_crm_task_from_lead_task(task)
 
         # ``skip_trace`` is the holding stage. ``awaiting_skip_trace`` means the
         # hold has matured and manual skip tracing should be performed.
+        lead_changed = lead.needs_skip_trace or lead.lead_status != "skip_trace"
         lead.needs_skip_trace = False
         old_status = lead.lead_status
         lead.lead_status = "skip_trace"
@@ -368,7 +373,11 @@ class SkipTraceEnqueue:
             refresh_lead_scoring(lead_id)
             queue_order_cache.clear()
 
-        return {'scheduled': scheduled, 'task_id': task.id}
+        return {
+            'scheduled': scheduled,
+            'task_id': task.id,
+            'changed': task_changed or mirror_changed or lead_changed,
+        }
 
     def activate_due_recent_sale_tasks(
         self,

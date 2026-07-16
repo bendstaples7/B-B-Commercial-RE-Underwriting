@@ -54,7 +54,11 @@ def main() -> None:
 
     app = create_app()
     with app.app_context():
-        lead_ids = find_mail_awaiting_lead_ids()
+        lead_ids = [
+            lead_id
+            for lead_id in find_mail_awaiting_lead_ids()
+            if count_superseded_tasks_for_lead(lead_id) > 0
+        ]
         if args.limit is not None:
             lead_ids = lead_ids[: args.limit]
 
@@ -98,11 +102,22 @@ def main() -> None:
             sync_pending_hubspot_completions(hubspot_sync_ids)
             refresh_leads_after_mail_task_changes(affected_leads)
 
-        recent_sale_result = reconcile_recent_sale_mail_tasks(
-            actor='backfill_mail_queued_task_cleanup',
-            limit=args.limit,
-            commit=args.apply,
+        remaining_limit = (
+            None
+            if args.limit is None
+            else max(args.limit - len(lead_ids), 0)
         )
+        if remaining_limit == 0:
+            recent_sale_result = {
+                'rescheduled_task_count': 0,
+                'skip_trace_scheduled_count': 0,
+            }
+        else:
+            recent_sale_result = reconcile_recent_sale_mail_tasks(
+                actor='backfill_mail_queued_task_cleanup',
+                limit=remaining_limit,
+                commit=args.apply,
+            )
         if not args.apply:
             db.session.rollback()
 
