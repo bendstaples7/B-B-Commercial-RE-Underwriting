@@ -51,7 +51,8 @@ import {
   prefetchQueueNavigation,
 } from '@/utils/prefetchLeadWorkspace'
 import { ALL_LEAD_STATUSES } from '@/constants/leadStatuses'
-import type { CommandCenterPayload, PropertyDetail, LeadTask, LeadTimelineEntry, PropertyScoreResponse, PropertyScoreRecord, OutreachContact, QueueNavigation, LeadStatus } from '@/types'
+import { scoringActionLabel } from '@/constants/scoringRecommendedActions'
+import type { CommandCenterPayload, PropertyDetail, LeadTask, LeadTimelineEntry, PropertyScoreResponse, PropertyScoreRecord, OutreachContact, QueueNavigation, LeadStatus, CRMRecommendedAction } from '@/types'
 import { LeadScoreBadge } from '@/components/LeadScoreBadge'
 import type { ScoreTier } from '@/components/LeadScoreBadge'
 import { LeadStatusSelector } from '@/components/LeadStatusSelector'
@@ -450,7 +451,7 @@ interface TasksPanelProps {
   embedded?: boolean
   onTasksChanged: () => void
   /** Called after a task is successfully completed (for queue auto-advance). */
-  onAfterTaskCompleted?: () => void
+  onAfterTaskCompleted?: () => void | Promise<void>
 }
 
 export interface TasksPanelHandle {
@@ -477,11 +478,9 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
   const panelRef = useRef<HTMLDivElement>(null)
   const taskListRef = useRef<LeadTaskListHandle>(null)
   const [tasks, setTasks] = useState<LeadTask[]>(initialTasks)
-  const tasksRef = useRef<LeadTask[]>(initialTasks)
 
   useEffect(() => {
     setTasks(initialTasks)
-    tasksRef.current = initialTasks
   }, [initialTasks])
 
   React.useImperativeHandle(ref, () => ({
@@ -495,11 +494,6 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
       taskListRef.current?.openCreateForm()
     },
   }))
-
-  // Keep ref in sync with state for rollback on failure
-  useEffect(() => {
-    tasksRef.current = tasks
-  }, [tasks])
 
   // LeadTaskList handles creation internally and calls this with the new task.
   // Replace optimistic placeholder (id=0) when present; otherwise append.
@@ -536,28 +530,53 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
   }
 
   const handleTaskCompleted = async (taskId: number | string) => {
-    const snapshot = tasksRef.current
-    // Optimistic remove
-    setTasks(prev => prev.filter(t => t.id !== taskId))
-
     // Only native tasks (numeric IDs) can be completed from the platform
     if (typeof taskId === 'number') {
       try {
         await leadTaskService.completeTask(leadId, taskId)
-        queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
-        onTasksChanged()
-        onAfterTaskCompleted?.()
       } catch (err) {
-        // Rollback from snapshot
-        setTasks(snapshot)
         console.error('Failed to complete task:', err)
+        await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+        throw err
       }
-    } else {
-      // HubSpot tasks are completed in LeadTaskList before this callback
-      queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
-      onTasksChanged()
-      onAfterTaskCompleted?.()
     }
+    setTasks(prev => prev.filter(t => String(t.id) !== String(taskId)))
+    queryClient.setQueryData<CommandCenterPayload>(
+      ['commandCenter', leadId],
+      current => current
+        ? {
+            ...current,
+            open_tasks: current.open_tasks.filter(
+              task => String(task.id) !== String(taskId),
+            ),
+          }
+        : current,
+    )
+    await queryClient.invalidateQueries({
+      queryKey: ['commandCenter', leadId],
+      refetchType: 'none',
+    })
+    await onAfterTaskCompleted?.()
+  }
+
+  const handleHubSpotTaskDone = async (taskId: number) => {
+    setTasks(prev => prev.filter(t => String(t.id) !== String(taskId)))
+    queryClient.setQueryData<CommandCenterPayload>(
+      ['commandCenter', leadId],
+      current => current
+        ? {
+            ...current,
+            open_tasks: current.open_tasks.filter(
+              task => String(task.id) !== String(taskId),
+            ),
+          }
+        : current,
+    )
+    await queryClient.invalidateQueries({
+      queryKey: ['commandCenter', leadId],
+      refetchType: 'none',
+    })
+    await onAfterTaskCompleted?.()
   }
 
   return (
@@ -575,6 +594,7 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
           onTaskCreated={handleTaskCreated}
           onTaskUpdated={handleTaskUpdated}
           onTaskCompleted={handleTaskCompleted}
+          onHubSpotTaskDone={handleHubSpotTaskDone}
           onOptimisticTaskCreate={handleOptimisticTaskCreate}
           onOptimisticTaskRevert={handleOptimisticTaskRevert}
         />
@@ -592,6 +612,7 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
             onTaskCreated={handleTaskCreated}
             onTaskUpdated={handleTaskUpdated}
             onTaskCompleted={handleTaskCompleted}
+            onHubSpotTaskDone={handleHubSpotTaskDone}
             onOptimisticTaskCreate={handleOptimisticTaskCreate}
             onOptimisticTaskRevert={handleOptimisticTaskRevert}
           />
@@ -826,12 +847,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     }
     queryClient.removeQueries({ queryKey: [queueListKey] })
 
-    const nextId = queueNavigation?.next_id
-    if (nextId) {
-      advanceInQueue(nextId)
-      return
-    }
     try {
+      // Membership may have changed. Always ask for fresh navigation rather
+      // than using the pre-mutation neighbour cached in queueNavigation.
       const nav = await queueService.getNavigation(fromQueue.key, leadId, {
         outreach: fromQueue.outreach,
       })
@@ -843,7 +861,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     } catch {
       exitQueueCaughtUp()
     }
-  }, [fromQueue, leadId, queueNavigation?.next_id, advanceInQueue, exitQueueCaughtUp, queryClient])
+  }, [fromQueue, leadId, advanceInQueue, exitQueueCaughtUp, queryClient])
 
   const handleStatusChanged = useCallback(async (
     nextStatus?: LeadStatus,
@@ -862,7 +880,23 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         if (!current) return current
         const next = { ...current }
         if (nextStatus) next.lead_status = nextStatus
-        if (typeof result?.lead_score === 'number') next.lead_score = result.lead_score
+        if (result?.lead_score !== undefined) {
+          next.lead_score = result.lead_score ?? 0
+        }
+        if (result && result.recommended_action !== undefined) {
+          const action = result.recommended_action as CRMRecommendedAction | null
+          next.recommended_action = {
+            ...next.recommended_action,
+            value: action,
+            label: action ? scoringActionLabel(action) : null,
+            explanation: null,
+            recommended_contact_method: null,
+            outreach_contact: null,
+            winning_rule: null,
+            winning_rule_label: null,
+            signals: {},
+          }
+        }
         return next
       },
     )
@@ -883,11 +917,19 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const handleActivitySaved = useCallback((
     entry: LeadTimelineEntry,
     type: ActivityLogType,
-    meta?: { completedTaskId?: number; completedHubSpotTaskId?: number },
+    meta?: {
+      completedTaskId?: number
+      completedHubSpotTaskId?: number
+      warning?: string
+    },
   ) => {
     activityRef.current?.prependEntry(entry)
     setHighlightEntryId(entry.id)
-    setActivitySnackbar({ open: true, message: ACTIVITY_SUCCESS_MESSAGES[type] })
+    setActivitySnackbar({
+      open: true,
+      message: meta?.warning ?? ACTIVITY_SUCCESS_MESSAGES[type],
+      severity: meta?.warning ? 'warning' : 'success',
+    })
     setActivityModal(null)
     queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
     window.setTimeout(() => setHighlightEntryId(null), 2000)
@@ -1049,7 +1091,10 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               : 'Lead moved to Skip Trace',
         })
         if (!result.already_done) {
-          await handleStatusChanged(result.lead_status as LeadStatus)
+          await handleStatusChanged(result.lead_status as LeadStatus, {
+            lead_score: result.lead_score,
+            recommended_action: result.recommended_action,
+          })
         }
         return
       }

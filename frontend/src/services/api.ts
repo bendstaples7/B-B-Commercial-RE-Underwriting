@@ -1320,11 +1320,14 @@ export const commandCenterService = {
   ): Promise<{
     lead_id: number
     lead_status: string
+    lead_score?: number | null
+    recommended_action?: string | null
     completed_task_id: number | null
     skip_trace_task_id: number
     changed?: boolean
     already_done?: boolean
     reason_code?: string | null
+    healed?: boolean
   }> =>
     api.post(`/leads/${leadId}/move-to-skip-trace`, {
       complete_task_id: completeTaskId ?? null,

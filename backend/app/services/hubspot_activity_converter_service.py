@@ -274,16 +274,21 @@ class HubSpotActivityConverterService:
 
         self._upsert_lead_tasks_for_task(task, associations)
         if status == 'completed':
-            task.completion_timestamp = due_date or datetime.utcnow()
-            self._write_inbound_completed_timelines(
-                task,
-                lead_ids=[
-                    int(a['target_id'])
-                    for a in associations
-                    if a.get('target_type') == 'lead' and a.get('target_id') is not None
-                ],
-                occurred_at=task.completion_timestamp,
+            task.completion_timestamp = (
+                self._parse_engagement_completion_time(engagement.raw_payload)
+                or datetime.utcnow()
             )
+            lead_ids = [
+                int(a['target_id'])
+                for a in associations
+                if a.get('target_type') == 'lead' and a.get('target_id') is not None
+            ]
+            if not self._has_open_lead_task(str(engagement.hubspot_id), lead_ids):
+                self._write_inbound_completed_timelines(
+                    task,
+                    lead_ids=lead_ids,
+                    occurred_at=task.completion_timestamp,
+                )
         db.session.commit()
         logger.info(
             "Created Task(id=%s) from HubSpot engagement %s (status=%s).",
@@ -397,7 +402,10 @@ class HubSpotActivityConverterService:
                 task,
                 [{'target_type': 'lead', 'target_id': lead_id}],
             )
-            if new_status == 'completed':
+            if (
+                new_status == 'completed'
+                and not self._has_open_lead_task(hs_id, [lead_id])
+            ):
                 self._write_inbound_completed_timelines(
                     task,
                     lead_ids=[lead_id],
@@ -425,13 +433,12 @@ class HubSpotActivityConverterService:
             ))
             association_added = True
 
-        # Never let HubSpot push an open/overdue local due date further out
+        # Never let HubSpot clear or push an open/overdue local due date later
         # (e.g. status-change auto-sync overwriting an overdue follow-up).
         if (
             old_status in ('open', 'overdue')
             and task.due_date is not None
-            and due_date is not None
-            and due_date > task.due_date
+            and (due_date is None or due_date > task.due_date)
         ):
             logger.info(
                 'Keeping local due_date for Task(id=%s) hubspot_task_id=%s: '
@@ -588,15 +595,47 @@ class HubSpotActivityConverterService:
             )
 
     @staticmethod
-    def _parse_hubspot_completion_time(props: dict) -> datetime | None:
-        """Prefer HubSpot completion / last-modified stamps over sync time."""
-        for key in ('hs_task_completion_date', 'hs_lastmodifieddate'):
-            raw = props.get(key)
-            if raw is None or raw == '':
+    def _has_open_lead_task(hubspot_task_id: str, lead_ids: list[int]) -> bool:
+        """True when inbound completion would contradict an open LeadTask."""
+        if not lead_ids:
+            return False
+        from app.models import LeadTask
+        return (
+            LeadTask.query
+            .filter(
+                LeadTask.hubspot_task_id == str(hubspot_task_id),
+                LeadTask.lead_id.in_(lead_ids),
+                LeadTask.status == 'open',
+            )
+            .first()
+            is not None
+        )
+
+    @staticmethod
+    def _parse_engagement_completion_time(raw_payload: dict) -> datetime | None:
+        """Read a real completion stamp from a legacy engagement payload."""
+        properties = raw_payload.get('properties', {}) or {}
+        parsed = HubSpotActivityConverterService._parse_hubspot_completion_time(
+            properties,
+        )
+        if parsed is not None:
+            return parsed
+        metadata = raw_payload.get('metadata', {}) or {}
+        for key in ('completionTimestamp', 'completionDate', 'completedAt'):
+            raw = metadata.get(key)
+            if raw in (None, ''):
                 continue
             parsed = HubSpotActivityConverterService._parse_hubspot_due_date(raw)
             if parsed is not None:
                 return parsed
+        return None
+
+    @staticmethod
+    def _parse_hubspot_completion_time(props: dict) -> datetime | None:
+        """Return HubSpot's explicit completion stamp, never last-modified."""
+        raw = props.get('hs_task_completion_date')
+        if raw not in (None, ''):
+            return HubSpotActivityConverterService._parse_hubspot_due_date(raw)
         return None
 
     @staticmethod

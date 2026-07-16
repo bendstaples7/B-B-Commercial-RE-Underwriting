@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { Link as RouterLink } from 'react-router-dom'
 import {
   Accordion,
@@ -298,6 +298,18 @@ export function PropertySidebar({
   const saleRecentlyVerified = isSaleDateVerifiedWithinDays(
     commandCenterData.sale_date_meta,
   )
+  const canVerifySaleDate = Boolean(
+    saleDateDisplay
+    && (
+      !commandCenterData.sale_date_meta?.last_checked_at
+      || commandCenterData.sale_date_meta?.status === 'failed'
+    ),
+  )
+
+  useEffect(() => {
+    setSaleVerifyPending(false)
+    setSaleVerifyMessage(null)
+  }, [commandCenterData.id])
 
   const handleVerifySaleDate = async () => {
     setSaleVerifyPending(true)
@@ -501,15 +513,18 @@ export function PropertySidebar({
             >
               {saleFreshness}
             </Typography>
-          ) : saleDateDisplay ? (
+          ) : null}
+          {canVerifySaleDate ? (
             <Box sx={{ textAlign: 'right', mt: -0.25, mb: 0.5 }}>
-              <Typography
-                variant="caption"
-                color="text.disabled"
-                sx={{ display: 'block', pl: '108px' }}
-              >
-                Sale date not verified yet
-              </Typography>
+              {!commandCenterData.sale_date_meta?.last_checked_at ? (
+                <Typography
+                  variant="caption"
+                  color="text.disabled"
+                  sx={{ display: 'block', pl: '108px' }}
+                >
+                  Sale date not verified yet
+                </Typography>
+              ) : null}
               <Button
                 size="small"
                 variant="text"

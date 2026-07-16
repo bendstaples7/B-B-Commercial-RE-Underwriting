@@ -114,8 +114,8 @@ export interface LeadTaskListProps {
   onTaskCreated: (task: LeadTask) => void
   /** Called after a successful title/due-date update on a native task. */
   onTaskUpdated?: (task: LeadTask) => void
-  onTaskCompleted?: (taskId: number | string) => void
-  onHubSpotTaskDone?: (taskId: number) => void
+  onTaskCompleted?: (taskId: number | string) => void | Promise<void>
+  onHubSpotTaskDone?: (taskId: number) => void | Promise<void>
   /** Called immediately when the user submits the form, before the API call
    *  completes. Receives a temporary placeholder task (id = 0, status = 'open').
    *  Use this to add an optimistic entry to the task list.
@@ -175,7 +175,9 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
   const [followUpPreset, setFollowUpPreset] = useState<FollowUpPreset>('3')
   const [followUpCustomDue, setFollowUpCustomDue] = useState('')
   const [followUpError, setFollowUpError] = useState<string | null>(null)
+  const [taskCompletionError, setTaskCompletionError] = useState<string | null>(null)
   const [followUpSubmitting, setFollowUpSubmitting] = useState(false)
+  const [followUpCreated, setFollowUpCreated] = useState(false)
   const [editingTaskId, setEditingTaskId] = useState<number | null>(null)
   const [editingField, setEditingField] = useState<'title' | 'due_date' | null>(null)
   const [editTitle, setEditTitle] = useState('')
@@ -307,15 +309,17 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
     setFollowUpCustomDue('')
     setFollowUpError(null)
     setFollowUpSubmitting(false)
+    setFollowUpCreated(false)
   }
 
   const isLastOpenTask = (taskId: number | string) =>
     openTasks.length === 1 && String(openTasks[0]?.id) === String(taskId)
 
   const completeTaskDirectly = async (task: LeadTask) => {
+    setTaskCompletionError(null)
     const isHubSpot = task.source === 'hubspot'
     if (!isHubSpot) {
-      if (onTaskCompleted) onTaskCompleted(task.id as number)
+      if (onTaskCompleted) await onTaskCompleted(task.id as number)
       return
     }
     const numericId = typeof task.id === 'number'
@@ -327,8 +331,17 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
       await callLogService.markHubSpotTaskDone(leadId, numericId, {
         idNamespace: 'lead_task',
       })
-      if (onHubSpotTaskDone) onHubSpotTaskDone(numericId)
-      if (onTaskCompleted) onTaskCompleted(task.id)
+      if (onHubSpotTaskDone) {
+        await onHubSpotTaskDone(numericId)
+      } else if (onTaskCompleted) {
+        await onTaskCompleted(task.id)
+      }
+    } catch (err) {
+      const message = err instanceof Error
+        ? err.message
+        : 'Failed to complete task. Please try again.'
+      setTaskCompletionError(message)
+      throw err
     } finally {
       setMarkingDone(null)
     }
@@ -340,14 +353,19 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
       setFollowUpPreset('3')
       setFollowUpCustomDue('')
       setFollowUpError(null)
+      setFollowUpCreated(false)
       return
     }
-    void completeTaskDirectly(task)
+    void completeTaskDirectly(task).catch(() => undefined)
   }
 
   const handleCompleteWithoutFollowUp = async (task: LeadTask) => {
-    resetFollowUpPrompt()
-    await completeTaskDirectly(task)
+    try {
+      await completeTaskDirectly(task)
+      resetFollowUpPrompt()
+    } catch {
+      // Error remains visible in the still-open prompt and list-level alert.
+    }
   }
 
   const handleCompleteWithFollowUp = async (task: LeadTask) => {
@@ -360,14 +378,19 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
     setFollowUpSubmitting(true)
     try {
       // Create the next task first so the lead never briefly has no next action.
-      const newTask = await leadTaskService.createTask(leadId, {
-        title: 'Follow up',
-        task_type: 'custom',
-        due_date: due,
-      })
-      onTaskCreated(newTask)
-      resetFollowUpPrompt()
+      // If completion failed after creation, retry completion without creating
+      // another duplicate follow-up.
+      if (!followUpCreated) {
+        const newTask = await leadTaskService.createTask(leadId, {
+          title: 'Follow up',
+          task_type: 'custom',
+          due_date: due,
+        })
+        onTaskCreated(newTask)
+        setFollowUpCreated(true)
+      }
       await completeTaskDirectly(task)
+      resetFollowUpPrompt()
     } catch (err) {
       setFollowUpError(
         err instanceof Error ? err.message : 'Failed to create follow-up. Please try again.',
@@ -521,6 +544,17 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
           </Button>
         )}
       </Stack>
+
+      {taskCompletionError && (
+        <Alert
+          severity="error"
+          sx={{ mb: 1.5 }}
+          onClose={() => setTaskCompletionError(null)}
+          data-testid="task-completion-error"
+        >
+          {taskCompletionError}
+        </Alert>
+      )}
 
       {awaitingMailBatch && (
         <Stack

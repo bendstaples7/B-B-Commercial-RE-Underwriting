@@ -203,7 +203,7 @@ def _mail_work_in_flight(lead_id: int) -> bool:
         return False
 
 
-def _has_overdue_hubspot_task(lead_id: int) -> bool:
+def _has_overdue_lead_task(lead_id: int) -> bool:
     """True when the lead has an open overdue LeadTask (due on/before today)."""
     try:
         today = date.today()
@@ -564,11 +564,11 @@ class LeadScoringEngine:
         if isinstance(lead_id, int) and _mail_work_in_flight(lead_id):
             return 'nurture', 'mail_work_in_flight', {'lead_id': lead_id}
 
-        has_overdue_hs_task = _has_overdue_hubspot_task(lead_id) if isinstance(lead_id, int) else False
-        if lead.follow_up_overdue or has_overdue_hs_task:
+        has_overdue_lead_task = _has_overdue_lead_task(lead_id) if isinstance(lead_id, int) else False
+        if lead.follow_up_overdue or has_overdue_lead_task:
             return 'follow_up_now', 'follow_up_overdue', {
                 'follow_up_overdue': bool(lead.follow_up_overdue),
-                'has_overdue_hs_task': has_overdue_hs_task,
+                'has_overdue_lead_task': has_overdue_lead_task,
             }
 
         if lead.is_warm:

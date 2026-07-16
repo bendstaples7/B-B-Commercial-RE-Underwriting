@@ -313,28 +313,13 @@ def resolve_sale_date_meta(lead: Lead) -> dict:
             enrichment_error = getattr(enrich, 'error_reason', None)
             if source is None:
                 source = 'Cook County records'
-            same_run_success = (
-                EnrichmentRecord.query
-                .filter(
-                    EnrichmentRecord.lead_id == lead_id,
-                    EnrichmentRecord.data_source_id.in_(assessor_source_ids),
-                    EnrichmentRecord.status == 'success',
-                    EnrichmentRecord.created_at >= enrich.created_at - timedelta(minutes=5),
-                    EnrichmentRecord.created_at <= enrich.created_at + timedelta(minutes=5),
-                )
-                .order_by(EnrichmentRecord.created_at.desc())
-                .first()
-            )
-            if same_run_success is not None:
-                enrichment_status = 'success'
-                enrichment_error = None
 
     if last_updated_at is None and last_checked_at is None:
         return null_meta
 
     meta = {
         'last_updated_at': last_updated_at,
-        'last_checked_at': last_checked_at or last_updated_at,
+        'last_checked_at': last_checked_at,
         'source': source,
     }
     if enrichment_status is not None:

@@ -7,6 +7,7 @@ consumers stay consistent until they migrate fully to LeadTask.
 from __future__ import annotations
 
 import logging
+from hashlib import sha1
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
 
@@ -428,8 +429,13 @@ def complete_hubspot_task(
     )
 
 
-def _inbound_timeline_activity_id(hubspot_task_id: str) -> str:
-    return f'hs-task-completed:{hubspot_task_id}'
+def _inbound_timeline_activity_id(lead_id: int, hubspot_task_id: str) -> str:
+    """Lead-scoped idempotency key that fits the 50-character DB column."""
+    raw = f'hs-task-completed:{lead_id}:{hubspot_task_id}'
+    if len(raw) <= 50:
+        return raw
+    digest = sha1(str(hubspot_task_id).encode('utf-8')).hexdigest()[:20]
+    return f'hs-task-completed:{lead_id}:{digest}'
 
 
 def ensure_inbound_hubspot_task_completed_timeline(
@@ -449,7 +455,7 @@ def ensure_inbound_hubspot_task_completed_timeline(
     if not hs_id:
         return False
 
-    activity_id = _inbound_timeline_activity_id(hs_id)
+    activity_id = _inbound_timeline_activity_id(lead_id, hs_id)
     existing = LeadTimelineEntry.query.filter_by(
         hubspot_activity_id=activity_id,
     ).first()
@@ -472,6 +478,10 @@ def ensure_inbound_hubspot_task_completed_timeline(
     if when.tzinfo is not None:
         when = when.astimezone(timezone.utc).replace(tzinfo=None)
 
+    lead_task = LeadTask.query.filter_by(
+        lead_id=lead_id,
+        hubspot_task_id=hs_id,
+    ).first()
     db.session.add(
         LeadTimelineEntry(
             lead_id=lead_id,
@@ -482,7 +492,8 @@ def ensure_inbound_hubspot_task_completed_timeline(
             summary=f'HubSpot task completed: {title}',
             hubspot_activity_id=activity_id,
             event_metadata={
-                'task_id': task_id,
+                'crm_task_id': task_id,
+                'lead_task_id': lead_task.id if lead_task is not None else None,
                 'hubspot_task_id': hs_id,
                 'title': title,
                 'hubspot_synced': True,
@@ -517,10 +528,16 @@ def backfill_missing_hubspot_task_completed_timelines(
     applied = 0
     skipped = 0
 
-    for lt in q.all():
+    for lt in q.yield_per(100):
         scanned += 1
         hs_id = str(lt.hubspot_task_id)
-        activity_id = _inbound_timeline_activity_id(hs_id)
+        crm_task = Task.query.filter_by(hubspot_task_id=hs_id).first()
+        # A local LeadTask completion is not proof that HubSpot completed it.
+        # Only backfill inbound history when the canonical CRM payload agrees.
+        if crm_task is None or crm_task.status != 'completed':
+            skipped += 1
+            continue
+        activity_id = _inbound_timeline_activity_id(lt.lead_id, hs_id)
         if LeadTimelineEntry.query.filter_by(hubspot_activity_id=activity_id).first():
             skipped += 1
             continue
@@ -554,10 +571,12 @@ def backfill_missing_hubspot_task_completed_timelines(
             hubspot_task_id=hs_id,
             title=lt.title or '(No Subject)',
             occurred_at=occurred,
-            task_id=lt.id,
+            task_id=crm_task.id,
         )
         if created:
             applied += 1
+            if applied % 100 == 0:
+                db.session.commit()
 
     if not dry_run and applied:
         db.session.commit()

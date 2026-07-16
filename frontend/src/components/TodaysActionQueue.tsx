@@ -80,9 +80,9 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
   const isInitialLoading = isLoading && !data
-  // After task-complete advance clears the queue cache, remount may briefly have
-  // placeholder/prior rows while refetching — show the same full loading state.
-  const showLoading = isInitialLoading || (isFetching && isPlaceholderData)
+  // Keep prior rows visible (disabled below) for filter/page refetches.
+  // Cache-cleared remounts have no data and still use the initial loader.
+  const showLoading = isInitialLoading
   const showEmpty = data != null && rows.length === 0 && total === 0 && !showLoading
   const showRefetchIndicator = isFetching && isPlaceholderData && !showLoading
   const disablePlaceholderInteractions = isPlaceholderData

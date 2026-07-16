@@ -345,7 +345,6 @@ def test_sync_task_from_crm_v3_preserves_open_lead_task(app, lead):
             'properties': {
                 'hs_task_status': 'COMPLETED',
                 'hs_task_subject': 'Follow up with Julian D Shin',
-                'hs_timestamp': '2026-07-13T13:00:00Z',
                 'hs_lastmodifieddate': '2026-07-16T15:20:41.383Z',
             },
         }
@@ -354,9 +353,11 @@ def test_sync_task_from_crm_v3_preserves_open_lead_task(app, lead):
 
         refreshed_crm = Task.query.filter_by(hubspot_task_id='hs-preserve-open-lt').first()
         assert refreshed_crm.status == 'completed'
+        assert refreshed_crm.due_date == datetime(2026, 7, 13, 13, 0, 0)
 
         refreshed_lt = LeadTask.query.filter_by(hubspot_task_id='hs-preserve-open-lt').first()
         assert refreshed_lt.status == 'open'
+        assert refreshed_lt.due_date == datetime(2026, 7, 13).date()
         assert refreshed_lt.completed_at is None
 
         assert LeadTimelineEntry.query.filter_by(
@@ -399,6 +400,7 @@ def test_sync_task_from_crm_v3_open_to_completed_writes_timeline(app, lead):
                 'hs_task_status': 'COMPLETED',
                 'hs_task_subject': 'Follow up on 2915 N Hamlin Ave',
                 'hs_timestamp': '2025-10-01T12:00:00Z',
+                'hs_task_completion_date': '2025-10-21T15:30:00Z',
                 'hs_lastmodifieddate': '2025-10-21T15:30:00Z',
             },
         }
@@ -478,6 +480,20 @@ def test_backfill_missing_hubspot_task_completed_timelines(app, lead):
             created_by='HubSpot',
         )
         db.session.add(lt)
+        crm_task = Task(
+            title=lt.title,
+            status='completed',
+            source='hubspot_import',
+            hubspot_task_id=lt.hubspot_task_id,
+            completion_timestamp=lt.completed_at,
+            raw_payload={
+                'properties': {
+                    'hs_task_status': 'COMPLETED',
+                    'hs_task_completion_date': '2025-10-21T15:30:00Z',
+                },
+            },
+        )
+        db.session.add(crm_task)
         db.session.commit()
 
         dry = backfill_missing_hubspot_task_completed_timelines(
@@ -510,4 +526,5 @@ def test_backfill_missing_hubspot_task_completed_timelines(app, lead):
 
         LeadTimelineEntry.query.filter_by(lead_id=lead).delete()
         LeadTask.query.filter_by(hubspot_task_id='hs-backfill-tl-1').delete()
+        Task.query.filter_by(hubspot_task_id='hs-backfill-tl-1').delete()
         db.session.commit()

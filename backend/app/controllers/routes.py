@@ -153,7 +153,7 @@ def health_check():
          (fails if the user or assigned leads are missing)
       6. Async stack — Redis reachable? Celery worker responding? (warn only)
       7. Open Letter / mail queue schema
-      8. Enrichment catalog — required data_sources present after self-heal (FAIL if not)
+      8. Enrichment catalog — required data_sources present after startup heal (FAIL if not)
          plus supporting-data invariant counts (WARN when no recent enrichment)
     """
     import os
@@ -333,31 +333,18 @@ def health_check():
     try:
         from app.services.cook_county_enrichment_service import (
             check_enrichment_catalog_health,
-            collect_enrichment_supporting_data_invariants,
         )
-        catalog = check_enrichment_catalog_health(heal=True)
+        # Startup owns catalog repair. Health probes must remain read-only.
+        catalog = check_enrichment_catalog_health(heal=False)
         if catalog['ok']:
             checks['enrichment_catalog'] = (
                 f"ok ({catalog['present_count']}/{catalog['required_count']} sources)"
             )
         else:
             checks['enrichment_catalog'] = (
-                f"FAIL: missing data_sources after heal: {catalog['missing']}"
+                f"FAIL: missing data_sources after startup: {catalog['missing']}"
             )
             degraded = True
-
-        invariants = collect_enrichment_supporting_data_invariants()
-        checks['enrichment_invariants'] = (
-            f"ok (enrichment_7d={invariants['enrichment_records_last_7d']}, "
-            f"chicago_no_pin_sale={invariants['chicago_no_pin_with_sale']}, "
-            f"working_set_sale_no_enrichment={invariants['working_set_sale_no_enrichment']})"
-        )
-        if invariants['enrichment_records_last_7d'] == 0:
-            checks['enrichment_invariants'] = (
-                f"WARN: no enrichment_records in last 7d; "
-                f"chicago_no_pin_sale={invariants['chicago_no_pin_with_sale']}, "
-                f"working_set_sale_no_enrichment={invariants['working_set_sale_no_enrichment']}"
-            )
     except Exception as e:
         checks['enrichment_catalog'] = f'FAIL: {e}'
         degraded = True

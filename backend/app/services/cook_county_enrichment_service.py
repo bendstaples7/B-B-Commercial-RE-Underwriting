@@ -160,7 +160,7 @@ def _due_open_task_exists_clause(today: date):
 
 def collect_enrichment_supporting_data_invariants() -> dict:
     """Read-only counts for catalog/enrichment gaps (observability only)."""
-    catalog = check_enrichment_catalog_health(heal=True)
+    catalog = check_enrichment_catalog_health(heal=False)
     since_7d = datetime.utcnow() - timedelta(days=7)
     today = date.today()
     due_exists = _due_open_task_exists_clause(today)

@@ -24,7 +24,7 @@ def _mock_action_engine_db(monkeypatch):
 
     monkeypatch.setattr('app.services.lead_scoring_engine._resolve_crm_flags', _flags)
     monkeypatch.setattr(
-        'app.services.lead_scoring_engine._has_overdue_hubspot_task',
+        'app.services.lead_scoring_engine._has_overdue_lead_task',
         lambda _lead_id: False,
     )
     monkeypatch.setattr(

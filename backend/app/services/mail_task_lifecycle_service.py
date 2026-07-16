@@ -585,14 +585,43 @@ def _open_mirrored_tasks_for_lead(lead_id: int) -> list[Task]:
 
 
 def count_superseded_tasks_for_lead(lead_id: int) -> int:
-    """Count outreach LeadTasks that would be completed when a lead enters the mail batch."""
+    """Count canonical and orphan mirrored outreach tasks superseded by mail."""
     count = 0
     for task in LeadTask.query.filter_by(lead_id=lead_id, status='open').all():
         if is_mail_follow_up_task(task):
             continue
         if is_superseded_by_mail_task(task.task_type, task.title):
             count += 1
+    count += len(_orphan_superseded_crm_tasks(lead_id))
     return count
+
+
+def _orphan_superseded_crm_tasks(lead_id: int) -> list[Task]:
+    """CRM mirrors still open without a corresponding canonical LeadTask."""
+    candidates = _open_hubspot_tasks_for_lead(lead_id) + _open_mirrored_tasks_for_lead(lead_id)
+    seen: set[int] = set()
+    result: list[Task] = []
+    for task in candidates:
+        if task.id in seen:
+            continue
+        seen.add(task.id)
+        canonical = LeadTask.query.filter(
+            LeadTask.lead_id == lead_id,
+            or_(
+                LeadTask.mirror_task_id == task.id,
+                and_(
+                    task.hubspot_task_id is not None,
+                    LeadTask.hubspot_task_id == str(task.hubspot_task_id),
+                ),
+            ),
+        ).first()
+        if canonical is not None:
+            continue
+        if is_mail_follow_up_task(task):
+            continue
+        if is_superseded_by_mail_task(task.task_type, task.title):
+            result.append(task)
+    return result
 
 
 def complete_tasks_superseded_by_mail(
@@ -605,7 +634,8 @@ def complete_tasks_superseded_by_mail(
 
     Returns (completed_count, hubspot_task_ids_pending_api_sync).
     Never completes follow-up-after-mailer tasks (pending or dated) or their mirrors.
-    CRM ``tasks`` rows are write-through mirrors only — discovery is LeadTask-only.
+    CRM ``tasks`` rows are write-through mirrors; orphan mirrors are swept so
+    stale imported work cannot remain open after canonical mail staging.
     """
     now = datetime.now(timezone.utc)
     completed = 0
@@ -639,6 +669,12 @@ def complete_tasks_superseded_by_mail(
         _append_native_task_completed_timeline(lead_id, task, actor, now)
         completed += 1
 
+    for task in _orphan_superseded_crm_tasks(lead_id):
+        _complete_native_task_mirror(task, now)
+        completed += 1
+        if task.hubspot_task_id:
+            hubspot_ids_to_sync.append(str(task.hubspot_task_id))
+
     if commit and completed:
         db.session.commit()
         from app.services.next_action_invariant import ensure_next_action_after_task_change
@@ -655,7 +691,7 @@ def complete_mail_prep_tasks(
 ) -> int:
     """Complete superseded outreach tasks when a lead is staged for mail.
 
-    Delegates to complete_tasks_superseded_by_mail (native, HubSpot, mirrored).
+    Delegates to canonical LeadTask completion plus orphan CRM-mirror cleanup.
     """
     count, _pending = complete_tasks_superseded_by_mail(lead_id, actor=actor, commit=commit)
     return count

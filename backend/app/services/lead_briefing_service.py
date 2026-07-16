@@ -43,7 +43,6 @@ _MAX_BULLET_CHARS = 180
 _CONTACT_EVENT_TYPES = frozenset({
     'note_added', 'hubspot_call', 'hubspot_note', 'call_logged', 'note_logged',
     'email_logged', 'meeting_logged', 'sms_logged', 'voicemail_logged',
-    'task_completed',
 })
 
 _DANGLING_END_WORDS = frozenset({

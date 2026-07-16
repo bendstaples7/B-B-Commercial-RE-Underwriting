@@ -115,8 +115,6 @@ class DataSourceConnector:
     def __init__(self) -> None:
         self._plugins: dict[str, DataSourcePlugin] = {}
         _register_default_plugins(self)
-        if has_app_context():
-            self.ensure_registered_data_sources()
 
     # ------------------------------------------------------------------
     # Plugin management

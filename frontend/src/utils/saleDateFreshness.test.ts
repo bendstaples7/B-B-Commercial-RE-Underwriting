@@ -81,7 +81,7 @@ describe('formatSaleDateFreshness', () => {
       last_updated_at: '2024-03-15T12:00:00Z',
       source: 'Import',
     })
-    expect(text).toMatch(/Last checked .* · Import/)
+    expect(text).toMatch(/Updated .* · Import/)
   })
 
   it('returns null when no timestamp', () => {

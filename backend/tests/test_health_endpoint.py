@@ -7,7 +7,7 @@ import pytest
 import sqlalchemy.exc
 
 
-def test_health_returns_200_when_db_connected(client, monkeypatch):
+def test_health_returns_200_when_db_connected(client, app, monkeypatch):
     """GET /api/health with a working DB returns HTTP 200 and 'status' in body.
 
     The migration head check and queue checks always fail in the SQLite test
@@ -61,6 +61,11 @@ def test_health_returns_200_when_db_connected(client, monkeypatch):
 
     # Make QueueService.get_counts succeed
     monkeypatch.setattr(QueueService, 'get_counts', lambda self: {})
+    with app.app_context():
+        from app.services.cook_county_enrichment_service import (
+            ensure_automated_data_sources,
+        )
+        ensure_automated_data_sources()
 
     response = client.get('/api/health')
     assert response.status_code == 200
@@ -115,7 +120,7 @@ def test_health_response_is_always_valid_json(client):
 
 
 def test_health_includes_enrichment_catalog_check(client, app, monkeypatch):
-    """Health heals/seeds the enrichment catalog and reports status."""
+    """Startup seed plus read-only health reports a complete catalog."""
     from alembic.runtime.migration import MigrationContext
     from app.services.queue_service import QueueService
     import app.controllers.routes as routes_module
@@ -151,8 +156,12 @@ def test_health_includes_enrichment_catalog_check(client, app, monkeypatch):
     with app.app_context():
         from app.models.enrichment import DataSource
         from app import db
+        from app.services.cook_county_enrichment_service import (
+            ensure_automated_data_sources,
+        )
         DataSource.query.delete()
         db.session.commit()
+        ensure_automated_data_sources()
 
     response = client.get('/api/health')
     data = response.get_json()

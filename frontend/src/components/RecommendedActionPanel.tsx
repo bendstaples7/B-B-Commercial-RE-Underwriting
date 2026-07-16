@@ -269,16 +269,21 @@ export function RecommendedActionPanel({
       || btn.action === 'add_to_mail_batch'
       || btn.action === 'move_to_skip_trace'
     ) {
-      return unavailableReasonForQuickAction(btn.action as QuickActionId, eligibilityCtx)
+      const reason = unavailableReasonForQuickAction(
+        btn.action as QuickActionId,
+        eligibilityCtx,
+      )
+      if (reason) return reason
+    }
+    if (isDNC && btn.isOutreach === true) {
+      return 'Outreach is blocked — lead is Do Not Contact'
     }
     return null
   }
 
   const renderActionButton = (btn: ActionButton, testIdPrefix = 'ra-action-btn') => {
     const unavailableReason = unavailableReasonFor(btn)
-    const isDisabled =
-      (isDNC && btn.isOutreach === true)
-      || unavailableReason != null
+    const isDisabled = unavailableReason != null
     const isLoading = pendingAction === btn.action
     const title =
       unavailableReason

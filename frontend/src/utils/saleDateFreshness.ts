@@ -29,6 +29,7 @@ export function isSaleDateVerifiedWithinDays(
 
 /** Muted caption for sale-date freshness, e.g. "Last checked Mar 2024 · Cook County records". */
 export function formatSaleDateFreshness(meta: SaleDateMeta | null | undefined): string | null {
+  const isChecked = Boolean(meta?.last_checked_at)
   const stamp = meta?.last_checked_at || meta?.last_updated_at
   if (!stamp) return null
   const checked = new Date(stamp)
@@ -41,12 +42,13 @@ export function formatSaleDateFreshness(meta: SaleDateMeta | null | undefined): 
   const source = meta?.source?.trim()
   const status = meta?.status?.trim()
   const suffix =
-    status === 'no_results'
+    isChecked && status === 'no_results'
       ? ' (no sale found)'
-      : status === 'failed'
+      : isChecked && status === 'failed'
         ? ' (check failed)'
         : ''
+  const prefix = isChecked ? 'Last checked' : 'Updated'
   return source
-    ? `Last checked ${monthYear} · ${source}${suffix}`
-    : `Last checked ${monthYear}${suffix}`
+    ? `${prefix} ${monthYear} · ${source}${suffix}`
+    : `${prefix} ${monthYear}${suffix}`
 }

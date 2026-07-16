@@ -74,10 +74,14 @@ export function evaluateAddToMailBatch(input: {
       true,
     )
   }
-  const mailReady = input.mailEligible ?? input.isMailable ?? false
+  // Match backend SoT exactly. `isMailable` only validates the address;
+  // `mailEligible` also applies recent-sale and other operational holds.
+  const mailReady = input.mailEligible === true
   if (mailReady) return ok()
   if (input.mailIneligibleReason === 'recently_sold') {
     if (input.mailEligibleDate) {
+      // Backend keeps ISO copy for API/log consumers; UI intentionally formats
+      // the same reason code as a human-readable date.
       return blocked(
         REASON_MAIL_RECENTLY_SOLD,
         `Held after recent sale until ${formatDateOnly(input.mailEligibleDate)}`,

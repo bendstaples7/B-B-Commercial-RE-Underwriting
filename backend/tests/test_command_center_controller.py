@@ -541,10 +541,8 @@ class TestUpdateStatus:
             db.session.refresh(lead)
             assert lead.recommended_action is None
 
-    def test_dnc_status_does_not_cancel_open_tasks(self, client, app):
-        """PATCH status to do_not_contact clears RA but leaves open tasks;
-        dedicated POST .../do-not-contact owns cancellation.
-        """
+    def test_dnc_status_cancels_open_tasks(self, client, app):
+        """PATCH and dedicated DNC action enforce the same task invariant."""
         with app.app_context():
             lead = _make_lead(app, '10 Status St', lead_status='mailing_no_contact_made')
             task = _make_task(app, lead.id)
@@ -555,7 +553,7 @@ class TestUpdateStatus:
                 headers=_AUTH_HEADERS,
             )
             db.session.refresh(task)
-            assert task.status == 'open'
+            assert task.status == 'cancelled'
             assert task.completed_at is None
 
     def test_returns_404_for_missing_lead(self, client, app):

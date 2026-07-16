@@ -41,7 +41,12 @@ def main(argv: list[str] | None = None) -> int:
         action='store_true',
         help='Persist changes (default is dry-run)',
     )
-    parser.add_argument('--limit', type=int, default=None, help='Max LeadTasks to scan')
+    parser.add_argument(
+        '--limit',
+        type=int,
+        default=500,
+        help='Max LeadTasks to scan per run (default: 500)',
+    )
     parser.add_argument('--lead-id', type=int, default=None, help='Restrict to one lead')
     args = parser.parse_args(argv)
 

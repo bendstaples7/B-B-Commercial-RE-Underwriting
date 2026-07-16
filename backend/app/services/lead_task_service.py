@@ -149,23 +149,26 @@ class LeadTaskService:
             )
             db.session.add(task)
         else:
-            task.title = clean_title
-            task.due_date = due
-            # Never reopen a locally completed HubSpot LeadTask from stale sync.
-            if task.status == 'completed' and mapped_status != 'completed':
-                pass
-            # LeadTask is next-action SoT. Inbound HubSpot COMPLETED must not
-            # silently close an already-open working task (status-change sync,
-            # Celery Beat, webhooks). Completions of open tasks belong to the
-            # platform complete path / explicit HubSpot complete API.
-            elif task.status == 'open' and mapped_status == 'completed':
+            preserve_local_task = (
+                (task.status == 'completed' and mapped_status != 'completed')
+                or (task.status == 'open' and mapped_status == 'completed')
+            )
+            # Never reopen a locally completed task from stale sync, and never
+            # let an inbound HubSpot completion mutate an open next-action task.
+            # Preserve title and due date too: clearing/rescheduling either field
+            # would still remove the task from its local working queue.
+            if preserve_local_task:
                 logger.info(
-                    'Preserving open LeadTask id=%s despite HubSpot completed '
-                    'hubspot_task_id=%s (LeadTask is next-action SoT)',
+                    'Preserving local LeadTask id=%s status=%s against inbound '
+                    'HubSpot status=%s hubspot_task_id=%s',
                     task.id,
+                    task.status,
+                    mapped_status,
                     hs_id,
                 )
             else:
+                task.title = clean_title
+                task.due_date = due
                 task.status = mapped_status
                 if mapped_status == 'completed' and task.completed_at is None:
                     task.completed_at = datetime.now(timezone.utc)

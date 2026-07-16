@@ -46,6 +46,7 @@ const MAX_NOTES_LENGTH = 2000
 export type LogCallSavedMeta = {
   completedTaskId?: number
   completedHubSpotTaskId?: number
+  warning?: string
 }
 
 function resolveContactName(
@@ -119,7 +120,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
   const [mailCampaignId, setMailCampaignId] = useState<number | ''>('')
   const [contactMethod, setContactMethod] = useState<ContactMethodValue>(EMPTY_CONTACT_METHOD)
   const [completeTask, setCompleteTask] = useState(true)
-  const [createFollowUp, setCreateFollowUp] = useState(true)
+  const [createFollowUp, setCreateFollowUp] = useState(Boolean(callTask))
   const [followUpPreset, setFollowUpPreset] = useState<FollowUpPreset>('3')
   const [customDueDate, setCustomDueDate] = useState('')
 
@@ -235,6 +236,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
       const entry = await callLogService.logCall(leadId, payload)
 
       let completedHubSpotTaskId: number | undefined
+      let completionWarning: string | undefined
       if (hubSpotTaskId != null) {
         try {
           await callLogService.markHubSpotTaskDone(leadId, hubSpotTaskId, {
@@ -243,6 +245,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
           completedHubSpotTaskId = hubSpotTaskId
         } catch (hubSpotErr) {
           console.error('Call logged but HubSpot task completion failed:', hubSpotErr)
+          completionWarning = 'Call saved; the HubSpot task is still open.'
         }
       }
 
@@ -256,8 +259,12 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
       const summary = summaryParts.join('. ').slice(0, 500)
       const metadataFallback = buildCallMetadataFallback(payload, contactMethod, contacts)
       const savedMeta: LogCallSavedMeta | undefined =
-        completedTaskId != null || completedHubSpotTaskId != null
-          ? { completedTaskId: completedTaskId ?? undefined, completedHubSpotTaskId }
+        completedTaskId != null || completedHubSpotTaskId != null || completionWarning
+          ? {
+              completedTaskId: completedTaskId ?? undefined,
+              completedHubSpotTaskId,
+              warning: completionWarning,
+            }
           : undefined
       onSaved(
         {
@@ -275,7 +282,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
       setMailCampaignId('')
       setContactMethod(EMPTY_CONTACT_METHOD)
       setCompleteTask(true)
-      setCreateFollowUp(true)
+      setCreateFollowUp(Boolean(callTask))
       setFollowUpPreset('3')
       setCustomDueDate('')
     } catch (err) {

@@ -841,6 +841,7 @@ describe('RecommendedActionPanel', () => {
           leadStatus="mailing_no_contact_made"
           openTasks={[]}
           isMailable
+          mailEligible
           onAction={onAction}
         />,
       )

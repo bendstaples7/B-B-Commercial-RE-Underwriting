@@ -60,7 +60,16 @@ def test_health_status_reflects_db_connectivity(client, db_available):
             return ctx
 
         with patch.object(MigrationContext, 'configure', staticmethod(mock_configure)), \
-             patch.object(QueueService, 'get_counts', return_value={}):
+             patch.object(QueueService, 'get_counts', return_value={}), \
+             patch(
+                 'app.services.cook_county_enrichment_service.check_enrichment_catalog_health',
+                 return_value={
+                     'ok': True,
+                     'present_count': 12,
+                     'required_count': 12,
+                     'missing': [],
+                 },
+             ):
             response = client.get('/api/health')
 
         assert response.status_code == 200, (

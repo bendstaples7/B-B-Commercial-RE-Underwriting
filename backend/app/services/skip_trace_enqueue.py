@@ -127,6 +127,7 @@ class SkipTraceEnqueue:
 
         eligibility = evaluate_move_to_skip_trace(lead)
         if eligibility.already_done:
+            healed_handoff = False
             skip_trace_task = (
                 LeadTask.query
                 .filter_by(
@@ -149,12 +150,16 @@ class SkipTraceEnqueue:
                     commit=False,
                 )
                 db.session.commit()
+                healed_handoff = True
             return {
                 "lead_id": lead_id,
                 "lead_status": lead.lead_status,
+                "lead_score": lead.lead_score,
+                "recommended_action": lead.recommended_action,
                 "completed_task_id": None,
                 "skip_trace_task_id": skip_trace_task.id,
-                "changed": False,
+                "changed": healed_handoff,
+                "healed": healed_handoff,
                 "already_done": True,
                 "reason_code": eligibility.reason_code,
             }
@@ -282,10 +287,13 @@ class SkipTraceEnqueue:
         from app.services.queue_order_cache import queue_order_cache
 
         refresh_lead_scoring(lead_id)
+        db.session.refresh(lead)
         queue_order_cache.clear()
         return {
             "lead_id": lead_id,
             "lead_status": "skip_trace",
+            "lead_score": lead.lead_score,
+            "recommended_action": lead.recommended_action,
             "completed_task_id": completed_task_id_out,
             "skip_trace_task_id": skip_trace_task.id,
             "changed": True,

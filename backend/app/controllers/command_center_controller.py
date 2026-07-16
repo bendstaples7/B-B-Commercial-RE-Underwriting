@@ -868,8 +868,7 @@ def update_status(lead_id: int):
     PATCH /api/leads/<lead_id>/status
 
     Update the lead_status of a lead. Handles DNC and suppressed special cases
-    (null RA). Open-task cancellation is owned by the dedicated DNC action —
-    status PATCH must not clear next-action tasks.
+    consistently with their dedicated actions.
     Appends a status_changed timeline entry. Triggers RA recomputation for
     non-terminal statuses.
     """
@@ -889,11 +888,14 @@ def update_status(lead_id: int):
 
     lead.lead_status = new_status
 
-    # Terminal-ish statuses clear RA only. Dedicated POST .../do-not-contact
-    # owns cancelling open LeadTasks so a status dropdown change cannot break
-    # the next-action chain.
+    # Match the dedicated DNC action: DNC always cancels open next-action work,
+    # regardless of whether it came from Quick Actions or the status selector.
     if new_status in ('do_not_contact', 'suppressed'):
         lead.recommended_action = None
+    if new_status == 'do_not_contact':
+        LeadTask.query.filter_by(lead_id=lead_id, status='open').update(
+            {'status': 'cancelled'},
+        )
 
     db.session.add(lead)
 

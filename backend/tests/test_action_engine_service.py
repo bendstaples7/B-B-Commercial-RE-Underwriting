@@ -293,7 +293,7 @@ def test_scoring_never_returns_analyze_property():
             data_completeness_score=data_completeness_score,
         )
         with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=open_task_count), \
-             patch('app.services.lead_scoring_engine._has_overdue_hubspot_task', return_value=False):
+             patch('app.services.lead_scoring_engine._has_overdue_lead_task', return_value=False):
             result = ActionEngineService.compute_recommended_action(lead)
         assert result != 'analyze_property'
 
@@ -585,7 +585,7 @@ def test_recompute_and_persist_appends_timeline_when_ra_changes(app):
         assert isinstance(meta['lead_score'], float)
         assert meta['is_warm'] is False
         assert meta['signals']['follow_up_overdue'] is True
-        assert meta['signals']['has_overdue_hs_task'] is False
+        assert meta['signals']['has_overdue_lead_task'] is False
         assert meta['signals']['recommended_contact_method'] == 'phone'
         assert 'property_street' not in meta['signals']
 

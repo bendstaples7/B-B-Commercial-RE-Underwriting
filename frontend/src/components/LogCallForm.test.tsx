@@ -509,7 +509,8 @@ describe('LogCallForm', () => {
       render(<LogCallForm leadId={1} onSaved={onSaved} />)
 
       selectOutcome('voicemail')
-      // Follow-up is enabled by default — pick the 3-day horizon and save.
+      // No current task: explicitly opt into creating a follow-up.
+      await user.click(screen.getByTestId('create-follow-up-checkbox'))
       expect(screen.getByTestId('follow-up-3d')).toBeInTheDocument()
       await user.click(screen.getByTestId('follow-up-3d'))
       await user.click(screen.getByTestId('call-save-btn'))

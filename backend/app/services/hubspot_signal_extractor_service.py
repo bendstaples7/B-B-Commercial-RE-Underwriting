@@ -100,7 +100,7 @@ class HubSpotSignalExtractorService:
                 LeadTask.lead_id == lead_id,
                 LeadTask.status == 'open',
                 LeadTask.due_date.isnot(None),
-                LeadTask.due_date < today,
+                LeadTask.due_date <= today,
             )
             .first()
         )

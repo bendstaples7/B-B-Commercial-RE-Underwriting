@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Intentional park / terminal — no decide-next prompt required.
 PARKED_LEAD_STATUSES = frozenset({
+    'deprioritize',
     'do_not_contact',
     'suppressed',
     'deal_won',

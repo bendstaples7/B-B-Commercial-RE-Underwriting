@@ -496,7 +496,7 @@ class TestOutreachContactMethod:
              patch.object(engine, 'get_weights', return_value=weights), \
              patch.object(LeadScoringEngine, '_has_recent_email', return_value=False), \
              patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
-             patch('app.services.lead_scoring_engine._has_overdue_hubspot_task', return_value=False), \
+             patch('app.services.lead_scoring_engine._has_overdue_lead_task', return_value=False), \
              patch('app.services.lead_scoring_engine._resolve_crm_flags', return_value=(True, True, True)), \
              patch.object(LeadScoringEngine, '_score_engagement', return_value=0.0):
             result = engine.compute(lead, weights)
@@ -594,7 +594,7 @@ class TestMotivationScoreAttribution:
              patch.object(engine, 'get_weights', return_value=weights), \
              patch.object(LeadScoringEngine, '_has_recent_email', return_value=False), \
              patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
-             patch('app.services.lead_scoring_engine._has_overdue_hubspot_task', return_value=False), \
+             patch('app.services.lead_scoring_engine._has_overdue_lead_task', return_value=False), \
              patch('app.services.lead_scoring_engine._resolve_crm_flags', return_value=(True, False, True)), \
              patch.object(LeadScoringEngine, '_score_engagement', return_value=0.0):
             result = engine.compute(lead, weights, signals=signals)
@@ -658,7 +658,7 @@ class TestRecentlySoldMailGuard:
 
         monkeypatch.setattr('app.services.lead_scoring_engine._resolve_crm_flags', _flags)
         monkeypatch.setattr('app.services.lead_scoring_engine._count_open_tasks', lambda _id: 0)
-        monkeypatch.setattr('app.services.lead_scoring_engine._has_overdue_hubspot_task', lambda _id: False)
+        monkeypatch.setattr('app.services.lead_scoring_engine._has_overdue_lead_task', lambda _id: False)
 
         lead = MagicMock()
         lead.lead_status = 'mailing_no_contact_made'
@@ -685,7 +685,7 @@ class TestRecentlySoldMailGuard:
 
         monkeypatch.setattr('app.services.lead_scoring_engine._resolve_crm_flags', _flags)
         monkeypatch.setattr('app.services.lead_scoring_engine._count_open_tasks', lambda _id: 0)
-        monkeypatch.setattr('app.services.lead_scoring_engine._has_overdue_hubspot_task', lambda _id: False)
+        monkeypatch.setattr('app.services.lead_scoring_engine._has_overdue_lead_task', lambda _id: False)
 
         lead = MagicMock()
         lead.lead_status = 'mailing_no_contact_made'
