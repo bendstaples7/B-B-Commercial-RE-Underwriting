@@ -8,6 +8,7 @@ Update this doc when ownership changes.
 
 | Domain | Canonical | Do not add |
 |--------|-----------|------------|
+| CRM home dashboard | [`ActivityDashboardPage.tsx`](../frontend/src/pages/ActivityDashboardPage.tsx) at `/` → `/dashboard` via [`dashboardApi.ts`](../frontend/src/services/dashboardApi.ts) | Multifamily deal `DashboardTab`; resurrecting orphaned `HomePage` |
 | Lead detail page | [`UnifiedLeadCommandCenter.tsx`](../frontend/src/components/UnifiedLeadCommandCenter.tsx) at `/leads/:id` | New detail pages, `PropertyDetailPage`-style layouts |
 | Activity logging UI | [`LogActivityModal.tsx`](../frontend/src/components/LogActivityModal.tsx) + [`LogNoteForm`](../frontend/src/components/LogNoteForm.tsx) / [`LogCallForm`](../frontend/src/components/LogCallForm.tsx) / [`LogEmailForm`](../frontend/src/components/LogEmailForm.tsx) | Inline log forms, `window.prompt`, direct `callLogService` from queue row actions |
 | Activity timeline (UI) | [`LeadTimeline.tsx`](../frontend/src/components/LeadTimeline.tsx) via `commandCenterService.getTimeline` | New timeline components on alternate APIs |
@@ -30,6 +31,7 @@ Update this doc when ownership changes.
 
 | Domain | Canonical | Do not add |
 |--------|-----------|------------|
+| CRM activity KPIs / goals | [`activity_dashboard_service.py`](../backend/app/services/activity_dashboard_service.py) + [`dashboard_controller.py`](../backend/app/controllers/dashboard_controller.py) at `/api/dashboard/*` → `user_activity_goals` + `LeadTimelineEntry` counts | Multifamily `DashboardService` / deal financial dashboard; parallel KPI aggregators |
 | Unified scoring + recommended action | [`LeadScoringEngine`](../backend/app/services/lead_scoring_engine.py) + [`scoring_rubric.py`](../backend/app/services/scoring_rubric.py) via [`refresh_lead_scoring`](../backend/app/services/lead_refresh.py) | `DeterministicScoringEngine`, `ActionEngineService`, or second writers to `leads.lead_score` / `leads.recommended_action` |
 | Pipeline status | `lead.lead_status` via lead_status_service / LeadStatusSelector | Treating `hubspot_deal_stage` as editable pipeline status (it is a read-only HubSpot mirror) |
 | Live `leads.lead_score` | [`LeadScoringEngine.persist()`](../backend/app/services/lead_scoring_engine.py) — same value as latest `lead_scores.total_score` | Second writer to `leads.lead_score` |
@@ -52,6 +54,7 @@ Update this doc when ownership changes.
 
 | Concern | Route | Handler |
 |---------|-------|---------|
+| CRM activity dashboard | `GET /api/dashboard/activity`, `PUT /api/dashboard/goals` | activity dashboard service |
 | Lead detail (command center) | `GET /api/leads/:id/command-center` | command center controller |
 | Lead activity timeline | `GET /api/leads/:id/timeline` | command center → `{ entries, total, page }` |
 | Lead quick briefing | `POST /api/leads/:id/briefing` | LeadBriefingService → persist `leads.quick_briefing`; `{ bullets[5], mode, generated_at, updated_at, ... }` (revise when saved exists) |

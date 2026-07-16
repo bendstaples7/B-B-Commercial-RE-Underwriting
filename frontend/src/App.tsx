@@ -73,6 +73,7 @@ import StorageIcon from '@mui/icons-material/Storage'
 import ListAltIcon from '@mui/icons-material/ListAlt'
 import LocalPostOfficeIcon from '@mui/icons-material/LocalPostOffice'
 import TravelExploreIcon from '@mui/icons-material/TravelExplore'
+import SpaceDashboardIcon from '@mui/icons-material/SpaceDashboard'
 import { usePipelineStatus } from './context/PipelineStatusContext'
 import Avatar from '@mui/material/Avatar'
 import { WorkflowStep, PropertyFacts, PropertyType, ConstructionType, InteriorCondition } from './types'
@@ -108,6 +109,7 @@ import { ScoringWeightsEditor } from './components/ScoringWeightsEditor'
 import GlobalSearchBar from '@/components/GlobalSearchBar'
 import SearchResultsPage from '@/pages/SearchResultsPage'
 import { DealKanbanPage } from './pages/DealKanbanPage'
+import { ActivityDashboardPage } from './pages/ActivityDashboardPage'
 import { QuickAddPage } from './pages/QuickAddPage'
 import { PipelineConfigAdminPage } from './pages/PipelineConfigAdminPage'
 import DataSourcesPanel from '@/components/DataSourcesPanel'
@@ -192,6 +194,20 @@ type NavGroup = NavItemGroup | NavSubgroupGroup
 
 /** Nav structure: top-level sections, each with grouped child items. */
 const NAV_SECTIONS = [
+  {
+    label: 'Dashboard',
+    path: '/dashboard',
+    icon: <SpaceDashboardIcon />,
+    headerNavigates: true,
+    groups: [
+      {
+        label: null,
+        items: [
+          { label: 'Activity Goals', path: '/dashboard', icon: <SpaceDashboardIcon />, badgeKey: null },
+        ],
+      },
+    ],
+  },
   {
     label: 'Analysis',
     path: '/analysis',
@@ -1347,6 +1363,7 @@ function App() {
 
   // Track which top-level sections are expanded; default all open
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    '/dashboard': true,
     '/analysis': true,
     '/properties': true,
     '/marketing/direct-mail': true,
@@ -1771,8 +1788,9 @@ function App() {
           <Route path="/*" element={
             <AuthGuard>
               <Routes>
-          {/* Default landing page — redirect to Kanban */}
-          <Route path="/" element={<Navigate to="/kanban" replace />} />
+          {/* Default landing page — activity goals dashboard */}
+          <Route path="/" element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard" element={<ActivityDashboardPage />} />
           {/* Queue routes */}
           <Route path="/queues/todays-action" element={<TodaysActionQueue />} />
           <Route path="/queues/previously-warm" element={<PreviouslyWarmQueue />} />

@@ -45,6 +45,12 @@ _KNOWN_REVISIONS = frozenset({
     'q7r8s9t0u1v2', 'r8s9t0u1v2w3', 'r9s0t1u2v3w4',
     's9t0u1v2w3x4', 't9u0v1w2x3y4', 'u0v1w2x3y4z5',
     'rs_hold_20260715', 'rs_task_key_20260715',
+    # CRM activity dashboard goals
+    'act_goals_20260715',
+    # Timeline actor+occurred index for activity dashboard
+    'act_tl_idx_20260715',
+    # user_activity_goals FK to users
+    'act_goals_fk_20260716',
     's0t1u2v3w4x5', 't0u1v2w3x4y5', 'u1v2w3x4y5z6',
     'v1w2x3y4z5a6', 'w2x3y4z5a6b7', 'x3y4z5a6b7c8',
     'y4z5a6b7c8d9', 'z5a6b7c8d9e0',
