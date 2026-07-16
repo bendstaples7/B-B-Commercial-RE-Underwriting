@@ -130,6 +130,9 @@ from app.models.mail_queue_item import MailQueueItem
 from app.models.mail_campaign import MailCampaign
 from app.models.mail_enqueue_attempt import MailEnqueueAttempt
 
+# CRM activity dashboard goals
+from app.models.user_activity_goal import UserActivityGoal
+
 __all__ = [
     # Authentication
     'User',
@@ -238,4 +241,6 @@ __all__ = [
     'MailQueueItem',
     'MailCampaign',
     'MailEnqueueAttempt',
+    # CRM activity dashboard
+    'UserActivityGoal',
 ]

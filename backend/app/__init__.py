@@ -641,6 +641,10 @@ def create_app(config_name='development'):
     from app.controllers.contact_controller import contacts_bp
     app.register_blueprint(contacts_bp, url_prefix='')
 
+    # CRM activity goals dashboard (home KPIs)
+    from app.controllers.dashboard_controller import dashboard_bp
+    app.register_blueprint(dashboard_bp, url_prefix='/api/dashboard')
+
     # Actionable Lead Command Center — Queue endpoints
     from app.controllers.queue_controller import queue_bp
     app.register_blueprint(queue_bp, url_prefix='/api/queues')
