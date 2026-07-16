@@ -347,12 +347,20 @@ class ActivityDashboardService:
         if unknown:
             raise ValueError(f'Unknown metrics: {sorted(unknown)}')
 
+        # Parse/validate everything first so mixed-validity payloads do not
+        # partially mutate the session before raising.
+        actions: list[tuple[str, str, int | None]] = []
         for metric, raw in targets.items():
             if raw is None:
+                actions.append(('clear', metric, None))
+            else:
+                actions.append(('upsert', metric, _parse_strict_int(raw, metric)))
+
+        for action, metric, value in actions:
+            if action == 'clear':
                 self._clear_one_goal(user_id, normalized, metric)
             else:
-                value = _parse_strict_int(raw, metric)
-                self._upsert_one_goal(user_id, normalized, metric, value)
+                self._upsert_one_goal(user_id, normalized, metric, value)  # type: ignore[arg-type]
 
         db.session.commit()
         return self.get_goals(user_id, normalized)

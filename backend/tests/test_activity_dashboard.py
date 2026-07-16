@@ -242,6 +242,17 @@ class TestActivityDashboardService:
             with pytest.raises(ValueError, match='must be an integer'):
                 svc.upsert_goals('dash-user-1', 'weekly', {'calls': 12.9})
 
+    def test_upsert_rejects_mixed_payload_without_partial_write(self, app):
+        with app.app_context():
+            _ensure_user('dash-user-1')
+            svc = ActivityDashboardService()
+            svc.upsert_goals('dash-user-1', 'weekly', {'calls': 10})
+            with pytest.raises(ValueError, match='must be an integer'):
+                svc.upsert_goals('dash-user-1', 'weekly', {'calls': 20, 'mailers': True})
+            # Failed mixed payload must not change existing goals
+            assert svc.get_goals('dash-user-1', 'weekly')['calls'] == 10
+            assert svc.get_goals('dash-user-1', 'weekly')['mailers'] is None
+
     def test_clear_goal_with_null(self, app):
         with app.app_context():
             _ensure_user('dash-user-1')
@@ -272,42 +283,52 @@ class TestDashboardApi:
         assert resp.status_code == 400
 
     def test_get_and_put_goals(self, client, app):
+        from unittest.mock import patch
+
+        fixed_now = datetime(2026, 7, 15, 12, 0, 0)
         with app.app_context():
             _ensure_user('dash-user-1')
             _ensure_user('dash-user-2', email_prefix='other')
             lead = _make_lead(property_street='102 Dashboard St')
-            # Within the current Chicago week for the live API clock
+            # Naive `now` is Chicago local; noon CDT => 17:00Z comparable_end.
+            # Entry must be strictly before that exclusive bound.
             _add_entry(
                 lead.id, 'call_logged', 'dash-user-1',
-                datetime.utcnow() - timedelta(hours=2),
+                datetime(2026, 7, 15, 14, 0, 0),
             )
             db.session.commit()
 
-        put = client.put(
-            '/api/dashboard/goals',
-            headers=_AUTH,
-            json={'period_type': 'week', 'targets': {'calls': 25, 'mailers': 10}},
-        )
-        assert put.status_code == 200
-        assert put.get_json()['period_type'] == 'weekly'
-        assert put.get_json()['goals']['calls'] == 25
-        assert put.get_json()['goals']['mailers'] == 10
+        real_get = ActivityDashboardService.get_activity
 
-        get = client.get('/api/dashboard/activity?period=week', headers=_AUTH)
-        assert get.status_code == 200
-        body = get.get_json()
-        assert body['period'] == 'week'
-        assert body['counts']['calls'] >= 1
-        assert body['goals']['calls'] == 25
-        assert body['progress']['calls'] is not None
-        assert 'series' in body
-        assert 'trends' in body
-        assert body['trend_label'] == 'WoW'
+        def _frozen_get(self, user_id, period='week', now=None):
+            return real_get(self, user_id, period=period, now=fixed_now)
 
-        other = client.get('/api/dashboard/activity?period=week', headers=_OTHER)
-        assert other.status_code == 200
-        assert other.get_json()['goals']['calls'] is None
-        assert other.get_json()['counts']['calls'] == 0
+        with patch.object(ActivityDashboardService, 'get_activity', _frozen_get):
+            put = client.put(
+                '/api/dashboard/goals',
+                headers=_AUTH,
+                json={'period_type': 'week', 'targets': {'calls': 25, 'mailers': 10}},
+            )
+            assert put.status_code == 200
+            assert put.get_json()['period_type'] == 'weekly'
+            assert put.get_json()['goals']['calls'] == 25
+            assert put.get_json()['goals']['mailers'] == 10
+
+            get = client.get('/api/dashboard/activity?period=week', headers=_AUTH)
+            assert get.status_code == 200
+            body = get.get_json()
+            assert body['period'] == 'week'
+            assert body['counts']['calls'] >= 1
+            assert body['goals']['calls'] == 25
+            assert body['progress']['calls'] is not None
+            assert 'series' in body
+            assert 'trends' in body
+            assert body['trend_label'] == 'WoW'
+
+            other = client.get('/api/dashboard/activity?period=week', headers=_OTHER)
+            assert other.status_code == 200
+            assert other.get_json()['goals']['calls'] is None
+            assert other.get_json()['counts']['calls'] == 0
 
     def test_put_goals_validation(self, client, app):
         with app.app_context():

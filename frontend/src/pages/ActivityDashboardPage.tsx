@@ -83,6 +83,7 @@ interface MetricCardProps {
   trendLabel: string
   editing: boolean
   draft: string
+  goalsDisabled: boolean
   onDraftChange: (value: string) => void
   onStartEdit: () => void
 }
@@ -96,6 +97,7 @@ function MetricCard({
   trendLabel,
   editing,
   draft,
+  goalsDisabled,
   onDraftChange,
   onStartEdit,
 }: MetricCardProps) {
@@ -131,6 +133,7 @@ function MetricCard({
             value={draft}
             onChange={(e) => onDraftChange(e.target.value)}
             inputProps={{ min: 0, step: 1, 'aria-label': `${METRIC_LABELS[metric]} goal` }}
+            disabled={goalsDisabled}
             fullWidth
           />
         ) : hasPositiveGoal ? (
@@ -155,7 +158,13 @@ function MetricCard({
             Goal: {goal}
           </Typography>
         ) : (
-          <Button size="small" startIcon={<EditIcon />} onClick={onStartEdit} sx={{ alignSelf: 'flex-start' }}>
+          <Button
+            size="small"
+            startIcon={<EditIcon />}
+            onClick={onStartEdit}
+            disabled={goalsDisabled}
+            sx={{ alignSelf: 'flex-start' }}
+          >
             Set goal
           </Button>
         )}
@@ -271,11 +280,13 @@ export function ActivityDashboardPage() {
     tasks: '',
   })
 
-  const { data, isLoading, isError, error, isFetching } = useQuery({
+  const { data, isLoading, isError, error, isFetching, isPlaceholderData } = useQuery({
     queryKey: ['dashboard', 'activity', period],
     queryFn: () => dashboardService.getActivity(period),
     placeholderData: keepPreviousData,
   })
+
+  const goalsDisabled = isFetching || isPlaceholderData
 
   const saveMutation = useMutation({
     mutationFn: (targets: Partial<Record<ActivityMetric, number | null>>) =>
@@ -288,7 +299,7 @@ export function ActivityDashboardPage() {
   })
 
   const startEditing = () => {
-    if (!data || isFetching) return
+    if (!data || goalsDisabled) return
     const next = { ...drafts }
     for (const key of METRIC_KEYS) {
       next[key] = data.goals[key] != null ? String(data.goals[key]) : ''
@@ -305,7 +316,7 @@ export function ActivityDashboardPage() {
   }
 
   const saveGoals = () => {
-    if (!data || isFetching) return
+    if (!data || goalsDisabled) return
     const targets: Partial<Record<ActivityMetric, number | null>> = {}
     let hasChange = false
     for (const key of METRIC_KEYS) {
@@ -383,7 +394,7 @@ export function ActivityDashboardPage() {
                 size="small"
                 startIcon={<SaveIcon />}
                 onClick={saveGoals}
-                disabled={saveMutation.isPending}
+                disabled={goalsDisabled || saveMutation.isPending}
               >
                 Save goals
               </Button>
@@ -401,7 +412,7 @@ export function ActivityDashboardPage() {
               size="small"
               startIcon={<EditIcon />}
               onClick={startEditing}
-              disabled={!data || isFetching}
+              disabled={!data || goalsDisabled}
             >
               Edit goals
             </Button>
@@ -447,6 +458,7 @@ export function ActivityDashboardPage() {
                   trendLabel={data.trend_label}
                   editing={editing}
                   draft={drafts[metric]}
+                  goalsDisabled={goalsDisabled}
                   onDraftChange={(value) =>
                     setDrafts((prev) => ({ ...prev, [metric]: value }))
                   }

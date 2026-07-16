@@ -14,14 +14,27 @@ depends_on = None
 
 
 def upgrade():
+    # Drop goals whose user_id no longer exists so ADD CONSTRAINT can validate.
+    op.execute(
+        """
+        DELETE FROM user_activity_goals AS g
+        WHERE NOT EXISTS (
+            SELECT 1 FROM users AS u WHERE u.user_id = g.user_id
+        )
+        """
+    )
     op.execute(
         """
         DO $$
         BEGIN
             IF NOT EXISTS (
                 SELECT 1
-                FROM pg_constraint
-                WHERE conname = 'fk_user_activity_goals_user_id'
+                FROM pg_constraint AS c
+                JOIN pg_class AS t ON c.conrelid = t.oid
+                JOIN pg_namespace AS n ON t.relnamespace = n.oid
+                WHERE c.conname = 'fk_user_activity_goals_user_id'
+                  AND t.relname = 'user_activity_goals'
+                  AND n.nspname = current_schema()
             ) THEN
                 ALTER TABLE user_activity_goals
                 ADD CONSTRAINT fk_user_activity_goals_user_id

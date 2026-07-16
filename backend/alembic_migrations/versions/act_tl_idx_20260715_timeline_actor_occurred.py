@@ -1,4 +1,4 @@
-"""Timeline actor index + user_activity_goals FK for dashboard.
+"""Index lead_timeline_entries for activity dashboard actor+time queries.
 
 Revision ID: act_tl_idx_20260715
 Revises: act_goals_20260715
