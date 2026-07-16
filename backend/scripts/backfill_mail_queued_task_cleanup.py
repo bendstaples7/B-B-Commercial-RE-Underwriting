@@ -65,14 +65,11 @@ def main() -> None:
             if args.limit is None
             else max(args.limit - len(recent_processed_ids), 0)
         )
-        lead_ids = [
-            lead_id
-            for lead_id in find_mail_awaiting_lead_ids(
-                limit=remaining_limit,
-                exclude_lead_ids=recent_processed_ids,
-            )
-            if count_superseded_tasks_for_lead(lead_id) > 0
-        ]
+        lead_ids = find_mail_awaiting_lead_ids(
+            limit=remaining_limit,
+            exclude_lead_ids=recent_processed_ids,
+            require_superseded_tasks=True,
+        )
 
         logger.info('Found %s mail-awaiting lead(s)', len(lead_ids))
         print(f'Found {len(lead_ids)} mail-awaiting lead(s)', flush=True)

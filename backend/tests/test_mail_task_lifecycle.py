@@ -463,6 +463,10 @@ class TestRecentSaleMailReconciliation:
             assert result['activated_lead_ids'] == [lead.id]
             assert activated.lead_status == 'awaiting_skip_trace'
             assert activated.needs_skip_trace is True
+            activated_task = db.session.get(LeadTask, scheduled['task_id'])
+            assert activated_task.workflow_key is None
+            second = service.activate_due_recent_sale_tasks(actor='test')
+            assert second['processed_task_count'] == 0
 
     def test_retires_matured_hold_task_for_terminal_lead(self, app):
         from app import db
@@ -513,16 +517,25 @@ class TestRecentSaleMailReconciliation:
             )
             recent_task = _make_task(app, recent.id)
 
-            result = reconcile_recent_sale_mail_tasks(
-                actor='test',
-                limit=1,
-                commit=True,
-            )
+            with patch(
+                'app.services.mail_task_lifecycle_service.sql_not_recently_sold',
+                return_value=(
+                    Lead.acquisition_date
+                    <= date.today() - timedelta(days=730)
+                ),
+            ):
+                result = reconcile_recent_sale_mail_tasks(
+                    actor='test',
+                    limit=2,
+                    commit=True,
+                )
 
-            assert result['processed_lead_ids'] == [matured.id]
+            assert result['processed_lead_ids'] == [matured.id, recent.id]
             assert result['activated_lead_ids'] == [matured.id]
             assert db.session.get(Lead, matured.id).lead_status == 'awaiting_skip_trace'
-            assert db.session.get(LeadTask, recent_task.id).due_date == date.today()
+            assert db.session.get(LeadTask, recent_task.id).due_date == (
+                recent.acquisition_date + timedelta(days=730)
+            )
 
 
 class TestCompleteTasksSupersededByMail:
@@ -700,6 +713,20 @@ class TestFindMailAwaitingLeadIds:
             lead = _make_lead(app, '11 Awaiting St', up_next_to_mail=True)
             ids = find_mail_awaiting_lead_ids()
             assert lead.id in ids
+
+    def test_superseded_task_limit_applies_after_qualification(self, app):
+        with app.app_context():
+            no_task = _make_lead(app, '12 Awaiting Without Task St', up_next_to_mail=True)
+            qualifying = _make_lead(app, '13 Awaiting With Task St', up_next_to_mail=True)
+            _make_task(app, qualifying.id)
+
+            ids = find_mail_awaiting_lead_ids(
+                limit=1,
+                require_superseded_tasks=True,
+            )
+
+            assert no_task.id not in ids
+            assert ids == [qualifying.id]
 
 
 class TestEnqueueCompletesMailPrepTasks:

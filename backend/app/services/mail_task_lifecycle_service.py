@@ -5,7 +5,7 @@ import logging
 import re
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import or_
+from sqlalchemy import and_, func, or_
 
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry, MailQueueItem
@@ -462,13 +462,16 @@ def reconcile_recent_sale_mail_tasks(
         'do_not_contact',
     ]
     ordered_ids: list[int] = []
+    activation_processed_ids = set(activation.get('processed_lead_ids', []))
     if remaining_limit:
+        candidates = Lead.query.filter(
+            ~sql_not_recently_sold(),
+            ~Lead.lead_status.in_(terminal_statuses),
+        )
+        if activation_processed_ids:
+            candidates = candidates.filter(~Lead.id.in_(activation_processed_ids))
         candidates = (
-            Lead.query
-            .filter(
-                ~sql_not_recently_sold(),
-                ~Lead.lead_status.in_(terminal_statuses),
-            )
+            candidates
             .with_entities(Lead.id)
             .order_by(Lead.id.asc())
             .limit(remaining_limit)
@@ -531,13 +534,13 @@ def reconcile_recent_sale_mail_tasks(
         activation.get('activated_lead_ids', []) + affected_leads
     ))
     return {
+        **activation,
         'affected_lead_count': len(all_affected_leads),
         'affected_lead_ids': all_affected_leads,
         'processed_lead_ids': list(dict.fromkeys(
             activation.get('processed_lead_ids', []) + ordered_ids
         )),
         'skip_trace_scheduled_count': skip_trace_scheduled_count,
-        **activation,
         'rescheduled_task_count': task_count,
         'results': results,
     }
@@ -752,10 +755,44 @@ def complete_mail_prep_tasks(
     return count
 
 
+def _sql_maybe_superseded_task(task_model):
+    """Broad SQL prefilter for the canonical Python superseded-task rule."""
+    task_type = func.coalesce(task_model.task_type, 'custom')
+    title = func.lower(func.coalesce(task_model.title, ''))
+    positive_title = or_(
+        title.like('%call%'),
+        title.like('%phone%'),
+        title.like('%voicemail%'),
+        title.like('%follow up%'),
+        title.like('%follow-up%'),
+        title.like('%followup%'),
+    )
+    excluded_title = or_(
+        title.like('%email%'),
+        title.like('%e-mail%'),
+        title.like('%mail%'),
+        title.like('%letter%'),
+    )
+    return or_(
+        task_type.in_(('add_to_mail_batch', 'call_owner_today')),
+        and_(
+            ~task_type.in_((
+                'research_missing_pin',
+                'match_hubspot_deal',
+                'run_property_analysis',
+                'skip_trace_owner',
+            )),
+            positive_title,
+            ~excluded_title,
+        ),
+    )
+
+
 def find_mail_awaiting_lead_ids(
     *,
     limit: int | None = None,
     exclude_lead_ids: set[int] | None = None,
+    require_superseded_tasks: bool = False,
 ) -> list[int]:
     """Return a bounded batch staged in mail, optionally excluding prior work."""
     queued_lead_ids = db.session.query(MailQueueItem.lead_id).filter(
@@ -770,10 +807,58 @@ def find_mail_awaiting_lead_ids(
     if exclude_lead_ids:
         query = query.filter(~Lead.id.in_(exclude_lead_ids))
     query = query.with_entities(Lead.id).order_by(Lead.id.asc())
-    if limit is not None:
-        query = query.limit(max(limit, 0))
-    rows = query.all()
-    return [row[0] for row in rows]
+    if not require_superseded_tasks:
+        if limit is not None:
+            query = query.limit(max(limit, 0))
+        return [row[0] for row in query.all()]
+
+    native_exists = db.session.query(LeadTask.id).filter(
+        LeadTask.lead_id == Lead.id,
+        LeadTask.status == 'open',
+        _sql_maybe_superseded_task(LeadTask),
+    ).exists()
+    direct_crm_exists = db.session.query(Task.id).filter(
+        Task.lead_id == Lead.id,
+        Task.status.in_(('open', 'overdue')),
+        _sql_maybe_superseded_task(Task),
+    ).exists()
+    associated_crm_exists = (
+        db.session.query(Task.id)
+        .join(TaskAssociation, TaskAssociation.task_id == Task.id)
+        .filter(
+            TaskAssociation.target_type == 'lead',
+            TaskAssociation.target_id == Lead.id,
+            Task.status.in_(('open', 'overdue')),
+            _sql_maybe_superseded_task(Task),
+        )
+        .exists()
+    )
+    query = query.filter(or_(
+        native_exists,
+        direct_crm_exists,
+        associated_crm_exists,
+    ))
+
+    target = None if limit is None else max(limit, 0)
+    if target == 0:
+        return []
+    batch_size = max((target or 100) * 4, 100)
+    offset = 0
+    matched: list[int] = []
+    while target is None or len(matched) < target:
+        rows = query.limit(batch_size).offset(offset).all()
+        if not rows:
+            break
+        for row in rows:
+            if count_superseded_tasks_for_lead(row[0]) <= 0:
+                continue
+            matched.append(row[0])
+            if target is not None and len(matched) >= target:
+                break
+        if len(rows) < batch_size:
+            break
+        offset += batch_size
+    return matched
 
 
 def _parse_sent_at(value) -> datetime | None:

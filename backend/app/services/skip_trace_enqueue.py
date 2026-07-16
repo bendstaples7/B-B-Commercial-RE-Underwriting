@@ -418,6 +418,7 @@ class SkipTraceEnqueue:
         tasks = query.all()
         activated_ids: list[int] = []
         retired_task_ids: list[int] = []
+        released_hold_task_ids: list[int] = []
         hubspot_task_ids: set[str] = set()
         now = datetime.now(timezone.utc)
         for task in tasks:
@@ -464,8 +465,11 @@ class SkipTraceEnqueue:
                     },
                 ))
                 activated_ids.append(lead.id)
+            task.workflow_key = None
+            db.session.add(task)
+            released_hold_task_ids.append(task.id)
 
-        if commit and (activated_ids or retired_task_ids):
+        if commit and (activated_ids or retired_task_ids or released_hold_task_ids):
             db.session.commit()
             if hubspot_task_ids:
                 from app.services.hubspot_task_completion_service import (
@@ -484,6 +488,7 @@ class SkipTraceEnqueue:
             "activated_lead_ids": activated_ids,
             "retired_task_count": len(retired_task_ids),
             "retired_task_ids": retired_task_ids,
+            "released_hold_task_ids": released_hold_task_ids,
             "processed_task_count": len(tasks),
             "processed_lead_ids": list(dict.fromkeys(
                 task.lead_id for task in tasks

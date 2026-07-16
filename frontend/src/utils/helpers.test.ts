@@ -4,7 +4,10 @@ import { formatDateOnly } from './helpers'
 describe('formatDateOnly', () => {
   it('formats ISO date-only values in local time', () => {
     expect(formatDateOnly('2026-07-15')).toBe(
-      new Date('2026-07-15T00:00:00').toLocaleDateString(),
+      new Date(Date.UTC(2026, 6, 15)).toLocaleDateString(
+        undefined,
+        { timeZone: 'UTC' },
+      ),
     )
   })
 
