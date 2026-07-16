@@ -8,6 +8,7 @@ from sqlalchemy import asc, nullslast
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry
 from app.models.task import Task
+from app.models.task_association import TaskAssociation
 from app.exceptions import (
     LeadTaskValidationError,
     InvalidTaskStatusTransitionError,
@@ -15,6 +16,16 @@ from app.exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _task_linked_to_lead(task: Task, lead_id: int) -> bool:
+    if task.lead_id == lead_id:
+        return True
+    return TaskAssociation.query.filter_by(
+        task_id=task.id,
+        target_type='lead',
+        target_id=lead_id,
+    ).first() is not None
 
 
 def complete_native_task_mirror(
@@ -28,7 +39,7 @@ def complete_native_task_mirror(
         mirror = db.session.get(Task, lead_task.mirror_task_id)
         if (
             mirror is not None
-            and mirror.lead_id == lead_task.lead_id
+            and _task_linked_to_lead(mirror, lead_task.lead_id)
             and mirror.status in ('open', 'overdue')
         ):
             mirror.status = 'completed'

@@ -11,5 +11,6 @@ describe('formatDateOnly', () => {
   it('uses the standard empty display for missing or invalid values', () => {
     expect(formatDateOnly(null)).toBe('—')
     expect(formatDateOnly('not-a-date')).toBe('—')
+    expect(formatDateOnly('2026-02-30')).toBe('—')
   })
 })

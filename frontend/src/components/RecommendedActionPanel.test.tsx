@@ -15,6 +15,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { RecommendedActionPanel } from './RecommendedActionPanel'
 import type { RecommendedActionMeta, LeadTask } from '@/types'
+import { formatDateOnly } from '@/utils/helpers'
 
 // ---------------------------------------------------------------------------
 // Test data helpers
@@ -613,7 +614,7 @@ describe('RecommendedActionPanel', () => {
       expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeInTheDocument()
     })
 
-    it('shows Add to Mail Queue in Quick actions for nurture when isMailable', () => {
+    it('shows Add to Mail Queue in Quick actions for a hold when mail remains eligible', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('hold')}
@@ -703,7 +704,9 @@ describe('RecommendedActionPanel', () => {
       expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent(
         'move to Awaiting Skip Trace',
       )
-      expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent('3/31/2027')
+      expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent(
+        formatDateOnly('2027-03-31'),
+      )
       expect(screen.getByRole('button', { name: 'Adjust for Recent Sale' })).toBeInTheDocument()
       expect(screen.queryByTestId('ra-universal-btn-add_to_mail_batch')).not.toBeInTheDocument()
     })

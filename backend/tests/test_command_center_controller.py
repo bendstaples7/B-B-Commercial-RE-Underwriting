@@ -870,6 +870,26 @@ class TestAdjustForRecentSale:
             assert response.status_code == 400
             assert response.get_json()['error'] == 'Request body must be a JSON object'
 
+    @pytest.mark.parametrize(
+        ('body', 'content_type'),
+        [('null', 'application/json'), ('{bad json', 'application/json')],
+    )
+    def test_rejects_null_or_malformed_json_body(self, client, app, body, content_type):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '829 Recent Sale Malformed Body St',
+                acquisition_date=date.today() - timedelta(days=30),
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/adjust-for-recent-sale',
+                headers=_AUTH_HEADERS,
+                data=body,
+                content_type=content_type,
+            )
+            assert response.status_code == 400
+            assert response.get_json()['error'] == 'Request body must be a JSON object'
+
 
 # ---------------------------------------------------------------------------
 # 34.2 — POST /api/leads/<id>/tasks

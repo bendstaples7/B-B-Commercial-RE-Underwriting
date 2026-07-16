@@ -26,11 +26,19 @@ export function formatDate(value: string | null): string {
 /** Format an ISO date-only value in local time without a UTC day shift. */
 export function formatDateOnly(value: string | null | undefined): string {
   if (!value) return '—'
-  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value)
-    ? `${value}T00:00:00`
-    : value
+  const isoDate = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  const normalized = isoDate ? `${value}T00:00:00` : value
   const date = new Date(normalized)
-  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleDateString()
+  if (Number.isNaN(date.getTime())) return '—'
+  if (
+    isoDate
+    && (
+      date.getFullYear() !== Number(isoDate[1])
+      || date.getMonth() !== Number(isoDate[2]) - 1
+      || date.getDate() !== Number(isoDate[3])
+    )
+  ) return '—'
+  return date.toLocaleDateString()
 }
 
 export function formatPhoneConfidence(

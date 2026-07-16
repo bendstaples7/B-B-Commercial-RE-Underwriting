@@ -244,6 +244,7 @@ class TestRecentSaleMailReconciliation:
                 title='Recent-sale hold ended — verify new owner and contact information',
                 status='open',
                 due_date=eligible_date,
+                workflow_key='recent_sale_hold',
                 created_by='test',
             )
             queued_item = MailQueueItem(
@@ -320,6 +321,7 @@ class TestRecentSaleMailReconciliation:
                 title='Old skip trace title',
                 status='open',
                 due_date=date.today(),
+                workflow_key='recent_sale_hold',
                 created_by='test',
                 mirror_task_id=mirror.id,
             )
@@ -461,6 +463,66 @@ class TestRecentSaleMailReconciliation:
             assert result['activated_lead_ids'] == [lead.id]
             assert activated.lead_status == 'awaiting_skip_trace'
             assert activated.needs_skip_trace is True
+
+    def test_retires_matured_hold_task_for_terminal_lead(self, app):
+        from app import db
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '4 Terminal Recent Sale Activation St',
+                acquisition_date=date.today() - timedelta(days=30),
+            )
+            service = SkipTraceEnqueue()
+            scheduled = service.schedule_recent_sale(
+                lead.id,
+                due_date=date.today(),
+                actor='test',
+            )
+            lead.lead_status = 'deal_lost'
+            db.session.commit()
+
+            result = service.activate_due_recent_sale_tasks(actor='test')
+
+            task = db.session.get(LeadTask, scheduled['task_id'])
+            assert result['retired_task_ids'] == [task.id]
+            assert task.status == 'completed'
+            assert db.session.get(Lead, lead.id).lead_status == 'deal_lost'
+
+    def test_bounded_reconciliation_prioritizes_matured_hold_activation(self, app):
+        from app import db
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        with app.app_context():
+            matured = _make_lead(
+                app,
+                '5 Matured Hold Priority St',
+                acquisition_date=date.today() - timedelta(days=800),
+            )
+            SkipTraceEnqueue().schedule_recent_sale(
+                matured.id,
+                due_date=date.today(),
+                actor='test',
+            )
+            recent = _make_lead(
+                app,
+                '6 New Recent Sale Candidate St',
+                acquisition_date=date.today() - timedelta(days=30),
+                recommended_contact_method='direct_mail',
+            )
+            recent_task = _make_task(app, recent.id)
+
+            result = reconcile_recent_sale_mail_tasks(
+                actor='test',
+                limit=1,
+                commit=True,
+            )
+
+            assert result['processed_lead_ids'] == [matured.id]
+            assert result['activated_lead_ids'] == [matured.id]
+            assert db.session.get(Lead, matured.id).lead_status == 'awaiting_skip_trace'
+            assert db.session.get(LeadTask, recent_task.id).due_date == date.today()
 
 
 class TestCompleteTasksSupersededByMail:

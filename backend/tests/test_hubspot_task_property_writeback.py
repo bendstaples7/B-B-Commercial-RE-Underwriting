@@ -110,6 +110,7 @@ def test_mirror_crm_task_from_lead_task_clears_due_date(app):
             due_date=datetime(2026, 7, 13, 13, 0, 0),
             status='open',
             hubspot_task_id='hs-clear-due-1',
+            lead_id=lead.id,
         )
         db.session.add_all([lead_task, crm_task])
         db.session.flush()
@@ -120,3 +121,47 @@ def test_mirror_crm_task_from_lead_task_clears_due_date(app):
         assert crm_task.title == 'Follow up without date'
         assert crm_task.due_date is None
         assert crm_task.updated_at is not None
+
+
+def test_mirror_crm_task_supports_association_only_link_and_reports_sync(app):
+    from app import db
+    from app.models.lead import Lead
+    from app.models.lead_task import LeadTask
+    from app.models.task import Task
+    from app.models.task_association import TaskAssociation
+    from app.services.hubspot_task_completion_service import mirror_crm_task_from_lead_task
+
+    with app.app_context():
+        lead = Lead(property_street='2 Associated Mirror St')
+        db.session.add(lead)
+        db.session.flush()
+        crm_task = Task(
+            title='Old title',
+            status='open',
+            hubspot_task_id='hs-associated-1',
+        )
+        db.session.add(crm_task)
+        db.session.flush()
+        db.session.add(TaskAssociation(
+            task_id=crm_task.id,
+            target_type='lead',
+            target_id=lead.id,
+        ))
+        lead_task = LeadTask(
+            lead_id=lead.id,
+            task_type='custom',
+            title='Updated title',
+            status='open',
+            due_date=date(2026, 8, 1),
+            mirror_task_id=crm_task.id,
+        )
+        db.session.add(lead_task)
+        db.session.flush()
+        pending_ids: set[str] = set()
+
+        changed = mirror_crm_task_from_lead_task(lead_task, pending_ids)
+
+        assert changed is True
+        assert crm_task.title == 'Updated title'
+        assert crm_task.due_date.date() == date(2026, 8, 1)
+        assert pending_ids == {'hs-associated-1'}

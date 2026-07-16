@@ -952,9 +952,11 @@ def adjust_for_recent_sale(lead_id: int):
     if denied is not None:
         return denied
 
-    data = request.get_json(silent=True)
-    if data is None:
+    raw_body = request.get_data(cache=True)
+    if not raw_body:
         data = {}
+    else:
+        data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({'error': 'Request body must be a JSON object'}), 400
     task_id = data.get('task_id')

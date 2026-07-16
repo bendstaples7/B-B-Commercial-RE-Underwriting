@@ -109,7 +109,7 @@ export function QuickAddPage() {
   }>({ city: null, state: null, zip: null })
   const [successResult, setSuccessResult] = useState<QuickAddResponse | null>(null)
   const [existingActionFeedback, setExistingActionFeedback] = useState<{
-    severity: 'success' | 'error'
+    severity: 'success' | 'warning' | 'error'
     message: string
   } | null>(null)
 
@@ -200,29 +200,36 @@ export function QuickAddPage() {
     }) => {
       await commandCenterService.updateStatus(leadId, 'mailing_no_contact_made')
       if (action === 'outreach') {
-        return 'Lead reactivated. Scoring will place it in the appropriate outreach flow.'
+        return {
+          severity: 'success' as const,
+          message: 'Lead reactivated. Scoring will place it in the appropriate outreach flow.',
+        }
       }
 
       const result = await openLetterService.enqueue([leadId], 'quick-add')
       if (result.added > 0) {
-        return 'Lead reactivated and added to the mail queue.'
+        return { severity: 'success' as const, message: 'Lead reactivated and added to the mail queue.' }
       }
       const outcome = result.results?.find((item) => item.lead_id === leadId)
       if (outcome?.status === 'already_queued') {
-        return 'Lead reactivated and was already in the mail queue.'
+        return {
+          severity: 'success' as const,
+          message: 'Lead reactivated and was already in the mail queue.',
+        }
       }
       if (outcome?.status === 'recently_sold') {
         const eligible = outcome.rescheduled_to
           ? formatDateOnly(outcome.rescheduled_to)
           : 'the end of the two-year hold'
-        throw new Error(
-          `Lead was reactivated, but a recent sale was detected. Direct mail is deferred until ${eligible}.`,
-        )
+        return {
+          severity: 'warning' as const,
+          message: `Lead was reactivated, but a recent sale was detected. Direct mail is deferred until ${eligible}.`,
+        }
       }
       throw new Error(outcome?.error || 'Lead was reactivated, but could not be added to mail.')
     },
-    onSuccess: (message) => {
-      setExistingActionFeedback({ severity: 'success', message })
+    onSuccess: (feedback) => {
+      setExistingActionFeedback(feedback)
     },
     onError: (error: Error) => {
       setExistingActionFeedback({

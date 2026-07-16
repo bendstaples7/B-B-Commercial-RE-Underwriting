@@ -17,6 +17,7 @@ from app.models.contact import Contact
 from app.models.lead import Lead
 from app.models.lead_task import LeadTask
 from app.models.lead_timeline_entry import LeadTimelineEntry
+from app.models.task import Task
 from app.exceptions import InvalidLeadStatusTransitionError
 from app.services.lead_task_service import (
     LeadTaskService,
@@ -289,6 +290,7 @@ class SkipTraceEnqueue:
                 lead_id=lead_id,
                 task_type="skip_trace_owner",
                 status="open",
+                workflow_key="recent_sale_hold",
             )
             .first()
         )
@@ -311,6 +313,8 @@ class SkipTraceEnqueue:
                 recompute_action=False,
                 commit=False,
             )
+            task.workflow_key = "recent_sale_hold"
+            db.session.add(task)
         else:
             task.title = title
             task.due_date = due_date
@@ -318,7 +322,11 @@ class SkipTraceEnqueue:
         from app.services.hubspot_task_completion_service import (
             mirror_crm_task_from_lead_task,
         )
-        mirror_changed = mirror_crm_task_from_lead_task(task)
+        hubspot_task_ids: set[str] = set()
+        mirror_changed = mirror_crm_task_from_lead_task(
+            task,
+            hubspot_task_ids,
+        )
 
         # ``skip_trace`` is the holding stage. ``awaiting_skip_trace`` means the
         # hold has matured and manual skip tracing should be performed.
@@ -367,6 +375,11 @@ class SkipTraceEnqueue:
 
         if commit:
             db.session.commit()
+            if hubspot_task_ids:
+                from app.services.mail_task_lifecycle_service import (
+                    sync_recent_sale_hubspot_due_dates,
+                )
+                sync_recent_sale_hubspot_due_dates(hubspot_task_ids, due_date)
             from app.services.lead_refresh import refresh_lead_scoring
             from app.services.queue_order_cache import queue_order_cache
 
@@ -377,6 +390,7 @@ class SkipTraceEnqueue:
             'scheduled': scheduled,
             'task_id': task.id,
             'changed': task_changed or mirror_changed or lead_changed,
+            'hubspot_task_ids': sorted(hubspot_task_ids),
         }
 
     def activate_due_recent_sale_tasks(
@@ -394,16 +408,19 @@ class SkipTraceEnqueue:
                 LeadTask.status == "open",
                 LeadTask.due_date.isnot(None),
                 LeadTask.due_date <= date.today(),
-                LeadTask.title.like("Recent-sale hold ended%")
+                LeadTask.workflow_key == "recent_sale_hold",
             )
             .order_by(LeadTask.due_date.asc(), LeadTask.id.asc())
         )
         if limit is not None:
             query = query.limit(limit)
 
+        tasks = query.all()
         activated_ids: list[int] = []
+        retired_task_ids: list[int] = []
+        hubspot_task_ids: set[str] = set()
         now = datetime.now(timezone.utc)
-        for task in query.all():
+        for task in tasks:
             lead = Lead.query.filter_by(id=task.lead_id).with_for_update().first()
             if lead is None or lead.lead_status in {
                 "deprioritize",
@@ -412,6 +429,17 @@ class SkipTraceEnqueue:
                 "suppressed",
                 "do_not_contact",
             }:
+                task.status = "completed"
+                task.completed_at = now
+                db.session.add(task)
+                if task.hubspot_task_id:
+                    hubspot_task_ids.add(str(task.hubspot_task_id))
+                if task.mirror_task_id:
+                    mirror = db.session.get(Task, task.mirror_task_id)
+                    if mirror is not None and mirror.hubspot_task_id:
+                        hubspot_task_ids.add(str(mirror.hubspot_task_id))
+                complete_native_task_mirror(task, now)
+                retired_task_ids.append(task.id)
                 continue
             if lead.lead_status != "awaiting_skip_trace" or not lead.needs_skip_trace:
                 old_status = lead.lead_status
@@ -437,8 +465,13 @@ class SkipTraceEnqueue:
                 ))
                 activated_ids.append(lead.id)
 
-        if commit and activated_ids:
+        if commit and (activated_ids or retired_task_ids):
             db.session.commit()
+            if hubspot_task_ids:
+                from app.services.hubspot_task_completion_service import (
+                    sync_pending_hubspot_completions,
+                )
+                sync_pending_hubspot_completions(sorted(hubspot_task_ids))
             from app.services.lead_refresh import refresh_lead_scoring
             from app.services.queue_order_cache import queue_order_cache
 
@@ -449,6 +482,12 @@ class SkipTraceEnqueue:
         return {
             "activated_lead_count": len(activated_ids),
             "activated_lead_ids": activated_ids,
+            "retired_task_count": len(retired_task_ids),
+            "retired_task_ids": retired_task_ids,
+            "processed_task_count": len(tasks),
+            "processed_lead_ids": list(dict.fromkeys(
+                task.lead_id for task in tasks
+            )),
         }
 
     @staticmethod

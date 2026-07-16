@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 MAIL_FOLLOW_UP_OFFSET_DAYS = 7
 FOLLOW_UP_AFTER_MAIL_TITLE_RE = re.compile(r'follow up after mail', re.IGNORECASE)
 SENT_RECENTLY_DAYS = 14
+RECENT_SALE_RECONCILIATION_BATCH_SIZE = 500
 
 
 def recent_sale_mail_eligible_date(lead: Lead) -> date | None:
@@ -134,7 +135,7 @@ def reconcile_recent_sale_mail_tasks_for_lead(
     due_at = datetime.combine(eligible_date, datetime.min.time())
     represented_crm_ids: set[int] = set()
     represented_hubspot_ids: set[str] = set()
-    hubspot_task_ids: set[str] = set()
+    hubspot_task_ids: set[str] = set(skip_trace.get('hubspot_task_ids', []))
     rescheduled = 0
 
     native_tasks = LeadTask.query.filter(
@@ -175,6 +176,8 @@ def reconcile_recent_sale_mail_tasks_for_lead(
                 mirror.status = 'open'
             mirror.updated_at = datetime.utcnow()
             db.session.add(mirror)
+            if mirror.hubspot_task_id:
+                hubspot_task_ids.add(str(mirror.hubspot_task_id))
 
         _append_recent_sale_snooze_timeline(
             lead.id,
@@ -338,6 +341,11 @@ def adjust_earliest_task_for_recent_sale(
             db.session.rollback()
             raise ValueError('Lead cannot be moved into a recent-sale hold')
         db.session.commit()
+        if scheduled.get('hubspot_task_ids'):
+            sync_recent_sale_hubspot_due_dates(
+                scheduled['hubspot_task_ids'],
+                eligible_date,
+            )
         return {
             'task_id': scheduled['task_id'],
             'task_created': True,
@@ -369,6 +377,8 @@ def adjust_earliest_task_for_recent_sale(
                 mirror.status = 'open'
             mirror.updated_at = datetime.utcnow()
             db.session.add(mirror)
+            if mirror.hubspot_task_id:
+                hubspot_ids.add(str(mirror.hubspot_task_id))
         selected_id = native.id
         selected_type = native.task_type
         selected_title = native.title
@@ -414,6 +424,36 @@ def reconcile_recent_sale_mail_tasks(
     commit: bool = True,
 ) -> dict:
     """Reconcile all due direct-mail work; safe to run repeatedly."""
+    effective_limit = (
+        RECENT_SALE_RECONCILIATION_BATCH_SIZE
+        if limit is None
+        else max(limit, 0)
+    )
+    from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+    if commit:
+        activation = SkipTraceEnqueue().activate_due_recent_sale_tasks(
+            actor=actor,
+            commit=True,
+            limit=effective_limit,
+        )
+    else:
+        savepoint = db.session.begin_nested()
+        try:
+            activation = SkipTraceEnqueue().activate_due_recent_sale_tasks(
+                actor=actor,
+                commit=False,
+                limit=effective_limit,
+            )
+            db.session.flush()
+        finally:
+            savepoint.rollback()
+            db.session.expire_all()
+
+    remaining_limit = max(
+        effective_limit - activation.get('processed_task_count', 0),
+        0,
+    )
     terminal_statuses = [
         'deprioritize',
         'deal_won',
@@ -421,18 +461,19 @@ def reconcile_recent_sale_mail_tasks(
         'suppressed',
         'do_not_contact',
     ]
-    candidates = (
-        Lead.query
-        .filter(
-            ~sql_not_recently_sold(),
-            ~Lead.lead_status.in_(terminal_statuses),
+    ordered_ids: list[int] = []
+    if remaining_limit:
+        candidates = (
+            Lead.query
+            .filter(
+                ~sql_not_recently_sold(),
+                ~Lead.lead_status.in_(terminal_statuses),
+            )
+            .with_entities(Lead.id)
+            .order_by(Lead.id.asc())
+            .limit(remaining_limit)
         )
-        .with_entities(Lead.id)
-        .order_by(Lead.id.asc())
-    )
-    if limit is not None:
-        candidates = candidates.limit(max(limit, 0))
-    ordered_ids = [row[0] for row in candidates.all()]
+        ordered_ids = [row[0] for row in candidates.all()]
 
     affected_leads: list[int] = []
     skip_trace_scheduled_count = 0
@@ -486,34 +527,15 @@ def reconcile_recent_sale_mail_tasks(
             sync_recent_sale_hubspot_due_dates([task_id], due_date)
         refresh_leads_after_mail_task_changes(affected_leads)
 
-    from app.services.skip_trace_enqueue import SkipTraceEnqueue
-
-    activation_limit = (
-        None
-        if limit is None
-        else max(limit - len(ordered_ids), 0)
-    )
-    if commit:
-        activation = SkipTraceEnqueue().activate_due_recent_sale_tasks(
-            actor=actor,
-            commit=True,
-            limit=activation_limit,
-        )
-    else:
-        savepoint = db.session.begin_nested()
-        try:
-            activation = SkipTraceEnqueue().activate_due_recent_sale_tasks(
-                actor=actor,
-                commit=False,
-                limit=activation_limit,
-            )
-            db.session.flush()
-        finally:
-            savepoint.rollback()
-            db.session.expire_all()
-
+    all_affected_leads = list(dict.fromkeys(
+        activation.get('activated_lead_ids', []) + affected_leads
+    ))
     return {
-        'affected_lead_count': len(affected_leads),
+        'affected_lead_count': len(all_affected_leads),
+        'affected_lead_ids': all_affected_leads,
+        'processed_lead_ids': list(dict.fromkeys(
+            activation.get('processed_lead_ids', []) + ordered_ids
+        )),
         'skip_trace_scheduled_count': skip_trace_scheduled_count,
         **activation,
         'rescheduled_task_count': task_count,
@@ -730,17 +752,27 @@ def complete_mail_prep_tasks(
     return count
 
 
-def find_mail_awaiting_lead_ids() -> list[int]:
-    """Lead IDs staged in a mail batch (MailQueueItem queued; legacy up_next_to_mail)."""
+def find_mail_awaiting_lead_ids(
+    *,
+    limit: int | None = None,
+    exclude_lead_ids: set[int] | None = None,
+) -> list[int]:
+    """Return a bounded batch staged in mail, optionally excluding prior work."""
     queued_lead_ids = db.session.query(MailQueueItem.lead_id).filter(
         MailQueueItem.status == 'queued',
     ).distinct()
-    rows = Lead.query.filter(
+    query = Lead.query.filter(
         or_(
             Lead.up_next_to_mail.is_(True),  # legacy rows until flag cleared
             Lead.id.in_(queued_lead_ids),
         )
-    ).with_entities(Lead.id).all()
+    )
+    if exclude_lead_ids:
+        query = query.filter(~Lead.id.in_(exclude_lead_ids))
+    query = query.with_entities(Lead.id).order_by(Lead.id.asc())
+    if limit is not None:
+        query = query.limit(max(limit, 0))
+    rows = query.all()
     return [row[0] for row in rows]
 
 

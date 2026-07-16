@@ -54,13 +54,25 @@ def main() -> None:
 
     app = create_app()
     with app.app_context():
+        recent_sale_result = reconcile_recent_sale_mail_tasks(
+            actor='backfill_mail_queued_task_cleanup',
+            limit=args.limit,
+            commit=args.apply,
+        )
+        recent_processed_ids = set(recent_sale_result['processed_lead_ids'])
+        remaining_limit = (
+            None
+            if args.limit is None
+            else max(args.limit - len(recent_processed_ids), 0)
+        )
         lead_ids = [
             lead_id
-            for lead_id in find_mail_awaiting_lead_ids()
+            for lead_id in find_mail_awaiting_lead_ids(
+                limit=remaining_limit,
+                exclude_lead_ids=recent_processed_ids,
+            )
             if count_superseded_tasks_for_lead(lead_id) > 0
         ]
-        if args.limit is not None:
-            lead_ids = lead_ids[: args.limit]
 
         logger.info('Found %s mail-awaiting lead(s)', len(lead_ids))
         print(f'Found {len(lead_ids)} mail-awaiting lead(s)', flush=True)
@@ -102,22 +114,6 @@ def main() -> None:
             sync_pending_hubspot_completions(hubspot_sync_ids)
             refresh_leads_after_mail_task_changes(affected_leads)
 
-        remaining_limit = (
-            None
-            if args.limit is None
-            else max(args.limit - len(lead_ids), 0)
-        )
-        if remaining_limit == 0:
-            recent_sale_result = {
-                'rescheduled_task_count': 0,
-                'skip_trace_scheduled_count': 0,
-            }
-        else:
-            recent_sale_result = reconcile_recent_sale_mail_tasks(
-                actor='backfill_mail_queued_task_cleanup',
-                limit=remaining_limit,
-                commit=args.apply,
-            )
         if not args.apply:
             db.session.rollback()
 
@@ -134,7 +130,8 @@ def main() -> None:
             f'{recent_sale_result["rescheduled_task_count"]} recent-sale '
             f'task deferral(s), '
             f'{recent_sale_result["skip_trace_scheduled_count"]} '
-            f'skip-trace schedule(s)',
+            f'skip-trace schedule(s), '
+            f'{recent_sale_result["affected_lead_count"]} recent-sale lead(s) affected',
             flush=True,
         )
 

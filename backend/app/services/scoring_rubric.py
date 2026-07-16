@@ -400,8 +400,8 @@ def effective_acquisition_date_sql():
             mrs.op('~*')(
                 r'^(January|Jan|February|Feb|March|Mar|April|Apr|May|'
                 r'June|Jun|July|Jul|August|Aug|September|Sep|October|Oct|'
-                r'November|Nov|December|Dec) '
-                r'(0?[1-9]|[12][0-9]|3[01]),? [0-9]{4}$'
+                r'November|Nov|December|Dec)\s+'
+                r'(0?[1-9]|[12][0-9]|3[01]),?\s+[0-9]{4}$'
             ),
             named_date,
         ),

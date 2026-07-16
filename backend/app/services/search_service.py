@@ -276,9 +276,10 @@ def compute_python_relevance_score(
     street = _normalize_search_text(getattr(row, 'property_street', None))
 
     score = 0.0
+    exact_id = lead_id_query(query)
     requested_id = lead_id_search_text(query)
     row_id = str(getattr(row, 'id', ''))
-    if requested_id is not None and requested_id == row_id:
+    if exact_id is not None and exact_id == getattr(row, 'id', None):
         score += WEIGHT_EXACT_LEAD_ID_MATCH
     elif requested_id is not None and requested_id in row_id:
         score += WEIGHT_PARTIAL_LEAD_ID_MATCH
@@ -336,9 +337,13 @@ def compute_python_relevance_score(
 
 def build_match_context(row: Any, q_trimmed: str, q_digits: str) -> dict | None:
     """Determine match context for display (phone/email)."""
+    exact_lead_id = lead_id_query(q_trimmed)
     requested_lead_id = lead_id_search_text(q_trimmed)
     row_id = str(getattr(row, 'id', ''))
-    if requested_lead_id is not None and requested_lead_id in row_id:
+    if (
+        (exact_lead_id is not None and exact_lead_id == getattr(row, 'id', None))
+        or (requested_lead_id is not None and requested_lead_id in row_id)
+    ):
         return {'type': 'lead_id', 'value': row_id}
 
     matched_phone = getattr(row, 'matched_phone', None)
@@ -879,8 +884,11 @@ class SearchService:
                 if primary_first or primary_last
                 else None
             )
+            exact_id = lead_id_query(q_trimmed)
             requested_id = lead_id_search_text(q_trimmed)
-            if requested_id is not None and requested_id in str(lead.id):
+            if exact_id is not None and exact_id == lead.id:
+                matched = True
+            elif requested_id is not None and requested_id in str(lead.id):
                 matched = True
             elif _phone_match(lead, q_digits) or _email_match(lead, f'%{q_trimmed}%'):
                 matched = True

@@ -84,6 +84,14 @@ class TestLeadIdQuery:
             'value': '11181',
         }
 
+    def test_leading_zeroes_still_match_exact_id(self):
+        row = FakeRow(id=1, matched_phone=None, matched_email=None)
+        assert compute_python_relevance_score(row, '001', ['001']) >= 100
+        assert build_match_context(row, '001', '') == {
+            'type': 'lead_id',
+            'value': '1',
+        }
+
 
 class TestPostgresRelevanceSql:
     def test_normalizes_name_case_and_treats_like_wildcards_literally(self):

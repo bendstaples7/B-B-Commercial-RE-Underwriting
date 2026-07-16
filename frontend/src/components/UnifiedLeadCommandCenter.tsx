@@ -1005,6 +1005,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     leadLoading,
     leadDetailError,
     openTasks,
+    fromQueue,
     handleStatusChanged,
   ])
 
