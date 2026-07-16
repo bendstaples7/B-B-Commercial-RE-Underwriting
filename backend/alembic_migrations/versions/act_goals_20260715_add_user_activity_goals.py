@@ -5,7 +5,6 @@ Revises: rs_task_key_20260715
 """
 
 from alembic import op
-import sqlalchemy as sa
 
 
 revision = 'act_goals_20260715'
@@ -15,39 +14,35 @@ depends_on = None
 
 
 def upgrade():
-    op.create_table(
-        'user_activity_goals',
-        sa.Column('id', sa.Integer(), primary_key=True),
-        sa.Column('user_id', sa.String(length=36), nullable=False),
-        sa.Column('period_type', sa.String(length=20), nullable=False),
-        sa.Column('metric', sa.String(length=20), nullable=False),
-        sa.Column('target', sa.Integer(), nullable=False, server_default='0'),
-        sa.Column('updated_at', sa.DateTime(), nullable=False, server_default=sa.text('NOW()')),
-        sa.Column('created_at', sa.DateTime(), nullable=False, server_default=sa.text('NOW()')),
-        sa.CheckConstraint(
-            "period_type IN ('weekly', 'monthly')",
-            name='ck_user_activity_goals_period_type',
-        ),
-        sa.CheckConstraint(
-            "metric IN ('calls', 'mailers', 'emails', 'notes', 'tasks')",
-            name='ck_user_activity_goals_metric',
-        ),
-        sa.CheckConstraint(
-            'target >= 0',
-            name='ck_user_activity_goals_target_nonneg',
-        ),
-        sa.UniqueConstraint(
-            'user_id', 'period_type', 'metric',
-            name='uq_user_activity_goals_user_period_metric',
-        ),
+    op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_activity_goals (
+            id SERIAL PRIMARY KEY,
+            user_id VARCHAR(36) NOT NULL,
+            period_type VARCHAR(20) NOT NULL,
+            metric VARCHAR(20) NOT NULL,
+            target INTEGER NOT NULL DEFAULT 0,
+            updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
+            created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
+            CONSTRAINT ck_user_activity_goals_period_type
+                CHECK (period_type IN ('weekly', 'monthly')),
+            CONSTRAINT ck_user_activity_goals_metric
+                CHECK (metric IN ('calls', 'mailers', 'emails', 'notes', 'tasks')),
+            CONSTRAINT ck_user_activity_goals_target_nonneg
+                CHECK (target >= 0),
+            CONSTRAINT uq_user_activity_goals_user_period_metric
+                UNIQUE (user_id, period_type, metric)
+        )
+        """
     )
-    op.create_index(
-        'ix_user_activity_goals_user_id',
-        'user_activity_goals',
-        ['user_id'],
+    op.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_user_activity_goals_user_id
+        ON user_activity_goals (user_id)
+        """
     )
 
 
 def downgrade():
-    op.drop_index('ix_user_activity_goals_user_id', table_name='user_activity_goals')
-    op.drop_table('user_activity_goals')
+    op.execute("DROP INDEX IF EXISTS ix_user_activity_goals_user_id")
+    op.execute("DROP TABLE IF EXISTS user_activity_goals")

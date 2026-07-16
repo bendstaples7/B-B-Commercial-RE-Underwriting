@@ -1,4 +1,4 @@
-"""Index lead_timeline_entries for activity dashboard actor+time queries.
+"""Timeline actor index + user_activity_goals FK for dashboard.
 
 Revision ID: act_tl_idx_20260715
 Revises: act_goals_20260715
@@ -15,8 +15,10 @@ depends_on = None
 
 def upgrade():
     op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_timeline_actor_occurred "
-        "ON lead_timeline_entries (actor, occurred_at)"
+        """
+        CREATE INDEX IF NOT EXISTS ix_timeline_actor_occurred
+        ON lead_timeline_entries (actor, occurred_at)
+        """
     )
 
 

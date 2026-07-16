@@ -5,6 +5,7 @@ import pytest
 
 from app import db
 from app.models import Lead, LeadTimelineEntry
+from app.models.user import User
 from app.services.activity_dashboard_service import (
     ActivityDashboardService,
     period_bounds,
@@ -14,6 +15,25 @@ from app.services.activity_dashboard_service import (
 
 _AUTH = {'X-User-Id': 'dash-user-1'}
 _OTHER = {'X-User-Id': 'dash-user-2'}
+
+
+def _ensure_user(user_id: str, email_prefix: str = 'dash') -> User:
+    existing = User.query.filter_by(user_id=user_id).first()
+    if existing:
+        return existing
+    email = f'{email_prefix}-{user_id[:8]}@test.com'
+    user = User(
+        user_id=user_id,
+        email=email,
+        email_lower=email.lower(),
+        password_hash='$2b$12$fakehashfakehashfakehashfakehashfakehashfakehash',
+        display_name=email_prefix,
+        is_active=True,
+        password_set=True,
+    )
+    db.session.add(user)
+    db.session.flush()
+    return user
 
 
 def _make_lead(**kwargs):
@@ -59,7 +79,6 @@ def _add_entry(lead_id, event_type, actor, occurred_at, is_deleted=False):
 
 class TestPeriodBounds:
     def test_week_starts_monday_chicago_as_utc(self):
-        # Wednesday 2026-07-15 Chicago → week Mon Jul 13 00:00 CDT = 05:00 UTC
         now = datetime(2026, 7, 15, 14, 30, 0)
         start, end, period_type = period_bounds('week', now=now)
         assert period_type == 'weekly'
@@ -77,6 +96,12 @@ class TestPeriodBounds:
         with pytest.raises(ValueError):
             period_bounds('year')
 
+    def test_previous_week_uses_chicago_local_midnights(self):
+        start, end, period_type = period_bounds('week', now=datetime(2026, 7, 15, 12, 0, 0))
+        prev_start, prev_end = previous_period_bounds(start, end, period_type)
+        assert prev_start == datetime(2026, 7, 6, 5, 0, 0)
+        assert prev_end == start
+
     def test_previous_month_bounds(self):
         start, end, period_type = period_bounds('month', now=datetime(2026, 7, 15, 12, 0, 0))
         prev_start, prev_end = previous_period_bounds(start, end, period_type)
@@ -87,10 +112,10 @@ class TestPeriodBounds:
 class TestActivityDashboardService:
     def test_counts_by_actor_and_period(self, app):
         with app.app_context():
+            _ensure_user('dash-user-1')
             lead = _make_lead()
             now = datetime(2026, 7, 15, 12, 0, 0)
-            # Store occurred_at in UTC-naive matching Chicago-week UTC window
-            in_week = datetime(2026, 7, 14, 15, 0, 0)  # after Jul 13 05:00 UTC
+            in_week = datetime(2026, 7, 14, 15, 0, 0)
             before_week = datetime(2026, 7, 12, 12, 0, 0)
 
             _add_entry(lead.id, 'call_logged', 'dash-user-1', in_week)
@@ -123,6 +148,7 @@ class TestActivityDashboardService:
 
     def test_progress_with_goals_uncapped(self, app):
         with app.app_context():
+            _ensure_user('dash-user-1')
             lead = _make_lead(property_street='101 Dashboard St')
             now = datetime(2026, 7, 15, 12, 0, 0)
             in_week = datetime(2026, 7, 14, 15, 0, 0)
@@ -141,12 +167,12 @@ class TestActivityDashboardService:
 
     def test_wow_uses_same_elapsed_window(self, app):
         with app.app_context():
+            _ensure_user('dash-user-1')
             lead = _make_lead(property_street='103 Dashboard St')
-            # Wed Jul 15 noon Chicago → comparable through Wed; prior week Mon–Wed only
             now = datetime(2026, 7, 15, 12, 0, 0)
             this_week = datetime(2026, 7, 14, 15, 0, 0)
             last_week_in_window = datetime(2026, 7, 7, 15, 0, 0)
-            last_week_after_window = datetime(2026, 7, 10, 15, 0, 0)  # Fri — outside comparable
+            last_week_after_window = datetime(2026, 7, 10, 15, 0, 0)
             _add_entry(lead.id, 'call_logged', 'dash-user-1', this_week)
             _add_entry(lead.id, 'call_logged', 'dash-user-1', this_week + timedelta(hours=1))
             _add_entry(lead.id, 'call_logged', 'dash-user-1', this_week + timedelta(hours=2))
@@ -159,15 +185,32 @@ class TestActivityDashboardService:
 
             assert result['trend_label'] == 'WoW'
             assert result['counts']['calls'] == 3
-            # Prior full week has 2, but comparable window should only include 1
             assert result['previous_counts']['calls'] == 1
             assert result['trends']['calls']['delta'] == 2
             assert result['trends']['calls']['pct_change'] == 200.0
             assert len(result['series']['daily']) == 7
             assert len(result['series']['previous_daily']) == 7
 
+    def test_daily_buckets_use_chicago_calendar_day(self, app):
+        """Late Chicago evening UTC should land on the Chicago calendar date."""
+        with app.app_context():
+            _ensure_user('dash-user-1')
+            lead = _make_lead(property_street='105 Dashboard St')
+            now = datetime(2026, 7, 15, 12, 0, 0)
+            # 2026-07-14 23:30 CDT = 2026-07-15 04:30 UTC
+            late_chicago_evening = datetime(2026, 7, 15, 4, 30, 0)
+            _add_entry(lead.id, 'call_logged', 'dash-user-1', late_chicago_evening)
+            db.session.commit()
+
+            svc = ActivityDashboardService()
+            result = svc.get_activity('dash-user-1', period='week', now=now)
+            by_date = {row['date']: row['calls'] for row in result['series']['daily']}
+            assert by_date.get('2026-07-14') == 1
+            assert by_date.get('2026-07-15', 0) == 0
+
     def test_mom_previous_month(self, app):
         with app.app_context():
+            _ensure_user('dash-user-1')
             lead = _make_lead(property_street='104 Dashboard St')
             now = datetime(2026, 7, 15, 12, 0, 0)
             _add_entry(lead.id, 'mail_sent', 'dash-user-1', datetime(2026, 7, 2, 12, 0, 0))
@@ -179,24 +222,34 @@ class TestActivityDashboardService:
             result = svc.get_activity('dash-user-1', period='month', now=now)
             assert result['trend_label'] == 'MoM'
             assert result['counts']['mailers'] == 1
-            # June 10 is within comparable MTD window (through Jul 15); June 20 is not
             assert result['previous_counts']['mailers'] == 1
             assert result['trends']['mailers']['delta'] == 0
             assert result['previous_range']['start'].startswith('2026-06-01')
 
     def test_upsert_goals_rejects_unknown_metric(self, app):
         with app.app_context():
+            _ensure_user('dash-user-1')
             svc = ActivityDashboardService()
             with pytest.raises(ValueError, match='Unknown metrics'):
                 svc.upsert_goals('dash-user-1', 'weekly', {'sms': 10})
 
     def test_upsert_goals_rejects_bool_and_float(self, app):
         with app.app_context():
+            _ensure_user('dash-user-1')
             svc = ActivityDashboardService()
             with pytest.raises(ValueError, match='must be an integer'):
                 svc.upsert_goals('dash-user-1', 'weekly', {'calls': True})
             with pytest.raises(ValueError, match='must be an integer'):
                 svc.upsert_goals('dash-user-1', 'weekly', {'calls': 12.9})
+
+    def test_clear_goal_with_null(self, app):
+        with app.app_context():
+            _ensure_user('dash-user-1')
+            svc = ActivityDashboardService()
+            svc.upsert_goals('dash-user-1', 'weekly', {'calls': 10})
+            assert svc.get_goals('dash-user-1', 'weekly')['calls'] == 10
+            svc.upsert_goals('dash-user-1', 'weekly', {'calls': None})
+            assert svc.get_goals('dash-user-1', 'weekly')['calls'] is None
 
 
 class TestDashboardApi:
@@ -211,16 +264,22 @@ class TestDashboardApi:
         )
         assert resp.status_code == 401
 
-    def test_get_invalid_period(self, client):
+    def test_get_invalid_period(self, client, app):
+        with app.app_context():
+            _ensure_user('dash-user-1')
+            db.session.commit()
         resp = client.get('/api/dashboard/activity?period=year', headers=_AUTH)
         assert resp.status_code == 400
 
     def test_get_and_put_goals(self, client, app):
         with app.app_context():
+            _ensure_user('dash-user-1')
+            _ensure_user('dash-user-2', email_prefix='other')
             lead = _make_lead(property_street='102 Dashboard St')
+            # Within the current Chicago week for the live API clock
             _add_entry(
                 lead.id, 'call_logged', 'dash-user-1',
-                datetime.utcnow() - timedelta(hours=1),
+                datetime.utcnow() - timedelta(hours=2),
             )
             db.session.commit()
 
@@ -250,7 +309,11 @@ class TestDashboardApi:
         assert other.get_json()['goals']['calls'] is None
         assert other.get_json()['counts']['calls'] == 0
 
-    def test_put_goals_validation(self, client):
+    def test_put_goals_validation(self, client, app):
+        with app.app_context():
+            _ensure_user('dash-user-1')
+            db.session.commit()
+
         resp = client.put(
             '/api/dashboard/goals',
             headers=_AUTH,
@@ -269,5 +332,19 @@ class TestDashboardApi:
             '/api/dashboard/goals',
             headers=_AUTH,
             json={'period_type': 'weekly', 'targets': {}},
+        )
+        assert resp.status_code == 400
+
+        resp = client.put(
+            '/api/dashboard/goals',
+            headers=_AUTH,
+            json=['not', 'an', 'object'],
+        )
+        assert resp.status_code == 400
+
+        resp = client.put(
+            '/api/dashboard/goals',
+            headers=_AUTH,
+            json={'period_type': 12, 'targets': {'calls': 1}},
         )
         assert resp.status_code == 400

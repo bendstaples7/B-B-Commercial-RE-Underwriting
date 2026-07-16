@@ -49,6 +49,24 @@ export function formatDateOnly(value: string | null | undefined): string {
   )
 }
 
+/**
+ * Format an inclusive calendar range from UTC ISO bound timestamps using
+ * their date prefixes (avoids local-TZ day shift at midnight UTC).
+ */
+export function formatUtcDateRange(startIso: string, endIsoExclusive: string): string {
+  const start = new Date(`${startIso.slice(0, 10)}T12:00:00`)
+  const endDate = new Date(`${endIsoExclusive.slice(0, 10)}T12:00:00`)
+  endDate.setDate(endDate.getDate() - 1)
+  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' }
+  return `${start.toLocaleDateString(undefined, opts)} – ${endDate.toLocaleDateString(undefined, opts)}`
+}
+
+/** Short weekday + month/day label for a calendar date (YYYY-MM-DD). */
+export function formatShortCalendarDay(isoDate: string): string {
+  const d = new Date(`${isoDate.slice(0, 10)}T12:00:00`)
+  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'numeric', day: 'numeric' })
+}
+
 export function formatPhoneConfidence(
   confidenceScore?: number | null,
   notes?: string | null,

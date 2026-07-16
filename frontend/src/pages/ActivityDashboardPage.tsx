@@ -48,24 +48,10 @@ import {
   type ActivityPeriodType,
   type ActivityTrend,
 } from '@/services/dashboardApi'
+import { formatShortCalendarDay, formatUtcDateRange } from '@/utils/helpers'
 
 function periodToType(period: ActivityPeriod): ActivityPeriodType {
   return period === 'week' ? 'weekly' : 'monthly'
-}
-
-/** Format a UTC ISO timestamp using its calendar date (avoid local TZ day shift). */
-function formatRange(startIso: string, endIso: string): string {
-  const start = new Date(`${startIso.slice(0, 10)}T12:00:00`)
-  const endExclusive = endIso.slice(0, 10)
-  const endDate = new Date(`${endExclusive}T12:00:00`)
-  endDate.setDate(endDate.getDate() - 1)
-  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' }
-  return `${start.toLocaleDateString(undefined, opts)} – ${endDate.toLocaleDateString(undefined, opts)}`
-}
-
-function formatShortDay(isoDate: string): string {
-  const d = new Date(`${isoDate}T12:00:00`)
-  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'numeric', day: 'numeric' })
 }
 
 function formatTrendChip(trend: ActivityTrend, label: string): {
@@ -210,36 +196,29 @@ function ComparisonChart({ data, trendLabel }: { data: ActivityDashboardResponse
   )
 }
 
-function DailyTrendChart({
-  data,
-  period,
-}: {
-  data: ActivityDashboardResponse
-  period: ActivityPeriod
-}) {
+function DailyTrendChart({ data }: { data: ActivityDashboardResponse }) {
   const theme = useTheme()
+  const chartPeriod = data.period
   const chartData = useMemo(() => {
-    if (period === 'week') {
-      // Align by weekday index (both series are length 7 Mon–Sun).
+    if (chartPeriod === 'week') {
       return data.series.daily.map((day, index) => ({
-        label: formatShortDay(day.date),
+        label: formatShortCalendarDay(day.date),
         Current: day.total,
         Previous: data.series.previous_daily[index]?.total ?? null,
       }))
     }
-    // Align by day-of-month; missing previous days stay null (not zero).
     const prevByDom = new Map(
       data.series.previous_daily.map((d) => [Number(d.date.slice(8, 10)), d.total]),
     )
     return data.series.daily.map((day) => {
       const dom = Number(day.date.slice(8, 10))
       return {
-        label: formatShortDay(day.date),
+        label: formatShortCalendarDay(day.date),
         Current: day.total,
         Previous: prevByDom.has(dom) ? prevByDom.get(dom)! : null,
       }
     })
-  }, [data.series.daily, data.series.previous_daily, period])
+  }, [data.series.daily, data.series.previous_daily, chartPeriod])
 
   return (
     <Paper elevation={1} sx={{ p: 2.5, height: 340 }}>
@@ -299,7 +278,7 @@ export function ActivityDashboardPage() {
   })
 
   const saveMutation = useMutation({
-    mutationFn: (targets: Partial<Record<ActivityMetric, number>>) =>
+    mutationFn: (targets: Partial<Record<ActivityMetric, number | null>>) =>
       dashboardService.upsertGoals(periodToType(period), targets),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['dashboard', 'activity'] })
@@ -309,7 +288,7 @@ export function ActivityDashboardPage() {
   })
 
   const startEditing = () => {
-    if (!data) return
+    if (!data || isFetching) return
     const next = { ...drafts }
     for (const key of METRIC_KEYS) {
       next[key] = data.goals[key] != null ? String(data.goals[key]) : ''
@@ -326,19 +305,31 @@ export function ActivityDashboardPage() {
   }
 
   const saveGoals = () => {
-    const targets: Partial<Record<ActivityMetric, number>> = {}
+    if (!data || isFetching) return
+    const targets: Partial<Record<ActivityMetric, number | null>> = {}
+    let hasChange = false
     for (const key of METRIC_KEYS) {
       const raw = drafts[key].trim()
-      if (raw === '') continue
+      const previous = data.goals[key]
+      if (raw === '') {
+        if (previous != null) {
+          targets[key] = null
+          hasChange = true
+        }
+        continue
+      }
       const value = Number(raw)
       if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value)) {
         setGoalError('Goals must be non-negative whole numbers.')
         return
       }
-      targets[key] = value
+      if (previous !== value) {
+        targets[key] = value
+        hasChange = true
+      }
     }
-    if (Object.keys(targets).length === 0) {
-      setGoalError('Enter at least one goal to save.')
+    if (!hasChange) {
+      setGoalError('Enter or clear at least one goal to save.')
       return
     }
     setGoalError(null)
@@ -367,8 +358,8 @@ export function ActivityDashboardPage() {
           </Typography>
           <Typography variant="body2" color="text.secondary">
             Your completed outreach
-            {data ? ` · ${formatRange(data.range.start, data.range.end)}` : ''}
-            {data ? ` · vs ${formatRange(data.previous_range.start, data.previous_range.end)}` : ''}
+            {data ? ` · ${formatUtcDateRange(data.range.start, data.range.end)}` : ''}
+            {data ? ` · vs ${formatUtcDateRange(data.previous_range.start, data.previous_range.end)}` : ''}
             {isFetching && !isLoading ? ' · updating…' : ''}
           </Typography>
         </Box>
@@ -410,7 +401,7 @@ export function ActivityDashboardPage() {
               size="small"
               startIcon={<EditIcon />}
               onClick={startEditing}
-              disabled={!data}
+              disabled={!data || isFetching}
             >
               Edit goals
             </Button>
@@ -470,7 +461,7 @@ export function ActivityDashboardPage() {
               <ComparisonChart data={data} trendLabel={data.trend_label} />
             </Grid>
             <Grid item xs={12} md={6}>
-              <DailyTrendChart data={data} period={period} />
+              <DailyTrendChart data={data} />
             </Grid>
           </Grid>
         </Stack>

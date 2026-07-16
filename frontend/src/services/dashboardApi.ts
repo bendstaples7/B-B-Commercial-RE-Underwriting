@@ -77,7 +77,7 @@ export const dashboardService = {
 
   upsertGoals(
     periodType: ActivityPeriodType,
-    targets: Partial<Record<ActivityMetric, number>>,
+    targets: Partial<Record<ActivityMetric, number | null>>,
   ): Promise<UpsertGoalsResponse> {
     return api
       .put<UpsertGoalsResponse>('/dashboard/goals', {

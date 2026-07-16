@@ -63,6 +63,7 @@ class LeadTimelineEntry(db.Model):
 
     __table_args__ = (
         db.Index('ix_timeline_lead_occurred', 'lead_id', 'occurred_at'),
+        db.Index('ix_timeline_actor_occurred', 'actor', 'occurred_at'),
     )
 
     def __repr__(self):

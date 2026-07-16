@@ -10,7 +10,12 @@ from sqlalchemy.exc import IntegrityError
 
 from app import db
 from app.models.lead_timeline_entry import LeadTimelineEntry
-from app.models.user_activity_goal import METRICS, PERIOD_TYPES, UserActivityGoal
+from app.models.user_activity_goal import (
+    MAX_TARGET,
+    METRICS,
+    PERIOD_TYPES,
+    UserActivityGoal,
+)
 
 # Timeline event_type → dashboard metric key
 EVENT_TO_METRIC = {
@@ -41,6 +46,21 @@ def _to_utc_naive(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt
     return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _ensure_utc_aware(dt: datetime) -> datetime:
+    """Treat naive datetimes as UTC (DB storage convention)."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _as_chicago(dt: datetime) -> datetime:
+    return _ensure_utc_aware(dt).astimezone(BUSINESS_TZ)
+
+
+def _local_day_key(dt: datetime) -> str:
+    return _as_chicago(dt).date().isoformat()
 
 
 def period_bounds(period: str, now: datetime | None = None) -> tuple[datetime, datetime, str]:
@@ -81,12 +101,17 @@ def previous_period_bounds(
     end: datetime,
     period_type: str,
 ) -> tuple[datetime, datetime]:
-    """Return the immediately prior week or calendar month (UTC-naive)."""
-    if period_type == 'weekly':
-        return start - timedelta(days=7), end - timedelta(days=7)
+    """Return the immediately prior week or calendar month (UTC-naive).
 
-    # Previous calendar month in business TZ, derived from current UTC bounds.
-    start_local = start.replace(tzinfo=timezone.utc).astimezone(BUSINESS_TZ)
+    Derives prior boundaries in America/Chicago so DST transitions do not shift
+    the window by a UTC hour.
+    """
+    start_local = _as_chicago(start)
+    if period_type == 'weekly':
+        prev_start_local = start_local - timedelta(days=7)
+        prev_end_local = start_local
+        return _to_utc_naive(prev_start_local), _to_utc_naive(prev_end_local)
+
     prev_month_last = start_local - timedelta(days=1)
     prev_start_local = prev_month_last.replace(
         day=1, hour=0, minute=0, second=0, microsecond=0,
@@ -111,16 +136,14 @@ def _trend_for(current: int, previous: int) -> dict[str, Any]:
     }
 
 
-def _day_key(dt: datetime) -> str:
-    return dt.date().isoformat()
-
-
 def _parse_strict_int(raw: Any, metric: str) -> int:
     """Accept only JSON integers (not bool/float/str)."""
     if isinstance(raw, bool) or not isinstance(raw, int):
         raise ValueError(f'target for {metric} must be an integer')
     if raw < 0:
         raise ValueError(f'target for {metric} must be >= 0')
+    if raw > MAX_TARGET:
+        raise ValueError(f'target for {metric} must be <= {MAX_TARGET}')
     return raw
 
 
@@ -168,7 +191,6 @@ class ActivityDashboardService:
             if goal is None or goal <= 0:
                 progress[metric] = None
             else:
-                # Uncapped so overachievement is visible to the UI.
                 progress[metric] = round((count / goal) * 100, 1)
             trends[metric] = _trend_for(count, previous_counts[metric])
 
@@ -258,19 +280,25 @@ class ActivityDashboardService:
         start: datetime,
         end: datetime,
     ) -> list[dict[str, Any]]:
-        """Return one bucket per calendar day in [start, end) (UTC date keys)."""
+        """Return one bucket per Chicago calendar day in [start, end)."""
+        start_local = _as_chicago(start).replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        )
+        end_local = _as_chicago(end).replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        )
+
         buckets: dict[str, dict[str, int]] = {}
-        day = start
-        while day < end:
-            key = _day_key(day)
-            buckets[key] = _empty_counts()
+        day = start_local
+        while day < end_local:
+            buckets[day.date().isoformat()] = _empty_counts()
             day += timedelta(days=1)
 
         for occurred_at, event_type in events:
             metric = EVENT_TO_METRIC.get(event_type)
             if not metric:
                 continue
-            key = _day_key(occurred_at)
+            key = _local_day_key(occurred_at)
             if key in buckets:
                 buckets[key][metric] += 1
 
@@ -305,7 +333,10 @@ class ActivityDashboardService:
         if not user_id or user_id == 'anonymous':
             raise ValueError('Authentication required')
 
-        normalized = PERIOD_ALIASES.get((period_type or '').strip().lower())
+        if not isinstance(period_type, str):
+            raise ValueError("period_type must be 'weekly' or 'monthly'")
+
+        normalized = PERIOD_ALIASES.get(period_type.strip().lower())
         if normalized is None:
             raise ValueError("period_type must be 'weekly' or 'monthly'")
 
@@ -316,16 +347,22 @@ class ActivityDashboardService:
         if unknown:
             raise ValueError(f'Unknown metrics: {sorted(unknown)}')
 
-        parsed = {
-            metric: _parse_strict_int(raw, metric)
-            for metric, raw in targets.items()
-        }
-
-        for metric, value in parsed.items():
-            self._upsert_one_goal(user_id, normalized, metric, value)
+        for metric, raw in targets.items():
+            if raw is None:
+                self._clear_one_goal(user_id, normalized, metric)
+            else:
+                value = _parse_strict_int(raw, metric)
+                self._upsert_one_goal(user_id, normalized, metric, value)
 
         db.session.commit()
         return self.get_goals(user_id, normalized)
+
+    def _clear_one_goal(self, user_id: str, period_type: str, metric: str) -> None:
+        UserActivityGoal.query.filter_by(
+            user_id=user_id,
+            period_type=period_type,
+            metric=metric,
+        ).delete()
 
     def _upsert_one_goal(
         self,

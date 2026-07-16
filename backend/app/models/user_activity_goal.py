@@ -6,6 +6,8 @@ from app import db
 
 PERIOD_TYPES = ('weekly', 'monthly')
 METRICS = ('calls', 'mailers', 'emails', 'notes', 'tasks')
+# PostgreSQL INTEGER max (signed 32-bit)
+MAX_TARGET = 2_147_483_647
 
 
 def _utcnow_naive() -> datetime:
@@ -18,7 +20,12 @@ class UserActivityGoal(db.Model):
     __tablename__ = 'user_activity_goals'
 
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.String(36), nullable=False, index=True)
+    user_id = db.Column(
+        db.String(36),
+        db.ForeignKey('users.user_id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
     period_type = db.Column(db.String(20), nullable=False)
     metric = db.Column(db.String(20), nullable=False)
     target = db.Column(db.Integer, nullable=False, default=0)
