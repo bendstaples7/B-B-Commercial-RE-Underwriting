@@ -135,7 +135,7 @@ describe('QuickAddPage deprioritized matches', () => {
     )
 
     await waitFor(() => {
-      expect(openLetterService.enqueue).toHaveBeenCalledWith([42])
+      expect(openLetterService.enqueue).toHaveBeenCalledWith([42], 'quick-add')
     })
     expect(order).toEqual(['reactivate', 'mail'])
     expect(await screen.findByText(/added to the mail queue/i)).toBeInTheDocument()

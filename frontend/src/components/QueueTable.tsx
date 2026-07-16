@@ -36,6 +36,7 @@ import { LeadStatusChip } from './LeadStatusChip'
 import { OutreachContactCallout } from './OutreachContactCallout'
 import { outreachDisplayLabel } from '@/constants/scoringRecommendedActions'
 import { MailEnqueueResultDialog } from './MailEnqueueResultDialog'
+import { formatEnqueueSummary } from '@/utils/formatEnqueueSummary'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -44,7 +45,7 @@ import { MailEnqueueResultDialog } from './MailEnqueueResultDialog'
 export interface RowAction {
   label: string
   icon: React.ReactNode
-  onClick: (row: QueueRow) => Promise<void>
+  onClick: (row: QueueRow) => Promise<BulkActionResult | void>
   testId?: string
 }
 
@@ -189,6 +190,9 @@ export function QueueTable({
 
   const handleRowAction = async (action: RowAction, row: QueueRow) => {
     if (disabled) return
+    setBulkMessage(null)
+    setBulkMailResult(null)
+    setMailResultOpen(false)
     // Mark row as pending
     setRowStates((prev) => ({
       ...prev,
@@ -196,7 +200,12 @@ export function QueueTable({
     }))
 
     try {
-      await action.onClick(row)
+      const result = await action.onClick(row)
+      if (result?.mail_enqueue) {
+        setBulkMailResult(result.mail_enqueue)
+        setBulkMessage(formatEnqueueSummary(result.mail_enqueue))
+        setMailResultOpen(true)
+      }
       // Clear pending state on success
       setRowStates((prev) => {
         const next = { ...prev }
@@ -228,11 +237,7 @@ export function QueueTable({
       const result = await action.onClick(selectedIds)
       if (result.mail_enqueue) {
         setBulkMailResult(result.mail_enqueue)
-        setBulkMessage(
-          `${result.mail_enqueue.added} staged · ${
-            result.mail_enqueue.invalid + result.mail_enqueue.skipped
-          } need attention`,
-        )
+        setBulkMessage(formatEnqueueSummary(result.mail_enqueue))
       } else if (result.failures > 0) {
         setBulkMessage(
           result.message ?? `${result.successes} succeeded, ${result.failures} failed`,

@@ -29,6 +29,7 @@ from app.services.mail_task_lifecycle_service import (
     complete_tasks_superseded_by_mail,
     count_superseded_tasks_for_lead,
     find_mail_awaiting_lead_ids,
+    reconcile_recent_sale_mail_tasks,
     refresh_leads_after_mail_task_changes,
 )
 
@@ -53,9 +54,22 @@ def main() -> None:
 
     app = create_app()
     with app.app_context():
-        lead_ids = find_mail_awaiting_lead_ids()
-        if args.limit is not None:
-            lead_ids = lead_ids[: args.limit]
+        recent_sale_result = reconcile_recent_sale_mail_tasks(
+            actor='backfill_mail_queued_task_cleanup',
+            limit=args.limit,
+            commit=args.apply,
+        )
+        recent_processed_ids = set(recent_sale_result['processed_lead_ids'])
+        remaining_limit = (
+            None
+            if args.limit is None
+            else max(args.limit - len(recent_processed_ids), 0)
+        )
+        lead_ids = find_mail_awaiting_lead_ids(
+            limit=remaining_limit,
+            exclude_lead_ids=recent_processed_ids,
+            require_superseded_tasks=True,
+        )
 
         logger.info('Found %s mail-awaiting lead(s)', len(lead_ids))
         print(f'Found {len(lead_ids)} mail-awaiting lead(s)', flush=True)
@@ -97,6 +111,9 @@ def main() -> None:
             sync_pending_hubspot_completions(hubspot_sync_ids)
             refresh_leads_after_mail_task_changes(affected_leads)
 
+        if not args.apply:
+            db.session.rollback()
+
         mode = 'Applied' if args.apply else 'Dry-run'
         logger.info(
             '%s complete: %s lead(s) affected, %s task completion(s)',
@@ -106,7 +123,12 @@ def main() -> None:
         )
         print(
             f'{mode} complete: {len(affected_leads)} lead(s) affected, '
-            f'{total_completed} task completion(s)',
+            f'{total_completed} task completion(s), '
+            f'{recent_sale_result["rescheduled_task_count"]} recent-sale '
+            f'task deferral(s), '
+            f'{recent_sale_result["skip_trace_scheduled_count"]} '
+            f'skip-trace schedule(s), '
+            f'{recent_sale_result["affected_lead_count"]} recent-sale lead(s) affected',
             flush=True,
         )
 

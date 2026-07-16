@@ -7,6 +7,14 @@ export interface EnqueueCounts {
   results?: EnqueueLeadResult[]
 }
 
+export type EnqueueSeverity = 'success' | 'warning' | 'error'
+
+export function enqueueResultSeverity(result: EnqueueCounts): EnqueueSeverity {
+  const failures = result.skipped + result.invalid
+  if (failures === 0) return 'success'
+  return result.added > 0 ? 'warning' : 'error'
+}
+
 const STATUS_LABELS: Record<string, string> = {
   already_queued: 'already in batch',
   invalid_address: 'invalid address',

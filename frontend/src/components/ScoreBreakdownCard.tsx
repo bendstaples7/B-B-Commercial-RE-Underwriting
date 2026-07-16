@@ -58,6 +58,7 @@ const ACTION_COLORS: Record<
   valuation_needed: 'warning',
   needs_manual_review: 'warning',
   nurture: 'default',
+  hold: 'default',
   suppress: 'error',
   do_not_contact: 'error',
   follow_up_now: 'info',

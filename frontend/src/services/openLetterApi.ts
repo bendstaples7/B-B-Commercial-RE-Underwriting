@@ -54,6 +54,11 @@ export interface EnqueueLeadResult {
   owner_name?: string | null
   property_street?: string | null
   sale_date?: string | null
+  rescheduled_to?: string | null
+  rescheduled_task_count?: number
+  skip_trace_scheduled?: boolean
+  skip_trace_task_id?: number | null
+  removed_queue_item_count?: number
 }
 
 export type EnqueueResult = Omit<MailQueueSummary, 'items'> & {

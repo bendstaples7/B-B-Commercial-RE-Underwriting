@@ -65,6 +65,13 @@ RECOMMENDED_ACTION_METADATA = {
         'label': 'Call Ready',
         'explanation': 'This lead is ready for a phone outreach attempt.',
     },
+    'hold': {
+        'label': 'Skip Trace Hold',
+        'explanation': (
+            'A recent sale is still inside the two-year hold. Keep this lead in '
+            'Skip Trace until its scheduled Awaiting Skip Trace date.'
+        ),
+    },
     'valuation_needed': {
         'label': 'Valuation Needed',
         'explanation': 'Run a valuation or property analysis before outreach.',

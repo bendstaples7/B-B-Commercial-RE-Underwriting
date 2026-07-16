@@ -27,6 +27,11 @@ import CloseIcon from '@mui/icons-material/Close'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { buildingOwnershipService, leadTaskService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
+import {
+  enqueueResultSeverity,
+  formatEnqueueSummary,
+  type EnqueueSeverity,
+} from '@/utils/formatEnqueueSummary'
 import type {
   BuildingOwnershipAnalyzeResult,
   BuildingOwnershipDetail,
@@ -133,6 +138,7 @@ export function BuildingOwnershipReviewDrawer({
   const [analyzeSnapshot, setAnalyzeSnapshot] = useState<BuildingOwnershipAnalyzeResult | null>(null)
   const [mailMessage, setMailMessage] = useState<string | null>(null)
   const [mailPending, setMailPending] = useState(false)
+  const [mailSeverity, setMailSeverity] = useState<EnqueueSeverity>('success')
 
   const hasAnalysis = Boolean(
     commandCenterData.condo_analysis_id || analyzeSnapshot?.condo_analysis_id,
@@ -275,6 +281,7 @@ export function BuildingOwnershipReviewDrawer({
   const effectiveSale = overrideMutation.isSuccess ? overrideBuildingSale : displaySale
   const showMailCta =
     hasMailingAddress &&
+    commandCenterData.mail_eligible !== false &&
     (effectiveRisk === 'likely_not_condo' || effectiveSale === 'yes') &&
     commandCenterData.mail_queue_status !== 'queued'
 
@@ -285,16 +292,16 @@ export function BuildingOwnershipReviewDrawer({
       if (onAddToMailQueue) {
         await onAddToMailQueue()
       } else {
-        const result = await openLetterService.enqueue([leadId])
-        setMailMessage(
-          `Added to mail queue (${result.queued_count}/${result.batch_minimum})`,
-        )
+        const result = await openLetterService.enqueue([leadId], 'building-ownership-review')
+        setMailMessage(formatEnqueueSummary(result))
+        setMailSeverity(enqueueResultSeverity(result))
         await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
         await queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
         await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
       }
     } catch (err) {
       setMailMessage(err instanceof Error ? err.message : 'Failed to add to mail queue')
+      setMailSeverity('error')
     } finally {
       setMailPending(false)
     }
@@ -555,7 +562,7 @@ export function BuildingOwnershipReviewDrawer({
               {mailPending ? <CircularProgress size={22} color="inherit" /> : 'Add to Mail Queue'}
             </Button>
             {mailMessage && (
-              <Alert severity="info" sx={{ mt: 1 }}>
+              <Alert severity={mailSeverity} sx={{ mt: 1 }}>
                 {mailMessage}
               </Alert>
             )}

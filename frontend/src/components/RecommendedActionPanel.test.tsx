@@ -15,6 +15,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { RecommendedActionPanel } from './RecommendedActionPanel'
 import type { RecommendedActionMeta, LeadTask } from '@/types'
+import { formatDateOnly } from '@/utils/helpers'
 
 // ---------------------------------------------------------------------------
 // Test data helpers
@@ -613,11 +614,11 @@ describe('RecommendedActionPanel', () => {
       expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeInTheDocument()
     })
 
-    it('shows Add to Mail Queue in Quick actions for nurture when isMailable', () => {
+    it('shows Add to Mail Queue in Quick actions for a hold when mail remains eligible', () => {
       render(
         <RecommendedActionPanel
-          recommendedAction={makeRA('nurture')}
-          leadStatus="mailing_no_contact_made"
+          recommendedAction={makeRA('hold')}
+          leadStatus="skip_trace"
           openTasks={[]}
           isMailable
           onAction={vi.fn()}
@@ -681,6 +682,33 @@ describe('RecommendedActionPanel', () => {
 
       expect(screen.queryByTestId('ra-universal-btn-add_to_mail_batch')).not.toBeInTheDocument()
       expect(screen.queryByTestId('ra-action-btn-add_to_mail_batch')).not.toBeInTheDocument()
+    })
+
+    it('explains a recent-sale hold and hides Add to Mail Queue', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('hold')}
+          leadStatus="skip_trace"
+          openTasks={[]}
+          isMailable
+          mailEligible={false}
+          mailIneligibleReason="recently_sold"
+          mailEligibleDate="2027-03-31"
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent(
+        'Held in Skip Trace',
+      )
+      expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent(
+        'move to Awaiting Skip Trace',
+      )
+      expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent(
+        formatDateOnly('2027-03-31'),
+      )
+      expect(screen.getByRole('button', { name: 'Adjust for Recent Sale' })).toBeInTheDocument()
+      expect(screen.queryByTestId('ra-universal-btn-add_to_mail_batch')).not.toBeInTheDocument()
     })
 
     it('hides Add to Mail Queue for stale mail_ready when owner mail is invalid', () => {

@@ -199,14 +199,14 @@ def test_priority_3_mailable_no_contact_returns_mail_ready():
     assert result == 'mail_ready'
 
 
-def test_priority_3_mailable_recently_sold_returns_nurture():
+def test_priority_3_mailable_recently_sold_returns_hold():
     from datetime import date, timedelta
     lead = make_lead(has_phone=False, has_email=False)
     lead.acquisition_date = date.today() - timedelta(days=30)
     with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
          patch('app.services.lead_scoring_engine.is_mailable_lead', return_value=True):
         result = ActionEngineService.compute_recommended_action(lead)
-    assert result == 'nurture'
+    assert result == 'hold'
 
 
 def test_priority_3_fires_before_priority_4():
@@ -399,7 +399,7 @@ def test_recently_sold_hold_is_preserved_when_owner_mail_is_incomplete():
     lead.mailing_city = None
     with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
         result = ActionEngineService.compute_recommended_action(lead)
-    assert result == 'nurture'
+    assert result == 'hold'
 
 
 def test_priority_7_high_score_with_open_tasks_skips_ready_for_outreach():

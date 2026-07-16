@@ -30,7 +30,10 @@ from app.services.recommended_action_metadata import (
 )
 from app.services.outreach_method_service import resolve_outreach_contact
 from app.services.lead_scoring_engine import LeadScoringEngine
-from app.services.mail_task_lifecycle_service import resolve_mail_queue_status
+from app.services.mail_task_lifecycle_service import (
+    recent_sale_mail_eligible_date,
+    resolve_mail_queue_status,
+)
 from app.services.open_letter_contact_mapper import is_owner_mailable_lead
 from app.services.scoring_rubric import display_most_recent_sale, resolve_sale_date_meta
 
@@ -600,6 +603,9 @@ def get_command_center(lead_id: int):
             'resolved_person_role': person_role,
         })
 
+    is_mailable = is_owner_mailable_lead(lead)
+    mail_eligible_date = recent_sale_mail_eligible_date(lead)
+
     return jsonify({
         'id': lead.id,
         'owner_first_name': lead.owner_first_name,
@@ -668,7 +674,22 @@ def get_command_center(lead_id: int):
         'most_recent_sale': lead.most_recent_sale,
         'most_recent_sale_display': display_most_recent_sale(lead),
         'sale_date_meta': resolve_sale_date_meta(lead),
-        'is_mailable': is_owner_mailable_lead(lead),
+        'is_mailable': is_mailable,
+        'mail_eligible': is_mailable and mail_eligible_date is None,
+        'mail_ineligible_reason': (
+            'recently_sold'
+            if mail_eligible_date is not None
+            else (
+                'invalid_owner_address'
+                if not is_mailable
+                else None
+            )
+        ),
+        'mail_eligible_date': (
+            mail_eligible_date.isoformat()
+            if mail_eligible_date is not None
+            else None
+        ),
         'address_2': lead.address_2,
         'returned_addresses': lead.returned_addresses,
         # Research / workflow tracking
@@ -918,6 +939,46 @@ def move_to_skip_trace(lead_id: int):
             lead_id,
             exc,
         )
+
+    return jsonify(result), 200
+
+
+@command_center_bp.route('/<int:lead_id>/adjust-for-recent-sale', methods=['POST'])
+@handle_errors
+@require_auth
+def adjust_for_recent_sale(lead_id: int):
+    """Move the selected/earliest task to two years after the latest sale."""
+    lead, denied = _load_authorized_lead(lead_id)
+    if denied is not None:
+        return denied
+
+    raw_body = request.get_data(cache=True)
+    if not raw_body:
+        data = {}
+    else:
+        data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Request body must be a JSON object'}), 400
+    task_id = data.get('task_id')
+    if task_id is not None:
+        try:
+            task_id = int(task_id)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'task_id must be an integer'}), 400
+
+    from app.services.mail_task_lifecycle_service import (
+        adjust_earliest_task_for_recent_sale,
+    )
+
+    try:
+        result = adjust_earliest_task_for_recent_sale(
+            lead,
+            actor=getattr(g, 'user_id', 'anonymous'),
+            task_id=task_id,
+            hubspot_task_id=data.get('hubspot_task_id'),
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 409
 
     return jsonify(result), 200
 

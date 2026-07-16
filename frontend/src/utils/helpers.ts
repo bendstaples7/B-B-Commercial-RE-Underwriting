@@ -23,6 +23,32 @@ export function formatDate(value: string | null): string {
   })
 }
 
+/** Format an ISO date-only value in local time without a UTC day shift. */
+export function formatDateOnly(value: string | null | undefined): string {
+  if (!value) return '—'
+  const isoDate = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  const date = isoDate
+    ? new Date(Date.UTC(
+      Number(isoDate[1]),
+      Number(isoDate[2]) - 1,
+      Number(isoDate[3]),
+    ))
+    : new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  if (
+    isoDate
+    && (
+      date.getUTCFullYear() !== Number(isoDate[1])
+      || date.getUTCMonth() !== Number(isoDate[2]) - 1
+      || date.getUTCDate() !== Number(isoDate[3])
+    )
+  ) return '—'
+  return date.toLocaleDateString(
+    undefined,
+    isoDate ? { timeZone: 'UTC' } : undefined,
+  )
+}
+
 export function formatPhoneConfidence(
   confidenceScore?: number | null,
   notes?: string | null,

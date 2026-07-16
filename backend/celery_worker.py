@@ -1276,6 +1276,17 @@ def mark_tasks_overdue() -> int:
         db.session.commit()
         if updated:
             logger.info("mark_tasks_overdue: marked %d task(s) as overdue.", updated)
+        from app.services.mail_task_lifecycle_service import (
+            reconcile_recent_sale_mail_tasks,
+        )
+        reconciliation = reconcile_recent_sale_mail_tasks(
+            actor='tasks.mark_overdue',
+        )
+        if reconciliation['rescheduled_task_count']:
+            logger.info(
+                "mark_tasks_overdue: deferred %d recent-sale mail task(s).",
+                reconciliation['rescheduled_task_count'],
+            )
         return updated
 
 

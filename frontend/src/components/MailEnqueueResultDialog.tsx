@@ -12,9 +12,16 @@ import {
   Typography,
 } from '@mui/material'
 import { Link as RouterLink } from 'react-router-dom'
-import type { BulkActionResult } from '@/types'
+import type { EnqueueLeadResult, EnqueueResult } from '@/services/openLetterApi'
+import { formatDateOnly } from '@/utils/helpers'
 
-type MailResult = NonNullable<BulkActionResult['mail_enqueue']>
+export type MailEnqueueDisplayResult = Pick<
+  EnqueueResult,
+  'attempt_id' | 'added' | 'skipped' | 'invalid'
+> & {
+  results: EnqueueLeadResult[]
+}
+type MailResult = MailEnqueueDisplayResult
 type Outcome = MailResult['results'][number]
 
 interface MailEnqueueResultDialogProps {
@@ -37,7 +44,15 @@ const STATUS_LABELS: Record<string, string> = {
 function outcomeDetail(outcome: Outcome): string | null {
   if (outcome.error) return outcome.error
   if (outcome.status === 'recently_sold' && outcome.sale_date) {
-    return `Sale date: ${outcome.sale_date}`
+    const saleDate = formatDateOnly(outcome.sale_date)
+    if (outcome.rescheduled_to) {
+      const eligibleDate = formatDateOnly(outcome.rescheduled_to)
+      const queueRemoval = outcome.removed_queue_item_count
+        ? ' Removed from the existing mail queue.'
+        : ''
+      return `Recent sale detected ${saleDate}.${queueRemoval} Held in Skip Trace; moves to Awaiting Skip Trace on ${eligibleDate}. Direct mail remains deferred until then.`
+    }
+    return `Recent sale detected ${saleDate}.`
   }
   return null
 }

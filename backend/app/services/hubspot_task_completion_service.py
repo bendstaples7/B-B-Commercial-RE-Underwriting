@@ -323,21 +323,48 @@ def sync_hubspot_task_properties(
         return False
 
 
-def mirror_crm_task_from_lead_task(lead_task) -> None:
+def mirror_crm_task_from_lead_task(
+    lead_task,
+    hubspot_task_ids_to_sync: set[str] | None = None,
+) -> bool:
     """Keep parallel CRM ``tasks`` row in sync when present (best-effort)."""
-    hs_id = getattr(lead_task, 'hubspot_task_id', None)
-    if not hs_id:
-        return
-    crm_task = Task.query.filter_by(hubspot_task_id=str(hs_id)).first()
+    crm_task = None
+    mirror_task_id = getattr(lead_task, 'mirror_task_id', None)
+    if mirror_task_id is not None:
+        candidate = db.session.get(Task, mirror_task_id)
+        if candidate is not None and _crm_task_linked_to_lead(
+            candidate,
+            lead_task.lead_id,
+        ):
+            crm_task = candidate
     if crm_task is None:
-        return
+        hs_id = getattr(lead_task, 'hubspot_task_id', None)
+        if not hs_id:
+            return False
+        for candidate in Task.query.filter_by(hubspot_task_id=str(hs_id)).all():
+            if _crm_task_linked_to_lead(candidate, lead_task.lead_id):
+                crm_task = candidate
+                break
+    if crm_task is None:
+        return False
+    expected_due = (
+        None
+        if lead_task.due_date is None
+        else datetime.combine(lead_task.due_date, time(13, 0, 0))
+    )
+    changed = (
+        crm_task.title != lead_task.title
+        or crm_task.due_date != expected_due
+    )
+    if not changed:
+        return False
     crm_task.title = lead_task.title
-    if lead_task.due_date is None:
-        crm_task.due_date = None
-    else:
-        crm_task.due_date = datetime.combine(lead_task.due_date, time(13, 0, 0))
+    crm_task.due_date = expected_due
     crm_task.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     db.session.add(crm_task)
+    if hubspot_task_ids_to_sync is not None and crm_task.hubspot_task_id:
+        hubspot_task_ids_to_sync.add(str(crm_task.hubspot_task_id))
+    return True
 
 
 def sync_pending_hubspot_completions(hubspot_task_ids: list[str]) -> None:

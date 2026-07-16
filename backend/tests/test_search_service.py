@@ -5,6 +5,8 @@ from app.services.search_service import (
     build_match_context,
     build_search_document_from_row,
     compute_python_relevance_score,
+    lead_id_query,
+    lead_id_search_text,
     phone_query_digits,
     tokenize_query,
 )
@@ -39,6 +41,56 @@ class TestPhoneQueryDetection:
 
     def test_formatted_phone_query_keeps_digits(self):
         assert phone_query_digits('(312) 543-2084') == '3125432084'
+
+
+class TestLeadIdQuery:
+    def test_parses_exact_numeric_query(self):
+        assert lead_id_query(' 11181 ') == 11181
+
+    def test_rejects_mixed_query(self):
+        assert lead_id_query('lead 11181') is None
+
+    def test_rejects_non_decimal_unicode_digits(self):
+        assert lead_id_query('²') is None
+        assert lead_id_search_text('²²') is None
+
+    def test_partial_numeric_query_is_available_for_incremental_search(self):
+        assert lead_id_search_text('181') == '181'
+        assert lead_id_search_text('1') is None
+
+    def test_exact_id_gets_match_context_and_highest_boost(self):
+        row = FakeRow(
+            id=11181,
+            owner_first_name='Owner',
+            owner_last_name='Name',
+            property_street='1 Main St',
+            lead_score=0,
+            is_warm=False,
+            lead_status='skip_trace',
+            matched_phone=None,
+            matched_email=None,
+        )
+        score = compute_python_relevance_score(row, '11181', ['11181'])
+        assert score >= 100
+        assert build_match_context(row, '11181', '11181') == {
+            'type': 'lead_id',
+            'value': '11181',
+        }
+
+    def test_partial_id_gets_lead_id_match_context(self):
+        row = FakeRow(id=11181, matched_phone=None, matched_email=None)
+        assert build_match_context(row, '181', '') == {
+            'type': 'lead_id',
+            'value': '11181',
+        }
+
+    def test_leading_zeroes_still_match_exact_id(self):
+        row = FakeRow(id=1, matched_phone=None, matched_email=None)
+        assert compute_python_relevance_score(row, '001', ['001']) >= 100
+        assert build_match_context(row, '001', '') == {
+            'type': 'lead_id',
+            'value': '1',
+        }
 
 
 class TestPostgresRelevanceSql:

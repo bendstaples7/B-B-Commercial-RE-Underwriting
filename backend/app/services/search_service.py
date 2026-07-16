@@ -35,6 +35,8 @@ WEIGHT_CONTACTED_STATUS = 0.5
 WEIGHT_RECENT_HUBSPOT = 0.2
 WEIGHT_LEAD_SCORE_FACTOR = 0.3
 WEIGHT_EXACT_FIELD_MATCH = 12.0
+WEIGHT_EXACT_LEAD_ID_MATCH = 100.0
+WEIGHT_PARTIAL_LEAD_ID_MATCH = 50.0
 WEIGHT_PREFIX_FIELD_MATCH = 9.0
 WEIGHT_CONTAINS_FIELD_MATCH = 7.0
 TOKEN_SIMILARITY_THRESHOLD = 0.25
@@ -131,6 +133,18 @@ def phone_query_digits(query: str) -> str:
         return ''
     digits = _digits_only(query)
     return digits if len(digits) >= 4 else ''
+
+
+def lead_id_query(query: str) -> int | None:
+    """Return an exact lead ID for an all-digit query."""
+    normalized = (query or '').strip()
+    return int(normalized) if normalized.isdecimal() else None
+
+
+def lead_id_search_text(query: str) -> str | None:
+    """Return numeric text suitable for partial lead-ID matching."""
+    normalized = (query or '').strip()
+    return normalized if len(normalized) >= 2 and normalized.isdecimal() else None
 
 
 def _token_matches_text(token: str, text_value: str, fuzzy: bool = False) -> bool:
@@ -262,6 +276,13 @@ def compute_python_relevance_score(
     street = _normalize_search_text(getattr(row, 'property_street', None))
 
     score = 0.0
+    exact_id = lead_id_query(query)
+    requested_id = lead_id_search_text(query)
+    row_id = str(getattr(row, 'id', ''))
+    if exact_id is not None and exact_id == getattr(row, 'id', None):
+        score += WEIGHT_EXACT_LEAD_ID_MATCH
+    elif requested_id is not None and requested_id in row_id:
+        score += WEIGHT_PARTIAL_LEAD_ID_MATCH
     if full_name == q_lower or street == q_lower:
         score += WEIGHT_EXACT_FIELD_MATCH
     elif full_name.startswith(q_lower) or street.startswith(q_lower):
@@ -316,6 +337,15 @@ def compute_python_relevance_score(
 
 def build_match_context(row: Any, q_trimmed: str, q_digits: str) -> dict | None:
     """Determine match context for display (phone/email)."""
+    exact_lead_id = lead_id_query(q_trimmed)
+    requested_lead_id = lead_id_search_text(q_trimmed)
+    row_id = str(getattr(row, 'id', ''))
+    if (
+        (exact_lead_id is not None and exact_lead_id == getattr(row, 'id', None))
+        or (requested_lead_id is not None and requested_lead_id in row_id)
+    ):
+        return {'type': 'lead_id', 'value': row_id}
+
     matched_phone = getattr(row, 'matched_phone', None)
     if matched_phone:
         return {'type': 'phone', 'value': matched_phone}
@@ -613,6 +643,15 @@ class SearchService:
         return f"""
         (
             CASE
+                WHEN :lead_id IS NOT NULL AND l.id = :lead_id
+                    THEN {WEIGHT_EXACT_LEAD_ID_MATCH}
+                WHEN :lead_id_pattern IS NOT NULL
+                     AND CAST(l.id AS TEXT) LIKE :lead_id_pattern
+                    THEN {WEIGHT_PARTIAL_LEAD_ID_MATCH}
+                ELSE 0
+            END
+            +
+            CASE
                 WHEN {normalized_street} = :q_normalized
                      OR {normalized_name} = :q_normalized
                     THEN {WEIGHT_EXACT_FIELD_MATCH}
@@ -664,6 +703,12 @@ class SearchService:
             'is_admin': is_admin,
             'q': q_trimmed,
             'q_normalized': _normalize_search_text(q_trimmed),
+            'lead_id': lead_id_query(q_trimmed),
+            'lead_id_pattern': (
+                f"%{lead_id_search_text(q_trimmed)}%"
+                if lead_id_search_text(q_trimmed) is not None
+                else None
+            ),
             'pattern': f'%{q_trimmed}%',
             'phone_digits_pattern': f'%{q_digits}%' if len(q_digits) >= 4 else None,
             'token_threshold': TOKEN_SIMILARITY_THRESHOLD,
@@ -750,6 +795,10 @@ class SearchService:
                 (l.owner_user_id = :user_id OR :is_admin = TRUE)
                 AND (l.owner_user_id IS NOT NULL OR :is_admin = TRUE)
                 AND (
+                    (:lead_id IS NOT NULL AND l.id = :lead_id)
+                    OR (:lead_id_pattern IS NOT NULL
+                        AND CAST(l.id AS TEXT) LIKE :lead_id_pattern)
+                    OR
                     ({token_pred})
                     OR {doc} % lower(:q)
                     OR {phone_email}
@@ -835,7 +884,13 @@ class SearchService:
                 if primary_first or primary_last
                 else None
             )
-            if _phone_match(lead, q_digits) or _email_match(lead, f'%{q_trimmed}%'):
+            exact_id = lead_id_query(q_trimmed)
+            requested_id = lead_id_search_text(q_trimmed)
+            if exact_id is not None and exact_id == lead.id:
+                matched = True
+            elif requested_id is not None and requested_id in str(lead.id):
+                matched = True
+            elif _phone_match(lead, q_digits) or _email_match(lead, f'%{q_trimmed}%'):
                 matched = True
             else:
                 matched = all(

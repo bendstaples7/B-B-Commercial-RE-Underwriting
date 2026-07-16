@@ -71,6 +71,15 @@ import {
   ccSectionTitleSx,
 } from '@/components/lead-detail/commandCenterChrome'
 import { SuppressLeadDialog } from '@/components/SuppressLeadDialog'
+import {
+  MailEnqueueResultDialog,
+  type MailEnqueueDisplayResult,
+} from '@/components/MailEnqueueResultDialog'
+import {
+  enqueueResultSeverity,
+  formatEnqueueSummary,
+} from '@/utils/formatEnqueueSummary'
+import { formatDateOnly } from '@/utils/helpers'
 
 export { ALL_LEAD_STATUSES } from '@/constants/leadStatuses'
 export { tabParamToIndex } from '@/components/lead-detail/LeadDetailTabPanel'
@@ -756,12 +765,16 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const [activitySnackbar, setActivitySnackbar] = useState<{
     open: boolean
     message: string
+    severity?: 'success' | 'warning' | 'error'
     linkTo?: string
     linkLabel?: string
   }>({
     open: false,
     message: '',
   })
+  const [mailEnqueueResult, setMailEnqueueResult] =
+    useState<MailEnqueueDisplayResult | null>(null)
+  const [mailEnqueueResultOpen, setMailEnqueueResultOpen] = useState(false)
   const [suppressDialogOpen, setSuppressDialogOpen] = useState(false)
   const [dncDialogOpen, setDncDialogOpen] = useState(false)
   const [dncPending, setDncPending] = useState(false)
@@ -860,12 +873,23 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         window.setTimeout(() => tasksPanelRef.current?.openCreateForm(), 300)
         return
       case 'add_to_mail_batch': {
-        const result = await openLetterService.enqueue([leadId])
+        const result = await openLetterService.enqueue([leadId], fromQueue?.key ?? 'command-center')
+        const displayResult = {
+          attempt_id: result.attempt_id,
+          added: result.added,
+          skipped: result.skipped,
+          invalid: result.invalid,
+          results: result.results ?? [],
+        }
+        setMailEnqueueResult(displayResult)
+        setMailEnqueueResultOpen(true)
         setActivitySnackbar({
           open: true,
-          message: `Added to mail queue (${result.queued_count}/${result.batch_minimum})`,
-          linkTo: '/queues/ready-to-mail',
-          linkLabel: 'View batch',
+          message: formatEnqueueSummary(result),
+          severity: enqueueResultSeverity(result),
+          ...(result.added > 0
+            ? { linkTo: '/queues/ready-to-mail', linkLabel: 'View batch' }
+            : {}),
         })
         await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
         await queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
@@ -928,6 +952,23 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         await handleStatusChanged()
         return
       }
+      case 'adjust_for_recent_sale': {
+        const currentTask = openTasks[0]
+        const result = await leadService.adjustForRecentSale(
+          leadId,
+          currentTask?.id == null ? undefined : Number(currentTask.id),
+          currentTask?.hubspot_task_id,
+        )
+        setActivitySnackbar({
+          open: true,
+          message: result.task_created
+            ? `Task created for ${formatDateOnly(result.due_date)}`
+            : `Task moved to ${formatDateOnly(result.due_date)}`,
+        })
+        await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+        await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+        return
+      }
       case 'add_contact_info':
         navigate(`${location.pathname}?tab=contacts`, { replace: true })
         window.setTimeout(() => {
@@ -964,6 +1005,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     leadLoading,
     leadDetailError,
     openTasks,
+    fromQueue,
     handleStatusChanged,
   ])
 
@@ -1085,6 +1127,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               openTasks={openTasks}
               mailQueueStatus={commandCenterData!.mail_queue_status ?? null}
               isMailable={commandCenterData!.is_mailable ?? false}
+              mailEligible={commandCenterData!.mail_eligible}
+              mailIneligibleReason={commandCenterData!.mail_ineligible_reason}
+              mailEligibleDate={commandCenterData!.mail_eligible_date}
               showOutreachContact={placement === 'recommended_action'}
               embedded
               onAction={handleRaAction}
@@ -1230,7 +1275,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         data-testid="activity-success-snackbar"
       >
         <Alert
-          severity="success"
+          severity={activitySnackbar.severity ?? 'success'}
           onClose={() => setActivitySnackbar((s) => ({ ...s, open: false }))}
           data-testid="activity-success-alert"
           action={
@@ -1249,6 +1294,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           {activitySnackbar.message}
         </Alert>
       </Snackbar>
+      <MailEnqueueResultDialog
+        open={mailEnqueueResultOpen}
+        onClose={() => setMailEnqueueResultOpen(false)}
+        result={mailEnqueueResult}
+      />
     </Box>
   )
 }

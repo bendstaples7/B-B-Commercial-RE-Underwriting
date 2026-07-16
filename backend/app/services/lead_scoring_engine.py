@@ -295,6 +295,8 @@ def _maybe_promote_skip_trace_to_mailing(lead: Lead) -> str | None:
         return None
     if lead.lead_status not in ('skip_trace', 'awaiting_skip_trace'):
         return None
+    if rubric.is_recently_sold(lead):
+        return None
     if bool(getattr(lead, 'needs_skip_trace', False)):
         return None
     if not _has_mailing_address(lead):
@@ -543,6 +545,20 @@ class LeadScoringEngine:
         if getattr(lead, "do_not_contact", False) is True:
             return 'suppress', 'do_not_contact_flag', {'do_not_contact': True}
 
+        if rubric.is_recently_sold(lead):
+            sale = rubric.effective_acquisition_date(lead)
+            return 'hold', 'recent_sale_hold', {
+                'lead_status': lead.lead_status,
+                'requires_skip_trace': False,
+                'most_recent_sale': getattr(lead, 'most_recent_sale', None),
+                'skip_trace_due_date': (
+                    sale + timedelta(days=rubric.RECENT_SALE_SUPPRESSION_DAYS)
+                ).isoformat() if sale is not None else None,
+                'days_since_sale': (
+                    (date.today() - sale).days if sale is not None else None
+                ),
+            }
+
         if lead.lead_status in ('skip_trace', 'awaiting_skip_trace'):
             # Residential leads with a mailing address fall through to score/mail
             # rules; commercial and address-less skip-trace still need contact work.
@@ -558,17 +574,6 @@ class LeadScoringEngine:
                 not _is_commercial_lead(lead) and _has_mailing_address(lead)
             )
             if is_mailable_lead(lead) or residential_with_mail:
-                if rubric.is_recently_sold(lead):
-                    sale = rubric.effective_acquisition_date(lead)
-                    days_since = (date.today() - sale).days if sale else None
-                    return 'nurture', 'recently_sold', {
-                        'has_phone': False,
-                        'has_email': False,
-                        'is_mailable': True,
-                        'has_mailing_address': True,
-                        'most_recent_sale': getattr(lead, 'most_recent_sale', None),
-                        'days_since_sale': days_since,
-                    }
                 lead_id_early = getattr(lead, 'id', None)
                 if isinstance(lead_id_early, int) and _mail_work_in_flight(lead_id_early):
                     return 'nurture', 'mail_work_in_flight', {
@@ -639,13 +644,6 @@ class LeadScoringEngine:
             return 'nurture', 'negative_motivation', {'motivation_score': motivation_score}
 
         if score_tier == "A" and data_quality_score >= 70:
-            if rubric.is_recently_sold(lead):
-                sale = rubric.effective_acquisition_date(lead)
-                days_since = (date.today() - sale).days if sale else None
-                return 'nurture', 'recently_sold', {
-                    'most_recent_sale': getattr(lead, 'most_recent_sale', None),
-                    'days_since_sale': days_since,
-                }
             blocked = _cold_mail_ready_outcome(lead)
             if blocked is not None:
                 return blocked
@@ -653,13 +651,6 @@ class LeadScoringEngine:
                 'score_tier': score_tier, 'data_quality_score': data_quality_score,
             }
         if score_tier == "B" and data_quality_score >= 70:
-            if rubric.is_recently_sold(lead):
-                sale = rubric.effective_acquisition_date(lead)
-                days_since = (date.today() - sale).days if sale else None
-                return 'nurture', 'recently_sold', {
-                    'most_recent_sale': getattr(lead, 'most_recent_sale', None),
-                    'days_since_sale': days_since,
-                }
             if motivation_score >= 15:
                 return 'review_now', 'high_motivation_tier_b', {
                     'score_tier': score_tier,
@@ -1288,6 +1279,8 @@ class LeadScoringEngine:
             return recommended_action, None
 
         if recommended_action == 'mail_ready':
+            if rubric.is_recently_sold(lead):
+                return 'hold', None
             return recommended_action, 'direct_mail'
         if recommended_action == 'call_ready':
             return recommended_action, 'phone'
@@ -1317,6 +1310,8 @@ class LeadScoringEngine:
             method = 'direct_mail'
         elif refined == 'call_ready':
             method = 'phone'
+        if method == 'direct_mail' and rubric.is_recently_sold(lead):
+            return 'hold', None
         return refined, method
 
     @staticmethod
@@ -1437,7 +1432,7 @@ RESIDENTIAL_MAX_POINTS = rubric.RESIDENTIAL_MAX_POINTS
 COMMERCIAL_MAX_POINTS = rubric.COMMERCIAL_MAX_POINTS
 ALLOWED_ACTIONS = {
     "review_now", "enrich_data", "mail_ready", "call_ready",
-    "valuation_needed", "suppress", "nurture", "needs_manual_review",
+    "valuation_needed", "suppress", "nurture", "hold", "needs_manual_review",
     "follow_up_now", "ready_for_outreach", "add_contact_info", "create_task",
     "resolve_match", "analyze_property", "do_not_contact",
 }
