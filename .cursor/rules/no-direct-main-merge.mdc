@@ -15,12 +15,7 @@ alwaysApply: true
 
 ## When planning a new feature
 
-Choose the branch per the global **branch-lifecycle** rule, not "always branch":
-
-- If the previous branch is **already merged into `main`** → create a new `feat/<topic>` branch off latest `main` as step 0.
-- If the existing branch is **uncommitted or not yet merged into `main`** → continue on that existing branch; do **not** cut a new branch off `main` and do **not** stash WIP onto a fresh branch.
-
-Never plan work that commits directly on `main`. When unsure which case applies, ask before branching.
+Choose the branch per `.cursor/rules/branch-lifecycle.mdc` (merged → new `feat/*` off `main`; otherwise continue the current branch). Never plan work that commits directly on `main`. When unsure which case applies, ask before branching.
 
 ## Required workflow
 

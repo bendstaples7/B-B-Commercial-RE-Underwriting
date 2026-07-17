@@ -338,6 +338,9 @@ class HubSpotActivityConverterService:
             changed = True
 
         self._upsert_lead_tasks_for_task(task)
+        if changed and old_status != 'completed' and new_status == 'completed':
+            # Write timelines before commit so lead_id-only legacy links persist.
+            self._write_inbound_completed_timelines_for_unprotected_leads(task)
         db.session.commit()
 
         if changed:
@@ -348,8 +351,6 @@ class HubSpotActivityConverterService:
                 old_status,
                 new_status,
             )
-            if old_status != 'completed' and new_status == 'completed':
-                self._write_inbound_completed_timelines_for_unprotected_leads(task)
             self._recompute_action_for_task(task)
 
         return changed

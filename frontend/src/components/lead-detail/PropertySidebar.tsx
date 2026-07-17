@@ -311,7 +311,10 @@ export function PropertySidebar({
     setSaleVerifyMessage(null)
   }, [commandCenterData.id])
 
-  const pollQueuedSaleVerification = async (leadId: number) => {
+  const pollQueuedSaleVerification = async (
+    leadId: number,
+    previousCheckedAt: string | null | undefined,
+  ) => {
     const delaysMs = [2000, 3000, 5000, 8000, 13000]
     for (const delayMs of delaysMs) {
       await new Promise((resolve) => {
@@ -319,7 +322,9 @@ export function PropertySidebar({
       })
       try {
         const fresh = await commandCenterService.getCommandCenter(leadId)
-        if (fresh.sale_date_meta?.last_checked_at) {
+        const checkedAt = fresh.sale_date_meta?.last_checked_at
+        // Wait for a new check stamp — retries keep the prior failed timestamp.
+        if (checkedAt && checkedAt !== previousCheckedAt) {
           queryClient.setQueryData(['commandCenter', leadId], fresh)
           return
         }
@@ -333,6 +338,7 @@ export function PropertySidebar({
   const handleVerifySaleDate = async () => {
     setSaleVerifyPending(true)
     setSaleVerifyMessage(null)
+    const previousCheckedAt = commandCenterData.sale_date_meta?.last_checked_at
     try {
       const result = await commandCenterService.verifySaleDate(commandCenterData.id)
       if (result.message) {
@@ -346,7 +352,7 @@ export function PropertySidebar({
         )
       } else if (result.queued) {
         setSaleVerifyMessage('Verification queued.')
-        void pollQueuedSaleVerification(commandCenterData.id)
+        void pollQueuedSaleVerification(commandCenterData.id, previousCheckedAt)
       } else {
         setSaleVerifyMessage('Verification checked.')
       }

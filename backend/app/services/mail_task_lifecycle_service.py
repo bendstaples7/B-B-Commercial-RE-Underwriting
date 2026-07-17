@@ -596,8 +596,91 @@ def count_superseded_tasks_for_lead(lead_id: int) -> int:
     return count
 
 
+def _orphan_superseded_crm_tasks(lead_id: int) -> list[Task]:
+    """CRM mirrors still open without a corresponding canonical LeadTask.
+
+    Batches association and LeadTask lookups so mail-awaiting scans do not
+    issue two queries per candidate task.
+    """
+    candidates = _open_hubspot_tasks_for_lead(lead_id) + _open_mirrored_tasks_for_lead(lead_id)
+    seen: set[int] = set()
+    tasks: list[Task] = []
+    for task in candidates:
+        if task.id in seen:
+            continue
+        seen.add(task.id)
+        tasks.append(task)
+    if not tasks:
+        return []
+
+    task_ids = [task.id for task in tasks]
+    hs_ids = [str(task.hubspot_task_id) for task in tasks if task.hubspot_task_id]
+
+    canonical_filters = [LeadTask.mirror_task_id.in_(task_ids)]
+    if hs_ids:
+        canonical_filters.append(LeadTask.hubspot_task_id.in_(hs_ids))
+    canonical_rows = LeadTask.query.filter(
+        LeadTask.lead_id == lead_id,
+        or_(*canonical_filters),
+    ).all()
+    canonical_mirror_ids = {
+        row.mirror_task_id for row in canonical_rows if row.mirror_task_id is not None
+    }
+    canonical_hs_ids = {
+        str(row.hubspot_task_id) for row in canonical_rows if row.hubspot_task_id
+    }
+
+    assoc_rows = TaskAssociation.query.filter(
+        TaskAssociation.task_id.in_(task_ids),
+        TaskAssociation.target_type == 'lead',
+    ).all()
+    linked_leads_by_task: dict[int, set[int]] = {task_id: set() for task_id in task_ids}
+    for row in assoc_rows:
+        linked_leads_by_task[int(row.task_id)].add(int(row.target_id))
+    for task in tasks:
+        if task.lead_id is not None:
+            linked_leads_by_task[task.id].add(int(task.lead_id))
+
+    all_linked_lead_ids: set[int] = set()
+    for lead_ids in linked_leads_by_task.values():
+        all_linked_lead_ids.update(lead_ids)
+
+    protected_hs_ids: set[str] = set()
+    protected_mirror_ids: set[int] = set()
+    if all_linked_lead_ids:
+        open_filters = [LeadTask.mirror_task_id.in_(task_ids)]
+        if hs_ids:
+            open_filters.append(LeadTask.hubspot_task_id.in_(hs_ids))
+        for row in LeadTask.query.filter(
+            LeadTask.lead_id.in_(all_linked_lead_ids),
+            LeadTask.status == 'open',
+            or_(*open_filters),
+        ).all():
+            if row.hubspot_task_id:
+                protected_hs_ids.add(str(row.hubspot_task_id))
+            if row.mirror_task_id is not None:
+                protected_mirror_ids.add(row.mirror_task_id)
+
+    result: list[Task] = []
+    for task in tasks:
+        hs_id = str(task.hubspot_task_id) if task.hubspot_task_id else None
+        if task.id in canonical_mirror_ids or (hs_id and hs_id in canonical_hs_ids):
+            continue
+        if (hs_id and hs_id in protected_hs_ids) or task.id in protected_mirror_ids:
+            continue
+        if is_mail_follow_up_task(task):
+            continue
+        if is_superseded_by_mail_task(task.task_type, task.title):
+            result.append(task)
+    return result
+
+
 def _crm_task_has_open_canonical_on_linked_leads(task: Task) -> bool:
-    """True when any linked lead still has an open canonical LeadTask for this mirror."""
+    """True when any linked lead still has an open canonical LeadTask for this mirror.
+
+    Prefer ``_orphan_superseded_crm_tasks`` for batch paths; this remains for
+    single-task checks.
+    """
     from app.models import LeadTask
 
     lead_ids: set[int] = set()
@@ -619,36 +702,6 @@ def _crm_task_has_open_canonical_on_linked_leads(task: Task) -> bool:
     else:
         query = query.filter(LeadTask.mirror_task_id == task.id)
     return query.first() is not None
-
-
-def _orphan_superseded_crm_tasks(lead_id: int) -> list[Task]:
-    """CRM mirrors still open without a corresponding canonical LeadTask."""
-    candidates = _open_hubspot_tasks_for_lead(lead_id) + _open_mirrored_tasks_for_lead(lead_id)
-    seen: set[int] = set()
-    result: list[Task] = []
-    for task in candidates:
-        if task.id in seen:
-            continue
-        seen.add(task.id)
-        canonical = LeadTask.query.filter(
-            LeadTask.lead_id == lead_id,
-            or_(
-                LeadTask.mirror_task_id == task.id,
-                and_(
-                    task.hubspot_task_id is not None,
-                    LeadTask.hubspot_task_id == str(task.hubspot_task_id),
-                ),
-            ),
-        ).first()
-        if canonical is not None:
-            continue
-        if _crm_task_has_open_canonical_on_linked_leads(task):
-            continue
-        if is_mail_follow_up_task(task):
-            continue
-        if is_superseded_by_mail_task(task.task_type, task.title):
-            result.append(task)
-    return result
 
 
 def complete_tasks_superseded_by_mail(

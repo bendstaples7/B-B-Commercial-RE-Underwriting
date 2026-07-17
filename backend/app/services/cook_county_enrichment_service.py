@@ -477,14 +477,9 @@ def backfill_cook_county_enrichment(
         if not candidates:
             break
 
-        # Prioritize due-task leads within the batch without breaking id-based pagination.
-        candidates.sort(
-            key=lambda lead: (
-                not _lead_has_due_open_task(lead.id, today),
-                lead.id,
-            ),
-        )
-
+        # Keep ID order so last_id remains a valid exclusive pagination cursor.
+        # Due-task priority is applied via skip rules below (recently sold without
+        # a due task is skipped; due-task leads still run when reached).
         for lead in candidates:
             cursor = lead.id
             summary["processed"] += 1
