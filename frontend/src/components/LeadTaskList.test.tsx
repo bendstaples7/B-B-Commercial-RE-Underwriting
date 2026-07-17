@@ -13,6 +13,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, within } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import { LeadTaskList } from './LeadTaskList'
 import type { LeadTask, CRMRecommendedAction } from '@/types'
 
@@ -24,6 +25,9 @@ vi.mock('@/services/api', () => ({
   leadTaskService: {
     createTask: vi.fn(),
     updateTask: vi.fn(),
+  },
+  callLogService: {
+    markHubSpotTaskDone: vi.fn(),
   },
 }))
 
@@ -926,20 +930,46 @@ describe('LeadTaskList', () => {
   })
 
   describe('mail batch awaiting state', () => {
-    it('shows paused note when awaiting mail batch with no open tasks', () => {
+    it('shows staged confirmation and link when mail queue status is queued', () => {
       render(
-        <LeadTaskList
-          leadId={1}
-          tasks={[]}
-          mailQueueStatus="queued"
-          onTaskCreated={vi.fn()}
-        />,
+        <MemoryRouter>
+          <LeadTaskList
+            leadId={1}
+            tasks={[]}
+            mailQueueStatus="queued"
+            onTaskCreated={vi.fn()}
+          />
+        </MemoryRouter>,
       )
 
-      expect(screen.getByTestId('awaiting-mail-batch-chip')).toBeInTheDocument()
+      expect(screen.getByTestId('awaiting-mail-batch-chip')).toHaveTextContent(
+        'Staged for next mail batch',
+      )
+      expect(screen.getByTestId('view-staged-batch-link')).toHaveAttribute(
+        'href',
+        '/queues/ready-to-mail',
+      )
       expect(screen.getByTestId('mail-awaiting-paused-note')).toHaveTextContent(
         'Outreach paused — waiting for batch send.',
       )
+    })
+
+    it('shows awaiting chip without staged link for legacy up_next_to_mail only', () => {
+      render(
+        <MemoryRouter>
+          <LeadTaskList
+            leadId={1}
+            tasks={[]}
+            upNextToMail
+            onTaskCreated={vi.fn()}
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.getByTestId('awaiting-mail-batch-chip')).toHaveTextContent(
+        'Awaiting mail batch',
+      )
+      expect(screen.queryByTestId('view-staged-batch-link')).not.toBeInTheDocument()
     })
   })
 
@@ -1155,6 +1185,93 @@ describe('LeadTaskList', () => {
       )
 
       expect(screen.getByTestId('edit-task-btn-5')).toBeInTheDocument()
+    })
+  })
+
+  describe('last-task follow-up prompt', () => {
+    it('completes immediately when other open tasks remain', async () => {
+      const onTaskCompleted = vi.fn()
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[
+            makeTask(1, { title: 'Keep me' }),
+            makeTask(2, { title: 'Complete me' }),
+          ]}
+          onTaskCreated={vi.fn()}
+          onTaskCompleted={onTaskCompleted}
+        />,
+      )
+
+      await user.click(screen.getByTestId('complete-task-btn-2'))
+      expect(onTaskCompleted).toHaveBeenCalledWith(2)
+      expect(screen.queryByTestId('last-task-follow-up-prompt-2')).not.toBeInTheDocument()
+    })
+
+    it('opens follow-up decision when completing the last open task', async () => {
+      const onTaskCompleted = vi.fn()
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[makeTask(7, { title: 'Only task' })]}
+          onTaskCreated={vi.fn()}
+          onTaskCompleted={onTaskCompleted}
+        />,
+      )
+
+      await user.click(screen.getByTestId('complete-task-btn-7'))
+      expect(onTaskCompleted).not.toHaveBeenCalled()
+      expect(screen.getByTestId('last-task-follow-up-prompt-7')).toBeInTheDocument()
+      expect(screen.getByText(/This is the last open task/)).toBeInTheDocument()
+    })
+
+    it('leaves without next step completes the task only', async () => {
+      const onTaskCompleted = vi.fn()
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[makeTask(8, { title: 'Only task' })]}
+          onTaskCreated={vi.fn()}
+          onTaskCompleted={onTaskCompleted}
+        />,
+      )
+
+      await user.click(screen.getByTestId('complete-task-btn-8'))
+      await user.click(screen.getByTestId('last-task-leave-as-is-8'))
+      expect(onTaskCompleted).toHaveBeenCalledWith(8)
+      expect(mockCreateTask).not.toHaveBeenCalled()
+    })
+
+    it('creates follow-up then completes the last task', async () => {
+      const onTaskCompleted = vi.fn()
+      const onTaskCreated = vi.fn()
+      mockCreateTask.mockResolvedValue(
+        makeTask(99, { title: 'Follow up', due_date: '2026-07-19' }),
+      )
+
+      render(
+        <LeadTaskList
+          leadId={1}
+          tasks={[makeTask(9, { title: 'Only task' })]}
+          onTaskCreated={onTaskCreated}
+          onTaskCompleted={onTaskCompleted}
+        />,
+      )
+
+      await user.click(screen.getByTestId('complete-task-btn-9'))
+      await user.click(screen.getByTestId('last-task-create-follow-up-9'))
+
+      await waitFor(() => {
+        expect(mockCreateTask).toHaveBeenCalledWith(1, expect.objectContaining({
+          title: 'Follow up',
+          task_type: 'custom',
+          due_date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        }))
+      })
+      await waitFor(() => {
+        expect(onTaskCreated).toHaveBeenCalled()
+        expect(onTaskCompleted).toHaveBeenCalledWith(9)
+      })
     })
   })
 })

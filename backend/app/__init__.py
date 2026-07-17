@@ -751,6 +751,27 @@ def create_app(config_name='development'):
             except Exception as _e:
                 app.logger.warning("Startup: could not auto-configure HubSpot client secret: %s", _e)
 
+            # Seed/repair enrichment DataSource catalog so Cook County backfill
+            # cannot silently skip on an empty catalog (prod incident class).
+            try:
+                from app.services.cook_county_enrichment_service import (
+                    check_enrichment_catalog_health,
+                )
+                catalog = check_enrichment_catalog_health(heal=True)
+                if catalog['ok']:
+                    app.logger.info(
+                        "Startup: enrichment catalog ok (%s/%s sources).",
+                        catalog['present_count'],
+                        catalog['required_count'],
+                    )
+                else:
+                    app.logger.error(
+                        "Startup: enrichment catalog incomplete after heal: missing=%s",
+                        catalog['missing'],
+                    )
+            except Exception as _e:
+                app.logger.warning("Startup: could not seed enrichment catalog: %s", _e)
+
     # ---------------------------------------------------------------------------
     # Startup cleanup — mark any import runs stuck in 'running' as 'failed'.
     # This happens when the server was restarted without a Celery worker running,

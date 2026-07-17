@@ -51,7 +51,8 @@ import {
   prefetchQueueNavigation,
 } from '@/utils/prefetchLeadWorkspace'
 import { ALL_LEAD_STATUSES } from '@/constants/leadStatuses'
-import type { CommandCenterPayload, PropertyDetail, LeadTask, LeadTimelineEntry, PropertyScoreResponse, PropertyScoreRecord, OutreachContact, QueueNavigation } from '@/types'
+import { scoringActionLabel } from '@/constants/scoringRecommendedActions'
+import type { CommandCenterPayload, PropertyDetail, LeadTask, LeadTimelineEntry, PropertyScoreResponse, PropertyScoreRecord, OutreachContact, QueueNavigation, LeadStatus, CRMRecommendedAction } from '@/types'
 import { LeadScoreBadge } from '@/components/LeadScoreBadge'
 import type { ScoreTier } from '@/components/LeadScoreBadge'
 import { LeadStatusSelector } from '@/components/LeadStatusSelector'
@@ -71,10 +72,6 @@ import {
   ccSectionTitleSx,
 } from '@/components/lead-detail/commandCenterChrome'
 import { SuppressLeadDialog } from '@/components/SuppressLeadDialog'
-import {
-  MailEnqueueResultDialog,
-  type MailEnqueueDisplayResult,
-} from '@/components/MailEnqueueResultDialog'
 import {
   enqueueResultSeverity,
   formatEnqueueSummary,
@@ -115,7 +112,14 @@ interface StickyHeaderProps {
   leadId: number
   commandCenterData: CommandCenterPayload
   scoreRecord?: PropertyScoreRecord | null
-  onStatusChanged: () => void
+  onStatusChanged: (
+    nextStatus: LeadStatus,
+    result?: {
+      timeline_entry?: LeadTimelineEntry
+      lead_score?: number | null
+      recommended_action?: string | null
+    },
+  ) => void | Promise<void>
   onViewFullBreakdown?: () => void
   fromQueue?: FromQueueState | null
 }
@@ -447,7 +451,7 @@ interface TasksPanelProps {
   embedded?: boolean
   onTasksChanged: () => void
   /** Called after a task is successfully completed (for queue auto-advance). */
-  onAfterTaskCompleted?: () => void
+  onAfterTaskCompleted?: () => void | Promise<void>
 }
 
 export interface TasksPanelHandle {
@@ -474,11 +478,9 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
   const panelRef = useRef<HTMLDivElement>(null)
   const taskListRef = useRef<LeadTaskListHandle>(null)
   const [tasks, setTasks] = useState<LeadTask[]>(initialTasks)
-  const tasksRef = useRef<LeadTask[]>(initialTasks)
 
   useEffect(() => {
     setTasks(initialTasks)
-    tasksRef.current = initialTasks
   }, [initialTasks])
 
   React.useImperativeHandle(ref, () => ({
@@ -493,16 +495,18 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
     },
   }))
 
-  // Keep ref in sync with state for rollback on failure
-  useEffect(() => {
-    tasksRef.current = tasks
-  }, [tasks])
-
   // LeadTaskList handles creation internally and calls this with the new task.
-  // No optimistic update needed here — the API call already succeeded.
+  // Replace optimistic placeholder (id=0) when present; otherwise append.
   const handleTaskCreated = (task: LeadTask) => {
-    // Replace the optimistic placeholder (id=0) with the real task from the API
-    setTasks(prev => prev.map(t => (t.id === 0 ? task : t)))
+    setTasks((prev) => {
+      if (prev.some((t) => t.id === 0)) {
+        return prev.map((t) => (t.id === 0 ? task : t))
+      }
+      if (prev.some((t) => t.id === task.id)) {
+        return prev.map((t) => (t.id === task.id ? { ...t, ...task } : t))
+      }
+      return [task, ...prev]
+    })
     queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
     onTasksChanged()
   }
@@ -526,28 +530,53 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
   }
 
   const handleTaskCompleted = async (taskId: number | string) => {
-    const snapshot = tasksRef.current
-    // Optimistic remove
-    setTasks(prev => prev.filter(t => t.id !== taskId))
-
     // Only native tasks (numeric IDs) can be completed from the platform
     if (typeof taskId === 'number') {
       try {
         await leadTaskService.completeTask(leadId, taskId)
-        queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
-        onTasksChanged()
-        onAfterTaskCompleted?.()
       } catch (err) {
-        // Rollback from snapshot
-        setTasks(snapshot)
         console.error('Failed to complete task:', err)
+        await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+        throw err
       }
-    } else {
-      // HubSpot tasks are completed in LeadTaskList before this callback
-      queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
-      onTasksChanged()
-      onAfterTaskCompleted?.()
     }
+    setTasks(prev => prev.filter(t => String(t.id) !== String(taskId)))
+    queryClient.setQueryData<CommandCenterPayload>(
+      ['commandCenter', leadId],
+      current => current
+        ? {
+            ...current,
+            open_tasks: current.open_tasks.filter(
+              task => String(task.id) !== String(taskId),
+            ),
+          }
+        : current,
+    )
+    await queryClient.invalidateQueries({
+      queryKey: ['commandCenter', leadId],
+      refetchType: 'none',
+    })
+    await onAfterTaskCompleted?.()
+  }
+
+  const handleHubSpotTaskDone = async (taskId: number) => {
+    setTasks(prev => prev.filter(t => String(t.id) !== String(taskId)))
+    queryClient.setQueryData<CommandCenterPayload>(
+      ['commandCenter', leadId],
+      current => current
+        ? {
+            ...current,
+            open_tasks: current.open_tasks.filter(
+              task => String(task.id) !== String(taskId),
+            ),
+          }
+        : current,
+    )
+    await queryClient.invalidateQueries({
+      queryKey: ['commandCenter', leadId],
+      refetchType: 'none',
+    })
+    await onAfterTaskCompleted?.()
   }
 
   return (
@@ -565,6 +594,7 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
           onTaskCreated={handleTaskCreated}
           onTaskUpdated={handleTaskUpdated}
           onTaskCompleted={handleTaskCompleted}
+          onHubSpotTaskDone={handleHubSpotTaskDone}
           onOptimisticTaskCreate={handleOptimisticTaskCreate}
           onOptimisticTaskRevert={handleOptimisticTaskRevert}
         />
@@ -582,6 +612,7 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
             onTaskCreated={handleTaskCreated}
             onTaskUpdated={handleTaskUpdated}
             onTaskCompleted={handleTaskCompleted}
+            onHubSpotTaskDone={handleHubSpotTaskDone}
             onOptimisticTaskCreate={handleOptimisticTaskCreate}
             onOptimisticTaskRevert={handleOptimisticTaskRevert}
           />
@@ -772,9 +803,8 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     open: false,
     message: '',
   })
-  const [mailEnqueueResult, setMailEnqueueResult] =
-    useState<MailEnqueueDisplayResult | null>(null)
-  const [mailEnqueueResultOpen, setMailEnqueueResultOpen] = useState(false)
+  /** After staging mail from a work queue — prompt to continue to next lead. */
+  const [mailContinuePrompt, setMailContinuePrompt] = useState(false)
   const [suppressDialogOpen, setSuppressDialogOpen] = useState(false)
   const [dncDialogOpen, setDncDialogOpen] = useState(false)
   const [dncPending, setDncPending] = useState(false)
@@ -783,6 +813,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const advanceInQueue = useCallback(
     (nextLeadId: number) => {
       if (!fromQueue) return
+      setMailContinuePrompt(false)
       navigate(buildLeadUrl(nextLeadId, fromQueue.key), { state: { fromQueue } })
     },
     [fromQueue, navigate],
@@ -790,6 +821,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
 
   const exitQueueCaughtUp = useCallback(() => {
     if (!fromQueue) return
+    setMailContinuePrompt(false)
     navigate(queuePath(fromQueue.key))
     setActivitySnackbar({
       open: true,
@@ -799,12 +831,25 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
 
   const advanceAfterTaskComplete = useCallback(async () => {
     if (!fromQueue) return
-    const nextId = queueNavigation?.next_id
-    if (nextId) {
-      advanceInQueue(nextId)
-      return
+    const queueListKey = `queue-${fromQueue.key}`
+    // Refresh list/counts before leaving so Back lands on fresh data; clear
+    // cache so remount shows QueueLoadingState instead of stale rows.
+    await queryClient.invalidateQueries({
+      queryKey: [queueListKey],
+      refetchType: 'all',
+    })
+    await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+    if (fromQueue.key === 'todays-action') {
+      await queryClient.invalidateQueries({
+        queryKey: ['queue-todays-action-outreach-counts'],
+        refetchType: 'all',
+      })
     }
+    queryClient.removeQueries({ queryKey: [queueListKey] })
+
     try {
+      // Membership may have changed. Always ask for fresh navigation rather
+      // than using the pre-mutation neighbour cached in queueNavigation.
       const nav = await queueService.getNavigation(fromQueue.key, leadId, {
         outreach: fromQueue.outreach,
       })
@@ -816,36 +861,75 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     } catch {
       exitQueueCaughtUp()
     }
-  }, [fromQueue, leadId, queueNavigation?.next_id, advanceInQueue, exitQueueCaughtUp])
+  }, [fromQueue, leadId, advanceInQueue, exitQueueCaughtUp, queryClient])
 
-  const handleStatusChanged = useCallback(async () => {
-    await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+  const handleStatusChanged = useCallback(async (
+    nextStatus?: LeadStatus,
+    result?: {
+      timeline_entry?: LeadTimelineEntry
+      lead_score?: number | null
+      recommended_action?: string | null
+    },
+  ) => {
+    // Do not refetch Command Center here. Its GET used to perform stale HubSpot
+    // task reconciliation, which must never be a side effect of changing lead
+    // status. Prefer the PATCH payload (status + score + timeline entry).
+    queryClient.setQueryData<CommandCenterPayload>(
+      ['commandCenter', leadId],
+      (current) => {
+        if (!current) return current
+        const next = { ...current }
+        if (nextStatus) next.lead_status = nextStatus
+        if (result?.lead_score !== undefined) {
+          next.lead_score = result.lead_score ?? 0
+        }
+        if (result && result.recommended_action !== undefined) {
+          const action = result.recommended_action as CRMRecommendedAction | null
+          next.recommended_action = {
+            ...next.recommended_action,
+            value: action,
+            label: action ? scoringActionLabel(action) : null,
+            explanation: null,
+            recommended_contact_method: null,
+            outreach_contact: null,
+            winning_rule: null,
+            winning_rule_label: null,
+            signals: {},
+          }
+        }
+        return next
+      },
+    )
+    if (result?.timeline_entry) {
+      activityRef.current?.prependEntry(result.timeline_entry)
+      setHighlightEntryId(result.timeline_entry.id)
+      window.setTimeout(() => setHighlightEntryId(null), 2000)
+    }
     // Header prefers leadScore history over CC lead_score — must refresh or score looks stuck.
     await queryClient.invalidateQueries({ queryKey: ['leadScore', leadId] })
     await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
     if (!fromQueue) return
     await queryClient.invalidateQueries({ queryKey: ['queue-navigation', fromQueue.key] })
     await queryClient.invalidateQueries({ queryKey: [`queue-${fromQueue.key}`] })
-    try {
-      const nav = await queueService.getNavigation(fromQueue.key, leadId, {
-        outreach: fromQueue.outreach,
-      })
-      if (nav.position === null) {
-        void advanceAfterTaskComplete()
-      }
-    } catch {
-      // Stay on lead when navigation check fails.
-    }
-  }, [queryClient, leadId, fromQueue, advanceAfterTaskComplete])
+    // Stay on this lead after status change — only task/activity completion advances the queue.
+  }, [queryClient, leadId, fromQueue])
 
   const handleActivitySaved = useCallback((
     entry: LeadTimelineEntry,
     type: ActivityLogType,
-    meta?: { completedTaskId?: number; completedHubSpotTaskId?: number },
+    meta?: {
+      completedTaskId?: number
+      completedHubSpotTaskId?: number
+      warning?: string
+    },
   ) => {
     activityRef.current?.prependEntry(entry)
     setHighlightEntryId(entry.id)
-    setActivitySnackbar({ open: true, message: ACTIVITY_SUCCESS_MESSAGES[type] })
+    setActivitySnackbar({
+      open: true,
+      message: meta?.warning ?? ACTIVITY_SUCCESS_MESSAGES[type],
+      severity: meta?.warning ? 'warning' : 'success',
+    })
     setActivityModal(null)
     queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
     window.setTimeout(() => setHighlightEntryId(null), 2000)
@@ -874,23 +958,28 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         return
       case 'add_to_mail_batch': {
         const result = await openLetterService.enqueue([leadId], fromQueue?.key ?? 'command-center')
-        const displayResult = {
-          attempt_id: result.attempt_id,
-          added: result.added,
-          skipped: result.skipped,
-          invalid: result.invalid,
-          results: result.results ?? [],
-        }
-        setMailEnqueueResult(displayResult)
-        setMailEnqueueResultOpen(true)
         setActivitySnackbar({
           open: true,
           message: formatEnqueueSummary(result),
           severity: enqueueResultSeverity(result),
           ...(result.added > 0
-            ? { linkTo: '/queues/ready-to-mail', linkLabel: 'View batch' }
+            ? { linkTo: '/queues/ready-to-mail', linkLabel: 'View staged batch' }
             : {}),
         })
+        if (result.added > 0 && fromQueue) {
+          setMailContinuePrompt(true)
+          await queryClient.invalidateQueries({
+            queryKey: [`queue-${fromQueue.key}`],
+            refetchType: 'all',
+          })
+          if (fromQueue.key === 'todays-action') {
+            await queryClient.invalidateQueries({
+              queryKey: ['queue-todays-action-outreach-counts'],
+              refetchType: 'all',
+            })
+          }
+          await queryClient.invalidateQueries({ queryKey: ['queue-navigation', fromQueue.key] })
+        }
         await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
         await queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
         await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
@@ -937,19 +1026,76 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       }
       case 'skip_trace':
       case 'move_to_skip_trace': {
-        const currentTaskId = openTasks[0]?.id
+        // Never pass the skip-trace handoff task as complete_task_id — the API
+        // must not try to complete "Awaiting skip trace" as current work.
+        const completable = openTasks.find(
+          (t) => t.task_type !== 'skip_trace_owner' && (t.status === 'open' || t.status === 'overdue'),
+        )
+        const rawId = completable?.id
+        const completeTaskId =
+          rawId == null || rawId === ''
+            ? undefined
+            : Number(rawId)
         const result = await commandCenterService.moveToSkipTrace(
           leadId,
-          currentTaskId == null ? undefined : Number(currentTaskId),
+          completeTaskId != null && Number.isFinite(completeTaskId)
+            ? completeTaskId
+            : undefined,
         )
-        tasksPanelRef.current?.scrollIntoView()
+        // Apply the returned status and task transition immediately. Unlike a
+        // normal status PATCH, this action also completes current work and
+        // creates/reuses the skip-trace handoff task.
+        queryClient.setQueryData<CommandCenterPayload>(
+          ['commandCenter', leadId],
+          (current) => {
+            if (!current) return current
+            const remainingTasks = current.open_tasks.filter(
+              (task) => (
+                result.completed_task_id == null
+                || Number(task.id) !== result.completed_task_id
+              ),
+            )
+            const hasHandoff = remainingTasks.some(
+              (task) => Number(task.id) === result.skip_trace_task_id,
+            )
+            const handoffTask: LeadTask = {
+              id: result.skip_trace_task_id,
+              lead_id: leadId,
+              task_type: 'skip_trace_owner',
+              title: 'Awaiting skip trace',
+              status: 'open',
+              due_date: null,
+              created_at: new Date().toISOString(),
+              completed_at: null,
+              created_by: 'system',
+              source: 'native',
+            }
+            return {
+              ...current,
+              lead_status: result.lead_status as LeadStatus,
+              needs_skip_trace: true,
+              open_tasks: hasHandoff
+                ? remainingTasks
+                : [...remainingTasks, handoffTask],
+            }
+          },
+        )
         setActivitySnackbar({
           open: true,
-          message: result.completed_task_id
-            ? 'Current task completed and lead moved to Skip Trace'
-            : 'Lead moved to Skip Trace',
+          message: result.already_done
+            ? (result.reason_code === 'already_awaiting_skip_trace'
+              ? 'Already awaiting skip trace'
+              : 'Already in Skip Trace pipeline')
+            : result.completed_task_id
+              ? 'Current task completed and lead moved to Skip Trace'
+              : 'Lead moved to Skip Trace',
         })
-        await handleStatusChanged()
+        if (!result.already_done) {
+          await handleStatusChanged(result.lead_status as LeadStatus, {
+            lead_score: result.lead_score,
+            recommended_action: result.recommended_action,
+          })
+        }
         return
       }
       case 'adjust_for_recent_sale': {
@@ -1028,6 +1174,10 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   }, [showLead, tabParam])
 
   useEffect(() => {
+    setMailContinuePrompt(false)
+  }, [leadId])
+
+  useEffect(() => {
     if (!showLead) return
     const logType = parseLogActivityParam(searchParams.get('log'))
     if (!logType) return
@@ -1099,6 +1249,63 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             onAdvance={advanceInQueue}
             onPrefetchLead={prefetchQueueLead}
           />
+        )}
+        {mailContinuePrompt && fromQueue && (
+          <Alert
+            severity="success"
+            data-testid="mail-continue-banner"
+            onClose={() => setMailContinuePrompt(false)}
+            sx={{
+              borderRadius: 0,
+              borderBottom: 1,
+              borderColor: 'divider',
+            }}
+            action={
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
+                <Button
+                  color="inherit"
+                  size="small"
+                  variant="outlined"
+                  component={RouterLink}
+                  to="/queues/ready-to-mail"
+                  data-testid="mail-continue-view-staged-batch"
+                  sx={{ bgcolor: 'background.paper' }}
+                >
+                  View staged batch
+                </Button>
+                {queueNavLoading ? (
+                  <CircularProgress size={18} color="inherit" sx={{ mx: 1 }} />
+                ) : queueNavigation?.next_id ? (
+                  <Button
+                    color="inherit"
+                    size="small"
+                    variant="outlined"
+                    data-testid="mail-continue-next-lead"
+                    onClick={() => { void advanceAfterTaskComplete() }}
+                  >
+                    Next lead
+                  </Button>
+                ) : (
+                  <Button
+                    color="inherit"
+                    size="small"
+                    variant="outlined"
+                    data-testid="mail-continue-back-to-queue"
+                    onClick={() => {
+                      setMailContinuePrompt(false)
+                      navigate(queuePath(fromQueue.key))
+                    }}
+                  >
+                    Back to queue
+                  </Button>
+                )}
+              </Box>
+            }
+          >
+            {queueNavLoading || queueNavigation?.next_id
+              ? 'Staged for the next mail batch.'
+              : 'Staged. You’re caught up.'}
+          </Alert>
         )}
         <StickyHeader
           leadId={leadId}
@@ -1283,8 +1490,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               <Button
                 color="inherit"
                 size="small"
+                variant="outlined"
                 component={RouterLink}
                 to={activitySnackbar.linkTo}
+                data-testid="activity-success-link"
+                sx={{ bgcolor: 'background.paper' }}
               >
                 {activitySnackbar.linkLabel ?? 'View'}
               </Button>
@@ -1294,11 +1504,6 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           {activitySnackbar.message}
         </Alert>
       </Snackbar>
-      <MailEnqueueResultDialog
-        open={mailEnqueueResultOpen}
-        onClose={() => setMailEnqueueResultOpen(false)}
-        result={mailEnqueueResult}
-      />
     </Box>
   )
 }

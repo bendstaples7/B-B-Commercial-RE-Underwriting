@@ -1307,16 +1307,27 @@ export const commandCenterService = {
     api.get(`/leads/${leadId}/command-center`).then(r => r.data),
   getRecommendedAction: (leadId: number): Promise<{ recommended_action: CRMRecommendedAction | null }> =>
     api.get(`/leads/${leadId}/recommended-action`).then(r => r.data),
-  updateStatus: (leadId: number, status: LeadStatus, reason?: string): Promise<unknown> =>
+  updateStatus: (leadId: number, status: LeadStatus, reason?: string): Promise<{
+    lead_status: LeadStatus
+    recommended_action?: string | null
+    lead_score?: number | null
+    timeline_entry?: import('@/types').LeadTimelineEntry
+  }> =>
     api.patch(`/leads/${leadId}/status`, { status, reason: reason || undefined }).then(r => r.data),
   moveToSkipTrace: (
     leadId: number,
     completeTaskId?: number,
   ): Promise<{
     lead_id: number
-    lead_status: 'skip_trace'
+    lead_status: string
+    lead_score?: number | null
+    recommended_action?: string | null
     completed_task_id: number | null
     skip_trace_task_id: number
+    changed?: boolean
+    already_done?: boolean
+    reason_code?: string | null
+    healed?: boolean
   }> =>
     api.post(`/leads/${leadId}/move-to-skip-trace`, {
       complete_task_id: completeTaskId ?? null,
@@ -1350,6 +1361,25 @@ export const commandCenterService = {
     hubspot_sync_stale?: boolean;
   }> =>
     api.post(`/leads/${leadId}/hubspot-sync`).then(r => r.data),
+  verifySaleDate: (leadId: number): Promise<{
+    lead_id: number;
+    queued: boolean;
+    ran_sync: boolean;
+    message?: string;
+    summary?: {
+      skipped?: boolean;
+      skip_reason?: string | null;
+      plugins_run?: number;
+      success?: number;
+      no_results?: number;
+      failed?: number;
+    } | null;
+    county_assessor_pin?: string | null;
+    most_recent_sale_display?: string | null;
+    most_recent_sale_price?: number | null;
+    sale_date_meta?: import('@/types').CommandCenterPayload['sale_date_meta'];
+  }> =>
+    api.post(`/leads/${leadId}/sale-date-verification`).then(r => r.data),
 }
 
 export const leadTaskService = {

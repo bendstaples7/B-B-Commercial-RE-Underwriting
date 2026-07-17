@@ -1,5 +1,14 @@
 import axios, { AxiosError, AxiosInstance } from 'axios'
-import type { ErrorResponse } from '@/types'
+type ApiErrorPayload = {
+  error?: string | { message?: unknown }
+  message?: unknown
+}
+
+function asApiErrorPayload(value: unknown): ApiErrorPayload {
+  return value != null && typeof value === 'object'
+    ? value as ApiErrorPayload
+    : {}
+}
 
 // Create axios instance with default config
 const api: AxiosInstance = axios.create({
@@ -30,7 +39,7 @@ api.interceptors.request.use(
 // Response interceptor for error handling
 api.interceptors.response.use(
   (response) => response,
-  (error: AxiosError<ErrorResponse>) => {
+  (error: AxiosError<unknown>) => {
     if (error.response) {
       // Server responded with error status
       const errorData = error.response.data
@@ -52,12 +61,34 @@ api.interceptors.response.use(
       //   { error: { message: "..." } }  — structured error object
       //   { error: "..." }               — plain string error (auth endpoints)
       //   { message: "..." }             — direct message field
-      const errorField = (errorData as any)?.error
+      // Prefer `message` when `error` is a generic label like "Invalid request".
+      const payload = asApiErrorPayload(errorData)
+      const errorField = payload.error
+      const detailedMessage =
+        typeof payload.message === 'string'
+          ? payload.message
+          : null
+      const genericErrorLabels = new Set([
+        'Invalid request',
+        'Validation error',
+        'An error occurred',
+        'Internal server error',
+        'HTTP error',
+      ])
       const message =
-        errorField?.message ||
-        (typeof errorField === 'string' ? errorField : null) ||
-        errorData?.message ||
-        'An error occurred'
+        (errorField != null
+          && typeof errorField === 'object'
+          && typeof errorField.message === 'string'
+          ? errorField.message
+          : null)
+        || (typeof errorField === 'string'
+          && genericErrorLabels.has(errorField)
+          && detailedMessage
+          ? detailedMessage
+          : null)
+        || (typeof errorField === 'string' ? errorField : null)
+        || detailedMessage
+        || 'An error occurred'
 
       console.error(`[API] ${status} ${url}:`, message, errorData)
 

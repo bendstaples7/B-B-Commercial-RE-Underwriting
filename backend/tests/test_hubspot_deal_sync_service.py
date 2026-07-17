@@ -66,7 +66,8 @@ class TestHubSpotDealSyncService:
             assert health['hubspot_sync_stale'] is False
 
     @patch.object(HubSpotDealSyncService, 'refresh_and_enrich_lead')
-    def test_auto_sync_lead_if_stale_triggers_refresh(self, mock_refresh, app):
+    def test_auto_sync_lead_if_stale_is_retired_no_op(self, mock_refresh, app):
+        """View/user-path auto-sync is retired — never pulls HubSpot."""
         with app.app_context():
             lead = Lead(owner_first_name='A', owner_last_name='B')
             db.session.add(lead)
@@ -86,8 +87,8 @@ class TestHubSpotDealSyncService:
             db.session.commit()
 
             mock_refresh.return_value = {'synced': True}
-            assert HubSpotDealSyncService.auto_sync_lead_if_stale(lead.id) is True
-            mock_refresh.assert_called_once_with(lead.id, include_tasks=True)
+            assert HubSpotDealSyncService.auto_sync_lead_if_stale(lead.id) is False
+            mock_refresh.assert_not_called()
 
     @patch.object(HubSpotDealSyncService, 'refresh_and_enrich_lead')
     def test_auto_sync_skips_when_fresh(self, mock_refresh, app):
@@ -139,7 +140,7 @@ class TestHubSpotDealSyncService:
             assert HubSpotDealSyncService.deal_missing_context_properties(deal3) is False
 
     @patch.object(HubSpotDealSyncService, 'refresh_and_enrich_lead')
-    def test_auto_sync_when_deal_context_properties_missing(self, mock_refresh, app):
+    def test_auto_sync_retired_even_when_deal_context_missing(self, mock_refresh, app):
         with app.app_context():
             lead = Lead(
                 owner_first_name='A',
@@ -163,8 +164,8 @@ class TestHubSpotDealSyncService:
             db.session.commit()
 
             mock_refresh.return_value = {'synced': True}
-            assert HubSpotDealSyncService.auto_sync_lead_if_stale(lead.id) is True
-            mock_refresh.assert_called_once_with(lead.id, include_tasks=True)
+            assert HubSpotDealSyncService.auto_sync_lead_if_stale(lead.id) is False
+            mock_refresh.assert_not_called()
 
     @patch.object(HubSpotDealSyncService, 'refresh_deal_from_api')
     @patch('app.services.hubspot_deal_sync_service.HubSpotDealSyncService._get_client')
@@ -209,13 +210,21 @@ class TestHubSpotDealSyncService:
             mock_refresh.return_value = deal
 
             svc = HubSpotDealSyncService()
-            result = svc.refresh_and_enrich_lead(lead.id)
+            with patch.object(svc, 'sync_tasks_for_lead') as mock_sync_tasks:
+                result = svc.refresh_and_enrich_lead(lead.id)
+                mock_sync_tasks.assert_not_called()
 
             assert result['synced'] is True
             db.session.refresh(lead)
             assert lead.lead_status == 'mailing_contacted_no_interest'
             assert lead.hubspot_deal_stage == 'Mailing, contact made, no interest'
             assert lead.last_hubspot_sync_at is not None
+
+            with patch.object(svc, 'sync_tasks_for_lead') as mock_sync_tasks:
+                mock_sync_tasks.return_value = {'synced': True, 'created': 0, 'updated': 0}
+                result = svc.refresh_and_enrich_lead(lead.id, include_tasks=True)
+                mock_sync_tasks.assert_called_once_with(lead.id)
+                assert result['task_sync'] == mock_sync_tasks.return_value
 
     def test_enrich_lead_from_deal_sets_last_hubspot_sync_at(self, app):
         with app.app_context():
@@ -275,7 +284,7 @@ class TestHubSpotDealSyncService:
             assert lead.deal_description == '3 units currently zoned by right for 4'
 
     @patch.object(HubSpotDealSyncService, 'refresh_and_enrich_lead')
-    def test_auto_sync_when_lead_missing_deal_context(self, mock_refresh, app):
+    def test_auto_sync_retired_even_when_lead_missing_deal_context(self, mock_refresh, app):
         with app.app_context():
             lead = Lead(
                 owner_first_name='A',
@@ -304,5 +313,5 @@ class TestHubSpotDealSyncService:
             db.session.commit()
 
             mock_refresh.return_value = {'synced': True}
-            assert HubSpotDealSyncService.auto_sync_lead_if_stale(lead.id) is True
-            mock_refresh.assert_called_once_with(lead.id, include_tasks=True)
+            assert HubSpotDealSyncService.auto_sync_lead_if_stale(lead.id) is False
+            mock_refresh.assert_not_called()

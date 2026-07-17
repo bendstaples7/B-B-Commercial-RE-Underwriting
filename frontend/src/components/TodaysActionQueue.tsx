@@ -80,8 +80,11 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
   const total = data?.total ?? 0
   const totalPages = computeTotalPages(data?.total ?? 0, data?.per_page ?? 20)
   const isInitialLoading = isLoading && !data
-  const showEmpty = data != null && rows.length === 0 && total === 0
-  const showRefetchIndicator = isFetching && isPlaceholderData
+  // Keep prior rows visible (disabled below) for filter/page refetches.
+  // Cache-cleared remounts have no data and still use the initial loader.
+  const showLoading = isInitialLoading
+  const showEmpty = data != null && rows.length === 0 && total === 0 && !showLoading
+  const showRefetchIndicator = isFetching && isPlaceholderData && !showLoading
   const disablePlaceholderInteractions = isPlaceholderData
 
   const handlePageChange = onPageChangeWithClear((newPage) => {
@@ -215,7 +218,7 @@ export function TodaysActionQueue({ extraQueryKeys }: TodaysActionQueueProps = {
         </Typography>
       )}
 
-      {isInitialLoading ? (
+      {showLoading ? (
         <QueueLoadingState />
       ) : showEmpty ? (
         <Box sx={{ py: 4, textAlign: 'center' }} data-testid="todays-action-empty">

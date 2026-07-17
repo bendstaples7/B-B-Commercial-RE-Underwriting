@@ -157,6 +157,82 @@ def test_abbreviation_not_treated_as_multi_sentence():
     assert not truncated.endswith(' ')
 
 
+def test_is_complete_bullet_allows_the_a_an_starts():
+    svc = LeadBriefingService(api_key='test-key')
+    assert svc._is_complete_bullet(
+        'The last HubSpot call was April 27 and left a voicemail.'
+    ) is True
+    assert svc._is_complete_bullet(
+        'A showing was set for Sunday afternoon after the connected call.'
+    ) is True
+    assert svc._is_complete_bullet(
+        'An evening callback is more likely to catch her live.'
+    ) is True
+
+
+def test_build_context_uses_metadata_body_when_summary_empty(app):
+    with app.app_context():
+        from app import db
+        from app.models import Lead, LeadTimelineEntry
+
+        lead = Lead(
+            property_street='100 Main',
+            property_city='Chicago',
+            property_state='IL',
+            owner_first_name='Linda',
+            owner_last_name='Bobert',
+            lead_status='in_person_appointment',
+            recommended_action='call_ready',
+            owner_user_id='test-user',
+        )
+        db.session.add(lead)
+        db.session.flush()
+        db.session.add(LeadTimelineEntry(
+            lead_id=lead.id,
+            event_type='hubspot_call',
+            occurred_at=datetime(2026, 5, 31, 19, 56, 55, tzinfo=timezone.utc),
+            source='hubspot',
+            actor='HubSpot',
+            summary='',
+            event_metadata={
+                'body': 'Connected, setup a showing for Sunday at 3:30',
+                'disposition': 'Connected',
+            },
+        ))
+        db.session.commit()
+
+        svc = LeadBriefingService(api_key='test-key')
+        ctx = svc._build_context(lead)
+        assert ctx['last_activity_summary']
+        assert 'showing' in ctx['last_activity_summary'].lower()
+        assert any(
+            'showing' in (row.get('summary') or '').lower()
+            for row in ctx['recent_activity']
+        )
+
+
+def test_ensure_five_uses_context_not_generic_fillers():
+    svc = LeadBriefingService(api_key='test-key')
+    context = {
+        'last_activity_at': '2026-04-27T19:44:50+00:00',
+        'days_since_last_activity': 80,
+        'last_activity_summary': 'Left voicemail after HubSpot call',
+        'recent_activity': [
+            {
+                'event_type': 'hubspot_call',
+                'summary': 'Connected, setup a showing for Sunday at 3:30',
+            },
+        ],
+        'open_tasks': [],
+    }
+    filled = svc._ensure_five([None, None, None, None, None], context=context)
+    assert len(filled) == 5
+    assert 'unclear from the log' not in filled[0].lower()
+    assert 'walkthrough useful' not in filled[1].lower()
+    assert 'voicemail' in filled[0].lower() or 'outreach' in filled[0].lower()
+    assert 'showing' in filled[1].lower() or 'walkthrough' in filled[1].lower()
+
+
 def test_parse_bullets_pads_via_ensure_five():
     svc = LeadBriefingService(api_key='test-key')
     cleaned = svc._ensure_five(['Only one complete sentence here.'])

@@ -5,6 +5,7 @@
  * Requirements: 3.2, 3.3, 3.6, 4.3, 7.5, 7.6
  */
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { Link as RouterLink } from 'react-router-dom'
 import {
   Alert,
   Box,
@@ -30,10 +31,18 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import AddTaskIcon from '@mui/icons-material/AddTask'
 import HubIcon from '@mui/icons-material/Hub'
+import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted'
 import type { LeadTask, LeadTaskType, CRMRecommendedAction, OutreachContact } from '@/types'
 import { leadTaskService, callLogService } from '@/services/api'
 import { OutreachContactInline, OutreachContactMissingHint } from '@/components/OutreachContactCallout'
+import { FollowUpHorizonControls } from '@/components/FollowUpHorizonControls'
 import { ccSubsectionTitleSx } from '@/components/lead-detail/commandCenterChrome'
+import {
+  type FollowUpPreset,
+  formatFollowUpPresetLabel,
+  followUpDueForPreset,
+  resolveFollowUpDueDate,
+} from '@/utils/followUpPresets'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -105,8 +114,8 @@ export interface LeadTaskListProps {
   onTaskCreated: (task: LeadTask) => void
   /** Called after a successful title/due-date update on a native task. */
   onTaskUpdated?: (task: LeadTask) => void
-  onTaskCompleted?: (taskId: number | string) => void
-  onHubSpotTaskDone?: (taskId: number) => void
+  onTaskCompleted?: (taskId: number | string) => void | Promise<void>
+  onHubSpotTaskDone?: (taskId: number) => void | Promise<void>
   /** Called immediately when the user submits the form, before the API call
    *  completes. Receives a temporary placeholder task (id = 0, status = 'open').
    *  Use this to add an optimistic entry to the task list.
@@ -162,6 +171,13 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [markingDone, setMarkingDone] = useState<number | null>(null)
+  const [followUpPromptTaskId, setFollowUpPromptTaskId] = useState<number | string | null>(null)
+  const [followUpPreset, setFollowUpPreset] = useState<FollowUpPreset>('3')
+  const [followUpCustomDue, setFollowUpCustomDue] = useState('')
+  const [followUpError, setFollowUpError] = useState<string | null>(null)
+  const [taskCompletionError, setTaskCompletionError] = useState<string | null>(null)
+  const [followUpSubmitting, setFollowUpSubmitting] = useState(false)
+  const [followUpCreated, setFollowUpCreated] = useState(false)
   const [editingTaskId, setEditingTaskId] = useState<number | null>(null)
   const [editingField, setEditingField] = useState<'title' | 'due_date' | null>(null)
   const [editTitle, setEditTitle] = useState('')
@@ -287,9 +303,114 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
     }
   }
 
+  const resetFollowUpPrompt = () => {
+    setFollowUpPromptTaskId(null)
+    setFollowUpPreset('3')
+    setFollowUpCustomDue('')
+    setFollowUpError(null)
+    setFollowUpSubmitting(false)
+    setFollowUpCreated(false)
+  }
+
+  const isLastOpenTask = (taskId: number | string) =>
+    openTasks.length === 1 && String(openTasks[0]?.id) === String(taskId)
+
+  const completeTaskDirectly = async (task: LeadTask) => {
+    setTaskCompletionError(null)
+    const isHubSpot = task.source === 'hubspot'
+    if (!isHubSpot) {
+      try {
+        if (onTaskCompleted) await onTaskCompleted(task.id as number)
+      } catch (err) {
+        const message = err instanceof Error
+          ? err.message
+          : 'Failed to complete task. Please try again.'
+        setTaskCompletionError(message)
+        throw err
+      }
+      return
+    }
+    const numericId = typeof task.id === 'number'
+      ? task.id
+      : Number.parseInt(String(task.id), 10)
+    if (!Number.isFinite(numericId)) return
+    setMarkingDone(numericId)
+    try {
+      await callLogService.markHubSpotTaskDone(leadId, numericId, {
+        idNamespace: 'lead_task',
+      })
+      if (onHubSpotTaskDone) {
+        await onHubSpotTaskDone(numericId)
+      } else if (onTaskCompleted) {
+        await onTaskCompleted(task.id)
+      }
+    } catch (err) {
+      const message = err instanceof Error
+        ? err.message
+        : 'Failed to complete task. Please try again.'
+      setTaskCompletionError(message)
+      throw err
+    } finally {
+      setMarkingDone(null)
+    }
+  }
+
+  const handleCompleteClick = (task: LeadTask) => {
+    if (isLastOpenTask(task.id)) {
+      setFollowUpPromptTaskId(task.id)
+      setFollowUpPreset('3')
+      setFollowUpCustomDue('')
+      setFollowUpError(null)
+      setFollowUpCreated(false)
+      return
+    }
+    void completeTaskDirectly(task).catch(() => undefined)
+  }
+
+  const handleCompleteWithoutFollowUp = async (task: LeadTask) => {
+    try {
+      await completeTaskDirectly(task)
+      resetFollowUpPrompt()
+    } catch {
+      // Error remains visible in the still-open prompt and list-level alert.
+    }
+  }
+
+  const handleCompleteWithFollowUp = async (task: LeadTask) => {
+    const due = resolveFollowUpDueDate(followUpPreset, followUpCustomDue)
+    if (!due) {
+      setFollowUpError('Choose a follow-up date.')
+      return
+    }
+    setFollowUpError(null)
+    setFollowUpSubmitting(true)
+    try {
+      // Create the next task first so the lead never briefly has no next action.
+      // If completion failed after creation, retry completion without creating
+      // another duplicate follow-up.
+      if (!followUpCreated) {
+        const newTask = await leadTaskService.createTask(leadId, {
+          title: 'Follow up',
+          task_type: 'custom',
+          due_date: due,
+        })
+        onTaskCreated(newTask)
+        setFollowUpCreated(true)
+      }
+      await completeTaskDirectly(task)
+      resetFollowUpPrompt()
+    } catch (err) {
+      setFollowUpError(
+        err instanceof Error ? err.message : 'Failed to create follow-up. Please try again.',
+      )
+    } finally {
+      setFollowUpSubmitting(false)
+    }
+  }
+
   const handleStartEdit = (task: LeadTask, field: 'title' | 'due_date' = 'title') => {
     // Local LeadTask rows (native or HubSpot-imported) are editable via PATCH.
-    // Legacy string ids (e.g. hs-…) and optimistic placeholders are not.
+    // Optimistic placeholders (non-numeric ids) are not.
     if (editSubmittingRef.current) return
     if (typeof task.id !== 'number' || task.id <= 0) return
     skipBlurSaveRef.current = false
@@ -432,14 +553,49 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
         )}
       </Stack>
 
-      {awaitingMailBatch && (
-        <Chip
-          label="Awaiting mail batch"
-          size="small"
-          color="info"
+      {taskCompletionError && (
+        <Alert
+          severity="error"
           sx={{ mb: 1.5 }}
-          data-testid="awaiting-mail-batch-chip"
-        />
+          onClose={() => setTaskCompletionError(null)}
+          data-testid="task-completion-error"
+        >
+          {taskCompletionError}
+        </Alert>
+      )}
+
+      {awaitingMailBatch && (
+        <Stack
+          direction={{ xs: 'column', sm: 'row' }}
+          spacing={1}
+          alignItems={{ xs: 'stretch', sm: 'center' }}
+          sx={{ mb: 1.5 }}
+          data-testid="mail-staged-confirmation"
+        >
+          <Chip
+            label={
+              mailQueueStatus === 'queued'
+                ? 'Staged for next mail batch'
+                : 'Awaiting mail batch'
+            }
+            size="small"
+            color="info"
+            data-testid="awaiting-mail-batch-chip"
+          />
+          {mailQueueStatus === 'queued' && (
+            <Button
+              component={RouterLink}
+              to="/queues/ready-to-mail"
+              size="small"
+              variant="outlined"
+              startIcon={<FormatListBulletedIcon />}
+              data-testid="view-staged-batch-link"
+              sx={{ alignSelf: { xs: 'flex-start', sm: 'center' } }}
+            >
+              View staged batch
+            </Button>
+          )}
+        </Stack>
       )}
 
       {noOpenTasksWhileAwaitingMail && (
@@ -503,7 +659,8 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
                       <IconButton
                         edge="end"
                         aria-label={`Complete task: ${task.title}`}
-                        onClick={() => onTaskCompleted(task.id as number)}
+                        onClick={() => handleCompleteClick(task)}
+                        disabled={followUpSubmitting || followUpPromptTaskId === task.id}
                         data-testid={`complete-task-btn-${task.id}`}
                         size="small"
                       >
@@ -515,26 +672,24 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
                           <IconButton
                             edge="end"
                             aria-label={`Mark HubSpot task done: ${task.title}`}
-                            onClick={async () => {
-                              const rawId = String(task.id)
-                              const isLegacyCrm = rawId.startsWith('hs-')
-                              const numericId = parseInt(rawId.replace(/^hs-/, ''), 10)
-                              setMarkingDone(numericId)
-                              try {
-                                await callLogService.markHubSpotTaskDone(leadId, numericId, {
-                                  idNamespace: isLegacyCrm ? 'crm_task' : 'lead_task',
-                                })
-                                if (onHubSpotTaskDone) onHubSpotTaskDone(numericId)
-                                if (onTaskCompleted) onTaskCompleted(task.id)
-                              } finally {
-                                setMarkingDone(null)
-                              }
-                            }}
-                            disabled={markingDone === parseInt(String(task.id).replace('hs-', ''), 10)}
+                            onClick={() => handleCompleteClick(task)}
+                            disabled={
+                              followUpSubmitting
+                              || followUpPromptTaskId === task.id
+                              || markingDone === (
+                                typeof task.id === 'number'
+                                  ? task.id
+                                  : Number.parseInt(String(task.id), 10)
+                              )
+                            }
                             data-testid={`mark-done-btn-${task.id}`}
                             size="small"
                           >
-                            {markingDone === parseInt(String(task.id).replace('hs-', ''), 10)
+                            {markingDone === (
+                              typeof task.id === 'number'
+                                ? task.id
+                                : Number.parseInt(String(task.id), 10)
+                            )
                               ? <CircularProgress size={14} />
                               : <CheckCircleOutlineIcon fontSize="small" />
                             }
@@ -733,6 +888,73 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
                     }
                   />
                 </ListItem>
+                {followUpPromptTaskId === task.id && (
+                  <Box
+                    sx={{
+                      mx: 2,
+                      mb: 1.5,
+                      p: 1.5,
+                      border: 1,
+                      borderColor: 'divider',
+                      borderRadius: 1,
+                      bgcolor: 'action.hover',
+                    }}
+                    data-testid={`last-task-follow-up-prompt-${task.id}`}
+                  >
+                    <Typography variant="body2" sx={{ mb: 1 }}>
+                      This is the last open task. Create a follow-up?
+                      {followUpPreset !== 'custom' && (
+                        <>
+                          {' '}
+                          <Typography component="span" variant="body2" color="primary.main">
+                            {formatFollowUpPresetLabel(
+                              followUpPreset,
+                              followUpDueForPreset(followUpPreset),
+                            )}
+                          </Typography>
+                        </>
+                      )}
+                    </Typography>
+                    <FollowUpHorizonControls
+                      preset={followUpPreset}
+                      customDueDate={followUpCustomDue}
+                      error={followUpError}
+                      onPresetChange={(value) => {
+                        setFollowUpPreset(value)
+                        setFollowUpError(null)
+                      }}
+                      onCustomDueDateChange={(value) => {
+                        setFollowUpCustomDue(value)
+                        setFollowUpError(null)
+                      }}
+                      testIdPrefix={`last-task-follow-up-${task.id}`}
+                    />
+                    <Stack direction="row" spacing={1} justifyContent="flex-end" sx={{ mt: 1.5 }}>
+                      <Button
+                        size="small"
+                        onClick={() => void handleCompleteWithoutFollowUp(task)}
+                        disabled={followUpSubmitting}
+                        data-testid={`last-task-leave-as-is-${task.id}`}
+                      >
+                        Leave without next step
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="contained"
+                        onClick={() => void handleCompleteWithFollowUp(task)}
+                        disabled={followUpSubmitting}
+                        startIcon={
+                          followUpSubmitting
+                            ? <CircularProgress size={14} color="inherit" />
+                            : undefined
+                        }
+                        data-testid={`last-task-create-follow-up-${task.id}`}
+                      >
+                        {followUpSubmitting ? 'Saving…' : 'Complete & create follow-up'}
+                      </Button>
+                    </Stack>
+                  </Box>
+                )}
               </Box>
             )
           })}

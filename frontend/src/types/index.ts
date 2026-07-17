@@ -2159,9 +2159,13 @@ export interface CommandCenterPayload {
   mail_ineligible_reason?: 'recently_sold' | 'invalid_owner_address' | null;
   mail_eligible_date?: string | null;
   most_recent_sale_display?: string | null;
+  most_recent_sale_price?: number | null;
   sale_date_meta?: {
     last_updated_at?: string | null;
+    last_checked_at?: string | null;
     source?: string | null;
+    status?: string | null;
+    error_reason?: string | null;
   };
   timeline: {
     entries: LeadTimelineEntry[];

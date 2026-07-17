@@ -323,14 +323,16 @@ class TestGetCommandCenter:
             assert 'total' in data['timeline']
 
     @patch('app.services.hubspot_deal_sync_service.HubSpotDealSyncService.auto_sync_lead_if_stale')
-    def test_auto_syncs_stale_hubspot_on_load(self, mock_auto_sync, client, app):
-        """Opening command center triggers background HubSpot sync when data is stale."""
+    @patch('app.services.hubspot_deal_sync_service.HubSpotDealSyncService.sync_tasks_for_lead')
+    def test_does_not_auto_sync_hubspot_on_load(self, mock_sync_tasks, mock_auto_sync, client, app):
+        """Opening command center must not trigger HubSpot sync-on-read or task pull."""
         with app.app_context():
             lead = _make_lead(app, '6 Auto Sync St')
             mock_auto_sync.return_value = True
             response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
             assert response.status_code == 200
-            mock_auto_sync.assert_called_once_with(lead.id)
+            mock_auto_sync.assert_not_called()
+            mock_sync_tasks.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -349,9 +351,28 @@ class TestUpdateStatus:
                 headers=_AUTH_HEADERS,
             )
             assert response.status_code == 200
+
+    @patch('app.services.hubspot_deal_sync_service.HubSpotDealSyncService.sync_tasks_for_lead')
+    @patch('app.services.hubspot_deal_sync_service.HubSpotDealSyncService.refresh_and_enrich_lead')
+    @patch('app.services.hubspot_deal_sync_service.HubSpotDealSyncService.auto_sync_lead_if_stale')
+    def test_status_change_does_not_pull_hubspot_tasks(
+        self, mock_auto_sync, mock_refresh, mock_sync_tasks, client, app,
+    ):
+        """Status PATCH must not auto-sync or pull HubSpot tasks (user-path split)."""
+        with app.app_context():
+            lead = _make_lead(app, '6b No HubSpot Pull St', lead_status='mailing_no_contact_made')
+            response = client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({'status': 'in_person_appointment'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            mock_auto_sync.assert_not_called()
+            mock_refresh.assert_not_called()
+            mock_sync_tasks.assert_not_called()
             body = response.get_json()
-            assert 'lead_score' in body
-            assert body['lead_status'] == 'deprioritize'
+            assert body['lead_status'] == 'in_person_appointment'
 
     def test_in_person_appointment_increases_score_via_pipeline_bonus(self, client, app):
         """Status → in_person_appointment applies +30 bonus and leaves enrich_data."""
@@ -450,18 +471,60 @@ class TestUpdateStatus:
         """PATCH /api/leads/<id>/status appends a status_changed timeline entry."""
         with app.app_context():
             lead = _make_lead(app, '8 Status St', lead_status='mailing_no_contact_made')
-            client.patch(
+            response = client.patch(
                 f'/api/leads/{lead.id}/status',
                 data=json.dumps({'status': 'negotiating_remote'}),
                 content_type='application/json',
                 headers=_AUTH_HEADERS,
             )
+            body = response.get_json()
+            assert 'timeline_entry' in body
+            assert body['timeline_entry']['event_type'] == 'status_changed'
             entry = LeadTimelineEntry.query.filter_by(
                 lead_id=lead.id, event_type='status_changed'
             ).first()
             assert entry is not None
             assert entry.event_metadata['previous_status'] == 'mailing_no_contact_made'
             assert entry.event_metadata['new_status'] == 'negotiating_remote'
+            assert 'previous_score' in (entry.event_metadata or {})
+            assert 'new_score' in (entry.event_metadata or {})
+            assert 'Score' in entry.summary
+
+    def test_in_person_appointment_timeline_includes_score_delta(self, client, app):
+        """Status → in_person_appointment timeline summary includes score before → after."""
+        with app.app_context():
+            from app.services.lead_scoring_engine import LeadScoringEngine
+
+            lead = _make_lead(
+                app,
+                '8b Score Timeline St',
+                lead_status='mailing_contacted_interested',
+                lead_score=30.0,
+                has_phone=True,
+                has_email=False,
+                has_property_match=True,
+                analysis_complete=True,
+            )
+            LeadScoringEngine().score_and_persist(lead.id)
+            db.session.refresh(lead)
+            before = float(lead.lead_score or 0)
+
+            response = client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({'status': 'in_person_appointment'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = response.get_json()
+            entry = body['timeline_entry']
+            assert entry['event_type'] == 'status_changed'
+            assert 'Score' in entry['summary']
+            assert '→' in entry['summary']
+            meta = entry.get('metadata') or {}
+            assert meta.get('previous_score') == pytest.approx(before, abs=0.15)
+            assert float(meta.get('new_score')) > float(meta.get('previous_score'))
+            assert float(body['lead_score']) == pytest.approx(float(meta.get('new_score')), abs=0.05)
 
     def test_dnc_status_nulls_recommended_action(self, client, app):
         """Setting status to do_not_contact sets recommended_action to null."""
@@ -479,7 +542,7 @@ class TestUpdateStatus:
             assert lead.recommended_action is None
 
     def test_dnc_status_cancels_open_tasks(self, client, app):
-        """Setting status to do_not_contact cancels all open tasks."""
+        """PATCH and dedicated DNC action enforce the same task invariant."""
         with app.app_context():
             lead = _make_lead(app, '10 Status St', lead_status='mailing_no_contact_made')
             task = _make_task(app, lead.id)
@@ -491,6 +554,7 @@ class TestUpdateStatus:
             )
             db.session.refresh(task)
             assert task.status == 'cancelled'
+            assert task.completed_at is None
 
     def test_returns_404_for_missing_lead(self, client, app):
         """PATCH /api/leads/99999/status returns 404."""
@@ -521,10 +585,11 @@ class TestUpdateStatus:
                 lead_id=lead.id, event_type='status_changed'
             ).first()
             assert entry is not None
-            assert entry.summary == (
+            assert entry.summary.startswith(
                 "Status changed from 'mailing_no_contact_made' to 'negotiating_remote'. "
                 "Called today, owner interested."
             )
+            assert 'Score' in entry.summary
 
     def test_status_change_without_reason_uses_existing_summary_format(self, client, app):
         """PATCH without reason: summary uses existing format (Req 2.5)."""
@@ -540,7 +605,10 @@ class TestUpdateStatus:
                 lead_id=lead.id, event_type='status_changed'
             ).first()
             assert entry is not None
-            assert entry.summary == "Status changed from 'mailing_no_contact_made' to 'deprioritize'."
+            assert entry.summary.startswith(
+                "Status changed from 'mailing_no_contact_made' to 'deprioritize'."
+            )
+            assert 'Score' in entry.summary
 
     def test_status_change_empty_reason_uses_existing_summary_format(self, client, app):
         """PATCH with empty reason string: summary uses existing format (Req 2.5)."""
@@ -556,7 +624,10 @@ class TestUpdateStatus:
                 lead_id=lead.id, event_type='status_changed'
             ).first()
             assert entry is not None
-            assert entry.summary == "Status changed from 'mailing_no_contact_made' to 'deprioritize'."
+            assert entry.summary.startswith(
+                "Status changed from 'mailing_no_contact_made' to 'deprioritize'."
+            )
+            assert 'Score' in entry.summary
 
     # ------------------------------------------------------------------
     # Requirement 2.6 — reason stored in event_metadata
@@ -657,6 +728,8 @@ class TestMoveToSkipTrace:
             body = json.loads(response.data)
             assert body['lead_status'] == 'skip_trace'
             assert body['completed_task_id'] == current.id
+            assert body.get('changed') is True
+            assert body.get('already_done') is False
 
             db.session.refresh(lead)
             db.session.refresh(current)
@@ -749,9 +822,15 @@ class TestMoveToSkipTrace:
                 headers=_AUTH_HEADERS,
                 json={'complete_task_id': handoff.id},
             )
-            assert response.status_code == 400
+            assert response.status_code == 200
+            body = json.loads(response.data)
+            assert body['lead_status'] == 'skip_trace'
+            assert body['completed_task_id'] is None
+            assert body['skip_trace_task_id'] == handoff.id
             db.session.refresh(handoff)
             assert handoff.status == 'open'
+            db.session.refresh(lead)
+            assert lead.lead_status == 'skip_trace'
 
     def test_completed_analysis_task_preserves_analysis_side_effect(
         self,
@@ -805,6 +884,13 @@ class TestMoveToSkipTrace:
                 json={},
             )
             assert response.status_code == 422
+            body = json.loads(response.data)
+            from tests.action_error_asserts import assert_action_error_is_specific
+            assert_action_error_is_specific(body)
+            assert body['error'] == 'ActionNotApplicableError'
+            assert body['error_type'] == 'action_not_applicable'
+            assert body['reason_code'] == 'terminal_status'
+            assert body.get('message')
             db.session.refresh(lead)
             assert lead.lead_status == terminal_status
             assert LeadTask.query.filter_by(
@@ -812,8 +898,57 @@ class TestMoveToSkipTrace:
                 task_type='skip_trace_owner',
             ).count() == 0
 
+    @pytest.mark.parametrize(
+        'pipeline_status,reason_code',
+        [
+            ('skip_trace', 'already_skip_trace'),
+            ('awaiting_skip_trace', 'already_awaiting_skip_trace'),
+        ],
+    )
+    def test_already_in_skip_trace_pipeline_is_idempotent(
+        self,
+        pipeline_status,
+        reason_code,
+        client,
+        app,
+    ):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                f'825b {pipeline_status} St',
+                lead_status=pipeline_status,
+            )
+            handoff = _make_task(
+                app,
+                lead.id,
+                task_type='skip_trace_owner',
+                title='Awaiting skip trace',
+            )
+            other = _make_task(
+                app,
+                lead.id,
+                title='Should not complete',
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/move-to-skip-trace',
+                headers=_AUTH_HEADERS,
+                json={'complete_task_id': other.id},
+            )
+            assert response.status_code == 200
+            body = json.loads(response.data)
+            assert body['already_done'] is True
+            assert body['changed'] is False
+            assert body['reason_code'] == reason_code
+            assert body['completed_task_id'] is None
+            assert body['skip_trace_task_id'] == handoff.id
+            assert body['lead_status'] == pipeline_status
+            db.session.refresh(other)
+            assert other.status == 'open'
+            assert LeadTimelineEntry.query.filter_by(
+                lead_id=lead.id,
+                event_type='status_changed',
+            ).count() == 0
 
-class TestAdjustForRecentSale:
     def test_moves_selected_task_due_date_without_changing_task(self, client, app):
         with app.app_context():
             sale_date = date.today() - timedelta(days=30)
@@ -1795,4 +1930,77 @@ class TestHubSpotTimelineImport:
             assert count == 0
             total = LeadTimelineEntry.query.filter_by(lead_id=lead.id).count()
             assert total == 0
+
+
+class TestSaleDateVerification:
+    @patch('app.services.cook_county_enrichment_service.ensure_automated_data_sources')
+    @patch('app.services.cook_county_enrichment_service.enqueue_cook_county_enrichment')
+    @patch('app.services.cook_county_enrichment_service.enrich_cook_county_lead')
+    def test_verify_sale_date_runs_sync_when_worker_unavailable(
+        self, mock_enrich, mock_enqueue, mock_ensure, client, app,
+    ):
+        """Explicit verify endpoint uses canonical enrichment and returns sale metadata."""
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '43 Sale Verify St',
+                most_recent_sale='6/12/2018',
+                property_city='Chicago',
+                property_state='IL',
+            )
+            mock_enqueue.return_value = False
+            mock_enrich.return_value = {
+                'lead_id': lead.id,
+                'skipped': False,
+                'plugins_run': 1,
+                'success': 0,
+                'no_results': 1,
+                'failed': 0,
+            }
+
+            response = client.post(
+                f'/api/leads/{lead.id}/sale-date-verification',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 200
+            data = response.get_json()
+            assert data['lead_id'] == lead.id
+            assert data['ran_sync'] is True
+            assert data['queued'] is False
+            assert data['message'] == 'Verification checked.'
+            mock_ensure.assert_called_once()
+            mock_enrich.assert_called_once_with(lead.id)
+
+    @patch('app.services.cook_county_enrichment_service.ensure_automated_data_sources')
+    @patch('app.services.cook_county_enrichment_service.enqueue_cook_county_enrichment')
+    @patch('app.services.cook_county_enrichment_service.enrich_cook_county_lead')
+    def test_verify_sale_date_surfaces_skip_reason(
+        self, mock_enrich, mock_enqueue, mock_ensure, client, app,
+    ):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '44 Sale Skip St',
+                most_recent_sale='6/12/2018',
+                property_city='Wheaton',
+                property_state='IL',
+            )
+            mock_enqueue.return_value = False
+            mock_enrich.return_value = {
+                'lead_id': lead.id,
+                'skipped': True,
+                'skip_reason': 'not_eligible',
+                'plugins_run': 0,
+            }
+
+            response = client.post(
+                f'/api/leads/{lead.id}/sale-date-verification',
+                headers=_AUTH_HEADERS,
+            )
+
+            assert response.status_code == 200
+            data = response.get_json()
+            assert data['message'] == 'Not eligible for Cook County enrichment.'
+            assert data['summary']['skipped'] is True
 

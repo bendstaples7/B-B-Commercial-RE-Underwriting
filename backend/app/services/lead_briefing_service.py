@@ -39,7 +39,7 @@ _TIMELINE_LIMIT = 40
 _BULLET_COUNT = 5
 _MAX_BULLET_CHARS = 180
 
-# Timeline event types that count as real contact (not admin/status/task chatter)
+# Timeline event types that count as real contact (not admin/status chatter)
 _CONTACT_EVENT_TYPES = frozenset({
     'note_added', 'hubspot_call', 'hubspot_note', 'call_logged', 'note_logged',
     'email_logged', 'meeting_logged', 'sms_logged', 'voicemail_logged',
@@ -52,9 +52,9 @@ _DANGLING_END_WORDS = frozenset({
     'that', 'this', 'these', 'those', 'meh',
 })
 
-# Mid-clause leftovers rarely start a real bullet; pronouns are allowed starts.
+# Mid-clause leftovers rarely start a real bullet; articles/pronouns are allowed.
 _DANGLING_START_WORDS = frozenset({
-    'a', 'an', 'the', 'and', 'or', 'but', 'for', 'with', 'to', 'of', 'in',
+    'and', 'or', 'but', 'for', 'with', 'to', 'of', 'in',
     'on', 'at', 'by', 'from', 'as', 'was', 'were', 'is', 'are', 'be', 'been',
     'about', 'which', 'that', 'this', 'these', 'those', 'meh',
 })
@@ -272,7 +272,9 @@ class LeadBriefingService:
         context: dict[str, Any],
         previous: Optional[dict[str, Any]],
     ) -> str:
-        context_json = json.dumps(context, indent=2, default=str)
+        context_json = self._escape_untrusted_context(
+            json.dumps(context, indent=2, default=str),
+        )
         if mode == 'revise':
             return _REVISE_PROMPT.format(
                 bullet_count=_BULLET_COUNT,
@@ -287,6 +289,15 @@ class LeadBriefingService:
             bullet_count=_BULLET_COUNT,
             max_chars=_MAX_BULLET_CHARS,
             context_json=context_json,
+        )
+
+    @staticmethod
+    def _escape_untrusted_context(raw: str) -> str:
+        """Prevent CRM text from closing the untrusted-context delimiter."""
+        return (
+            raw
+            .replace('<<<UNTRUSTED_LEAD_CONTEXT', '[[[UNTRUSTED_LEAD_CONTEXT')
+            .replace('UNTRUSTED_LEAD_CONTEXT>>>', 'UNTRUSTED_LEAD_CONTEXT]]]')
         )
 
     @staticmethod
@@ -306,6 +317,19 @@ class LeadBriefingService:
             'mode': raw.get('mode') or 'create',
         }
 
+    @staticmethod
+    def _entry_display_text(entry: LeadTimelineEntry, *, max_chars: int = 400) -> str:
+        """UI-parity text: summary, else metadata body/notes (HTML-stripped)."""
+        summary = strip_html_tags(entry.summary or "").strip()
+        if summary:
+            return summary[:max_chars]
+        meta = entry.event_metadata if isinstance(entry.event_metadata, dict) else {}
+        for key in ('body', 'notes'):
+            raw = meta.get(key)
+            if isinstance(raw, str) and raw.strip():
+                return strip_html_tags(raw)[:max_chars]
+        return ""
+
     def _build_context(self, lead: Lead) -> dict[str, Any]:
         open_tasks = (
             LeadTask.query
@@ -322,31 +346,38 @@ class LeadBriefingService:
             .all()
         )
 
-        recent_activity = []
+        contact_activity: list[dict[str, Any]] = []
+        other_activity: list[dict[str, Any]] = []
         for e in timeline:
-            summary = strip_html_tags(e.summary or "")[:220]
-            if not summary:
+            text = self._entry_display_text(e)
+            if not text:
                 continue
-            recent_activity.append({
+            row = {
                 "event_type": e.event_type,
                 "occurred_at": e.occurred_at.isoformat() if e.occurred_at else None,
                 "source": e.source,
-                "summary": summary,
-            })
+                "summary": text[:220],
+            }
+            if (e.event_type or '') in _CONTACT_EVENT_TYPES:
+                contact_activity.append(row)
+            else:
+                other_activity.append(row)
+        # Prefer contact events so status/task noise does not crowd HubSpot calls/notes
+        recent_activity = (contact_activity + other_activity)[:25]
 
         now = datetime.now(timezone.utc)
-        # Prefer a real contact event over admin/status/task timeline noise
+        # Prefer a real contact event over admin/status timeline noise
         last = next(
             (
                 e for e in timeline
                 if (e.event_type or '') in _CONTACT_EVENT_TYPES
-                and strip_html_tags(e.summary or "")
+                and self._entry_display_text(e)
             ),
             None,
         )
         if last is None:
             last = next(
-                (e for e in timeline if strip_html_tags(e.summary or "")),
+                (e for e in timeline if self._entry_display_text(e)),
                 None,
             )
         last_at = last.occurred_at if last else None
@@ -355,6 +386,7 @@ class LeadBriefingService:
         days_since = None
         if last_at is not None:
             days_since = max(0, int((now - last_at).total_seconds() // 86400))
+        last_summary = self._entry_display_text(last)[:220] if last else None
 
         return {
             # Identity for grounding only — prompt forbids restating on-page fields
@@ -365,9 +397,7 @@ class LeadBriefingService:
             "lead_score": lead.lead_score,
             "last_activity_at": last_at.isoformat() if last_at else None,
             "days_since_last_activity": days_since,
-            "last_activity_summary": (
-                strip_html_tags(last.summary or "")[:220] if last else None
-            ),
+            "last_activity_summary": last_summary,
             "open_tasks_note": (
                 "Already visible on Command Center — do not restate titles or due dates; "
                 "convert into a concrete dial plan for the NEXT ACTION bullet."
@@ -380,7 +410,7 @@ class LeadBriefingService:
                 }
                 for t in open_tasks
             ],
-            "recent_activity": recent_activity[:25],
+            "recent_activity": recent_activity,
         }
 
     def _call_gemini_api(self, prompt: str) -> str:
@@ -623,6 +653,66 @@ class LeadBriefingService:
 
         return False
 
+    def _context_last_contact_filler(self, context: Optional[dict[str, Any]]) -> Optional[str]:
+        """Deterministic LAST CONTACT bullet from derived last_activity fields."""
+        ctx = context or {}
+        summary = str(ctx.get('last_activity_summary') or '').strip()
+        days = ctx.get('days_since_last_activity')
+        last_at = ctx.get('last_activity_at')
+        if not summary and days is None and not last_at:
+            return None
+        date_bit = ''
+        if isinstance(last_at, str) and last_at:
+            try:
+                parsed = datetime.fromisoformat(last_at.replace('Z', '+00:00'))
+                date_bit = parsed.strftime('%b %d, %Y')
+            except ValueError:
+                date_bit = ''
+        when = ''
+        if isinstance(days, int):
+            if days == 0:
+                when = 'today'
+            elif days == 1:
+                when = 'yesterday'
+            else:
+                when = f'{days} days ago'
+        parts = []
+        if when and date_bit:
+            parts.append(f'Last outreach was {when} ({date_bit})')
+        elif when:
+            parts.append(f'Last outreach was {when}')
+        elif date_bit:
+            parts.append(f'Last outreach was on {date_bit}')
+        else:
+            parts.append('Last outreach is recorded')
+        if summary:
+            short = summary[:100].rstrip(' .,;:')
+            parts.append(f': {short}')
+        line = ''.join(parts).strip()
+        if not line.endswith(('.', '!', '?')):
+            line += '.'
+        return line if self._is_complete_bullet(line) else None
+
+    def _context_next_action_filler(self, context: Optional[dict[str, Any]]) -> Optional[str]:
+        """NEXT ACTION from recent contact language without pasting task titles."""
+        ctx = context or {}
+        blobs = []
+        summary = str(ctx.get('last_activity_summary') or '').lower()
+        if summary:
+            blobs.append(summary)
+        for row in ctx.get('recent_activity') or []:
+            blobs.append(str((row or {}).get('summary') or '').lower())
+        text = ' '.join(blobs)
+        if any(k in text for k in ('showing', 'walkthrough', 'walk through', 'appointment')):
+            return 'Confirm the walkthrough or showing time and what would make it useful.'
+        if 'voicemail' in text or 'left vm' in text or 'no answer' in text:
+            return 'Try again live and leave a short callback ask if you hit voicemail.'
+        if 'connected' in text or 'spoke' in text:
+            return 'Pick up where the last conversation left off and lock a concrete next step.'
+        if ctx.get('open_tasks'):
+            return 'Work the open follow-up and leave with a clear next ask on this dial.'
+        return None
+
     def _ensure_five(
         self,
         bullets: list[Optional[str]] | list[str],
@@ -634,22 +724,33 @@ class LeadBriefingService:
         # Normalize any densely-packed string list into slots
         if all(isinstance(b, str) for b in slots if b is not None) and None not in slots:
             pass
-        fillers = [
-            "Last outreach timing is unclear from the log — confirm before dialing.",
-            "Next step is not obvious from recent notes — ask what would make a walkthrough useful.",
+        soft_fillers = [
             "No strong objection pattern stands out in recent history.",
             "Verify the best phone or email before the next attempt.",
             "Keep the next ask small and concrete.",
         ]
+        unclear = "Last outreach timing is unclear from the log — confirm before dialing."
+        walkthrough = (
+            "Next step is not obvious from recent notes — ask what would make a walkthrough useful."
+        )
         used = {b for b in slots if isinstance(b, str)}
         for i in range(_BULLET_COUNT):
             if slots[i] is not None:
                 continue
-            for filler in fillers:
-                if filler not in used and not self._is_page_echo(filler, context):
-                    slots[i] = filler
-                    used.add(filler)
-                    break
+            candidate: Optional[str] = None
+            if i == 0:
+                candidate = self._context_last_contact_filler(context) or unclear
+            elif i == 1:
+                candidate = self._context_next_action_filler(context) or walkthrough
+            else:
+                for filler in soft_fillers:
+                    if filler not in used and not self._is_page_echo(filler, context):
+                        candidate = filler
+                        break
+            if candidate and candidate not in used and not self._is_page_echo(candidate, context):
+                if self._is_complete_bullet(candidate):
+                    slots[i] = candidate
+                    used.add(candidate)
         cleaned = [b for b in slots if isinstance(b, str) and self._is_complete_bullet(b)]
         if len(cleaned) < _BULLET_COUNT:
             raise GeminiResponseError(

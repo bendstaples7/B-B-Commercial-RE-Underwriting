@@ -1,18 +1,36 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { PropertySidebar } from '@/components/lead-detail/PropertySidebar'
 import type { CommandCenterPayload } from '@/types'
+import { commandCenterService } from '@/services/api'
+
+vi.mock('@/services/api', async () => {
+  const actual = await vi.importActual<typeof import('@/services/api')>('@/services/api')
+  return {
+    ...actual,
+    commandCenterService: {
+      ...actual.commandCenterService,
+      verifySaleDate: vi.fn(),
+    },
+  }
+})
 
 vi.stubGlobal('navigator', {
   clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
 })
 
 function renderSidebar(payload: CommandCenterPayload) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
   return render(
-    <MemoryRouter>
-      <PropertySidebar commandCenterData={payload} />
-    </MemoryRouter>,
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>
+        <PropertySidebar commandCenterData={payload} />
+      </MemoryRouter>
+    </QueryClientProvider>,
   )
 }
 
@@ -53,6 +71,12 @@ function makePayload(overrides: Partial<CommandCenterPayload> = {}): CommandCent
 describe('PropertySidebar phone confidence', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(commandCenterService.verifySaleDate).mockResolvedValue({
+      lead_id: 1,
+      queued: false,
+      ran_sync: true,
+      message: 'Verification checked.',
+    })
   })
 
   it('shows confidence chip from contacts[].phones when contacts exist', () => {
@@ -329,5 +353,166 @@ describe('PropertySidebar phone confidence', () => {
     expect(screen.getByText(/100 Main St/)).toBeInTheDocument()
     expect(screen.queryByTestId('owner-mailing-empty')).not.toBeInTheDocument()
     expect(screen.queryByTestId('owner-mailing-missing-for-mail')).not.toBeInTheDocument()
+  })
+})
+
+describe('PropertySidebar always-visible sale and PIN', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(commandCenterService.verifySaleDate).mockResolvedValue({
+      lead_id: 1,
+      queued: false,
+      ran_sync: true,
+      message: 'Verification checked.',
+    })
+  })
+
+  it('shows None for missing Most Recent Sale and PIN', () => {
+    renderSidebar(
+      makePayload({
+        county_assessor_pin: null,
+        most_recent_sale_display: null,
+      } as Partial<CommandCenterPayload>),
+    )
+
+    expect(screen.getByTestId('sidebar-most-recent-sale')).toHaveTextContent('Most Recent Sale')
+    expect(screen.getByTestId('sidebar-most-recent-sale')).toHaveTextContent('None')
+    expect(screen.getByTestId('sidebar-county-assessor-pin')).toHaveTextContent('PIN')
+    expect(screen.getByTestId('sidebar-county-assessor-pin')).toHaveTextContent('None')
+  })
+
+  it('shows sale date and PIN when present', () => {
+    renderSidebar(
+      makePayload({
+        county_assessor_pin: '14-21-123-456-0000',
+        most_recent_sale_display: '10/21/2015',
+        most_recent_sale_price: 250000,
+      } as Partial<CommandCenterPayload>),
+    )
+
+    expect(screen.getByTestId('sidebar-most-recent-sale')).toHaveTextContent('10/21/2015')
+    expect(screen.getByTestId('sidebar-most-recent-sale')).toHaveTextContent('$250,000')
+    expect(screen.getByTestId('sidebar-county-assessor-pin')).toHaveTextContent(
+      '14-21-123-456-0000',
+    )
+  })
+
+  it('offers on-demand verification when sale date is unverified', async () => {
+    renderSidebar(
+      makePayload({
+        id: 643,
+        most_recent_sale_display: '06/12/2018',
+        sale_date_meta: {
+          last_checked_at: null,
+          last_updated_at: null,
+          source: null,
+        },
+      } as Partial<CommandCenterPayload>),
+    )
+
+    expect(screen.getByText('Sale date not verified yet')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('sidebar-verify-sale-date'))
+
+    await waitFor(() => {
+      expect(commandCenterService.verifySaleDate).toHaveBeenCalledWith(643)
+    })
+    expect(await screen.findByText('Verification checked.')).toBeInTheDocument()
+  })
+
+  it('shows a spinner while sale-date verification is in flight', async () => {
+    let resolveVerify: (value: {
+      lead_id: number
+      queued: boolean
+      ran_sync: boolean
+      message?: string
+    }) => void = () => undefined
+    vi.mocked(commandCenterService.verifySaleDate).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveVerify = resolve
+        }),
+    )
+
+    renderSidebar(
+      makePayload({
+        id: 643,
+        most_recent_sale_display: '06/12/2018',
+        sale_date_meta: {
+          last_checked_at: null,
+          last_updated_at: null,
+          source: null,
+        },
+      } as Partial<CommandCenterPayload>),
+    )
+
+    fireEvent.click(screen.getByTestId('sidebar-verify-sale-date'))
+    expect(screen.getByTestId('sidebar-sale-verify-spinner')).toBeInTheDocument()
+    expect(screen.getByTestId('sidebar-verify-sale-date')).toHaveTextContent('Verifying')
+
+    resolveVerify({ lead_id: 643, queued: false, ran_sync: true, message: 'Verification checked.' })
+    expect(await screen.findByText('Verification checked.')).toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-sale-verify-spinner')).not.toBeInTheDocument()
+  })
+
+  it('shows a checkmark when sale date was verified within the last month', () => {
+    const checkedAt = new Date()
+    checkedAt.setDate(checkedAt.getDate() - 10)
+
+    renderSidebar(
+      makePayload({
+        most_recent_sale_display: '06/12/2018',
+        sale_date_meta: {
+          last_checked_at: checkedAt.toISOString(),
+          source: 'Cook County records',
+          status: 'ok',
+        },
+      } as Partial<CommandCenterPayload>),
+    )
+
+    expect(screen.getByTestId('sidebar-sale-verified-check')).toBeInTheDocument()
+  })
+
+  it('does not show a checkmark when verification is older than a month', () => {
+    const checkedAt = new Date()
+    checkedAt.setDate(checkedAt.getDate() - 45)
+
+    renderSidebar(
+      makePayload({
+        most_recent_sale_display: '06/12/2018',
+        sale_date_meta: {
+          last_checked_at: checkedAt.toISOString(),
+          source: 'Cook County records',
+        },
+      } as Partial<CommandCenterPayload>),
+    )
+
+    expect(screen.queryByTestId('sidebar-sale-verified-check')).not.toBeInTheDocument()
+  })
+
+  it('surfaces skip reason instead of checked when enrichment is skipped', async () => {
+    vi.mocked(commandCenterService.verifySaleDate).mockResolvedValue({
+      lead_id: 99,
+      queued: false,
+      ran_sync: true,
+      message: 'Not eligible for Cook County enrichment.',
+      summary: { skipped: true, skip_reason: 'not_eligible' },
+    })
+
+    renderSidebar(
+      makePayload({
+        id: 99,
+        most_recent_sale_display: '06/12/2018',
+        sale_date_meta: {
+          last_checked_at: null,
+          last_updated_at: null,
+          source: null,
+        },
+      } as Partial<CommandCenterPayload>),
+    )
+
+    fireEvent.click(screen.getByTestId('sidebar-verify-sale-date'))
+    expect(
+      await screen.findByText('Not eligible for Cook County enrichment.'),
+    ).toBeInTheDocument()
   })
 })

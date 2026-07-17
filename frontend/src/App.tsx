@@ -126,7 +126,7 @@ import { GoogleMapsLoadedContext } from '@/context/GoogleMapsContext'
 // Declare it outside the component so it's stable across renders.
 const GOOGLE_MAPS_LIBRARIES: ['places'] = ['places']
 
-/** Work queue sub-groups nested under Properties → Work Queues. */
+/** Work queue sub-groups under the top-level Work Queues nav section. */
 type NavQueueItem = {
   label: string
   path: string
@@ -195,6 +195,18 @@ type NavGroup = NavItemGroup | NavSubgroupGroup
 /** Nav structure: top-level sections, each with grouped child items. */
 const NAV_SECTIONS = [
   {
+    label: 'Work Queues',
+    path: '/queues/todays-action',
+    icon: <TodayIcon />,
+    headerNavigates: true,
+    groups: [
+      {
+        label: null,
+        subgroups: WORK_QUEUE_SUBGROUPS,
+      },
+    ],
+  },
+  {
     label: 'Dashboard',
     path: '/dashboard',
     icon: <SpaceDashboardIcon />,
@@ -240,10 +252,6 @@ const NAV_SECTIONS = [
           { label: 'Data Sources', path: '/leads/data-sources', icon: <StorageIcon />, badgeKey: null },
           { label: 'Outreach Lists', path: '/properties/outreach-lists', icon: <ListAltIcon />, badgeKey: null },
         ],
-      },
-      {
-        label: 'Work Queues',
-        subgroups: WORK_QUEUE_SUBGROUPS,
       },
     ],
   },
@@ -1363,6 +1371,7 @@ function App() {
 
   // Track which top-level sections are expanded; default all open
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    '/queues/todays-action': true,
     '/dashboard': true,
     '/analysis': true,
     '/properties': true,

@@ -9,8 +9,7 @@ from app import db
 from app.models.hubspot_signal import HubSpotSignal
 from app.models.hubspot_signal_dictionary import HubSpotSignalDictionary
 from app.models.lead import Lead
-from app.models.task import Task
-from app.models.task_association import TaskAssociation
+from app.models.lead_task import LeadTask
 
 logger = logging.getLogger(__name__)
 
@@ -88,22 +87,20 @@ class HubSpotSignalExtractorService:
     @staticmethod
     def _has_overdue_task(lead_id: int) -> bool:
         """
-        Return True if the lead has at least one open Task whose due_date is
-        in the past (i.e., the task is overdue).
+        Return True if the lead has at least one open LeadTask whose due_date is
+        on or before today (i.e., the task is overdue or due today).
 
         Per Requirement 16.4: FOLLOW_UP_OVERDUE is set based on the presence
-        of an open Task with a past due date, NOT on keyword matching alone.
+        of an open task with a past due date, NOT on keyword matching alone.
         """
-        now = datetime.utcnow()
+        today = datetime.utcnow().date()
         overdue_task = (
-            db.session.query(Task)
-            .join(TaskAssociation, TaskAssociation.task_id == Task.id)
+            LeadTask.query
             .filter(
-                TaskAssociation.target_type == 'lead',
-                TaskAssociation.target_id == lead_id,
-                Task.status == 'open',
-                Task.due_date != None,  # noqa: E711
-                Task.due_date < now,
+                LeadTask.lead_id == lead_id,
+                LeadTask.status == 'open',
+                LeadTask.due_date.isnot(None),
+                LeadTask.due_date <= today,
             )
             .first()
         )

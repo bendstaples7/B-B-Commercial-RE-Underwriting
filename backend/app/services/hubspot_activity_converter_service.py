@@ -273,6 +273,27 @@ class HubSpotActivityConverterService:
                 ))
 
         self._upsert_lead_tasks_for_task(task, associations)
+        if status == 'completed':
+            task.completion_timestamp = (
+                self._parse_engagement_completion_time(engagement.raw_payload)
+                or datetime.utcnow()
+            )
+            lead_ids = [
+                int(a['target_id'])
+                for a in associations
+                if a.get('target_type') == 'lead' and a.get('target_id') is not None
+            ]
+            timeline_lead_ids = [
+                lead_id
+                for lead_id in lead_ids
+                if not self._has_open_lead_task(str(engagement.hubspot_id), [lead_id])
+            ]
+            if timeline_lead_ids:
+                self._write_inbound_completed_timelines(
+                    task,
+                    lead_ids=timeline_lead_ids,
+                    occurred_at=task.completion_timestamp,
+                )
         db.session.commit()
         logger.info(
             "Created Task(id=%s) from HubSpot engagement %s (status=%s).",
@@ -317,6 +338,9 @@ class HubSpotActivityConverterService:
             changed = True
 
         self._upsert_lead_tasks_for_task(task)
+        if changed and old_status != 'completed' and new_status == 'completed':
+            # Write timelines before commit so lead_id-only legacy links persist.
+            self._write_inbound_completed_timelines_for_unprotected_leads(task)
         db.session.commit()
 
         if changed:
@@ -346,6 +370,11 @@ class HubSpotActivityConverterService:
         body = props.get('hs_task_body') or None
         due_date = self._parse_hubspot_due_date(props.get('hs_timestamp'))
         raw_payload = {'properties': props, 'id': hs_id}
+        completion_at = (
+            self._parse_hubspot_completion_time(props)
+            if new_status == 'completed'
+            else None
+        )
 
         from app.models.task_association import TaskAssociation
 
@@ -368,11 +397,20 @@ class HubSpotActivityConverterService:
                 target_id=lead_id,
             ))
             if new_status == 'completed':
-                task.completion_timestamp = datetime.utcnow()
+                task.completion_timestamp = completion_at or datetime.utcnow()
             self._upsert_lead_tasks_for_task(
                 task,
                 [{'target_type': 'lead', 'target_id': lead_id}],
             )
+            if (
+                new_status == 'completed'
+                and not self._has_open_lead_task(hs_id, [lead_id])
+            ):
+                self._write_inbound_completed_timelines(
+                    task,
+                    lead_ids=[lead_id],
+                    occurred_at=completion_at,
+                )
             db.session.commit()
             logger.info(
                 'Created Task(id=%s) from live HubSpot CRM task %s (status=%s).',
@@ -395,6 +433,23 @@ class HubSpotActivityConverterService:
             ))
             association_added = True
 
+        # Never let HubSpot clear or push an open/overdue local due date later
+        # (e.g. status-change auto-sync overwriting an overdue follow-up).
+        if (
+            old_status in ('open', 'overdue')
+            and task.due_date is not None
+            and (due_date is None or due_date > task.due_date)
+        ):
+            logger.info(
+                'Keeping local due_date for Task(id=%s) hubspot_task_id=%s: '
+                'HubSpot %s is later than local %s',
+                task.id,
+                hs_id,
+                due_date,
+                task.due_date,
+            )
+            due_date = task.due_date
+
         changed = (
             association_added
             or task.status != new_status
@@ -407,9 +462,10 @@ class HubSpotActivityConverterService:
         task.due_date = due_date
         task.raw_payload = raw_payload
         task.status = new_status
+        became_completed = old_status != 'completed' and new_status == 'completed'
         if new_status == 'completed':
             if task.completion_timestamp is None:
-                task.completion_timestamp = datetime.utcnow()
+                task.completion_timestamp = completion_at or datetime.utcnow()
                 changed = True
         elif task.completion_timestamp is not None:
             task.completion_timestamp = None
@@ -419,6 +475,21 @@ class HubSpotActivityConverterService:
             task,
             [{'target_type': 'lead', 'target_id': lead_id}],
         )
+
+        if became_completed:
+            from app.models import LeadTask
+            lt = LeadTask.query.filter_by(
+                hubspot_task_id=hs_id, lead_id=lead_id,
+            ).first()
+            # When an open LeadTask is preserved (next-action SoT), do not
+            # write a HubSpot "task completed" timeline that contradicts Open Tasks.
+            if lt is None or lt.status != 'open':
+                self._write_inbound_completed_timelines(
+                    task,
+                    lead_ids=[lead_id],
+                    occurred_at=completion_at or task.completion_timestamp,
+                )
+            changed = True
 
         if not changed:
             db.session.commit()
@@ -489,6 +560,114 @@ class HubSpotActivityConverterService:
         hs_status = (props.get('hs_task_status') or '').upper()
         return 'completed' if hs_status == 'COMPLETED' else 'open'
 
+    def _write_inbound_completed_timelines_for_unprotected_leads(
+        self,
+        task: Task,
+        *,
+        occurred_at: datetime | None = None,
+    ) -> None:
+        """Write inbound completion timelines for leads without open LeadTasks."""
+        if not task.hubspot_task_id:
+            return
+        hs_id = str(task.hubspot_task_id)
+        lead_ids: set[int] = set()
+        for row in TaskAssociation.query.filter_by(
+            task_id=task.id,
+            target_type='lead',
+        ).all():
+            lead_ids.add(int(row.target_id))
+        if task.lead_id is not None:
+            lead_ids.add(int(task.lead_id))
+        eligible = [
+            lead_id
+            for lead_id in lead_ids
+            if not self._has_open_lead_task(hs_id, [lead_id])
+        ]
+        if eligible:
+            self._write_inbound_completed_timelines(
+                task,
+                lead_ids=eligible,
+                occurred_at=occurred_at,
+            )
+
+    def _write_inbound_completed_timelines(
+        self,
+        task: Task,
+        *,
+        lead_ids: list[int] | None = None,
+        occurred_at: datetime | None = None,
+    ) -> None:
+        """Write task_completed timeline rows for HubSpot inbound completions."""
+        if not task.hubspot_task_id:
+            return
+        from app.services.hubspot_task_completion_service import (
+            ensure_inbound_hubspot_task_completed_timeline,
+        )
+
+        ids: set[int] = set(lead_ids or [])
+        if not ids:
+            for row in TaskAssociation.query.filter_by(
+                task_id=task.id,
+                target_type='lead',
+            ).all():
+                ids.add(int(row.target_id))
+            if task.lead_id is not None:
+                ids.add(int(task.lead_id))
+
+        when = occurred_at or task.completion_timestamp or datetime.utcnow()
+        for lead_id in ids:
+            ensure_inbound_hubspot_task_completed_timeline(
+                lead_id,
+                hubspot_task_id=str(task.hubspot_task_id),
+                title=task.title or '(No Subject)',
+                occurred_at=when,
+                task_id=task.id,
+            )
+
+    @staticmethod
+    def _has_open_lead_task(hubspot_task_id: str, lead_ids: list[int]) -> bool:
+        """True when inbound completion would contradict an open LeadTask."""
+        if not lead_ids:
+            return False
+        from app.models import LeadTask
+        return (
+            LeadTask.query
+            .filter(
+                LeadTask.hubspot_task_id == str(hubspot_task_id),
+                LeadTask.lead_id.in_(lead_ids),
+                LeadTask.status == 'open',
+            )
+            .first()
+            is not None
+        )
+
+    @staticmethod
+    def _parse_engagement_completion_time(raw_payload: dict) -> datetime | None:
+        """Read a real completion stamp from a legacy engagement payload."""
+        properties = raw_payload.get('properties', {}) or {}
+        parsed = HubSpotActivityConverterService._parse_hubspot_completion_time(
+            properties,
+        )
+        if parsed is not None:
+            return parsed
+        metadata = raw_payload.get('metadata', {}) or {}
+        for key in ('completionTimestamp', 'completionDate', 'completedAt'):
+            raw = metadata.get(key)
+            if raw in (None, ''):
+                continue
+            parsed = HubSpotActivityConverterService._parse_hubspot_due_date(raw)
+            if parsed is not None:
+                return parsed
+        return None
+
+    @staticmethod
+    def _parse_hubspot_completion_time(props: dict) -> datetime | None:
+        """Return HubSpot's explicit completion stamp, never last-modified."""
+        raw = props.get('hs_task_completion_date')
+        if raw not in (None, ''):
+            return HubSpotActivityConverterService._parse_hubspot_due_date(raw)
+        return None
+
     @staticmethod
     def _map_hubspot_task_status(engagement) -> str:
         """Map HubSpot task status fields to internal task status."""
@@ -514,6 +693,8 @@ class HubSpotActivityConverterService:
         for lead_id in lead_ids:
             try:
                 ActionEngineService.recompute_and_persist(lead_id)
+                from app.services.next_action_invariant import ensure_next_action_after_task_change
+                ensure_next_action_after_task_change(lead_id)
             except Exception as exc:
                 db.session.rollback()
                 logger.warning(

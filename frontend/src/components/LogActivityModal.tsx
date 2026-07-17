@@ -8,6 +8,7 @@ import {
   useMediaQuery,
   useTheme,
 } from '@mui/material'
+import type { SxProps, Theme } from '@mui/material/styles'
 import { useQuery } from '@tanstack/react-query'
 import type { LeadTask, LeadTimelineEntry } from '@/types'
 import { contactService } from '@/services/api'
@@ -58,27 +59,46 @@ export function LogActivityModal({
     onSaved(entry, activityType, meta)
   }
 
+  const isCall = activityType === 'call'
+  const contentSx: SxProps<Theme> = isCall
+    ? {
+        overflowX: 'hidden',
+        overflowY: 'visible',
+        pt: 1.5,
+        pb: 1.5,
+        '& .MuiFormControl-root': { overflow: 'visible' },
+      }
+    : {
+        overflowY: 'auto',
+        overflowX: 'hidden',
+        maxHeight: fullScreen ? 'none' : 'min(80vh, 720px)',
+        pt: 2,
+        '& .MuiFormControl-root': { overflow: 'visible' },
+      }
+
   return (
     <Dialog
       open={open}
       onClose={onClose}
-      maxWidth="sm"
+      maxWidth={isCall ? 'lg' : 'sm'}
       fullWidth
       fullScreen={fullScreen}
-      scroll="paper"
+      scroll={isCall ? 'body' : 'paper'}
       aria-labelledby="log-activity-dialog-title"
       data-testid={`log-activity-modal-${activityType}`}
+      PaperProps={
+        isCall
+          ? { sx: { maxWidth: 980 } }
+          : undefined
+      }
     >
-      <DialogTitle id="log-activity-dialog-title">{TITLES[activityType]}</DialogTitle>
-      <DialogContent
-        dividers
-        sx={{
-          overflowY: 'auto',
-          maxHeight: fullScreen ? 'none' : 'min(80vh, 720px)',
-          pt: 2,
-          '& .MuiFormControl-root': { overflow: 'visible' },
-        }}
+      <DialogTitle
+        id="log-activity-dialog-title"
+        sx={isCall ? { py: 1.25, px: 2.5 } : undefined}
       >
+        {TITLES[activityType]}
+      </DialogTitle>
+      <DialogContent dividers sx={contentSx}>
         {activityType === 'note' && (
           <LogNoteForm leadId={leadId} onSaved={handleSaved} onCancel={onClose} />
         )}

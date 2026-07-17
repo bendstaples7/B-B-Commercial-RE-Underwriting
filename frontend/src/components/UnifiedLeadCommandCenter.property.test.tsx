@@ -1113,9 +1113,9 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
     )
   }, 30000)
 
-  // Feature: unified-lead-command-center, Property 13: Task completion optimistically shrinks the task list
+  // Feature: unified-lead-command-center, Property 13: Successful task completion shrinks the task list
   // **Validates: Requirements 7.3**
-  it('Property 13: Task completion optimistically shrinks the task list', async () => {
+  it('Property 13: Successful task completion shrinks the task list', async () => {
     const { commandCenterService, leadTaskService } = await import('@/services/api')
     const { leadService } = await import('@/services/leadApi')
     const mockGetCommandCenter = commandCenterService.getCommandCenter as ReturnType<typeof vi.fn>
@@ -1146,8 +1146,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         mockGetCommandCenter.mockResolvedValue(payload)
         mockGetLeadDetail.mockResolvedValue(minimalPropertyDetail(1))
 
-        // Mock completeTask to never resolve — tests optimistic removal before backend completes
-        mockCompleteTask.mockReturnValue(new Promise(() => {}))
+        mockCompleteTask.mockResolvedValue({})
 
         const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
         const container = document.createElement('div')
@@ -1175,13 +1174,21 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         const firstTaskCompleteBtn = tasksPanel!.querySelector('[data-testid="complete-task-btn-1"]')
         expect(firstTaskCompleteBtn).not.toBeNull()
         firstTaskCompleteBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+        if (tasks.length === 1) {
+          await waitFor(() => {
+            expect(
+              tasksPanel!.querySelector('[data-testid="last-task-leave-as-is-1"]'),
+            ).not.toBeNull()
+          })
+          tasksPanel!
+            .querySelector('[data-testid="last-task-leave-as-is-1"]')!
+            .dispatchEvent(new MouseEvent('click', { bubbles: true }))
+        }
 
-        // Wait a tick for the optimistic state update to propagate
-        await new Promise(r => setTimeout(r, 0))
-
-        // Assert count is N-1 immediately (optimistic removal before backend resolves)
-        const newCount = tasksPanel!.querySelectorAll('[data-testid^="task-item-"]').length
-        expect(newCount).toBe(tasks.length - 1)
+        await waitFor(() => {
+          const newCount = tasksPanel!.querySelectorAll('[data-testid^="task-item-"]').length
+          expect(newCount).toBe(tasks.length - 1)
+        })
 
         unmount()
         document.body.removeChild(container)

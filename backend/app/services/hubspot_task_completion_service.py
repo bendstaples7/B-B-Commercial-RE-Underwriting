@@ -7,6 +7,7 @@ consumers stay consistent until they migrate fully to LeadTask.
 from __future__ import annotations
 
 import logging
+from hashlib import sha1
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
 
@@ -417,9 +418,235 @@ def complete_hubspot_task(
                 lead_id,
                 exc,
             )
+        else:
+            return HubSpotCompletionResult(
+                completed=True,
+                hubspot_task_id=local.hubspot_task_id,
+                hubspot_synced=hubspot_synced,
+            )
+
+    from app.services.next_action_invariant import ensure_next_action_after_task_change
+    ensure_next_action_after_task_change(lead_id)
 
     return HubSpotCompletionResult(
         completed=True,
         hubspot_task_id=local.hubspot_task_id,
         hubspot_synced=hubspot_synced,
     )
+
+
+def _inbound_timeline_activity_id(lead_id: int, hubspot_task_id: str) -> str:
+    """Lead-scoped idempotency key that fits the 50-character DB column."""
+    raw = f'hs-task-completed:{lead_id}:{hubspot_task_id}'
+    if len(raw) <= 50:
+        return raw
+    digest = sha1(str(hubspot_task_id).encode('utf-8')).hexdigest()[:20]
+    return f'hs-task-completed:{lead_id}:{digest}'
+
+
+def ensure_inbound_hubspot_task_completed_timeline(
+    lead_id: int,
+    *,
+    hubspot_task_id: str,
+    title: str,
+    occurred_at: datetime | None = None,
+    task_id: int | None = None,
+) -> bool:
+    """Append a task_completed timeline row for a HubSpot-side completion.
+
+    Idempotent via ``hubspot_activity_id`` / metadata ``hubspot_task_id``.
+    Returns True when a new row was inserted.
+    """
+    hs_id = str(hubspot_task_id).strip()
+    if not hs_id:
+        return False
+
+    activity_id = _inbound_timeline_activity_id(lead_id, hs_id)
+    existing = LeadTimelineEntry.query.filter_by(
+        hubspot_activity_id=activity_id,
+    ).first()
+    if existing is not None:
+        return False
+
+    # Also skip when an older row already recorded this HubSpot task id.
+    for row in (
+        LeadTimelineEntry.query.filter_by(
+            lead_id=lead_id,
+            event_type='task_completed',
+            is_deleted=False,
+        ).all()
+    ):
+        meta = row.event_metadata or {}
+        if str(meta.get('hubspot_task_id') or '') == hs_id:
+            return False
+
+    when = occurred_at or datetime.utcnow()
+    if when.tzinfo is not None:
+        when = when.astimezone(timezone.utc).replace(tzinfo=None)
+
+    lead_task = LeadTask.query.filter_by(
+        lead_id=lead_id,
+        hubspot_task_id=hs_id,
+    ).first()
+    db.session.add(
+        LeadTimelineEntry(
+            lead_id=lead_id,
+            event_type='task_completed',
+            occurred_at=when,
+            source='hubspot',
+            actor='HubSpot',
+            summary=f'HubSpot task completed: {title}',
+            hubspot_activity_id=activity_id,
+            event_metadata={
+                'crm_task_id': task_id,
+                'lead_task_id': lead_task.id if lead_task is not None else None,
+                'hubspot_task_id': hs_id,
+                'title': title,
+                'hubspot_synced': True,
+                'note': 'Completed in HubSpot (inbound sync)',
+            },
+        ),
+    )
+    return True
+
+
+def _crm_task_completed_in_hubspot(crm_task: Task) -> bool:
+    """True when the CRM mirror reflects a HubSpot-side completion, not a local mirror."""
+    if crm_task.status != 'completed' or crm_task.source != 'hubspot_import':
+        return False
+    payload = crm_task.raw_payload if isinstance(crm_task.raw_payload, dict) else {}
+    props = payload.get('properties', {}) if isinstance(payload.get('properties'), dict) else {}
+    hs_status = str(props.get('hs_task_status') or '').upper()
+    if hs_status == 'COMPLETED':
+        return True
+    metadata = payload.get('metadata', {}) if isinstance(payload.get('metadata'), dict) else {}
+    for key in ('status', 'taskStatus'):
+        if str(metadata.get(key) or '').upper() in ('COMPLETED', 'DONE'):
+            return True
+    return False
+
+
+def _lead_task_completed_locally(lead_task: LeadTask) -> bool:
+    """True when a native completion timeline already exists for this LeadTask."""
+    for row in LeadTimelineEntry.query.filter_by(
+        lead_id=lead_task.lead_id,
+        event_type='task_completed',
+        is_deleted=False,
+    ).all():
+        meta = row.event_metadata or {}
+        if meta.get('lead_task_id') == lead_task.id and row.source in ('manual', 'system'):
+            return True
+        if meta.get('task_id') == lead_task.id and row.source in ('manual', 'system'):
+            return True
+    return False
+
+
+def backfill_missing_hubspot_task_completed_timelines(
+    *,
+    dry_run: bool = True,
+    limit: int | None = None,
+    lead_id: int | None = None,
+) -> dict:
+    """Insert missing task_completed timeline rows for completed HubSpot LeadTasks.
+
+    Returns counts: scanned, missing, applied, skipped.
+    """
+    q = LeadTask.query.filter(
+        LeadTask.hubspot_task_id.isnot(None),
+        LeadTask.status == 'completed',
+    ).order_by(LeadTask.id.asc())
+    if lead_id is not None:
+        q = q.filter_by(lead_id=lead_id)
+    if limit is not None:
+        q = q.limit(limit)
+
+    scanned = 0
+    missing = 0
+    applied = 0
+    skipped = 0
+
+    for lt in q.yield_per(100):
+        scanned += 1
+        hs_id = str(lt.hubspot_task_id)
+        crm_task = Task.query.filter_by(hubspot_task_id=hs_id).first()
+        # A local LeadTask completion is not proof that HubSpot completed it.
+        # Only backfill inbound history when the canonical CRM payload agrees.
+        if (
+            crm_task is None
+            or not _crm_task_completed_in_hubspot(crm_task)
+            or _lead_task_completed_locally(lt)
+        ):
+            skipped += 1
+            continue
+        activity_id = _inbound_timeline_activity_id(lt.lead_id, hs_id)
+        if LeadTimelineEntry.query.filter_by(hubspot_activity_id=activity_id).first():
+            skipped += 1
+            continue
+        has_meta_match = False
+        for row in LeadTimelineEntry.query.filter_by(
+            lead_id=lt.lead_id,
+            event_type='task_completed',
+            is_deleted=False,
+        ).all():
+            meta = row.event_metadata or {}
+            if str(meta.get('hubspot_task_id') or '') == hs_id:
+                has_meta_match = True
+                break
+        if has_meta_match:
+            skipped += 1
+            continue
+
+        missing += 1
+        occurred = _resolve_backfill_occurred_at(lt)
+        if dry_run:
+            logger.info(
+                'dry-run: would add task_completed timeline lead_id=%s hubspot_task_id=%s occurred_at=%s',
+                lt.lead_id,
+                hs_id,
+                occurred,
+            )
+            continue
+
+        created = ensure_inbound_hubspot_task_completed_timeline(
+            lt.lead_id,
+            hubspot_task_id=hs_id,
+            title=lt.title or '(No Subject)',
+            occurred_at=occurred,
+            task_id=crm_task.id,
+        )
+        if created:
+            applied += 1
+            if applied % 100 == 0:
+                db.session.commit()
+
+    if not dry_run and applied:
+        db.session.commit()
+
+    return {
+        'scanned': scanned,
+        'missing': missing,
+        'applied': applied,
+        'skipped': skipped,
+        'dry_run': dry_run,
+    }
+
+
+def _resolve_backfill_occurred_at(lt: LeadTask) -> datetime:
+    """Prefer HubSpot completion stamps over local upsert times."""
+    from app.models.task import Task
+    from app.services.hubspot_activity_converter_service import (
+        HubSpotActivityConverterService,
+    )
+
+    crm = Task.query.filter_by(hubspot_task_id=str(lt.hubspot_task_id)).first()
+    if crm is not None:
+        props = (crm.raw_payload or {}).get('properties') or {}
+        if props:
+            parsed = HubSpotActivityConverterService._parse_hubspot_completion_time(props)
+            if parsed is not None:
+                return parsed
+        if crm.completion_timestamp is not None:
+            return crm.completion_timestamp
+    if lt.completed_at is not None:
+        return lt.completed_at
+    return datetime.utcnow()

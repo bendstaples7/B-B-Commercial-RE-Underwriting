@@ -18,12 +18,14 @@ import {
   TableHead,
   TableRow,
   Tabs,
+  Tooltip,
   Typography,
 } from '@mui/material'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import HomeWorkIcon from '@mui/icons-material/HomeWork'
 import ApartmentIcon from '@mui/icons-material/Apartment'
+import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import { multifamilyService } from '@/services/api'
 import { leadService } from '@/services/leadApi'
 import { formatPhoneNumber } from '@/utils/phone'
@@ -42,7 +44,7 @@ import { ScoreHistoryTimeline } from '@/components/ScoreHistoryTimeline'
 import { ScoreLegend } from '@/components/ScoreLegend'
 import { hasNonBlankPhones, PhoneList } from '@/components/PhoneRow'
 import { MotivationSignalsPanel } from '@/components/lead-detail/MotivationSignalsPanel'
-import { formatSaleDateFreshness } from '@/utils/saleDateFreshness'
+import { formatSaleDateFreshness, isSaleDateVerifiedWithinDays } from '@/utils/saleDateFreshness'
 import { contactDisplayName } from '@/utils/propertyContacts'
 import { formatImportNote } from './leadDetailFormatters'
 import { ccSubsectionTitleSx } from '@/components/lead-detail/commandCenterChrome'
@@ -303,14 +305,45 @@ export function LeadDetailTabPanel({
             ['Units', leadData.units],
             ['Units Allowed', leadData.units_allowed],
             ['Zoning', leadData.zoning],
-            ['County Assessor PIN', leadData.county_assessor_pin],
+            [
+              'County Assessor PIN',
+              leadData.county_assessor_pin?.trim() || 'None',
+            ],
             ['Tax Bill 2021', leadData.tax_bill_2021 != null ? `$${leadData.tax_bill_2021.toLocaleString()}` : null],
-            ['Most Recent Sale', commandCenterData.most_recent_sale_display ?? leadData.most_recent_sale],
+            [
+              'Most Recent Sale',
+              (() => {
+                const saleText =
+                  (commandCenterData.most_recent_sale_display ?? leadData.most_recent_sale) ||
+                  'None'
+                if (
+                  saleText === 'None' ||
+                  !isSaleDateVerifiedWithinDays(commandCenterData.sale_date_meta)
+                ) {
+                  return saleText
+                }
+                return (
+                  <Box
+                    component="span"
+                    sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}
+                  >
+                    {saleText}
+                    <Tooltip title="Verified within the last month">
+                      <CheckCircleIcon
+                        sx={{ fontSize: 14, color: 'success.main' }}
+                        aria-label="Verified within the last month"
+                        data-testid="info-sale-verified-check"
+                      />
+                    </Tooltip>
+                  </Box>
+                )
+              })(),
+            ],
           ])}
           {formatSaleDateFreshness(commandCenterData.sale_date_meta) && (
             <Typography
               variant="caption"
-              color="text.disabled"
+              color="text.secondary"
               sx={{ display: 'block', mt: -2, mb: 3, pl: 1 }}
               data-testid="info-most-recent-sale-freshness"
             >

@@ -6,8 +6,6 @@ from sqlalchemy import exists, and_, or_, case, select, func
 
 from app import db
 from app.models import Lead, LeadTask, LeadTimelineEntry, MailQueueItem
-from app.models.task import Task
-from app.models.task_association import TaskAssociation
 from app.services.queue_order_cache import queue_order_cache
 from app.services.open_letter_contact_mapper import is_owner_mailable_lead
 from app.services.recommended_action_metadata import get_recommended_action_display
@@ -115,7 +113,7 @@ def _leads_to_queue_rows(leads: list) -> list[dict]:
 
 
 def _due_task_context(lead_ids: list[int], cutoff: date) -> dict[int, dict]:
-    """Return the oldest due task from native and CRM task stores."""
+    """Return the oldest due open LeadTask for each lead (LeadTask-only SoT)."""
     if not lead_ids:
         return {}
     tasks = (
@@ -130,66 +128,13 @@ def _due_task_context(lead_ids: list[int], cutoff: date) -> dict[int, dict]:
         .all()
     )
     context: dict[int, dict] = {}
-    sort_keys: dict[int, tuple[datetime, int, int]] = {}
-
-    def consider(
-        lead_id: int,
-        title: str,
-        due_at: datetime,
-        source_rank: int,
-        task_id: int,
-    ) -> None:
-        """Keep the earliest due task while returning a date-only API field."""
-        comparable_due = due_at.replace(tzinfo=None)
-        candidate_key = (comparable_due, source_rank, task_id)
-        if lead_id in sort_keys and candidate_key >= sort_keys[lead_id]:
-            return
-        sort_keys[lead_id] = candidate_key
-        context[lead_id] = {
-            'due_task_title': title,
-            'due_task_due_date': comparable_due.date().isoformat(),
-        }
-
     for task in tasks:
-        consider(
-            task.lead_id,
-            task.title,
-            datetime.combine(task.due_date, datetime.min.time()),
-            0,
-            task.id,
-        )
-    cutoff_dt = datetime.combine(cutoff, datetime.max.time())
-    direct_tasks = (
-        Task.query
-        .filter(
-            Task.lead_id.in_(lead_ids),
-            Task.status.in_(['open', 'overdue']),
-            Task.due_date <= cutoff_dt,
-        )
-        .order_by(Task.due_date.asc(), Task.id.asc())
-        .all()
-    )
-    for task in direct_tasks:
-        consider(task.lead_id, task.title, task.due_date, 1, task.id)
-
-    associated_tasks = (
-        db.session.query(Task, TaskAssociation.target_id)
-        .join(TaskAssociation, TaskAssociation.task_id == Task.id)
-        .filter(
-            TaskAssociation.target_type == 'lead',
-            TaskAssociation.target_id.in_(lead_ids),
-            Task.status.in_(['open', 'overdue']),
-            Task.due_date <= cutoff_dt,
-        )
-        .order_by(
-            TaskAssociation.target_id.asc(),
-            Task.due_date.asc(),
-            Task.id.asc(),
-        )
-        .all()
-    )
-    for task, lead_id in associated_tasks:
-        consider(lead_id, task.title, task.due_date, 1, task.id)
+        if task.lead_id in context:
+            continue
+        context[task.lead_id] = {
+            'due_task_title': task.title,
+            'due_task_due_date': task.due_date.isoformat(),
+        }
     return context
 
 
@@ -203,41 +148,6 @@ def _apply_queue_sort(query, sort_by: str, sort_order: str, default_col=None):
     if sort_by == 'lead_score' or sort_col is Lead.lead_score:
         return query.order_by(primary, Lead.motivation_score.desc(), Lead.id.asc())
     return query.order_by(primary, Lead.id.asc())
-
-
-def _hubspot_task_overdue_subquery(cutoff_date):
-    """Return an EXISTS subquery: lead has an open/overdue HubSpot task due on or before cutoff_date.
-
-    Joins tasks → task_associations where target_type='lead' and target_id=Lead.id.
-    Also checks tasks.lead_id directly for CRM-native tasks.
-    Used by Today's Action (cutoff=today) and Follow-Up Overdue (cutoff=yesterday).
-    """
-    from datetime import datetime as _dt
-    # Normalise cutoff to a datetime so the comparison works against Task.due_date (DateTime column)
-    if not isinstance(cutoff_date, _dt):
-        cutoff_dt = _dt(cutoff_date.year, cutoff_date.month, cutoff_date.day, 23, 59, 59)
-    else:
-        cutoff_dt = cutoff_date
-
-    # Via task_associations (HubSpot-imported tasks)
-    via_assoc = exists().where(
-        and_(
-            TaskAssociation.target_type == 'lead',
-            TaskAssociation.target_id == Lead.id,
-            TaskAssociation.task_id == Task.id,
-            Task.status.in_(['open', 'overdue']),
-            Task.due_date <= cutoff_dt,
-        )
-    )
-    # Via direct lead_id FK (CRM-native tasks mirrored to tasks table)
-    via_direct = exists().where(
-        and_(
-            Task.lead_id == Lead.id,
-            Task.status.in_(['open', 'overdue']),
-            Task.due_date <= cutoff_dt,
-        )
-    )
-    return or_(via_assoc, via_direct)
 
 
 def _lead_awaiting_mail_subquery():
@@ -279,14 +189,6 @@ def _open_lead_task_overdue_excluding_mail_awaiting(today: date):
                 LeadTask.due_date < today,
             )
         ),
-        ~_lead_awaiting_mail_subquery(),
-    )
-
-
-def _hubspot_task_overdue_excluding_mail_awaiting(cutoff_date):
-    """HubSpot task overdue, excluding leads waiting in a mail batch."""
-    return and_(
-        _hubspot_task_overdue_subquery(cutoff_date),
         ~_lead_awaiting_mail_subquery(),
     )
 
@@ -400,10 +302,8 @@ class QueueService:
 
     def _follow_up_overdue_query(self):
         today = date.today()
-        yesterday = today - timedelta(days=1)
         seven_days_ago = today - timedelta(days=7)
         open_lead_task_overdue = _open_lead_task_overdue_excluding_mail_awaiting(today)
-        hubspot_task_overdue = _hubspot_task_overdue_excluding_mail_awaiting(yesterday)
         return self._base_query().filter(
             or_(
                 open_lead_task_overdue,
@@ -412,7 +312,6 @@ class QueueService:
                     Lead.last_contact_date < seven_days_ago,
                     ~_lead_awaiting_mail_subquery(),
                 ),
-                hubspot_task_overdue,
             )
         )
 
@@ -505,13 +404,9 @@ class QueueService:
         """Base Today's Action membership query, optionally filtered by outreach label."""
         today = today or date.today()
         open_lead_task_due_today = _open_lead_task_due_today_excluding_mail_awaiting(today)
-        hubspot_task_due_today = _hubspot_task_overdue_excluding_mail_awaiting(today)
         query = self._base_query().filter(
             Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
-            or_(
-                open_lead_task_due_today,
-                hubspot_task_due_today,
-            ),
+            open_lead_task_due_today,
         )
         clause = _outreach_filter_clause(normalize_todays_outreach_filter(outreach))
         if clause is not None:
@@ -575,16 +470,13 @@ class QueueService:
         return self._base_query().filter(Lead.is_warm.is_(True)).count()
 
     def _count_follow_up_overdue(self, today: date, seven_days_ago: date) -> int:
-        """Follow-Up Overdue: any lead with an overdue follow-up.
+        """Follow-Up Overdue: overdue open LeadTask or stale follow_up_now RA.
 
         Matches leads where ANY of the following is true:
           - Has an open lead_task with due_date in the past
           - recommended_action = 'follow_up_now' AND last_contact_date > 7 days ago
-          - Has an open/overdue HubSpot task with due_date in the past (any lead_status)
         """
-        yesterday = today - timedelta(days=1)
         open_lead_task_overdue = _open_lead_task_overdue_excluding_mail_awaiting(today)
-        hubspot_task_overdue = _hubspot_task_overdue_excluding_mail_awaiting(yesterday)
 
         return (
             self._base_query()
@@ -596,34 +488,17 @@ class QueueService:
                         Lead.last_contact_date < seven_days_ago,
                         ~_lead_awaiting_mail_subquery(),
                     ),
-                    hubspot_task_overdue,
                 )
             )
             .count()
         )
 
     def _count_no_next_action(self) -> int:
-        """No Next Action: lead_status in (active, new) AND
-        recommended_action in (null, 'create_task') AND no open tasks.
-        """
+        """No Next Action: active pipeline, decide-next RA, no open LeadTasks."""
         has_open_lead_task = exists().where(
             and_(
                 LeadTask.lead_id == Lead.id,
                 LeadTask.status == 'open',
-            )
-        )
-        has_open_hubspot_task = exists().where(
-            and_(
-                TaskAssociation.target_type == 'lead',
-                TaskAssociation.target_id == Lead.id,
-                TaskAssociation.task_id == Task.id,
-                Task.status.in_(['open', 'overdue']),
-            )
-        )
-        has_open_direct_task = exists().where(
-            and_(
-                Task.lead_id == Lead.id,
-                Task.status.in_(['open', 'overdue']),
             )
         )
 
@@ -636,8 +511,6 @@ class QueueService:
                     Lead.recommended_action.in_(['create_task', 'ready_for_outreach', 'add_contact_info']),
                 ),
                 ~has_open_lead_task,
-                ~has_open_hubspot_task,
-                ~has_open_direct_task,
             )
             .count()
         )
@@ -695,11 +568,9 @@ class QueueService:
     ) -> tuple[list[dict], int]:
         """Follow-Up Overdue — see _count_follow_up_overdue for criteria."""
         today = date.today()
-        yesterday = today - timedelta(days=1)
         seven_days_ago = today - timedelta(days=7)
 
         open_lead_task_overdue = _open_lead_task_overdue_excluding_mail_awaiting(today)
-        hubspot_task_overdue = _hubspot_task_overdue_excluding_mail_awaiting(yesterday)
 
         query = self._base_query().filter(
             or_(
@@ -709,7 +580,6 @@ class QueueService:
                     Lead.last_contact_date < seven_days_ago,
                     ~_lead_awaiting_mail_subquery(),
                 ),
-                hubspot_task_overdue,
             )
         )
         total = query.count()
@@ -747,30 +617,11 @@ class QueueService:
         return [_leads_to_queue_rows(leads), total]
 
     def _no_next_action_query(self):
-        """Base query for No Next Action queue membership."""
-        from sqlalchemy import and_, exists, or_
-        from app.models.lead_task import LeadTask
-        from app.models.task import Task
-        from app.models.task_association import TaskAssociation
-
+        """Base query for No Next Action queue membership (LeadTask-only)."""
         has_open_lead_task = exists().where(
             and_(
                 LeadTask.lead_id == Lead.id,
                 LeadTask.status == 'open',
-            )
-        )
-        has_open_hubspot_task = exists().where(
-            and_(
-                TaskAssociation.target_type == 'lead',
-                TaskAssociation.target_id == Lead.id,
-                TaskAssociation.task_id == Task.id,
-                Task.status.in_(['open', 'overdue']),
-            )
-        )
-        has_open_direct_task = exists().where(
-            and_(
-                Task.lead_id == Lead.id,
-                Task.status.in_(['open', 'overdue']),
             )
         )
         return self._base_query().filter(
@@ -780,8 +631,6 @@ class QueueService:
                 Lead.recommended_action.in_(['create_task', 'ready_for_outreach', 'add_contact_info']),
             ),
             ~has_open_lead_task,
-            ~has_open_hubspot_task,
-            ~has_open_direct_task,
         )
 
     def get_no_next_action_status_counts(self) -> dict[str, int]:
@@ -1024,10 +873,8 @@ class QueueService:
 
         if queue_key == 'follow-up-overdue':
             today = date.today()
-            yesterday = today - timedelta(days=1)
             seven_days_ago = today - timedelta(days=7)
             open_lead_task_overdue = _open_lead_task_overdue_excluding_mail_awaiting(today)
-            hubspot_task_overdue = _hubspot_task_overdue_excluding_mail_awaiting(yesterday)
             query = self._base_query().filter(
                 or_(
                     open_lead_task_overdue,
@@ -1036,7 +883,6 @@ class QueueService:
                         Lead.last_contact_date < seven_days_ago,
                         ~_lead_awaiting_mail_subquery(),
                     ),
-                    hubspot_task_overdue,
                 )
             )
             sort_col = getattr(Lead, sort_by, Lead.last_contact_date)
@@ -1047,17 +893,6 @@ class QueueService:
             has_open_lead_task = exists().where(
                 and_(LeadTask.lead_id == Lead.id, LeadTask.status == 'open')
             )
-            has_open_hubspot_task = exists().where(
-                and_(
-                    TaskAssociation.target_type == 'lead',
-                    TaskAssociation.target_id == Lead.id,
-                    TaskAssociation.task_id == Task.id,
-                    Task.status.in_(['open', 'overdue']),
-                )
-            )
-            has_open_direct_task = exists().where(
-                and_(Task.lead_id == Lead.id, Task.status.in_(['open', 'overdue']))
-            )
             query = self._base_query().filter(
                 Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
                 or_(
@@ -1065,8 +900,6 @@ class QueueService:
                     Lead.recommended_action.in_(['create_task', 'ready_for_outreach', 'add_contact_info']),
                 ),
                 ~has_open_lead_task,
-                ~has_open_hubspot_task,
-                ~has_open_direct_task,
             )
             status_order = case((Lead.lead_status == 'awaiting_skip_trace', 0), else_=1)
             sort_col = getattr(Lead, sort_by, Lead.lead_score)

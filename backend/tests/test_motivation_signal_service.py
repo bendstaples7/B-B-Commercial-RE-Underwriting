@@ -111,7 +111,7 @@ class TestStructuredMotivationScoring:
             weights = _default_mock_weights()
             with patch.object(LeadScoringEngine, '_score_engagement', return_value=0.0), \
                  patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
-                 patch('app.services.lead_scoring_engine._has_overdue_hubspot_task', return_value=False), \
+                 patch('app.services.lead_scoring_engine._has_overdue_lead_task', return_value=False), \
                  patch('app.services.lead_scoring_engine._resolve_crm_flags', return_value=(False, False, False)):
                 base_result = engine.compute(baseline, weights)
                 distressed_result = engine.compute(distressed, weights)

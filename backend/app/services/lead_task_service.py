@@ -149,12 +149,27 @@ class LeadTaskService:
             )
             db.session.add(task)
         else:
-            task.title = clean_title
-            task.due_date = due
-            # Never reopen a locally completed HubSpot LeadTask from stale sync.
-            if task.status == 'completed' and mapped_status != 'completed':
-                pass
+            preserve_local_task = (
+                (task.status == 'completed' and mapped_status != 'completed')
+                or (task.status == 'open' and mapped_status == 'completed')
+                or (task.status == 'cancelled' and mapped_status != 'cancelled')
+            )
+            # Never reopen a locally completed task from stale sync, and never
+            # let an inbound HubSpot completion mutate an open next-action task.
+            # Preserve title and due date too: clearing/rescheduling either field
+            # would still remove the task from its local working queue.
+            if preserve_local_task:
+                logger.info(
+                    'Preserving local LeadTask id=%s status=%s against inbound '
+                    'HubSpot status=%s hubspot_task_id=%s',
+                    task.id,
+                    task.status,
+                    mapped_status,
+                    hs_id,
+                )
             else:
+                task.title = clean_title
+                task.due_date = due
                 task.status = mapped_status
                 if mapped_status == 'completed' and task.completed_at is None:
                     task.completed_at = datetime.now(timezone.utc)
@@ -175,6 +190,12 @@ class LeadTaskService:
             db.session.commit()
         else:
             db.session.flush()
+
+        # Only when this call owns the transaction — batch HubSpot sync callers
+        # recompute via ActionEngine after the full task upsert batch.
+        if commit and mapped_status in ('completed', 'cancelled'):
+            from app.services.next_action_invariant import ensure_next_action_after_task_change
+            ensure_next_action_after_task_change(lead_id)
 
         return task
 
@@ -338,6 +359,7 @@ class LeadTaskService:
         db.session.add(entry)
         db.session.commit()
 
+        scoring_handled = False
         if task.task_type == 'run_property_analysis':
             try:
                 from app.services.analysis_completion_service import mark_lead_analysis_complete
@@ -347,6 +369,7 @@ class LeadTaskService:
                     actor=actor,
                     recompute_action=recompute_action,
                 )
+                scoring_handled = recompute_action
             except Exception as exc:
                 db.session.rollback()
                 logger.error(
@@ -357,11 +380,16 @@ class LeadTaskService:
             try:
                 from app.services.action_engine_service import ActionEngineService
                 ActionEngineService.recompute_and_persist(lead_id)
+                scoring_handled = True
             except Exception as exc:
                 logger.error(
                     "ActionEngineService.recompute_and_persist failed for lead %s: %s",
                     lead_id, exc, exc_info=True,
                 )
+
+        if not scoring_handled:
+            from app.services.next_action_invariant import ensure_next_action_after_task_change
+            ensure_next_action_after_task_change(lead_id)
 
         return task
 

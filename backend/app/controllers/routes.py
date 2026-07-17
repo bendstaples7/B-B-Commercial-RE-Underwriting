@@ -152,6 +152,9 @@ def health_check():
       5. Lead visibility — can ben.d.staples.7@gmail.com see leads?
          (fails if the user or assigned leads are missing)
       6. Async stack — Redis reachable? Celery worker responding? (warn only)
+      7. Open Letter / mail queue schema
+      8. Enrichment catalog — required data_sources present after startup heal (FAIL if not)
+         plus supporting-data invariant counts (WARN when no recent enrichment)
     """
     import os
     from app import db
@@ -323,6 +326,28 @@ def health_check():
         checks['open_letter_encryption'] = 'ok'
     else:
         checks['open_letter_encryption'] = 'skipped (OPEN_LETTER_API_TOKEN not set)'
+
+    # ------------------------------------------------------------------
+    # Check 8: Enrichment catalog (Cook County / Chicago plugins)
+    # ------------------------------------------------------------------
+    try:
+        from app.services.cook_county_enrichment_service import (
+            check_enrichment_catalog_health,
+        )
+        # Startup owns catalog repair. Health probes must remain read-only.
+        catalog = check_enrichment_catalog_health(heal=False)
+        if catalog['ok']:
+            checks['enrichment_catalog'] = (
+                f"ok ({catalog['present_count']}/{catalog['required_count']} sources)"
+            )
+        else:
+            checks['enrichment_catalog'] = (
+                f"FAIL: missing data_sources after startup: {catalog['missing']}"
+            )
+            degraded = True
+    except Exception as e:
+        checks['enrichment_catalog'] = f'FAIL: {e}'
+        degraded = True
 
     status = 'degraded' if degraded else 'healthy'
     http_status = 503 if degraded else 200

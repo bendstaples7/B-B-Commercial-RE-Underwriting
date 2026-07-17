@@ -13,8 +13,12 @@ from app.models.lead_timeline_entry import LeadTimelineEntry
 from app.services.lead_timeline_service import LeadTimelineService
 from app.services.open_letter_config_service import OpenLetterConfigService
 from app.services.open_letter_contact_mapper import (
+    is_owner_mailable_lead,
     persist_embedded_address_fields,
     validate_owner_mailing_address,
+)
+from app.services.action_eligibility import (
+    evaluate_add_to_mail_batch,
 )
 from app.services.scoring_rubric import effective_acquisition_date, is_recently_sold
 from app.services.mail_task_lifecycle_service import (
@@ -260,9 +264,19 @@ class MailQueueService:
                     ).first():
                         outcome = {'lead_id': lead_id, 'status': 'already_queued'}
                     else:
+                        # Recent-sale and already-queued are handled above with
+                        # richer outcomes; evaluate address readiness here so the
+                        # Quick Action policy cannot drift from enqueue.
                         persist_embedded_address_fields(lead)
-                        error = validate_owner_mailing_address(lead)
-                        if error:
+                        mail_eligibility = evaluate_add_to_mail_batch(
+                            mail_eligible=is_owner_mailable_lead(lead),
+                        )
+                        if not mail_eligibility.ok:
+                            error = (
+                                validate_owner_mailing_address(lead)
+                                or mail_eligibility.message
+                                or 'Owner mailing address is not ready'
+                            )
                             item = MailQueueItem(
                                 lead_id=lead_id,
                                 user_id=user_id,

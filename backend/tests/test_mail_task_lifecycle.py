@@ -597,6 +597,7 @@ class TestCompleteTasksSupersededByMail:
 
     def test_completes_hubspot_follow_up_task(self, app):
         from app import db
+        from app.models import LeadTask
         from app.models.task import Task
         from app.models.task_association import TaskAssociation
 
@@ -618,6 +619,17 @@ class TestCompleteTasksSupersededByMail:
                     target_id=lead.id,
                 ),
             )
+            lead_task = LeadTask(
+                lead_id=lead.id,
+                task_type='custom',
+                title='Follow up on 123 Main St',
+                status='open',
+                due_date=date.today(),
+                created_by='HubSpot',
+                hubspot_task_id='hs-999',
+                mirror_task_id=hs_task.id,
+            )
+            db.session.add(lead_task)
             db.session.commit()
 
             with patch(
@@ -630,11 +642,13 @@ class TestCompleteTasksSupersededByMail:
 
             assert count == 1
             assert pending == ['hs-999']
+            assert LeadTask.query.get(lead_task.id).status == 'completed'
             refreshed = Task.query.get(hs_task.id)
             assert refreshed.status == 'completed'
 
     def test_completes_mirrored_manual_task(self, app):
         from app import db
+        from app.models import LeadTask
         from app.models.task import Task
 
         with app.app_context():
@@ -647,6 +661,17 @@ class TestCompleteTasksSupersededByMail:
                 task_type='call_owner_today',
             )
             db.session.add(mirror)
+            db.session.flush()
+            lead_task = LeadTask(
+                lead_id=lead.id,
+                task_type='call_owner_today',
+                title='Call owner back',
+                status='open',
+                due_date=date.today(),
+                created_by='test',
+                mirror_task_id=mirror.id,
+            )
+            db.session.add(lead_task)
             db.session.commit()
 
             count, _pending = complete_tasks_superseded_by_mail(
@@ -654,10 +679,12 @@ class TestCompleteTasksSupersededByMail:
             )
 
             assert count == 1
+            assert LeadTask.query.get(lead_task.id).status == 'completed'
             assert Task.query.get(mirror.id).status == 'completed'
 
     def test_completes_associated_mirrored_task(self, app):
         from app import db
+        from app.models import LeadTask
         from app.models.task import Task
         from app.models.task_association import TaskAssociation
 
@@ -678,6 +705,16 @@ class TestCompleteTasksSupersededByMail:
                     target_id=lead.id,
                 ),
             )
+            lead_task = LeadTask(
+                lead_id=lead.id,
+                task_type='custom',
+                title='Follow up with owner',
+                status='open',
+                due_date=date.today(),
+                created_by='test',
+                mirror_task_id=mirror.id,
+            )
+            db.session.add(lead_task)
             db.session.commit()
 
             assert count_superseded_tasks_for_lead(lead.id) == 1
@@ -686,8 +723,8 @@ class TestCompleteTasksSupersededByMail:
             )
 
             assert count == 1
+            assert LeadTask.query.get(lead_task.id).status == 'completed'
             assert Task.query.get(mirror.id).status == 'completed'
-
 
 class TestFollowUpOverdueMailAwaitingExclusion:
     def test_excludes_lead_with_overdue_task_when_up_next_to_mail(self, app):

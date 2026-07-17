@@ -605,11 +605,12 @@ _NNA_ALLOWED_STATUSES = {
     'mailing_contacted_no_interest', 'mailing_contacted_interested',
     'negotiating_remote', 'in_person_appointment', 'offer_delivered',
 }
-_OPEN_TASK_VARIANTS = {'open_lead', 'open_assoc', 'open_direct'}
+# Only open LeadTask rows exclude No Next Action; CRM Task mirrors do not.
+_OPEN_TASK_VARIANTS = {'open_lead'}
 
 
 def _expected_in_nna(lead_status: str, recommended_action, task_variant: str) -> bool:
-    """Pure-Python reference predicate for No Next Action (updated allow-list)."""
+    """Pure-Python reference predicate for No Next Action (LeadTask-only)."""
     return (
         lead_status in _NNA_ALLOWED_STATUSES
         and recommended_action in _NNA_ALLOWED_ACTIONS
@@ -695,9 +696,9 @@ def test_property_1_no_next_action_filter_predicate(
     # Feature: source-agnostic-crm-queues, Property 1: No Next Action filter predicate
 
     For any lead in the database, it appears in No Next Action iff:
-      - lead_status in ('new', 'active') AND
+      - lead_status in the active pipeline allow-list AND
       - recommended_action in (None, 'create_task', 'ready_for_outreach', 'add_contact_info') AND
-      - has no open task (no open LeadTask and no open Task via TaskAssociation or direct lead_id)
+      - has no open LeadTask (CRM Task / TaskAssociation mirrors do not count)
 
     Validates: Requirements 1.1, 1.3, 1.4
     """

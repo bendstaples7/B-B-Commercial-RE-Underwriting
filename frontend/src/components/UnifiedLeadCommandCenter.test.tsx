@@ -52,12 +52,21 @@ vi.mock('@/services/api', () => ({
     updateContact: vi.fn(),
     deleteContact: vi.fn(),
   },
+  queueService: {
+    getNavigation: vi.fn(),
+  },
 }))
 
 vi.mock('@/services/leadApi', () => ({
   leadService: {
     getLeadDetail: vi.fn(),
     analyzeLead: vi.fn(),
+  },
+}))
+
+vi.mock('@/services/openLetterApi', () => ({
+  default: {
+    enqueue: vi.fn(),
   },
 }))
 
@@ -476,8 +485,13 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
 
   it('moves the lead and current task to skip trace from quick actions', async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 })
+    const scrollIntoViewMock = vi.fn()
+    const originalScrollIntoView = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView =
+      scrollIntoViewMock as typeof Element.prototype.scrollIntoView
     vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
       makeCommandCenterPayload({
+        lead_status: 'mailing_no_contact_made',
         recommended_action: {
           value: 'nurture',
           label: 'Nurture',
@@ -503,6 +517,68 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
       lead_status: 'skip_trace',
       completed_task_id: 17,
       skip_trace_task_id: 18,
+      changed: true,
+      already_done: false,
+      reason_code: null,
+    })
+
+    try {
+      renderComponent()
+      await user.click(
+        await screen.findByTestId('ra-universal-btn-move_to_skip_trace'),
+      )
+
+      expect(commandCenterService.moveToSkipTrace).toHaveBeenCalledWith(1, 17)
+      expect(
+        await screen.findByText(
+          'Current task completed and lead moved to Skip Trace',
+        ),
+      ).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByTestId('lead-status-selector')).toHaveTextContent('Skip Trace')
+        expect(screen.getAllByText('Awaiting skip trace').length).toBeGreaterThan(0)
+        expect(
+          screen.queryByText('Manually skip trace returned letter'),
+        ).not.toBeInTheDocument()
+      })
+      expect(scrollIntoViewMock).not.toHaveBeenCalled()
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView
+    }
+  })
+
+  it('does not send skip-trace handoff task id as complete_task_id', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        lead_status: 'mailing_no_contact_made',
+        recommended_action: {
+          value: 'nurture',
+          label: 'Nurture',
+          explanation: null,
+          signals: {},
+        },
+        open_tasks: [{
+          id: 99,
+          lead_id: 1,
+          task_type: 'skip_trace_owner',
+          title: 'Awaiting skip trace',
+          status: 'open',
+          due_date: null,
+          created_at: '2023-01-01T00:00:00Z',
+          completed_at: null,
+          created_by: 'system',
+          source: 'native',
+        }],
+      }),
+    )
+    vi.mocked(commandCenterService.moveToSkipTrace).mockResolvedValue({
+      lead_id: 1,
+      lead_status: 'skip_trace',
+      completed_task_id: null,
+      skip_trace_task_id: 99,
+      changed: true,
+      already_done: false,
     })
 
     renderComponent()
@@ -510,11 +586,42 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
       await screen.findByTestId('ra-universal-btn-move_to_skip_trace'),
     )
 
-    expect(commandCenterService.moveToSkipTrace).toHaveBeenCalledWith(1, 17)
+    expect(commandCenterService.moveToSkipTrace).toHaveBeenCalledWith(1, undefined)
+  })
+
+  it('shows already-done snackbar when skip-trace pipeline is unchanged', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    // Force-enable the quick action path via mock that still returns already_done
+    // (button is normally grayed for awaiting_skip_trace; call service via enabled status).
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        lead_status: 'mailing_no_contact_made',
+        recommended_action: {
+          value: 'nurture',
+          label: 'Nurture',
+          explanation: null,
+          signals: {},
+        },
+        open_tasks: [],
+      }),
+    )
+    vi.mocked(commandCenterService.moveToSkipTrace).mockResolvedValue({
+      lead_id: 1,
+      lead_status: 'awaiting_skip_trace',
+      completed_task_id: null,
+      skip_trace_task_id: 42,
+      changed: false,
+      already_done: true,
+      reason_code: 'already_awaiting_skip_trace',
+    })
+
+    renderComponent()
+    await user.click(
+      await screen.findByTestId('ra-universal-btn-move_to_skip_trace'),
+    )
+
     expect(
-      await screen.findByText(
-        'Current task completed and lead moved to Skip Trace',
-      ),
+      await screen.findByText('Already awaiting skip trace'),
     ).toBeInTheDocument()
   })
 
@@ -679,7 +786,7 @@ describe('UnifiedLeadCommandCenter — sidebar responsive visibility', () => {
           phones: [{ value: '(630) 202-3839', confidence_score: 80 }],
           open_tasks: [
             {
-              id: 'hs-99',
+              id: 99,
               lead_id: 1,
               task_type: 'custom',
               title: 'Follow up with Gilberto Olivares',
@@ -704,7 +811,7 @@ describe('UnifiedLeadCommandCenter — sidebar responsive visibility', () => {
       expect(screen.queryByTestId('outreach-contact-callout')).not.toBeInTheDocument()
       expect(screen.queryByTestId('tasks-outreach-contact')).not.toBeInTheDocument()
       expect(screen.getByTestId('recommended-action-panel')).not.toHaveTextContent('(630) 202-3839')
-      expect(screen.getByTestId('task-item-hs-99')).toHaveTextContent('(630) 202-3839')
+      expect(screen.getByTestId('task-item-99')).toHaveTextContent('(630) 202-3839')
     })
 
     it('shows contact inline in recommended action when no open tasks', async () => {
@@ -746,7 +853,7 @@ describe('UnifiedLeadCommandCenter — sidebar responsive visibility', () => {
           phones: [],
           open_tasks: [
             {
-              id: 'hs-100',
+              id: 100,
               lead_id: 1,
               task_type: 'custom',
               title: 'Follow up',
@@ -773,9 +880,151 @@ describe('UnifiedLeadCommandCenter — sidebar responsive visibility', () => {
       expect(screen.getByTestId('recommended-action-panel')).not.toHaveTextContent(
         'No phone number on file',
       )
-      expect(screen.getByTestId('task-item-hs-100')).toHaveTextContent(
+      expect(screen.getByTestId('task-item-100')).toHaveTextContent(
         'No phone number on file',
       )
     })
+  })
+})
+
+describe('UnifiedLeadCommandCenter — queue advance', () => {
+  it('does not auto-advance after status change when lead leaves the queue', async () => {
+    const api = await import('@/services/api')
+    vi.mocked(api.commandCenterService.updateStatus).mockResolvedValue({
+      lead_status: 'do_not_contact',
+    } as never)
+    vi.mocked(api.queueService.getNavigation).mockResolvedValue({
+      queue_key: 'todays-action',
+      lead_id: 1,
+      position: null,
+      total: 5,
+      prev_id: null,
+      next_id: 99,
+    })
+
+    const fromQueue = { key: 'todays-action', label: "Today's Action" }
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: '/leads/1',
+            search: '?queue=todays-action',
+            state: { fromQueue },
+          },
+        ]}
+      >
+        <UnifiedLeadCommandCenter leadId={1} />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('lead-status-selector')).toBeInTheDocument()
+    })
+    const commandCenterFetchCount =
+      vi.mocked(api.commandCenterService.getCommandCenter).mock.calls.length
+    mockNavigate.mockClear()
+
+    await userEvent.click(screen.getByTestId('lead-status-selector'))
+    await waitFor(() => {
+      expect(screen.getByTestId('lead-status-option-do_not_contact')).toBeInTheDocument()
+    })
+    await userEvent.click(screen.getByTestId('lead-status-option-do_not_contact'))
+    await waitFor(() => {
+      expect(screen.getByTestId('status-submit-btn')).toBeInTheDocument()
+    })
+    await userEvent.click(screen.getByTestId('status-submit-btn'))
+
+    await waitFor(() => {
+      expect(api.commandCenterService.updateStatus).toHaveBeenCalled()
+    })
+
+    // Status PATCH must not trigger Command Center GET: that GET performs
+    // HubSpot task reconciliation and previously closed unrelated open tasks.
+    expect(api.commandCenterService.getCommandCenter).toHaveBeenCalledTimes(
+      commandCenterFetchCount,
+    )
+
+    // Previously position===null triggered advance to next_id; status change must stay put.
+    await new Promise((r) => setTimeout(r, 50))
+    expect(mockNavigate).not.toHaveBeenCalledWith(
+      expect.stringContaining('/leads/99'),
+      expect.anything(),
+    )
+  })
+})
+
+describe('UnifiedLeadCommandCenter — mail stage toast + continue banner', () => {
+  it('toasts staged confirmation without a results dialog and shows next-lead banner', async () => {
+    const openLetterService = (await import('@/services/openLetterApi')).default
+    const api = await import('@/services/api')
+
+    vi.mocked(openLetterService.enqueue).mockResolvedValue({
+      attempt_id: 42,
+      added: 1,
+      skipped: 0,
+      invalid: 0,
+      queued_count: 1,
+      batch_minimum: 1,
+      allow_send_below_minimum: true,
+      can_send: true,
+      results: [{ lead_id: 1, status: 'queued', owner_name: 'Jane', property_street: '456 Oak Ave' }],
+    })
+    vi.mocked(api.queueService.getNavigation).mockResolvedValue({
+      queue_key: 'todays-action',
+      lead_id: 1,
+      position: 2,
+      total: 10,
+      prev_id: null,
+      next_id: 55,
+    })
+    vi.mocked(api.commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        is_mailable: true,
+        mail_eligible: true,
+        mail_queue_status: null,
+      }),
+    )
+
+    const fromQueue = { key: 'todays-action', label: "Today's Action" }
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: '/leads/1',
+            search: '?queue=todays-action',
+            state: { fromQueue },
+          },
+        ]}
+      >
+        <UnifiedLeadCommandCenter leadId={1} />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeInTheDocument()
+    })
+
+    await userEvent.click(screen.getByTestId('ra-universal-btn-add_to_mail_batch'))
+
+    await waitFor(() => {
+      expect(openLetterService.enqueue).toHaveBeenCalled()
+    })
+
+    expect(screen.queryByText('Direct mail results')).not.toBeInTheDocument()
+    expect(await screen.findByTestId('activity-success-alert')).toBeInTheDocument()
+    expect(screen.getByTestId('activity-success-alert')).toHaveTextContent(/staged|added|1/i)
+    expect(screen.getByTestId('activity-success-link')).toHaveAttribute(
+      'href',
+      '/queues/ready-to-mail',
+    )
+
+    expect(await screen.findByTestId('mail-continue-banner')).toHaveTextContent(
+      'Staged for the next mail batch.',
+    )
+    expect(screen.getByTestId('mail-continue-view-staged-batch')).toHaveAttribute(
+      'href',
+      '/queues/ready-to-mail',
+    )
+    expect(screen.getByTestId('mail-continue-next-lead')).toBeInTheDocument()
   })
 })

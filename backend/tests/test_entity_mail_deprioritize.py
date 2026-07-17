@@ -379,7 +379,7 @@ class TestScoringMailGate:
             lambda lead_id: False,
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine._has_overdue_hubspot_task',
+            'app.services.lead_scoring_engine._has_overdue_lead_task',
             lambda lead_id: False,
         )
         monkeypatch.setattr(
@@ -491,7 +491,7 @@ class TestScoringMailGate:
             lambda lead_id: False,
         )
         monkeypatch.setattr(
-            'app.services.lead_scoring_engine._has_overdue_hubspot_task',
+            'app.services.lead_scoring_engine._has_overdue_lead_task',
             lambda lead_id: False,
         )
         monkeypatch.setattr(

@@ -16,6 +16,8 @@ jobs:
     name: Backend — performance tests (non-blocking)
     runs-on: ubuntu-latest
     continue-on-error: true
+    outputs:
+      test_outcome: ${{ steps.run_perf_tests.outcome }}
 
     services:
       postgres:
@@ -47,6 +49,7 @@ jobs:
         working-directory: backend
 
       - name: Run performance tests
+        id: run_perf_tests
         run: pytest -m performance --junitxml=pytest-performance-results.xml -o addopts=
         working-directory: backend
         env:
@@ -84,20 +87,34 @@ jobs:
 
       - name: Build jobs JSON
         uses: actions/github-script@v7
+        env:
+          BACKEND_PERFORMANCE_RESULT: ${{ needs.backend-performance.outputs.test_outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
+          retries: 3
           script: |
             const fs = require('fs');
-            const { data: runJobs } = await github.rest.actions.listJobsForWorkflowRun({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              run_id: context.runId,
-              per_page: 100,
-            });
-            const jobs = runJobs.jobs.map(j => ({
-              name: j.name,
-              conclusion: j.conclusion || 'unknown',
-              url: j.html_url,
-            }));
+            let jobs;
+            try {
+              const { data: runJobs } = await github.rest.actions.listJobsForWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: context.runId,
+                per_page: 100,
+              });
+              jobs = runJobs.jobs.map(j => ({
+                name: j.name,
+                conclusion: j.conclusion || 'unknown',
+                url: j.html_url,
+              }));
+            } catch (error) {
+              core.warning(`Could not fetch workflow jobs from GitHub API: ${error.message}`);
+              jobs = [{
+                name: 'Backend — performance tests (non-blocking)',
+                conclusion: process.env.BACKEND_PERFORMANCE_RESULT || 'unknown',
+                url: process.env.RUN_URL || '',
+              }];
+            }
             fs.writeFileSync('/tmp/jobs.json', JSON.stringify(jobs));
 
       - name: Generate summary markdown
