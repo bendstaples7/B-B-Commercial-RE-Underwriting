@@ -88,7 +88,7 @@ class HubSpotSignalExtractorService:
     def _has_overdue_task(lead_id: int) -> bool:
         """
         Return True if the lead has at least one open LeadTask whose due_date is
-        in the past (i.e., the task is overdue).
+        on or before today (i.e., the task is overdue or due today).
 
         Per Requirement 16.4: FOLLOW_UP_OVERDUE is set based on the presence
         of an open task with a past due date, NOT on keyword matching alone.

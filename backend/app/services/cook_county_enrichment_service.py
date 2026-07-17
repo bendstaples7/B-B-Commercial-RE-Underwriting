@@ -436,7 +436,6 @@ def backfill_cook_county_enrichment(
     since = datetime.utcnow() - timedelta(days=BACKFILL_STALE_DAYS)
     today = date.today()
     commercial_source_id = _commercial_valuation_source_id()
-    due_exists = _due_open_task_exists_clause(today)
 
     summary = {
         "status": "completed",
@@ -471,12 +470,20 @@ def backfill_cook_county_enrichment(
                     func.lower(Lead.property_city) == "chicago",
                 ),
             )
-            .order_by(due_exists.desc(), Lead.id)
+            .order_by(Lead.id)
             .limit(batch_size * 2)
             .all()
         )
         if not candidates:
             break
+
+        # Prioritize due-task leads within the batch without breaking id-based pagination.
+        candidates.sort(
+            key=lambda lead: (
+                not _lead_has_due_open_task(lead.id, today),
+                lead.id,
+            ),
+        )
 
         for lead in candidates:
             cursor = lead.id

@@ -418,6 +418,12 @@ def complete_hubspot_task(
                 lead_id,
                 exc,
             )
+        else:
+            return HubSpotCompletionResult(
+                completed=True,
+                hubspot_task_id=local.hubspot_task_id,
+                hubspot_synced=hubspot_synced,
+            )
 
     from app.services.next_action_invariant import ensure_next_action_after_task_change
     ensure_next_action_after_task_change(lead_id)
@@ -504,6 +510,37 @@ def ensure_inbound_hubspot_task_completed_timeline(
     return True
 
 
+def _crm_task_completed_in_hubspot(crm_task: Task) -> bool:
+    """True when the CRM mirror reflects a HubSpot-side completion, not a local mirror."""
+    if crm_task.status != 'completed' or crm_task.source != 'hubspot_import':
+        return False
+    payload = crm_task.raw_payload if isinstance(crm_task.raw_payload, dict) else {}
+    props = payload.get('properties', {}) if isinstance(payload.get('properties'), dict) else {}
+    hs_status = str(props.get('hs_task_status') or '').upper()
+    if hs_status == 'COMPLETED':
+        return True
+    metadata = payload.get('metadata', {}) if isinstance(payload.get('metadata'), dict) else {}
+    for key in ('status', 'taskStatus'):
+        if str(metadata.get(key) or '').upper() in ('COMPLETED', 'DONE'):
+            return True
+    return False
+
+
+def _lead_task_completed_locally(lead_task: LeadTask) -> bool:
+    """True when a native completion timeline already exists for this LeadTask."""
+    for row in LeadTimelineEntry.query.filter_by(
+        lead_id=lead_task.lead_id,
+        event_type='task_completed',
+        is_deleted=False,
+    ).all():
+        meta = row.event_metadata or {}
+        if meta.get('lead_task_id') == lead_task.id and row.source in ('manual', 'system'):
+            return True
+        if meta.get('task_id') == lead_task.id and row.source in ('manual', 'system'):
+            return True
+    return False
+
+
 def backfill_missing_hubspot_task_completed_timelines(
     *,
     dry_run: bool = True,
@@ -534,7 +571,11 @@ def backfill_missing_hubspot_task_completed_timelines(
         crm_task = Task.query.filter_by(hubspot_task_id=hs_id).first()
         # A local LeadTask completion is not proof that HubSpot completed it.
         # Only backfill inbound history when the canonical CRM payload agrees.
-        if crm_task is None or crm_task.status != 'completed':
+        if (
+            crm_task is None
+            or not _crm_task_completed_in_hubspot(crm_task)
+            or _lead_task_completed_locally(lt)
+        ):
             skipped += 1
             continue
         activity_id = _inbound_timeline_activity_id(lt.lead_id, hs_id)

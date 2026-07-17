@@ -283,10 +283,15 @@ class HubSpotActivityConverterService:
                 for a in associations
                 if a.get('target_type') == 'lead' and a.get('target_id') is not None
             ]
-            if not self._has_open_lead_task(str(engagement.hubspot_id), lead_ids):
+            timeline_lead_ids = [
+                lead_id
+                for lead_id in lead_ids
+                if not self._has_open_lead_task(str(engagement.hubspot_id), [lead_id])
+            ]
+            if timeline_lead_ids:
                 self._write_inbound_completed_timelines(
                     task,
-                    lead_ids=lead_ids,
+                    lead_ids=timeline_lead_ids,
                     occurred_at=task.completion_timestamp,
                 )
         db.session.commit()
@@ -344,13 +349,7 @@ class HubSpotActivityConverterService:
                 new_status,
             )
             if old_status != 'completed' and new_status == 'completed':
-                from app.models import LeadTask
-                open_lt = LeadTask.query.filter_by(
-                    hubspot_task_id=str(engagement.hubspot_id),
-                    status='open',
-                ).first()
-                if open_lt is None:
-                    self._write_inbound_completed_timelines(task)
+                self._write_inbound_completed_timelines_for_unprotected_leads(task)
             self._recompute_action_for_task(task)
 
         return changed
@@ -559,6 +558,36 @@ class HubSpotActivityConverterService:
     def _map_crm_v3_task_status(props: dict) -> str:
         hs_status = (props.get('hs_task_status') or '').upper()
         return 'completed' if hs_status == 'COMPLETED' else 'open'
+
+    def _write_inbound_completed_timelines_for_unprotected_leads(
+        self,
+        task: Task,
+        *,
+        occurred_at: datetime | None = None,
+    ) -> None:
+        """Write inbound completion timelines for leads without open LeadTasks."""
+        if not task.hubspot_task_id:
+            return
+        hs_id = str(task.hubspot_task_id)
+        lead_ids: set[int] = set()
+        for row in TaskAssociation.query.filter_by(
+            task_id=task.id,
+            target_type='lead',
+        ).all():
+            lead_ids.add(int(row.target_id))
+        if task.lead_id is not None:
+            lead_ids.add(int(task.lead_id))
+        eligible = [
+            lead_id
+            for lead_id in lead_ids
+            if not self._has_open_lead_task(hs_id, [lead_id])
+        ]
+        if eligible:
+            self._write_inbound_completed_timelines(
+                task,
+                lead_ids=eligible,
+                occurred_at=occurred_at,
+            )
 
     def _write_inbound_completed_timelines(
         self,

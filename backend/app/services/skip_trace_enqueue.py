@@ -183,7 +183,7 @@ class SkipTraceEnqueue:
             if candidate is not None and candidate.task_type != "skip_trace_owner":
                 completed_task = candidate
 
-        if completed_task is None:
+        if completed_task is None and complete_task_id is None:
             completed_task = (
                 LeadTask.query
                 .filter(

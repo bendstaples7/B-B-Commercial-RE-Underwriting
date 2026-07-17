@@ -76,7 +76,9 @@ api.interceptors.response.use(
         'HTTP error',
       ])
       const message =
-        (typeof errorField === 'object' && typeof errorField.message === 'string'
+        (errorField != null
+          && typeof errorField === 'object'
+          && typeof errorField.message === 'string'
           ? errorField.message
           : null)
         || (typeof errorField === 'string'

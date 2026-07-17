@@ -15,6 +15,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from flask import has_app_context
+from sqlalchemy.exc import IntegrityError
 
 from app import db
 from app.models.enrichment import DataSource, EnrichmentRecord
@@ -161,8 +162,15 @@ class DataSourceConnector:
         if not ds:
             ds = DataSource(name=name, is_active=True)
             db.session.add(ds)
-            db.session.commit()
-            logger.info("Registered new data source: %s (id=%d)", ds.name, ds.id)
+            try:
+                db.session.commit()
+            except IntegrityError:
+                db.session.rollback()
+                ds = DataSource.query.filter_by(name=name).first()
+                if ds is None:
+                    raise
+            else:
+                logger.info("Registered new data source: %s (id=%d)", ds.name, ds.id)
         return ds
 
     def ensure_registered_data_sources(self) -> list[DataSource]:

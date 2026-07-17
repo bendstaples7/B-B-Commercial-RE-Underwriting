@@ -272,7 +272,9 @@ class LeadBriefingService:
         context: dict[str, Any],
         previous: Optional[dict[str, Any]],
     ) -> str:
-        context_json = json.dumps(context, indent=2, default=str)
+        context_json = self._escape_untrusted_context(
+            json.dumps(context, indent=2, default=str),
+        )
         if mode == 'revise':
             return _REVISE_PROMPT.format(
                 bullet_count=_BULLET_COUNT,
@@ -287,6 +289,15 @@ class LeadBriefingService:
             bullet_count=_BULLET_COUNT,
             max_chars=_MAX_BULLET_CHARS,
             context_json=context_json,
+        )
+
+    @staticmethod
+    def _escape_untrusted_context(raw: str) -> str:
+        """Prevent CRM text from closing the untrusted-context delimiter."""
+        return (
+            raw
+            .replace('<<<UNTRUSTED_LEAD_CONTEXT', '[[[UNTRUSTED_LEAD_CONTEXT')
+            .replace('UNTRUSTED_LEAD_CONTEXT>>>', 'UNTRUSTED_LEAD_CONTEXT]]]')
         )
 
     @staticmethod

@@ -49,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument('--lead-id', type=int, default=None, help='Restrict to one lead')
     args = parser.parse_args(argv)
+    if args.limit is not None and args.limit < 0:
+        parser.error('--limit must be zero or positive')
 
     app = create_app()
     with app.app_context():

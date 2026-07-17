@@ -319,7 +319,15 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
     setTaskCompletionError(null)
     const isHubSpot = task.source === 'hubspot'
     if (!isHubSpot) {
-      if (onTaskCompleted) await onTaskCompleted(task.id as number)
+      try {
+        if (onTaskCompleted) await onTaskCompleted(task.id as number)
+      } catch (err) {
+        const message = err instanceof Error
+          ? err.message
+          : 'Failed to complete task. Please try again.'
+        setTaskCompletionError(message)
+        throw err
+      }
       return
     }
     const numericId = typeof task.id === 'number'

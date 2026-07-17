@@ -357,6 +357,16 @@ describe('PropertySidebar phone confidence', () => {
 })
 
 describe('PropertySidebar always-visible sale and PIN', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(commandCenterService.verifySaleDate).mockResolvedValue({
+      lead_id: 1,
+      queued: false,
+      ran_sync: true,
+      message: 'Verification checked.',
+    })
+  })
+
   it('shows None for missing Most Recent Sale and PIN', () => {
     renderSidebar(
       makePayload({

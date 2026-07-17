@@ -75,7 +75,7 @@ class TestNextActionInvariant:
                 ensure_next_action_after_task_change(lead.id)
                 mock_refresh.assert_not_called()
 
-    def test_complete_last_task_invokes_invariant(self, app):
+    def test_complete_last_task_skips_invariant_when_action_engine_succeeds(self, app):
         with app.app_context():
             lead = _make_lead(app, '4 Complete St')
             task = _make_open_task(lead.id)
@@ -84,6 +84,20 @@ class TestNextActionInvariant:
             ) as mock_ensure:
                 with patch(
                     'app.services.action_engine_service.ActionEngineService.recompute_and_persist',
+                ):
+                    LeadTaskService().complete(task.id, lead.id, actor='tester')
+                mock_ensure.assert_not_called()
+
+    def test_complete_last_task_invokes_invariant_when_action_engine_fails(self, app):
+        with app.app_context():
+            lead = _make_lead(app, '5 Complete St')
+            task = _make_open_task(lead.id)
+            with patch(
+                'app.services.next_action_invariant.ensure_next_action_after_task_change',
+            ) as mock_ensure:
+                with patch(
+                    'app.services.action_engine_service.ActionEngineService.recompute_and_persist',
+                    side_effect=RuntimeError('scoring failed'),
                 ):
                     LeadTaskService().complete(task.id, lead.id, actor='tester')
                 mock_ensure.assert_called_once_with(lead.id)

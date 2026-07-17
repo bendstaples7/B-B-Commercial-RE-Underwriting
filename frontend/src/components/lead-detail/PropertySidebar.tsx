@@ -311,6 +311,25 @@ export function PropertySidebar({
     setSaleVerifyMessage(null)
   }, [commandCenterData.id])
 
+  const pollQueuedSaleVerification = async (leadId: number) => {
+    const delaysMs = [2000, 3000, 5000, 8000, 13000]
+    for (const delayMs of delaysMs) {
+      await new Promise((resolve) => {
+        window.setTimeout(resolve, delayMs)
+      })
+      try {
+        const fresh = await commandCenterService.getCommandCenter(leadId)
+        if (fresh.sale_date_meta?.last_checked_at) {
+          queryClient.setQueryData(['commandCenter', leadId], fresh)
+          return
+        }
+      } catch {
+        // Keep polling until delays are exhausted.
+      }
+    }
+    await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+  }
+
   const handleVerifySaleDate = async () => {
     setSaleVerifyPending(true)
     setSaleVerifyMessage(null)
@@ -327,10 +346,13 @@ export function PropertySidebar({
         )
       } else if (result.queued) {
         setSaleVerifyMessage('Verification queued.')
+        void pollQueuedSaleVerification(commandCenterData.id)
       } else {
         setSaleVerifyMessage('Verification checked.')
       }
-      await queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
+      if (!result.queued) {
+        await queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
+      }
     } catch (error) {
       setSaleVerifyMessage(error instanceof Error ? error.message : 'Verification failed.')
     } finally {

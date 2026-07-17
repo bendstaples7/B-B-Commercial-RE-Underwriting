@@ -6,6 +6,7 @@ including recommended action retrieval with signal breakdown.
 Blueprint: command_center_bp, prefix /api/leads
 """
 import logging
+import os
 from functools import wraps
 
 from flask import Blueprint, jsonify, g, request
@@ -1579,8 +1580,21 @@ def verify_sale_date(lead_id: int):
         queued = enqueue_cook_county_enrichment(lead_id)
 
     if not queued:
-        summary = enrich_cook_county_lead(lead_id)
-        ran_sync = True
+        flask_env = os.getenv('FLASK_ENV', 'production')
+        if flask_env in ('development', 'testing'):
+            summary = enrich_cook_county_lead(lead_id)
+            ran_sync = True
+        else:
+            return jsonify({
+                'lead_id': lead_id,
+                'queued': False,
+                'ran_sync': False,
+                'error': 'workers_unavailable',
+                'message': (
+                    'Verification could not be queued because no background workers '
+                    'are available. Try again shortly.'
+                ),
+            }), 503
 
     from app import db as _db
     _db.session.refresh(lead)

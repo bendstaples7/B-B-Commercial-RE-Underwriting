@@ -55,11 +55,15 @@ export function addDaysIso(days: number): string {
   return `${yyyy}-${mm}-${dd}`
 }
 
-/** Add months to today as YYYY-MM-DD (local). */
+/** Add months to today as YYYY-MM-DD (local). Clamps day-of-month on overflow. */
 export function addMonthsIso(months: number): string {
   const d = new Date()
   d.setHours(0, 0, 0, 0)
+  const day = d.getDate()
+  d.setDate(1)
   d.setMonth(d.getMonth() + months)
+  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
+  d.setDate(Math.min(day, lastDay))
   const yyyy = d.getFullYear()
   const mm = String(d.getMonth() + 1).padStart(2, '0')
   const dd = String(d.getDate()).padStart(2, '0')

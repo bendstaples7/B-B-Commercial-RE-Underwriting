@@ -1,0 +1,15 @@
+---
+description: When to create a new feat branch vs continue the current branch
+alwaysApply: true
+---
+
+# Branch lifecycle
+
+Use this rule together with `no-direct-main-merge.mdc`.
+
+## Choose the branch before starting work
+
+- If the previous feature branch is **already merged into `main`** → create a new `feat/<topic>` branch off latest `main` as step 0.
+- If the existing branch is **uncommitted or not yet merged into `main`** → continue on that existing branch; do **not** cut a new branch off `main` and do **not** stash WIP onto a fresh branch.
+
+When unsure which case applies, ask before branching.

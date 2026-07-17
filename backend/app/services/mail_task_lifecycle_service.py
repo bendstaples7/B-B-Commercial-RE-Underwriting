@@ -596,6 +596,31 @@ def count_superseded_tasks_for_lead(lead_id: int) -> int:
     return count
 
 
+def _crm_task_has_open_canonical_on_linked_leads(task: Task) -> bool:
+    """True when any linked lead still has an open canonical LeadTask for this mirror."""
+    from app.models import LeadTask
+
+    lead_ids: set[int] = set()
+    if task.lead_id is not None:
+        lead_ids.add(int(task.lead_id))
+    for row in TaskAssociation.query.filter_by(
+        task_id=task.id,
+        target_type='lead',
+    ).all():
+        lead_ids.add(int(row.target_id))
+    if not lead_ids:
+        return False
+    query = LeadTask.query.filter(
+        LeadTask.lead_id.in_(lead_ids),
+        LeadTask.status == 'open',
+    )
+    if task.hubspot_task_id:
+        query = query.filter(LeadTask.hubspot_task_id == str(task.hubspot_task_id))
+    else:
+        query = query.filter(LeadTask.mirror_task_id == task.id)
+    return query.first() is not None
+
+
 def _orphan_superseded_crm_tasks(lead_id: int) -> list[Task]:
     """CRM mirrors still open without a corresponding canonical LeadTask."""
     candidates = _open_hubspot_tasks_for_lead(lead_id) + _open_mirrored_tasks_for_lead(lead_id)
@@ -616,6 +641,8 @@ def _orphan_superseded_crm_tasks(lead_id: int) -> list[Task]:
             ),
         ).first()
         if canonical is not None:
+            continue
+        if _crm_task_has_open_canonical_on_linked_leads(task):
             continue
         if is_mail_follow_up_task(task):
             continue
