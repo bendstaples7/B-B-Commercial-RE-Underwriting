@@ -125,12 +125,16 @@ def recent_cloud_transfer_ok(manifest_path: Path, window_hours: int = 24) -> boo
     return False
 
 
-def estimate_b2_steady_state_gb(
+def estimate_remote_steady_state_gb(
     avg_dump_mb: float,
-    dumps_per_day: int = 3,
-    retention_days: int = 30,
+    dumps_per_day: int = 1,
+    retention_days: int = 14,
 ) -> float:
     return dumps_per_day * retention_days * avg_dump_mb / 1024
+
+
+# Backward-compatible alias (older docs/tests).
+estimate_b2_steady_state_gb = estimate_remote_steady_state_gb
 
 
 def run_checks(conf_path: Path = Path("/home/deploy/backup.conf")) -> list[str]:

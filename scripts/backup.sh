@@ -118,7 +118,8 @@ fi
 # ── Pre-deploy-fast: skip dump when a recent valid scheduled backup exists ───
 if [[ "$PRE_DEPLOY_FAST" -eq 1 ]]; then
     MAX_AGE_HOURS="${PRE_DEPLOY_BACKUP_MAX_AGE_HOURS:-8}"
-    RECENT_OK=0
+    RECENT_META=""
+    RECENT_META="$(
     python3 -c "
 import json, sys
 from datetime import datetime, timezone, timedelta
@@ -148,17 +149,56 @@ for line in reversed(lines):
     except ValueError:
         continue
     if when >= cutoff:
-        print(entry.get('filename', 'unknown'))
+        filename = entry.get('filename', '')
+        if not filename:
+            continue
+        # filename<TAB>original timestamp (preserve dump time for remote path / manifest)
+        print(f'{filename}\t{ts}')
         sys.exit(0)
 sys.exit(1)
-" >> "$LOG_FILE" 2>&1 && RECENT_OK=1 || RECENT_OK=0
+" 2>>"$LOG_FILE"
+    )" || RECENT_META=""
 
-    if [[ "$RECENT_OK" -eq 1 ]]; then
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: pre-deploy-fast — recent valid scheduled backup within ${MAX_AGE_HOURS}h — skipping pg_dump" >> "$LOG_FILE"
-        echo "    Pre-deploy-fast: using recent scheduled backup (within ${MAX_AGE_HOURS}h)"
-        exit 0
+    RECENT_FILENAME=""
+    RECENT_TIMESTAMP=""
+    if [[ -n "$RECENT_META" ]]; then
+        RECENT_FILENAME="${RECENT_META%%$'\t'*}"
+        RECENT_TIMESTAMP="${RECENT_META#*$'\t'}"
     fi
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: pre-deploy-fast — no recent scheduled backup — running local pg_dump" >> "$LOG_FILE"
+
+    if [[ -n "$RECENT_FILENAME" && -f "$BACKUP_DIR/$RECENT_FILENAME" ]]; then
+        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: pre-deploy-fast — recent valid scheduled backup within ${MAX_AGE_HOURS}h — skipping pg_dump ($RECENT_FILENAME)" >> "$LOG_FILE"
+        echo "    Pre-deploy-fast: using recent scheduled backup (within ${MAX_AGE_HOURS}h)"
+        # Heal off-site copies if cloud transfer is stale (does not re-dump).
+        FILENAME="$RECENT_FILENAME"
+        TIMESTAMP_ISO="${RECENT_TIMESTAMP:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+        SHA256="$(sha256sum "$BACKUP_DIR/$FILENAME" | awk '{print $1}')"
+        SIZE_BYTES="$(stat -c "%s" "$BACKUP_DIR/$FILENAME")"
+        INTEGRITY="invalid"
+        if pg_restore --list "$BACKUP_DIR/$FILENAME" >> "$LOG_FILE" 2>&1; then
+            INTEGRITY="valid"
+        else
+            echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: pre-deploy-fast integrity check FAILED for $FILENAME" >> "$LOG_FILE"
+            send_alert \
+                "Pre-deploy-fast aborted — reused dump failed integrity [$BACKUP_TYPE] [$(date -u +%Y-%m-%dT%H:%M:%SZ)]" \
+                "pg_restore --list failed for reused backup $FILENAME. Falling through would risk uploading a corrupt dump."
+            # Fall through to a fresh pg_dump instead of uploading a bad archive.
+            PRE_DEPLOY_FAST=0
+        fi
+        if [[ "$INTEGRITY" == "valid" ]]; then
+            REMOTE_PATH=""
+            REMOTE_TRANSFERRED="false"
+            # shellcheck source=/home/deploy/backup_remote_transfer.sh
+            source /home/deploy/backup_remote_transfer.sh
+            if [[ "$BACKUP_FAILED" -ne 0 ]]; then
+                echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: pre-deploy-fast completed with remote failures — $FILENAME (remote_transferred=$REMOTE_TRANSFERRED)" >> "$LOG_FILE"
+                exit 1
+            fi
+            echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: pre-deploy-fast completed — $FILENAME (remote_transferred=$REMOTE_TRANSFERRED)" >> "$LOG_FILE"
+            exit 0
+        fi
+    fi
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: pre-deploy-fast — no recent usable scheduled backup — running local pg_dump" >> "$LOG_FILE"
 fi
 
 # ── Step 5: Determine output filename ────────────────────────────────────────
@@ -242,232 +282,10 @@ if [[ "$REDIS_EXIT" -ne 0 ]]; then
         "redis-backup.sh exited with code $REDIS_EXIT at $(date -u +%Y-%m-%dT%H:%M:%SZ). PostgreSQL backup is continuing. Check $LOG_FILE for details."
 fi
 
-# ── Step 10 & 11: Remote transfer with retry loop ────────────────────────────
-# Skip remote transfer if REMOTE_METHOD is empty (local-only backup mode)
-if [[ -z "${REMOTE_METHOD:-}" ]]; then
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: REMOTE_METHOD not set — skipping remote transfer (local backup only)" >> "$LOG_FILE"
-else
-# Validate remote method via backup_lib dispatch
-DISPATCH_CHECK=0
-python3 -c "
-import sys
-sys.path.insert(0, '/home/deploy')
-from backup_lib import dispatch_transfer_method
-try:
-    dispatch_transfer_method('$REMOTE_METHOD')
-except ValueError as e:
-    print(str(e), file=sys.stderr)
-    sys.exit(1)
-" 2>>"$LOG_FILE" || DISPATCH_CHECK=$?
-
-if [[ "$DISPATCH_CHECK" -ne 0 ]]; then
-    BACKUP_FAILED=1
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: Invalid REMOTE_METHOD='$REMOTE_METHOD' — skipping remote transfer" >> "$LOG_FILE"
-    send_alert \
-        "Remote transfer skipped — invalid REMOTE_METHOD [$BACKUP_TYPE] [$(date -u +%Y-%m-%dT%H:%M:%SZ)]" \
-        "REMOTE_METHOD is not a valid transfer method. Remote transfer was skipped. Backup type: $BACKUP_TYPE."
-else
-    # Generate remote path
-    REMOTE_PATH="$(python3 /home/deploy/backup_lib.py generate-remote-path "$RCLONE_PATH_PREFIX" "$TIMESTAMP_ISO" "$FILENAME")"
-
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: remote path=$REMOTE_PATH" >> "$LOG_FILE"
-
-    if [[ "$PRE_DEPLOY_FAST" -eq 1 ]]; then
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: pre-deploy-fast — scheduling background B2 upload (non-blocking)" >> "$LOG_FILE"
-        nohup env \
-            BACKUP_DIR="$BACKUP_DIR" \
-            FILENAME="$FILENAME" \
-            REMOTE_PATH="$REMOTE_PATH" \
-            LOG_FILE="$LOG_FILE" \
-            RCLONE_REMOTE="$RCLONE_REMOTE" \
-            RCLONE_BUCKET="$RCLONE_BUCKET" \
-            RCLONE_PATH_PREFIX="$RCLONE_PATH_PREFIX" \
-            REMOTE_CONNECT_TIMEOUT="${REMOTE_CONNECT_TIMEOUT:-30}" \
-            REMOTE_RETRY_COUNT="${REMOTE_RETRY_COUNT:-3}" \
-            REMOTE_RETRY_DELAY="${REMOTE_RETRY_DELAY:-300}" \
-            REMOTE_RETENTION_DAYS="${REMOTE_RETENTION_DAYS:-30}" \
-            TIMESTAMP_ISO="$TIMESTAMP_ISO" \
-            SIZE_BYTES="$SIZE_BYTES" \
-            SHA256="$SHA256" \
-            INTEGRITY="$INTEGRITY" \
-            BACKUP_TYPE="$BACKUP_TYPE" \
-            WEBHOOK_URL="${WEBHOOK_URL:-}" \
-            ALERT_METHOD="${ALERT_METHOD:-}" \
-            ALERT_EMAIL="${ALERT_EMAIL:-}" \
-            MSMTP_ACCOUNT="${MSMTP_ACCOUNT:-}" \
-            bash -c '
-set -euo pipefail
-RETRY_MAX="${REMOTE_RETRY_COUNT:-3}"
-RETRY_DELAY="${REMOTE_RETRY_DELAY:-300}"
-TRANSFER_SUCCESS=0
-ATTEMPT=0
-while [[ "$ATTEMPT" -lt "$RETRY_MAX" ]]; do
-    ATTEMPT=$(( ATTEMPT + 1 ))
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh (bg): remote transfer attempt $ATTEMPT/$RETRY_MAX" >> "$LOG_FILE"
-    TRANSFER_EXIT=0
-    rclone copyto "$BACKUP_DIR/$FILENAME" "$RCLONE_REMOTE:$RCLONE_BUCKET/$REMOTE_PATH" \
-        --contimeout "${REMOTE_CONNECT_TIMEOUT}s" \
-        2>>"$LOG_FILE" || TRANSFER_EXIT=$?
-    if [[ "$TRANSFER_EXIT" -ne 0 ]]; then
-        if [[ "$ATTEMPT" -lt "$RETRY_MAX" ]]; then
-            sleep "$RETRY_DELAY"
-        fi
-        continue
-    fi
-    LOCAL_SIZE="$(stat -c "%s" "$BACKUP_DIR/$FILENAME")"
-    REMOTE_SIZE_JSON="$(rclone size "$RCLONE_REMOTE:$RCLONE_BUCKET/$REMOTE_PATH" --json 2>>"$LOG_FILE")" || {
-        if [[ "$ATTEMPT" -lt "$RETRY_MAX" ]]; then
-            sleep "$RETRY_DELAY"
-        fi
-        continue
-    }
-    REMOTE_SIZE="$(echo "$REMOTE_SIZE_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(\"bytes\", -1))")"
-    if [[ "$REMOTE_SIZE" -eq "$LOCAL_SIZE" ]]; then
-        TRANSFER_SUCCESS=1
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh (bg): remote transfer verified" >> "$LOG_FILE"
-        break
-    fi
-    if [[ "$ATTEMPT" -lt "$RETRY_MAX" ]]; then
-        sleep "$RETRY_DELAY"
-    fi
-done
-if [[ "$TRANSFER_SUCCESS" -eq 1 ]]; then
-    python3 -c "
-import json
-print(json.dumps({
-    \"filename\": \"$FILENAME\",
-    \"timestamp\": \"$TIMESTAMP_ISO\",
-    \"size_bytes\": $SIZE_BYTES,
-    \"sha256\": \"$SHA256\",
-    \"integrity\": \"$INTEGRITY\",
-    \"type\": \"$BACKUP_TYPE\",
-    \"remote_transferred\": True,
-    \"remote_path\": \"$REMOTE_PATH\"
-}))
-" | python3 /home/deploy/backup_lib.py serialize-manifest >> "$BACKUP_DIR/backup_manifest.log"
-    rclone delete --min-age "${REMOTE_RETENTION_DAYS}d" \
-        "$RCLONE_REMOTE:$RCLONE_BUCKET/$RCLONE_PATH_PREFIX/" \
-        2>>"$LOG_FILE" || true
-else
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh (bg): remote transfer failed after $RETRY_MAX attempts (non-blocking)" >> "$LOG_FILE"
-    ALERT_SUBJECT="Pre-deploy-fast background B2 upload failed for $FILENAME after $RETRY_MAX attempts"
-    ALERT_BODY="Check $LOG_FILE."
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT: $ALERT_SUBJECT" >> "$LOG_FILE"
-    if [[ "${ALERT_METHOD:-}" == "email" || "${ALERT_METHOD:-}" == "both" ]] && [[ -n "${ALERT_EMAIL:-}" ]]; then
-        {
-            printf 'Subject: [Backup Alert] %s\n' "$ALERT_SUBJECT"
-            printf 'To: %s\n' "${ALERT_EMAIL}"
-            printf 'Content-Type: text/plain; charset=UTF-8\n'
-            printf '\n'
-            printf '%s' "$ALERT_BODY"
-        } | msmtp --account="${MSMTP_ACCOUNT}" "${ALERT_EMAIL}" 2>>"$LOG_FILE" \
-            || echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT DELIVERY FAILED (email): $?" >> "$LOG_FILE"
-    fi
-    if [[ "${ALERT_METHOD:-}" == "webhook" || "${ALERT_METHOD:-}" == "both" ]] && [[ -n "${WEBHOOK_URL:-}" ]]; then
-        curl -s -X POST "$WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -d "{\"text\": \"[Backup Alert] $ALERT_SUBJECT\n$ALERT_BODY\"}" \
-            --max-time 10 >> "$LOG_FILE" 2>&1 || true
-    fi
-fi
-' >> "$LOG_FILE" 2>&1 &
-        echo "    Pre-deploy-fast: local backup complete; B2 upload running in background"
-    else
-    # Retry loop — up to REMOTE_RETRY_COUNT attempts (blocking)
-    RETRY_MAX="${REMOTE_RETRY_COUNT:-3}"
-    RETRY_DELAY="${REMOTE_RETRY_DELAY:-300}"
-    TRANSFER_SUCCESS=0
-    ATTEMPT=0
-
-    while [[ "$ATTEMPT" -lt "$RETRY_MAX" ]]; do
-        ATTEMPT=$(( ATTEMPT + 1 ))
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: remote transfer attempt $ATTEMPT/$RETRY_MAX" >> "$LOG_FILE"
-
-        TRANSFER_EXIT=0
-        rclone copyto "$BACKUP_DIR/$FILENAME" "$RCLONE_REMOTE:$RCLONE_BUCKET/$REMOTE_PATH" \
-            --contimeout "${REMOTE_CONNECT_TIMEOUT:-30}s" \
-            2>>"$LOG_FILE" || TRANSFER_EXIT=$?
-
-        if [[ "$TRANSFER_EXIT" -ne 0 ]]; then
-            echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARNING: rclone copy failed on attempt $ATTEMPT (exit code $TRANSFER_EXIT)" >> "$LOG_FILE"
-            if [[ "$ATTEMPT" -lt "$RETRY_MAX" ]]; then
-                echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: waiting ${RETRY_DELAY}s before retry" >> "$LOG_FILE"
-                sleep "$RETRY_DELAY"
-            fi
-            continue
-        fi
-
-        # Verify remote file size matches local size
-        LOCAL_SIZE="$(stat -c "%s" "$BACKUP_DIR/$FILENAME")"
-        REMOTE_SIZE_JSON="$(rclone size "$RCLONE_REMOTE:$RCLONE_BUCKET/$REMOTE_PATH" --json 2>>"$LOG_FILE")" || {
-            echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARNING: rclone size check failed on attempt $ATTEMPT" >> "$LOG_FILE"
-            if [[ "$ATTEMPT" -lt "$RETRY_MAX" ]]; then
-                sleep "$RETRY_DELAY"
-            fi
-            continue
-        }
-
-        REMOTE_SIZE="$(echo "$REMOTE_SIZE_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('bytes', -1))")"
-
-        if [[ "$REMOTE_SIZE" -eq "$LOCAL_SIZE" ]]; then
-            TRANSFER_SUCCESS=1
-            echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: remote transfer verified — local=${LOCAL_SIZE}B remote=${REMOTE_SIZE}B" >> "$LOG_FILE"
-            break
-        else
-            echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARNING: remote size mismatch on attempt $ATTEMPT — local=${LOCAL_SIZE}B remote=${REMOTE_SIZE}B" >> "$LOG_FILE"
-            if [[ "$ATTEMPT" -lt "$RETRY_MAX" ]]; then
-                sleep "$RETRY_DELAY"
-            fi
-        fi
-    done
-
-    if [[ "$TRANSFER_SUCCESS" -eq 1 ]]; then
-        REMOTE_TRANSFERRED="true"
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: remote transfer succeeded — $REMOTE_PATH" >> "$LOG_FILE"
-
-        # ── Step 13: Delete remote backups older than REMOTE_RETENTION_DAYS ──
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: pruning remote backups older than ${REMOTE_RETENTION_DAYS:-30} days" >> "$LOG_FILE"
-        rclone delete --min-age "${REMOTE_RETENTION_DAYS:-30}d" \
-            "$RCLONE_REMOTE:$RCLONE_BUCKET/$RCLONE_PATH_PREFIX/" \
-            2>>"$LOG_FILE" \
-            && echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: remote retention pruning complete" >> "$LOG_FILE" \
-            || echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARNING: remote retention pruning encountered an error (non-fatal)" >> "$LOG_FILE"
-    else
-        BACKUP_FAILED=1
-        REMOTE_TRANSFERRED="false"
-        REMOTE_PATH=""
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: remote transfer failed after $RETRY_MAX attempts" >> "$LOG_FILE"
-        send_alert \
-            "Remote transfer FAILED after $RETRY_MAX attempts [$BACKUP_TYPE] [$(date -u +%Y-%m-%dT%H:%M:%SZ)]" \
-            "All $RETRY_MAX remote transfer attempts for $FILENAME failed at $(date -u +%Y-%m-%dT%H:%M:%SZ). Backup type: $BACKUP_TYPE. Check $LOG_FILE for details."
-    fi
-
-    # Update manifest entry with final remote transfer status
-    # Append a corrected entry (the restore script uses the last matching entry via lookup_manifest_entry)
-    if [[ "$REMOTE_TRANSFERRED" == "true" ]]; then
-        REMOTE_TRANSFERRED_PYTHON="True"
-    else
-        REMOTE_TRANSFERRED_PYTHON="False"
-    fi
-
-    python3 -c "
-import json, sys
-print(json.dumps({
-    'filename': '$FILENAME',
-    'timestamp': '$TIMESTAMP_ISO',
-    'size_bytes': $SIZE_BYTES,
-    'sha256': '$SHA256',
-    'integrity': '$INTEGRITY',
-    'type': '$BACKUP_TYPE',
-    'remote_transferred': $REMOTE_TRANSFERRED_PYTHON,
-    'remote_path': '$REMOTE_PATH'
-}))
-" | python3 /home/deploy/backup_lib.py serialize-manifest >> "$BACKUP_DIR/backup_manifest.log"
-
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: manifest updated with remote transfer status" >> "$LOG_FILE"
-    fi  # end: blocking remote transfer (not pre-deploy-fast)
-fi
-fi  # end: if REMOTE_METHOD is set
+# ── Step 10 & 11: Remote transfer (multi-target, gated) ───────────────────────
+# Logic lives in backup_remote_transfer.sh (sourced so REMOTE_* / BACKUP_FAILED update).
+# shellcheck source=/home/deploy/backup_remote_transfer.sh
+source /home/deploy/backup_remote_transfer.sh
 
 # ── Step 12: Delete local backups older than LOCAL_RETENTION_DAYS ─────────────
 # Only run if no failures occurred during this backup run.

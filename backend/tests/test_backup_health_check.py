@@ -53,9 +53,11 @@ def test_cron_missing_entries_detects_gaps():
     assert "daily-summary.sh" in missing
 
 
-def test_estimate_b2_steady_state_under_free_tier():
-    steady = hc.estimate_b2_steady_state_gb(57.0)
+def test_estimate_remote_steady_state_under_free_tier():
+    steady = hc.estimate_remote_steady_state_gb(57.0)
     assert steady < 10
+    # Alias kept for older call sites
+    assert hc.estimate_b2_steady_state_gb(57.0) == steady
 
 
 def test_run_checks_skips_remote_when_not_configured(tmp_path: Path, monkeypatch):
