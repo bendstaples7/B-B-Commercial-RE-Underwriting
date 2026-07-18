@@ -627,7 +627,7 @@ def cook_county_backfill_sale_dates_task(self):
 
     lock_key = 'cook_county:sale_date_backfill_lock'
     lock_ttl_seconds = 50 * 60
-    claimed = False
+    lock_token: str | None = None
 
     try:
         from app import create_app
@@ -643,8 +643,10 @@ def cook_county_backfill_sale_dates_task(self):
 
             client = _redis_client()
             if client is not None:
-                claimed = try_claim_redis_key(lock_key, ttl_seconds=lock_ttl_seconds)
-                if not claimed:
+                lock_token = try_claim_redis_key(
+                    lock_key, ttl_seconds=lock_ttl_seconds,
+                )
+                if not lock_token:
                     _logger.info(
                         "cook_county.backfill_sale_dates: skipped (lock held)"
                     )
@@ -657,12 +659,12 @@ def cook_county_backfill_sale_dates_task(self):
         _logger.error("cook_county.backfill_sale_dates failed: %s", exc)
         raise
     finally:
-        if claimed:
+        if lock_token:
             try:
-                from app.services.deploy_sync_policy import _redis_client
-                client = _redis_client()
-                if client is not None:
-                    client.delete(lock_key)
+                from app.services.deploy_sync_policy import (
+                    release_redis_key_if_token,
+                )
+                release_redis_key_if_token(lock_key, lock_token)
             except Exception as release_exc:
                 _logger.warning(
                     "cook_county.backfill_sale_dates: failed to release lock: %s",

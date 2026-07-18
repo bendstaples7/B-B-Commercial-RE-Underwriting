@@ -803,6 +803,8 @@ class ContactService:
             for contact, link in existing_rows:
                 if contact.id == reused.id:
                     if link.role not in ('owner', 'former_owner'):
+                        # Keep attorney/manager/etc. intact — do not convert to owner.
+                        reused = None
                         break
                     if link.role == 'former_owner':
                         self._reactivate_owner_link(link, property_id, is_primary=is_primary)
@@ -812,39 +814,45 @@ class ContactService:
                         ).update({'is_primary': False})
                         link.is_primary = True
                     return reused, link
-            if is_primary:
-                PropertyContact.query.filter_by(
-                    property_id=property_id, is_primary=True,
-                ).update({'is_primary': False})
-            if (first_name or '').strip() and len((first_name or '').strip()) > len(
-                (reused.first_name or '').strip()
-            ):
-                reused.first_name = first_name
-            if (last_name or '').strip() and not (reused.last_name or '').strip():
-                reused.last_name = last_name
-            link = PropertyContact(
-                property_id=property_id,
-                contact_id=reused.id,
-                role='owner',
-                is_primary=is_primary or not existing_rows,
-            )
-            try:
-                with db.session.begin_nested():
-                    db.session.add(link)
-                    db.session.flush()
-            except sqlalchemy.exc.IntegrityError:
-                existing = (
-                    PropertyContact.query
-                    .filter_by(property_id=property_id, contact_id=reused.id)
-                    .first()
+            if reused is not None:
+                if is_primary:
+                    PropertyContact.query.filter_by(
+                        property_id=property_id, is_primary=True,
+                    ).update({'is_primary': False})
+                if (first_name or '').strip() and len((first_name or '').strip()) > len(
+                    (reused.first_name or '').strip()
+                ):
+                    reused.first_name = first_name
+                if (last_name or '').strip() and not (reused.last_name or '').strip():
+                    reused.last_name = last_name
+                link = PropertyContact(
+                    property_id=property_id,
+                    contact_id=reused.id,
+                    role='owner',
+                    is_primary=is_primary or not existing_rows,
                 )
-                if existing is None:
-                    raise
-                self._reactivate_owner_link(
-                    existing, property_id, is_primary=is_primary,
-                )
-                return reused, existing
-            return reused, link
+                try:
+                    with db.session.begin_nested():
+                        db.session.add(link)
+                        db.session.flush()
+                except sqlalchemy.exc.IntegrityError:
+                    existing = (
+                        PropertyContact.query
+                        .filter_by(property_id=property_id, contact_id=reused.id)
+                        .first()
+                    )
+                    if existing is None:
+                        raise
+                    if existing.role not in ('owner', 'former_owner'):
+                        # Race: non-owner link appeared — create a distinct owner contact.
+                        reused = None
+                    else:
+                        self._reactivate_owner_link(
+                            existing, property_id, is_primary=is_primary,
+                        )
+                        return reused, existing
+                else:
+                    return reused, link
 
         if is_primary:
             PropertyContact.query.filter_by(

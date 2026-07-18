@@ -15,7 +15,7 @@ export function formatDate(dateStr: string | null | undefined): string {
 
 export function formatDateTime(dateStr: string | null | undefined): string {
   if (!dateStr) return '—'
-  const d = new Date(dateStr)
+  const d = new Date(dateStr.trim())
   if (Number.isNaN(d.getTime())) return '—'
   return d.toLocaleString()
 }

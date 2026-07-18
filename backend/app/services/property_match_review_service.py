@@ -117,33 +117,41 @@ class PropertyMatchReviewService:
             'awaiting_skip_trace',
         )
 
-        # Sidebar Apply passes the previewed PIN so enrich can fall back to
-        # lookup_by_pin when address lookup is flaky or empty.
+        # Sidebar Apply may pass a previewed PIN for lookup_by_pin fallback when
+        # address lookup is flaky — do not persist it until GIS confirms the parcel.
         pin_value = (pin or '').strip() or None
-        if pin_value:
-            from app.services.plugins.pin_utils import (
-                format_pin_for_storage,
-                normalize_pin_for_socrata,
-            )
-            if len(normalize_pin_for_socrata(pin_value)) != 14:
+        is_cook = getattr(connector, 'market', None) == 'cook_county_il'
+        if pin_value and is_cook:
+            from app.services.plugins.pin_utils import normalize_pin_for_socrata
+            digits = normalize_pin_for_socrata(pin_value)
+            if len(digits) != 14 or not digits.isdigit():
                 raise ValueError('Invalid Cook County PIN')
-            lead.county_assessor_pin = format_pin_for_storage(pin_value)
 
         try:
             outcome = self._ingestion_service()._enrich_with_gis(
-                lead, connector, import_job_id=None,
+                lead, connector, import_job_id=None, pin_hint=pin_value,
             )
             if not outcome.get('match_found'):
                 db.session.rollback()
                 raise ValueError('GIS match could not be applied')
 
+            from app.services.plugins.pin_utils import (
+                format_pin_for_storage,
+                normalize_pin_for_socrata,
+            )
+            parcel_pin = outcome.get('parcel_pin') or lead.county_assessor_pin
             if pin_value:
-                from app.services.plugins.pin_utils import normalize_pin_for_socrata
-                resolved = normalize_pin_for_socrata(lead.county_assessor_pin or '')
+                resolved = normalize_pin_for_socrata(parcel_pin or '')
                 submitted = normalize_pin_for_socrata(pin_value)
                 if resolved and submitted and resolved != submitted:
                     db.session.rollback()
                     raise ValueError('Submitted PIN does not match the resolved parcel')
+                # Persist connector PIN (preferred) or the validated submitted PIN.
+                store_raw = parcel_pin or pin_value
+                if is_cook:
+                    lead.county_assessor_pin = format_pin_for_storage(store_raw)
+                else:
+                    lead.county_assessor_pin = (store_raw or '').strip() or None
 
             if not preserve_skip_trace:
                 lead.needs_skip_trace = False

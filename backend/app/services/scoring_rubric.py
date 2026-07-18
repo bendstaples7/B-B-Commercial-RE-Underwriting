@@ -873,36 +873,9 @@ def _flat_phone_confidences(lead: Lead) -> list[int]:
     return scores
 
 
-def _lead_has_former_owner_links(lead_id: int) -> bool:
-    """True when this property has any former_owner PropertyContact links."""
-    from flask import has_app_context
-
-    if not has_app_context():
-        return False
-    try:
-        from sqlalchemy import text
-        from app import db
-
-        row = db.session.execute(
-            text("""
-                SELECT 1 FROM property_contacts
-                WHERE property_id = :lead_id AND role = 'former_owner'
-                LIMIT 1
-            """),
-            {"lead_id": lead_id},
-        ).fetchone()
-        return row is not None
-    except SQLAlchemyError as exc:
-        logger.warning("former_owner link lookup failed for lead %s: %s", lead_id, exc)
-        return False
-
-
 def _use_flat_contact_fields(lead: Lead) -> bool:
-    """Skip flat phone/email when former owners exist (flat fields may be stale)."""
-    lead_id = getattr(lead, "id", None)
-    if isinstance(lead_id, int) and _lead_has_former_owner_links(lead_id):
-        return False
-    return True
+    """Use flat phone/email unless contacts are still likely prior-owner stale."""
+    return not contacts_likely_prior_owner(lead)
 
 
 def _relational_phone_confidences(lead_id: int) -> list[int]:

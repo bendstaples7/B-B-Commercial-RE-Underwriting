@@ -832,11 +832,10 @@ describe('PropertySidebar prior-owner stale contacts', () => {
     const wash = screen.getByTestId('sidebar-likely-prior-owner').parentElement
     expect(wash).toHaveStyle({ pointerEvents: 'none' })
 
-    // Outreach disabled for likely prior-owner contacts
+    // Visual wash only — phones/emails stay dialable/copyable for outreach.
     expect(screen.getByTestId('sidebar-phones')).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /prior@example.com/i })).not.toBeInTheDocument()
-    expect(screen.getByText('prior@example.com')).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /630.*202.*3839/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /prior@example.com/i })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /630.*202.*3839/i })).toBeInTheDocument()
   })
 
   it('does not show Past owners in the right rail when stale', () => {

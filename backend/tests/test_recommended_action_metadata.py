@@ -22,7 +22,7 @@ def test_skip_trace_nurture_gets_recent_sale_rationale_when_contacts_stale():
         acquisition_date=date.today() - timedelta(days=400),
     )
     with patch(
-        'app.services.scoring_rubric.contacts_likely_prior_owner',
+        'app.services.recommended_action_metadata.contacts_likely_prior_owner',
         return_value=True,
     ):
         display = get_recommended_action_display('nurture', lead=lead)
@@ -37,7 +37,7 @@ def test_skip_trace_nurture_without_stale_contacts_stays_blank():
         acquisition_date=date.today() - timedelta(days=800),
     )
     with patch(
-        'app.services.scoring_rubric.contacts_likely_prior_owner',
+        'app.services.recommended_action_metadata.contacts_likely_prior_owner',
         return_value=False,
     ):
         display = get_recommended_action_display('nurture', lead=lead)

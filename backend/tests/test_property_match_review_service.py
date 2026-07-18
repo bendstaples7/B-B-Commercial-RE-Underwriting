@@ -30,7 +30,8 @@ class TestApproveMatch:
         with app.app_context():
             lead = _seed_lead()
             mock_connector = MagicMock()
-            mock_connector.connector_name = 'cook_county_il'
+            mock_connector.connector_name = 'cook_county_gis'
+            mock_connector.market = 'cook_county_il'
 
             with patch(
                 'app.services.property_match_review_service.connector_for_lead',
@@ -43,9 +44,10 @@ class TestApproveMatch:
             ):
                 svc_instance = MagicMock()
                 svc_instance._enrich_with_gis.return_value = {
-                    'connector_name': 'cook_county_il',
+                    'connector_name': 'cook_county_gis',
                     'match_found': True,
                     'fields_populated': 1,
+                    'parcel_pin': '14-21-123-456-0000',
                 }
                 mock_ingestion.return_value = svc_instance
 
@@ -58,6 +60,9 @@ class TestApproveMatch:
             refreshed = db.session.get(Lead, lead.id)
             assert refreshed.needs_skip_trace is True
             assert refreshed.county_assessor_pin == '14-21-123-456-0000'
+            assert svc_instance._enrich_with_gis.call_args.kwargs['pin_hint'] == (
+                '14211234560000'
+            )
 
     def test_approve_clears_needs_skip_trace_outside_skip_pipeline(self, app):
         with app.app_context():
@@ -67,7 +72,8 @@ class TestApproveMatch:
                 recommended_action=None,
             )
             mock_connector = MagicMock()
-            mock_connector.connector_name = 'cook_county_il'
+            mock_connector.connector_name = 'cook_county_gis'
+            mock_connector.market = 'cook_county_il'
 
             with patch(
                 'app.services.property_match_review_service.connector_for_lead',
@@ -80,9 +86,10 @@ class TestApproveMatch:
             ):
                 svc_instance = MagicMock()
                 svc_instance._enrich_with_gis.return_value = {
-                    'connector_name': 'cook_county_il',
+                    'connector_name': 'cook_county_gis',
                     'match_found': True,
                     'fields_populated': 1,
+                    'parcel_pin': None,
                 }
                 mock_ingestion.return_value = svc_instance
 
@@ -95,7 +102,8 @@ class TestApproveMatch:
         with app.app_context():
             lead = _seed_lead(county_assessor_pin=None, needs_skip_trace=False)
             mock_connector = MagicMock()
-            mock_connector.connector_name = 'cook_county_il'
+            mock_connector.connector_name = 'cook_county_gis'
+            mock_connector.market = 'cook_county_il'
 
             with patch(
                 'app.services.property_match_review_service.connector_for_lead',
@@ -110,8 +118,9 @@ class TestApproveMatch:
                     lead_obj.needs_skip_trace = True
                     lead_obj.has_property_match = False
                     return {
-                        'connector_name': 'cook_county_il',
+                        'connector_name': 'cook_county_gis',
                         'match_found': False,
+                        'parcel_pin': None,
                     }
 
                 svc_instance._enrich_with_gis.side_effect = _enrich

@@ -557,7 +557,7 @@ export function PropertySidebar({
           <PhoneList
             phones={phones}
             dense={!stacked}
-            actionable={!contactsLikelyPriorOwner}
+            actionable
           />
         </SidebarLabeledContent>
       )}
@@ -567,7 +567,7 @@ export function PropertySidebar({
             <CopyableEmail
               key={`${e}-${i}`}
               email={e}
-              actionable={!contactsLikelyPriorOwner}
+              actionable
             />
           ))}
         </SidebarLabeledContent>

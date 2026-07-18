@@ -4,6 +4,7 @@ from app.services.outreach_method_service import (
     outreach_action_explanation,
     outreach_action_label,
 )
+from app.services.scoring_rubric import contacts_likely_prior_owner
 
 # Shared copy for skip-trace after a recent transfer (hold + active skip-trace work).
 RECENT_SALE_OUTDATED_CONTACT_EXPLANATION = (
@@ -162,9 +163,6 @@ def _lead_needs_recent_sale_contact_rationale(lead) -> bool:
     status = getattr(lead, 'lead_status', None)
     if status not in ('skip_trace', 'awaiting_skip_trace'):
         return False
-    from app.services.scoring_rubric import (
-        contacts_likely_prior_owner,
-    )
     if not contacts_likely_prior_owner(lead):
         return False
     return bool(getattr(lead, 'needs_skip_trace', False))

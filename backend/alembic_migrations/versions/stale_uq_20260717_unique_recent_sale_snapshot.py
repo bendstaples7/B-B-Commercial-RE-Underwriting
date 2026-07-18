@@ -1,4 +1,7 @@
-"""Unique recent_sale snapshot per lead+sale; keep lead_sale lookup index.
+"""Data-only: delete duplicate recent_sale snapshots (non-null sale_date).
+
+Indexes are created in stale_own_20260717; this revision only cleans
+duplicate rows so that unique index remains valid.
 
 Revision ID: stale_uq_20260717
 Revises: stale_own_20260717
@@ -25,19 +28,6 @@ def upgrade():
           AND a.sale_date IS NOT DISTINCT FROM b.sale_date
           AND a.reason = 'recent_sale'
           AND b.reason = 'recent_sale'
-        """
-    )
-    op.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_lead_owner_snapshots_recent_sale
-        ON lead_owner_snapshots (lead_id, sale_date)
-        WHERE reason = 'recent_sale' AND sale_date IS NOT NULL
-        """
-    )
-    op.execute(
-        """
-        CREATE INDEX IF NOT EXISTS ix_lead_owner_snapshots_lead_sale
-        ON lead_owner_snapshots (lead_id, sale_date)
         """
     )
 

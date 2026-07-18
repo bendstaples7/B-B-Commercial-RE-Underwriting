@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIDENCE = 50
 MIN_VIABLE_CONFIDENCE = 10
+HUBSPOT_PRIMARY_NOTE = 'HubSpot primary'
 
 
 class PhoneConfidenceService:
@@ -25,6 +26,10 @@ class PhoneConfidenceService:
     @staticmethod
     def normalize_phone(value: str | None) -> str:
         return re.sub(r'\D', '', value or '')
+
+    @staticmethod
+    def _is_synthetic_hubspot_primary_notes(notes: str | None) -> bool:
+        return (notes or '').strip().lower() == HUBSPOT_PRIMARY_NOTE.lower()
 
     @staticmethod
     def parse_hubspot_phone_line(line: str) -> tuple[str | None, str | None]:
@@ -181,7 +186,7 @@ class PhoneConfidenceService:
                 not notes
                 and cls.normalize_phone(value) in primary_field_digits
             ):
-                notes = 'HubSpot primary'
+                notes = HUBSPOT_PRIMARY_NOTE
             stamped.append((value, notes, label))
         return stamped
 
@@ -211,14 +216,15 @@ class PhoneConfidenceService:
         # (WN/NIS stay at annotation score) or unless only the synthetic marker applies.
         annotation_score = cls.confidence_from_annotation(notes)
         explicit_score = cls._explicit_annotation_score(notes)
+        synthetic_primary_notes = cls._is_synthetic_hubspot_primary_notes(notes)
         if (
             is_hubspot_primary
             and explicit_score is None
             and annotation_score >= DEFAULT_CONFIDENCE
         ):
             annotation_score = max(annotation_score, 85)
-            if not notes:
-                notes = 'HubSpot primary'
+            if not notes or synthetic_primary_notes:
+                notes = HUBSPOT_PRIMARY_NOTE
         elif explicit_score is not None:
             annotation_score = explicit_score
 
@@ -226,14 +232,16 @@ class PhoneConfidenceService:
             if cls.normalize_phone(cp.value) != digits:
                 continue
             changed = False
-            if notes:
+            # Synthetic "HubSpot primary" is a marker, not an annotation — treat like
+            # empty notes so outcome-derived low confidence (wrong_number) is kept.
+            if notes and not synthetic_primary_notes:
                 if cp.notes != notes:
                     cp.notes = notes
                     changed = True
                 if cp.confidence_score != annotation_score:
                     cp.confidence_score = annotation_score
                     changed = True
-            elif is_hubspot_primary:
+            elif is_hubspot_primary or synthetic_primary_notes:
                 preserve_low = (
                     cp.last_outcome == 'wrong_number'
                     or (
@@ -242,8 +250,8 @@ class PhoneConfidenceService:
                         and cls._explicit_annotation_score(cp.notes) is None
                     )
                 )
-                if cp.notes != 'HubSpot primary':
-                    cp.notes = 'HubSpot primary'
+                if cp.notes != HUBSPOT_PRIMARY_NOTE:
+                    cp.notes = HUBSPOT_PRIMARY_NOTE
                     changed = True
                 if not preserve_low:
                     boosted = max(
@@ -278,9 +286,57 @@ class PhoneConfidenceService:
         return cp, True
 
     @classmethod
+    def _ensure_active_owner_contact_id(cls, lead_id: int) -> int | None:
+        """Create or reactivate an owner link when only former_owners remain."""
+        from app.models.contact import Contact
+        from app.services.contact_service import ContactService
+
+        former = (
+            PropertyContact.query
+            .filter_by(property_id=lead_id, role='former_owner')
+            .order_by(
+                PropertyContact.is_primary.desc(),
+                PropertyContact.id.desc(),
+            )
+            .first()
+        )
+        if former is not None:
+            ContactService()._reactivate_owner_link(
+                former, lead_id, is_primary=True,
+            )
+            db.session.flush()
+            return former.contact_id
+
+        lead = Lead.query.get(lead_id)
+        if lead is None:
+            return None
+        first = (getattr(lead, 'owner_first_name', None) or '').strip() or None
+        last = (getattr(lead, 'owner_last_name', None) or '').strip() or None
+        if first or last:
+            contact, _link = ContactService()._upsert_named_owner(
+                lead_id, first, last, is_primary=True,
+            )
+            return contact.id
+
+        contact = Contact(first_name=None, last_name=None, role='owner')
+        db.session.add(contact)
+        db.session.flush()
+        link = PropertyContact(
+            property_id=lead_id,
+            contact_id=contact.id,
+            role='owner',
+            is_primary=True,
+        )
+        db.session.add(link)
+        db.session.flush()
+        return contact.id
+
+    @classmethod
     def sync_phones_from_hubspot_contact(cls, lead_id: int, contact) -> int:
         """Apply HubSpot phone annotations to relational contact_phones for a lead."""
         contact_id = cls.get_primary_contact_id(lead_id)
+        if contact_id is None:
+            contact_id = cls._ensure_active_owner_contact_id(lead_id)
         if contact_id is None:
             return 0
 

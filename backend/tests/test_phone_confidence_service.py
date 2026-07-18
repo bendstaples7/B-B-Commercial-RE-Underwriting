@@ -278,3 +278,56 @@ def test_sync_phones_from_hubspot_contact_applies_annotations(app):
         phone = ContactPhone.query.filter_by(contact_id=contact.id).first()
         assert phone.notes == 'CONFIRMED'
         assert phone.confidence_score == 90
+
+
+def test_hubspot_primary_resync_preserves_wrong_number(app):
+    with app.app_context():
+        from app import db
+        from app.models import Lead
+        from app.models.contact import Contact
+        from app.models.contact_phone import ContactPhone
+        from app.models.hubspot_contact import HubSpotContact
+        from app.models.property_contact import PropertyContact
+
+        lead = Lead(
+            property_street='100 Wrong Number St',
+            lead_status='mailing_no_contact_made',
+            has_phone=True,
+            has_email=True,
+            has_property_match=True,
+            analysis_complete=True,
+            lead_score=50.0,
+        )
+        db.session.add(lead)
+        db.session.flush()
+
+        contact = Contact(first_name='Pat', last_name='Owner', role='owner')
+        db.session.add(contact)
+        db.session.flush()
+        db.session.add(PropertyContact(
+            property_id=lead.id,
+            contact_id=contact.id,
+            role='owner',
+            is_primary=True,
+        ))
+        db.session.add(ContactPhone(
+            contact_id=contact.id,
+            value='6304305720',
+            label='other',
+            confidence_score=5,
+            last_outcome='wrong_number',
+            notes='HubSpot primary',
+        ))
+        hs_contact = HubSpotContact(
+            hubspot_id='999002',
+            raw_payload={'properties': {'phone': '(630) 430-5720'}},
+        )
+        db.session.add(hs_contact)
+        db.session.commit()
+
+        PhoneConfidenceService.sync_phones_from_hubspot_contact(lead.id, hs_contact)
+        db.session.commit()
+
+        phone = ContactPhone.query.filter_by(contact_id=contact.id).first()
+        assert phone.confidence_score == 5
+        assert phone.last_outcome == 'wrong_number'

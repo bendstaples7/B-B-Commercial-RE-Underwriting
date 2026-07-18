@@ -1671,6 +1671,19 @@ def verify_sale_date(lead_id: int):
                 message = 'Lead not found.'
             else:
                 message = f'Verification skipped ({reason}).'
+        elif int(summary.get('failed') or 0) > 0:
+            failed = int(summary['failed'])
+            success = int(summary.get('success') or 0)
+            if success > 0:
+                message = (
+                    f'Sale date verification partially completed '
+                    f'({failed} source(s) failed).'
+                )
+            else:
+                message = (
+                    f'Sale date verification failed '
+                    f'({failed} source(s) failed).'
+                )
     elif not queued and not ran_sync:
         message = 'Verification could not be queued or run.'
 

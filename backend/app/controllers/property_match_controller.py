@@ -63,14 +63,8 @@ def approve_property_match(lead_id: int):
         if isinstance(body, dict) and isinstance(body.get('pin'), str)
         else None
     )
-    if pin:
-        from app.services.plugins.pin_utils import normalize_pin_for_socrata
-        digits = normalize_pin_for_socrata(pin)
-        if len(digits) != 14 or not digits.isdigit():
-            return jsonify({
-                'error': 'validation_error',
-                'message': 'Invalid Cook County PIN',
-            }), 400
+    # PIN length/format rules are market-specific (Cook 14-digit vs DuPage native);
+    # validate in PropertyMatchReviewService after resolving the GIS connector.
     return jsonify(_match_svc.approve_match(lead_id, actor=actor, pin=pin)), 200
 
 

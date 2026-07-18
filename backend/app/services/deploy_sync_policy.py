@@ -197,15 +197,47 @@ def set_redis_value(key: str, value: str) -> None:
         logger.warning('Redis set failed for key=%s: %s', key, exc)
 
 
-def try_claim_redis_key(key: str, *, ttl_seconds: int = 3600) -> bool:
-    """SET NX with TTL — returns True when this caller claimed the key."""
+def try_claim_redis_key(
+    key: str,
+    *,
+    ttl_seconds: int = 3600,
+    token: str | None = None,
+) -> str | None:
+    """SET NX with TTL — returns the claim token when acquired, else None."""
+    import uuid
+
+    client = _redis_client()
+    if client is None:
+        return None
+    claim_token = token or uuid.uuid4().hex
+    try:
+        if client.set(key, claim_token, nx=True, ex=ttl_seconds):
+            return claim_token
+        return None
+    except Exception as exc:
+        logger.warning('Redis claim failed for key=%s: %s', key, exc)
+        return None
+
+
+_RELEASE_IF_TOKEN_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('del', KEYS[1])
+end
+return 0
+"""
+
+
+def release_redis_key_if_token(key: str, token: str) -> bool:
+    """Compare-and-delete: remove key only when it still holds *token*."""
+    if not token:
+        return False
     client = _redis_client()
     if client is None:
         return False
     try:
-        return bool(client.set(key, '1', nx=True, ex=ttl_seconds))
+        return bool(client.eval(_RELEASE_IF_TOKEN_LUA, 1, key, token))
     except Exception as exc:
-        logger.warning('Redis claim failed for key=%s: %s', key, exc)
+        logger.warning('Redis release failed for key=%s: %s', key, exc)
         return False
 
 
