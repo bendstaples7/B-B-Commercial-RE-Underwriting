@@ -8,6 +8,7 @@ Environment:
   B2_KEY_ID            — Backblaze application key ID
   B2_APPLICATION_KEY   — Backblaze application key secret
   B2_RCLONE_REMOTE     — rclone remote name (default: b2)
+  RCLONE_CONFIG_PASS   — optional; required when rclone.conf is encrypted
 """
 
 from __future__ import annotations
@@ -23,6 +24,105 @@ from pathlib import Path
 
 def _present(value: str) -> bool:
     return bool(value.strip())
+
+
+def _is_encrypted_rclone_conf(text: str) -> bool:
+    head = text.lstrip()[:400].upper()
+    return "RCLONE_ENCRYPT" in head or "ENCRYPTED RCLONE CONFIGURATION" in head
+
+
+def _list_remotes(rclone_bin: str) -> list[str]:
+    probe = subprocess.run(
+        [rclone_bin, "listremotes"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if probe.returncode != 0:
+        raise RuntimeError(
+            (probe.stderr or probe.stdout or "rclone listremotes failed").strip()
+        )
+    return (probe.stdout or "").splitlines()
+
+
+def _configure_via_rclone_cli(
+    rclone_bin: str,
+    remote: str,
+    key_id: str,
+    app_key: str,
+) -> None:
+    """Update/create remote through rclone so encrypted configs stay supported."""
+    remotes = _list_remotes(rclone_bin)
+    expected = f"{remote}:"
+    if expected in remotes:
+        cmd = [
+            rclone_bin,
+            "config",
+            "update",
+            remote,
+            "type",
+            "b2",
+            "account",
+            key_id,
+            "key",
+            app_key,
+            "--non-interactive",
+        ]
+    else:
+        cmd = [
+            rclone_bin,
+            "config",
+            "create",
+            remote,
+            "b2",
+            "account",
+            key_id,
+            "key",
+            app_key,
+            "--non-interactive",
+        ]
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            (result.stderr or result.stdout or "rclone config failed").strip()
+        )
+    remotes = _list_remotes(rclone_bin)
+    if expected not in remotes:
+        raise RuntimeError(f"rclone remote '{remote}' missing after config")
+
+
+def _configure_via_ini(
+    config_path: Path,
+    previous: str,
+    remote: str,
+    key_id: str,
+    app_key: str,
+    rclone_bin: str,
+) -> None:
+    parser = configparser.ConfigParser(interpolation=None)
+    if previous:
+        parser.read_string(previous)
+
+    if not parser.has_section(remote):
+        parser.add_section(remote)
+    parser[remote]["type"] = "b2"
+    parser[remote]["account"] = key_id
+    parser[remote]["key"] = app_key
+
+    fd, tmp_name = tempfile.mkstemp(prefix="rclone-", suffix=".conf", dir=str(config_path.parent))
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        with tmp_path.open("w", encoding="utf-8") as fh:
+            parser.write(fh)
+        os.chmod(tmp_path, 0o600)
+        tmp_path.replace(config_path)
+        os.chmod(config_path, 0o600)
+        remotes = _list_remotes(rclone_bin)
+        if f"{remote}:" not in remotes:
+            raise RuntimeError("rclone listremotes did not include the new B2 remote")
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def main() -> None:
@@ -52,48 +152,23 @@ def main() -> None:
     config_path = config_dir / "rclone.conf"
 
     previous = config_path.read_text(encoding="utf-8") if config_path.is_file() else ""
-    parser = configparser.ConfigParser()
-    if previous:
-        parser.read_string(previous)
+    previous_bytes = config_path.read_bytes() if config_path.is_file() else None
 
-    if not parser.has_section(remote):
-        parser.add_section(remote)
-    parser[remote]["type"] = "b2"
-    parser[remote]["account"] = key_id
-    parser[remote]["key"] = app_key
-
-    fd, tmp_name = tempfile.mkstemp(prefix="rclone-", suffix=".conf", dir=str(config_dir))
-    os.close(fd)
-    tmp_path = Path(tmp_name)
     try:
-        with tmp_path.open("w", encoding="utf-8") as fh:
-            parser.write(fh)
-        os.chmod(tmp_path, 0o600)
-        tmp_path.replace(config_path)
-        os.chmod(config_path, 0o600)
-
-        probe = subprocess.run(
-            [rclone_bin, "listremotes"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        remotes = (probe.stdout or "").splitlines()
-        expected = f"{remote}:"
-        if probe.returncode != 0 or expected not in remotes:
-            raise RuntimeError(
-                (probe.stderr or probe.stdout or "rclone listremotes failed").strip()
+        if previous and _is_encrypted_rclone_conf(previous):
+            _configure_via_rclone_cli(rclone_bin, remote, key_id, app_key)
+        else:
+            _configure_via_ini(
+                config_path, previous, remote, key_id, app_key, rclone_bin
             )
     except Exception as exc:
-        if previous:
-            config_path.write_text(previous, encoding="utf-8")
+        if previous_bytes is not None:
+            config_path.write_bytes(previous_bytes)
             os.chmod(config_path, 0o600)
-        elif config_path.is_file() and not previous:
+        elif config_path.is_file() and previous_bytes is None:
             config_path.unlink(missing_ok=True)
         print(f"ERROR: rclone B2 config failed: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
-    finally:
-        tmp_path.unlink(missing_ok=True)
 
     print(f"NOTE: rclone remote '{remote}' configured for Backblaze B2")
 

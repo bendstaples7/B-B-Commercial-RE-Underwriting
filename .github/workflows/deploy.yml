@@ -217,21 +217,21 @@ jobs:
           # B2 and Cloudflare setup run independently inside configure_backup_remotes.py.
           umask 077
           python3 - <<'PY'
-import json, os, pathlib
-path = pathlib.Path("/tmp/backup_rclone_secrets.json")
-keys = (
-    "B2_KEY_ID",
-    "B2_APPLICATION_KEY",
-    "B2_BUCKET_NAME",
-    "CLOUDFLARE_ACCOUNT_ID",
-    "CLOUDFLARE_R2_ACCESS_KEY_ID",
-    "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
-    "CLOUDFLARE_R2_BUCKET_NAME",
-)
-data = {k: os.environ.get(k, "") for k in keys}
-path.write_text(json.dumps(data), encoding="utf-8")
-path.chmod(0o600)
-PY
+          import json, os, pathlib
+          path = pathlib.Path("/tmp/backup_rclone_secrets.json")
+          keys = (
+              "B2_KEY_ID",
+              "B2_APPLICATION_KEY",
+              "B2_BUCKET_NAME",
+              "CLOUDFLARE_ACCOUNT_ID",
+              "CLOUDFLARE_R2_ACCESS_KEY_ID",
+              "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+              "CLOUDFLARE_R2_BUCKET_NAME",
+          )
+          data = {k: os.environ.get(k, "") for k in keys}
+          path.write_text(json.dumps(data), encoding="utf-8")
+          path.chmod(0o600)
+          PY
           scp -i ~/.ssh/id_deploy /tmp/backup_rclone_secrets.json $VPS_USER@$VPS_HOST:/tmp/backup_rclone_secrets.json
           shred -u /tmp/backup_rclone_secrets.json 2>/dev/null || rm -f /tmp/backup_rclone_secrets.json
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \

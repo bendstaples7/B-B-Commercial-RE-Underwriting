@@ -8,8 +8,8 @@
 #           REMOTE_UPLOAD_HOUR_UTC REMOTE_RETENTION_DAYS REMOTE_* timeouts
 #
 # Sets: REMOTE_TRANSFERRED REMOTE_PATH BACKUP_FAILED (may set to 1)
-# REMOTE_PATH is the object path under the bucket (no remote:bucket prefix),
-# so restore-drill.sh can prepend RCLONE_REMOTE:RCLONE_BUCKET.
+# REMOTE_PATH is semicolon-separated remote:bucket/object paths for successful
+# uploads (restore-drill.sh resolves one; recent-check requires all targets).
 # Expects send_alert function if alerting is desired (optional).
 
 set -euo pipefail
@@ -30,6 +30,20 @@ resolve_rclone_targets() {
     return 1
 }
 
+rclone_remote_type() {
+    # Print rclone backend type for a remote name (e.g. b2, s3), or empty on failure.
+    local remote_name="$1"
+    rclone config dump 2>>"$LOG_FILE" | python3 -c '
+import json, sys
+name = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+print((data.get(name) or {}).get("type") or "")
+' "$remote_name" 2>>"$LOG_FILE" || true
+}
+
 prune_remote_prefix() {
     local remote_name="$1"
     local bucket_name="$2"
@@ -37,14 +51,14 @@ prune_remote_prefix() {
     local prefix="${RCLONE_PATH_PREFIX:-backups}"
     local dest="${remote_name}:${bucket_name}/${prefix}/"
     local prune_exit=0
-    case "$remote_name" in
-        b2*)
-            rclone delete --min-age "${retention}d" --b2-hard-delete "$dest" 2>>"$LOG_FILE" || prune_exit=$?
-            ;;
-        *)
-            rclone delete --min-age "${retention}d" "$dest" 2>>"$LOG_FILE" || prune_exit=$?
-            ;;
-    esac
+    local backend_type
+    backend_type="$(rclone_remote_type "$remote_name")"
+    # Use B2 hard-delete only when the configured backend type is b2 (not by alias name).
+    if [[ "$backend_type" == "b2" ]]; then
+        rclone delete --min-age "${retention}d" --b2-hard-delete "$dest" 2>>"$LOG_FILE" || prune_exit=$?
+    else
+        rclone delete --min-age "${retention}d" "$dest" 2>>"$LOG_FILE" || prune_exit=$?
+    fi
     if [[ "$prune_exit" -ne 0 ]]; then
         echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARNING: remote prune failed for ${remote_name}:${bucket_name} (exit $prune_exit)" >> "$LOG_FILE"
         if declare -F send_alert >/dev/null 2>&1; then
