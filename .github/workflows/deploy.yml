@@ -173,6 +173,7 @@ jobs:
           CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
           CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
           CLOUDFLARE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_R2_BUCKET_NAME }}
+          RCLONE_CONFIG_PASS: ${{ secrets.RCLONE_CONFIG_PASS }}
         run: |
           # Copy deploy script and shared checks
           scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
@@ -227,6 +228,7 @@ jobs:
               "CLOUDFLARE_R2_ACCESS_KEY_ID",
               "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
               "CLOUDFLARE_R2_BUCKET_NAME",
+              "RCLONE_CONFIG_PASS",
           )
           data = {k: os.environ.get(k, "") for k in keys}
           path.write_text(json.dumps(data), encoding="utf-8")

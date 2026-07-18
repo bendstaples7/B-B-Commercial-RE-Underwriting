@@ -32,6 +32,15 @@ def _is_encrypted_rclone_conf(text: str) -> bool:
     return "RCLONE_ENCRYPT" in head or "ENCRYPTED RCLONE CONFIGURATION" in head
 
 
+def _require_config_pass_for_encrypted(previous: str) -> None:
+    if previous and _is_encrypted_rclone_conf(previous):
+        if not os.environ.get("RCLONE_CONFIG_PASS", "").strip():
+            raise RuntimeError(
+                "rclone.conf is encrypted but RCLONE_CONFIG_PASS is not set; "
+                "add the GitHub/Actions secret so deploy can update remotes"
+            )
+
+
 def _list_remotes(rclone_bin: str) -> list[str]:
     probe = subprocess.run(
         [rclone_bin, "listremotes"],
@@ -162,6 +171,7 @@ def main() -> None:
     previous_bytes = config_path.read_bytes() if config_path.is_file() else None
 
     try:
+        _require_config_pass_for_encrypted(previous)
         if previous and _is_encrypted_rclone_conf(previous):
             _configure_via_rclone_cli(
                 rclone_bin, remote, access_key, secret_key, endpoint
