@@ -1,5 +1,7 @@
 """Add former_owner role, superseded_at, and lead_owner_snapshots.
 
+Unique recent_sale index is created in stale_uq_20260717 after duplicate cleanup.
+
 Revision ID: stale_own_20260717
 Revises: act_goals_fk_20260716
 """
@@ -49,18 +51,9 @@ def upgrade():
         ON lead_owner_snapshots (lead_id, sale_date)
         """
     )
-    # One recent_sale snapshot per lead+sale (concurrent CC GET safety).
-    op.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_lead_owner_snapshots_recent_sale
-        ON lead_owner_snapshots (lead_id, sale_date)
-        WHERE reason = 'recent_sale' AND sale_date IS NOT NULL
-        """
-    )
 
 
 def downgrade():
-    op.execute('DROP INDEX IF EXISTS uq_lead_owner_snapshots_recent_sale')
     op.execute('DROP INDEX IF EXISTS ix_lead_owner_snapshots_lead_sale')
     op.execute('DROP INDEX IF EXISTS ix_lead_owner_snapshots_lead_id')
     op.execute('DROP TABLE IF EXISTS lead_owner_snapshots')

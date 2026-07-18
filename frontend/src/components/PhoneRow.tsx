@@ -130,18 +130,21 @@ export function PhoneRow({
           />
         </Tooltip>
       )}
-      <Tooltip title={copied ? 'Copied!' : 'Copy'}>
-        <IconButton
-          size="small"
-          onClick={(e) => {
-            e.stopPropagation()
-            handleCopy()
-          }}
-          sx={{ p: 0.25, flexShrink: 0 }}
-        >
-          <ContentCopyIcon sx={{ fontSize: dense ? 11 : 14 }} />
-        </IconButton>
-      </Tooltip>
+      {actionable && (
+        <Tooltip title={copied ? 'Copied!' : 'Copy'}>
+          <IconButton
+            size="small"
+            onClick={(e) => {
+              e.stopPropagation()
+              handleCopy()
+            }}
+            sx={{ p: 0.25, flexShrink: 0 }}
+            aria-label="Copy phone"
+          >
+            <ContentCopyIcon sx={{ fontSize: dense ? 11 : 14 }} />
+          </IconButton>
+        </Tooltip>
+      )}
     </Box>
   )
 }

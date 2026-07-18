@@ -7,4 +7,9 @@ describe('formatDate', () => {
     expect(formatDate('2024-07-17')).toBe(expected)
     expect(formatDate('2024-07-17T00:00:00Z')).toBe(expected)
   })
+
+  it('rejects invalid calendar dates instead of rolling over', () => {
+    expect(formatDate('2024-02-30')).toBe('—')
+    expect(formatDate('2024-13-01')).toBe('—')
+  })
 })

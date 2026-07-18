@@ -4,8 +4,13 @@ export function formatDate(dateStr: string | null | undefined): string {
   const dateOnly = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed)
   if (dateOnly) {
     const [, year, month, day] = dateOnly
-    const local = new Date(Number(year), Number(month) - 1, Number(day))
-    if (Number.isNaN(local.getTime())) return '—'
+    const y = Number(year)
+    const m = Number(month) - 1
+    const d = Number(day)
+    const local = new Date(y, m, d)
+    if (local.getFullYear() !== y || local.getMonth() !== m || local.getDate() !== d) {
+      return '—'
+    }
     return local.toLocaleDateString()
   }
   const d = new Date(trimmed)

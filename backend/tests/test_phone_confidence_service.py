@@ -54,6 +54,15 @@ class TestConfidenceHelpers:
         assert merged[0][1] == 'CONFIRMED'
         assert PhoneConfidenceService.confidence_from_annotation(merged[0][1]) == 90
 
+    def test_merge_prefers_disconnected_over_confirmed(self):
+        merged = PhoneConfidenceService.merge_parsed_phones([
+            ('(630) 430-5720', 'CONFIRMED', 'other'),
+            ('6304305720', 'disconnected', 'other'),
+        ])
+        assert len(merged) == 1
+        assert 'disconnect' in (merged[0][1] or '').lower()
+        assert PhoneConfidenceService.confidence_from_annotation(merged[0][1]) == 5
+
     def test_parse_phones_from_props_merges_additional_confirmed(self):
         props = {
             'phone': '(630) 430-5720',

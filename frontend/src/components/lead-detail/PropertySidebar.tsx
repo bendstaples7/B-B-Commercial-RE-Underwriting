@@ -203,11 +203,13 @@ function CopyableEmail({
           {email}
         </Typography>
       )}
-      <Tooltip title={copied ? 'Copied!' : 'Copy'}>
-        <IconButton size="small" onClick={handleCopy} sx={{ p: 0.25, flexShrink: 0 }}>
-          <ContentCopyIcon sx={{ fontSize: 11 }} />
-        </IconButton>
-      </Tooltip>
+      {actionable && (
+        <Tooltip title={copied ? 'Copied!' : 'Copy'}>
+          <IconButton size="small" onClick={handleCopy} sx={{ p: 0.25, flexShrink: 0 }}>
+            <ContentCopyIcon sx={{ fontSize: 11 }} />
+          </IconButton>
+        </Tooltip>
+      )}
     </Box>
   )
 }
@@ -557,7 +559,7 @@ export function PropertySidebar({
           <PhoneList
             phones={phones}
             dense={!stacked}
-            actionable
+            actionable={!contactsLikelyPriorOwner}
           />
         </SidebarLabeledContent>
       )}
@@ -567,7 +569,7 @@ export function PropertySidebar({
             <CopyableEmail
               key={`${e}-${i}`}
               email={e}
-              actionable
+              actionable={!contactsLikelyPriorOwner}
             />
           ))}
         </SidebarLabeledContent>

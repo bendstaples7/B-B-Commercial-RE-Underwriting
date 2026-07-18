@@ -136,13 +136,15 @@ class PhoneConfidenceService:
             ex_val, ex_notes, ex_label = existing
 
             def _merge_rank(n: str | None) -> tuple[int, int]:
+                """Higher tuple wins. Explicit negatives outrank positives."""
                 if not n:
                     return (0, 0)
-                if n.lower().strip() == 'hubspot primary':
+                if n.lower().strip() == HUBSPOT_PRIMARY_NOTE.lower():
                     return (1, 0)
                 score = cls.confidence_from_annotation(n)
                 if score != DEFAULT_CONFIDENCE:
-                    return (3, score)
+                    # Prefer lower scores so "disconnected"/WN beat "confirmed".
+                    return (3, -score)
                 return (2, score)
 
             if notes and not ex_notes:
@@ -287,48 +289,23 @@ class PhoneConfidenceService:
 
     @classmethod
     def _ensure_active_owner_contact_id(cls, lead_id: int) -> int | None:
-        """Create or reactivate an owner link when only former_owners remain."""
-        from app.models.contact import Contact
-        from app.services.contact_service import ContactService
+        """Create an owner from lead name fields when no active owner exists.
 
-        former = (
-            PropertyContact.query
-            .filter_by(property_id=lead_id, role='former_owner')
-            .order_by(
-                PropertyContact.is_primary.desc(),
-                PropertyContact.id.desc(),
-            )
-            .first()
-        )
-        if former is not None:
-            ContactService()._reactivate_owner_link(
-                former, lead_id, is_primary=True,
-            )
-            db.session.flush()
-            return former.contact_id
+        Never reactivates a former_owner solely because HubSpot phones arrived —
+        that would put prior-owner numbers back on outreach paths.
+        """
+        from app.services.contact_service import ContactService
 
         lead = Lead.query.get(lead_id)
         if lead is None:
             return None
         first = (getattr(lead, 'owner_first_name', None) or '').strip() or None
         last = (getattr(lead, 'owner_last_name', None) or '').strip() or None
-        if first or last:
-            contact, _link = ContactService()._upsert_named_owner(
-                lead_id, first, last, is_primary=True,
-            )
-            return contact.id
-
-        contact = Contact(first_name=None, last_name=None, role='owner')
-        db.session.add(contact)
-        db.session.flush()
-        link = PropertyContact(
-            property_id=lead_id,
-            contact_id=contact.id,
-            role='owner',
-            is_primary=True,
+        if not first and not last:
+            return None
+        contact, _link = ContactService()._upsert_named_owner(
+            lead_id, first, last, is_primary=True,
         )
-        db.session.add(link)
-        db.session.flush()
         return contact.id
 
     @classmethod
