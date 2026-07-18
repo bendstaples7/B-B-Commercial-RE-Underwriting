@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 _ROOT = Path(__file__).resolve().parents[2]
 _PATH = _ROOT / "scripts" / "inject-remote-backup.py"
 
@@ -45,6 +47,20 @@ def test_build_rclone_targets_empty():
     assert inj.build_rclone_targets() == ""
 
 
+def test_normalize_upload_hour_strips_leading_zeros():
+    assert inj.normalize_upload_hour("08") == "8"
+    assert inj.normalize_upload_hour("10") == "10"
+    assert inj.normalize_upload_hour("0") == "0"
+    assert inj.normalize_upload_hour("23") == "23"
+
+
+def test_normalize_upload_hour_rejects_invalid():
+    with pytest.raises(ValueError):
+        inj.normalize_upload_hour("24")
+    with pytest.raises(ValueError):
+        inj.normalize_upload_hour("noon")
+
+
 def test_apply_remote_settings_dual_and_defaults():
     conf = 'REMOTE_METHOD=""\nRCLONE_REMOTE="old"\n'
     updated = inj.apply_remote_settings(
@@ -60,20 +76,19 @@ def test_apply_remote_settings_dual_and_defaults():
     assert 'RCLONE_BUCKET="bbreanalyzer"' in updated
 
 
+def test_apply_remote_settings_normalizes_padded_hour():
+    conf = 'REMOTE_METHOD=""\n'
+    updated = inj.apply_remote_settings(
+        conf,
+        b2_bucket="bbreanalyzer",
+        upload_hour="08",
+    )
+    assert 'REMOTE_UPLOAD_HOUR_UTC="8"' in updated
+
+
 def test_apply_remote_settings_cloudflare_only_legacy_vars():
     conf = 'REMOTE_METHOD=""\n'
     updated = inj.apply_remote_settings(conf, cf_bucket="bb-analyzer-backups")
     assert 'RCLONE_TARGETS="cloudflare:bb-analyzer-backups"' in updated
     assert 'RCLONE_REMOTE="cloudflare"' in updated
     assert 'RCLONE_BUCKET="bb-analyzer-backups"' in updated
-
-
-def test_remote_failure_policy_all_failed_vs_partial():
-    """BACKUP_FAILED is set only when every configured target fails."""
-
-    def should_fail_backup(success: list[str], failed: list[str]) -> bool:
-        return bool(failed) and not success
-
-    assert should_fail_backup(["b2:bucket/a.dump"], ["cloudflare:bucket"]) is False
-    assert should_fail_backup([], ["b2:x", "cloudflare:y"]) is True
-    assert should_fail_backup(["a", "b"], []) is False

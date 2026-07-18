@@ -326,13 +326,19 @@ Use this checklist when the VPS is unrecoverable and you need to rebuild from sc
    Note: This bypasses checksum verification. Only use this when you have high confidence in the backup file's integrity (e.g., freshly downloaded from your own off-site storage).
 
 6. **Deploy all scripts** to `/home/deploy/`:
-   - `backup.sh`, `restore.sh`, `redis-backup.sh`, `wal-archive.sh`, `pg-basebackup.sh`, `daily-summary.sh`, `backup_lib.py`
+   - `backup.sh`, `backup_remote_transfer.sh`, `restore.sh`, `restore-drill.sh`, `redis-backup.sh`, `wal-archive.sh`, `pg-basebackup.sh`, `daily-summary.sh`, `verify-backup-health.sh`, `install-backup-cron.sh`, `backup_lib.py`, `backup_health_check.py`
+   - `setup-b2-rclone.py`, `setup-cloudflare-rclone.py`, `configure_backup_remotes.py`, `inject-remote-backup.py`
    - Set permissions:
      ```bash
-     chmod 750 /home/deploy/backup.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh \
-               /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh
+     chmod 750 /home/deploy/backup.sh /home/deploy/backup_remote_transfer.sh \
+               /home/deploy/restore.sh /home/deploy/restore-drill.sh \
+               /home/deploy/redis-backup.sh /home/deploy/pg-basebackup.sh \
+               /home/deploy/daily-summary.sh /home/deploy/verify-backup-health.sh \
+               /home/deploy/install-backup-cron.sh
      chmod 755 /home/deploy/wal-archive.sh   # must be executable by the postgres OS user
-     chmod 644 /home/deploy/backup_lib.py
+     chmod 644 /home/deploy/backup_lib.py /home/deploy/backup_health_check.py \
+               /home/deploy/setup-b2-rclone.py /home/deploy/setup-cloudflare-rclone.py \
+               /home/deploy/configure_backup_remotes.py /home/deploy/inject-remote-backup.py
      ```
 
 7. **Create and configure `/home/deploy/backup.conf`**:
@@ -341,7 +347,15 @@ Use this checklist when the VPS is unrecoverable and you need to rebuild from sc
    chmod 600 /home/deploy/backup.conf
    chown deploy:deploy /home/deploy/backup.conf
    ```
-   Edit the file and fill in all real values: `PGDATABASE`, `RCLONE_REMOTE`, `RCLONE_BUCKET`, `ALERT_EMAIL`, `WEBHOOK_URL`, etc.
+   Edit the file and fill in all real values. For dual off-site uploads set:
+   - `REMOTE_METHOD="rclone"`
+   - `RCLONE_TARGETS="b2:<bucket> cloudflare:<bucket>"`
+   - `RCLONE_PATH_PREFIX="backups"`
+   - `REMOTE_RETENTION_DAYS=14`
+   - `REMOTE_UPLOAD_HOUR_UTC=10` (no leading zero — use `8` not `08`)
+   - Legacy primary download target for `restore-drill.sh`: `RCLONE_REMOTE` + `RCLONE_BUCKET` (usually the Backblaze pair)
+   - Plus `PGDATABASE` / DB creds, `ALERT_EMAIL`, `WEBHOOK_URL`, etc.
+   - Then configure rclone remotes (`setup-b2-rclone.py` / `setup-cloudflare-rclone.py`) before the next scheduled upload.
 
 8. **Run `scripts/setup-backup-dirs.sh`** to create required directories and set permissions:
    ```bash

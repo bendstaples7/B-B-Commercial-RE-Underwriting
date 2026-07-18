@@ -8,6 +8,8 @@
 #           REMOTE_UPLOAD_HOUR_UTC REMOTE_RETENTION_DAYS REMOTE_* timeouts
 #
 # Sets: REMOTE_TRANSFERRED REMOTE_PATH BACKUP_FAILED (may set to 1)
+# REMOTE_PATH is the object path under the bucket (no remote:bucket prefix),
+# so restore-drill.sh can prepend RCLONE_REMOTE:RCLONE_BUCKET.
 # Expects send_alert function if alerting is desired (optional).
 
 set -euo pipefail
@@ -34,14 +36,25 @@ prune_remote_prefix() {
     local retention="${REMOTE_RETENTION_DAYS:-14}"
     local prefix="${RCLONE_PATH_PREFIX:-backups}"
     local dest="${remote_name}:${bucket_name}/${prefix}/"
+    local prune_exit=0
     case "$remote_name" in
         b2*)
-            rclone delete --min-age "${retention}d" --b2-hard-delete "$dest" 2>>"$LOG_FILE" || true
+            rclone delete --min-age "${retention}d" --b2-hard-delete "$dest" 2>>"$LOG_FILE" || prune_exit=$?
             ;;
         *)
-            rclone delete --min-age "${retention}d" "$dest" 2>>"$LOG_FILE" || true
+            rclone delete --min-age "${retention}d" "$dest" 2>>"$LOG_FILE" || prune_exit=$?
             ;;
     esac
+    if [[ "$prune_exit" -ne 0 ]]; then
+        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARNING: remote prune failed for ${remote_name}:${bucket_name} (exit $prune_exit)" >> "$LOG_FILE"
+        if declare -F send_alert >/dev/null 2>&1; then
+            send_alert \
+                "Remote prune FAILED [${remote_name}:${bucket_name}] [$(date -u +%Y-%m-%dT%H:%M:%SZ)]" \
+                "Retention prune failed for ${remote_name}:${bucket_name}/${prefix}/ (exit $prune_exit). Uploads may continue; check $LOG_FILE."
+        fi
+        return 1
+    fi
+    return 0
 }
 
 transfer_one_target() {
@@ -54,7 +67,7 @@ transfer_one_target() {
     local dest="${remote_name}:${bucket_name}/${object_path}"
 
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: pre-transfer prune - ${remote_name}:${bucket_name} (retain ${REMOTE_RETENTION_DAYS:-14}d)" >> "$LOG_FILE"
-    prune_remote_prefix "$remote_name" "$bucket_name"
+    prune_remote_prefix "$remote_name" "$bucket_name" || true
 
     while [[ "$attempt" -lt "$retry_max" ]]; do
         attempt=$(( attempt + 1 ))
@@ -82,7 +95,7 @@ transfer_one_target() {
         remote_size="$(printf '%s' "$remote_size_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("bytes", -1))')"
         if [[ "$remote_size" -eq "$local_size" ]]; then
             echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: transfer verified - ${remote_name}:${bucket_name}/${object_path} (${local_size}B)" >> "$LOG_FILE"
-            prune_remote_prefix "$remote_name" "$bucket_name"
+            prune_remote_prefix "$remote_name" "$bucket_name" || true
             return 0
         fi
         echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARNING: size mismatch ${remote_name} attempt $attempt - local=${local_size}B remote=${remote_size}B" >> "$LOG_FILE"
@@ -90,20 +103,37 @@ transfer_one_target() {
             sleep "$retry_delay"
         fi
     done
-    prune_remote_prefix "$remote_name" "$bucket_name"
+    prune_remote_prefix "$remote_name" "$bucket_name" || true
     return 1
 }
 
 recent_cloud_transfer_exists() {
-    BACKUP_DIR="$BACKUP_DIR" python3 - <<'PY'
+    local targets_str
+    targets_str="$(resolve_rclone_targets)" || targets_str=""
+    BACKUP_DIR="$BACKUP_DIR" RCLONE_TARGETS_CHECK="$targets_str" python3 - <<'PY'
 import json, os, sys
 from datetime import datetime, timezone, timedelta
+
 manifest = os.path.join(os.environ["BACKUP_DIR"], "backup_manifest.log")
+targets = [t for t in os.environ.get("RCLONE_TARGETS_CHECK", "").split() if t]
 cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
 try:
     lines = [ln.strip() for ln in open(manifest, encoding="utf-8") if ln.strip()]
 except OSError:
     sys.exit(1)
+
+def covers_all_targets(remote_path: str) -> bool:
+    if not targets:
+        return bool(remote_path)
+    parts = [p.strip() for p in remote_path.split(";") if p.strip()]
+    if not parts:
+        return False
+    for target in targets:
+        prefix = f"{target}/"
+        if not any(p == target or p.startswith(prefix) for p in parts):
+            return False
+    return True
+
 for line in reversed(lines):
     try:
         entry = json.loads(line)
@@ -113,6 +143,9 @@ for line in reversed(lines):
         continue
     transferred = entry.get("remote_transferred")
     if transferred is not True and transferred != "true":
+        continue
+    remote_path = str(entry.get("remote_path") or "")
+    if not covers_all_targets(remote_path):
         continue
     ts = entry.get("timestamp", "")
     try:
@@ -156,33 +189,21 @@ if [[ -z "${REMOTE_METHOD:-}" ]]; then
     return 0 2>/dev/null || exit 0
 fi
 
-DISPATCH_CHECK=0
-REMOTE_METHOD="$REMOTE_METHOD" python3 - <<'PY' 2>>"$LOG_FILE" || DISPATCH_CHECK=$?
-import os, sys
-sys.path.insert(0, "/home/deploy")
-from backup_lib import dispatch_transfer_method
-try:
-    dispatch_transfer_method(os.environ["REMOTE_METHOD"])
-except ValueError as e:
-    print(str(e), file=sys.stderr)
-    sys.exit(1)
-PY
-
-if [[ "$DISPATCH_CHECK" -ne 0 ]]; then
+# Multi-target transfer is rclone-only. Reject advertised-but-unimplemented methods.
+if [[ "$REMOTE_METHOD" != "rclone" ]]; then
     BACKUP_FAILED=1
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: Invalid REMOTE_METHOD - skipping remote transfer" >> "$LOG_FILE"
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: REMOTE_METHOD='$REMOTE_METHOD' is not supported by multi-target transfer (only rclone)" >> "$LOG_FILE"
     if declare -F send_alert >/dev/null 2>&1; then
         send_alert \
-            "Remote transfer skipped - invalid REMOTE_METHOD [$BACKUP_TYPE] [$(date -u +%Y-%m-%dT%H:%M:%SZ)]" \
-            "REMOTE_METHOD is not a valid transfer method. Remote transfer was skipped. Backup type: $BACKUP_TYPE."
+            "Remote transfer skipped - unsupported REMOTE_METHOD [$BACKUP_TYPE] [$(date -u +%Y-%m-%dT%H:%M:%SZ)]" \
+            "REMOTE_METHOD must be 'rclone' for dual-cloud uploads. Got: $REMOTE_METHOD."
     fi
     return 0 2>/dev/null || exit 0
 fi
 
 SKIP_REMOTE=0
-UPLOAD_HOUR="${REMOTE_UPLOAD_HOUR_UTC:-10}"
-CURRENT_HOUR="$(date -u +%H)"
-CURRENT_HOUR=$((10#$CURRENT_HOUR))
+UPLOAD_HOUR=$((10#${REMOTE_UPLOAD_HOUR_UTC:-10}))
+CURRENT_HOUR=$((10#$(date -u +%H)))
 
 if [[ "$BACKUP_TYPE" == "scheduled" ]]; then
     if [[ "$CURRENT_HOUR" -ne "$UPLOAD_HOUR" ]]; then
@@ -228,8 +249,6 @@ for target in "${TARGET_ARR[@]}"; do
         FAILED_TARGETS+=("$target")
         continue
     fi
-    # After one off-site copy succeeds, cap further retries so a bad secondary
-    # provider cannot hang the backup for REMOTE_RETRY_COUNT * DELAY.
     target_retries="$PRIMARY_RETRY"
     if [[ "${#SUCCESS_PATHS[@]}" -gt 0 ]]; then
         target_retries=1
@@ -244,8 +263,9 @@ done
 
 if [[ "${#SUCCESS_PATHS[@]}" -gt 0 ]]; then
     REMOTE_TRANSFERRED="true"
-    REMOTE_PATH=$(printf '%s;' "${SUCCESS_PATHS[@]}")
-    REMOTE_PATH="${REMOTE_PATH%;}"
+    # Semicolon-separated remote:bucket/object paths. restore-drill.sh resolves one.
+    # recent_cloud_transfer_exists requires every configured target to appear here.
+    REMOTE_PATH="$(IFS=';'; echo "${SUCCESS_PATHS[*]}")"
 else
     REMOTE_TRANSFERRED="false"
     REMOTE_PATH=""
@@ -256,8 +276,6 @@ if [[ "${#FAILED_TARGETS[@]}" -gt 0 ]]; then
     if [[ "${#SUCCESS_PATHS[@]}" -gt 0 ]]; then
         SUCCESS_LIST="${SUCCESS_PATHS[*]}"
     fi
-    # Fail the backup run only when every configured target failed.
-    # Partial success must not block deploy (local dump + at least one off-site copy is enough).
     if [[ "${#SUCCESS_PATHS[@]}" -eq 0 ]]; then
         BACKUP_FAILED=1
     fi
@@ -277,4 +295,4 @@ fi
 append_manifest_remote_status "$REMOTE_TRANSFERRED_PYTHON" "$REMOTE_PATH" \
     | python3 /home/deploy/backup_lib.py serialize-manifest >> "$BACKUP_DIR/backup_manifest.log"
 
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: manifest updated with remote transfer status (transferred=$REMOTE_TRANSFERRED)" >> "$LOG_FILE"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: manifest updated with remote transfer status (transferred=$REMOTE_TRANSFERRED path=$REMOTE_PATH)" >> "$LOG_FILE"

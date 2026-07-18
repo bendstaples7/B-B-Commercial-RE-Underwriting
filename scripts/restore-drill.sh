@@ -35,9 +35,48 @@ DRILL_FILE="$WORKDIR/$FILENAME"
 
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] restore-drill: target=$FILENAME"
 
+# Resolve a single rclone source from remote_path.
+# Accepts:
+#   - object path only: backups/YYYY/MM/DD/file.dump
+#   - full path: remote:bucket/object
+#   - multi-target: remote:bucket/obj;other:bucket/obj  (prefer primary)
+resolve_rclone_source() {
+    local remote_path="$1"
+    local primary="${RCLONE_REMOTE}:${RCLONE_BUCKET}"
+    python3 -c "
+import sys
+remote_path = sys.argv[1]
+primary = sys.argv[2].rstrip('/')
+parts = [p.strip() for p in remote_path.split(';') if p.strip()]
+if not parts:
+    raise SystemExit('empty remote_path')
+
+def is_full(p: str) -> bool:
+    # remote:bucket/...  (colon before first slash)
+    head = p.split('/', 1)[0]
+    return ':' in head
+
+full = [p for p in parts if is_full(p)]
+if full:
+    for p in full:
+        if p == primary or p.startswith(primary + '/'):
+            print(p)
+            raise SystemExit(0)
+    print(full[0])
+    raise SystemExit(0)
+
+# Object-path-only (legacy / single-segment) — prepend primary remote:bucket
+obj = parts[0].lstrip('/')
+if not primary or primary == ':' or primary.endswith(':'):
+    raise SystemExit('RCLONE_REMOTE/RCLONE_BUCKET required for object-path remote_path')
+print(f'{primary}/{obj}')
+" "$remote_path" "$primary"
+}
+
 if [[ -n "${REMOTE_METHOD:-}" && "$REMOTE_OK" == "yes" && -n "$REMOTE_PATH" ]]; then
-    echo "restore-drill: downloading from ${RCLONE_REMOTE}:${RCLONE_BUCKET}/${REMOTE_PATH}"
-    rclone copyto "${RCLONE_REMOTE}:${RCLONE_BUCKET}/${REMOTE_PATH}" "$DRILL_FILE"
+    SOURCE="$(resolve_rclone_source "$REMOTE_PATH")"
+    echo "restore-drill: downloading from ${SOURCE}"
+    rclone copyto "$SOURCE" "$DRILL_FILE"
 else
     LOCAL_FILE="$BACKUP_DIR/$FILENAME"
     if [[ ! -f "$LOCAL_FILE" ]]; then

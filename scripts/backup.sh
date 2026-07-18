@@ -118,8 +118,8 @@ fi
 # ── Pre-deploy-fast: skip dump when a recent valid scheduled backup exists ───
 if [[ "$PRE_DEPLOY_FAST" -eq 1 ]]; then
     MAX_AGE_HOURS="${PRE_DEPLOY_BACKUP_MAX_AGE_HOURS:-8}"
-    RECENT_FILENAME=""
-    RECENT_FILENAME="$(
+    RECENT_META=""
+    RECENT_META="$(
     python3 -c "
 import json, sys
 from datetime import datetime, timezone, timedelta
@@ -149,33 +149,56 @@ for line in reversed(lines):
     except ValueError:
         continue
     if when >= cutoff:
-        print(entry.get('filename', ''), end='')
+        filename = entry.get('filename', '')
+        if not filename:
+            continue
+        # filename<TAB>original timestamp (preserve dump time for remote path / manifest)
+        print(f'{filename}\t{ts}')
         sys.exit(0)
 sys.exit(1)
 " 2>>"$LOG_FILE"
-    )" || RECENT_FILENAME=""
+    )" || RECENT_META=""
+
+    RECENT_FILENAME=""
+    RECENT_TIMESTAMP=""
+    if [[ -n "$RECENT_META" ]]; then
+        RECENT_FILENAME="${RECENT_META%%$'\t'*}"
+        RECENT_TIMESTAMP="${RECENT_META#*$'\t'}"
+    fi
 
     if [[ -n "$RECENT_FILENAME" && -f "$BACKUP_DIR/$RECENT_FILENAME" ]]; then
         echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: pre-deploy-fast — recent valid scheduled backup within ${MAX_AGE_HOURS}h — skipping pg_dump ($RECENT_FILENAME)" >> "$LOG_FILE"
         echo "    Pre-deploy-fast: using recent scheduled backup (within ${MAX_AGE_HOURS}h)"
         # Heal off-site copies if cloud transfer is stale (does not re-dump).
         FILENAME="$RECENT_FILENAME"
-        TIMESTAMP_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        TIMESTAMP_ISO="${RECENT_TIMESTAMP:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
         SHA256="$(sha256sum "$BACKUP_DIR/$FILENAME" | awk '{print $1}')"
         SIZE_BYTES="$(stat -c "%s" "$BACKUP_DIR/$FILENAME")"
-        INTEGRITY="valid"
-        REMOTE_PATH=""
-        REMOTE_TRANSFERRED="false"
-        # shellcheck source=/home/deploy/backup_remote_transfer.sh
-        source /home/deploy/backup_remote_transfer.sh
-        if [[ "$BACKUP_FAILED" -ne 0 ]]; then
-            echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: pre-deploy-fast completed with remote failures — $FILENAME (remote_transferred=$REMOTE_TRANSFERRED)" >> "$LOG_FILE"
-            exit 1
+        INTEGRITY="invalid"
+        if pg_restore --list "$BACKUP_DIR/$FILENAME" >> "$LOG_FILE" 2>&1; then
+            INTEGRITY="valid"
+        else
+            echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ERROR: pre-deploy-fast integrity check FAILED for $FILENAME" >> "$LOG_FILE"
+            send_alert \
+                "Pre-deploy-fast aborted — reused dump failed integrity [$BACKUP_TYPE] [$(date -u +%Y-%m-%dT%H:%M:%SZ)]" \
+                "pg_restore --list failed for reused backup $FILENAME. Falling through would risk uploading a corrupt dump."
+            # Fall through to a fresh pg_dump instead of uploading a bad archive.
+            PRE_DEPLOY_FAST=0
         fi
-        echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: pre-deploy-fast completed — $FILENAME (remote_transferred=$REMOTE_TRANSFERRED)" >> "$LOG_FILE"
-        exit 0
+        if [[ "$INTEGRITY" == "valid" ]]; then
+            REMOTE_PATH=""
+            REMOTE_TRANSFERRED="false"
+            # shellcheck source=/home/deploy/backup_remote_transfer.sh
+            source /home/deploy/backup_remote_transfer.sh
+            if [[ "$BACKUP_FAILED" -ne 0 ]]; then
+                echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: pre-deploy-fast completed with remote failures — $FILENAME (remote_transferred=$REMOTE_TRANSFERRED)" >> "$LOG_FILE"
+                exit 1
+            fi
+            echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: pre-deploy-fast completed — $FILENAME (remote_transferred=$REMOTE_TRANSFERRED)" >> "$LOG_FILE"
+            exit 0
+        fi
     fi
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: pre-deploy-fast — no recent scheduled backup — running local pg_dump" >> "$LOG_FILE"
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] backup.sh: pre-deploy-fast — no recent usable scheduled backup — running local pg_dump" >> "$LOG_FILE"
 fi
 
 # ── Step 5: Determine output filename ────────────────────────────────────────

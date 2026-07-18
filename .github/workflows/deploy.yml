@@ -191,12 +191,13 @@ jobs:
           scp -i ~/.ssh/id_deploy scripts/backup_health_check.py $VPS_USER@$VPS_HOST:/home/deploy/backup_health_check.py
           scp -i ~/.ssh/id_deploy scripts/setup-b2-rclone.py $VPS_USER@$VPS_HOST:/home/deploy/setup-b2-rclone.py
           scp -i ~/.ssh/id_deploy scripts/setup-cloudflare-rclone.py $VPS_USER@$VPS_HOST:/home/deploy/setup-cloudflare-rclone.py
+          scp -i ~/.ssh/id_deploy scripts/configure_backup_remotes.py $VPS_USER@$VPS_HOST:/home/deploy/configure_backup_remotes.py
           scp -i ~/.ssh/id_deploy scripts/inject-remote-backup.py $VPS_USER@$VPS_HOST:/home/deploy/inject-remote-backup.py
           scp -i ~/.ssh/id_deploy scripts/restore-drill.sh $VPS_USER@$VPS_HOST:/home/deploy/restore-drill.sh
           scp -i ~/.ssh/id_deploy backup_lib.py $VPS_USER@$VPS_HOST:/home/deploy/backup_lib.py
           # Set correct permissions on backup scripts
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
-            "chmod 750 /home/deploy/backup.sh /home/deploy/backup_remote_transfer.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh /home/deploy/install-backup-cron.sh /home/deploy/verify-backup-health.sh /home/deploy/restore-drill.sh && chmod 755 /home/deploy/wal-archive.sh && chmod 644 /home/deploy/backup_lib.py /home/deploy/backup_health_check.py /home/deploy/setup-b2-rclone.py /home/deploy/setup-cloudflare-rclone.py /home/deploy/inject-remote-backup.py"
+            "chmod 750 /home/deploy/backup.sh /home/deploy/backup_remote_transfer.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh /home/deploy/install-backup-cron.sh /home/deploy/verify-backup-health.sh /home/deploy/restore-drill.sh && chmod 755 /home/deploy/wal-archive.sh && chmod 644 /home/deploy/backup_lib.py /home/deploy/backup_health_check.py /home/deploy/setup-b2-rclone.py /home/deploy/setup-cloudflare-rclone.py /home/deploy/configure_backup_remotes.py /home/deploy/inject-remote-backup.py"
           # Create a stub backup.conf if none exists so backup.sh can run without blocking the deploy.
           # The stub has empty remote/alert credentials — backup will skip remote transfer and alerting
           # but will still run pg_dump and write a local manifest entry.
@@ -212,28 +213,33 @@ jobs:
           # rclone is required before cloud remotes when REMOTE_METHOD is set.
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
             "command -v rclone >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y rclone)"
-          # Optional: configure cloud remotes from a short-lived env file (avoids secrets on argv).
+          # Optional: configure cloud remotes from short-lived JSON (never shell-sourced).
+          # B2 and Cloudflare setup run independently inside configure_backup_remotes.py.
           umask 077
-          {
-            printf 'B2_KEY_ID=%s\n' "$B2_KEY_ID"
-            printf 'B2_APPLICATION_KEY=%s\n' "$B2_APPLICATION_KEY"
-            printf 'B2_BUCKET_NAME=%s\n' "$B2_BUCKET_NAME"
-            printf 'CLOUDFLARE_ACCOUNT_ID=%s\n' "$CLOUDFLARE_ACCOUNT_ID"
-            printf 'CLOUDFLARE_R2_ACCESS_KEY_ID=%s\n' "$CLOUDFLARE_R2_ACCESS_KEY_ID"
-            printf 'CLOUDFLARE_R2_SECRET_ACCESS_KEY=%s\n' "$CLOUDFLARE_R2_SECRET_ACCESS_KEY"
-            printf 'CLOUDFLARE_R2_BUCKET_NAME=%s\n' "$CLOUDFLARE_R2_BUCKET_NAME"
-          } > /tmp/backup_rclone_secrets.env
-          scp -i ~/.ssh/id_deploy /tmp/backup_rclone_secrets.env $VPS_USER@$VPS_HOST:/tmp/backup_rclone_secrets.env
-          shred -u /tmp/backup_rclone_secrets.env 2>/dev/null || rm -f /tmp/backup_rclone_secrets.env
+          python3 - <<'PY'
+import json, os, pathlib
+path = pathlib.Path("/tmp/backup_rclone_secrets.json")
+keys = (
+    "B2_KEY_ID",
+    "B2_APPLICATION_KEY",
+    "B2_BUCKET_NAME",
+    "CLOUDFLARE_ACCOUNT_ID",
+    "CLOUDFLARE_R2_ACCESS_KEY_ID",
+    "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+    "CLOUDFLARE_R2_BUCKET_NAME",
+)
+data = {k: os.environ.get(k, "") for k in keys}
+path.write_text(json.dumps(data), encoding="utf-8")
+path.chmod(0o600)
+PY
+          scp -i ~/.ssh/id_deploy /tmp/backup_rclone_secrets.json $VPS_USER@$VPS_HOST:/tmp/backup_rclone_secrets.json
+          shred -u /tmp/backup_rclone_secrets.json 2>/dev/null || rm -f /tmp/backup_rclone_secrets.json
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
-            "chmod 600 /tmp/backup_rclone_secrets.env; \
-             set -a; . /tmp/backup_rclone_secrets.env; set +a; \
-             python3 /home/deploy/setup-b2-rclone.py && \
-             python3 /home/deploy/setup-cloudflare-rclone.py && \
-             python3 /home/deploy/inject-remote-backup.py; \
-             status=\$?; \
-             shred -u /tmp/backup_rclone_secrets.env 2>/dev/null || rm -f /tmp/backup_rclone_secrets.env; \
-             exit \$status" \
+            'set -euo pipefail; \
+             trap '\''rm -f /tmp/backup_rclone_secrets.json'\'' EXIT; \
+             chmod 600 /tmp/backup_rclone_secrets.json; \
+             export BACKUP_RCLONE_SECRETS_JSON=/tmp/backup_rclone_secrets.json; \
+             python3 /home/deploy/configure_backup_remotes.py' \
             || { echo "ERROR: cloud rclone setup / inject-remote-backup failed."; exit 1; }
           # Install backup cron entries (idempotent; preserves non-backup crontab lines).
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST "bash /home/deploy/install-backup-cron.sh"
