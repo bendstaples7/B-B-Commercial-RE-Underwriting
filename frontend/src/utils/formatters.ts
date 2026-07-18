@@ -1,13 +1,26 @@
 export function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return '—'
-  const d = new Date(dateStr)
+  const trimmed = dateStr.trim()
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed)
+  if (dateOnly) {
+    const [, year, month, day] = dateOnly
+    const y = Number(year)
+    const m = Number(month) - 1
+    const d = Number(day)
+    const local = new Date(y, m, d)
+    if (local.getFullYear() !== y || local.getMonth() !== m || local.getDate() !== d) {
+      return '—'
+    }
+    return local.toLocaleDateString()
+  }
+  const d = new Date(trimmed)
   if (Number.isNaN(d.getTime())) return '—'
   return d.toLocaleDateString()
 }
 
 export function formatDateTime(dateStr: string | null | undefined): string {
   if (!dateStr) return '—'
-  const d = new Date(dateStr)
+  const d = new Date(dateStr.trim())
   if (Number.isNaN(d.getTime())) return '—'
   return d.toLocaleString()
 }

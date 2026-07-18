@@ -4,6 +4,14 @@ from app.services.outreach_method_service import (
     outreach_action_explanation,
     outreach_action_label,
 )
+from app.services.scoring_rubric import contacts_likely_prior_owner
+
+# Shared copy for skip-trace after a recent transfer (hold + active skip-trace work).
+RECENT_SALE_OUTDATED_CONTACT_EXPLANATION = (
+    'Because of a recent sale, the owner and mailing details on file are likely '
+    'tied to the prior owner — treat that contact info as outdated until skip '
+    'trace confirms who to reach now.'
+)
 
 RECOMMENDED_ACTION_METADATA = {
     'enrich_data': {
@@ -69,7 +77,8 @@ RECOMMENDED_ACTION_METADATA = {
         'label': 'Skip Trace Hold',
         'explanation': (
             'A recent sale is still inside the two-year hold. Keep this lead in '
-            'Skip Trace until its scheduled Awaiting Skip Trace date.'
+            'Skip Trace until its scheduled Awaiting Skip Trace date. '
+            + RECENT_SALE_OUTDATED_CONTACT_EXPLANATION
         ),
     },
     'valuation_needed': {
@@ -122,7 +131,10 @@ WINNING_RULE_LABELS = {
     'mailable_no_digital_contact': 'Mailable but no phone or email',
     'no_property_match_with_address': 'Has an address but no confirmed property match',
     'mail_work_in_flight': 'Mail work is already in progress',
-    'recently_sold': 'Property was recently sold',
+    'recently_sold': 'Property was recently sold — prior-owner contact info is likely outdated',
+    'recent_sale_hold': (
+        'Recent-sale hold — prior-owner contact info is likely outdated until skip trace'
+    ),
     'tier_a_high_quality': 'Tier A with high data quality',
     'tier_b_high_quality': 'Tier B with high data quality',
     'high_motivation_tier_b': 'Tier B with high motivation',
@@ -144,9 +156,50 @@ def get_winning_rule_label(rule: str | None) -> str | None:
     return WINNING_RULE_LABELS.get(rule, rule.replace('_', ' '))
 
 
+def _lead_needs_recent_sale_contact_rationale(lead) -> bool:
+    """True when Next Steps should explain outdated pre-sale owner/mailing info."""
+    if lead is None:
+        return False
+    status = getattr(lead, 'lead_status', None)
+    if status not in ('skip_trace', 'awaiting_skip_trace'):
+        return False
+    if not contacts_likely_prior_owner(lead):
+        return False
+    return bool(getattr(lead, 'needs_skip_trace', False))
+
+
+def _with_recent_sale_contact_rationale(
+    explanation: str | None,
+    *,
+    lead=None,
+    winning_rule: str | None = None,
+    action: str | None = None,
+) -> str | None:
+    """Append (or set) recent-sale outdated-contact copy on the existing explanation."""
+    needs = (
+        action == 'hold'
+        or winning_rule in ('recent_sale_hold', 'recently_sold')
+        or _lead_needs_recent_sale_contact_rationale(lead)
+    )
+    if not needs:
+        return explanation
+    # `hold` already embeds the copy in its base metadata.
+    if action == 'hold':
+        return explanation
+    base = (explanation or '').strip()
+    if RECENT_SALE_OUTDATED_CONTACT_EXPLANATION in base:
+        return explanation if explanation else RECENT_SALE_OUTDATED_CONTACT_EXPLANATION
+    if not base:
+        return RECENT_SALE_OUTDATED_CONTACT_EXPLANATION
+    return f'{base} {RECENT_SALE_OUTDATED_CONTACT_EXPLANATION}'
+
+
 def get_recommended_action_display(
     action: str | None,
     contact_method: str | None = None,
+    *,
+    lead=None,
+    winning_rule: str | None = None,
 ) -> dict:
     """Return label and explanation, with channel-specific overrides when applicable."""
     if not action:
@@ -160,4 +213,10 @@ def get_recommended_action_display(
     label = channel_label or base_label
 
     explanation = outreach_action_explanation(action, contact_method, base_explanation)
+    explanation = _with_recent_sale_contact_rationale(
+        explanation,
+        lead=lead,
+        winning_rule=winning_rule,
+        action=action,
+    )
     return {'label': label, 'explanation': explanation}

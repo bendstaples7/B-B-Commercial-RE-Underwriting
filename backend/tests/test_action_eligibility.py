@@ -30,7 +30,6 @@ def test_move_to_skip_trace_ok_for_active_status():
     'status,reason',
     [
         ('skip_trace', REASON_ALREADY_SKIP_TRACE),
-        ('awaiting_skip_trace', REASON_ALREADY_AWAITING_SKIP_TRACE),
     ],
 )
 def test_move_to_skip_trace_already_done(status, reason):
@@ -39,7 +38,15 @@ def test_move_to_skip_trace_already_done(status, reason):
     assert result.ok is False
     assert result.already_done is True
     assert result.reason_code == reason
-    assert result.message
+
+
+def test_move_to_skip_trace_ok_for_awaiting_skip_trace():
+    """Hold-ended leads still need an active handoff into Skip Trace."""
+    lead = SimpleNamespace(lead_status='awaiting_skip_trace')
+    result = evaluate_move_to_skip_trace(lead)
+    assert result.ok is True
+    assert result.already_done is False
+    assert result.reason_code is None
 
 
 @pytest.mark.parametrize(

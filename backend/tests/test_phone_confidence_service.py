@@ -28,6 +28,23 @@ class TestConfidenceHelpers:
     def test_confidence_from_annotation_confirmed(self):
         assert PhoneConfidenceService.confidence_from_annotation('CONFIRMED') == 90
 
+    def test_confidence_from_annotation_rejects_incorrect_and_not_good(self):
+        assert PhoneConfidenceService.confidence_from_annotation('incorrect number') == 5
+        assert PhoneConfidenceService.confidence_from_annotation('not good') == 5
+
+    def test_confidence_from_annotation_disconnected_before_confirmed(self):
+        assert PhoneConfidenceService.confidence_from_annotation('confirmed, now disconnected') == 5
+
+    def test_parse_phones_primary_disconnected_wins_over_hubspot_primary(self):
+        props = {
+            'phone': '(630) 430-5720',
+            'additional_phone_numbers': '1) (630) 430-5720 disconnected',
+        }
+        parsed = PhoneConfidenceService.parse_phones_from_hubspot_props(props)
+        assert len(parsed) == 1
+        assert 'disconnect' in (parsed[0][1] or '').lower()
+        assert PhoneConfidenceService.confidence_from_annotation(parsed[0][1]) == 5
+
     def test_merge_prefers_confirmed_over_bare_primary(self):
         merged = PhoneConfidenceService.merge_parsed_phones([
             ('(630) 430-5720', None, 'other'),
@@ -36,6 +53,15 @@ class TestConfidenceHelpers:
         assert len(merged) == 1
         assert merged[0][1] == 'CONFIRMED'
         assert PhoneConfidenceService.confidence_from_annotation(merged[0][1]) == 90
+
+    def test_merge_prefers_disconnected_over_confirmed(self):
+        merged = PhoneConfidenceService.merge_parsed_phones([
+            ('(630) 430-5720', 'CONFIRMED', 'other'),
+            ('6304305720', 'disconnected', 'other'),
+        ])
+        assert len(merged) == 1
+        assert 'disconnect' in (merged[0][1] or '').lower()
+        assert PhoneConfidenceService.confidence_from_annotation(merged[0][1]) == 5
 
     def test_parse_phones_from_props_merges_additional_confirmed(self):
         props = {
@@ -52,6 +78,26 @@ class TestConfidenceHelpers:
 
     def test_confidence_from_annotation_disconnected(self):
         assert PhoneConfidenceService.confidence_from_annotation('disconnected') == 5
+
+    def test_confidence_from_annotation_wn_nis_family_na(self):
+        assert PhoneConfidenceService.confidence_from_annotation('WN') == 5
+        assert PhoneConfidenceService.confidence_from_annotation('NIS') == 5
+        assert PhoneConfidenceService.confidence_from_annotation('Not in service') == 5
+        assert PhoneConfidenceService.confidence_from_annotation('Son of the Owner') == 25
+        assert PhoneConfidenceService.confidence_from_annotation('NA') == 35
+
+    def test_sort_prefers_hubspot_primary_over_alphabetical(self):
+        phones = [
+            {'value': '(630) 111-0000', 'confidence_score': 50, 'notes': None, 'label': 'other'},
+            {
+                'value': '(312) 999-0000',
+                'confidence_score': 50,
+                'notes': 'HubSpot primary',
+                'label': 'other',
+            },
+        ]
+        sorted_phones = PhoneConfidenceService.sort_phones_for_display(phones)
+        assert sorted_phones[0]['value'] == '(312) 999-0000'
 
     def test_confidence_from_outcome_answered(self):
         assert PhoneConfidenceService.confidence_from_outcome('answered', 50) == 85
@@ -241,3 +287,56 @@ def test_sync_phones_from_hubspot_contact_applies_annotations(app):
         phone = ContactPhone.query.filter_by(contact_id=contact.id).first()
         assert phone.notes == 'CONFIRMED'
         assert phone.confidence_score == 90
+
+
+def test_hubspot_primary_resync_preserves_wrong_number(app):
+    with app.app_context():
+        from app import db
+        from app.models import Lead
+        from app.models.contact import Contact
+        from app.models.contact_phone import ContactPhone
+        from app.models.hubspot_contact import HubSpotContact
+        from app.models.property_contact import PropertyContact
+
+        lead = Lead(
+            property_street='100 Wrong Number St',
+            lead_status='mailing_no_contact_made',
+            has_phone=True,
+            has_email=True,
+            has_property_match=True,
+            analysis_complete=True,
+            lead_score=50.0,
+        )
+        db.session.add(lead)
+        db.session.flush()
+
+        contact = Contact(first_name='Pat', last_name='Owner', role='owner')
+        db.session.add(contact)
+        db.session.flush()
+        db.session.add(PropertyContact(
+            property_id=lead.id,
+            contact_id=contact.id,
+            role='owner',
+            is_primary=True,
+        ))
+        db.session.add(ContactPhone(
+            contact_id=contact.id,
+            value='6304305720',
+            label='other',
+            confidence_score=5,
+            last_outcome='wrong_number',
+            notes='HubSpot primary',
+        ))
+        hs_contact = HubSpotContact(
+            hubspot_id='999002',
+            raw_payload={'properties': {'phone': '(630) 430-5720'}},
+        )
+        db.session.add(hs_contact)
+        db.session.commit()
+
+        PhoneConfidenceService.sync_phones_from_hubspot_contact(lead.id, hs_contact)
+        db.session.commit()
+
+        phone = ContactPhone.query.filter_by(contact_id=contact.id).first()
+        assert phone.confidence_score == 5
+        assert phone.last_outcome == 'wrong_number'

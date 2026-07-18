@@ -16,6 +16,7 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import { Link as RouterLink } from 'react-router-dom'
 import type { PropertyMatchPreview, QueueRow } from '@/types'
 import { LEAD_STATUS_LABELS } from '@/components/LeadStatusChip'
+import { formatCookCountyPin } from '@/utils/cookCountyPin'
 
 export interface PropertyMatchReviewCardProps {
   row: QueueRow
@@ -137,7 +138,7 @@ export function PropertyMatchReviewCard({
                   display="block"
                   sx={{ overflowWrap: 'anywhere' }}
                 >
-                  PIN {preview.pin}
+                  PIN {formatCookCountyPin(preview.pin)}
                   {preview.connector ? ` · ${preview.connector}` : ''}
                 </Typography>
               )}

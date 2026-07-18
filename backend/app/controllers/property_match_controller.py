@@ -57,7 +57,15 @@ def preview_property_match(lead_id: int):
 @handle_errors
 def approve_property_match(lead_id: int):
     actor = getattr(g, 'user_id', 'anonymous')
-    return jsonify(_match_svc.approve_match(lead_id, actor=actor)), 200
+    body = request.get_json(silent=True)
+    pin = (
+        body.get('pin')
+        if isinstance(body, dict) and isinstance(body.get('pin'), str)
+        else None
+    )
+    # PIN length/format rules are market-specific (Cook 14-digit vs DuPage native);
+    # validate in PropertyMatchReviewService after resolving the GIS connector.
+    return jsonify(_match_svc.approve_match(lead_id, actor=actor, pin=pin)), 200
 
 
 @property_match_bp.route('/<int:lead_id>/property-match/reject', methods=['POST'])

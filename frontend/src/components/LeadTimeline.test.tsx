@@ -319,18 +319,56 @@ describe('LeadTimeline', () => {
   // -------------------------------------------------------------------------
 
   describe('load more appends entries', () => {
-    it('shows "Load more" button when more entries exist', () => {
+    it('previews five entries and offers show-older when total exceeds five', () => {
+      const entries = Array.from({ length: 8 }, (_, i) => makeEntry(i + 1))
+
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={entries}
+          initialTotal={8}
+          onLoadMore={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('timeline-accordion')).toBeInTheDocument()
+      expect(screen.getByTestId('timeline-entry-1')).toBeInTheDocument()
+      expect(screen.getByTestId('timeline-entry-5')).toBeInTheDocument()
+      expect(screen.queryByTestId('timeline-entry-6')).not.toBeInTheDocument()
+      expect(screen.getByTestId('timeline-show-older-btn')).toHaveTextContent('3 more')
+      expect(screen.getByTestId('timeline-showing')).toHaveTextContent('Showing 5 of 8')
+      expect(screen.queryByTestId('load-more-btn')).not.toBeInTheDocument()
+    })
+
+    it('shows "Load more" button when more entries exist and total is within preview', () => {
       const entries = [makeEntry(1), makeEntry(2)]
 
       render(
         <LeadTimeline
           leadId={1}
           initialEntries={entries}
-          initialTotal={10}
+          initialTotal={4}
           onLoadMore={vi.fn()}
         />
       )
 
+      expect(screen.getByTestId('load-more-btn')).toBeInTheDocument()
+    })
+
+    it('reveals load more after expanding older activity', async () => {
+      const entries = Array.from({ length: 8 }, (_, i) => makeEntry(i + 1))
+
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={entries}
+          initialTotal={12}
+          onLoadMore={vi.fn()}
+        />,
+      )
+
+      await user.click(screen.getByTestId('timeline-show-older-btn'))
+      expect(screen.getByTestId('timeline-entry-8')).toBeInTheDocument()
       expect(screen.getByTestId('load-more-btn')).toBeInTheDocument()
     })
 
@@ -411,6 +449,7 @@ describe('LeadTimeline', () => {
         />
       )
 
+      await user.click(screen.getByTestId('timeline-show-older-btn'))
       await user.click(screen.getByTestId('load-more-btn'))
 
       await waitFor(() => {

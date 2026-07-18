@@ -11,6 +11,7 @@ import {
   IconButton,
   Link,
   Paper,
+  Snackbar,
   Tooltip,
   Typography,
 } from '@mui/material'
@@ -18,6 +19,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import EmailIcon from '@mui/icons-material/Email'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import RefreshIcon from '@mui/icons-material/Refresh'
 import { useQueryClient } from '@tanstack/react-query'
 import type {
   CommandCenterPayload,
@@ -30,7 +32,9 @@ import {
   formatSaleDateFreshness,
   isSaleDateVerifiedWithinDays,
 } from '@/utils/saleDateFreshness'
-import { commandCenterService } from '@/services/api'
+import { formatCookCountyPin } from '@/utils/cookCountyPin'
+import { commandCenterService, leadTaskService } from '@/services/api'
+import { propertyMatchService } from '@/services/propertyMatchApi'
 import {
   isEntityContactName,
   ownerDisplayEntries,
@@ -38,6 +42,10 @@ import {
 import { formatImportNote } from './leadDetailFormatters'
 import { hasNonBlankPhones, PhoneList } from '@/components/PhoneRow'
 import { ccCardSx } from '@/components/lead-detail/commandCenterChrome'
+import { PriorOwnerStaleOverlay } from '@/components/lead-detail/PriorOwnerStaleCallout'
+
+/** Poll delays after queued sale-date verify (overridable in tests). */
+export let saleVerifyPollDelaysMs = [2000, 3000, 5000, 8000, 13000]
 
 const SidebarStackedContext = createContext(false)
 
@@ -170,7 +178,13 @@ function SidebarLabeledContent({
   )
 }
 
-function CopyableEmail({ email }: { email: string }) {
+function CopyableEmail({
+  email,
+  actionable = true,
+}: {
+  email: string
+  actionable?: boolean
+}) {
   const [copied, setCopied] = useState(false)
   const handleCopy = () => {
     navigator.clipboard.writeText(email)
@@ -180,11 +194,67 @@ function CopyableEmail({ email }: { email: string }) {
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 0.5, minWidth: 0 }}>
       <EmailIcon sx={{ fontSize: 13, color: 'text.secondary', flexShrink: 0 }} />
-      <Link href={`mailto:${email}`} variant="caption" underline="hover" noWrap>
-        {email}
-      </Link>
+      {actionable ? (
+        <Link href={`mailto:${email}`} variant="caption" underline="hover" noWrap>
+          {email}
+        </Link>
+      ) : (
+        <Typography variant="caption" noWrap>
+          {email}
+        </Typography>
+      )}
+      {actionable && (
+        <Tooltip title={copied ? 'Copied!' : 'Copy'}>
+          <IconButton size="small" onClick={handleCopy} sx={{ p: 0.25, flexShrink: 0 }}>
+            <ContentCopyIcon sx={{ fontSize: 11 }} />
+          </IconButton>
+        </Tooltip>
+      )}
+    </Box>
+  )
+}
+
+function CopyablePin({
+  pin,
+  valueTestId,
+}: {
+  pin: string
+  valueTestId?: string
+}) {
+  const [copied, setCopied] = useState(false)
+  const displayPin = formatCookCountyPin(pin)
+  if (!displayPin) return null
+  const handleCopy = () => {
+    void navigator.clipboard.writeText(displayPin)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        gap: 0.5,
+        minWidth: 0,
+      }}
+    >
+      <Typography
+        variant="caption"
+        component="span"
+        noWrap
+        data-testid={valueTestId}
+      >
+        {displayPin}
+      </Typography>
       <Tooltip title={copied ? 'Copied!' : 'Copy'}>
-        <IconButton size="small" onClick={handleCopy} sx={{ p: 0.25, flexShrink: 0 }}>
+        <IconButton
+          size="small"
+          onClick={handleCopy}
+          aria-label="Copy PIN"
+          data-testid="sidebar-pin-copy"
+          sx={{ p: 0.25, flexShrink: 0 }}
+        >
           <ContentCopyIcon sx={{ fontSize: 11 }} />
         </IconButton>
       </Tooltip>
@@ -196,15 +266,22 @@ export interface PropertySidebarProps {
   commandCenterData: CommandCenterPayload
   /** `sidebar` sticky lg+ panel; `inline` accordion for viewports below lg. */
   variant?: 'sidebar' | 'inline'
+  /** Jump to Info tab sale-history table. */
+  onViewSaleHistory?: () => void
 }
 
 export function PropertySidebar({
   commandCenterData,
   variant = 'sidebar',
+  onViewSaleHistory,
 }: PropertySidebarProps) {
   const queryClient = useQueryClient()
   const [saleVerifyPending, setSaleVerifyPending] = useState(false)
   const [saleVerifyMessage, setSaleVerifyMessage] = useState<string | null>(null)
+  const [pinLookupPending, setPinLookupPending] = useState(false)
+  const [pinCandidate, setPinCandidate] = useState<string | null>(null)
+  const [pinApplyPending, setPinApplyPending] = useState(false)
+  const [sidebarSnack, setSidebarSnack] = useState<string | null>(null)
   type SidebarExtras = {
     phones?: LeadPhone[]
     emails?: string[]
@@ -292,30 +369,50 @@ export function PropertySidebar({
   const actionValue = commandCenterData.recommended_action?.value
   const mailRecommended =
     contactMethod === 'direct_mail' || actionValue === 'mail_ready'
-  const saleFreshness = formatSaleDateFreshness(commandCenterData.sale_date_meta)
   const saleDateDisplay =
     commandCenterData.most_recent_sale_display ?? data.most_recent_sale ?? null
+  const hasDisplayedSale = Boolean(
+    saleDateDisplay && String(saleDateDisplay).trim() && String(saleDateDisplay).trim() !== 'None',
+  )
+  const saleFreshness = formatSaleDateFreshness(commandCenterData.sale_date_meta, {
+    hasDisplayedSale,
+  })
   const saleRecentlyVerified = isSaleDateVerifiedWithinDays(
     commandCenterData.sale_date_meta,
+    undefined,
+    undefined,
+    { hasDisplayedSale },
+  )
+  const isCookCountyEligible = Boolean(commandCenterData.is_cook_county_eligible)
+  const canReverifySaleDate = Boolean(
+    isCookCountyEligible
+    && commandCenterData.sale_date_meta?.last_checked_at
+    && commandCenterData.sale_date_meta?.status !== 'failed',
   )
   const canVerifySaleDate = Boolean(
-    saleDateDisplay
+    isCookCountyEligible
+    && !canReverifySaleDate
     && (
       !commandCenterData.sale_date_meta?.last_checked_at
       || commandCenterData.sale_date_meta?.status === 'failed'
     ),
   )
+  const pinMissing = !commandCenterData.county_assessor_pin?.trim()
+  const contactsLikelyPriorOwner = Boolean(commandCenterData.contacts_likely_prior_owner)
 
   useEffect(() => {
     setSaleVerifyPending(false)
     setSaleVerifyMessage(null)
+    setPinLookupPending(false)
+    setPinCandidate(null)
+    setPinApplyPending(false)
   }, [commandCenterData.id])
 
   const pollQueuedSaleVerification = async (
     leadId: number,
     previousCheckedAt: string | null | undefined,
   ) => {
-    const delaysMs = [2000, 3000, 5000, 8000, 13000]
+    const delaysMs = saleVerifyPollDelaysMs
     for (const delayMs of delaysMs) {
       await new Promise((resolve) => {
         window.setTimeout(resolve, delayMs)
@@ -326,13 +423,14 @@ export function PropertySidebar({
         // Wait for a new check stamp — retries keep the prior failed timestamp.
         if (checkedAt && checkedAt !== previousCheckedAt) {
           queryClient.setQueryData(['commandCenter', leadId], fresh)
-          return
+          return 'checked' as const
         }
       } catch {
         // Keep polling until delays are exhausted.
       }
     }
     await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+    return 'timed_out' as const
   }
 
   const handleVerifySaleDate = async () => {
@@ -341,24 +439,31 @@ export function PropertySidebar({
     const previousCheckedAt = commandCenterData.sale_date_meta?.last_checked_at
     try {
       const result = await commandCenterService.verifySaleDate(commandCenterData.id)
-      if (result.message) {
-        setSaleVerifyMessage(result.message)
-      } else if (result.summary?.skipped) {
+      if (result.queued) {
+        const pollResult = await pollQueuedSaleVerification(
+          commandCenterData.id,
+          previousCheckedAt,
+        )
+        if (pollResult === 'timed_out') {
+          setSaleVerifyMessage('Verification timed out. Refresh to check status.')
+        }
+        return
+      }
+      if (result.summary?.skipped) {
         const reason = result.summary.skip_reason || 'unknown'
         setSaleVerifyMessage(
           reason === 'not_eligible'
             ? 'Not eligible for Cook County enrichment.'
             : `Verification skipped (${reason}).`,
         )
-      } else if (result.queued) {
-        setSaleVerifyMessage('Verification queued.')
-        void pollQueuedSaleVerification(commandCenterData.id, previousCheckedAt)
-      } else {
-        setSaleVerifyMessage('Verification checked.')
+      } else if (
+        result.message
+        && result.message !== 'Verification queued.'
+        && !result.ran_sync
+      ) {
+        setSaleVerifyMessage(result.message)
       }
-      if (!result.queued) {
-        await queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
-      }
+      await queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
     } catch (error) {
       setSaleVerifyMessage(error instanceof Error ? error.message : 'Verification failed.')
     } finally {
@@ -366,54 +471,155 @@ export function PropertySidebar({
     }
   }
 
+  const handleLookUpPin = async () => {
+    setPinLookupPending(true)
+    setPinCandidate(null)
+    try {
+      const preview = await propertyMatchService.preview(commandCenterData.id)
+      const pin = formatCookCountyPin(
+        preview.pin || preview.recommended_address?.county_assessor_pin || '',
+      )
+      if (preview.found && pin) {
+        setPinCandidate(pin)
+        return
+      }
+      await leadTaskService.createTask(commandCenterData.id, {
+        title: 'Research missing PIN',
+        task_type: 'research_missing_pin',
+      })
+      setSidebarSnack('No PIN found — research task created')
+      await queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
+    } catch (error) {
+      setSidebarSnack(error instanceof Error ? error.message : 'PIN lookup failed')
+    } finally {
+      setPinLookupPending(false)
+    }
+  }
+
+  const handleApplyPinCandidate = async () => {
+    if (!pinCandidate) return
+    setPinApplyPending(true)
+    try {
+      const result = await propertyMatchService.approve(commandCenterData.id, {
+        pin: pinCandidate,
+      })
+      setPinCandidate(null)
+      const appliedPin = formatCookCountyPin(
+        (result as { county_assessor_pin?: string | null })?.county_assessor_pin,
+      )
+      setSidebarSnack(
+        appliedPin
+          ? `PIN applied: ${appliedPin}`
+          : 'PIN applied from property match',
+      )
+      await queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
+    } catch (error) {
+      setSidebarSnack(error instanceof Error ? error.message : 'Could not apply PIN')
+    } finally {
+      setPinApplyPending(false)
+    }
+  }
+
   const stacked = variant === 'inline'
+  const contactInfoBody = (
+    <>
+      {ownerEntries.map((entry, idx) => (
+        <SidebarRow
+          key={`${entry.label}-${entry.name}`}
+          label={entry.label}
+          value={
+            <>
+              {entry.name}
+              {entry.contact?.is_primary && isEntityContactName(entry.contact) ? (
+                <Chip
+                  size="small"
+                  label="LLC — resolve entity"
+                  variant="outlined"
+                  sx={{ ml: 0.75, height: 18, fontSize: '0.65rem' }}
+                />
+              ) : null}
+            </>
+          }
+          valueFontWeight={idx === 0 ? 600 : 500}
+          testId={
+            idx === 0
+              ? 'sidebar-owner-name'
+              : entry.label === 'Company'
+                ? 'sidebar-company-name'
+                : entry.label === 'Also listed'
+                  ? 'sidebar-also-listed-name'
+                  : entry.label === 'Owner 2'
+                    ? 'sidebar-owner-2-name'
+                    : undefined
+          }
+        />
+      ))}
+      {hasNonBlankPhones(phones) && (
+        <SidebarLabeledContent label="Phone" testId="sidebar-phones">
+          <PhoneList
+            phones={phones}
+            dense={!stacked}
+            actionable={!contactsLikelyPriorOwner}
+          />
+        </SidebarLabeledContent>
+      )}
+      {emails.length > 0 && (
+        <SidebarLabeledContent label="Email" testId="sidebar-emails">
+          {emails.map((e, i) => (
+            <CopyableEmail
+              key={`${e}-${i}`}
+              email={e}
+              actionable={!contactsLikelyPriorOwner}
+            />
+          ))}
+        </SidebarLabeledContent>
+      )}
+      <SidebarRow
+        label="Mailing"
+        alwaysShow
+        emptyLabel="Not on file"
+        testId="sidebar-owner-mailing"
+        value={
+          hasOwnerMailing ? (
+            <>
+              {mailingStreet}
+              {mailingCityLine && (
+                <>
+                  {mailingStreet ? '\n' : ''}
+                  {mailingCityLine}
+                </>
+              )}
+            </>
+          ) : null
+        }
+      />
+      {data.socials && <SidebarRow label="Socials" value={data.socials} />}
+    </>
+  )
   const sections = (
     <SidebarStackedContext.Provider value={stacked}>
       <SidebarSection title="Contact Info">
-        {ownerEntries.map((entry, idx) => (
-          <SidebarRow
-            key={`${entry.label}-${entry.name}`}
-            label={entry.label}
-            value={
-              <>
-                {entry.name}
-                {entry.contact?.is_primary && isEntityContactName(entry.contact) ? (
-                  <Chip
-                    size="small"
-                    label="LLC — resolve entity"
-                    variant="outlined"
-                    sx={{ ml: 0.75, height: 18, fontSize: '0.65rem' }}
-                  />
-                ) : null}
-              </>
-            }
-            valueFontWeight={idx === 0 ? 600 : 500}
-            testId={
-              idx === 0
-                ? 'sidebar-owner-name'
-                : entry.label === 'Company'
-                  ? 'sidebar-company-name'
-                  : entry.label === 'Also listed'
-                    ? 'sidebar-also-listed-name'
-                    : entry.label === 'Owner 2'
-                      ? 'sidebar-owner-2-name'
-                      : undefined
-            }
-          />
-        ))}
-        {hasNonBlankPhones(phones) && (
-          <SidebarLabeledContent label="Phone" testId="sidebar-phones">
-            <PhoneList phones={phones} dense={!stacked} />
-          </SidebarLabeledContent>
+        {contactsLikelyPriorOwner ? (
+          <PriorOwnerStaleOverlay
+            testId="sidebar-contact-info"
+            bannerTestId="sidebar-likely-prior-owner"
+          >
+            {contactInfoBody}
+          </PriorOwnerStaleOverlay>
+        ) : (
+          <Box data-testid="sidebar-contact-info">{contactInfoBody}</Box>
         )}
-        {emails.length > 0 && (
-          <SidebarLabeledContent label="Email" testId="sidebar-emails">
-            {emails.map((e, i) => (
-              <CopyableEmail key={`${e}-${i}`} email={e} />
-            ))}
-          </SidebarLabeledContent>
+        {!hasOwnerMailing && mailRecommended && (
+          <Typography
+            variant="caption"
+            color="warning.main"
+            data-testid="owner-mailing-missing-for-mail"
+            sx={{ display: 'block', mt: 0.5 }}
+          >
+            No mailing address on file for this lead. Skip trace or add an owner mailing
+            address before sending mail.
+          </Typography>
         )}
-        {data.socials && <SidebarRow label="Socials" value={data.socials} />}
       </SidebarSection>
 
       {commandCenterData.ownership_type && (
@@ -476,7 +682,61 @@ export function PropertySidebar({
         <SidebarRow label="Zoning" value={data.zoning} />
         <SidebarRow
           label="PIN"
-          value={commandCenterData.county_assessor_pin}
+          value={
+            pinMissing ? (
+              <Box
+                sx={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-end',
+                  gap: 0.5,
+                }}
+                data-testid="sidebar-pin-lookup"
+              >
+                <Typography variant="caption" color="text.disabled" component="span">
+                  None
+                </Typography>
+                {pinCandidate ? (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    <CopyablePin pin={pinCandidate} valueTestId="sidebar-pin-candidate" />
+                    <Button
+                      size="small"
+                      variant="text"
+                      onClick={handleApplyPinCandidate}
+                      disabled={pinApplyPending}
+                      data-testid="sidebar-apply-pin"
+                      startIcon={
+                        pinApplyPending ? (
+                          <CircularProgress size={12} color="inherit" aria-hidden />
+                        ) : undefined
+                      }
+                      sx={{ minWidth: 0, px: 0.5, py: 0, fontSize: '0.7rem' }}
+                    >
+                      {pinApplyPending ? 'Applying…' : 'Apply'}
+                    </Button>
+                  </Box>
+                ) : (
+                  <Button
+                    size="small"
+                    variant="text"
+                    onClick={handleLookUpPin}
+                    disabled={pinLookupPending}
+                    data-testid="sidebar-look-up-pin"
+                    startIcon={
+                      pinLookupPending ? (
+                        <CircularProgress size={12} color="inherit" aria-hidden />
+                      ) : undefined
+                    }
+                    sx={{ minWidth: 0, px: 0.5, py: 0, fontSize: '0.7rem' }}
+                  >
+                    {pinLookupPending ? 'Looking up…' : 'Look up PIN'}
+                  </Button>
+                )}
+              </Box>
+            ) : (
+              <CopyablePin pin={commandCenterData.county_assessor_pin || ''} />
+            )
+          }
           alwaysShow
           emptyLabel="None"
           testId="sidebar-county-assessor-pin"
@@ -488,28 +748,37 @@ export function PropertySidebar({
           }
         />
         <Box data-testid="sidebar-most-recent-sale">
-          <SidebarRow
-            label="Most Recent Sale"
-            value={(() => {
+          <SidebarLabeledContent label="Most Recent Sale">
+            {(() => {
               const dateDisplay = saleDateDisplay
-              if (!dateDisplay) return null
               const price = commandCenterData.most_recent_sale_price
               const text =
-                price != null
-                  ? `${dateDisplay} · $${Number(price).toLocaleString()}`
-                  : dateDisplay
-              if (!saleRecentlyVerified && !saleVerifyPending) return text
+                dateDisplay
+                  ? price != null
+                    ? `${dateDisplay} · $${Number(price).toLocaleString()}`
+                    : dateDisplay
+                  : null
+              const displayText = text ?? 'None'
               return (
                 <Box
-                  component="span"
                   sx={{
                     display: 'inline-flex',
                     alignItems: 'center',
                     justifyContent: 'flex-end',
                     gap: 0.5,
+                    textAlign: 'right',
                   }}
                 >
-                  {text}
+                  <Typography
+                    variant="caption"
+                    component="span"
+                    sx={{
+                      color: text ? 'text.primary' : 'text.disabled',
+                      wordBreak: 'break-word',
+                    }}
+                  >
+                    {displayText}
+                  </Typography>
                   {saleVerifyPending ? (
                     <CircularProgress
                       size={12}
@@ -517,7 +786,7 @@ export function PropertySidebar({
                       aria-label="Verifying sale date"
                       data-testid="sidebar-sale-verify-spinner"
                     />
-                  ) : (
+                  ) : saleRecentlyVerified ? (
                     <Tooltip title="Verified within the last month">
                       <CheckCircleIcon
                         sx={{ fontSize: 14, color: 'success.main' }}
@@ -525,54 +794,117 @@ export function PropertySidebar({
                         data-testid="sidebar-sale-verified-check"
                       />
                     </Tooltip>
-                  )}
+                  ) : null}
                 </Box>
               )
             })()}
-            alwaysShow
-            emptyLabel="None"
-          />
-          {saleFreshness ? (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ display: 'block', textAlign: 'right', pl: '108px', mt: -0.25, mb: 0.5 }}
-              data-testid="sidebar-sale-last-checked"
+          </SidebarLabeledContent>
+          {(saleFreshness || canReverifySaleDate || onViewSaleHistory) ? (
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'flex-end',
+                gap: 0.75,
+                flexWrap: 'nowrap',
+                mb: 0.5,
+                mt: -0.35,
+              }}
+              data-testid="sidebar-sale-meta-row"
             >
-              {saleFreshness}
-            </Typography>
-          ) : null}
-          {canVerifySaleDate ? (
-            <Box sx={{ textAlign: 'right', mt: -0.25, mb: 0.5 }}>
-              {!commandCenterData.sale_date_meta?.last_checked_at ? (
+              {saleFreshness ? (
                 <Typography
                   variant="caption"
-                  color="text.disabled"
-                  sx={{ display: 'block', pl: '108px' }}
+                  color="text.secondary"
+                  component="span"
+                  sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+                  data-testid="sidebar-sale-last-checked"
                 >
-                  Sale date not verified yet
+                  {saleFreshness}
                 </Typography>
               ) : null}
-              <Button
-                size="small"
-                variant="text"
-                onClick={handleVerifySaleDate}
-                disabled={saleVerifyPending}
-                data-testid="sidebar-verify-sale-date"
-                startIcon={
-                  saleVerifyPending ? (
-                    <CircularProgress size={12} color="inherit" aria-hidden />
-                  ) : undefined
-                }
-                sx={{ minWidth: 0, px: 0.5, py: 0, fontSize: '0.7rem' }}
+              {canReverifySaleDate && !saleVerifyPending ? (
+                <Tooltip title="Check sale date again">
+                  <IconButton
+                    size="small"
+                    onClick={handleVerifySaleDate}
+                    aria-label="Re-verify sale date"
+                    data-testid="sidebar-reverify-sale-date"
+                    sx={{ p: 0.25, flexShrink: 0 }}
+                  >
+                    <RefreshIcon sx={{ fontSize: 14 }} />
+                  </IconButton>
+                </Tooltip>
+              ) : null}
+              {onViewSaleHistory ? (
+                <Box
+                  component="button"
+                  type="button"
+                  onClick={onViewSaleHistory}
+                  data-testid="sidebar-sale-history-link"
+                  aria-label="View sale history in Info tab"
+                  sx={{
+                    appearance: 'none',
+                    border: 0,
+                    background: 'none',
+                    p: 0,
+                    m: 0,
+                    cursor: 'pointer',
+                    font: 'inherit',
+                    color: 'primary.main',
+                    textDecoration: 'underline',
+                    textUnderlineOffset: '2px',
+                    fontSize: '0.75rem',
+                    lineHeight: 1.66,
+                    flexShrink: 0,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Sale history
+                </Box>
+              ) : null}
+            </Box>
+          ) : null}
+          {(canVerifySaleDate || saleVerifyMessage) ? (
+            <Box sx={{ textAlign: 'right', mt: -0.25, mb: 0.5 }}>
+              <Typography
+                variant="caption"
+                color="text.disabled"
+                component="span"
+                sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', justifyContent: 'flex-end' }}
               >
-                {saleVerifyPending ? 'Verifying…' : 'Verify sale date'}
-              </Button>
+                {canVerifySaleDate && !saleVerifyPending && !commandCenterData.sale_date_meta?.last_checked_at ? (
+                  <Box component="span">Sale date not verified yet</Box>
+                ) : null}
+                {canVerifySaleDate && !saleVerifyPending ? (
+                  <Box
+                    component="button"
+                    type="button"
+                    onClick={handleVerifySaleDate}
+                    data-testid="sidebar-verify-sale-date"
+                    aria-label="Verify sale date"
+                    sx={{
+                      appearance: 'none',
+                      border: 0,
+                      background: 'none',
+                      p: 0,
+                      m: 0,
+                      cursor: 'pointer',
+                      font: 'inherit',
+                      color: 'primary.main',
+                      textDecoration: 'underline',
+                      textUnderlineOffset: '2px',
+                    }}
+                  >
+                    Verify
+                  </Box>
+                ) : null}
+              </Typography>
               {saleVerifyMessage ? (
                 <Typography
                   variant="caption"
                   color="text.secondary"
-                  sx={{ display: 'block', pl: '108px' }}
+                  sx={{ display: 'block' }}
                 >
                   {saleVerifyMessage}
                 </Typography>
@@ -623,45 +955,6 @@ export function PropertySidebar({
           </Box>
         </SidebarSection>
       )}
-
-      <SidebarSection title="Owner Mailing Address">
-        <SidebarRow
-          label="Mailing"
-          value={
-            hasOwnerMailing ? (
-              <>
-                {mailingStreet}
-                {mailingCityLine && (
-                  <>
-                    {mailingStreet ? '\n' : ''}
-                    {mailingCityLine}
-                  </>
-                )}
-              </>
-            ) : (
-              <Typography
-                component="span"
-                variant="caption"
-                color="text.secondary"
-                data-testid="owner-mailing-empty"
-              >
-                Not on file
-              </Typography>
-            )
-          }
-        />
-        {!hasOwnerMailing && mailRecommended && (
-          <Typography
-            variant="caption"
-            color="warning.main"
-            data-testid="owner-mailing-missing-for-mail"
-            sx={{ display: 'block', mt: 0.5 }}
-          >
-            No mailing address on file for this lead. Skip trace or add an owner mailing
-            address before sending mail.
-          </Typography>
-        )}
-      </SidebarSection>
 
       {(data.needs_skip_trace != null || data.skip_tracer || data.date_skip_traced) && (
         <SidebarSection title="Skip Trace">
@@ -828,56 +1121,72 @@ export function PropertySidebar({
     </SidebarStackedContext.Provider>
   )
 
+  const snackbar = (
+    <Snackbar
+      open={Boolean(sidebarSnack)}
+      autoHideDuration={4000}
+      onClose={() => setSidebarSnack(null)}
+      message={sidebarSnack ?? ''}
+      data-testid="sidebar-snackbar"
+    />
+  )
+
   if (variant === 'inline') {
     const ownerSummary = ownerEntries[0]?.name
     return (
-      <Accordion
-        defaultExpanded={false}
-        disableGutters
-        data-testid="property-sidebar-mobile"
-        sx={{
-          ...ccCardSx,
-          mb: 2,
-          display: { xs: 'block', lg: 'none' },
-          '&:before': { display: 'none' },
-        }}
-      >
-        <AccordionSummary
-          expandIcon={<ExpandMoreIcon />}
-          aria-controls="property-contacts-content"
-          id="property-contacts-header"
+      <>
+        <Accordion
+          defaultExpanded={false}
+          disableGutters
+          data-testid="property-sidebar-mobile"
+          sx={{
+            ...ccCardSx,
+            mb: 2,
+            display: { xs: 'block', lg: 'none' },
+            '&:before': { display: 'none' },
+          }}
         >
-          <Box sx={{ minWidth: 0 }}>
-            <Typography fontWeight={600}>Property & contacts</Typography>
-            {ownerSummary ? (
-              <Typography variant="caption" color="text.secondary" noWrap display="block">
-                {ownerSummary}
-              </Typography>
-            ) : null}
-          </Box>
-        </AccordionSummary>
-        <AccordionDetails id="property-contacts-content" sx={{ pt: 0 }}>{sections}</AccordionDetails>
-      </Accordion>
+          <AccordionSummary
+            expandIcon={<ExpandMoreIcon />}
+            aria-controls="property-contacts-content"
+            id="property-contacts-header"
+          >
+            <Box sx={{ minWidth: 0 }}>
+              <Typography fontWeight={600}>Property & contacts</Typography>
+              {ownerSummary ? (
+                <Typography variant="caption" color="text.secondary" noWrap display="block">
+                  {ownerSummary}
+                </Typography>
+              ) : null}
+            </Box>
+          </AccordionSummary>
+          <AccordionDetails id="property-contacts-content" sx={{ pt: 0 }}>{sections}</AccordionDetails>
+        </Accordion>
+        {snackbar}
+      </>
     )
   }
 
   return (
-    <Paper
-      data-testid="property-sidebar"
-      sx={{
-        ...ccCardSx,
-        mb: 0,
-        position: 'sticky',
-        top: 80,
-        maxHeight: 'calc(100vh - 100px)',
-        overflowY: 'auto',
-        display: { xs: 'none', sm: 'none', md: 'none', lg: 'block' },
-        minWidth: 340,
-        maxWidth: 400,
-        flexShrink: 0,
-      }}
-    >
-      {sections}
-    </Paper>
+    <>
+      <Paper
+        data-testid="property-sidebar"
+        sx={{
+          ...ccCardSx,
+          mb: 0,
+          position: 'sticky',
+          top: 80,
+          maxHeight: 'calc(100vh - 100px)',
+          overflowY: 'auto',
+          display: { xs: 'none', sm: 'none', md: 'none', lg: 'block' },
+          minWidth: 340,
+          maxWidth: 400,
+          flexShrink: 0,
+        }}
+      >
+        {sections}
+      </Paper>
+      {snackbar}
+    </>
   )
 }

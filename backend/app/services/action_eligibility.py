@@ -64,18 +64,17 @@ def _blocked(
 
 
 def evaluate_move_to_skip_trace(lead: _LeadStatusLike) -> ActionEligibilityResult:
-    """Whether Move to Skip Trace may mutate this lead."""
+    """Whether Move to Skip Trace may mutate this lead.
+
+    ``skip_trace`` is already on the Skip Trace work column (already done).
+    ``awaiting_skip_trace`` (e.g. recent-sale hold ended) still needs an active
+    handoff into that queue — Move to Skip Trace must stay available.
+    """
     status = lead.lead_status
     if status == 'skip_trace':
         return _blocked(
             REASON_ALREADY_SKIP_TRACE,
             'Already in Skip Trace',
-            already_done=True,
-        )
-    if status == 'awaiting_skip_trace':
-        return _blocked(
-            REASON_ALREADY_AWAITING_SKIP_TRACE,
-            'Already awaiting skip trace',
             already_done=True,
         )
     if status in TERMINAL_LEAD_STATUSES:

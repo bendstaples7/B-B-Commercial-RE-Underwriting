@@ -243,7 +243,62 @@ class ContactService:
                 payload={'contact_id': contact_id},
             )
 
+        # Promote an existing former_owner link instead of conflicting.
+        # Duplicate active links still raise ConflictError (API contract).
+        existing_link = (
+            PropertyContact.query
+            .filter_by(property_id=property_id, contact_id=contact_id)
+            .first()
+        )
+        if existing_link is not None:
+            if existing_link.role == 'former_owner' and role == 'owner':
+                if is_primary:
+                    other_owners = (
+                        PropertyContact.query
+                        .filter(
+                            PropertyContact.property_id == property_id,
+                            PropertyContact.role == 'owner',
+                            PropertyContact.contact_id != contact_id,
+                        )
+                        .all()
+                    )
+                    if other_owners:
+                        from datetime import datetime, timezone
+                        from app.services.owner_snapshot_service import (
+                            REASON_CONTACT_REPLACED,
+                            capture_owner_snapshot,
+                        )
+                        lead = Property.query.get(property_id)
+                        if lead is not None:
+                            capture_owner_snapshot(
+                                lead, reason=REASON_CONTACT_REPLACED, commit=False,
+                            )
+                        now = datetime.now(timezone.utc)
+                        for old in other_owners:
+                            old.role = 'former_owner'
+                            old.is_primary = False
+                            old.superseded_at = now
+                    (
+                        PropertyContact.query
+                        .filter_by(property_id=property_id, is_primary=True)
+                        .update({'is_primary': False})
+                    )
+                existing_link.role = 'owner'
+                existing_link.is_primary = is_primary
+                existing_link.superseded_at = None
+                db.session.add(existing_link)
+                db.session.commit()
+                from app.services.lead_refresh import refresh_lead_scoring
+                refresh_lead_scoring(property_id)
+                return existing_link
+
+            raise ConflictError(
+                f"Contact id={contact_id} is already linked to Property id={property_id}.",
+                payload={'property_id': property_id, 'contact_id': contact_id},
+            )
+
         # Demote existing primary contacts if the new one is primary
+        # (co-owners stay active owners — only primary flag changes).
         if is_primary:
             (
                 PropertyContact.query
@@ -320,25 +375,19 @@ class ContactService:
     # Query
     # ------------------------------------------------------------------
 
-    def get_contacts_for_property(self, property_id: int) -> list:
-        """Return all Contacts linked to a Property, with join record metadata.
+    def get_contacts_for_property(
+        self,
+        property_id: int,
+        *,
+        include_former_owners: bool = False,
+    ) -> list:
+        """Return Contacts linked to a Property, with join record metadata.
 
         Each element of the returned list is a tuple ``(Contact, PropertyContact)``
         so that callers have access to both the contact fields and the join
         record's ``role`` and ``is_primary`` values.
 
-        Parameters
-        ----------
-        property_id : int
-
-        Returns
-        -------
-        list[tuple[Contact, PropertyContact]]
-
-        Raises
-        ------
-        ResourceNotFoundError
-            If no Property with *property_id* exists.
+        Former owners are excluded by default (see Past owners / snapshots).
         """
         if Property.query.get(property_id) is None:
             raise ResourceNotFoundError(
@@ -346,7 +395,7 @@ class ContactService:
                 payload={'property_id': property_id},
             )
 
-        rows = (
+        query = (
             db.session.query(Contact, PropertyContact)
             .options(
                 selectinload(Contact.phones),
@@ -354,9 +403,10 @@ class ContactService:
             )
             .join(PropertyContact, PropertyContact.contact_id == Contact.id)
             .filter(PropertyContact.property_id == property_id)
-            .all()
         )
-        return rows
+        if not include_former_owners:
+            query = query.filter(PropertyContact.role != 'former_owner')
+        return query.all()
 
     @staticmethod
     def serialize_contact_summary(contact: Contact, pc: PropertyContact) -> dict:
@@ -378,13 +428,23 @@ class ContactService:
             ],
         }
 
-    def get_ordered_contacts_payload(self, property_id: int) -> list[dict]:
+    def get_ordered_contacts_payload(
+        self,
+        property_id: int,
+        *,
+        include_former_owners: bool = False,
+    ) -> list[dict]:
         """Contacts for a property, primary first then by PropertyContact id.
 
         Shape matches PropertyDetail / CommandCenter ``contacts[]``:
         id, first_name, last_name, role, is_primary, phones[], emails[].
+
+        Former owners are excluded by default (see Past owners / snapshots).
         """
-        rows = self.get_contacts_for_property(property_id)
+        rows = self.get_contacts_for_property(
+            property_id,
+            include_former_owners=include_former_owners,
+        )
         rows = sorted(rows, key=lambda pair: (not pair[1].is_primary, pair[1].id))
         return [self.serialize_contact_summary(contact, pc) for contact, pc in rows]
 
@@ -409,6 +469,13 @@ class ContactService:
             raise ValidationException('Lead with id is required.', field='lead_id')
 
         property_id = lead.id
+        outgoing_owner_ids = {
+            pc.contact_id
+            for pc in PropertyContact.query.filter_by(
+                property_id=property_id,
+                role='owner',
+            ).all()
+        }
         owners: list[tuple[str | None, str | None]] = []
         o1_first = (lead.owner_first_name or '').strip() or None
         o1_last = (lead.owner_last_name or '').strip() or None
@@ -482,6 +549,18 @@ class ContactService:
                 phone_source=phone_source,
             )
 
+        # When incoming person owners differ from existing owner-role links,
+        # archive the unmatched ones so Past owners history is preserved.
+        if results or promoted_any_org:
+            kept_ids = {contact.id for contact, _link in results}
+            archive_ids = outgoing_owner_ids - kept_ids
+            if archive_ids:
+                self._archive_unmatched_owners(
+                    property_id,
+                    kept_ids,
+                    only_contact_ids=archive_ids,
+                )
+
         if commit:
             db.session.commit()
         else:
@@ -504,6 +583,64 @@ class ContactService:
                 )
 
         return results
+
+    def _reactivate_owner_link(
+        self,
+        link: PropertyContact,
+        property_id: int,
+        *,
+        is_primary: bool,
+    ) -> None:
+        """Restore an archived/former owner link to active owner for upserts."""
+        if is_primary:
+            PropertyContact.query.filter_by(
+                property_id=property_id, is_primary=True,
+            ).update({'is_primary': False})
+            link.is_primary = True
+        link.role = 'owner'
+        link.superseded_at = None
+
+    def _archive_unmatched_owners(
+        self,
+        property_id: int,
+        kept_contact_ids: set[int],
+        *,
+        only_contact_ids: set[int] | None = None,
+    ) -> int:
+        """Re-role owner links not in *kept_contact_ids* to former_owner.
+
+        Snapshots once when any owners will be archived. No-op when nothing
+        unmatched exists (avoids snapshot spam on idempotent upserts).
+        """
+        from datetime import datetime, timezone
+
+        from app.services.owner_snapshot_service import (
+            REASON_CONTACT_REPLACED,
+            capture_owner_snapshot,
+        )
+
+        query = PropertyContact.query.filter(
+            PropertyContact.property_id == property_id,
+            PropertyContact.role == 'owner',
+        )
+        if kept_contact_ids:
+            query = query.filter(~PropertyContact.contact_id.in_(kept_contact_ids))
+        if only_contact_ids is not None:
+            query = query.filter(PropertyContact.contact_id.in_(only_contact_ids))
+        unmatched = query.all()
+        if not unmatched:
+            return 0
+
+        lead = Property.query.get(property_id)
+        if lead is not None:
+            capture_owner_snapshot(lead, reason=REASON_CONTACT_REPLACED, commit=False)
+
+        now = datetime.now(timezone.utc)
+        for link in unmatched:
+            link.role = 'former_owner'
+            link.is_primary = False
+            link.superseded_at = now
+        return len(unmatched)
 
     @staticmethod
     def _flat_phone_digits_from_lead(lead: Property) -> list[str]:
@@ -636,6 +773,8 @@ class ContactService:
             )
             if not exact and not fuzzy:
                 continue
+            if link.role not in ('owner', 'former_owner'):
+                continue
             # Prefer the more complete first name (e.g. JOSEPH A over Joseph)
             if (first_name or '').strip() and len((first_name or '').strip()) > len(
                 (contact.first_name or '').strip()
@@ -643,12 +782,13 @@ class ContactService:
                 contact.first_name = first_name
             if (last_name or '').strip() and not (contact.last_name or '').strip():
                 contact.last_name = last_name
-            if is_primary and not link.is_primary:
+            if link.role == 'former_owner':
+                self._reactivate_owner_link(link, property_id, is_primary=is_primary)
+            elif is_primary:
                 PropertyContact.query.filter_by(
                     property_id=property_id, is_primary=True,
                 ).update({'is_primary': False})
                 link.is_primary = True
-                link.role = link.role or 'owner'
             return contact, link
 
         # Cross-property reuse: same user + phone/email (+ name gate) on another building.
@@ -662,43 +802,57 @@ class ContactService:
         if reused is not None:
             for contact, link in existing_rows:
                 if contact.id == reused.id:
-                    if is_primary and not link.is_primary:
+                    if link.role not in ('owner', 'former_owner'):
+                        # Keep attorney/manager/etc. intact — do not convert to owner.
+                        reused = None
+                        break
+                    if link.role == 'former_owner':
+                        self._reactivate_owner_link(link, property_id, is_primary=is_primary)
+                    elif is_primary:
                         PropertyContact.query.filter_by(
                             property_id=property_id, is_primary=True,
                         ).update({'is_primary': False})
                         link.is_primary = True
-                        link.role = link.role or 'owner'
                     return reused, link
-            if is_primary:
-                PropertyContact.query.filter_by(
-                    property_id=property_id, is_primary=True,
-                ).update({'is_primary': False})
-            if (first_name or '').strip() and len((first_name or '').strip()) > len(
-                (reused.first_name or '').strip()
-            ):
-                reused.first_name = first_name
-            if (last_name or '').strip() and not (reused.last_name or '').strip():
-                reused.last_name = last_name
-            link = PropertyContact(
-                property_id=property_id,
-                contact_id=reused.id,
-                role='owner',
-                is_primary=is_primary or not existing_rows,
-            )
-            try:
-                with db.session.begin_nested():
-                    db.session.add(link)
-                    db.session.flush()
-            except sqlalchemy.exc.IntegrityError:
-                existing = (
-                    PropertyContact.query
-                    .filter_by(property_id=property_id, contact_id=reused.id)
-                    .first()
+            if reused is not None:
+                if is_primary:
+                    PropertyContact.query.filter_by(
+                        property_id=property_id, is_primary=True,
+                    ).update({'is_primary': False})
+                if (first_name or '').strip() and len((first_name or '').strip()) > len(
+                    (reused.first_name or '').strip()
+                ):
+                    reused.first_name = first_name
+                if (last_name or '').strip() and not (reused.last_name or '').strip():
+                    reused.last_name = last_name
+                link = PropertyContact(
+                    property_id=property_id,
+                    contact_id=reused.id,
+                    role='owner',
+                    is_primary=is_primary or not existing_rows,
                 )
-                if existing is None:
-                    raise
-                return reused, existing
-            return reused, link
+                try:
+                    with db.session.begin_nested():
+                        db.session.add(link)
+                        db.session.flush()
+                except sqlalchemy.exc.IntegrityError:
+                    existing = (
+                        PropertyContact.query
+                        .filter_by(property_id=property_id, contact_id=reused.id)
+                        .first()
+                    )
+                    if existing is None:
+                        raise
+                    if existing.role not in ('owner', 'former_owner'):
+                        # Race: non-owner link appeared — create a distinct owner contact.
+                        reused = None
+                    else:
+                        self._reactivate_owner_link(
+                            existing, property_id, is_primary=is_primary,
+                        )
+                        return reused, existing
+                else:
+                    return reused, link
 
         if is_primary:
             PropertyContact.query.filter_by(

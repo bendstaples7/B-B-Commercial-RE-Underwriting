@@ -154,25 +154,72 @@ def test_resolve_sale_date_meta_same_run_success_wins_over_no_results(app):
         db.session.add(lead)
         db.session.flush()
         checked_at = datetime(2026, 7, 16, 12, 0, 0)
+        later = datetime(2026, 7, 16, 12, 0, 5)
         db.session.add_all([
             EnrichmentRecord(
                 lead_id=lead.id,
                 data_source_id=assessor.id,
                 status='success',
+                retrieved_data={'acquisition_date': '2018-06-12'},
                 created_at=checked_at,
             ),
             EnrichmentRecord(
                 lead_id=lead.id,
                 data_source_id=commercial.id,
                 status='no_results',
-                created_at=checked_at,
+                created_at=later,
             ),
         ])
         db.session.commit()
 
         meta = resolve_sale_date_meta(lead)
         assert meta['status'] == 'success'
-        assert meta['last_checked_at'].startswith('2026-07-16')
+        assert meta['last_checked_at'].startswith('2026-07-16T12:00:00')
+
+
+def test_resolve_sale_date_meta_assessor_without_sale_keys_is_no_sale(app):
+    with app.app_context():
+        from app import db
+        from app.models.enrichment import DataSource, EnrichmentRecord
+
+        lead = Lead(
+            property_street='5 No Sale Keys St',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            most_recent_sale='7/17/2024',
+        )
+        assessor = DataSource.query.filter_by(name='cook_county_assessor').first()
+        if assessor is None:
+            assessor = DataSource(name='cook_county_assessor', is_active=True)
+            db.session.add(assessor)
+        commercial = DataSource.query.filter_by(name='cook_county_commercial_valuation').first()
+        if commercial is None:
+            commercial = DataSource(name='cook_county_commercial_valuation', is_active=True)
+            db.session.add(commercial)
+        db.session.add(lead)
+        db.session.flush()
+        db.session.add_all([
+            EnrichmentRecord(
+                lead_id=lead.id,
+                data_source_id=assessor.id,
+                status='success',
+                retrieved_data={'square_footage': 3300, 'year_built': 1896},
+                created_at=datetime(2026, 7, 17, 18, 46, 1),
+            ),
+            EnrichmentRecord(
+                lead_id=lead.id,
+                data_source_id=commercial.id,
+                status='no_results',
+                created_at=datetime(2026, 7, 17, 18, 46, 11),
+            ),
+        ])
+        db.session.commit()
+
+        meta = resolve_sale_date_meta(lead)
+        assert meta['status'] == 'no_sale'
+        assert meta['last_checked_at'].startswith('2026-07-17T18:46:01')
+        assert meta['source'] == 'Cook County records'
 
 
 def test_resolve_sale_date_meta_ignores_future_imported_sale(app):

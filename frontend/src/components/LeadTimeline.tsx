@@ -5,6 +5,9 @@
  */
 import { useState, useEffect, type KeyboardEvent, type MouseEvent } from 'react'
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Avatar,
   Box,
   Button,
@@ -34,6 +37,9 @@ import { stripHtmlTags } from '@/utils/helpers'
 // Number of characters before the summary is considered "long" and gets a
 // collapse toggle.
 const SUMMARY_COLLAPSE_THRESHOLD = 120
+
+/** Entries shown before "Show older activity" inside the accordion. */
+export const TIMELINE_PREVIEW_COUNT = 5
 
 /**
  * Derive display text for a timeline entry, falling back to metadata when summary is empty.
@@ -520,6 +526,7 @@ export interface LeadTimelineProps {
  * - HubSpot-sourced entries show an orange "H" chip and have no edit/delete controls.
  */
 export function LeadTimeline({
+  leadId,
   initialEntries,
   initialTotal,
   onLoadMore,
@@ -530,6 +537,7 @@ export function LeadTimeline({
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [showAllLoaded, setShowAllLoaded] = useState(false)
 
   useEffect(() => {
     setEntries(initialEntries)
@@ -537,7 +545,19 @@ export function LeadTimeline({
     setPage(1)
   }, [initialEntries, initialTotal])
 
+  // Only collapse the expanded timeline when navigating to a different lead —
+  // not when the same lead's entries refresh after an activity log.
+  useEffect(() => {
+    setShowAllLoaded(false)
+    setPage(1)
+  }, [leadId])
+
   const hasMore = entries.length < total
+  const inPreview = !showAllLoaded && total > TIMELINE_PREVIEW_COUNT
+  const visibleEntries = inPreview
+    ? entries.slice(0, TIMELINE_PREVIEW_COUNT)
+    : entries
+  const olderRemaining = Math.max(0, total - TIMELINE_PREVIEW_COUNT)
 
   const handleLoadMore = async () => {
     if (!onLoadMore || loading) return
@@ -550,6 +570,7 @@ export function LeadTimeline({
       setEntries((prev) => [...prev, ...result.entries])
       setTotal(result.total)
       setPage(nextPage)
+      setShowAllLoaded(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load more entries.')
     } finally {
@@ -557,86 +578,118 @@ export function LeadTimeline({
     }
   }
 
+  const handleShowOlder = () => {
+    setShowAllLoaded(true)
+  }
+
   return (
     <Box data-testid="lead-timeline">
-      {/* Section header */}
-      <Typography variant="subtitle1" fontWeight="bold" sx={{ mb: 1 }}>
-        Timeline
-        {total > 0 && (
-          <Chip
-            label={total}
-            size="small"
-            sx={{ ml: 1 }}
-            data-testid="timeline-total-badge"
-          />
-        )}
-      </Typography>
-
-      {/* Empty state */}
-      {entries.length === 0 && (
-        <Typography
-          variant="body2"
-          color="text.secondary"
-          data-testid="timeline-empty"
+      <Accordion
+        defaultExpanded
+        disableGutters
+        elevation={0}
+        sx={{
+          bgcolor: 'transparent',
+          '&:before': { display: 'none' },
+          border: 1,
+          borderColor: 'divider',
+          borderRadius: 1,
+        }}
+        data-testid="timeline-accordion"
+      >
+        <AccordionSummary
+          expandIcon={<ExpandMoreIcon />}
+          aria-controls="lead-timeline-content"
+          id="lead-timeline-header"
+          sx={{ minHeight: 44, px: 1.5, '& .MuiAccordionSummary-content': { my: 1 } }}
         >
-          No timeline entries yet.
-        </Typography>
-      )}
-
-      {/* Entry list */}
-      {entries.length > 0 && (
-        <List dense disablePadding data-testid="timeline-list">
-          {entries.map((entry, index) => (
-            <Box key={entry.id}>
-              {index > 0 && <Divider component="li" />}
-              <TimelineEntryRow
-                entry={entry}
-                highlighted={highlightEntryId != null && entry.id === highlightEntryId}
+          <Typography variant="subtitle1" fontWeight="bold" component="span">
+            Timeline
+            {total > 0 && (
+              <Chip
+                label={total}
+                size="small"
+                sx={{ ml: 1 }}
+                data-testid="timeline-total-badge"
               />
+            )}
+          </Typography>
+        </AccordionSummary>
+        <AccordionDetails sx={{ px: 1.5, pt: 0, pb: 1.5 }}>
+          {entries.length === 0 && (
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              data-testid="timeline-empty"
+            >
+              No timeline entries yet.
+            </Typography>
+          )}
+
+          {entries.length > 0 && (
+            <List dense disablePadding data-testid="timeline-list">
+              {visibleEntries.map((entry, index) => (
+                <Box key={entry.id}>
+                  {index > 0 && <Divider component="li" />}
+                  <TimelineEntryRow
+                    entry={entry}
+                    highlighted={highlightEntryId != null && entry.id === highlightEntryId}
+                  />
+                </Box>
+              ))}
+            </List>
+          )}
+
+          {inPreview && (
+            <Box sx={{ mt: 1, textAlign: 'center' }}>
+              <Button
+                size="small"
+                onClick={handleShowOlder}
+                data-testid="timeline-show-older-btn"
+              >
+                Show older activity ({olderRemaining} more)
+              </Button>
             </Box>
-          ))}
-        </List>
-      )}
+          )}
 
-      {/* Load more */}
-      {hasMore && onLoadMore && (
-        <Box sx={{ mt: 1, textAlign: 'center' }} data-testid="load-more-container">
-          <Button
-            size="small"
-            variant="outlined"
-            onClick={handleLoadMore}
-            disabled={loading}
-            startIcon={loading ? <CircularProgress size={14} color="inherit" /> : undefined}
-            data-testid="load-more-btn"
-          >
-            {loading ? 'Loading…' : `Load more (${total - entries.length} remaining)`}
-          </Button>
-        </Box>
-      )}
+          {!inPreview && hasMore && onLoadMore && (
+            <Box sx={{ mt: 1, textAlign: 'center' }} data-testid="load-more-container">
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={handleLoadMore}
+                disabled={loading}
+                startIcon={loading ? <CircularProgress size={14} color="inherit" /> : undefined}
+                data-testid="load-more-btn"
+              >
+                {loading ? 'Loading…' : `Load more (${total - entries.length} remaining)`}
+              </Button>
+            </Box>
+          )}
 
-      {/* Pagination info */}
-      {entries.length > 0 && (
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ mt: 1, display: 'block' }}
-          data-testid="timeline-showing"
-        >
-          Showing {entries.length} of {total}
-        </Typography>
-      )}
+          {entries.length > 0 && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ mt: 1, display: 'block' }}
+              data-testid="timeline-showing"
+            >
+              Showing {visibleEntries.length} of {total}
+            </Typography>
+          )}
 
-      {/* Load more error */}
-      {error && (
-        <Typography
-          variant="caption"
-          color="error"
-          sx={{ mt: 1, display: 'block' }}
-          data-testid="load-more-error"
-        >
-          {error}
-        </Typography>
-      )}
+          {error && (
+            <Typography
+              variant="caption"
+              color="error"
+              sx={{ mt: 1, display: 'block' }}
+              data-testid="load-more-error"
+            >
+              {error}
+            </Typography>
+          )}
+        </AccordionDetails>
+      </Accordion>
     </Box>
   )
 }

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  REASON_ALREADY_AWAITING_SKIP_TRACE,
   REASON_ALREADY_SKIP_TRACE,
   REASON_DNC_BLOCKS_OUTREACH,
   REASON_MAIL_ALREADY_QUEUED,
@@ -25,10 +24,12 @@ describe('actionEligibility', () => {
       alreadyDone: true,
       reasonCode: REASON_ALREADY_SKIP_TRACE,
     })
+  })
+
+  it('allows move_to_skip_trace when awaiting skip trace after a hold', () => {
     expect(evaluateMoveToSkipTrace('awaiting_skip_trace')).toMatchObject({
-      ok: false,
-      alreadyDone: true,
-      reasonCode: REASON_ALREADY_AWAITING_SKIP_TRACE,
+      ok: true,
+      alreadyDone: false,
     })
   })
 
@@ -76,6 +77,11 @@ describe('actionEligibility', () => {
       unavailableReasonForQuickAction('move_to_skip_trace', {
         leadStatus: 'awaiting_skip_trace',
       }),
-    ).toBe('Already awaiting skip trace')
+    ).toBeNull()
+    expect(
+      unavailableReasonForQuickAction('move_to_skip_trace', {
+        leadStatus: 'skip_trace',
+      }),
+    ).toBeNull()
   })
 })

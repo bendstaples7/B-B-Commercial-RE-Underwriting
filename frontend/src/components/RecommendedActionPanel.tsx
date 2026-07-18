@@ -358,6 +358,26 @@ export function RecommendedActionPanel({
     </Stack>
   )
 
+  const renderAlreadyInSkipTraceControls = (testIdPrefix: string) => {
+    const skipEval = evaluateMoveToSkipTrace(leadStatus)
+    return (
+      <Button
+        key="already-skip-trace"
+        variant="outlined"
+        size="small"
+        disabled
+        title={skipEval.message ?? 'Already in the Skip Trace work queue'}
+        data-testid={`${testIdPrefix}-already-skip-trace`}
+        sx={{
+          width: { xs: '100%', sm: 'auto' },
+          justifyContent: { xs: 'flex-start', sm: 'center' },
+        }}
+      >
+        In Skip Trace
+      </Button>
+    )
+  }
+
   const renderUniversalActions = (raButtons: ActionButton[] = []) => (
     <Box sx={{ mb: raButtons.length > 0 ? 2 : 0, mt: 2, maxWidth: '100%' }}>
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
@@ -374,6 +394,12 @@ export function RecommendedActionPanel({
         {universalActions.map((btn) => {
           if (btn.action === 'add_to_mail_batch' && isInMailBatch) {
             return renderInMailBatchControls('ra-universal-btn')
+          }
+          if (
+            btn.action === 'move_to_skip_trace'
+            && evaluateMoveToSkipTrace(leadStatus).alreadyDone
+          ) {
+            return renderAlreadyInSkipTraceControls('ra-universal-btn')
           }
           return renderActionButton(btn, 'ra-universal-btn')
         })}
@@ -430,7 +456,10 @@ export function RecommendedActionPanel({
 
   const { value, label, explanation, recommended_contact_method: contactMethod, outreach_contact: outreachContact, winning_rule_label: winningRuleLabel } = recommendedAction
   const hasOpenTasks = openTasks.length > 0
-  const showTaskFallback = value === 'nurture' && hasOpenTasks
+  const skipTraceOwnerTask = openTasks.find((t) => t.task_type === 'skip_trace_owner')
+  const hasOpenSkipTraceOwner = Boolean(skipTraceOwnerTask)
+  const framingTask = skipTraceOwnerTask ?? openTasks[0]
+  const showTaskFallback = (value === 'nurture' || hasOpenSkipTraceOwner) && hasOpenTasks
   const displayLabel = showTaskFallback
     ? 'Follow up on next task'
     : label ?? (value ? outreachDisplayLabel(value, contactMethod) : 'No recommended action')
@@ -478,14 +507,14 @@ export function RecommendedActionPanel({
         </Typography>
       )}
 
-      {showTaskFallback && (
+      {showTaskFallback && framingTask && (
         <Typography
           variant="body2"
           color="text.secondary"
           sx={{ mb: 2 }}
           data-testid="ra-next-task-title"
         >
-          {openTasks[0].title}
+          {framingTask.title}
         </Typography>
       )}
 
@@ -497,11 +526,11 @@ export function RecommendedActionPanel({
         <OutreachContactMissingHint channel={contactMethod as OutreachContact['channel']} />
       )}
 
-      {!hideRaHeading && !showTaskFallback && explanation && (
+      {!hideRaHeading && explanation && (
         <Typography
           variant="body2"
           color="text.secondary"
-          sx={{ mb: winningRuleLabel ? 1 : 2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+          sx={{ mb: winningRuleLabel && !showTaskFallback ? 1 : 2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}
           data-testid="ra-explanation"
         >
           {explanation}

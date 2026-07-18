@@ -22,12 +22,15 @@ class PropertyContact(db.Model):
     role = db.Column(
         db.Enum(
             'owner', 'property_manager', 'attorney', 'family_member', 'other',
-            name='property_contact_role_enum'
+            'former_owner',
+            name='property_contact_role_enum',
+            create_type=False,
         ),
         nullable=False,
         default='owner'
     )
     is_primary = db.Column(db.Boolean, nullable=False, default=False)
+    superseded_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         db.UniqueConstraint('property_id', 'contact_id', name='uq_property_contact'),

@@ -20,6 +20,7 @@ from app.models.contact import Contact
 from app.models.contact_phone import ContactPhone
 from app.models.contact_email import ContactEmail
 from app.models.property_contact import PropertyContact
+from app.models.lead_owner_snapshot import LeadOwnerSnapshot
 
 # Lead management models
 from app.models.lead import Property, Lead, LeadAuditTrail
@@ -156,6 +157,7 @@ __all__ = [
     'ContactPhone',
     'ContactEmail',
     'PropertyContact',
+    'LeadOwnerSnapshot',
     # Lead management
     'Property',
     'Lead',

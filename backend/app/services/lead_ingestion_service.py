@@ -210,12 +210,15 @@ class LeadIngestionService:
         lead,
         connector: GISConnector,
         import_job_id: int | None = None,
+        pin_hint: str | None = None,
     ) -> dict:
         """Attempt a GIS parcel lookup and populate null fields on the lead.
 
         Lookup strategy (Requirement 8.1):
         1. Try lookup_by_address using lead.property_street.
-        2. If no result and lead.county_assessor_pin is set, try lookup_by_pin.
+        2. If no result and lead.county_assessor_pin (or *pin_hint*) is set,
+           try lookup_by_pin.  *pin_hint* is used for lookup only and is not
+           written to the lead before a parcel match is confirmed.
 
         On match (Requirement 8.2, 8.3):
         - Populate each GIS field on the lead only when the current value is null.
@@ -247,6 +250,7 @@ class LeadIngestionService:
             'source_type': lead.source_type,
             'match_found': False,
             'fields_populated': 0,
+            'parcel_pin': None,
             'error': None,
         }
 
@@ -255,8 +259,13 @@ class LeadIngestionService:
             parcel = connector.lookup_by_address(lead.property_street or '')
 
             # Fallback: by PIN when address lookup returns nothing
-            if parcel is None and lead.county_assessor_pin:
-                parcel = connector.lookup_by_pin(lead.county_assessor_pin)
+            pin_for_lookup = (
+                (lead.county_assessor_pin or '').strip()
+                or (pin_hint or '').strip()
+                or None
+            )
+            if parcel is None and pin_for_lookup:
+                parcel = connector.lookup_by_pin(pin_for_lookup)
 
             if parcel is None:
                 # No match found (Requirement 8.4)
@@ -264,6 +273,8 @@ class LeadIngestionService:
                 lead.has_property_match = False          # Req 6.2, 6.3
                 _append_note(lead, 'GIS match not found')
                 return outcome
+
+            outcome['parcel_pin'] = getattr(parcel, 'county_assessor_pin', None)
 
             # Match found — populate null fields (Requirement 8.2)
             fields_populated = 0

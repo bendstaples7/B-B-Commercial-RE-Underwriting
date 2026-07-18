@@ -93,7 +93,13 @@ class PropertyMatchReviewService:
             'message': None,
         }
 
-    def approve_match(self, lead_id: int, *, actor: str = 'anonymous') -> dict:
+    def approve_match(
+        self,
+        lead_id: int,
+        *,
+        actor: str = 'anonymous',
+        pin: str | None = None,
+    ) -> dict:
         lead = db.session.get(Lead, lead_id)
         if lead is None:
             raise ValueError(f'Lead {lead_id} not found')
@@ -102,23 +108,73 @@ class PropertyMatchReviewService:
         if connector is None:
             raise ValueError('No GIS connector available')
 
-        outcome = self._ingestion_service()._enrich_with_gis(lead, connector, import_job_id=None)
-        if not outcome.get('match_found'):
-            raise ValueError('GIS match could not be applied')
-
-        lead.needs_skip_trace = False
-        db.session.add(lead)
-        entry = LeadTimelineEntry(
-            lead_id=lead_id,
-            event_type='property_match_approved',
-            occurred_at=dt.datetime.now(dt.timezone.utc),
-            source='manual',
-            actor=actor,
-            summary='Property match approved from Missing Property Match queue.',
-            event_metadata={'connector': outcome.get('connector_name')},
+        # Preserve skip-trace handoff when the lead is already in that pipeline
+        # (Command Center "Look up PIN" / Apply must not wipe needs_skip_trace).
+        # Missing-property-match queue leads often have needs_skip_trace=True from
+        # a prior GIS miss — those still clear the flag on approve.
+        preserve_skip_trace = lead.lead_status in (
+            'skip_trace',
+            'awaiting_skip_trace',
         )
-        db.session.add(entry)
-        db.session.commit()
+
+        # Sidebar Apply may pass a previewed PIN for lookup_by_pin fallback when
+        # address lookup is flaky — do not persist it until GIS confirms the parcel.
+        pin_value = (pin or '').strip() or None
+        is_cook = getattr(connector, 'market', None) == 'cook_county_il'
+        if pin_value and is_cook:
+            from app.services.plugins.pin_utils import normalize_pin_for_socrata
+            digits = normalize_pin_for_socrata(pin_value)
+            if len(digits) != 14 or not digits.isdigit():
+                raise ValueError('Invalid Cook County PIN')
+
+        try:
+            outcome = self._ingestion_service()._enrich_with_gis(
+                lead, connector, import_job_id=None, pin_hint=pin_value,
+            )
+            if not outcome.get('match_found'):
+                db.session.rollback()
+                raise ValueError('GIS match could not be applied')
+
+            from app.services.plugins.pin_utils import (
+                format_pin_for_storage,
+                normalize_pin_for_socrata,
+            )
+            parcel_pin = outcome.get('parcel_pin') or lead.county_assessor_pin
+            if pin_value:
+                resolved = normalize_pin_for_socrata(parcel_pin or '')
+                submitted = normalize_pin_for_socrata(pin_value)
+                if resolved and submitted and resolved != submitted:
+                    db.session.rollback()
+                    raise ValueError('Submitted PIN does not match the resolved parcel')
+                # Persist connector PIN (preferred) or the validated submitted PIN.
+                store_raw = parcel_pin or pin_value
+                if is_cook:
+                    lead.county_assessor_pin = format_pin_for_storage(store_raw)
+                else:
+                    lead.county_assessor_pin = (store_raw or '').strip() or None
+
+            if not preserve_skip_trace:
+                lead.needs_skip_trace = False
+            db.session.add(lead)
+            entry = LeadTimelineEntry(
+                lead_id=lead_id,
+                event_type='property_match_approved',
+                occurred_at=dt.datetime.now(dt.timezone.utc),
+                source='manual',
+                actor=actor,
+                summary='Property match approved from Missing Property Match queue.',
+                event_metadata={
+                    'connector': outcome.get('connector_name'),
+                    'pin': lead.county_assessor_pin,
+                },
+            )
+            db.session.add(entry)
+            db.session.commit()
+        except ValueError:
+            raise
+        except Exception:
+            db.session.rollback()
+            raise
 
         refresh_lead_scoring(lead_id)
         db.session.refresh(lead)
@@ -135,10 +191,15 @@ class PropertyMatchReviewService:
                     lead_id, exc,
                 )
 
+        recommended = lead.recommended_action
+        if recommended is not None and hasattr(recommended, 'value'):
+            recommended = recommended.value
+
         return {
             'lead_id': lead_id,
             'has_property_match': lead.has_property_match,
-            'recommended_action': lead.recommended_action.value if lead.recommended_action else None,
+            'county_assessor_pin': lead.county_assessor_pin,
+            'recommended_action': recommended,
             'removed_from_queue': True,
         }
 

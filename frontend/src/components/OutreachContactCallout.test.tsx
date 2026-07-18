@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@/test/testUtils'
+import { render, screen, waitFor } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
 import { OutreachContactCallout, OutreachContactInline } from './OutreachContactCallout'
 import type { OutreachContact } from '@/types'
@@ -75,8 +75,29 @@ describe('OutreachContactCallout', () => {
     }
     render(<OutreachContactCallout contact={contact} />)
 
-    await user.click(screen.getByTestId('outreach-contact-copy'))
+    const copyBtn = screen.getByTestId('outreach-contact-copy')
+    expect(copyBtn).toHaveAttribute('aria-label', 'Copy phone contact')
+    await user.click(copyBtn)
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('+15551234567')
+  })
+
+  it('swallows clipboard write failures without throwing', async () => {
+    vi.stubGlobal('navigator', {
+      clipboard: { writeText: vi.fn().mockRejectedValue(new Error('denied')) },
+    })
+    const contact: OutreachContact = {
+      channel: 'email',
+      label: 'Email',
+      value: 'owner@example.com',
+      display: 'owner@example.com',
+      href: 'mailto:owner@example.com',
+    }
+    render(<OutreachContactCallout contact={contact} />)
+    await user.click(screen.getByTestId('outreach-contact-copy'))
+    expect(screen.getByTestId('outreach-contact-copy')).toHaveAttribute(
+      'aria-label',
+      'Copy email contact',
+    )
   })
 
   it('renders compact mode without copy button', () => {
@@ -108,5 +129,26 @@ describe('OutreachContactInline', () => {
     expect(screen.getByTestId('outreach-contact-inline')).toBeInTheDocument()
     expect(screen.getByTestId('outreach-contact-link')).toHaveTextContent('(555) 123-4567')
     expect(screen.queryByTestId('outreach-contact-callout')).not.toBeInTheDocument()
+  })
+
+  it('copies phone digits via the inline copy control', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    const contact: OutreachContact = {
+      channel: 'phone',
+      label: 'Call',
+      value: '(555) 123-4567',
+      display: '(555) 123-4567',
+      href: 'tel:+15551234567',
+    }
+    render(<OutreachContactInline contact={contact} />)
+
+    await user.click(screen.getByTestId('outreach-contact-copy'))
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalled()
+    })
+    const copied = writeText.mock.calls[0][0] as string
+    expect(copied.replace(/\D/g, '')).toContain('5551234567')
   })
 })

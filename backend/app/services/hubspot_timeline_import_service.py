@@ -117,6 +117,17 @@ class HubSpotTimelineImportService:
             elif disposition is not None and not looks_like_uuid(disposition):
                 activity['disposition'] = str(disposition)
                 activity['outcome'] = str(disposition)
+            for dial_key in (
+                'toNumber',
+                'fromNumber',
+                'phoneNumber',
+                'hs_call_to_number',
+                'hs_call_from_number',
+            ):
+                dialed = metadata.get(dial_key)
+                if dialed and not isinstance(dialed, (dict, list)):
+                    activity['phone_number'] = str(dialed).strip()
+                    break
         elif isinstance(metadata, dict) and metadata:
             disposition = (
                 metadata.get('disposition')

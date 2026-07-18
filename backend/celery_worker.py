@@ -169,6 +169,12 @@ celery.conf.update(
             'schedule': crontab(hour='3,9,15,21', minute=30),
             'options': {'expires': 3600},
         },
+        # Sale-date-focused verification — hourly assessor lane with Redis cursor.
+        'cook-county-sale-date-verification': {
+            'task': 'cook_county.backfill_sale_dates',
+            'schedule': crontab(minute=15),
+            'options': {'expires': 3300},
+        },
         # Nightly supporting-data invariants — catalog gaps / enrichment silence.
         'cook-county-enrichment-invariants': {
             'task': 'cook_county.enrichment_invariants',
@@ -611,6 +617,59 @@ def cook_county_backfill_enrichment_task(self):
     except Exception as exc:
         _logger.error("cook_county.backfill_enrichment failed: %s", exc)
         raise
+
+
+@celery.task(bind=True, name='cook_county.backfill_sale_dates')
+def cook_county_backfill_sale_dates_task(self):
+    """Hourly task: assessor-focused sale-date verification with Redis cursor."""
+    import logging
+    _logger = logging.getLogger('celery.cook_county.backfill_sale_dates')
+
+    lock_key = 'cook_county:sale_date_backfill_lock'
+    lock_ttl_seconds = 50 * 60
+    lock_token: str | None = None
+
+    try:
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            from app.services.deploy_sync_policy import (
+                _redis_client,
+                try_claim_redis_key,
+            )
+            from app.services.cook_county_enrichment_service import (
+                backfill_sale_date_verification,
+            )
+
+            client = _redis_client()
+            if client is not None:
+                lock_token = try_claim_redis_key(
+                    lock_key, ttl_seconds=lock_ttl_seconds,
+                )
+                if not lock_token:
+                    _logger.info(
+                        "cook_county.backfill_sale_dates: skipped (lock held)"
+                    )
+                    return {'skipped': True, 'reason': 'lock_held'}
+
+            summary = backfill_sale_date_verification()
+            _logger.info("cook_county.backfill_sale_dates: %s", summary)
+            return summary
+    except Exception as exc:
+        _logger.error("cook_county.backfill_sale_dates failed: %s", exc)
+        raise
+    finally:
+        if lock_token:
+            try:
+                from app.services.deploy_sync_policy import (
+                    release_redis_key_if_token,
+                )
+                release_redis_key_if_token(lock_key, lock_token)
+            except Exception as release_exc:
+                _logger.warning(
+                    "cook_county.backfill_sale_dates: failed to release lock: %s",
+                    release_exc,
+                )
 
 
 @celery.task(bind=True, name='cook_county.enrichment_invariants')
@@ -1503,6 +1562,7 @@ REQUIRED_TASKS = {
     'building_ownership.backfill_commercial',
     'cook_county.enrich_lead',
     'cook_county.backfill_enrichment',
+    'cook_county.backfill_sale_dates',
     'cook_county.enrichment_invariants',
     'motivation.backfill_signals',
     'gis.backfill_property_matches',

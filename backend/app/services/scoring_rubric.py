@@ -204,6 +204,32 @@ def format_last_sale_at(lead: Lead) -> str | None:
     return sale.isoformat()
 
 
+def contacts_likely_prior_owner(lead: Lead) -> bool:
+    """True when a recent sale is newer than the last completed skip-trace.
+
+    Uses the same recent-sale window as mail hold (``RECENT_SALE_SUPPRESSION_DAYS``).
+    Default assumption: contact rows may still describe the prior owner until
+    ``date_skip_traced`` is on/after the sale date.
+    """
+    sale = effective_acquisition_date(lead)
+    if sale is None or sale > date.today():
+        return False
+    if (date.today() - sale).days >= RECENT_SALE_SUPPRESSION_DAYS:
+        return False
+    skip_traced = getattr(lead, 'date_skip_traced', None)
+    if skip_traced is None:
+        return True
+    skip_day = skip_traced.date() if hasattr(skip_traced, 'date') else skip_traced
+    return skip_day < sale
+
+
+def contacts_stale_since(lead: Lead) -> str | None:
+    """ISO sale date that makes contacts stale, or None when not stale."""
+    if not contacts_likely_prior_owner(lead):
+        return None
+    return format_last_sale_at(lead)
+
+
 def display_most_recent_sale(lead: Lead) -> str | None:
     """Single UI display value using the newest valid sale date."""
     effective = effective_acquisition_date(lead)
@@ -230,6 +256,78 @@ def humanize_sale_date_source(changed_by: str | None) -> str | None:
     return changed_by
 
 
+_SALE_RETRIEVED_KEYS = frozenset({
+    'acquisition_date',
+    'most_recent_sale',
+    'most_recent_sale_price',
+})
+
+
+def _retrieved_data_has_sale_fields(retrieved_data) -> bool:
+    if not isinstance(retrieved_data, dict):
+        return False
+    for key in _SALE_RETRIEVED_KEYS:
+        value = retrieved_data.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return True
+    return False
+
+
+def _sale_probe_status_from_enrichment(enrich, *, is_assessor: bool) -> str | None:
+    """Map an enrichment row to a sale-date UI status.
+
+    Assessor ``success`` / ``no_results`` without sale keys means the parcel
+    sale probe ran empty — ``no_sale``. Commercial valuation must never claim
+    ``no_sale`` (it is not the parcel-sales probe).
+    """
+    if enrich is None:
+        return None
+    raw = getattr(enrich, 'status', None)
+    if raw == 'failed':
+        return 'failed'
+    has_sale = _retrieved_data_has_sale_fields(getattr(enrich, 'retrieved_data', None))
+    if is_assessor and raw in ('success', 'no_results'):
+        return 'success' if has_sale else 'no_sale'
+    if raw == 'success':
+        return 'success' if has_sale else 'no_results'
+    if raw == 'no_results':
+        return 'no_results'
+    return raw
+
+
+def _pick_sale_probe_enrichment(lead_id: int, source_ids_by_name: dict[str, int]):
+    """Prefer assessor over commercial; return (record, is_assessor)."""
+    from app.models.enrichment import EnrichmentRecord
+
+    assessor_id = source_ids_by_name.get('cook_county_assessor')
+    commercial_id = source_ids_by_name.get('cook_county_commercial_valuation')
+
+    def _latest_for(source_id: int | None):
+        if source_id is None:
+            return None
+        return (
+            EnrichmentRecord.query
+            .filter(
+                EnrichmentRecord.lead_id == lead_id,
+                EnrichmentRecord.data_source_id == source_id,
+            )
+            .order_by(EnrichmentRecord.created_at.desc())
+            .first()
+        )
+
+    assessor = _latest_for(assessor_id)
+    if assessor is not None:
+        return assessor, True
+
+    commercial = _latest_for(commercial_id)
+    if commercial is None:
+        return None, False
+    return commercial, False
+
+
 def resolve_sale_date_meta(lead: Lead) -> dict:
     """Audit + enrichment freshness for sale-date fields shown in Command Center."""
     null_meta = {'last_updated_at': None, 'last_checked_at': None, 'source': None}
@@ -238,7 +336,7 @@ def resolve_sale_date_meta(lead: Lead) -> dict:
     if not has_app_context():
         return null_meta
 
-    from app.models.enrichment import DataSource, EnrichmentRecord
+    from app.models.enrichment import DataSource
     from app.models.lead import LeadAuditTrail
 
     lead_id = getattr(lead, 'id', None)
@@ -281,35 +379,30 @@ def resolve_sale_date_meta(lead: Lead) -> dict:
     last_updated_at = row.changed_at.isoformat() if row and row.changed_at else None
     source = humanize_sale_date_source(row.changed_by) if row else None
 
-    # Enrichment probe timestamp (even when sale fields did not change).
-    # ``no_results`` should still show as "checked" rather than "never verified".
-    assessor_source_ids = [
-        sid for (sid,) in (
+    # Sale-date probe: prefer cook_county_assessor. Commercial valuation is
+    # only a fallback when no assessor enrichment exists.
+    source_ids_by_name = {
+        name: sid
+        for sid, name in (
             DataSource.query
-            .with_entities(DataSource.id)
+            .with_entities(DataSource.id, DataSource.name)
             .filter(DataSource.name.in_((
                 'cook_county_assessor',
                 'cook_county_commercial_valuation',
             )))
             .all()
         )
-    ]
+    }
     last_checked_at = None
     enrichment_status = None
     enrichment_error = None
-    if assessor_source_ids:
-        enrich = (
-            EnrichmentRecord.query
-            .filter(
-                EnrichmentRecord.lead_id == lead_id,
-                EnrichmentRecord.data_source_id.in_(assessor_source_ids),
-            )
-            .order_by(EnrichmentRecord.created_at.desc())
-            .first()
-        )
+    if source_ids_by_name:
+        enrich, is_assessor = _pick_sale_probe_enrichment(lead_id, source_ids_by_name)
         if enrich and enrich.created_at:
             last_checked_at = enrich.created_at.isoformat()
-            enrichment_status = enrich.status
+            enrichment_status = _sale_probe_status_from_enrichment(
+                enrich, is_assessor=is_assessor,
+            )
             enrichment_error = getattr(enrich, 'error_reason', None)
             if source is None:
                 source = 'Cook County records'
@@ -780,6 +873,11 @@ def _flat_phone_confidences(lead: Lead) -> list[int]:
     return scores
 
 
+def _use_flat_contact_fields(lead: Lead) -> bool:
+    """Use flat phone/email unless contacts are still likely prior-owner stale."""
+    return not contacts_likely_prior_owner(lead)
+
+
 def _relational_phone_confidences(lead_id: int) -> list[int]:
     """Best-effort DB read of ContactPhone confidence for a property lead."""
     from app.services.phone_confidence_service import DEFAULT_CONFIDENCE
@@ -798,6 +896,7 @@ def _relational_phone_confidences(lead_id: int) -> list[int]:
                 FROM contact_phones cp
                 JOIN property_contacts pc ON pc.contact_id = cp.contact_id
                 WHERE pc.property_id = :lead_id
+                  AND (pc.role IS NULL OR pc.role <> 'former_owner')
                   AND cp.value IS NOT NULL
                   AND TRIM(cp.value) <> ''
             """),
@@ -815,10 +914,12 @@ def _relational_phone_confidences(lead_id: int) -> list[int]:
 
 def _best_phone_confidence(lead: Lead) -> int | None:
     """Highest phone confidence across relational contacts and flat slots."""
-    scores = list(_flat_phone_confidences(lead))
+    scores: list[int] = []
     lead_id = getattr(lead, "id", None)
     if isinstance(lead_id, int):
         scores.extend(_relational_phone_confidences(lead_id))
+    if _use_flat_contact_fields(lead):
+        scores.extend(_flat_phone_confidences(lead))
     if not scores:
         return None
     return max(scores)
@@ -842,7 +943,7 @@ def _has_flat_email(lead: Lead) -> bool:
 
 def _email_reachability(lead: Lead) -> tuple[float, bool, bool]:
     """Return (points, has_email, is_owner_or_primary)."""
-    has_flat = _has_flat_email(lead)
+    has_flat = _has_flat_email(lead) if _use_flat_contact_fields(lead) else False
     has_relational = False
     is_owner_or_primary = False
     lead_id = getattr(lead, "id", None)
@@ -861,6 +962,7 @@ def _email_reachability(lead: Lead) -> tuple[float, bool, bool]:
                     FROM contact_emails ce
                     JOIN property_contacts pc ON pc.contact_id = ce.contact_id
                     WHERE pc.property_id = :lead_id
+                      AND (pc.role IS NULL OR pc.role <> 'former_owner')
                       AND ce.value IS NOT NULL
                       AND TRIM(ce.value) <> ''
                 """),
@@ -944,6 +1046,7 @@ def batch_contact_reachability_scores(leads: list[Lead]) -> dict[int, tuple[floa
                 FROM contact_phones cp
                 JOIN property_contacts pc ON pc.contact_id = cp.contact_id
                 WHERE pc.property_id IN :lead_ids
+                  AND (pc.role IS NULL OR pc.role <> 'former_owner')
                   AND cp.value IS NOT NULL
                   AND TRIM(cp.value) <> ''
             """).bindparams(bindparam("lead_ids", expanding=True))
@@ -967,6 +1070,7 @@ def batch_contact_reachability_scores(leads: list[Lead]) -> dict[int, tuple[floa
                 FROM contact_emails ce
                 JOIN property_contacts pc ON pc.contact_id = ce.contact_id
                 WHERE pc.property_id IN :lead_ids
+                  AND (pc.role IS NULL OR pc.role <> 'former_owner')
                   AND ce.value IS NOT NULL
                   AND TRIM(ce.value) <> ''
             """).bindparams(bindparam("lead_ids", expanding=True))
@@ -994,10 +1098,12 @@ def batch_contact_reachability_scores(leads: list[Lead]) -> dict[int, tuple[floa
         if not isinstance(lead_id, int):
             continue
         scores = list(phone_confidences.get(lead_id, []))
-        scores.extend(_flat_phone_confidences(lead))
+        if _use_flat_contact_fields(lead):
+            scores.extend(_flat_phone_confidences(lead))
         best_confidence = max(scores) if scores else None
         has_relational_email, email_owner_primary = email_meta.get(lead_id, (False, False))
-        has_email = _has_flat_email(lead) or has_relational_email
+        has_flat_email = _has_flat_email(lead) if _use_flat_contact_fields(lead) else False
+        has_email = has_flat_email or has_relational_email
         out[lead_id] = _contact_reachability_from_values(
             best_confidence,
             has_email,

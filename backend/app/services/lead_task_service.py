@@ -343,8 +343,35 @@ class LeadTaskService:
                     LeadTask.id != task.id,
                 ).first()
                 lead.needs_skip_trace = another_open_handoff is not None
-                if not lead.needs_skip_trace and lead.date_skip_traced is None:
+                # Re-verification (e.g. after recent-sale hold) always refreshes
+                # the skip-trace stamp when the last handoff is completed.
+                if not lead.needs_skip_trace:
                     lead.date_skip_traced = date.today()
+                    # Same residential/mailable/not-recently-sold gate as scoring —
+                    # do not force commercial or address-less leads into mailing.
+                    from app.services.lead_scoring_engine import (
+                        _maybe_promote_skip_trace_to_mailing,
+                    )
+                    old_status = _maybe_promote_skip_trace_to_mailing(lead)
+                    if old_status is not None:
+                        db.session.add(LeadTimelineEntry(
+                            lead_id=lead_id,
+                            event_type='status_changed',
+                            occurred_at=datetime.now(timezone.utc),
+                            source='manual',
+                            actor=actor,
+                            summary=(
+                                f"Status changed from '{old_status}' to "
+                                "'mailing_no_contact_made' after skip-trace "
+                                "verification was completed."
+                            ),
+                            event_metadata={
+                                'previous_status': old_status,
+                                'new_status': 'mailing_no_contact_made',
+                                'reason': 'skip_trace_owner_completed',
+                                'task_id': task_id,
+                            },
+                        ))
                 db.session.add(lead)
 
         entry = LeadTimelineEntry(

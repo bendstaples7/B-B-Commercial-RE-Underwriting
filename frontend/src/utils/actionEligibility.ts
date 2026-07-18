@@ -48,11 +48,10 @@ function blocked(
 }
 
 export function evaluateMoveToSkipTrace(leadStatus: LeadStatus): ActionEligibilityResult {
+  // Only the Skip Trace work column is already-done. Awaiting Skip Trace
+  // (e.g. after a recent-sale hold) still needs Move to Skip Trace to enqueue.
   if (leadStatus === 'skip_trace') {
     return blocked(REASON_ALREADY_SKIP_TRACE, 'Already in Skip Trace', true)
-  }
-  if (leadStatus === 'awaiting_skip_trace') {
-    return blocked(REASON_ALREADY_AWAITING_SKIP_TRACE, 'Already awaiting skip trace', true)
   }
   if (TERMINAL_LEAD_STATUSES.includes(leadStatus)) {
     return blocked(REASON_TERMINAL_STATUS, 'Not available for this lead status')
@@ -129,6 +128,8 @@ export function unavailableReasonForQuickAction(
 ): string | null {
   if (action === 'move_to_skip_trace') {
     const r = evaluateMoveToSkipTrace(ctx.leadStatus)
+    // Already in Skip Trace shows alternate "In Skip Trace" control — not a gray Move title.
+    if (r.alreadyDone) return null
     return r.ok ? null : r.message
   }
   if (action === 'add_to_mail_batch') {
