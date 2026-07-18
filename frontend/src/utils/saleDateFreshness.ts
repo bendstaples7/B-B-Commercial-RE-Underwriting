@@ -6,20 +6,20 @@ export interface SaleDateMeta {
   error_reason?: string | null
 }
 
+export interface SaleDateFreshnessOptions {
+  /** True when Most Recent Sale shows a date (not None / empty). */
+  hasDisplayedSale?: boolean
+}
+
 /** How recently a sale-date check counts as "fresh" for the verified checkmark. */
 export const SALE_DATE_RECENT_VERIFICATION_DAYS = 30
 
-/**
- * True when Cook County (or equivalent) verification ran successfully within
- * `days` of `now`. Uses `last_checked_at` only — import updates do not count.
- */
-export function isSaleDateVerifiedWithinDays(
+function isRecentCheck(
   meta: SaleDateMeta | null | undefined,
-  days: number = SALE_DATE_RECENT_VERIFICATION_DAYS,
-  now: Date = new Date(),
+  days: number,
+  now: Date,
 ): boolean {
   if (!meta?.last_checked_at) return false
-  if (meta.status?.trim() === 'failed') return false
   const checked = new Date(meta.last_checked_at)
   if (Number.isNaN(checked.getTime())) return false
   const ageMs = now.getTime() - checked.getTime()
@@ -27,28 +27,62 @@ export function isSaleDateVerifiedWithinDays(
   return ageMs <= days * 24 * 60 * 60 * 1000
 }
 
-/** Muted caption for sale-date freshness, e.g. "Last checked Mar 2024 · Cook County records". */
-export function formatSaleDateFreshness(meta: SaleDateMeta | null | undefined): string | null {
-  const isChecked = Boolean(meta?.last_checked_at)
-  const stamp = meta?.last_checked_at || meta?.last_updated_at
-  if (!stamp) return null
+function formatMonthYear(stamp: string): string | null {
   const checked = new Date(stamp)
   if (Number.isNaN(checked.getTime())) return null
-  const monthYear = checked.toLocaleDateString(undefined, {
+  return checked.toLocaleDateString(undefined, {
     month: 'short',
     year: 'numeric',
     timeZone: 'UTC',
   })
-  const source = meta?.source?.trim()
+}
+
+/**
+ * True when Cook County verification confirmed a sale, or confirmed no sale
+ * while none is displayed. Uses `last_checked_at` only — import updates do not count.
+ */
+export function isSaleDateVerifiedWithinDays(
+  meta: SaleDateMeta | null | undefined,
+  days: number = SALE_DATE_RECENT_VERIFICATION_DAYS,
+  now: Date = new Date(),
+  options: SaleDateFreshnessOptions = {},
+): boolean {
+  if (!isRecentCheck(meta, days, now)) return false
   const status = meta?.status?.trim()
-  const suffix =
-    isChecked && status === 'no_results'
-      ? ' (no sale found)'
-      : isChecked && status === 'failed'
-        ? ' (check failed)'
-        : ''
-  const prefix = isChecked ? 'Last checked' : 'Updated'
-  return source
-    ? `${prefix} ${monthYear} · ${source}${suffix}`
-    : `${prefix} ${monthYear}${suffix}`
+  if (status === 'failed') return false
+  if (status === 'success') return true
+  if (status === 'no_sale') return options.hasDisplayedSale !== true
+  return false
+}
+
+/**
+ * One-line muted caption for sale-date freshness.
+ * Unconfirmed probes say "Cannot confirm as of …" — never "Last checked" alone.
+ */
+export function formatSaleDateFreshness(
+  meta: SaleDateMeta | null | undefined,
+  options: SaleDateFreshnessOptions = {},
+): string | null {
+  const isChecked = Boolean(meta?.last_checked_at)
+  const stamp = meta?.last_checked_at || meta?.last_updated_at
+  if (!stamp) return null
+  const monthYear = formatMonthYear(stamp)
+  if (!monthYear) return null
+  const status = meta?.status?.trim()
+
+  if (isChecked && status === 'failed') {
+    return `Check failed as of ${monthYear}`
+  }
+  if (isChecked && status === 'no_sale') {
+    return options.hasDisplayedSale === true
+      ? `Cannot confirm as of ${monthYear}`
+      : `No sale found as of ${monthYear}`
+  }
+  if (isChecked && status === 'success') {
+    return `Confirmed as of ${monthYear}`
+  }
+  if (isChecked) {
+    return `Checked as of ${monthYear}`
+  }
+  return `Updated ${monthYear}`
 }

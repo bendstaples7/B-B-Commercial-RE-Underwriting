@@ -461,6 +461,31 @@ export interface PropertyContactSummary {
   emails: Array<{ id: number; value: string; label: EmailLabel }>
 }
 
+/** Snapshot of owner/contact/mailing captured when contacts went stale or were replaced. */
+export interface PastOwnerSnapshot {
+  id: number
+  captured_at: string | null
+  reason: 'recent_sale' | 'contact_replaced' | string
+  sale_date?: string | null
+  owner_names: Array<{
+    contact_id?: number | null
+    first_name?: string | null
+    last_name?: string | null
+    role?: ContactRole | string | null
+    is_primary?: boolean
+  }>
+  phones: Array<{
+    value?: string | null
+    label?: string | null
+    confidence_score?: number | null
+  }>
+  emails: Array<{ value?: string | null; label?: string | null }>
+  mailing_address?: string | null
+  mailing_city?: string | null
+  mailing_state?: string | null
+  mailing_zip?: string | null
+}
+
 export interface PropertyDetail extends Property {
   motivation_score?: number | null;
   motivation_signal_summary?: MotivationSignalSummaryItem[];
@@ -1758,7 +1783,7 @@ export interface HubSpotSignal {
 // Contact Model Types
 // ---------------------------------------------------------------------------
 
-export type ContactRole = 'owner' | 'property_manager' | 'attorney' | 'family_member' | 'other'
+export type ContactRole = 'owner' | 'property_manager' | 'attorney' | 'family_member' | 'other' | 'former_owner'
 
 export type PhoneLabel = 'mobile' | 'home' | 'work' | 'other'
 
@@ -2097,6 +2122,12 @@ export interface CommandCenterPayload {
   owner_2_last_name?: string | null;
   /** Relational contacts — prefer over flat owner/phone/email fields when present. */
   contacts?: PropertyContactSummary[];
+  /** True when sale is newer than date_skip_traced (contacts may be prior owner). */
+  contacts_likely_prior_owner?: boolean;
+  /** ISO sale date that made contacts stale, when applicable. */
+  contacts_stale_since?: string | null;
+  /** Point-in-time past owner snapshots (mailing + contacts). */
+  past_owners?: PastOwnerSnapshot[];
   /** Linked companies / LLCs (HubSpot-style Organizations). */
   organizations?: PropertyOrganizationSummary[];
   /** Other buildings owned by the same person (not same-address duplicates). */
@@ -2160,6 +2191,12 @@ export interface CommandCenterPayload {
   mail_eligible_date?: string | null;
   most_recent_sale_display?: string | null;
   most_recent_sale_price?: number | null;
+  /** Newest-first Cook County parcel sales for this PIN (cache or live fallback). */
+  sale_history?: Array<{
+    sale_date?: string | null;
+    sale_price?: number | null;
+    sale_type?: string | null;
+  }>;
   sale_date_meta?: {
     last_updated_at?: string | null;
     last_checked_at?: string | null;

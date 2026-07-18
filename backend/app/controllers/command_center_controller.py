@@ -36,7 +36,13 @@ from app.services.mail_task_lifecycle_service import (
     resolve_mail_queue_status,
 )
 from app.services.open_letter_contact_mapper import is_owner_mailable_lead
-from app.services.scoring_rubric import display_most_recent_sale, resolve_sale_date_meta
+from app.services.scoring_rubric import (
+    contacts_likely_prior_owner,
+    contacts_stale_since,
+    display_most_recent_sale,
+    resolve_sale_date_meta,
+)
+from app.services.plugins.cook_county_assessor import list_parcel_sale_history
 
 logger = logging.getLogger(__name__)
 
@@ -363,7 +369,11 @@ def get_recommended_action(lead_id: int):
 
     ra = lead.recommended_action
     contact_method = lead.recommended_contact_method
-    display = get_recommended_action_display(ra, contact_method)
+    display = get_recommended_action_display(
+        ra,
+        contact_method,
+        lead=lead,
+    )
     signals = _get_winning_rule_signals(lead)
     if contact_method:
         signals = {**signals, 'recommended_contact_method': contact_method}
@@ -445,7 +455,12 @@ def get_command_center(lead_id: int):
     contact_method = winning_signals.get('recommended_contact_method')
     if contact_method is None and ra == lead.recommended_action:
         contact_method = lead.recommended_contact_method
-    ra_display = get_recommended_action_display(ra, contact_method)
+    ra_display = get_recommended_action_display(
+        ra,
+        contact_method,
+        lead=lead,
+        winning_rule=winning_rule,
+    )
     open_tasks = _lead_task_service.list_open(lead_id)
     timeline_entries, timeline_total = _lead_timeline_service.get_page(lead_id, page=1, per_page=25)
 
@@ -479,6 +494,7 @@ def get_command_center(lead_id: int):
             SELECT ce.value FROM contact_emails ce
             JOIN property_contacts pc ON pc.contact_id = ce.contact_id
             WHERE pc.property_id = :lead_id
+              AND (pc.role IS NULL OR pc.role <> 'former_owner')
         """), {'lead_id': lead_id}).fetchall()
         if row[0]
     ]
@@ -611,6 +627,26 @@ def get_command_center(lead_id: int):
     contacts_payload = ContactService().get_ordered_contacts_payload(lead_id)
     related_properties = ContactService().get_related_properties(lead_id)
 
+    from app.services.owner_snapshot_service import (
+        ensure_stale_owner_snapshot,
+        list_past_owners_payload,
+    )
+    try:
+        snap = ensure_stale_owner_snapshot(lead, commit=False)
+        if snap is not None:
+            _db.session.commit()
+    except Exception:  # noqa: BLE001 — never block command center
+        logger.exception(
+            'ensure_stale_owner_snapshot failed for lead %s', lead_id,
+        )
+        try:
+            _db.session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+    past_owners_payload = list_past_owners_payload(lead_id)
+    contacts_stale = contacts_likely_prior_owner(lead)
+    stale_since = contacts_stale_since(lead)
+
     org_rows = (
         _db.session.query(Organization, PropertyOrganizationLink)
         .join(
@@ -656,6 +692,9 @@ def get_command_center(lead_id: int):
         'owner_2_first_name': lead.owner_2_first_name,
         'owner_2_last_name': lead.owner_2_last_name,
         'contacts': contacts_payload,
+        'contacts_likely_prior_owner': contacts_stale,
+        'contacts_stale_since': stale_since,
+        'past_owners': past_owners_payload,
         'organizations': organizations_payload,
         'related_properties': related_properties,
         # Property details
@@ -718,6 +757,11 @@ def get_command_center(lead_id: int):
         'most_recent_sale_display': display_most_recent_sale(lead),
         'most_recent_sale_price': getattr(lead, 'most_recent_sale_price', None),
         'sale_date_meta': resolve_sale_date_meta(lead),
+        'sale_history': list_parcel_sale_history(
+            getattr(lead, 'county_assessor_pin', None),
+            limit=50,
+            lead=lead,
+        ),
         'is_mailable': is_mailable,
         'mail_eligible': is_mailable and mail_eligible_date is None,
         'mail_ineligible_reason': (
@@ -888,6 +932,12 @@ def update_status(lead_id: int):
     previous_score = lead.lead_score
 
     lead.lead_status = new_status
+
+    # Entering the skip-trace pipeline means skip work is still needed. Without
+    # this flag, scoring's residential mailing promotion immediately reverts
+    # manual awaiting_skip_trace / skip_trace changes when a mailing address exists.
+    if new_status in ('skip_trace', 'awaiting_skip_trace'):
+        lead.needs_skip_trace = True
 
     # Match the dedicated DNC action: DNC always cancels open next-action work,
     # regardless of whether it came from Quick Actions or the status selector.
@@ -1599,7 +1649,7 @@ def verify_sale_date(lead_id: int):
     from app import db as _db
     _db.session.refresh(lead)
 
-    message = 'Verification queued.'
+    message = 'Verification queued.' if queued else ''
     if ran_sync and summary is not None:
         if summary.get('skipped'):
             reason = summary.get('skip_reason') or 'unknown'
@@ -1609,8 +1659,6 @@ def verify_sale_date(lead_id: int):
                 message = 'Lead not found.'
             else:
                 message = f'Verification skipped ({reason}).'
-        else:
-            message = 'Verification checked.'
     elif not queued and not ran_sync:
         message = 'Verification could not be queued or run.'
 

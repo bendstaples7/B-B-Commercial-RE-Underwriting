@@ -85,9 +85,57 @@ class TestOpenLetterContactMapper:
         assert is_owner_mailable_lead(lead) is True
 
     def test_owner_mail_readiness_rejects_returned_address(self):
-        lead = _make_lead(returned_addresses='123 Main St returned')
+        lead = _make_lead(returned_addresses='123 Main St Chicago IL 60601')
         assert validate_owner_mailing_address(lead) == (
-            'Owner mailing address was previously returned'
+            'Current owner mailing address was previously returned'
+        )
+
+    def test_owner_mail_allows_different_historical_returned_street(self):
+        lead = _make_lead(
+            mailing_address='198 Karen Cir',
+            mailing_city='Bolingbrook',
+            mailing_state='IL',
+            mailing_zip='60440',
+            returned_addresses='3851 W Fullerton Ave Ste 2, Bolingbrook, IL 60440',
+        )
+        assert validate_owner_mailing_address(lead) is None
+        assert is_owner_mailable_lead(lead) is True
+
+    def test_owner_mail_rejects_equivalent_returned_formatting(self):
+        lead = _make_lead(
+            mailing_address='123 Main Street',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60601',
+            returned_addresses='123 Main St, Chicago, IL 60601',
+        )
+        assert validate_owner_mailing_address(lead) == (
+            'Current owner mailing address was previously returned'
+        )
+
+    def test_owner_mail_allows_unit_mismatch_in_returned_history(self):
+        lead = _make_lead(
+            mailing_address='100 Oak Ave Apt 2',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60601',
+            returned_addresses='100 Oak Ave Apt 5, Chicago, IL 60601',
+        )
+        assert validate_owner_mailing_address(lead) is None
+
+    def test_owner_mail_rejects_when_one_of_multiple_returned_matches(self):
+        lead = _make_lead(
+            mailing_address='123 Main St',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60601',
+            returned_addresses=(
+                '999 Other Rd, Chicago, IL 60601\n'
+                '123 Main St Chicago IL 60601\n'
+            ),
+        )
+        assert validate_owner_mailing_address(lead) == (
+            'Current owner mailing address was previously returned'
         )
 
     def test_does_not_mix_partial_mailing_with_property(self):

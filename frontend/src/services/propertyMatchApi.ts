@@ -6,8 +6,10 @@ import api from '@/services/api'
 export const propertyMatchService = {
   preview: (leadId: number) =>
     api.get(`/leads/${leadId}/property-match/preview`).then(r => r.data),
-  approve: (leadId: number) =>
-    api.post(`/leads/${leadId}/property-match/approve`).then(r => r.data),
+  approve: (leadId: number, options?: { pin?: string }) =>
+    api
+      .post(`/leads/${leadId}/property-match/approve`, options?.pin ? { pin: options.pin } : {})
+      .then(r => r.data),
   reject: (leadId: number, action: string, note?: string) =>
     api.post(`/leads/${leadId}/property-match/reject`, { action, note }).then(r => r.data),
   updateAddress: (

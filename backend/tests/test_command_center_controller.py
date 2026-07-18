@@ -422,6 +422,33 @@ class TestUpdateStatus:
             db.session.refresh(lead)
             assert lead.lead_status == 'deprioritize'
 
+    def test_awaiting_skip_trace_sticks_when_mailing_address_present(self, client, app):
+        """Manual awaiting_skip_trace must not be undone by residential mailing promotion."""
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '7 Await Stick St',
+                lead_status='mailing_no_contact_made',
+                needs_skip_trace=False,
+                mailing_address='100 Main St',
+                mailing_city='Chicago',
+                mailing_state='IL',
+                mailing_zip='60614',
+                lead_category='residential',
+            )
+            response = client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({'status': 'awaiting_skip_trace'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            body = response.get_json()
+            assert body['lead_status'] == 'awaiting_skip_trace'
+            db.session.refresh(lead)
+            assert lead.lead_status == 'awaiting_skip_trace'
+            assert lead.needs_skip_trace is True
+
     def test_status_change_does_not_set_hubspot_deal_stage_without_match(self, client, app):
         """PATCH /api/leads/<id>/status leaves hubspot_deal_stage unset without a HubSpot deal."""
         with app.app_context():
@@ -902,7 +929,6 @@ class TestMoveToSkipTrace:
         'pipeline_status,reason_code',
         [
             ('skip_trace', 'already_skip_trace'),
-            ('awaiting_skip_trace', 'already_awaiting_skip_trace'),
         ],
     )
     def test_already_in_skip_trace_pipeline_is_idempotent(
@@ -948,6 +974,51 @@ class TestMoveToSkipTrace:
                 lead_id=lead.id,
                 event_type='status_changed',
             ).count() == 0
+
+    def test_move_to_skip_trace_from_awaiting_enqueues_skip_trace_column(
+        self,
+        client,
+        app,
+    ):
+        """Recent-sale hold end leaves awaiting_skip_trace; Move completes verify work."""
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '825c Awaiting Enqueue St',
+                lead_status='awaiting_skip_trace',
+                needs_skip_trace=True,
+            )
+            verify = _make_task(
+                app,
+                lead.id,
+                task_type='skip_trace_owner',
+                title='Recent-sale hold ended — verify new owner and contact information',
+                due_date=date.today(),
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/move-to-skip-trace',
+                headers=_AUTH_HEADERS,
+                json={},
+            )
+            assert response.status_code == 200
+            body = json.loads(response.data)
+            assert body.get('already_done') is not True
+            assert body['lead_status'] == 'skip_trace'
+            assert body['completed_task_id'] == verify.id
+            db.session.refresh(lead)
+            db.session.refresh(verify)
+            assert lead.lead_status == 'skip_trace'
+            assert lead.needs_skip_trace is True
+            assert verify.status == 'completed'
+            handoffs = LeadTask.query.filter_by(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                status='open',
+            ).all()
+            assert len(handoffs) == 1
+            assert handoffs[0].id == body['skip_trace_task_id']
+            assert handoffs[0].title == 'Awaiting skip trace'
+            assert handoffs[0].due_date is None
 
     def test_moves_selected_task_due_date_without_changing_task(self, client, app):
         with app.app_context():
@@ -1313,6 +1384,7 @@ class TestCompleteTask:
             db.session.refresh(mirror)
             assert lead.needs_skip_trace is False
             assert lead.date_skip_traced == date.today()
+            assert lead.lead_status == 'mailing_no_contact_made'
             assert mirror.status == 'completed'
 
     def test_completing_one_duplicate_skip_trace_task_keeps_handoff_open(
@@ -1968,7 +2040,7 @@ class TestSaleDateVerification:
             assert data['lead_id'] == lead.id
             assert data['ran_sync'] is True
             assert data['queued'] is False
-            assert data['message'] == 'Verification checked.'
+            assert data['message'] == ''
             mock_ensure.assert_called_once()
             mock_enrich.assert_called_once_with(lead.id)
 

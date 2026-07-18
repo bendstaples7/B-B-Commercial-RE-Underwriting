@@ -515,3 +515,97 @@ class TestScheduleAfterCommit:
 
             pending = db.session.info.get("cook_county_enrichment_pending", set())
             assert pending == {42, 43}
+
+
+class TestSaleDatePluginsAndBackfill:
+    def test_sale_date_plugins_are_assessor_focused(self):
+        from app.services.cook_county_enrichment_service import sale_date_plugins_for_lead
+
+        lead = _cook_lead()
+        names = sale_date_plugins_for_lead(lead)
+        assert names == ["cook_county_assessor", "cook_county_commercial_valuation"]
+        assert "chicago_building_violations" not in names
+        assert "cook_county_permits" not in names
+
+    @patch("app.services.cook_county_enrichment_service.enrich_cook_county_sale_date")
+    @patch("app.services.cook_county_enrichment_service.lead_recently_sale_checked", return_value=False)
+    @patch("app.services.cook_county_enrichment_service._assessor_source_id", return_value=1)
+    @patch("app.services.cook_county_enrichment_service._resolve_market", return_value=COOK_COUNTY_MARKET)
+    def test_backfill_sale_dates_does_not_skip_recently_sold(
+        self,
+        _market,
+        _assessor_id,
+        _recently_checked,
+        enrich_mock,
+        app,
+    ):
+        from datetime import date, timedelta
+
+        from app.services.cook_county_enrichment_service import backfill_sale_date_verification
+
+        enrich_mock.return_value = {
+            "skipped": False,
+            "plugins_run": 1,
+            "success": 1,
+        }
+
+        with app.app_context():
+            lead = Property(
+                property_street="99 Sale Verify St",
+                property_city="Chicago",
+                property_state="IL",
+                county_assessor_pin="14-21-000-000-0000",
+                most_recent_sale=(date.today() - timedelta(days=30)).isoformat(),
+                source_type="manual_distress",
+            )
+            db.session.add(lead)
+            db.session.commit()
+
+            summary = backfill_sale_date_verification(
+                batch_size=5,
+                socrata_call_cap=20,
+                last_id=0,
+                persist_cursor=False,
+            )
+            assert summary["enriched"] >= 1
+            enrich_mock.assert_called()
+            assert any(
+                call.args[0] == lead.id for call in enrich_mock.call_args_list
+            )
+
+    @patch("app.services.cook_county_enrichment_service._set_sale_date_backfill_cursor")
+    @patch("app.services.cook_county_enrichment_service.enrich_cook_county_sale_date")
+    @patch("app.services.cook_county_enrichment_service.lead_recently_sale_checked", return_value=True)
+    @patch("app.services.cook_county_enrichment_service._assessor_source_id", return_value=1)
+    @patch("app.services.cook_county_enrichment_service._resolve_market", return_value=COOK_COUNTY_MARKET)
+    def test_backfill_skips_recently_checked_and_advances_cursor(
+        self,
+        _market,
+        _assessor_id,
+        _recently_checked,
+        enrich_mock,
+        set_cursor,
+        app,
+    ):
+        from app.services.cook_county_enrichment_service import backfill_sale_date_verification
+
+        with app.app_context():
+            lead = Property(
+                property_street="100 Already Checked St",
+                property_city="Chicago",
+                property_state="IL",
+                county_assessor_pin="14-21-111-111-0000",
+                source_type="manual_distress",
+            )
+            db.session.add(lead)
+            db.session.commit()
+
+            summary = backfill_sale_date_verification(
+                batch_size=5,
+                socrata_call_cap=20,
+                last_id=0,
+                persist_cursor=True,
+            )
+            enrich_mock.assert_not_called()
+            assert summary["skipped"] >= 1
+            set_cursor.assert_called()

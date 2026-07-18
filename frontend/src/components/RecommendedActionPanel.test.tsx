@@ -29,7 +29,7 @@ function makeRA(
   return { value, label, explanation, signals: {} }
 }
 
-function makeTask(id: number): LeadTask {
+function makeTask(id: number, overrides: Partial<LeadTask> = {}): LeadTask {
   return {
     id,
     lead_id: 1,
@@ -41,6 +41,7 @@ function makeTask(id: number): LeadTask {
     completed_at: null,
     created_by: 'user',
     source: 'native',
+    ...overrides,
   }
 }
 
@@ -287,6 +288,24 @@ describe('RecommendedActionPanel', () => {
       )
     })
 
+    it('keeps RA explanation visible under the next-task fallback', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA(
+            'nurture',
+            'Nurture',
+            'Because of a recent sale, the owner and mailing details on file are likely tied to the prior owner.',
+          )}
+          leadStatus="skip_trace"
+          openTasks={[{ ...makeTask(1), title: 'Awaiting skip trace', task_type: 'skip_trace_owner' }]}
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('ra-next-task-title')).toHaveTextContent('Awaiting skip trace')
+      expect(screen.getByTestId('ra-explanation')).toHaveTextContent('recent sale')
+    })
+
     it('shows next task fallback when no recommended action exists', () => {
       render(
         <RecommendedActionPanel
@@ -322,8 +341,6 @@ describe('RecommendedActionPanel', () => {
       'deal_lost',
       'suppressed',
       'do_not_contact',
-      'skip_trace',
-      'awaiting_skip_trace',
     ] as const)('grays out Move to Skip Trace for status %s', (leadStatus) => {
       render(
         <RecommendedActionPanel
@@ -335,6 +352,59 @@ describe('RecommendedActionPanel', () => {
       )
 
       expect(screen.getByTestId('ra-universal-btn-move_to_skip_trace')).toBeDisabled()
+    })
+
+    it.each([
+      ['skip_trace', 'In Skip Trace'],
+    ] as const)('shows already-done skip-trace control for status %s', (leadStatus, label) => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('enrich_data')}
+          leadStatus={leadStatus}
+          openTasks={[]}
+          onAction={vi.fn()}
+        />,
+      )
+
+      const btn = screen.getByTestId('ra-universal-btn-already-skip-trace')
+      expect(btn).toBeDisabled()
+      expect(btn).toHaveTextContent(label)
+      expect(screen.queryByTestId('ra-universal-btn-move_to_skip_trace')).not.toBeInTheDocument()
+    })
+
+    it('keeps Move to Skip Trace enabled for awaiting_skip_trace', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('enrich_data')}
+          leadStatus="awaiting_skip_trace"
+          openTasks={[]}
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('ra-universal-btn-move_to_skip_trace')).toBeEnabled()
+      expect(screen.queryByTestId('ra-universal-btn-already-skip-trace')).not.toBeInTheDocument()
+    })
+
+    it('frames open skip_trace_owner over competing call_ready RA', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('call_ready', 'Call Now')}
+          leadStatus="awaiting_skip_trace"
+          openTasks={[
+            makeTask(1, {
+              task_type: 'skip_trace_owner',
+              title: 'Recent-sale hold ended — verify new owner',
+            }),
+          ]}
+          onAction={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('ra-label')).toHaveTextContent('Follow up on next task')
+      expect(screen.getByTestId('ra-next-task-title')).toHaveTextContent(
+        'Recent-sale hold ended — verify new owner',
+      )
     })
 
     it('keeps Quick actions in a fixed order across leads', () => {

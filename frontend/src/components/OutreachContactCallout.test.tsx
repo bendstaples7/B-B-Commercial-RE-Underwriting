@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@/test/testUtils'
+import { render, screen, waitFor } from '@/test/testUtils'
 import userEvent from '@testing-library/user-event'
 import { OutreachContactCallout, OutreachContactInline } from './OutreachContactCallout'
 import type { OutreachContact } from '@/types'
@@ -108,5 +108,26 @@ describe('OutreachContactInline', () => {
     expect(screen.getByTestId('outreach-contact-inline')).toBeInTheDocument()
     expect(screen.getByTestId('outreach-contact-link')).toHaveTextContent('(555) 123-4567')
     expect(screen.queryByTestId('outreach-contact-callout')).not.toBeInTheDocument()
+  })
+
+  it('copies phone digits via the inline copy control', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    const contact: OutreachContact = {
+      channel: 'phone',
+      label: 'Call',
+      value: '(555) 123-4567',
+      display: '(555) 123-4567',
+      href: 'tel:+15551234567',
+    }
+    render(<OutreachContactInline contact={contact} />)
+
+    await user.click(screen.getByTestId('outreach-contact-copy'))
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalled()
+    })
+    const copied = writeText.mock.calls[0][0] as string
+    expect(copied.replace(/\D/g, '')).toContain('5551234567')
   })
 })

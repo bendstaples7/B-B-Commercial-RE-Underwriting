@@ -28,6 +28,9 @@ COOK_COUNTY_MARKET = "cook_county_il"
 BACKFILL_BATCH_SIZE = 75
 BACKFILL_SOCATA_CALL_CAP = 200
 BACKFILL_STALE_DAYS = 30
+SALE_DATE_BACKFILL_BATCH_SIZE = 200
+SALE_DATE_BACKFILL_SOCRATA_CALL_CAP = 250
+SALE_DATE_BACKFILL_CURSOR_KEY = "cook_county:sale_date_backfill:last_id"
 COMMERCIAL_VALUATION_SOURCE = "cook_county_commercial_valuation"
 ASSESSOR_SOURCE = "cook_county_assessor"
 
@@ -90,6 +93,30 @@ def plugins_for_lead(lead: Lead) -> list[str]:
     if chicago:
         plugins.extend(_CHICAGO_PLUGINS)
 
+    return plugins
+
+
+def sale_date_plugins_for_lead(lead: Lead) -> list[str]:
+    """Assessor-focused plugins for sale-date verification only."""
+    full = plugins_for_lead(lead)
+    if not full:
+        # Still allow assessor after GIS PIN recovery for Cook County leads.
+        if _resolve_market(lead) != COOK_COUNTY_MARKET:
+            return []
+        address = lead.property_street or ""
+        city = getattr(lead, "property_city", None)
+        if _has_pin(lead) or is_chicago_address(city=city, address=address):
+            return [ASSESSOR_SOURCE]
+        return []
+
+    plugins: list[str] = []
+    if ASSESSOR_SOURCE in full or _has_pin(lead) or is_chicago_address(
+        city=getattr(lead, "property_city", None),
+        address=lead.property_street or "",
+    ):
+        plugins.append(ASSESSOR_SOURCE)
+    if COMMERCIAL_VALUATION_SOURCE in full:
+        plugins.append(COMMERCIAL_VALUATION_SOURCE)
     return plugins
 
 
@@ -239,6 +266,16 @@ def _ensure_pin_from_gis(lead: Lead) -> bool:
 
 def enrich_cook_county_lead(lead_id: int) -> dict:
     """Run all applicable Cook County plugins for one lead; rescore once."""
+    return _enrich_cook_county_lead_with_plugins(lead_id, plugins_for_lead)
+
+
+def enrich_cook_county_sale_date(lead_id: int) -> dict:
+    """Run sale-date plugins only (assessor ± commercial valuation)."""
+    return _enrich_cook_county_lead_with_plugins(lead_id, sale_date_plugins_for_lead)
+
+
+def _enrich_cook_county_lead_with_plugins(lead_id: int, plugin_resolver) -> dict:
+    """Run selected Cook County plugins for one lead; rescore once."""
     summary = {
         "lead_id": lead_id,
         "skipped": False,
@@ -257,7 +294,7 @@ def enrich_cook_county_lead(lead_id: int) -> dict:
         return summary
 
     _ensure_pin_from_gis(lead)
-    plugin_names = plugins_for_lead(lead)
+    plugin_names = plugin_resolver(lead)
     if not plugin_names:
         summary["skipped"] = True
         summary["skip_reason"] = "not_eligible"
@@ -531,4 +568,151 @@ def backfill_cook_county_enrichment(
                 return summary
 
     summary["last_id"] = cursor
+    return summary
+
+
+def _sale_date_backfill_cursor() -> int:
+    from app.services.deploy_sync_policy import get_redis_value
+
+    raw = get_redis_value(SALE_DATE_BACKFILL_CURSOR_KEY)
+    if raw is None:
+        return 0
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _set_sale_date_backfill_cursor(last_id: int) -> None:
+    from app.services.deploy_sync_policy import set_redis_value
+
+    set_redis_value(SALE_DATE_BACKFILL_CURSOR_KEY, str(max(0, int(last_id))))
+
+
+def backfill_sale_date_verification(
+    *,
+    batch_size: int = SALE_DATE_BACKFILL_BATCH_SIZE,
+    socrata_call_cap: int = SALE_DATE_BACKFILL_SOCRATA_CALL_CAP,
+    last_id: int | None = None,
+    persist_cursor: bool = True,
+) -> dict:
+    """Hourly assessor-focused sale-date verification for Cook County leads.
+
+    Includes empty-sale leads never checked. Does not skip recent-sale holds.
+    Persists exclusive ``last_id`` in Redis and wraps to 0 when a pass ends.
+    """
+    since = datetime.utcnow() - timedelta(days=BACKFILL_STALE_DAYS)
+    cursor = _sale_date_backfill_cursor() if last_id is None else last_id
+
+    summary = {
+        "status": "completed",
+        "processed": 0,
+        "enriched": 0,
+        "skipped": 0,
+        "errors": 0,
+        "last_id": cursor,
+        "socrata_calls": 0,
+        "capped": False,
+        "wrapped": False,
+    }
+
+    if _assessor_source_id() is None:
+        summary["status"] = "skipped"
+        summary["skip_reason"] = "assessor_source_missing"
+        return summary
+
+    enriched_count = 0
+    saw_candidates = False
+
+    while enriched_count < batch_size and summary["socrata_calls"] < socrata_call_cap:
+        candidates = (
+            db.session.query(Lead)
+            .filter(
+                Lead.id > cursor,
+                Lead.property_state.in_(("IL", "Illinois", "il")),
+                or_(
+                    (
+                        Lead.county_assessor_pin.isnot(None)
+                        & (Lead.county_assessor_pin != "")
+                    ),
+                    func.lower(Lead.property_city) == "chicago",
+                ),
+            )
+            .order_by(
+                # Prefer leads that already have sale/acquisition text first.
+                (
+                    or_(
+                        Lead.most_recent_sale.isnot(None),
+                        Lead.acquisition_date.isnot(None),
+                    )
+                ).desc(),
+                Lead.id,
+            )
+            .limit(batch_size * 2)
+            .all()
+        )
+        if not candidates:
+            if cursor > 0 and not saw_candidates:
+                # Wrap and continue from the start of the book once per run.
+                cursor = 0
+                summary["wrapped"] = True
+                summary["last_id"] = 0
+                continue
+            break
+
+        saw_candidates = True
+        for lead in candidates:
+            cursor = lead.id
+            summary["processed"] += 1
+
+            if _resolve_market(lead) != COOK_COUNTY_MARKET:
+                summary["skipped"] += 1
+                continue
+
+            if lead_recently_sale_checked(lead.id, since):
+                summary["skipped"] += 1
+                continue
+
+            plugin_names = sale_date_plugins_for_lead(lead)
+            if not plugin_names and not _has_pin(lead):
+                # Attempt GIS PIN recovery path inside enrich; still count as a try.
+                plugin_names = [ASSESSOR_SOURCE]
+            estimated_calls = max(1, len(plugin_names) if plugin_names else 1)
+            if summary["socrata_calls"] + estimated_calls > socrata_call_cap:
+                summary["capped"] = True
+                summary["last_id"] = cursor
+                if persist_cursor:
+                    _set_sale_date_backfill_cursor(cursor)
+                return summary
+
+            try:
+                result = enrich_cook_county_sale_date(lead.id)
+                summary["socrata_calls"] += result.get("plugins_run", estimated_calls)
+                if result.get("skipped"):
+                    summary["skipped"] += 1
+                else:
+                    enriched_count += 1
+                    summary["enriched"] += 1
+            except Exception as exc:
+                summary["errors"] += 1
+                logger.warning(
+                    "Cook County sale-date backfill failed for lead %s: %s",
+                    lead.id,
+                    exc,
+                )
+
+            if enriched_count >= batch_size or summary["socrata_calls"] >= socrata_call_cap:
+                summary["capped"] = True
+                summary["last_id"] = cursor
+                if persist_cursor:
+                    _set_sale_date_backfill_cursor(cursor)
+                return summary
+
+    # Pass completed without capping — wrap cursor for the next stale window.
+    if not summary["capped"]:
+        cursor = 0
+        summary["wrapped"] = True
+    summary["last_id"] = cursor
+    if persist_cursor:
+        _set_sale_date_backfill_cursor(cursor)
     return summary

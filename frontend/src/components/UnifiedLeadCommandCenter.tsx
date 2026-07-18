@@ -1026,10 +1026,18 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       }
       case 'skip_trace':
       case 'move_to_skip_trace': {
-        // Never pass the skip-trace handoff task as complete_task_id — the API
-        // must not try to complete "Awaiting skip trace" as current work.
+        // Complete current work, including dated recent-sale verify tasks.
+        // Never pass the undated "Awaiting skip trace" handoff as complete_task_id.
+        const isUndatedSkipHandoff = (task: LeadTask) => (
+          task.task_type === 'skip_trace_owner'
+          && !task.due_date
+          && (task.title || '').trim().toLowerCase() === 'awaiting skip trace'
+        )
         const completable = openTasks.find(
-          (t) => t.task_type !== 'skip_trace_owner' && (t.status === 'open' || t.status === 'overdue'),
+          (t) => (
+            (t.status === 'open' || t.status === 'overdue')
+            && !isUndatedSkipHandoff(t)
+          ),
         )
         const rawId = completable?.id
         const completeTaskId =
@@ -1075,7 +1083,15 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               lead_status: result.lead_status as LeadStatus,
               needs_skip_trace: true,
               open_tasks: hasHandoff
-                ? remainingTasks
+                ? remainingTasks.map((task) => (
+                  Number(task.id) === result.skip_trace_task_id
+                    ? {
+                        ...task,
+                        title: 'Awaiting skip trace',
+                        due_date: null,
+                      }
+                    : task
+                ))
                 : [...remainingTasks, handoffTask],
             }
           },
@@ -1165,6 +1181,16 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     window.setTimeout(() => {
       document.querySelector('[data-testid="tab-panel"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }, 100)
+  }, [navigate, location.pathname])
+
+  const handleViewSaleHistory = useCallback(() => {
+    navigate(`${location.pathname}?tab=info#info-sale-history`, { replace: true })
+    window.setTimeout(() => {
+      document.getElementById('info-sale-history')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+    }, 120)
   }, [navigate, location.pathname])
 
   useEffect(() => {
@@ -1366,7 +1392,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             </Box>
           </Paper>
 
-          <PropertySidebar variant="inline" commandCenterData={commandCenterData!} />
+          <PropertySidebar
+            variant="inline"
+            commandCenterData={commandCenterData!}
+            onViewSaleHistory={handleViewSaleHistory}
+          />
 
           <BuildingOwnershipSection
             leadId={leadId}
@@ -1404,7 +1434,10 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         </Box>
 
         {/* Property sidebar — sticky, hidden below lg breakpoint (Req 11.1–11.5) */}
-        <PropertySidebar commandCenterData={commandCenterData!} />
+        <PropertySidebar
+          commandCenterData={commandCenterData!}
+          onViewSaleHistory={handleViewSaleHistory}
+        />
       </Box>
 
       <LogActivityModal

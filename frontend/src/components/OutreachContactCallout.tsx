@@ -148,20 +148,39 @@ function renderLink(contact: OutreachContact, compact: boolean) {
 
 /** Inline contact for task rows and Recommended Action — no bordered box. */
 export function OutreachContactInline({ contact }: OutreachContactInlineProps) {
+  const [copied, setCopied] = useState(false)
+
   if (!contact) return null
+
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(copyValue(contact))
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
 
   return (
     <Box
       data-testid="outreach-contact-inline"
-      sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25 }}
+      sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.25, minWidth: 0 }}
     >
       <Box sx={{ color: 'text.secondary', display: 'flex', flexShrink: 0 }}>
         {channelIcon(contact.channel, 14)}
       </Box>
-      <Typography variant="caption" color="text.secondary" component="span">
+      <Typography variant="caption" color="text.secondary" component="span" sx={{ flexShrink: 0 }}>
         {contact.label}
       </Typography>
-      {renderLink(contact, true)}
+      <Box sx={{ minWidth: 0 }}>{renderLink(contact, true)}</Box>
+      <Tooltip title={copied ? 'Copied' : 'Copy'}>
+        <IconButton
+          size="small"
+          onClick={handleCopy}
+          aria-label="Copy contact"
+          data-testid="outreach-contact-copy"
+          sx={{ p: 0.25, flexShrink: 0 }}
+        >
+          <ContentCopyIcon sx={{ fontSize: 14 }} />
+        </IconButton>
+      </Tooltip>
     </Box>
   )
 }

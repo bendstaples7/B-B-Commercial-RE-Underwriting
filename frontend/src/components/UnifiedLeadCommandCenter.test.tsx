@@ -547,7 +547,7 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
     }
   })
 
-  it('does not send skip-trace handoff task id as complete_task_id', async () => {
+  it('does not send undated skip-trace handoff task id as complete_task_id', async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 })
     vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
       makeCommandCenterPayload({
@@ -587,6 +587,52 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
     )
 
     expect(commandCenterService.moveToSkipTrace).toHaveBeenCalledWith(1, undefined)
+  })
+
+  it('completes dated recent-sale verify task when moving to skip trace', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        lead_status: 'awaiting_skip_trace',
+        recommended_action: {
+          value: 'nurture',
+          label: 'Nurture',
+          explanation: null,
+          signals: {},
+        },
+        open_tasks: [{
+          id: 188,
+          lead_id: 1,
+          task_type: 'skip_trace_owner',
+          title: 'Recent-sale hold ended — verify new owner and contact information',
+          status: 'open',
+          due_date: '2026-07-17',
+          created_at: '2023-01-01T00:00:00Z',
+          completed_at: null,
+          created_by: 'system',
+          source: 'native',
+        }],
+      }),
+    )
+    vi.mocked(commandCenterService.moveToSkipTrace).mockResolvedValue({
+      lead_id: 1,
+      lead_status: 'skip_trace',
+      completed_task_id: 188,
+      skip_trace_task_id: 189,
+      changed: true,
+      already_done: false,
+    })
+
+    renderComponent()
+    await user.click(
+      await screen.findByTestId('ra-universal-btn-move_to_skip_trace'),
+    )
+
+    expect(commandCenterService.moveToSkipTrace).toHaveBeenCalledWith(1, 188)
+    await waitFor(() => {
+      expect(screen.queryByText(/Recent-sale hold ended/i)).not.toBeInTheDocument()
+      expect(screen.getAllByText('Awaiting skip trace').length).toBeGreaterThan(0)
+    })
   })
 
   it('shows already-done snackbar when skip-trace pipeline is unchanged', async () => {

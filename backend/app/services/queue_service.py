@@ -47,7 +47,11 @@ def _lead_to_queue_row(
 ) -> dict:
     """Convert a Lead model instance to a queue row dict."""
     contact_method = lead.recommended_contact_method
-    ra_display = get_recommended_action_display(lead.recommended_action, contact_method)
+    ra_display = get_recommended_action_display(
+        lead.recommended_action,
+        contact_method,
+        lead=lead,
+    )
     lead_id = getattr(lead, 'id', None)
     if outreach_contacts is not None and isinstance(lead_id, int):
         outreach_contact = outreach_contacts.get(lead_id)
@@ -200,13 +204,17 @@ TODAYS_ACTION_OUTREACH_FILTERS = frozenset({
 
 
 def _complete_owner_mail_clause():
-    """SQL predicate matching owner-only direct-mail readiness."""
+    """SQL predicate matching owner-only direct-mail readiness.
+
+    Returned-mail history is evaluated in Python via
+    ``validate_owner_mailing_address`` / ``is_owner_mailable_lead`` so only
+    the *current* target address is blocked — not every lead with history.
+    """
     return and_(
         func.nullif(func.trim(Lead.mailing_address), '').isnot(None),
         func.nullif(func.trim(Lead.mailing_city), '').isnot(None),
         func.nullif(func.trim(Lead.mailing_state), '').isnot(None),
         func.nullif(func.trim(Lead.mailing_zip), '').isnot(None),
-        func.nullif(func.trim(Lead.returned_addresses), '').is_(None),
     )
 
 
@@ -417,7 +425,8 @@ class QueueService:
         """Counts of Today's Action leads by outreach display bucket.
 
         Uses one membership scan with conditional aggregates instead of five
-        separate COUNT queries.
+        separate COUNT queries. Direct-mail applies owner-mailing validation in
+        Python so returned-history matching is exact.
         """
         today = date.today()
         base = self._todays_action_query(today)
@@ -427,14 +436,14 @@ class QueueService:
         text_clause = _outreach_filter_clause('text_now')
         row = base.with_entities(
             func.count(Lead.id).label('all_count'),
-            func.coalesce(func.sum(case((mail_clause, 1), else_=0)), 0).label('direct_mail'),
             func.coalesce(func.sum(case((call_clause, 1), else_=0)), 0).label('call_now'),
             func.coalesce(func.sum(case((email_clause, 1), else_=0)), 0).label('email_now'),
             func.coalesce(func.sum(case((text_clause, 1), else_=0)), 0).label('text_now'),
         ).one()
+        mail_leads = base.filter(mail_clause).all() if mail_clause is not None else []
         return {
             'all': int(row.all_count or 0),
-            'direct_mail': int(row.direct_mail or 0),
+            'direct_mail': sum(1 for lead in mail_leads if is_owner_mailable_lead(lead)),
             'call_now': int(row.call_now or 0),
             'email_now': int(row.email_now or 0),
             'text_now': int(row.text_now or 0),
@@ -444,6 +453,10 @@ class QueueService:
         """All Today's Action lead IDs matching an optional outreach filter."""
         query = self._todays_action_query(outreach=outreach)
         query = _apply_queue_sort(query, 'lead_score', 'desc')
+        if normalize_todays_outreach_filter(outreach) == 'direct_mail':
+            return [
+                lead.id for lead in query.all() if is_owner_mailable_lead(lead)
+            ]
         return [row[0] for row in query.with_entities(Lead.id).all()]
 
     def get_todays_action(
@@ -456,9 +469,16 @@ class QueueService:
     ) -> tuple[list[dict], int]:
         """Today's Action — due open tasks; optional outreach display filter."""
         query = self._todays_action_query(outreach=outreach)
-        total = query.count()
-        query = _apply_queue_sort(query, sort_by, sort_order)
-        leads = query.offset((page - 1) * per_page).limit(per_page).all()
+        if normalize_todays_outreach_filter(outreach) == 'direct_mail':
+            query = _apply_queue_sort(query, sort_by, sort_order)
+            eligible = [lead for lead in query.all() if is_owner_mailable_lead(lead)]
+            total = len(eligible)
+            start = (page - 1) * per_page
+            leads = eligible[start:start + per_page]
+        else:
+            total = query.count()
+            query = _apply_queue_sort(query, sort_by, sort_order)
+            leads = query.offset((page - 1) * per_page).limit(per_page).all()
         rows = _leads_to_queue_rows(leads)
         task_context = _due_task_context([lead.id for lead in leads], date.today())
         for row in rows:

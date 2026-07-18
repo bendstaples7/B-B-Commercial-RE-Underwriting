@@ -53,6 +53,26 @@ class TestConfidenceHelpers:
     def test_confidence_from_annotation_disconnected(self):
         assert PhoneConfidenceService.confidence_from_annotation('disconnected') == 5
 
+    def test_confidence_from_annotation_wn_nis_family_na(self):
+        assert PhoneConfidenceService.confidence_from_annotation('WN') == 5
+        assert PhoneConfidenceService.confidence_from_annotation('NIS') == 5
+        assert PhoneConfidenceService.confidence_from_annotation('Not in service') == 5
+        assert PhoneConfidenceService.confidence_from_annotation('Son of the Owner') == 25
+        assert PhoneConfidenceService.confidence_from_annotation('NA') == 35
+
+    def test_sort_prefers_hubspot_primary_over_alphabetical(self):
+        phones = [
+            {'value': '(630) 111-0000', 'confidence_score': 50, 'notes': None, 'label': 'other'},
+            {
+                'value': '(312) 999-0000',
+                'confidence_score': 50,
+                'notes': 'HubSpot primary',
+                'label': 'other',
+            },
+        ]
+        sorted_phones = PhoneConfidenceService.sort_phones_for_display(phones)
+        assert sorted_phones[0]['value'] == '(312) 999-0000'
+
     def test_confidence_from_outcome_answered(self):
         assert PhoneConfidenceService.confidence_from_outcome('answered', 50) == 85
 

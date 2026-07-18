@@ -7,10 +7,10 @@ import {
 describe('isSaleDateVerifiedWithinDays', () => {
   const now = new Date('2026-07-16T12:00:00Z')
 
-  it('is true when last_checked_at is within 30 days', () => {
+  it('is true when success check is within 30 days', () => {
     expect(
       isSaleDateVerifiedWithinDays(
-        { last_checked_at: '2026-07-01T12:00:00Z', status: 'ok' },
+        { last_checked_at: '2026-07-01T12:00:00Z', status: 'success' },
         30,
         now,
       ),
@@ -20,7 +20,7 @@ describe('isSaleDateVerifiedWithinDays', () => {
   it('is false when last_checked_at is older than 30 days', () => {
     expect(
       isSaleDateVerifiedWithinDays(
-        { last_checked_at: '2026-05-01T12:00:00Z' },
+        { last_checked_at: '2026-05-01T12:00:00Z', status: 'success' },
         30,
         now,
       ),
@@ -30,7 +30,7 @@ describe('isSaleDateVerifiedWithinDays', () => {
   it('ignores last_updated_at without a check stamp', () => {
     expect(
       isSaleDateVerifiedWithinDays(
-        { last_updated_at: '2026-07-15T12:00:00Z' },
+        { last_updated_at: '2026-07-15T12:00:00Z', status: 'success' },
         30,
         now,
       ),
@@ -47,41 +47,67 @@ describe('isSaleDateVerifiedWithinDays', () => {
     ).toBe(false)
   })
 
-  it('treats no_results as a successful verification', () => {
+  it('is false for no_sale when a sale date is still displayed', () => {
+    expect(
+      isSaleDateVerifiedWithinDays(
+        { last_checked_at: '2026-07-15T12:00:00Z', status: 'no_sale' },
+        30,
+        now,
+        { hasDisplayedSale: true },
+      ),
+    ).toBe(false)
+  })
+
+  it('is true for no_sale when no sale date is displayed', () => {
+    expect(
+      isSaleDateVerifiedWithinDays(
+        { last_checked_at: '2026-07-15T12:00:00Z', status: 'no_sale' },
+        30,
+        now,
+        { hasDisplayedSale: false },
+      ),
+    ).toBe(true)
+  })
+
+  it('is false for legacy no_results without sale confirmation', () => {
     expect(
       isSaleDateVerifiedWithinDays(
         { last_checked_at: '2026-07-15T12:00:00Z', status: 'no_results' },
         30,
         now,
       ),
-    ).toBe(true)
+    ).toBe(false)
   })
 })
 
 describe('formatSaleDateFreshness', () => {
-  it('formats last checked date and source', () => {
-    const text = formatSaleDateFreshness({
-      last_checked_at: '2024-03-15T12:00:00Z',
-      source: 'Cook County records',
-    })
-    expect(text).toMatch(/Last checked .* · Cook County records/)
+  it('says confirmed as of for success', () => {
+    expect(
+      formatSaleDateFreshness({
+        last_checked_at: '2024-03-15T12:00:00Z',
+        source: 'Cook County records',
+        status: 'success',
+      }),
+    ).toBe('Confirmed as of Mar 2024')
   })
 
   it('prefers last_checked_at over last_updated_at', () => {
-    const text = formatSaleDateFreshness({
-      last_updated_at: '2023-01-01T12:00:00Z',
-      last_checked_at: '2024-03-15T12:00:00Z',
-      source: 'Cook County records',
-    })
-    expect(text).toMatch(/Last checked Mar 2024/)
+    expect(
+      formatSaleDateFreshness({
+        last_updated_at: '2023-01-01T12:00:00Z',
+        last_checked_at: '2024-03-15T12:00:00Z',
+        status: 'success',
+      }),
+    ).toBe('Confirmed as of Mar 2024')
   })
 
   it('falls back to last_updated_at', () => {
-    const text = formatSaleDateFreshness({
-      last_updated_at: '2024-03-15T12:00:00Z',
-      source: 'Import',
-    })
-    expect(text).toMatch(/Updated .* · Import/)
+    expect(
+      formatSaleDateFreshness({
+        last_updated_at: '2024-03-15T12:00:00Z',
+        source: 'Import',
+      }),
+    ).toBe('Updated Mar 2024')
   })
 
   it('returns null when no timestamp', () => {
@@ -93,21 +119,38 @@ describe('formatSaleDateFreshness', () => {
     expect(formatSaleDateFreshness({ last_checked_at: 'not-a-date' })).toBeNull()
   })
 
-  it('omits source when whitespace-only', () => {
-    const text = formatSaleDateFreshness({
-      last_checked_at: '2024-03-15T12:00:00Z',
-      source: '   ',
-    })
-    expect(text).toMatch(/^Last checked /)
-    expect(text).not.toContain('·')
+  it('says cannot confirm when sale is displayed but probe found none', () => {
+    expect(
+      formatSaleDateFreshness(
+        {
+          last_checked_at: '2026-07-17T12:00:00Z',
+          source: 'Cook County records',
+          status: 'no_sale',
+        },
+        { hasDisplayedSale: true },
+      ),
+    ).toBe('Cannot confirm as of Jul 2026')
   })
 
-  it('labels checked sources that returned no sale', () => {
-    const text = formatSaleDateFreshness({
-      last_checked_at: '2024-03-15T12:00:00Z',
-      source: 'Cook County records',
-      status: 'no_results',
-    })
-    expect(text).toMatch(/Cook County records \(no sale found\)/)
+  it('says no sale found when display is empty after no_sale probe', () => {
+    expect(
+      formatSaleDateFreshness(
+        {
+          last_checked_at: '2026-07-17T12:00:00Z',
+          source: 'Cook County records',
+          status: 'no_sale',
+        },
+        { hasDisplayedSale: false },
+      ),
+    ).toBe('No sale found as of Jul 2026')
+  })
+
+  it('says check failed as of for failed status', () => {
+    expect(
+      formatSaleDateFreshness({
+        last_checked_at: '2026-07-17T12:00:00Z',
+        status: 'failed',
+      }),
+    ).toBe('Check failed as of Jul 2026')
   })
 })

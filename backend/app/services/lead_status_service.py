@@ -22,6 +22,12 @@ def apply_lead_status_change(
 
     lead.lead_status = new_status
 
+    # Entering the skip-trace pipeline means skip work is still needed. Without
+    # this flag, scoring's residential mailing promotion immediately reverts
+    # manual awaiting_skip_trace / skip_trace changes when a mailing address exists.
+    if new_status in ('skip_trace', 'awaiting_skip_trace'):
+        lead.needs_skip_trace = True
+
     if new_status == 'do_not_contact':
         lead.recommended_action = None
         LeadTask.query.filter_by(lead_id=lead.id, status='open').update({'status': 'cancelled'})

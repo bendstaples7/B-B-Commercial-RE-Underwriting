@@ -414,6 +414,96 @@ class TestCookCountyAssessorPlugin:
         from app.services import CookCountyAssessorPlugin as PluginClass
         assert PluginClass is CookCountyAssessorPlugin
 
+    def test_fetch_most_recent_sale_falls_back_when_sale_type_null(self):
+        """Cook County often omits sale_type; still accept the PIN's latest sale."""
+        plugin = CookCountyAssessorPlugin()
+        calls = []
+
+        def fake_get(url, max_retries=2):
+            calls.append(url)
+            if "LAND" in url:
+                return []
+            return [{
+                "pin": "14292260030000",
+                "sale_date": "2024-07-17T00:00:00.000",
+                "sale_price": "967000",
+                "sale_type": None,
+            }]
+
+        plugin._cache_loader._socrata_get_with_retry = fake_get
+        fields = plugin._fetch_most_recent_sale("14292260030000")
+        assert len(calls) == 2
+        assert fields["acquisition_date"].isoformat() == "2024-07-17"
+        assert fields["most_recent_sale_price"] == 967000.0
+
+    def test_fetch_most_recent_sale_prefers_land_and_building(self):
+        plugin = CookCountyAssessorPlugin()
+
+        def fake_get(url, max_retries=2):
+            if "LAND" in url:
+                return [{
+                    "pin": "14292260030000",
+                    "sale_date": "2024-07-17T00:00:00.000",
+                    "sale_price": "967000",
+                    "sale_type": "LAND AND BUILDING",
+                }]
+            raise AssertionError("fallback query should not run when preferred hits")
+
+        plugin._cache_loader._socrata_get_with_retry = fake_get
+        fields = plugin._fetch_most_recent_sale("14292260030000")
+        assert fields["acquisition_date"].isoformat() == "2024-07-17"
+
+    @patch('app.models.parcel_sales_cache.ParcelSalesCache')
+    def test_list_parcel_sale_history_socrata_fallback(self, mock_cache_model):
+        from app.services.plugins import cook_county_assessor as assessor_mod
+
+        mock_cache_model.query.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
+
+        def fake_get(url, max_retries=2):
+            assert 'LAND AND BUILDING' not in url
+            return [
+                {
+                    'pin': '14292260030000',
+                    'sale_date': '2024-07-17T00:00:00.000',
+                    'sale_price': '967000',
+                    'sale_type': None,
+                },
+                {
+                    'pin': '14292260030000',
+                    'sale_date': '2010-01-05T00:00:00.000',
+                    'sale_price': '400000',
+                    'sale_type': 'LAND AND BUILDING',
+                },
+            ]
+
+        plugin = CookCountyAssessorPlugin()
+        plugin._cache_loader._socrata_get_with_retry = fake_get
+
+        with patch.object(assessor_mod, 'CookCountyAssessorPlugin', return_value=plugin):
+            history = assessor_mod.list_parcel_sale_history('14292260030000', limit=10)
+
+        assert len(history) == 2
+        assert history[0]['sale_date'] == '2024-07-17'
+        assert history[0]['sale_price'] == 967000.0
+        assert history[1]['sale_date'] == '2010-01-05'
+
+    def test_list_parcel_sale_history_seeds_from_lead_when_sources_empty(self):
+        from app.services.plugins import cook_county_assessor as assessor_mod
+        from datetime import date
+
+        lead = _make_lead(
+            most_recent_sale='7/17/2024',
+            most_recent_sale_price=967000.0,
+            acquisition_date=date(2024, 7, 17),
+            county_assessor_pin=None,
+        )
+        history = assessor_mod.list_parcel_sale_history(None, limit=10, lead=lead)
+        assert history == [{
+            'sale_date': '2024-07-17',
+            'sale_price': 967000.0,
+            'sale_type': None,
+        }]
+
 
 # ---------------------------------------------------------------------------
 # Integration: recalculate_lead_score with all merged features

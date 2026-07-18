@@ -169,6 +169,12 @@ celery.conf.update(
             'schedule': crontab(hour='3,9,15,21', minute=30),
             'options': {'expires': 3600},
         },
+        # Sale-date-focused verification — hourly assessor lane with Redis cursor.
+        'cook-county-sale-date-verification': {
+            'task': 'cook_county.backfill_sale_dates',
+            'schedule': crontab(minute=15),
+            'options': {'expires': 3300},
+        },
         # Nightly supporting-data invariants — catalog gaps / enrichment silence.
         'cook-county-enrichment-invariants': {
             'task': 'cook_county.enrichment_invariants',
@@ -610,6 +616,27 @@ def cook_county_backfill_enrichment_task(self):
             return summary
     except Exception as exc:
         _logger.error("cook_county.backfill_enrichment failed: %s", exc)
+        raise
+
+
+@celery.task(bind=True, name='cook_county.backfill_sale_dates')
+def cook_county_backfill_sale_dates_task(self):
+    """Hourly task: assessor-focused sale-date verification with Redis cursor."""
+    import logging
+    _logger = logging.getLogger('celery.cook_county.backfill_sale_dates')
+
+    try:
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            from app.services.cook_county_enrichment_service import (
+                backfill_sale_date_verification,
+            )
+            summary = backfill_sale_date_verification()
+            _logger.info("cook_county.backfill_sale_dates: %s", summary)
+            return summary
+    except Exception as exc:
+        _logger.error("cook_county.backfill_sale_dates failed: %s", exc)
         raise
 
 
@@ -1503,6 +1530,7 @@ REQUIRED_TASKS = {
     'building_ownership.backfill_commercial',
     'cook_county.enrich_lead',
     'cook_county.backfill_enrichment',
+    'cook_county.backfill_sale_dates',
     'cook_county.enrichment_invariants',
     'motivation.backfill_signals',
     'gis.backfill_property_matches',

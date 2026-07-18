@@ -57,7 +57,9 @@ def preview_property_match(lead_id: int):
 @handle_errors
 def approve_property_match(lead_id: int):
     actor = getattr(g, 'user_id', 'anonymous')
-    return jsonify(_match_svc.approve_match(lead_id, actor=actor)), 200
+    body = request.get_json(silent=True) or {}
+    pin = body.get('pin') if isinstance(body.get('pin'), str) else None
+    return jsonify(_match_svc.approve_match(lead_id, actor=actor, pin=pin)), 200
 
 
 @property_match_bp.route('/<int:lead_id>/property-match/reject', methods=['POST'])

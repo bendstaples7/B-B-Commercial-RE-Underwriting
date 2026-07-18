@@ -33,18 +33,24 @@ export function followUpDueForPreset(preset: Exclude<FollowUpPreset, 'custom'>):
   }
 }
 
+/** Shared follow-up due preview, e.g. "Wednesday, July 20". */
+export function formatFollowUpDueLong(isoDate: string): string {
+  const parsed = new Date(`${isoDate}T00:00:00`)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return parsed.toLocaleDateString(undefined, {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+  })
+}
+
 export function formatFollowUpPresetLabel(
   preset: Exclude<FollowUpPreset, 'custom'>,
   dueDate: string,
 ): string {
   const label = FOLLOW_UP_PRESET_LABELS[preset]
-  const parsed = new Date(`${dueDate}T00:00:00`)
-  if (Number.isNaN(parsed.getTime())) return label
-  if (preset === '1' || preset === '3' || preset === '7' || preset === '14') {
-    const day = parsed.toLocaleDateString(undefined, { weekday: 'long' })
-    return `${label} (${day})`
-  }
-  const when = parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  const when = formatFollowUpDueLong(dueDate)
+  if (!when) return label
   return `${label} (${when})`
 }
 

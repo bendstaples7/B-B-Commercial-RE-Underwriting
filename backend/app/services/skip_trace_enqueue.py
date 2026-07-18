@@ -128,6 +128,45 @@ class SkipTraceEnqueue:
         eligibility = evaluate_move_to_skip_trace(lead)
         if eligibility.already_done:
             healed_handoff = False
+            now = datetime.now(timezone.utc)
+            open_skip_tasks = (
+                LeadTask.query
+                .filter_by(
+                    lead_id=lead_id,
+                    task_type="skip_trace_owner",
+                    status="open",
+                )
+                .order_by(
+                    LeadTask.due_date.asc().nullslast(),
+                    LeadTask.id.asc(),
+                )
+                .all()
+            )
+            completed_task_id_out: Optional[int] = None
+            pending_hubspot_id: Optional[str] = None
+            for task in open_skip_tasks:
+                if self._is_undated_skip_trace_handoff(task):
+                    continue
+                # Heal stuck dated/verify work left open after an earlier handoff.
+                completed_task_id_out = task.id
+                if task.hubspot_task_id:
+                    from app.services.hubspot_task_completion_service import (
+                        mark_hubspot_task_completed_local,
+                    )
+                    local_completion = mark_hubspot_task_completed_local(
+                        lead_id,
+                        task.id,
+                        actor=actor,
+                        reason="moved_to_skip_trace",
+                    )
+                    if local_completion is not None:
+                        pending_hubspot_id = local_completion.hubspot_task_id
+                    else:
+                        self._complete_task_and_log(task, now, actor)
+                else:
+                    self._complete_task_and_log(task, now, actor)
+                healed_handoff = True
+
             skip_trace_task = (
                 LeadTask.query
                 .filter_by(
@@ -149,19 +188,34 @@ class SkipTraceEnqueue:
                     recompute_action=False,
                     commit=False,
                 )
-                db.session.commit()
                 healed_handoff = True
+            elif not self._is_undated_skip_trace_handoff(skip_trace_task):
+                skip_trace_task.title = "Awaiting skip trace"
+                skip_trace_task.due_date = None
+                skip_trace_task.workflow_key = None
+                db.session.add(skip_trace_task)
+                healed_handoff = True
+
+            if healed_handoff:
+                lead.needs_skip_trace = True
+                db.session.add(lead)
+                db.session.commit()
+                if pending_hubspot_id:
+                    from app.services.hubspot_task_completion_service import (
+                        sync_pending_hubspot_completions,
+                    )
+                    sync_pending_hubspot_completions([pending_hubspot_id])
             return {
                 "lead_id": lead_id,
                 "lead_status": lead.lead_status,
                 "lead_score": lead.lead_score,
                 "recommended_action": lead.recommended_action,
-                "completed_task_id": None,
+                "completed_task_id": completed_task_id_out,
                 "skip_trace_task_id": skip_trace_task.id,
                 "changed": healed_handoff,
                 "healed": healed_handoff,
-                "already_done": True,
-                "reason_code": eligibility.reason_code,
+                "already_done": not healed_handoff,
+                "reason_code": None if healed_handoff else eligibility.reason_code,
             }
         if not eligibility.ok:
             raise ActionNotApplicableError(
@@ -178,24 +232,33 @@ class SkipTraceEnqueue:
                 .filter_by(id=complete_task_id, lead_id=lead_id)
                 .first()
             )
-            # Never complete the skip-trace handoff itself; ignore stale/missing
-            # client ids so the handoff still succeeds instead of "Invalid request".
-            if candidate is not None and candidate.task_type != "skip_trace_owner":
+            # Never complete the undated skip-trace handoff placeholder itself;
+            # ignore stale/missing client ids so the handoff still succeeds.
+            if (
+                candidate is not None
+                and not self._is_undated_skip_trace_handoff(candidate)
+            ):
                 completed_task = candidate
 
         if completed_task is None and complete_task_id is None:
-            completed_task = (
+            open_tasks = (
                 LeadTask.query
                 .filter(
                     LeadTask.lead_id == lead_id,
                     LeadTask.status == "open",
-                    LeadTask.task_type != "skip_trace_owner",
                 )
                 .order_by(
                     LeadTask.due_date.asc().nullslast(),
                     LeadTask.id.asc(),
                 )
-                .first()
+                .all()
+            )
+            completed_task = next(
+                (
+                    task for task in open_tasks
+                    if not self._is_undated_skip_trace_handoff(task)
+                ),
+                None,
             )
 
         now = datetime.now(timezone.utc)
@@ -253,6 +316,8 @@ class SkipTraceEnqueue:
                 },
             ))
 
+        # Prefer an existing undated handoff; otherwise convert leftover open
+        # skip_trace_owner rows, or create a fresh undated placeholder.
         skip_trace_task = (
             LeadTask.query
             .filter_by(
@@ -260,9 +325,22 @@ class SkipTraceEnqueue:
                 task_type="skip_trace_owner",
                 status="open",
             )
+            .order_by(
+                LeadTask.due_date.asc().nullslast(),
+                LeadTask.id.asc(),
+            )
             .first()
         )
-        if skip_trace_task is None:
+        if skip_trace_task is not None and not self._is_undated_skip_trace_handoff(
+            skip_trace_task,
+        ):
+            # Dated verify work should already have been completed above; if an
+            # open skip_trace_owner remains, normalize it into the handoff.
+            skip_trace_task.title = "Awaiting skip trace"
+            skip_trace_task.due_date = None
+            skip_trace_task.workflow_key = None
+            db.session.add(skip_trace_task)
+        elif skip_trace_task is None:
             skip_trace_task = self._tasks.create(
                 lead_id,
                 {
@@ -537,6 +615,15 @@ class SkipTraceEnqueue:
                 task.lead_id for task in tasks
             )),
         }
+
+    @staticmethod
+    def _is_undated_skip_trace_handoff(task: LeadTask) -> bool:
+        """True for the undated pipeline placeholder — not current due work."""
+        if task.task_type != "skip_trace_owner":
+            return False
+        if task.due_date is not None:
+            return False
+        return (task.title or "").strip().lower() == "awaiting skip trace"
 
     @staticmethod
     def _complete_task_and_log(

@@ -14,6 +14,7 @@ import {
 import {
   type FollowUpPreset,
   followUpDueForPreset,
+  formatFollowUpDueLong,
 } from '@/utils/followUpPresets'
 
 const PRESET_OPTIONS: Array<{ value: FollowUpPreset; label: string; shortLabel?: string }> = [
@@ -52,11 +53,6 @@ function presetTestSuffix(value: FollowUpPreset): string {
   return `${value}d`
 }
 
-function formatDueShort(isoDate: string): string {
-  const parsed = new Date(`${isoDate}T00:00:00`)
-  if (Number.isNaN(parsed.getTime())) return ''
-  return parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-}
 
 function PresetButton({
   opt,
@@ -204,7 +200,7 @@ function ListVariant({
       >
         {PRESET_OPTIONS.map((opt) => {
           const duePreview =
-            opt.value !== 'custom' ? formatDueShort(followUpDueForPreset(opt.value)) : null
+            opt.value !== 'custom' ? formatFollowUpDueLong(followUpDueForPreset(opt.value)) : null
           return (
             <FormControlLabel
               key={opt.value}

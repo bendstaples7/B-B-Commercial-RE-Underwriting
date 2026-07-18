@@ -1,6 +1,7 @@
 """Map platform leads to Open Letter Connect contact payloads."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.models.lead import Lead
@@ -45,6 +46,97 @@ def _merge_parsed_fields(
     )
 
 
+_STREET_ABBREV = (
+    (r'\bstreet\b', 'st'),
+    (r'\bavenue\b', 'ave'),
+    (r'\bboulevard\b', 'blvd'),
+    (r'\bdrive\b', 'dr'),
+    (r'\broad\b', 'rd'),
+    (r'\blane\b', 'ln'),
+    (r'\bcourt\b', 'ct'),
+    (r'\bcircle\b', 'cir'),
+    (r'\bplace\b', 'pl'),
+    (r'\bterrace\b', 'ter'),
+    (r'\bparkway\b', 'pkwy'),
+    (r'\bapartment\b', 'apt'),
+    (r'\bsuite\b', 'ste'),
+    (r'\bunit\b', 'unit'),
+)
+
+
+def _normalize_address_part(value: str) -> str:
+    text = _clean(value).lower()
+    if not text:
+        return ''
+    text = text.replace('#', ' ')
+    text = re.sub(r'[.,;:/\\]+', ' ', text)
+    for pattern, repl in _STREET_ABBREV:
+        text = re.sub(pattern, repl, text)
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def _normalize_zip(value: str) -> str:
+    digits = re.sub(r'\D', '', _clean(value))
+    return digits[:5] if digits else ''
+
+
+def _address_tuple_from_line(line: str) -> tuple[str, str, str, str]:
+    cleaned = _clean(line)
+    if not cleaned:
+        return '', '', '', ''
+    parsed = parse_embedded_us_address(cleaned)
+    if parsed:
+        return parsed
+    return cleaned, '', '', ''
+
+
+def _returned_entry_matches_target(
+    returned_line: str,
+    target: tuple[str, str, str, str],
+) -> bool:
+    """True when a returned-mail history line identifies the current mailing target."""
+    t_street, t_city, t_state, t_zip = target
+    norm_street = _normalize_address_part(t_street)
+    if not norm_street:
+        return False
+
+    r_street, r_city, r_state, r_zip = _address_tuple_from_line(returned_line)
+    if not r_street:
+        r_street = returned_line
+    r_street_norm = _normalize_address_part(
+        re.sub(
+            r'\b(returned|undeliverable|rts|bad address)\b',
+            ' ',
+            r_street,
+            flags=re.I,
+        )
+    )
+    if not r_street_norm or r_street_norm != norm_street:
+        return False
+
+    if r_city and _normalize_address_part(r_city) != _normalize_address_part(t_city):
+        return False
+    if r_state and _normalize_address_part(r_state) != _normalize_address_part(t_state):
+        return False
+    if r_zip and _normalize_zip(r_zip) != _normalize_zip(t_zip):
+        return False
+    return True
+
+
+def current_owner_mailing_was_returned(lead: Lead) -> bool:
+    """True when returned-mail history identifies the current owner mailing target."""
+    returned = _clean(getattr(lead, 'returned_addresses', None))
+    if not returned:
+        return False
+    target = owner_mailing_address(lead)
+    if not target[0]:
+        return False
+    for line in returned.splitlines():
+        if _clean(line) and _returned_entry_matches_target(line, target):
+            return True
+    return False
+
+
 def is_mailable_lead(lead: Lead) -> bool:
     """True when the lead has a complete mailable address (including embedded parse)."""
     return validate_lead_mail_address(lead) is None
@@ -61,9 +153,8 @@ def owner_mailing_address(lead: Lead) -> tuple[str, str, str, str]:
 
 def validate_owner_mailing_address(lead: Lead) -> str | None:
     """Return an owner-mailing validation error, or None when complete."""
-    returned = _clean(getattr(lead, 'returned_addresses', None))
-    if returned:
-        return 'Owner mailing address was previously returned'
+    if current_owner_mailing_was_returned(lead):
+        return 'Current owner mailing address was previously returned'
     street, city, state, zip_code = owner_mailing_address(lead)
     if not street:
         return 'No owner mailing street address'

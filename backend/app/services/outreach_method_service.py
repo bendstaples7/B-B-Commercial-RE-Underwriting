@@ -281,6 +281,7 @@ def _collect_emails_for_lead(lead_id: int | None, lead: Lead) -> list[str]:
                     SELECT ce.value FROM contact_emails ce
                     JOIN property_contacts pc ON pc.contact_id = ce.contact_id
                     WHERE pc.property_id = :lead_id
+                      AND (pc.role IS NULL OR pc.role <> 'former_owner')
                 """),
                 {'lead_id': lead_id},
             ).fetchall()
@@ -356,25 +357,40 @@ def _batch_best_phone_by_lead(leads: list[Lead]) -> dict[int, str]:
     from sqlalchemy import bindparam, text
 
     from app import db
-    from app.services.phone_confidence_service import DEFAULT_CONFIDENCE
+    from app.services.phone_confidence_service import (
+        DEFAULT_CONFIDENCE,
+        MIN_VIABLE_CONFIDENCE,
+        PhoneConfidenceService,
+    )
 
     statement = text("""
-            SELECT pc.property_id, cp.value, cp.confidence_score
+            SELECT pc.property_id, cp.value, cp.confidence_score, cp.notes, cp.label, cp.source
             FROM contact_phones cp
             JOIN property_contacts pc ON pc.contact_id = cp.contact_id
             WHERE pc.property_id IN :lead_ids
+              AND (pc.role IS NULL OR pc.role <> 'former_owner')
         """).bindparams(bindparam('lead_ids', expanding=True))
     rows = db.session.execute(
         statement,
         {'lead_ids': lead_ids},
     ).fetchall()
 
-    candidates: dict[int, list[tuple[int, str]]] = defaultdict(list)
-    for property_id, value, confidence in rows:
+    # (score, preferred_rank, value) — preferred_rank 0 = HubSpot primary / phone_1
+    candidates: dict[int, list[tuple[int, int, str]]] = defaultdict(list)
+    for property_id, value, confidence, notes, label, source in rows:
         if not value or not str(value).strip():
             continue
         score = confidence if confidence is not None else DEFAULT_CONFIDENCE
-        candidates[property_id].append((score, str(value).strip()))
+        notes_l = (notes or '').lower()
+        label_l = (str(label) if label is not None else '').lower()
+        source_l = (str(source) if source is not None else '').lower()
+        is_primary = (
+            'hubspot primary' in notes_l
+            or label_l == 'mobile'
+            or (source_l.startswith('hubspot') and 'hubspot primary' in notes_l)
+        )
+        preferred = 0 if is_primary else 1
+        candidates[property_id].append((score, preferred, str(value).strip()))
 
     result: dict[int, str] = {}
     for lead in leads:
@@ -385,11 +401,28 @@ def _batch_best_phone_by_lead(leads: list[Lead]) -> dict[int, str]:
         for slot in range(1, 8):
             raw = getattr(lead, f'phone_{slot}', None)
             if isinstance(raw, str) and raw.strip():
-                ranked.append((DEFAULT_CONFIDENCE, raw.strip()))
+                # phone_1 is preferred over later flat slots; never sort by digits.
+                preferred = 0 if slot == 1 else 2
+                ranked.append((DEFAULT_CONFIDENCE, preferred, raw.strip()))
         if not ranked:
             continue
+        # Dedupe by normalized digits, keeping best score/preferred.
+        by_digits: dict[str, tuple[int, int, str]] = {}
+        for score, preferred, value in ranked:
+            digits = PhoneConfidenceService.normalize_phone(value)
+            if len(digits) < 7:
+                continue
+            existing = by_digits.get(digits)
+            if existing is None or (score, -preferred) > (existing[0], -existing[1]):
+                by_digits[digits] = (score, preferred, value)
+        ranked = list(by_digits.values())
         ranked.sort(key=lambda item: (-item[0], item[1]))
-        result[lead_id] = ranked[0][1]
+        viable = [item for item in ranked if item[0] >= MIN_VIABLE_CONFIDENCE]
+        if viable:
+            result[lead_id] = viable[0][2]
+        elif len(ranked) == 1:
+            result[lead_id] = ranked[0][2]
+        # Multiple numbers all below viable confidence → skip auto-pick.
     return result
 
 
@@ -408,6 +441,7 @@ def _batch_first_email_by_lead(leads: list[Lead]) -> dict[int, str]:
             FROM contact_emails ce
             JOIN property_contacts pc ON pc.contact_id = ce.contact_id
             WHERE pc.property_id IN :lead_ids
+              AND (pc.role IS NULL OR pc.role <> 'former_owner')
             ORDER BY pc.property_id, ce.id
         """).bindparams(bindparam('lead_ids', expanding=True))
     rows = db.session.execute(
