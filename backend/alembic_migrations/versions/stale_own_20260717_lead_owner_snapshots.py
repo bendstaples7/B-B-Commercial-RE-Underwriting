@@ -5,8 +5,6 @@ Revises: act_goals_fk_20260716
 """
 
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 
 revision = 'stale_own_20260717'
@@ -20,39 +18,36 @@ def upgrade():
         "ALTER TYPE property_contact_role_enum "
         "ADD VALUE IF NOT EXISTS 'former_owner'"
     )
-    op.add_column(
-        'property_contacts',
-        sa.Column('superseded_at', sa.DateTime(timezone=True), nullable=True),
+    op.execute(
+        """
+        ALTER TABLE property_contacts
+        ADD COLUMN IF NOT EXISTS superseded_at TIMESTAMP WITH TIME ZONE
+        """
     )
-    op.create_table(
-        'lead_owner_snapshots',
-        sa.Column('id', sa.Integer(), primary_key=True),
-        sa.Column(
-            'lead_id',
-            sa.Integer(),
-            sa.ForeignKey('leads.id', ondelete='CASCADE'),
-            nullable=False,
-            index=True,
-        ),
-        sa.Column(
-            'captured_at',
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text('NOW()'),
-        ),
-        sa.Column('reason', sa.String(40), nullable=False),
-        sa.Column('sale_date', sa.Date(), nullable=True),
-        sa.Column(
-            'payload',
-            postgresql.JSONB(astext_type=sa.Text()),
-            nullable=False,
-            server_default=sa.text("'{}'::jsonb"),
-        ),
+    op.execute(
+        """
+        CREATE TABLE IF NOT EXISTS lead_owner_snapshots (
+            id SERIAL PRIMARY KEY,
+            lead_id INTEGER NOT NULL
+                REFERENCES leads(id) ON DELETE CASCADE,
+            captured_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            reason VARCHAR(40) NOT NULL,
+            sale_date DATE,
+            payload JSONB NOT NULL DEFAULT '{}'::jsonb
+        )
+        """
     )
-    op.create_index(
-        'ix_lead_owner_snapshots_lead_sale',
-        'lead_owner_snapshots',
-        ['lead_id', 'sale_date'],
+    op.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_lead_owner_snapshots_lead_id
+        ON lead_owner_snapshots (lead_id)
+        """
+    )
+    op.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_lead_owner_snapshots_lead_sale
+        ON lead_owner_snapshots (lead_id, sale_date)
+        """
     )
     # One recent_sale snapshot per lead+sale (concurrent CC GET safety).
     op.execute(
@@ -65,7 +60,11 @@ def upgrade():
 
 
 def downgrade():
-    op.drop_index('ix_lead_owner_snapshots_lead_sale', table_name='lead_owner_snapshots')
-    op.drop_table('lead_owner_snapshots')
-    op.drop_column('property_contacts', 'superseded_at')
+    op.execute('DROP INDEX IF EXISTS uq_lead_owner_snapshots_recent_sale')
+    op.execute('DROP INDEX IF EXISTS ix_lead_owner_snapshots_lead_sale')
+    op.execute('DROP INDEX IF EXISTS ix_lead_owner_snapshots_lead_id')
+    op.execute('DROP TABLE IF EXISTS lead_owner_snapshots')
+    op.execute(
+        'ALTER TABLE property_contacts DROP COLUMN IF EXISTS superseded_at'
+    )
     # Postgres cannot easily remove enum values; leave former_owner in place.

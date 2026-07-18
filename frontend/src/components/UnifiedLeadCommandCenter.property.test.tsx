@@ -17,6 +17,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Routes, Route, Navigate, useParams, useLocation } from 'react-router-dom'
 import { primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import { UnifiedLeadCommandCenter, ALL_LEAD_STATUSES } from './UnifiedLeadCommandCenter'
+import { TIMELINE_PREVIEW_COUNT } from './LeadTimeline'
 import { QueueTable } from './QueueTable'
 import GlobalSearchBar from './GlobalSearchBar'
 import { ThemeProvider, createTheme } from '@mui/material'
@@ -1210,8 +1211,11 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
 
     await fc.assert(
       fc.asyncProperty(
-        // Generate N existing timeline entries (0..8) with unique IDs
-        fc.array(timelineEntryArb, { minLength: 0, maxLength: 8 }),
+        // Stay within the timeline preview window so all rows render without "Show older".
+        fc.array(timelineEntryArb, {
+          minLength: 0,
+          maxLength: TIMELINE_PREVIEW_COUNT - 1,
+        }),
         async (initialEntries) => {
           // Ensure all initial entries have distinct IDs (avoids duplicate key warnings
           // and makes position assertions unambiguous)
@@ -1274,6 +1278,12 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           // Wait for React state update to flush
           await new Promise(r => setTimeout(r, 50))
 
+          // Expand preview if the new entry pushed total past the preview window.
+          const showOlder = container.querySelector('[data-testid="timeline-show-older-btn"]')
+          if (showOlder) {
+            fireEvent.click(showOlder)
+          }
+
           // The new entry (id=999999) should now be at position 0 in the timeline list
           const timelineList = container.querySelector('[data-testid="timeline-list"]')
           expect(timelineList).not.toBeNull()
@@ -1319,8 +1329,10 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           const mockGetLeadDetail = leadService.getLeadDetail as ReturnType<typeof vi.fn>
           const mockGetTimeline = commandCenterService.getTimeline as ReturnType<typeof vi.fn>
 
-          // Total > initial entries count so the "Load more" button is shown
-          const total = initialEntries.length + moreEntries.length
+          // Distinct IDs across pages; total > loaded so Load more can appear after preview.
+          const page1 = initialEntries.map((e, i) => ({ ...e, id: i + 1 }))
+          const page2 = moreEntries.map((e, i) => ({ ...e, id: 1000 + i + 1 }))
+          const total = page1.length + page2.length
 
           mockGetCommandCenter.mockReset()
           mockGetLeadDetail.mockReset()
@@ -1336,11 +1348,11 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
             property_city: null,
             property_state: null,
             open_tasks: [],
-            timeline: { entries: initialEntries, total, page: 1, per_page: 20 },
+            timeline: { entries: page1, total, page: 1, per_page: 20 },
             recommended_action: { value: null, label: null, explanation: null, signals: {} },
           })
           mockGetLeadDetail.mockResolvedValue(minimalPropertyDetail(1))
-          mockGetTimeline.mockResolvedValue({ entries: moreEntries, total, page: 2, per_page: 20 })
+          mockGetTimeline.mockResolvedValue({ entries: page2, total, page: 2, per_page: 20 })
 
           const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
           const container = document.createElement('div')
@@ -1357,23 +1369,27 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
 
           await waitForCommandCenterLoaded(container)
 
-          // Verify initial entry count is N
+          // Preview may hide rows until "Show older" is clicked.
+          const expectedVisible = Math.min(page1.length, TIMELINE_PREVIEW_COUNT)
           const initialRendered = container.querySelectorAll('[data-testid^="timeline-entry-"]')
-          expect(initialRendered.length).toBe(initialEntries.length)
+          expect(initialRendered.length).toBe(expectedVisible)
+
+          const { fireEvent } = await import('@testing-library/react')
+          const showOlder = container.querySelector('[data-testid="timeline-show-older-btn"]')
+          if (showOlder) {
+            fireEvent.click(showOlder)
+          }
 
           // Find and click the "Load more" button
           const loadMoreBtn = container.querySelector('[data-testid="load-more-btn"]')
           expect(loadMoreBtn).not.toBeNull()
-
-          const { fireEvent } = await import('@testing-library/react')
           fireEvent.click(loadMoreBtn!)
 
           // Wait for the async load-more operation to complete
-          await new Promise(r => setTimeout(r, 100))
-
-          // After loading more, total entries should be N + M
-          const afterLoadRendered = container.querySelectorAll('[data-testid^="timeline-entry-"]')
-          expect(afterLoadRendered.length).toBe(initialEntries.length + moreEntries.length)
+          await waitFor(() => {
+            const afterLoadRendered = container.querySelectorAll('[data-testid^="timeline-entry-"]')
+            expect(afterLoadRendered.length).toBe(page1.length + page2.length)
+          })
 
           unmount()
           document.body.removeChild(container)

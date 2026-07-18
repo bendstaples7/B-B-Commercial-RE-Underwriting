@@ -1,4 +1,4 @@
-"""Unique recent_sale snapshot per lead+sale; drop non-unique lead_sale index.
+"""Unique recent_sale snapshot per lead+sale; keep lead_sale lookup index.
 
 Revision ID: stale_uq_20260717
 Revises: stale_own_20260717
@@ -25,7 +25,6 @@ def upgrade():
           AND b.reason = 'recent_sale'
         """
     )
-    op.drop_index('ix_lead_owner_snapshots_lead_sale', table_name='lead_owner_snapshots')
     op.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS uq_lead_owner_snapshots_recent_sale
@@ -33,10 +32,11 @@ def upgrade():
         WHERE reason = 'recent_sale' AND sale_date IS NOT NULL
         """
     )
-    op.create_index(
-        'ix_lead_owner_snapshots_lead_sale',
-        'lead_owner_snapshots',
-        ['lead_id', 'sale_date'],
+    op.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_lead_owner_snapshots_lead_sale
+        ON lead_owner_snapshots (lead_id, sale_date)
+        """
     )
 
 
