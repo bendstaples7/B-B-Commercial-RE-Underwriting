@@ -114,6 +114,7 @@ def _payload_has_content(payload: dict) -> bool:
     mailing = (
         (payload.get('mailing_address') or '').strip()
         or (payload.get('mailing_city') or '').strip()
+        or (payload.get('mailing_state') or '').strip()
         or (payload.get('mailing_zip') or '').strip()
     )
     return bool(mailing)
@@ -173,21 +174,18 @@ def capture_owner_snapshot(
         sale_date=sale_date,
         payload=payload,
     )
-    db.session.add(snap)
+    from sqlalchemy.exc import IntegrityError
     try:
-        if commit:
-            db.session.commit()
-        else:
+        with db.session.begin_nested():
+            db.session.add(snap)
             db.session.flush()
-    except Exception as exc:
-        # Concurrent unique violation on recent_sale — treat as already captured.
-        from sqlalchemy.exc import IntegrityError
-        if not isinstance(exc, IntegrityError):
-            raise
-        db.session.rollback()
+    except IntegrityError:
         if reason == REASON_RECENT_SALE and has_snapshot_for_sale(lead.id, sale_date):
             return None
         raise
+
+    if commit:
+        db.session.commit()
     logger.info(
         'Captured owner snapshot lead_id=%s reason=%s sale_date=%s',
         lead.id, reason, sale_date,

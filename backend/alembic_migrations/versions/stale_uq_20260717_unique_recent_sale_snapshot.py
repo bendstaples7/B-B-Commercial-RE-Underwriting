@@ -20,6 +20,8 @@ def upgrade():
         USING lead_owner_snapshots b
         WHERE a.id > b.id
           AND a.lead_id = b.lead_id
+          AND a.sale_date IS NOT NULL
+          AND b.sale_date IS NOT NULL
           AND a.sale_date IS NOT DISTINCT FROM b.sale_date
           AND a.reason = 'recent_sale'
           AND b.reason = 'recent_sale'
@@ -41,4 +43,4 @@ def upgrade():
 
 
 def downgrade():
-    op.execute('DROP INDEX IF EXISTS uq_lead_owner_snapshots_recent_sale')
+    pass

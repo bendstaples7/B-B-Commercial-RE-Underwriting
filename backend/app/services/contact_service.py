@@ -469,6 +469,13 @@ class ContactService:
             raise ValidationException('Lead with id is required.', field='lead_id')
 
         property_id = lead.id
+        outgoing_owner_ids = {
+            pc.contact_id
+            for pc in PropertyContact.query.filter_by(
+                property_id=property_id,
+                role='owner',
+            ).all()
+        }
         owners: list[tuple[str | None, str | None]] = []
         o1_first = (lead.owner_first_name or '').strip() or None
         o1_last = (lead.owner_last_name or '').strip() or None
@@ -544,10 +551,15 @@ class ContactService:
 
         # When incoming person owners differ from existing owner-role links,
         # archive the unmatched ones so Past owners history is preserved.
-        # Skip when no person owners were upserted (e.g. all promoted to org).
-        if results:
+        if results or promoted_any_org:
             kept_ids = {contact.id for contact, _link in results}
-            self._archive_unmatched_owners(property_id, kept_ids)
+            archive_ids = outgoing_owner_ids - kept_ids
+            if archive_ids:
+                self._archive_unmatched_owners(
+                    property_id,
+                    kept_ids,
+                    only_contact_ids=archive_ids,
+                )
 
         if commit:
             db.session.commit()
@@ -592,6 +604,8 @@ class ContactService:
         self,
         property_id: int,
         kept_contact_ids: set[int],
+        *,
+        only_contact_ids: set[int] | None = None,
     ) -> int:
         """Re-role owner links not in *kept_contact_ids* to former_owner.
 
@@ -611,6 +625,8 @@ class ContactService:
         )
         if kept_contact_ids:
             query = query.filter(~PropertyContact.contact_id.in_(kept_contact_ids))
+        if only_contact_ids is not None:
+            query = query.filter(PropertyContact.contact_id.in_(only_contact_ids))
         unmatched = query.all()
         if not unmatched:
             return 0
@@ -757,6 +773,8 @@ class ContactService:
             )
             if not exact and not fuzzy:
                 continue
+            if link.role not in ('owner', 'former_owner'):
+                continue
             # Prefer the more complete first name (e.g. JOSEPH A over Joseph)
             if (first_name or '').strip() and len((first_name or '').strip()) > len(
                 (contact.first_name or '').strip()
@@ -764,7 +782,13 @@ class ContactService:
                 contact.first_name = first_name
             if (last_name or '').strip() and not (contact.last_name or '').strip():
                 contact.last_name = last_name
-            self._reactivate_owner_link(link, property_id, is_primary=is_primary)
+            if link.role == 'former_owner':
+                self._reactivate_owner_link(link, property_id, is_primary=is_primary)
+            elif is_primary:
+                PropertyContact.query.filter_by(
+                    property_id=property_id, is_primary=True,
+                ).update({'is_primary': False})
+                link.is_primary = True
             return contact, link
 
         # Cross-property reuse: same user + phone/email (+ name gate) on another building.
@@ -778,7 +802,15 @@ class ContactService:
         if reused is not None:
             for contact, link in existing_rows:
                 if contact.id == reused.id:
-                    self._reactivate_owner_link(link, property_id, is_primary=is_primary)
+                    if link.role not in ('owner', 'former_owner'):
+                        break
+                    if link.role == 'former_owner':
+                        self._reactivate_owner_link(link, property_id, is_primary=is_primary)
+                    elif is_primary:
+                        PropertyContact.query.filter_by(
+                            property_id=property_id, is_primary=True,
+                        ).update({'is_primary': False})
+                        link.is_primary = True
                     return reused, link
             if is_primary:
                 PropertyContact.query.filter_by(

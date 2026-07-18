@@ -18,6 +18,13 @@ def apply_lead_status_change(
     """Update lead status with DNC/suppress side effects and timeline entry."""
     old_status = lead.lead_status
     if new_status == old_status:
+        if (
+            new_status in ('skip_trace', 'awaiting_skip_trace')
+            and not lead.needs_skip_trace
+        ):
+            lead.needs_skip_trace = True
+            db.session.add(lead)
+            db.session.commit()
         return
 
     lead.lead_status = new_status

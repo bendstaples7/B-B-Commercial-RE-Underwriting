@@ -440,10 +440,14 @@ class QueueService:
             func.coalesce(func.sum(case((email_clause, 1), else_=0)), 0).label('email_now'),
             func.coalesce(func.sum(case((text_clause, 1), else_=0)), 0).label('text_now'),
         ).one()
-        mail_leads = base.filter(mail_clause).all() if mail_clause is not None else []
+        mail_iter = (
+            base.filter(mail_clause).yield_per(500)
+            if mail_clause is not None
+            else ()
+        )
         return {
             'all': int(row.all_count or 0),
-            'direct_mail': sum(1 for lead in mail_leads if is_owner_mailable_lead(lead)),
+            'direct_mail': sum(1 for lead in mail_iter if is_owner_mailable_lead(lead)),
             'call_now': int(row.call_now or 0),
             'email_now': int(row.email_now or 0),
             'text_now': int(row.text_now or 0),
@@ -455,7 +459,8 @@ class QueueService:
         query = _apply_queue_sort(query, 'lead_score', 'desc')
         if normalize_todays_outreach_filter(outreach) == 'direct_mail':
             return [
-                lead.id for lead in query.all() if is_owner_mailable_lead(lead)
+                lead.id for lead in query.yield_per(500)
+                if is_owner_mailable_lead(lead)
             ]
         return [row[0] for row in query.with_entities(Lead.id).all()]
 
@@ -471,7 +476,10 @@ class QueueService:
         query = self._todays_action_query(outreach=outreach)
         if normalize_todays_outreach_filter(outreach) == 'direct_mail':
             query = _apply_queue_sort(query, sort_by, sort_order)
-            eligible = [lead for lead in query.all() if is_owner_mailable_lead(lead)]
+            eligible = [
+                lead for lead in query.yield_per(500)
+                if is_owner_mailable_lead(lead)
+            ]
             total = len(eligible)
             start = (page - 1) * per_page
             leads = eligible[start:start + per_page]
@@ -881,6 +889,16 @@ class QueueService:
         if queue_key == 'todays-action':
             query = self._todays_action_query(outreach=outreach)
             query = _apply_queue_sort(query, sort_by, sort_order)
+            if normalize_todays_outreach_filter(outreach) == 'direct_mail':
+                ids: list[int] = []
+                total = 0
+                for lead in query.yield_per(500):
+                    if not is_owner_mailable_lead(lead):
+                        continue
+                    total += 1
+                    if len(ids) < cap:
+                        ids.append(lead.id)
+                return ids, total
             return self._ordered_ids_from_query(query, cap)
 
         if queue_key == 'previously-warm':

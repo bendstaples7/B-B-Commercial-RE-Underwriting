@@ -465,7 +465,7 @@ export interface PropertyContactSummary {
 export interface PastOwnerSnapshot {
   id: number
   captured_at: string | null
-  reason: 'recent_sale' | 'contact_replaced' | string
+  reason: 'recent_sale' | 'contact_replaced' | (string & {})
   sale_date?: string | null
   owner_names: Array<{
     contact_id?: number | null
@@ -2142,6 +2142,7 @@ export interface CommandCenterPayload {
   square_footage?: number | null;
   year_built?: number | null;
   county_assessor_pin?: string | null;
+  is_cook_county_eligible?: boolean;
   ownership_type?: string | null;
   acquisition_date?: string | null;
   mailing_address?: string | null;

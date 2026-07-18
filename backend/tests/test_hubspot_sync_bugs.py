@@ -2434,6 +2434,7 @@ class TestBug8RescoreOnChange:
                 has_phone=True,
                 has_email=True,
                 has_property_match=True,
+                owner_user_id='test-user',
             )
             db.session.add(lead)
             db.session.commit()
@@ -2448,6 +2449,7 @@ class TestBug8RescoreOnChange:
             resp = client.patch(
                 f'/api/leads/{lead_id}/status',
                 json={'status': 'negotiating_remote'},
+                headers={'X-User-Id': 'test-user'},
             )
             assert resp.status_code == 200
 
@@ -2644,6 +2646,7 @@ class TestBug8RescoreOnChange:
                 has_phone=True,
                 has_email=True,
                 has_property_match=True,
+                owner_user_id='test-user',
             )
             db.session.add(lead)
             db.session.commit()
@@ -2657,6 +2660,7 @@ class TestBug8RescoreOnChange:
                 resp = client.patch(
                     f'/api/leads/{lead_id}/status',
                     json={'status': 'negotiating_remote'},
+                    headers={'X-User-Id': 'test-user'},
                 )
 
             # The scoring failure must NOT surface as a 500 — the status change

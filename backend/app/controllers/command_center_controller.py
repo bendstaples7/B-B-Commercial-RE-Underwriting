@@ -684,6 +684,7 @@ def get_command_center(lead_id: int):
 
     is_mailable = is_owner_mailable_lead(lead)
     mail_eligible_date = recent_sale_mail_eligible_date(lead)
+    from app.services.cook_county_enrichment_service import is_cook_county_lead
 
     return jsonify({
         'id': lead.id,
@@ -708,6 +709,7 @@ def get_command_center(lead_id: int):
         'square_footage': lead.square_footage,
         'year_built': lead.year_built,
         'county_assessor_pin': lead.county_assessor_pin,
+        'is_cook_county_eligible': is_cook_county_lead(lead),
         # Mailing address
         'mailing_address': lead.mailing_address,
         'mailing_city': lead.mailing_city,
@@ -761,6 +763,7 @@ def get_command_center(lead_id: int):
             getattr(lead, 'county_assessor_pin', None),
             limit=50,
             lead=lead,
+            cache_only=True,
         ),
         'is_mailable': is_mailable,
         'mail_eligible': is_mailable and mail_eligible_date is None,
@@ -907,6 +910,7 @@ def get_command_center(lead_id: int):
 
 
 @command_center_bp.route('/<int:lead_id>/status', methods=['PATCH'])
+@require_auth
 @handle_errors
 def update_status(lead_id: int):
     """
@@ -924,6 +928,10 @@ def update_status(lead_id: int):
     lead = Lead.query.get(lead_id)
     if lead is None:
         return jsonify({'error': 'Not found'}), 404
+
+    denied = _require_lead_read_access(lead)
+    if denied is not None:
+        return denied
 
     old_status = lead.lead_status
     new_status = data['status']
@@ -1649,7 +1657,11 @@ def verify_sale_date(lead_id: int):
     from app import db as _db
     _db.session.refresh(lead)
 
-    message = 'Verification queued.' if queued else ''
+    message = (
+        'Verification queued.'
+        if queued
+        else ('Sale date verified.' if ran_sync else '')
+    )
     if ran_sync and summary is not None:
         if summary.get('skipped'):
             reason = summary.get('skip_reason') or 'unknown'

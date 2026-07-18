@@ -121,7 +121,12 @@ class PropertyMatchReviewService:
         # lookup_by_pin when address lookup is flaky or empty.
         pin_value = (pin or '').strip() or None
         if pin_value:
-            from app.services.plugins.pin_utils import format_pin_for_storage
+            from app.services.plugins.pin_utils import (
+                format_pin_for_storage,
+                normalize_pin_for_socrata,
+            )
+            if len(normalize_pin_for_socrata(pin_value)) != 14:
+                raise ValueError('Invalid Cook County PIN')
             lead.county_assessor_pin = format_pin_for_storage(pin_value)
 
         try:
@@ -131,6 +136,14 @@ class PropertyMatchReviewService:
             if not outcome.get('match_found'):
                 db.session.rollback()
                 raise ValueError('GIS match could not be applied')
+
+            if pin_value:
+                from app.services.plugins.pin_utils import normalize_pin_for_socrata
+                resolved = normalize_pin_for_socrata(lead.county_assessor_pin or '')
+                submitted = normalize_pin_for_socrata(pin_value)
+                if resolved and submitted and resolved != submitted:
+                    db.session.rollback()
+                    raise ValueError('Submitted PIN does not match the resolved parcel')
 
             if not preserve_skip_trace:
                 lead.needs_skip_trace = False

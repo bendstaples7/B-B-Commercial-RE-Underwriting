@@ -625,19 +625,49 @@ def cook_county_backfill_sale_dates_task(self):
     import logging
     _logger = logging.getLogger('celery.cook_county.backfill_sale_dates')
 
+    lock_key = 'cook_county:sale_date_backfill_lock'
+    lock_ttl_seconds = 50 * 60
+    claimed = False
+
     try:
         from app import create_app
         app = create_app()
         with app.app_context():
+            from app.services.deploy_sync_policy import (
+                _redis_client,
+                try_claim_redis_key,
+            )
             from app.services.cook_county_enrichment_service import (
                 backfill_sale_date_verification,
             )
+
+            client = _redis_client()
+            if client is not None:
+                claimed = try_claim_redis_key(lock_key, ttl_seconds=lock_ttl_seconds)
+                if not claimed:
+                    _logger.info(
+                        "cook_county.backfill_sale_dates: skipped (lock held)"
+                    )
+                    return {'skipped': True, 'reason': 'lock_held'}
+
             summary = backfill_sale_date_verification()
             _logger.info("cook_county.backfill_sale_dates: %s", summary)
             return summary
     except Exception as exc:
         _logger.error("cook_county.backfill_sale_dates failed: %s", exc)
         raise
+    finally:
+        if claimed:
+            try:
+                from app.services.deploy_sync_policy import _redis_client
+                client = _redis_client()
+                if client is not None:
+                    client.delete(lock_key)
+            except Exception as release_exc:
+                _logger.warning(
+                    "cook_county.backfill_sale_dates: failed to release lock: %s",
+                    release_exc,
+                )
 
 
 @celery.task(bind=True, name='cook_county.enrichment_invariants')

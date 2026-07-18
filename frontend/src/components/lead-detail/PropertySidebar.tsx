@@ -178,7 +178,13 @@ function SidebarLabeledContent({
   )
 }
 
-function CopyableEmail({ email }: { email: string }) {
+function CopyableEmail({
+  email,
+  actionable = true,
+}: {
+  email: string
+  actionable?: boolean
+}) {
   const [copied, setCopied] = useState(false)
   const handleCopy = () => {
     navigator.clipboard.writeText(email)
@@ -188,9 +194,15 @@ function CopyableEmail({ email }: { email: string }) {
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 0.5, minWidth: 0 }}>
       <EmailIcon sx={{ fontSize: 13, color: 'text.secondary', flexShrink: 0 }} />
-      <Link href={`mailto:${email}`} variant="caption" underline="hover" noWrap>
-        {email}
-      </Link>
+      {actionable ? (
+        <Link href={`mailto:${email}`} variant="caption" underline="hover" noWrap>
+          {email}
+        </Link>
+      ) : (
+        <Typography variant="caption" noWrap>
+          {email}
+        </Typography>
+      )}
       <Tooltip title={copied ? 'Copied!' : 'Copy'}>
         <IconButton size="small" onClick={handleCopy} sx={{ p: 0.25, flexShrink: 0 }}>
           <ContentCopyIcon sx={{ fontSize: 11 }} />
@@ -369,14 +381,7 @@ export function PropertySidebar({
     undefined,
     { hasDisplayedSale },
   )
-  const propertyState = (commandCenterData.property_state || '').trim().toLowerCase()
-  const propertyCity = (commandCenterData.property_city || '').trim().toLowerCase()
-  const isCookCountyEligible = Boolean(
-    propertyState === 'il'
-    || propertyState === 'illinois'
-    || propertyCity === 'chicago'
-    || commandCenterData.county_assessor_pin?.trim(),
-  )
+  const isCookCountyEligible = Boolean(commandCenterData.is_cook_county_eligible)
   const canReverifySaleDate = Boolean(
     isCookCountyEligible
     && commandCenterData.sale_date_meta?.last_checked_at
@@ -549,13 +554,21 @@ export function PropertySidebar({
       ))}
       {hasNonBlankPhones(phones) && (
         <SidebarLabeledContent label="Phone" testId="sidebar-phones">
-          <PhoneList phones={phones} dense={!stacked} />
+          <PhoneList
+            phones={phones}
+            dense={!stacked}
+            actionable={!contactsLikelyPriorOwner}
+          />
         </SidebarLabeledContent>
       )}
       {emails.length > 0 && (
         <SidebarLabeledContent label="Email" testId="sidebar-emails">
           {emails.map((e, i) => (
-            <CopyableEmail key={`${e}-${i}`} email={e} />
+            <CopyableEmail
+              key={`${e}-${i}`}
+              email={e}
+              actionable={!contactsLikelyPriorOwner}
+            />
           ))}
         </SidebarLabeledContent>
       )}

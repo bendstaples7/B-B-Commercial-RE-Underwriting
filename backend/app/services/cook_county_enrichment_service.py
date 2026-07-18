@@ -638,16 +638,7 @@ def backfill_sale_date_verification(
                     func.lower(Lead.property_city) == "chicago",
                 ),
             )
-            .order_by(
-                # Prefer leads that already have sale/acquisition text first.
-                (
-                    or_(
-                        Lead.most_recent_sale.isnot(None),
-                        Lead.acquisition_date.isnot(None),
-                    )
-                ).desc(),
-                Lead.id,
-            )
+            .order_by(Lead.id)
             .limit(batch_size * 2)
             .all()
         )
@@ -662,6 +653,7 @@ def backfill_sale_date_verification(
 
         saw_candidates = True
         for lead in candidates:
+            previous_cursor = cursor
             cursor = lead.id
             summary["processed"] += 1
 
@@ -680,9 +672,9 @@ def backfill_sale_date_verification(
             estimated_calls = max(1, len(plugin_names) if plugin_names else 1)
             if summary["socrata_calls"] + estimated_calls > socrata_call_cap:
                 summary["capped"] = True
-                summary["last_id"] = cursor
+                summary["last_id"] = previous_cursor
                 if persist_cursor:
-                    _set_sale_date_backfill_cursor(cursor)
+                    _set_sale_date_backfill_cursor(previous_cursor)
                 return summary
 
             try:

@@ -75,7 +75,6 @@ export function PriorOwnerStaleOverlay({
       </Box>
 
       <Box
-        aria-hidden
         sx={{
           position: 'absolute',
           inset: 0,

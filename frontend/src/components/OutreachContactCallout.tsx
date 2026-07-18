@@ -153,9 +153,13 @@ export function OutreachContactInline({ contact }: OutreachContactInlineProps) {
   if (!contact) return null
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(copyValue(contact))
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
+    try {
+      await navigator.clipboard.writeText(copyValue(contact))
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // Clipboard unavailable (non-HTTPS, permission denied, etc.).
+    }
   }
 
   return (
@@ -174,7 +178,7 @@ export function OutreachContactInline({ contact }: OutreachContactInlineProps) {
         <IconButton
           size="small"
           onClick={handleCopy}
-          aria-label="Copy contact"
+          aria-label={`Copy ${contact.channel} contact`}
           data-testid="outreach-contact-copy"
           sx={{ p: 0.25, flexShrink: 0 }}
         >
@@ -192,9 +196,13 @@ export function OutreachContactCallout({ contact, compact = false }: OutreachCon
   if (!contact) return null
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(copyValue(contact))
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
+    try {
+      await navigator.clipboard.writeText(copyValue(contact))
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // Clipboard unavailable (non-HTTPS, permission denied, etc.).
+    }
   }
 
   if (compact) {
@@ -242,7 +250,7 @@ export function OutreachContactCallout({ contact, compact = false }: OutreachCon
           <IconButton
             size="small"
             onClick={handleCopy}
-            aria-label="Copy contact"
+            aria-label={`Copy ${contact.channel} contact`}
             data-testid="outreach-contact-copy"
           >
             <ContentCopyIcon fontSize="small" />

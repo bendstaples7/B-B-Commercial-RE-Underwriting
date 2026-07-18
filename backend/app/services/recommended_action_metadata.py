@@ -163,12 +163,9 @@ def _lead_needs_recent_sale_contact_rationale(lead) -> bool:
     if status not in ('skip_trace', 'awaiting_skip_trace'):
         return False
     from app.services.scoring_rubric import (
-        effective_acquisition_date,
-        is_recently_sold,
+        contacts_likely_prior_owner,
     )
-    if is_recently_sold(lead):
-        return True
-    if effective_acquisition_date(lead) is None:
+    if not contacts_likely_prior_owner(lead):
         return False
     return bool(getattr(lead, 'needs_skip_trace', False))
 

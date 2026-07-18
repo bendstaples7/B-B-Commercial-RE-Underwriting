@@ -84,6 +84,7 @@ function makePayload(overrides: Partial<CommandCenterPayload> = {}): CommandCent
       },
     ],
     phones: [{ value: '(630) 999-0000', confidence_score: 50 }],
+    is_cook_county_eligible: true,
     ...overrides,
   } as CommandCenterPayload
 }
@@ -831,10 +832,11 @@ describe('PropertySidebar prior-owner stale contacts', () => {
     const wash = screen.getByTestId('sidebar-likely-prior-owner').parentElement
     expect(wash).toHaveStyle({ pointerEvents: 'none' })
 
-    // Still interactive — phone and mailto remain in the DOM
+    // Outreach disabled for likely prior-owner contacts
     expect(screen.getByTestId('sidebar-phones')).toBeInTheDocument()
-    const mailLink = screen.getByRole('link', { name: /prior@example.com/i })
-    expect(mailLink).toHaveAttribute('href', 'mailto:prior@example.com')
+    expect(screen.queryByRole('link', { name: /prior@example.com/i })).not.toBeInTheDocument()
+    expect(screen.getByText('prior@example.com')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /630.*202.*3839/i })).not.toBeInTheDocument()
   })
 
   it('does not show Past owners in the right rail when stale', () => {

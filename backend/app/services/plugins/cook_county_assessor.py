@@ -229,6 +229,7 @@ def list_parcel_sale_history(
     *,
     limit: int = 50,
     lead=None,
+    cache_only: bool = False,
 ) -> list[dict]:
     """Return newest-first parcel sales for a PIN (date, price, type).
 
@@ -264,8 +265,9 @@ def list_parcel_sale_history(
             cached = []
 
         if cached:
-            history = [_serialize_sale_history_row(row) for row in cached]
-        else:
+            history.extend(_serialize_sale_history_row(row) for row in cached)
+
+        if not cache_only:
             plugin = CookCountyAssessorPlugin()
             where = f"pin='{normalized}'"
             url = (
@@ -294,6 +296,15 @@ def list_parcel_sale_history(
         if seeded:
             history = seeded
 
+    unique_history: dict[tuple, dict] = {}
+    for sale in history:
+        key = (sale.get('sale_date'), sale.get('sale_price'), sale.get('sale_type'))
+        unique_history[key] = sale
+    history = sorted(
+        unique_history.values(),
+        key=lambda row: row.get('sale_date') or '',
+        reverse=True,
+    )
     return history[:capped]
 
 

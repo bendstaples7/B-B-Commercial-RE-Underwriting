@@ -47,6 +47,10 @@ def _merge_parsed_fields(
 
 
 _STREET_ABBREV = (
+    (r'\bnorth\b', 'n'),
+    (r'\bsouth\b', 's'),
+    (r'\beast\b', 'e'),
+    (r'\bwest\b', 'w'),
     (r'\bstreet\b', 'st'),
     (r'\bavenue\b', 'ave'),
     (r'\bboulevard\b', 'blvd'),
@@ -68,7 +72,7 @@ def _normalize_address_part(value: str) -> str:
     text = _clean(value).lower()
     if not text:
         return ''
-    text = text.replace('#', ' ')
+    text = re.sub(r'#\s*', 'apt ', text)
     text = re.sub(r'[.,;:/\\]+', ' ', text)
     for pattern, repl in _STREET_ABBREV:
         text = re.sub(pattern, repl, text)

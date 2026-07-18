@@ -1359,6 +1359,10 @@ class TestCompleteTask:
                 '18a Skip Trace Complete St',
                 lead_status='skip_trace',
                 needs_skip_trace=True,
+                mailing_address='100 Owner Ln',
+                mailing_city='Chicago',
+                mailing_state='IL',
+                mailing_zip='60614',
             )
             task = _make_task(
                 app,
@@ -2040,7 +2044,7 @@ class TestSaleDateVerification:
             assert data['lead_id'] == lead.id
             assert data['ran_sync'] is True
             assert data['queued'] is False
-            assert data['message'] == ''
+            assert data['message'] == 'Sale date verified.'
             mock_ensure.assert_called_once()
             mock_enrich.assert_called_once_with(lead.id)
 

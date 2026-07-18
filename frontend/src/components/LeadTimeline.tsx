@@ -526,6 +526,7 @@ export interface LeadTimelineProps {
  * - HubSpot-sourced entries show an orange "H" chip and have no edit/delete controls.
  */
 export function LeadTimeline({
+  leadId,
   initialEntries,
   initialTotal,
   onLoadMore,
@@ -542,8 +543,14 @@ export function LeadTimeline({
     setEntries(initialEntries)
     setTotal(initialTotal)
     setPage(1)
-    setShowAllLoaded(false)
   }, [initialEntries, initialTotal])
+
+  // Only collapse the expanded timeline when navigating to a different lead —
+  // not when the same lead's entries refresh after an activity log.
+  useEffect(() => {
+    setShowAllLoaded(false)
+    setPage(1)
+  }, [leadId])
 
   const hasMore = entries.length < total
   const inPreview = !showAllLoaded && total > TIMELINE_PREVIEW_COUNT

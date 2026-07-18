@@ -37,15 +37,23 @@ export interface PhoneRowProps {
   showLabel?: boolean
   /** Dense caption sizing for sidebar; body for drawers/lists. */
   dense?: boolean
+  /** When false, render the number as plain text (no tel: link). */
+  actionable?: boolean
 }
 
 export interface PhoneListProps {
   phones: PhoneRowPhone[]
   showLabel?: boolean
   dense?: boolean
+  actionable?: boolean
 }
 
-export function PhoneRow({ phone, showLabel = false, dense = true }: PhoneRowProps) {
+export function PhoneRow({
+  phone,
+  showLabel = false,
+  dense = true,
+  actionable = true,
+}: PhoneRowProps) {
   const [copied, setCopied] = useState(false)
   const value = typeof phone === 'string' ? phone : phone.value
   if (!value?.trim()) return null
@@ -74,16 +82,26 @@ export function PhoneRow({ phone, showLabel = false, dense = true }: PhoneRowPro
       <PhoneIcon
         sx={{ fontSize: dense ? 13 : 16, color: 'text.secondary', flexShrink: 0 }}
       />
-      <Link
-        href={phoneTelHref(value)}
-        variant={dense ? 'caption' : 'body2'}
-        underline="hover"
-        onClick={(e) => e.stopPropagation()}
-        noWrap
-        sx={{ flexShrink: 0 }}
-      >
-        {displayPhone}
-      </Link>
+      {actionable ? (
+        <Link
+          href={phoneTelHref(value)}
+          variant={dense ? 'caption' : 'body2'}
+          underline="hover"
+          onClick={(e) => e.stopPropagation()}
+          noWrap
+          sx={{ flexShrink: 0 }}
+        >
+          {displayPhone}
+        </Link>
+      ) : (
+        <Typography
+          variant={dense ? 'caption' : 'body2'}
+          noWrap
+          sx={{ flexShrink: 0 }}
+        >
+          {displayPhone}
+        </Typography>
+      )}
       {showLabel && label && label !== 'other' && (
         <Typography component="span" variant="caption" color="text.secondary" noWrap>
           ({label})
@@ -128,7 +146,12 @@ export function PhoneRow({ phone, showLabel = false, dense = true }: PhoneRowPro
   )
 }
 
-export function PhoneList({ phones, showLabel = false, dense = true }: PhoneListProps) {
+export function PhoneList({
+  phones,
+  showLabel = false,
+  dense = true,
+  actionable = true,
+}: PhoneListProps) {
   const accordionId = useId()
   const nonBlankPhones = phones.filter((phone) => {
     const value = typeof phone === 'string' ? phone : phone.value
@@ -151,6 +174,7 @@ export function PhoneList({ phones, showLabel = false, dense = true }: PhoneList
           phone={phone}
           showLabel={showLabel}
           dense={dense}
+          actionable={actionable}
         />
       ))}
       {shouldCollapseLower && (
@@ -191,6 +215,7 @@ export function PhoneList({ phones, showLabel = false, dense = true }: PhoneList
                 phone={phone}
                 showLabel={showLabel}
                 dense={dense}
+                actionable={actionable}
               />
             ))}
           </AccordionDetails>

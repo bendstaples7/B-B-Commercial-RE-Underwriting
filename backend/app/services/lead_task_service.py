@@ -347,9 +347,13 @@ class LeadTaskService:
                 # the skip-trace stamp when the last handoff is completed.
                 if not lead.needs_skip_trace:
                     lead.date_skip_traced = date.today()
-                    if lead.lead_status in ('skip_trace', 'awaiting_skip_trace'):
-                        old_status = lead.lead_status
-                        lead.lead_status = 'mailing_no_contact_made'
+                    # Same residential/mailable/not-recently-sold gate as scoring —
+                    # do not force commercial or address-less leads into mailing.
+                    from app.services.lead_scoring_engine import (
+                        _maybe_promote_skip_trace_to_mailing,
+                    )
+                    old_status = _maybe_promote_skip_trace_to_mailing(lead)
+                    if old_status is not None:
                         db.session.add(LeadTimelineEntry(
                             lead_id=lead_id,
                             event_type='status_changed',

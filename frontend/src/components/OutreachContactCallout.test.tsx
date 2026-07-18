@@ -75,8 +75,29 @@ describe('OutreachContactCallout', () => {
     }
     render(<OutreachContactCallout contact={contact} />)
 
-    await user.click(screen.getByTestId('outreach-contact-copy'))
+    const copyBtn = screen.getByTestId('outreach-contact-copy')
+    expect(copyBtn).toHaveAttribute('aria-label', 'Copy phone contact')
+    await user.click(copyBtn)
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('+15551234567')
+  })
+
+  it('swallows clipboard write failures without throwing', async () => {
+    vi.stubGlobal('navigator', {
+      clipboard: { writeText: vi.fn().mockRejectedValue(new Error('denied')) },
+    })
+    const contact: OutreachContact = {
+      channel: 'email',
+      label: 'Email',
+      value: 'owner@example.com',
+      display: 'owner@example.com',
+      href: 'mailto:owner@example.com',
+    }
+    render(<OutreachContactCallout contact={contact} />)
+    await user.click(screen.getByTestId('outreach-contact-copy'))
+    expect(screen.getByTestId('outreach-contact-copy')).toHaveAttribute(
+      'aria-label',
+      'Copy email contact',
+    )
   })
 
   it('renders compact mode without copy button', () => {

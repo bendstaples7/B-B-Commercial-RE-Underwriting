@@ -485,6 +485,7 @@ def resolve_outreach_contacts_for_leads(leads: list[Lead]) -> dict[int, dict | N
 
     phone_by_lead = _batch_best_phone_by_lead(phone_leads) if phone_leads else {}
     email_by_lead = _batch_first_email_by_lead(email_leads) if email_leads else {}
+    phone_lead_ids = {lead.id for lead in phone_leads}
 
     resolved: dict[int, dict | None] = {}
     for lead in leads:
@@ -496,7 +497,9 @@ def resolve_outreach_contacts_for_leads(leads: list[Lead]) -> dict[int, dict | N
             resolved[lead_id] = None
             continue
         if method in ('phone', 'text'):
-            raw = phone_by_lead.get(lead_id) or _first_flat_phone(lead)
+            raw = phone_by_lead.get(lead_id)
+            if raw is None and lead_id not in phone_lead_ids:
+                raw = _first_flat_phone(lead)
             resolved[lead_id] = _phone_contact_dict(raw, method) if raw else None
         elif method == 'email':
             email = email_by_lead.get(lead_id)
@@ -515,7 +518,9 @@ def _resolve_phone_contact(lead: Lead, *, channel: str) -> dict | None:
             cached = resolve_outreach_contacts_for_leads([lead]).get(lead_id)
             if lead.recommended_contact_method == channel:
                 return cached
-        raw = _batch_best_phone_by_lead([lead]).get(lead_id) or _first_flat_phone(lead)
+        raw = _batch_best_phone_by_lead([lead]).get(lead_id)
+        if raw is None and lead.recommended_contact_method not in ('phone', 'text'):
+            raw = _first_flat_phone(lead)
     else:
         raw = _first_flat_phone(lead)
     if not raw:

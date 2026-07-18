@@ -5,7 +5,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import text
+from sqlalchemy import or_, text
 
 from app import db
 from app.models.contact_phone import ContactPhone
@@ -47,27 +47,42 @@ class PhoneConfidenceService:
         return phone_val, notes
 
     @staticmethod
-    def confidence_from_annotation(note: str | None) -> int:
+    def _note_has_word(lowered: str, word: str) -> bool:
+        return re.search(rf'(?<![a-z]){re.escape(word)}(?![a-z])', lowered) is not None
+
+    @classmethod
+    def _explicit_annotation_score(cls, notes: str | None) -> int | None:
+        """Non-default annotation score, excluding synthetic HubSpot-primary marker."""
+        if not notes or notes.lower().strip() == 'hubspot primary':
+            return None
+        score = cls.confidence_from_annotation(notes)
+        return score if score != DEFAULT_CONFIDENCE else None
+
+    @classmethod
+    def confidence_from_annotation(cls, note: str | None) -> int:
         if not note:
             return DEFAULT_CONFIDENCE
         lowered = note.lower().strip()
         if any(
-            token in lowered
-            for token in ('confirmed', 'good', 'verified', 'correct', 'works')
-        ):
-            return 90
-        if any(
-            token in lowered
-            for token in (
+            phrase in lowered
+            for phrase in (
                 'wrong number',
                 'wrong #',
                 'not in service',
-                'disconnect',
-                'disconnected',
-                'dead',
+                'not good',
             )
+        ):
+            return 5
+        if any(
+            cls._note_has_word(lowered, token)
+            for token in ('disconnect', 'disconnected', 'dead', 'incorrect', 'wrong')
         ) or re.search(r'(^|[\s(/])(wn|nis)([\s)/]|$)', lowered):
             return 5
+        if any(
+            cls._note_has_word(lowered, token)
+            for token in ('confirmed', 'good', 'verified', 'correct', 'works')
+        ):
+            return 90
         if any(
             token in lowered
             for token in (
@@ -114,10 +129,21 @@ class PhoneConfidenceService:
                 by_digits[digits] = (value, notes, label)
                 continue
             ex_val, ex_notes, ex_label = existing
+
+            def _merge_rank(n: str | None) -> tuple[int, int]:
+                if not n:
+                    return (0, 0)
+                if n.lower().strip() == 'hubspot primary':
+                    return (1, 0)
+                score = cls.confidence_from_annotation(n)
+                if score != DEFAULT_CONFIDENCE:
+                    return (3, score)
+                return (2, score)
+
             if notes and not ex_notes:
                 by_digits[digits] = (value, notes, label if label != 'other' else ex_label)
             elif notes and ex_notes:
-                if cls.confidence_from_annotation(notes) > cls.confidence_from_annotation(ex_notes):
+                if _merge_rank(notes) > _merge_rank(ex_notes):
                     by_digits[digits] = (value, notes, label if label != 'other' else ex_label)
             elif label != 'other' and ex_label == 'other':
                 by_digits[digits] = (ex_val, ex_notes, label)
@@ -127,15 +153,15 @@ class PhoneConfidenceService:
     def parse_phones_from_hubspot_props(cls, props: dict) -> list[tuple[str, str | None, str]]:
         """Parse and merge all phone fields from a HubSpot contact properties dict."""
         entries: list[tuple[str, str | None, str]] = []
+        primary_field_digits: set[str] = set()
         for key in ('phone', 'mobilephone', 'hs_phone_number'):
             val = (props.get(key) or '').strip()
             if not val:
                 continue
             phone_val, notes = cls.parse_hubspot_phone_line(val)
             label = 'mobile' if key == 'mobilephone' else 'other'
-            # HubSpot primary fields (enum has no 'phone' label) — stamp notes.
-            if key in ('phone', 'mobilephone') and not notes:
-                notes = 'HubSpot primary'
+            if key in ('phone', 'mobilephone'):
+                primary_field_digits.add(cls.normalize_phone(phone_val or val))
             if phone_val:
                 entries.append((phone_val, notes, label))
             else:
@@ -148,7 +174,16 @@ class PhoneConfidenceService:
                 if phone_val:
                     entries.append((phone_val, notes, 'other'))
 
-        return cls.merge_parsed_phones(entries)
+        merged = cls.merge_parsed_phones(entries)
+        stamped: list[tuple[str, str | None, str]] = []
+        for value, notes, label in merged:
+            if (
+                not notes
+                and cls.normalize_phone(value) in primary_field_digits
+            ):
+                notes = 'HubSpot primary'
+            stamped.append((value, notes, label))
+        return stamped
 
     @classmethod
     def upsert_contact_phone(
@@ -173,12 +208,19 @@ class PhoneConfidenceService:
             or (source == 'hubspot_import' and notes_l.startswith('hubspot primary'))
         )
         # Primary HubSpot phone/mobile fields get a floor of 85 unless annotated lower
-        # (WN/NIS stay at annotation score).
+        # (WN/NIS stay at annotation score) or unless only the synthetic marker applies.
         annotation_score = cls.confidence_from_annotation(notes)
-        if is_hubspot_primary and annotation_score >= DEFAULT_CONFIDENCE:
+        explicit_score = cls._explicit_annotation_score(notes)
+        if (
+            is_hubspot_primary
+            and explicit_score is None
+            and annotation_score >= DEFAULT_CONFIDENCE
+        ):
             annotation_score = max(annotation_score, 85)
             if not notes:
                 notes = 'HubSpot primary'
+        elif explicit_score is not None:
+            annotation_score = explicit_score
 
         for cp in ContactPhone.query.filter_by(contact_id=contact_id).all():
             if cls.normalize_phone(cp.value) != digits:
@@ -192,16 +234,25 @@ class PhoneConfidenceService:
                     cp.confidence_score = annotation_score
                     changed = True
             elif is_hubspot_primary:
+                preserve_low = (
+                    cp.last_outcome == 'wrong_number'
+                    or (
+                        cp.confidence_score is not None
+                        and cp.confidence_score < MIN_VIABLE_CONFIDENCE
+                        and cls._explicit_annotation_score(cp.notes) is None
+                    )
+                )
                 if cp.notes != 'HubSpot primary':
                     cp.notes = 'HubSpot primary'
                     changed = True
-                boosted = max(
-                    cp.confidence_score if cp.confidence_score is not None else DEFAULT_CONFIDENCE,
-                    85,
-                )
-                if cp.confidence_score != boosted:
-                    cp.confidence_score = boosted
-                    changed = True
+                if not preserve_low:
+                    boosted = max(
+                        cp.confidence_score if cp.confidence_score is not None else DEFAULT_CONFIDENCE,
+                        85,
+                    )
+                    if cp.confidence_score != boosted:
+                        cp.confidence_score = boosted
+                        changed = True
             elif cp.confidence_score is None:
                 cp.confidence_score = DEFAULT_CONFIDENCE
                 changed = True
@@ -279,7 +330,14 @@ class PhoneConfidenceService:
     ) -> None:
         cp = None
         if contact_phone_id is not None:
-            cp = ContactPhone.query.get(contact_phone_id)
+            candidate = ContactPhone.query.get(contact_phone_id)
+            if candidate is not None:
+                link = PropertyContact.query.filter_by(
+                    property_id=lead_id,
+                    contact_id=candidate.contact_id,
+                ).first()
+                if link is not None and link.role != 'former_owner':
+                    cp = candidate
         elif phone_number:
             cp = cls._find_phone_for_lead(lead_id, phone_number)
         if cp is None:
@@ -497,11 +555,15 @@ class PhoneConfidenceService:
 
     @classmethod
     def get_primary_contact_id(cls, lead_id: int) -> int | None:
-        primary = PropertyContact.query.filter_by(
-            property_id=lead_id,
-            is_primary=True,
-        ).first()
+        active_links = PropertyContact.query.filter(
+            PropertyContact.property_id == lead_id,
+            or_(
+                PropertyContact.role.is_(None),
+                PropertyContact.role != 'former_owner',
+            ),
+        )
+        primary = active_links.filter_by(is_primary=True).first()
         if primary:
             return primary.contact_id
-        any_link = PropertyContact.query.filter_by(property_id=lead_id).first()
+        any_link = active_links.first()
         return any_link.contact_id if any_link else None

@@ -873,6 +873,38 @@ def _flat_phone_confidences(lead: Lead) -> list[int]:
     return scores
 
 
+def _lead_has_former_owner_links(lead_id: int) -> bool:
+    """True when this property has any former_owner PropertyContact links."""
+    from flask import has_app_context
+
+    if not has_app_context():
+        return False
+    try:
+        from sqlalchemy import text
+        from app import db
+
+        row = db.session.execute(
+            text("""
+                SELECT 1 FROM property_contacts
+                WHERE property_id = :lead_id AND role = 'former_owner'
+                LIMIT 1
+            """),
+            {"lead_id": lead_id},
+        ).fetchone()
+        return row is not None
+    except SQLAlchemyError as exc:
+        logger.warning("former_owner link lookup failed for lead %s: %s", lead_id, exc)
+        return False
+
+
+def _use_flat_contact_fields(lead: Lead) -> bool:
+    """Skip flat phone/email when former owners exist (flat fields may be stale)."""
+    lead_id = getattr(lead, "id", None)
+    if isinstance(lead_id, int) and _lead_has_former_owner_links(lead_id):
+        return False
+    return True
+
+
 def _relational_phone_confidences(lead_id: int) -> list[int]:
     """Best-effort DB read of ContactPhone confidence for a property lead."""
     from app.services.phone_confidence_service import DEFAULT_CONFIDENCE
@@ -909,10 +941,12 @@ def _relational_phone_confidences(lead_id: int) -> list[int]:
 
 def _best_phone_confidence(lead: Lead) -> int | None:
     """Highest phone confidence across relational contacts and flat slots."""
-    scores = list(_flat_phone_confidences(lead))
+    scores: list[int] = []
     lead_id = getattr(lead, "id", None)
     if isinstance(lead_id, int):
         scores.extend(_relational_phone_confidences(lead_id))
+    if _use_flat_contact_fields(lead):
+        scores.extend(_flat_phone_confidences(lead))
     if not scores:
         return None
     return max(scores)
@@ -936,7 +970,7 @@ def _has_flat_email(lead: Lead) -> bool:
 
 def _email_reachability(lead: Lead) -> tuple[float, bool, bool]:
     """Return (points, has_email, is_owner_or_primary)."""
-    has_flat = _has_flat_email(lead)
+    has_flat = _has_flat_email(lead) if _use_flat_contact_fields(lead) else False
     has_relational = False
     is_owner_or_primary = False
     lead_id = getattr(lead, "id", None)
@@ -1091,10 +1125,12 @@ def batch_contact_reachability_scores(leads: list[Lead]) -> dict[int, tuple[floa
         if not isinstance(lead_id, int):
             continue
         scores = list(phone_confidences.get(lead_id, []))
-        scores.extend(_flat_phone_confidences(lead))
+        if _use_flat_contact_fields(lead):
+            scores.extend(_flat_phone_confidences(lead))
         best_confidence = max(scores) if scores else None
         has_relational_email, email_owner_primary = email_meta.get(lead_id, (False, False))
-        has_email = _has_flat_email(lead) or has_relational_email
+        has_flat_email = _has_flat_email(lead) if _use_flat_contact_fields(lead) else False
+        has_email = has_flat_email or has_relational_email
         out[lead_id] = _contact_reachability_from_values(
             best_confidence,
             has_email,

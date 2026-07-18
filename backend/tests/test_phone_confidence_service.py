@@ -28,6 +28,23 @@ class TestConfidenceHelpers:
     def test_confidence_from_annotation_confirmed(self):
         assert PhoneConfidenceService.confidence_from_annotation('CONFIRMED') == 90
 
+    def test_confidence_from_annotation_rejects_incorrect_and_not_good(self):
+        assert PhoneConfidenceService.confidence_from_annotation('incorrect number') == 5
+        assert PhoneConfidenceService.confidence_from_annotation('not good') == 5
+
+    def test_confidence_from_annotation_disconnected_before_confirmed(self):
+        assert PhoneConfidenceService.confidence_from_annotation('confirmed, now disconnected') == 5
+
+    def test_parse_phones_primary_disconnected_wins_over_hubspot_primary(self):
+        props = {
+            'phone': '(630) 430-5720',
+            'additional_phone_numbers': '1) (630) 430-5720 disconnected',
+        }
+        parsed = PhoneConfidenceService.parse_phones_from_hubspot_props(props)
+        assert len(parsed) == 1
+        assert 'disconnect' in (parsed[0][1] or '').lower()
+        assert PhoneConfidenceService.confidence_from_annotation(parsed[0][1]) == 5
+
     def test_merge_prefers_confirmed_over_bare_primary(self):
         merged = PhoneConfidenceService.merge_parsed_phones([
             ('(630) 430-5720', None, 'other'),
