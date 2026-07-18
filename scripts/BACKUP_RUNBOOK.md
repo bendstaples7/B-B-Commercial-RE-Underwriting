@@ -3,7 +3,7 @@
 **System:** B and B Real Estate Analyzer — Hetzner VPS  
 **Database:** PostgreSQL (`real_estate_analysis`)  
 **Owner:** `deploy` user  
-**Last updated:** 2025-07-15
+**Last updated:** 2026-07-18
 
 ---
 
@@ -13,13 +13,15 @@ All times are UTC. All jobs run as the `deploy` user.
 
 | Cron Expression | UTC Time | Script | Description |
 |---|---|---|---|
-| `0 2 * * *` | 02:00 daily | `backup.sh` | PostgreSQL + Redis backup (scheduled) |
-| `0 10 * * *` | 10:00 daily | `backup.sh` | PostgreSQL + Redis backup (scheduled) |
-| `0 18 * * *` | 18:00 daily | `backup.sh` | PostgreSQL + Redis backup (scheduled) |
+| `0 2 * * *` | 02:00 daily | `backup.sh` | Local PostgreSQL + Redis dump (no off-site upload) |
+| `0 10 * * *` | 10:00 daily | `backup.sh` | Local dump **plus** daily off-site upload to Backblaze and Cloudflare |
+| `0 18 * * *` | 18:00 daily | `backup.sh` | Local PostgreSQL + Redis dump (no off-site upload) |
 | `0 1 * * 0` | 01:00 Sunday | `pg-basebackup.sh` | Weekly full base backup for PITR |
 | `30 0 * * *` | 00:30 daily | `daily-summary.sh` | Daily backup status summary report |
 
-The three daily backups at 02:00, 10:00, and 18:00 UTC limit the maximum data loss window to 8 hours or less (RPO ≤ 8 hours).
+Local dumps at 02:00, 10:00, and 18:00 UTC keep RPO ≤ 8 hours on the VPS. Off-site upload runs **once per day** at 10:00 UTC (`REMOTE_UPLOAD_HOUR_UTC=10`) to both remotes configured in `RCLONE_TARGETS` (Backblaze + Cloudflare). That keeps remote storage inside free-tier budgets (~1 dump/day × 14-day remote retention).
+
+Pre-deploy backups upload off-site only when no successful cloud transfer exists in the last 24 hours.
 
 To verify all 5 entries are installed:
 
@@ -36,14 +38,25 @@ crontab -u deploy -l
 | Local dump files | `/home/deploy/backups/` | 30 days |
 | WAL archive segments | `/home/deploy/wal-archive/` | 7 days |
 | Base backup (PITR) | `/home/deploy/backups/base/` | — (manual management) |
-| Remote (off-site) | `<RCLONE_BUCKET>/<RCLONE_PATH_PREFIX>/YYYY/MM/DD/backup_YYYY-MM-DD_HH-MM-SS.dump` | 30 days |
+| Remote (Backblaze) | `b2:<bucket>/<RCLONE_PATH_PREFIX>/YYYY/MM/DD/...` | 14 days |
+| Remote (Cloudflare) | `cloudflare:<bucket>/<RCLONE_PATH_PREFIX>/YYYY/MM/DD/...` | 14 days |
 | Backup manifest | `/home/deploy/backups/backup_manifest.log` | — (append-only) |
 | Log file | `/home/deploy/logs/backup.log` | — |
 
 **Remote path example:**  
-`my-bucket/backups/2025/07/15/backup_2025-07-15_02-00-01.dump`
+`bbreanalyzer/backups/2026/07/18/backup_2026-07-18_10-00-01.dump`
 
-The remote bucket and path prefix are configured in `/home/deploy/backup.conf` via `RCLONE_BUCKET` and `RCLONE_PATH_PREFIX`.
+Configure targets in `/home/deploy/backup.conf`:
+
+```bash
+REMOTE_METHOD="rclone"
+RCLONE_TARGETS="b2:bbreanalyzer cloudflare:bb-analyzer-backups"
+RCLONE_PATH_PREFIX="backups"
+REMOTE_RETENTION_DAYS=14
+REMOTE_UPLOAD_HOUR_UTC=10
+```
+
+Legacy single-target `RCLONE_REMOTE` + `RCLONE_BUCKET` still works when `RCLONE_TARGETS` is empty.
 
 ---
 
@@ -277,11 +290,18 @@ Use this checklist when the VPS is unrecoverable and you need to rebuild from sc
    adduser deploy && usermod -aG sudo deploy
    ```
 
-4. **Download the most recent remote backup** from off-site storage:
+4. **Download the most recent remote backup** from off-site storage (try Cloudflare first if Backblaze is unavailable, or the reverse):
    ```bash
-   rclone copy <RCLONE_REMOTE>:<RCLONE_BUCKET>/<RCLONE_PATH_PREFIX>/YYYY/MM/DD/<filename> /home/deploy/backups/
+   # Cloudflare example
+   rclone copy cloudflare:bb-analyzer-backups/backups/YYYY/MM/DD/<filename> /home/deploy/backups/
+   # Backblaze example
+   rclone copy b2:bbreanalyzer/backups/YYYY/MM/DD/<filename> /home/deploy/backups/
    ```
-   Replace `YYYY/MM/DD/<filename>` with the actual date path and filename of the most recent valid backup.
+   Replace `YYYY/MM/DD/<filename>` with the actual date path and filename of the most recent valid backup. List candidates with:
+   ```bash
+   rclone lsf cloudflare:bb-analyzer-backups/backups/ --recursive
+   rclone lsf b2:bbreanalyzer/backups/ --recursive
+   ```
 
 5. **Restore the backup manifest** — the manifest (`backup_manifest.log`) is stored locally on the VPS and is not uploaded off-site. After a total VPS loss, the manifest is unavailable. You have two options:
 

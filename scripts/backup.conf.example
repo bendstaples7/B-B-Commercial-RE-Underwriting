@@ -15,14 +15,20 @@ WAL_ARCHIVE_DIR="/home/deploy/wal-archive"
 LOG_FILE="/home/deploy/logs/backup.log"
 
 # ── Remote storage ────────────────────────────────────────────────────────────
+# Local dumps run 3x/day; off-site upload runs once/day at REMOTE_UPLOAD_HOUR_UTC.
 REMOTE_METHOD=""          # rclone | s3 | rsync
+# Preferred: space-separated remote:bucket pairs (Backblaze + Cloudflare).
+# Example: RCLONE_TARGETS="b2:bbreanalyzer cloudflare:bb-analyzer-backups"
+RCLONE_TARGETS=""
+# Legacy single-target fallback (used only when RCLONE_TARGETS is empty):
 RCLONE_REMOTE="b2"              # rclone remote name (configured via rclone config)
 RCLONE_BUCKET="your-bucket-name"
-RCLONE_PATH_PREFIX="backups"    # remote path: RCLONE_BUCKET/RCLONE_PATH_PREFIX/YYYY/MM/DD/
+RCLONE_PATH_PREFIX="backups"    # remote path: bucket/prefix/YYYY/MM/DD/
+REMOTE_UPLOAD_HOUR_UTC="10"       # UTC hour for daily off-site upload (scheduled runs)
 
 # ── Retention ─────────────────────────────────────────────────────────────────
 LOCAL_RETENTION_DAYS=30
-REMOTE_RETENTION_DAYS=30
+REMOTE_RETENTION_DAYS=14        # keep off-site footprint inside free tiers
 REDIS_RETENTION_DAYS=7
 WAL_RETENTION_DAYS=7
 
