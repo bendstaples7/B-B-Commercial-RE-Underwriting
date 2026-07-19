@@ -16,6 +16,7 @@ from app.services.owner_snapshot_service import (
 )
 from app.services.scoring_rubric import (
     contacts_likely_prior_owner,
+    contacts_need_post_hold_verification,
     contacts_stale_since,
 )
 
@@ -65,6 +66,48 @@ class TestContactsLikelyPriorOwner:
         sale = date.today() - timedelta(days=800)
         lead = _lead(acquisition_date=sale, date_skip_traced=None)
         assert contacts_likely_prior_owner(lead) is False
+        assert contacts_stale_since(lead) is None
+
+    def test_false_when_year_2000_sale_never_skip_traced(self):
+        lead = _lead(acquisition_date=date(2000, 2, 1), date_skip_traced=None)
+        assert contacts_likely_prior_owner(lead) is False
+        assert contacts_stale_since(lead) is None
+
+    def test_false_when_old_sale_but_skip_traced_after(self):
+        sale = date.today() - timedelta(days=800)
+        lead = _lead(
+            acquisition_date=sale,
+            date_skip_traced=sale + timedelta(days=5),
+        )
+        assert contacts_likely_prior_owner(lead) is False
+        assert contacts_stale_since(lead) is None
+
+
+class TestContactsNeedPostHoldVerification:
+    def test_true_shortly_after_hold_ends(self):
+        # Hold is 730 days; sale at 800 days is past hold but still post-hold stale.
+        sale = date.today() - timedelta(days=800)
+        lead = _lead(acquisition_date=sale, date_skip_traced=None)
+        assert contacts_likely_prior_owner(lead) is False
+        assert contacts_need_post_hold_verification(lead) is True
+
+    def test_false_during_hold_window(self):
+        sale = date.today() - timedelta(days=30)
+        lead = _lead(acquisition_date=sale, date_skip_traced=None)
+        assert contacts_likely_prior_owner(lead) is True
+        assert contacts_need_post_hold_verification(lead) is False
+
+    def test_false_for_year_2000_sale(self):
+        lead = _lead(acquisition_date=date(2000, 2, 1), date_skip_traced=None)
+        assert contacts_need_post_hold_verification(lead) is False
+
+    def test_false_when_skip_traced_after_sale(self):
+        sale = date.today() - timedelta(days=800)
+        lead = _lead(
+            acquisition_date=sale,
+            date_skip_traced=sale + timedelta(days=5),
+        )
+        assert contacts_need_post_hold_verification(lead) is False
 
 
 class TestOwnerSnapshotService:

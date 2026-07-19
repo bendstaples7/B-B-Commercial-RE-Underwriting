@@ -67,14 +67,20 @@ def _apply_cold_mail_block_to_action(
     winning_rule: str,
     action_signals: dict,
 ) -> tuple[str | None, str, dict]:
-    """Replace any final cold-mail action with the owner-policy outcome."""
-    if recommended_action != 'mail_ready':
-        return recommended_action, winning_rule, action_signals
+    """Replace cold outreach actions blocked by owner entity policy."""
     blocked = _cold_mail_ready_outcome(lead)
     if blocked is None:
         return recommended_action, winning_rule, action_signals
     blocked_action, blocked_rule, blocked_signals = blocked
-    return blocked_action, blocked_rule, blocked_signals
+    if recommended_action == 'mail_ready':
+        return blocked_action, blocked_rule, blocked_signals
+    # Residential unresolved entity: no cold Call Now until research finds a person.
+    if (
+        blocked_rule == 'research_entity_owner'
+        and recommended_action == 'call_ready'
+    ):
+        return blocked_action, blocked_rule, blocked_signals
+    return recommended_action, winning_rule, action_signals
 
 
 def _apply_owner_mail_gate(
@@ -204,10 +210,16 @@ def _mail_work_in_flight(lead_id: int) -> bool:
 
 
 def _has_overdue_lead_task(lead_id: int) -> bool:
-    """True when the lead has an open overdue LeadTask (due on/before today)."""
+    """True when an open overdue *call-completable* LeadTask exists.
+
+    Research chores (e.g. legacy \"LLC search\") still put the lead in Today's
+    Action via due date, but must not force follow_up_now → Call Now.
+    """
     try:
+        from app.utils.call_completable_task import is_call_completable_task
+
         today = date.today()
-        return (
+        tasks = (
             LeadTask.query
             .filter(
                 LeadTask.lead_id == lead_id,
@@ -215,8 +227,12 @@ def _has_overdue_lead_task(lead_id: int) -> bool:
                 LeadTask.due_date.isnot(None),
                 LeadTask.due_date <= today,
             )
-            .first()
-        ) is not None
+            .all()
+        )
+        return any(
+            is_call_completable_task(task.task_type, task.title)
+            for task in tasks
+        )
     except Exception as exc:
         logger.warning("overdue LeadTask query failed for lead_id=%s: %s", lead_id, exc)
         return False
@@ -525,6 +541,16 @@ class LeadScoringEngine:
                 'days_since_sale': (
                     (date.today() - sale).days if sale is not None else None
                 ),
+            }
+
+        # After the mail hold ends, prior-owner phones/emails remain untrusted
+        # until skip-trace completes on/after the sale date.
+        if rubric.contacts_need_post_hold_verification(lead):
+            return 'enrich_data', 'recently_sold', {
+                'lead_status': lead.lead_status,
+                'requires_skip_trace': True,
+                'contacts_likely_prior_owner': True,
+                'most_recent_sale': getattr(lead, 'most_recent_sale', None),
             }
 
         if lead.lead_status in ('skip_trace', 'awaiting_skip_trace'):

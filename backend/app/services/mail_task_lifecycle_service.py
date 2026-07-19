@@ -17,7 +17,10 @@ from app.services.scoring_rubric import (
     is_recently_sold,
     sql_not_recently_sold,
 )
-from app.utils.call_completable_task import is_superseded_by_mail_task
+from app.utils.call_completable_task import (
+    is_call_completable_task,
+    is_superseded_by_mail_task,
+)
 from app.services.lead_task_service import complete_native_task_mirror
 
 logger = logging.getLogger(__name__)
@@ -41,15 +44,113 @@ def _is_recent_sale_defer_task(
     task_type: str | None,
     title: str | None,
 ) -> bool:
-    """True for due outreach work that should wait until mail is eligible."""
+    """True for due mail-batch work that should wait until mail is eligible.
+
+    Call / follow-up chores are completed (not snoozed) via
+    :func:`complete_obsolete_outreach_during_recent_sale_hold`.
+    """
     if is_mail_follow_up_title(title):
         return False
-    if task_type == 'add_to_mail_batch':
+    if (task_type or '').strip() == 'add_to_mail_batch':
         return True
     return (
         lead.recommended_contact_method == 'direct_mail'
         and is_superseded_by_mail_task(task_type, title)
+        and not is_call_completable_task(task_type, title)
     )
+
+
+def _is_obsolete_outreach_during_recent_sale_hold(
+    task_type: str | None,
+    title: str | None,
+) -> bool:
+    """True for prior-owner call/follow-up chores that must not stay due on hold."""
+    ttype = (task_type or 'custom').strip()
+    if ttype == 'skip_trace_owner':
+        return False
+    if ttype == 'add_to_mail_batch':
+        return False
+    if is_mail_follow_up_title(title):
+        return False
+    return (
+        is_call_completable_task(task_type, title)
+        or is_superseded_by_mail_task(task_type, title)
+    )
+
+
+def complete_obsolete_outreach_during_recent_sale_hold(
+    lead_id: int,
+    *,
+    actor: str = 'recent_sale_hold',
+    commit: bool = False,
+) -> tuple[list[int], list[str]]:
+    """Complete open dated call/follow-up tasks while a recent-sale hold is active.
+
+    Keeps Today's Action clear during Skip Trace Hold — prior-owner outreach is
+    obsolete until the hold ends / new owner is confirmed. Does not touch
+    ``skip_trace_owner`` hold/handoff tasks or post-mailer follow-ups.
+
+    Returns ``(completed_lead_task_ids, hubspot_task_ids_pending_api_sync)``.
+    Callers that commit later must sync HubSpot IDs after their commit
+    (same pattern as :func:`complete_tasks_superseded_by_mail`).
+    """
+    from app.services.hubspot_task_completion_service import (
+        mark_hubspot_task_completed_local,
+        sync_pending_hubspot_completions,
+    )
+
+    tasks = (
+        LeadTask.query
+        .filter(
+            LeadTask.lead_id == lead_id,
+            LeadTask.status == 'open',
+            LeadTask.due_date.isnot(None),
+        )
+        .order_by(LeadTask.id.asc())
+        .all()
+    )
+    now = datetime.now(timezone.utc)
+    completed_ids: list[int] = []
+    hubspot_ids_to_sync: list[str] = []
+    for task in tasks:
+        if not _is_obsolete_outreach_during_recent_sale_hold(task.task_type, task.title):
+            continue
+        if task.hubspot_task_id:
+            local = mark_hubspot_task_completed_local(
+                lead_id,
+                task.id,
+                actor=actor,
+                reason='recent_sale_hold_obsolete_outreach',
+            )
+            if local:
+                completed_ids.append(task.id)
+                if local.hubspot_task_id:
+                    hubspot_ids_to_sync.append(str(local.hubspot_task_id))
+            continue
+        task.status = 'completed'
+        task.completed_at = now
+        complete_native_task_mirror(task, now)
+        db.session.add(task)
+        db.session.add(LeadTimelineEntry(
+            lead_id=lead_id,
+            event_type='task_completed',
+            occurred_at=now,
+            source='system',
+            actor=actor,
+            summary=f'Task completed: {task.title}',
+            event_metadata={
+                'task_id': task.id,
+                'task_type': task.task_type,
+                'title': task.title,
+                'reason': 'recent_sale_hold_obsolete_outreach',
+            },
+        ))
+        completed_ids.append(task.id)
+    if commit and completed_ids:
+        db.session.commit()
+        if hubspot_ids_to_sync:
+            sync_pending_hubspot_completions(hubspot_ids_to_sync)
+    return completed_ids, hubspot_ids_to_sync
 
 
 def _append_recent_sale_snooze_timeline(
@@ -117,6 +218,23 @@ def reconcile_recent_sale_mail_tasks_for_lead(
         actor=actor,
         commit=False,
     )
+    completed_outreach_ids = list(
+        skip_trace.get('completed_obsolete_outreach_ids') or [],
+    )
+    hubspot_completion_ids: list[str] = list(
+        skip_trace.get('completed_obsolete_hubspot_task_ids') or [],
+    )
+    extra_completed, extra_hs = complete_obsolete_outreach_during_recent_sale_hold(
+        lead.id,
+        actor=actor,
+        commit=False,
+    )
+    for task_id in extra_completed:
+        if task_id not in completed_outreach_ids:
+            completed_outreach_ids.append(task_id)
+    for hs_id in extra_hs:
+        if hs_id not in hubspot_completion_ids:
+            hubspot_completion_ids.append(hs_id)
     queued_items = MailQueueItem.query.filter_by(
         lead_id=lead.id,
         status='queued',
@@ -198,10 +316,17 @@ def reconcile_recent_sale_mail_tasks_for_lead(
         db.session.commit()
         if hubspot_task_ids:
             sync_recent_sale_hubspot_due_dates(hubspot_task_ids, eligible_date)
+        if hubspot_completion_ids:
+            from app.services.hubspot_task_completion_service import (
+                sync_pending_hubspot_completions,
+            )
+            sync_pending_hubspot_completions(hubspot_completion_ids)
 
     return {
         'rescheduled_to': eligible_date.isoformat(),
         'rescheduled_task_count': rescheduled,
+        'completed_obsolete_outreach_ids': completed_outreach_ids,
+        'completed_obsolete_hubspot_task_ids': hubspot_completion_ids,
         'hubspot_task_ids': sorted(hubspot_task_ids),
         'skip_trace_scheduled': skip_trace['scheduled'],
         'skip_trace_task_id': skip_trace['task_id'],
@@ -210,6 +335,7 @@ def reconcile_recent_sale_mail_tasks_for_lead(
             bool(skip_trace.get('changed'))
             or bool(queued_items)
             or rescheduled > 0
+            or bool(completed_outreach_ids)
         ),
     }
 
@@ -432,6 +558,7 @@ def reconcile_recent_sale_mail_tasks(
     skip_trace_scheduled_count = 0
     task_count = 0
     hubspot_due_dates: dict[str, date] = {}
+    hubspot_completion_ids: list[str] = []
     results: list[dict] = []
 
     def record_outcome(lead_id: int, outcome: dict) -> None:
@@ -445,6 +572,9 @@ def reconcile_recent_sale_mail_tasks(
                 eligible = date.fromisoformat(outcome['rescheduled_to'])
                 for task_id in outcome['hubspot_task_ids']:
                     hubspot_due_dates[task_id] = eligible
+                for hs_id in outcome.get('completed_obsolete_hubspot_task_ids') or []:
+                    if hs_id not in hubspot_completion_ids:
+                        hubspot_completion_ids.append(hs_id)
             results.append({'lead_id': lead_id, **outcome})
 
     for lead_id in ordered_ids:
@@ -478,6 +608,11 @@ def reconcile_recent_sale_mail_tasks(
         db.session.commit()
         for task_id, due_date in hubspot_due_dates.items():
             sync_recent_sale_hubspot_due_dates([task_id], due_date)
+        if hubspot_completion_ids:
+            from app.services.hubspot_task_completion_service import (
+                sync_pending_hubspot_completions,
+            )
+            sync_pending_hubspot_completions(hubspot_completion_ids)
         refresh_leads_after_mail_task_changes(affected_leads)
 
     all_affected_leads = list(dict.fromkeys(

@@ -114,6 +114,20 @@ def test_todays_action_includes_lead_with_task_due_today(app):
         assert lead.id in ids
 
 
+def test_todays_action_excludes_legacy_llc_search_only(app):
+    """LLC search chores alone must not put a lead in Today's Action."""
+    with app.app_context():
+        lead = _make_lead(app, '2b Llc Search St', lead_status='mailing_no_contact_made')
+        _make_task(
+            app, lead.id, due_date=date.today() - timedelta(days=30),
+            title='LLC Search',
+        )
+        svc = QueueService()
+        rows, _total = svc.get_todays_action()
+        ids = [r['id'] for r in rows]
+        assert lead.id not in ids
+
+
 def test_todays_action_excludes_nurture_lead(app):
     """Today's Action excludes nurture leads."""
     with app.app_context():

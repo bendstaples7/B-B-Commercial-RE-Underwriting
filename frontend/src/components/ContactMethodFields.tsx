@@ -72,6 +72,21 @@ export interface MethodOption {
   recordId: number | null
   recordLabel: string | null
   confidenceScore?: number
+  contactId?: number
+  isHubspotPrimary?: boolean
+}
+
+function isHubspotPrimaryPhone(phone: {
+  notes?: string | null
+  label?: string | null
+  source?: string | null
+}): boolean {
+  const notes = (phone.notes || '').toLowerCase()
+  const source = (phone.source || '').toLowerCase()
+  return (
+    notes.includes('hubspot primary')
+    || (source.startsWith('hubspot') && notes.includes('hubspot primary'))
+  )
 }
 
 export function buildMethodOptions(
@@ -101,6 +116,8 @@ export function buildMethodOptions(
           recordId: phone.id,
           recordLabel: phone.label,
           confidenceScore: phone.confidence_score ?? 50,
+          contactId: contact.id,
+          isHubspotPrimary: isHubspotPrimaryPhone(phone),
         })
       }
     } else {
@@ -111,15 +128,19 @@ export function buildMethodOptions(
           value: email.value,
           recordId: email.id,
           recordLabel: email.label,
+          contactId: contact.id,
         })
       }
     }
   }
 
   if (mode === 'phone') {
-    return options.sort(
-      (a, b) => (b.confidenceScore ?? 50) - (a.confidenceScore ?? 50),
-    )
+    return options.sort((a, b) => {
+      const scoreDiff = (b.confidenceScore ?? 50) - (a.confidenceScore ?? 50)
+      if (scoreDiff !== 0) return scoreDiff
+      // Prefer HubSpot-primary when confidence ties (never alphabetical).
+      return Number(Boolean(b.isHubspotPrimary)) - Number(Boolean(a.isHubspotPrimary))
+    })
   }
 
   return options
@@ -194,19 +215,39 @@ export function ContactMethodFields({
 
   useEffect(() => {
     if (hasAutoSelected.current || contactsLoading || contacts.length === 0) return
+    // Respect a parent-provided selection (e.g. remount with prior dial target).
+    if (value.contactId != null && (value.methodKey || value.methodValue)) {
+      hasAutoSelected.current = true
+      return
+    }
 
     hasAutoSelected.current = true
 
-    // Default to the primary contact (or the first one) and that contact's
-    // first phone (calls) / email (emails) so details are captured even when
-    // there are multiple contacts. The user can still change or clear to None.
+    if (mode === 'phone') {
+      // Highest-confidence phone across all contacts (HubSpot-primary tie-break).
+      const options = buildMethodOptions(contacts, 'phone', null)
+      const opt = options[0]
+      if (!opt?.contactId) {
+        const fallback = contacts.find((c) => c.is_primary) ?? contacts[0]
+        onChange({ ...EMPTY_CONTACT_METHOD, contactId: fallback.id })
+        return
+      }
+      onChange({
+        contactId: opt.contactId,
+        methodKey: opt.key,
+        methodValue: opt.value,
+        methodLabel: opt.recordLabel,
+        methodRecordId: opt.recordId,
+      })
+      return
+    }
+
+    // Emails: primary contact (or first) + that contact's first email.
     const defaultContact = contacts.find((c) => c.is_primary) ?? contacts[0]
     const options = buildMethodOptions(contacts, mode, defaultContact.id)
     const opt = options[0]
 
     if (!opt) {
-      // The default contact has no phone/email of this mode — select the
-      // contact only so contact attribution is still captured.
       onChange({ ...EMPTY_CONTACT_METHOD, contactId: defaultContact.id })
       return
     }
@@ -218,7 +259,7 @@ export function ContactMethodFields({
       methodLabel: opt.recordLabel,
       methodRecordId: opt.recordId,
     })
-  }, [contacts, contactsLoading, mode, onChange])
+  }, [contacts, contactsLoading, mode, onChange, value.contactId, value.methodKey, value.methodValue])
 
   const handleContactChange = (contactKey: string) => {
     if (contactKey === CONTACT_NONE) {

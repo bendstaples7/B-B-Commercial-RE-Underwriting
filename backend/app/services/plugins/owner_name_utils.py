@@ -5,9 +5,23 @@ import re
 
 
 # Legal-entity suffixes / holding vehicles (investor LLCs, corps, trusts).
+# Soft org words (MANAGEMENT/HOLDINGS/…) are phrase-only below — bare tokens
+# false-positive too many person names into entity cold-mail blocks.
 _ENTITY_MARKERS = frozenset({
     "LLC", "INC", "CORP", "TRUST", "LP", "LLP", "COMPANY", "CO",
 })
+
+# Multi-word org shapes that are not covered by a single token.
+_ENTITY_PHRASES = (
+    "ASSET MANAGEMENT",
+    "PROPERTY MANAGEMENT",
+    "REAL ESTATE",
+    "PROPERTY GROUP",
+    "INVESTMENT GROUP",
+    "HOLDINGS LLC",
+    "PROPERTIES LLC",
+    "INVESTMENTS LLC",
+)
 
 # High-precision institutional markers — safe to auto-mark as nonprofit.
 _DEFINITE_INSTITUTIONAL_MARKERS = frozenset({
@@ -84,8 +98,21 @@ def is_entity_name(cleaned: str) -> bool:
     if is_institutional_name(cleaned):
         return True
     upper = cleaned.upper()
+    if any(phrase in upper for phrase in _ENTITY_PHRASES):
+        return True
     tokens = {_normalize_token(t) for t in upper.split()}
     return bool(tokens & _ENTITY_MARKERS)
+
+
+def is_property_management_name(cleaned: str) -> bool:
+    """True when *cleaned* looks like a management / asset-management company."""
+    if not cleaned:
+        return False
+    upper = cleaned.upper()
+    if "ASSET MANAGEMENT" in upper or "PROPERTY MANAGEMENT" in upper:
+        return True
+    tokens = {_normalize_token(t) for t in upper.split()}
+    return "MANAGEMENT" in tokens
 
 
 # Back-compat alias for plugins that imported the private name.

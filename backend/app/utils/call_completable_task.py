@@ -23,6 +23,31 @@ MAIL_SKIP_TASK_TYPES = frozenset({
     'skip_trace_owner',
 })
 
+# HubSpot / custom research chores — never treat as the call task to complete.
+LEGACY_ENTITY_RESEARCH_TITLE_RE = re.compile(
+    r'\b(llc\s*search|entity\s*search|research\s+(illinois\s+)?llc|'
+    r'look\s*up\s+llc|sos\s*search)\b',
+    re.IGNORECASE,
+)
+
+# SQL ILIKE fragments aligned with LEGACY_ENTITY_RESEARCH_TITLE_RE.
+LEGACY_ENTITY_RESEARCH_TITLE_ILIKE = (
+    '%llc search%',
+    '%entity search%',
+    '%research llc%',
+    '%research illinois llc%',
+    '%look up llc%',
+    '%sos search%',
+)
+
+
+def is_legacy_entity_research_task(task_type: str | None, title: str | None) -> bool:
+    """True for LLC/entity research chores that must not drive Call Now UX."""
+    text = (title or '').strip()
+    if not text:
+        return False
+    return bool(LEGACY_ENTITY_RESEARCH_TITLE_RE.search(text))
+
 
 def is_superseded_by_mail_task(task_type: str | None, title: str | None) -> bool:
     """Return True if an open task should be completed when a lead enters the mail batch."""
@@ -51,6 +76,9 @@ def is_call_completable_task(task_type: str | None, title: str | None) -> bool:
         return True
 
     if ttype in NON_CALL_TASK_TYPES:
+        return False
+
+    if is_legacy_entity_research_task(task_type, title):
         return False
 
     if is_mail_or_email_outreach_task(task_type, title):
@@ -86,10 +114,13 @@ def find_call_completable_task(tasks: list[Any]) -> Any | None:
         if is_call_completable_task(task_type, title):
             return task
 
-    # One open task that isn't mail/email outreach — treat as the call task.
+    # One open task that isn't mail/email or LLC research — treat as the call task.
     if len(open_tasks) == 1:
         _, task_type, title, _ = _task_fields(open_tasks[0])
-        if not is_mail_or_email_outreach_task(task_type, title):
+        if (
+            not is_mail_or_email_outreach_task(task_type, title)
+            and not is_legacy_entity_research_task(task_type, title)
+        ):
             return open_tasks[0]
 
     return None

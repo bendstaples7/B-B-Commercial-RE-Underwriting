@@ -78,3 +78,16 @@ def test_find_hubspot_follow_up_task():
     found = find_call_completable_task(tasks)
     assert found is not None
     assert found['id'] == 'hs-99'
+
+
+def test_llc_search_not_call_completable_or_sole_fallback():
+    assert is_call_completable_task('custom', 'LLC Search') is False
+    assert is_call_completable_task('custom', 'LLC search') is False
+    found = find_call_completable_task([{
+        'id': 5616,
+        'task_type': 'custom',
+        'title': 'LLC Search',
+        'status': 'open',
+        'source': 'hubspot',
+    }])
+    assert found is None

@@ -42,6 +42,7 @@ FK_REPOINTS = [
     ('lead_tasks', 'lead_id'),
     ('lead_timeline_entries', 'lead_id'),
     ('lead_scores', 'lead_id'),
+    ('lead_owner_snapshots', 'lead_id'),
     ('enrichment_records', 'lead_id'),
     ('hubspot_signals', 'lead_id'),
     ('lead_deal_links', 'lead_id'),
@@ -50,6 +51,8 @@ FK_REPOINTS = [
     ('property_organization_links', 'property_id'),
     ('owner_organization_links', 'owner_id'),
     ('tasks', 'lead_id'),
+    ('mail_queue_items', 'lead_id'),
+    ('motivation_signals', 'lead_id'),
 ]
 
 
@@ -187,6 +190,49 @@ def _repoint_hubspot_matches(winner_id: int, loser_id: int) -> None:
             hm.internal_record_id = winner_id
 
 
+def _prefer_newer_sale_onto_winner(winner: Lead, loser: Lead) -> None:
+    """When duplicates disagree on sale date, keep the newer transfer."""
+    from app.services.scoring_rubric import effective_acquisition_date
+
+    w_sale = effective_acquisition_date(winner)
+    l_sale = effective_acquisition_date(loser)
+    if l_sale is None:
+        return
+    if w_sale is not None and l_sale <= w_sale:
+        return
+    if getattr(loser, 'most_recent_sale', None) not in (None, ''):
+        winner.most_recent_sale = loser.most_recent_sale
+    if getattr(loser, 'most_recent_sale_price', None) not in (None, ''):
+        winner.most_recent_sale_price = loser.most_recent_sale_price
+    loser_acq = getattr(loser, 'acquisition_date', None)
+    if loser_acq is not None:
+        winner_acq = getattr(winner, 'acquisition_date', None)
+        if winner_acq is None or loser_acq > winner_acq:
+            winner.acquisition_date = loser_acq
+    elif l_sale is not None:
+        # Loser won via parsed most_recent_sale string only — keep flat date in sync.
+        winner_acq = getattr(winner, 'acquisition_date', None)
+        if winner_acq is None or l_sale > winner_acq:
+            winner.acquisition_date = l_sale
+
+
+def _prefer_cleaner_property_street(winner: Lead, loser: Lead) -> None:
+    """Prefer a street line without a glued ZIP when both normalize to one building."""
+    w_street = (winner.property_street or '').strip()
+    l_street = (loser.property_street or '').strip()
+    if not l_street or not streets_match_normalized(w_street, l_street):
+        return
+    # Glued ZIP-only suffixes (e.g. "3052 N Davlin 60618") are noisier than
+    # "3052 N Davlin Ct 1" — prefer the side without a trailing 5-digit ZIP.
+    import re
+    zip_suffix = re.compile(r'\s+\d{5}(?:-\d{4})?\s*$')
+    w_has_zip = bool(zip_suffix.search(w_street))
+    l_has_zip = bool(zip_suffix.search(l_street))
+    if w_has_zip and not l_has_zip:
+        winner.property_street = l_street
+        refresh_lead_dedup_fields(winner)
+
+
 def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedup_sentinel') -> None:
     """Merge loser into winner (ORM). Caller must commit."""
     winner_id = winner.id
@@ -219,8 +265,14 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
         if field == 'lead_score':
             # Scoring has a single writer — caller must rescore after commit.
             continue
+        if field in ('most_recent_sale', 'acquisition_date', 'most_recent_sale_price'):
+            # Handled below — prefer the newer transfer, not "winner empty only".
+            continue
         if (w_val is None or w_val == '') and l_val not in (None, ''):
             setattr(winner, field, l_val)
+
+    _prefer_newer_sale_onto_winner(winner, loser)
+    _prefer_cleaner_property_street(winner, loser)
 
     db.session.add(LeadAuditTrail(
         lead_id=winner_id,
@@ -262,15 +314,20 @@ def run_duplicate_sentinel(
     *,
     dry_run: bool = False,
     max_merges: int = 100,
-) -> dict[str, int]:
-    """Scan for duplicate clusters; auto-merge clear winners, flag ambiguous."""
+) -> dict:
+    """Scan for duplicate clusters; auto-merge clear winners, flag ambiguous.
+
+    Returns counts plus ``merged_pairs`` ``[{winner_id, loser_id}, ...]`` for
+    dry-run previews and post-apply verification.
+    """
     confirmed_ids = confirmed_hubspot_lead_ids()
     clusters = find_duplicate_clusters()
-    stats = {
+    stats: dict = {
         'clusters_found': len(clusters),
         'merged': 0,
         'flagged': 0,
         'skipped': 0,
+        'merged_pairs': [],
     }
     winners_to_rescore: set[int] = set()
 
@@ -295,14 +352,38 @@ def run_duplicate_sentinel(
         winner = next(l for l in cluster if l.id == winner_record['id'])
         losers = [l for l in cluster if l.id != winner.id]
 
-        if dry_run:
-            stats['merged'] += len(losers)
-            continue
-
         for loser in losers:
-            merge_lead_into_winner(winner, loser)
-            stats['merged'] += 1
-            winners_to_rescore.add(winner.id)
+            # Enforce max-merges per loser, not only per cluster.
+            if stats['merged'] >= max_merges:
+                stats['skipped'] += 1
+                break
+            pair = {
+                'winner_id': winner.id,
+                'loser_id': loser.id,
+                'winner_street': winner.property_street,
+                'loser_street': loser.property_street,
+            }
+            if dry_run:
+                stats['merged_pairs'].append(pair)
+                stats['merged'] += 1
+                continue
+            try:
+                # Isolate each pair so a later failure cannot undo earlier merges.
+                with db.session.begin_nested():
+                    merge_lead_into_winner(winner, loser)
+                stats['merged_pairs'].append(pair)
+                stats['merged'] += 1
+                winners_to_rescore.add(winner.id)
+            except Exception:
+                logger.exception(
+                    "Failed merging lead %s into %s — skipping pair",
+                    loser.id, winner.id,
+                )
+                stats['skipped'] += 1
+                winner = db.session.get(Lead, winner_record['id'])
+                if winner is None:
+                    break
+                continue
 
     if not dry_run:
         # Commit merges before rescoring — refresh_lead_scoring rolls back the
@@ -314,5 +395,7 @@ def run_duplicate_sentinel(
     else:
         db.session.rollback()
 
-    logger.info("Duplicate sentinel complete: %s", stats)
+    logger.info("Duplicate sentinel complete: %s", {
+        k: v for k, v in stats.items() if k != 'merged_pairs'
+    })
     return stats

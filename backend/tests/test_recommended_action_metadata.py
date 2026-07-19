@@ -39,6 +39,9 @@ def test_skip_trace_nurture_without_stale_contacts_stays_blank():
     with patch(
         'app.services.recommended_action_metadata.contacts_likely_prior_owner',
         return_value=False,
+    ), patch(
+        'app.services.recommended_action_metadata.contacts_need_post_hold_verification',
+        return_value=False,
     ):
         display = get_recommended_action_display('nurture', lead=lead)
     assert display['explanation'] in (None, '')
@@ -53,3 +56,18 @@ def test_mailing_nurture_without_sale_context_stays_blank():
     )
     display = get_recommended_action_display('nurture', lead=lead)
     assert display['explanation'] in (None, '')
+
+
+def test_enrich_data_recently_sold_uses_confirm_new_owner_label():
+    display = get_recommended_action_display(
+        'enrich_data',
+        winning_rule='recently_sold',
+    )
+    assert display['label'] == 'Confirm New Owner'
+    assert 'skip trace' in (display['explanation'] or '').lower()
+    assert RECENT_SALE_OUTDATED_CONTACT_EXPLANATION in (display['explanation'] or '')
+
+
+def test_enrich_data_without_recently_sold_keeps_generic_label():
+    display = get_recommended_action_display('enrich_data')
+    assert display['label'] == 'Enrich Data'

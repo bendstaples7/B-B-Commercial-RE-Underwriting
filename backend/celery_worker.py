@@ -1384,6 +1384,20 @@ def mark_tasks_overdue() -> int:
                 "mark_tasks_overdue: deferred %d recent-sale mail task(s).",
                 reconciliation['rescheduled_task_count'],
             )
+        from app.services.entity_research_lifecycle_service import (
+            reconcile_pending_entity_research,
+        )
+        entity_research = reconcile_pending_entity_research(
+            actor='tasks.mark_overdue',
+        )
+        if entity_research['processed_lead_count']:
+            logger.info(
+                "mark_tasks_overdue: entity research reconcile "
+                "leads=%d queued=%d retired_tasks=%d",
+                entity_research['processed_lead_count'],
+                entity_research['queued_count'],
+                entity_research['retired_task_count'],
+            )
         return updated
 
 

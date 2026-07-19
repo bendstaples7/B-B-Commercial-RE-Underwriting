@@ -634,6 +634,30 @@ class HubSpotMatcherService:
                 property_street=raw_address,
                 source="hubspot_import",
             )
+            # Prefer structured deal address props when HubSpot provides them.
+            deal_city = (props.get("city") or props.get("hs_city") or "").strip() or None
+            deal_state = (props.get("state") or props.get("hs_state_code") or "").strip() or None
+            deal_zip = (props.get("zip") or props.get("hs_zip") or "").strip() or None
+            if deal_city:
+                placeholder.property_city = deal_city
+            if deal_state:
+                placeholder.property_state = deal_state
+            if deal_zip:
+                placeholder.property_zip = deal_zip
+            from app.services.property_address_service import complete_property_address
+            # Cook street-only GIS: state blank/IL, or city still blank.
+            # Skip when a non-IL state and city are already set.
+            state_norm = (placeholder.property_state or "").strip().upper()
+            city_blank = not bool((placeholder.property_city or "").strip())
+            try_gis = (not state_norm or state_norm == "IL") or city_blank
+            if state_norm and state_norm != "IL" and not city_blank:
+                try_gis = False
+            complete_property_address(
+                placeholder,
+                try_gis=try_gis,
+                actor="hubspot_matcher",
+                commit=False,
+            )
             db.session.add(placeholder)
             db.session.flush()
             return self._upsert_match(

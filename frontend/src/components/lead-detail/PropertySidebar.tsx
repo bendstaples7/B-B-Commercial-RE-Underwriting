@@ -479,8 +479,18 @@ export function PropertySidebar({
       const pin = formatCookCountyPin(
         preview.pin || preview.recommended_address?.county_assessor_pin || '',
       )
+      // Incomplete situs must win over a street-only found+pin candidate.
+      if (preview.reason === 'incomplete_address' || preview.address_complete === false) {
+        setSidebarSnack(
+          preview.message
+          || 'Add city, state, and ZIP — then look up PIN',
+        )
+        await queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
+        return
+      }
       if (preview.found && pin) {
         setPinCandidate(pin)
+        await queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
         return
       }
       await leadTaskService.createTask(commandCenterData.id, {

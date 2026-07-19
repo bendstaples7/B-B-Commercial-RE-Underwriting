@@ -650,11 +650,13 @@ describe('PropertySidebar always-visible sale and PIN', () => {
         property_street: '123 Test St',
         property_city: 'Chicago',
         property_state: 'IL',
-        property_zip: null,
+        property_zip: '60601',
       },
       recommended_address: null,
       pin: null,
       connector: 'cook_county',
+      address_complete: true,
+      reason: 'no_match',
       message: 'No assessor match found',
     })
     vi.mocked(leadTaskService.createTask).mockResolvedValue({} as never)
@@ -675,6 +677,38 @@ describe('PropertySidebar always-visible sale and PIN', () => {
         task_type: 'research_missing_pin',
       })
     })
+  })
+
+  it('does not create research PIN task when address is incomplete', async () => {
+    vi.mocked(propertyMatchService.preview).mockResolvedValue({
+      found: false,
+      entered_address: {
+        property_street: '1239 N Hoyne',
+        property_city: null,
+        property_state: null,
+        property_zip: null,
+      },
+      recommended_address: null,
+      pin: null,
+      connector: null,
+      address_complete: false,
+      reason: 'incomplete_address',
+      message: 'Add city, state, and ZIP before looking up a PIN',
+    })
+
+    renderSidebar(
+      makePayload({
+        county_assessor_pin: null,
+      } as Partial<CommandCenterPayload>),
+    )
+
+    fireEvent.click(screen.getByTestId('sidebar-look-up-pin'))
+
+    await waitFor(() => {
+      expect(propertyMatchService.preview).toHaveBeenCalledWith(1)
+    })
+    expect(leadTaskService.createTask).not.toHaveBeenCalled()
+    expect(await screen.findByText(/Add city, state, and ZIP/i)).toBeInTheDocument()
   })
 
     it('shows Apply when Look up PIN finds a candidate', async () => {

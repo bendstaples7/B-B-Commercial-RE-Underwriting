@@ -941,6 +941,14 @@ class GoogleSheetsImporter:
                 existing.last_import_job_id = import_job_id
             existing.updated_at = datetime.utcnow()
             _fill_deal_source_from_import_source(existing)
+            from app.services.property_address_service import complete_property_address
+            # Parse-only on import hot path — batch GIS via heal script / Celery.
+            complete_property_address(
+                existing,
+                try_gis=False,
+                actor='google_sheets_importer',
+                commit=False,
+            )
             return existing
         else:
             # Create new lead
@@ -955,6 +963,13 @@ class GoogleSheetsImporter:
                 lead.owner_user_id = owner_user_id
             self._set_lead_fields(lead, validated_data)
             _fill_deal_source_from_import_source(lead)
+            from app.services.property_address_service import complete_property_address
+            complete_property_address(
+                lead,
+                try_gis=False,
+                actor='google_sheets_importer',
+                commit=False,
+            )
             db.session.add(lead)
             try:
                 with db.session.begin_nested():
@@ -976,6 +991,13 @@ class GoogleSheetsImporter:
                     existing.last_import_job_id = import_job_id
                 existing.updated_at = datetime.utcnow()
                 _fill_deal_source_from_import_source(existing)
+                from app.services.property_address_service import complete_property_address
+                complete_property_address(
+                    existing,
+                    try_gis=False,
+                    actor='google_sheets_importer',
+                    commit=False,
+                )
                 return existing
             try:
                 from app.services.contact_service import ContactService

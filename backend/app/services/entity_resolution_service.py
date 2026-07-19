@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from sqlalchemy import func, text
@@ -269,11 +269,18 @@ class EntityResolutionService:
         *,
         actor: str = "owner_import",
         sync: bool = False,
+        force: bool = False,
+        commit: bool = True,
     ) -> dict:
         """Queue (or sync-run) entity resolution when an owner org still needs research.
 
         Never raises for missing SOS data — marks ``pending`` and returns so
         imports / company promotion stay non-blocking.
+
+        When status is already ``pending``, skip re-queue unless ``force=True``
+        (used by background reconcile) so Command Center views cannot flood Celery.
+        Even with ``force=True``, skip re-queue when ``pending`` and
+        ``entity_lookup_checked_at`` is within 30 minutes (error status still requeues).
         """
         org = self._get_linked_owner_org(lead_id)
         if org is None:
@@ -282,6 +289,23 @@ class EntityResolutionService:
                 "skipped": True,
                 "reason": "no_owner_org",
             }
+        status = (org.entity_lookup_status or "").strip()
+        if status == "pending" and not sync:
+            skip_pending = not force
+            if force and org.entity_lookup_checked_at is not None:
+                checked_at = org.entity_lookup_checked_at
+                if checked_at.tzinfo is not None:
+                    checked_at = checked_at.replace(tzinfo=None)
+                if datetime.utcnow() - checked_at < timedelta(minutes=30):
+                    skip_pending = True
+            if skip_pending:
+                return {
+                    "queued": False,
+                    "skipped": True,
+                    "reason": "already_queued",
+                    "organization_id": org.id,
+                    "entity_lookup_status": org.entity_lookup_status,
+                }
         if not self.owner_org_needs_research(org):
             return {
                 "queued": False,
@@ -303,6 +327,15 @@ class EntityResolutionService:
         if not sync:
             try:
                 from celery_worker import entity_resolution_resolve_lead_task
+                if org is not None:
+                    if status != "pending":
+                        org.entity_lookup_status = "pending"
+                    org.entity_lookup_checked_at = datetime.utcnow()
+                    db.session.add(org)
+                    if commit:
+                        db.session.commit()
+                    else:
+                        db.session.flush()
                 entity_resolution_resolve_lead_task.apply_async(
                     args=[lead_id],
                     kwargs={"actor": actor},
@@ -338,7 +371,10 @@ class EntityResolutionService:
                 org.entity_lookup_status = "pending"
                 org.entity_lookup_error = str(exc)
                 org.entity_lookup_checked_at = None
-                db.session.commit()
+                if commit:
+                    db.session.commit()
+                else:
+                    db.session.flush()
             logger.warning(
                 "Entity resolution pending for lead_id=%s — SOS data not loaded: %s",
                 lead_id, exc,

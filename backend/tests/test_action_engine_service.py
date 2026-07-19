@@ -402,6 +402,89 @@ def test_recently_sold_hold_is_preserved_when_owner_mail_is_incomplete():
     assert result == 'hold'
 
 
+def test_post_hold_stale_contacts_return_enrich_data_not_call_ready():
+    """After the 730-day mail window, prior-owner phones must not score call_ready."""
+    lead = make_lead(
+        lead_score=85.0,
+        data_completeness_score=80.0,
+        has_phone=True,
+        has_email=True,
+        lead_status='skip_trace',
+    )
+    sale = date.today() - timedelta(days=800)
+    lead.acquisition_date = sale
+    lead.date_skip_traced = sale - timedelta(days=60)
+    lead.needs_skip_trace = True
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0), \
+         patch('app.services.lead_scoring_engine._resolve_crm_flags', return_value=(True, True, True)):
+        result = ActionEngineService.compute_recommended_action(lead)
+    assert result == 'enrich_data'
+
+
+def test_overdue_llc_search_does_not_force_call_ready():
+    """Legacy LLC search chores must not become Call Now via follow_up_overdue."""
+    lead = make_lead(
+        lead_score=85.0,
+        data_completeness_score=80.0,
+        has_phone=True,
+        has_email=True,
+        lead_status='mailing_no_contact_made',
+    )
+    lead.id = 4878
+    lead.follow_up_overdue = False
+    lead.is_warm = False
+
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=1), \
+         patch('app.services.lead_scoring_engine._has_overdue_lead_task', return_value=False), \
+         patch('app.services.lead_scoring_engine._resolve_crm_flags', return_value=(True, True, True)), \
+         patch('app.services.scoring_rubric.is_recently_sold', return_value=False), \
+         patch('app.services.scoring_rubric.contacts_likely_prior_owner', return_value=False), \
+         patch('app.services.lead_scoring_engine.cold_mail_block_reason', return_value=None):
+        # Simulate: open overdue LLC search exists, but helper ignores non-call tasks.
+        result = ActionEngineService.compute_recommended_action(lead)
+    assert result != 'call_ready'
+    assert result != 'follow_up_now'
+
+
+def test_has_overdue_lead_task_ignores_llc_search(app):
+    from app import db
+    from app.models.lead import Lead
+    from app.models.lead_task import LeadTask
+    from app.services.lead_scoring_engine import _has_overdue_lead_task
+
+    with app.app_context():
+        lead = Lead(
+            property_street='Overdue Llc Search St',
+            owner_first_name='Jane',
+            owner_last_name='Doe',
+            lead_status='mailing_no_contact_made',
+            has_phone=True,
+        )
+        db.session.add(lead)
+        db.session.flush()
+        db.session.add(LeadTask(
+            lead_id=lead.id,
+            task_type='custom',
+            title='LLC search',
+            status='open',
+            due_date=date.today() - timedelta(days=10),
+            created_by='test',
+        ))
+        db.session.commit()
+        assert _has_overdue_lead_task(lead.id) is False
+
+        db.session.add(LeadTask(
+            lead_id=lead.id,
+            task_type='custom',
+            title='Call phone 1',
+            status='open',
+            due_date=date.today() - timedelta(days=1),
+            created_by='test',
+        ))
+        db.session.commit()
+        assert _has_overdue_lead_task(lead.id) is True
+
+
 def test_priority_7_high_score_with_open_tasks_skips_ready_for_outreach():
     """When open tasks exist, priority 7 does not fire; falls through."""
     lead = make_lead(lead_score=70.0, data_completeness_score=60.0)

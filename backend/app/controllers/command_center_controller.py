@@ -7,6 +7,7 @@ Blueprint: command_center_bp, prefix /api/leads
 """
 import logging
 import os
+from datetime import datetime
 from functools import wraps
 
 from flask import Blueprint, jsonify, g, request
@@ -448,6 +449,30 @@ def get_command_center(lead_id: int):
         data_quality_breakdown = build_data_quality_breakdown(lead)
         data_completeness_score = data_quality_breakdown['total']
 
+    # Retire LLC chores + refresh scoring before RA / open_tasks snapshots so
+    # the response reflects post-preempt state (view path: no Celery enqueue).
+    try:
+        from app.services.entity_research_lifecycle_service import (
+            preempt_entity_research_for_lead,
+        )
+        preempt_entity_research_for_lead(
+            lead_id,
+            actor='command_center_view',
+            sync=False,
+            commit=True,
+            queue_research=False,
+        )
+        lead = Lead.query.get(lead_id)
+    except Exception:  # noqa: BLE001 — never block command center
+        logger.exception(
+            'preempt_entity_research_for_lead failed for lead %s', lead_id,
+        )
+        try:
+            _db.session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        lead = Lead.query.get(lead_id)
+
     # Display next step + "why" from one live decision so label/explanation
     # cannot disagree with a stale persisted recommended_action column.
     decision_action, winning_rule, winning_signals = _get_action_decision(lead)
@@ -682,6 +707,37 @@ def get_command_center(lead_id: int):
             'resolved_person_role': person_role,
         })
 
+    owner_orgs = [
+        org for org, link in org_rows
+        if (link.role or '') == 'owner'
+    ]
+    research_org = None
+    if owner_orgs:
+        research_org = max(
+            owner_orgs,
+            key=lambda o: (
+                o.entity_lookup_checked_at is not None,
+                o.entity_lookup_checked_at or datetime.min,
+                o.id or 0,
+            ),
+        )
+    entity_research_payload = None
+    if research_org is not None:
+        entity_research_payload = {
+            'organization_id': research_org.id,
+            'organization_name': research_org.name,
+            'entity_lookup_status': research_org.entity_lookup_status,
+            'entity_lookup_person_found': bool(
+                research_org.entity_lookup_person_found,
+            ),
+            'entity_lookup_checked_at': (
+                research_org.entity_lookup_checked_at.isoformat()
+                if research_org.entity_lookup_checked_at else None
+            ),
+            'entity_lookup_error': research_org.entity_lookup_error,
+            'file_number': research_org.file_number,
+        }
+
     is_mailable = is_owner_mailable_lead(lead)
     mail_eligible_date = recent_sale_mail_eligible_date(lead)
     from app.services.cook_county_enrichment_service import is_cook_county_lead
@@ -697,6 +753,7 @@ def get_command_center(lead_id: int):
         'contacts_stale_since': stale_since,
         'past_owners': past_owners_payload,
         'organizations': organizations_payload,
+        'entity_research': entity_research_payload,
         'related_properties': related_properties,
         # Property details
         'property_street': lead.property_street,

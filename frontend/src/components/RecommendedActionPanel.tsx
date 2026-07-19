@@ -28,10 +28,11 @@ import ContactMailOutlinedIcon from '@mui/icons-material/ContactMailOutlined'
 import PinDropOutlinedIcon from '@mui/icons-material/PinDropOutlined'
 import EventAvailableOutlinedIcon from '@mui/icons-material/EventAvailableOutlined'
 import DoNotDisturbOnOutlinedIcon from '@mui/icons-material/DoNotDisturbOnOutlined'
-import type { RecommendedActionMeta, LeadStatus, LeadTask, CRMRecommendedAction, OutreachContact } from '@/types'
+import type { RecommendedActionMeta, LeadStatus, LeadTask, CRMRecommendedAction, OutreachContact, EntityResearchSummary } from '@/types'
 import { outreachDisplayLabel } from '@/constants/scoringRecommendedActions'
 import { OutreachContactInline, OutreachContactMissingHint } from '@/components/OutreachContactCallout'
 import { formatDateOnly } from '@/utils/helpers'
+import { formatDate } from '@/utils/formatters'
 import {
   type QuickActionId,
   evaluateMoveToSkipTrace,
@@ -189,6 +190,9 @@ export interface RecommendedActionPanelProps {
   showOutreachContact?: boolean
   /** Drop outer border when nested inside a shared action card. */
   embedded?: boolean
+  /** Illinois LLC / org research status for visibility + refresh. */
+  entityResearch?: EntityResearchSummary | null
+  onRefreshEntityResearch?: () => Promise<void>
   onAction: (action: string) => Promise<void>
   onCreateTask?: () => void
 }
@@ -217,11 +221,14 @@ export function RecommendedActionPanel({
   mailEligibleDate = null,
   showOutreachContact = false,
   embedded = false,
+  entityResearch = null,
+  onRefreshEntityResearch,
   onAction,
   onCreateTask,
 }: RecommendedActionPanelProps) {
   const [actionError, setActionError] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
+  const [researchPending, setResearchPending] = useState(false)
 
   const isDNC = leadStatus === 'do_not_contact'
   const isInMailBatch = mailQueueStatus === 'queued'
@@ -407,7 +414,55 @@ export function RecommendedActionPanel({
     </Box>
   )
 
-  // No RA assigned — still show universal quick actions
+  const renderEntityResearch = () => {
+    if (!entityResearch) return null
+    return (
+      <Box sx={{ mb: 2 }} data-testid="entity-research-status">
+        <Typography variant="caption" color="text.secondary" display="block">
+          {entityResearch.entity_lookup_checked_at
+            ? `Last researched ${formatDate(entityResearch.entity_lookup_checked_at)}`
+            : 'Never researched (Illinois LLC / org)'}
+          {entityResearch.entity_lookup_status
+            ? ` · ${String(entityResearch.entity_lookup_status).replace(/_/g, ' ')}`
+            : ''}
+          {entityResearch.organization_name
+            ? ` · ${entityResearch.organization_name}`
+            : ''}
+        </Typography>
+        {entityResearch.entity_lookup_error && (
+          <Typography variant="caption" color="error" display="block">
+            {entityResearch.entity_lookup_error}
+          </Typography>
+        )}
+        {typeof onRefreshEntityResearch === 'function' && (
+          <Button
+            size="small"
+            variant="outlined"
+            sx={{ mt: 0.75 }}
+            disabled={researchPending || pendingAction !== null}
+            onClick={async () => {
+              setResearchPending(true)
+              setActionError(null)
+              try {
+                await onRefreshEntityResearch()
+              } catch (err) {
+                setActionError(
+                  err instanceof Error ? err.message : 'Entity research failed.',
+                )
+              } finally {
+                setResearchPending(false)
+              }
+            }}
+            data-testid="refresh-entity-research-btn"
+          >
+            {researchPending ? 'Researching…' : 'Refresh research'}
+          </Button>
+        )}
+      </Box>
+    )
+  }
+
+  // No RA assigned — still show entity research + universal quick actions
   if (!recommendedAction || !recommendedAction.value) {
     return (
       <Box
@@ -426,19 +481,15 @@ export function RecommendedActionPanel({
           />
         )}
         {openTasks.length > 0 ? (
-          <>
-            <Typography variant="body2" fontWeight={700}>
-              Follow up on next task
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              {openTasks[0].title}
-            </Typography>
-          </>
+          <Typography variant="body2" color="text.secondary" data-testid="ra-next-task-title">
+            {openTasks[0].title}
+          </Typography>
         ) : (
           <Typography variant="body2" color="text.secondary">
             No recommended action at this time.
           </Typography>
         )}
+        {renderEntityResearch()}
         {actionError && (
           <Alert
             severity="error"
@@ -456,14 +507,9 @@ export function RecommendedActionPanel({
 
   const { value, label, explanation, recommended_contact_method: contactMethod, outreach_contact: outreachContact, winning_rule_label: winningRuleLabel } = recommendedAction
   const hasOpenTasks = openTasks.length > 0
-  const skipTraceOwnerTask = openTasks.find((t) => t.task_type === 'skip_trace_owner')
-  const hasOpenSkipTraceOwner = Boolean(skipTraceOwnerTask)
-  const framingTask = skipTraceOwnerTask ?? openTasks[0]
-  const showTaskFallback = (value === 'nurture' || hasOpenSkipTraceOwner) && hasOpenTasks
-  const displayLabel = showTaskFallback
-    ? 'Follow up on next task'
-    : label ?? (value ? outreachDisplayLabel(value, contactMethod) : 'No recommended action')
-  const hideRaHeading = value === 'nurture' && !showTaskFallback
+  const displayLabel = label ?? (value ? outreachDisplayLabel(value, contactMethod) : 'No recommended action')
+  // Nurture has no actionable system suggestion — hide the label; keep explanation if present.
+  const hideRaLabel = value === 'nurture'
   const raButtons = (ACTION_BUTTONS[value] ?? []).filter(
     (btn) => (
       !universalActions.some((u) => u.action === btn.action)
@@ -492,7 +538,7 @@ export function RecommendedActionPanel({
       )}
 
       {/* RA label — hidden for nurture (no system suggestion, just quick actions) */}
-      {!hideRaHeading && (
+      {!hideRaLabel && (
         <Typography
           sx={{
             fontSize: '0.8rem',
@@ -507,37 +553,28 @@ export function RecommendedActionPanel({
         </Typography>
       )}
 
-      {showTaskFallback && framingTask && (
-        <Typography
-          variant="body2"
-          color="text.secondary"
-          sx={{ mb: 2 }}
-          data-testid="ra-next-task-title"
-        >
-          {framingTask.title}
-        </Typography>
-      )}
-
-      {!hideRaHeading && showOutreachContact && outreachContact && (
+      {!hideRaLabel && showOutreachContact && outreachContact && (
         <OutreachContactInline contact={outreachContact} />
       )}
 
-      {!hideRaHeading && showOutreachContact && !outreachContact && contactMethod && (
+      {!hideRaLabel && showOutreachContact && !outreachContact && contactMethod && (
         <OutreachContactMissingHint channel={contactMethod as OutreachContact['channel']} />
       )}
 
-      {!hideRaHeading && explanation && (
+      {explanation && (
         <Typography
           variant="body2"
           color="text.secondary"
-          sx={{ mb: winningRuleLabel && !showTaskFallback ? 1 : 2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+          sx={{ mb: winningRuleLabel ? 1 : 2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}
           data-testid="ra-explanation"
         >
           {explanation}
         </Typography>
       )}
 
-      {!hideRaHeading && !showTaskFallback && winningRuleLabel && (
+      {renderEntityResearch()}
+
+      {!hideRaLabel && winningRuleLabel && (
         <Alert
           severity="info"
           variant="outlined"
