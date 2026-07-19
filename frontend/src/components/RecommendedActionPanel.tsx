@@ -414,7 +414,55 @@ export function RecommendedActionPanel({
     </Box>
   )
 
-  // No RA assigned — still show universal quick actions
+  const renderEntityResearch = () => {
+    if (!entityResearch) return null
+    return (
+      <Box sx={{ mb: 2 }} data-testid="entity-research-status">
+        <Typography variant="caption" color="text.secondary" display="block">
+          {entityResearch.entity_lookup_checked_at
+            ? `Last researched ${formatDate(entityResearch.entity_lookup_checked_at)}`
+            : 'Never researched (Illinois LLC / org)'}
+          {entityResearch.entity_lookup_status
+            ? ` · ${String(entityResearch.entity_lookup_status).replace(/_/g, ' ')}`
+            : ''}
+          {entityResearch.organization_name
+            ? ` · ${entityResearch.organization_name}`
+            : ''}
+        </Typography>
+        {entityResearch.entity_lookup_error && (
+          <Typography variant="caption" color="error" display="block">
+            {entityResearch.entity_lookup_error}
+          </Typography>
+        )}
+        {typeof onRefreshEntityResearch === 'function' && (
+          <Button
+            size="small"
+            variant="outlined"
+            sx={{ mt: 0.75 }}
+            disabled={researchPending || pendingAction !== null}
+            onClick={async () => {
+              setResearchPending(true)
+              setActionError(null)
+              try {
+                await onRefreshEntityResearch()
+              } catch (err) {
+                setActionError(
+                  err instanceof Error ? err.message : 'Entity research failed.',
+                )
+              } finally {
+                setResearchPending(false)
+              }
+            }}
+            data-testid="refresh-entity-research-btn"
+          >
+            {researchPending ? 'Researching…' : 'Refresh research'}
+          </Button>
+        )}
+      </Box>
+    )
+  }
+
+  // No RA assigned — still show entity research + universal quick actions
   if (!recommendedAction || !recommendedAction.value) {
     return (
       <Box
@@ -441,6 +489,7 @@ export function RecommendedActionPanel({
             No recommended action at this time.
           </Typography>
         )}
+        {renderEntityResearch()}
         {actionError && (
           <Alert
             severity="error"
@@ -523,50 +572,7 @@ export function RecommendedActionPanel({
         </Typography>
       )}
 
-      {entityResearch && (
-        <Box sx={{ mb: 2 }} data-testid="entity-research-status">
-          <Typography variant="caption" color="text.secondary" display="block">
-            {entityResearch.entity_lookup_checked_at
-              ? `Last researched ${formatDate(entityResearch.entity_lookup_checked_at)}`
-              : 'Never researched (Illinois LLC / org)'}
-            {entityResearch.entity_lookup_status
-              ? ` · ${String(entityResearch.entity_lookup_status).replace(/_/g, ' ')}`
-              : ''}
-            {entityResearch.organization_name
-              ? ` · ${entityResearch.organization_name}`
-              : ''}
-          </Typography>
-          {entityResearch.entity_lookup_error && (
-            <Typography variant="caption" color="error" display="block">
-              {entityResearch.entity_lookup_error}
-            </Typography>
-          )}
-          {typeof onRefreshEntityResearch === 'function' && (
-            <Button
-              size="small"
-              variant="outlined"
-              sx={{ mt: 0.75 }}
-              disabled={researchPending || pendingAction !== null}
-              onClick={async () => {
-                setResearchPending(true)
-                setActionError(null)
-                try {
-                  await onRefreshEntityResearch()
-                } catch (err) {
-                  setActionError(
-                    err instanceof Error ? err.message : 'Entity research failed.',
-                  )
-                } finally {
-                  setResearchPending(false)
-                }
-              }}
-              data-testid="refresh-entity-research-btn"
-            >
-              {researchPending ? 'Researching…' : 'Refresh research'}
-            </Button>
-          )}
-        </Box>
-      )}
+      {renderEntityResearch()}
 
       {!hideRaLabel && winningRuleLabel && (
         <Alert

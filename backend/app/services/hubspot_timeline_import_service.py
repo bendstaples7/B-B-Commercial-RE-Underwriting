@@ -287,19 +287,24 @@ class HubSpotTimelineImportService:
                 pending_call_confidence.append((
                     occurred_at,
                     meta_activity.get('disposition') or meta_activity.get('outcome'),
-                    meta_activity.get('phone_number'),
+                    (
+                        meta_activity.get('phone_number')
+                        or meta_activity.get('toNumber')
+                        or meta_activity.get('phoneNumber')
+                    ),
                     activity_id,
                 ))
 
         if pending_call_confidence:
             from app.services.phone_confidence_service import PhoneConfidenceService
             pending_call_confidence.sort(key=lambda row: row[0])
-            for _occurred_at, disposition, phone_number, activity_id in pending_call_confidence:
+            for occurred_at, disposition, phone_number, activity_id in pending_call_confidence:
                 try:
                     PhoneConfidenceService.apply_hubspot_call_outcome(
                         lead_id,
                         disposition,
                         phone_number=phone_number,
+                        called_at=occurred_at,
                     )
                 except Exception as exc:
                     logger.warning(

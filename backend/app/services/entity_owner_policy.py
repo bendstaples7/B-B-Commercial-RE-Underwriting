@@ -72,6 +72,7 @@ def _owner_display_name(lead: Lead, primary: Optional[Contact]) -> str:
 def _org_name_is_entity(org: Organization) -> bool:
     if (org.org_type or "") in {
         "llc", "corporation", "trust", "property_management", "brokerage",
+        "law_firm",
     }:
         return True
     return is_entity_name(org.name or "")

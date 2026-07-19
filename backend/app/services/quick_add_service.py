@@ -228,12 +228,18 @@ class QuickAddService:
 
         from app.services.property_address_service import complete_property_address_fields
 
+        # Cook street-only GIS only when situs is blank/IL — never for out-of-state.
+        state_norm = (property_state or '').strip().upper()
+        city_blank = not (property_city or '').strip()
+        try_gis = (not state_norm or state_norm == 'IL') and (
+            city_blank or not state_norm
+        )
         completed = complete_property_address_fields(
             street,
             property_city,
             property_state,
             property_zip,
-            try_gis=True,
+            try_gis=try_gis,
         )
         street = completed.get('property_street') or street
         city = completed.get('property_city')
@@ -299,9 +305,10 @@ class QuickAddService:
             lead.updated_at = datetime.utcnow()
 
         from app.services.property_address_service import complete_property_address
+        # GIS already attempted above when allowed — avoid a second Cook lookup.
         complete_property_address(
             lead,
-            try_gis=True,
+            try_gis=False,
             actor='quick_add',
             commit=False,
         )

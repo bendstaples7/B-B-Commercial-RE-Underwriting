@@ -353,28 +353,33 @@ def run_duplicate_sentinel(
         losers = [l for l in cluster if l.id != winner.id]
 
         for loser in losers:
-            stats['merged_pairs'].append({
+            # Enforce max-merges per loser, not only per cluster.
+            if stats['merged'] >= max_merges:
+                stats['skipped'] += 1
+                break
+            pair = {
                 'winner_id': winner.id,
                 'loser_id': loser.id,
                 'winner_street': winner.property_street,
                 'loser_street': loser.property_street,
-            })
+            }
             if dry_run:
+                stats['merged_pairs'].append(pair)
                 stats['merged'] += 1
                 continue
             try:
-                merge_lead_into_winner(winner, loser)
+                # Isolate each pair so a later failure cannot undo earlier merges.
+                with db.session.begin_nested():
+                    merge_lead_into_winner(winner, loser)
+                stats['merged_pairs'].append(pair)
                 stats['merged'] += 1
                 winners_to_rescore.add(winner.id)
             except Exception:
-                db.session.rollback()
                 logger.exception(
                     "Failed merging lead %s into %s — skipping pair",
                     loser.id, winner.id,
                 )
                 stats['skipped'] += 1
-                # Reload winner after rollback so later losers in the cluster
-                # still see a live ORM instance.
                 winner = db.session.get(Lead, winner_record['id'])
                 if winner is None:
                     break

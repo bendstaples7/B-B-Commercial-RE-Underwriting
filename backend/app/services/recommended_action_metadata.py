@@ -224,7 +224,13 @@ def get_recommended_action_display(
     base_explanation = metadata.get('explanation')
 
     # Post-hold prior-owner path: clearer than generic "Enrich Data".
-    if action == 'enrich_data' and winning_rule == 'recently_sold':
+    recently_sold = winning_rule == 'recently_sold' or (
+        action == 'enrich_data'
+        and winning_rule is None
+        and lead is not None
+        and contacts_need_post_hold_verification(lead)
+    )
+    if action == 'enrich_data' and recently_sold:
         sold_meta = RECOMMENDED_ACTION_METADATA['enrich_data_recently_sold']
         base_label = sold_meta['label']
         base_explanation = sold_meta['explanation']

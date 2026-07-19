@@ -449,6 +449,30 @@ def get_command_center(lead_id: int):
         data_quality_breakdown = build_data_quality_breakdown(lead)
         data_completeness_score = data_quality_breakdown['total']
 
+    # Retire LLC chores + refresh scoring before RA / open_tasks snapshots so
+    # the response reflects post-preempt state (view path: no Celery enqueue).
+    try:
+        from app.services.entity_research_lifecycle_service import (
+            preempt_entity_research_for_lead,
+        )
+        preempt_entity_research_for_lead(
+            lead_id,
+            actor='command_center_view',
+            sync=False,
+            commit=True,
+            queue_research=False,
+        )
+        lead = Lead.query.get(lead_id)
+    except Exception:  # noqa: BLE001 — never block command center
+        logger.exception(
+            'preempt_entity_research_for_lead failed for lead %s', lead_id,
+        )
+        try:
+            _db.session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        lead = Lead.query.get(lead_id)
+
     # Display next step + "why" from one live decision so label/explanation
     # cannot disagree with a stale persisted recommended_action column.
     decision_action, winning_rule, winning_signals = _get_action_decision(lead)
@@ -647,28 +671,6 @@ def get_command_center(lead_id: int):
     past_owners_payload = list_past_owners_payload(lead_id)
     contacts_stale = contacts_likely_prior_owner(lead)
     stale_since = contacts_stale_since(lead)
-
-    try:
-        from app.services.entity_research_lifecycle_service import (
-            preempt_entity_research_for_lead,
-        )
-        # View path: promote + retire LLC chores only — do not enqueue Celery
-        # research (Beat reconcile / explicit Refresh owns that).
-        preempt_entity_research_for_lead(
-            lead_id,
-            actor='command_center_view',
-            sync=False,
-            commit=True,
-            queue_research=False,
-        )
-    except Exception:  # noqa: BLE001 — never block command center
-        logger.exception(
-            'preempt_entity_research_for_lead failed for lead %s', lead_id,
-        )
-        try:
-            _db.session.rollback()
-        except Exception:  # noqa: BLE001
-            pass
 
     org_rows = (
         _db.session.query(Organization, PropertyOrganizationLink)

@@ -15,9 +15,9 @@ import sys
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BACKEND_DIR)
 
-from dotenv import load_dotenv
+from env_loader import load_project_env
 
-load_dotenv(os.path.join(BACKEND_DIR, '.env'))
+load_project_env()
 
 
 def main() -> int:

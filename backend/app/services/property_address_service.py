@@ -152,8 +152,13 @@ def complete_property_address(
     actor: str = 'property_address_completer',
     commit: bool = False,
     write_timeline: bool = True,
+    set_review_flag: bool = True,
 ) -> dict[str, Any]:
-    """Fill missing property city/state/ZIP on *lead*; flag if still incomplete."""
+    """Fill missing property city/state/ZIP on *lead*; flag if still incomplete.
+
+    Pass ``set_review_flag=False`` (with ``write_timeline=False``) for preview
+    paths that must not persist ``review_required``.
+    """
     was_complete = is_property_address_complete(lead=lead)
     before = {
         'property_street': lead.property_street,
@@ -194,24 +199,34 @@ def complete_property_address(
     cleared_review = False
 
     if _clean(lead.property_street) and not now_complete:
-        if not lead.review_required:
+        if set_review_flag and not lead.review_required:
             lead.review_required = True
             flagged = True
         if write_timeline and (
             flagged or changed_fields or not _has_recent_incomplete_timeline(lead.id)
         ):
+            if lead.id is None:
+                db.session.add(lead)
+                db.session.flush()
             _append_incomplete_timeline(lead.id, actor=actor, result=result)
     elif (
         now_complete
         and not was_complete
         and before['review_required']
-        and _has_recent_incomplete_timeline(lead.id)
+        and (
+            _has_recent_incomplete_timeline(lead.id)
+            or flagged
+        )
     ):
         # Only clear review when incompleteness was flagged by this completer
-        # (timeline present) — do not wipe HubSpot / other review_required causes.
+        # (timeline present or flagged in this call) — do not wipe HubSpot /
+        # other review_required causes.
         lead.review_required = False
         cleared_review = True
         if write_timeline:
+            if lead.id is None:
+                db.session.add(lead)
+                db.session.flush()
             db.session.add(LeadTimelineEntry(
                 lead_id=lead.id,
                 event_type='property_address_completed',

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -46,15 +47,28 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    from app import create_app
-    from app.services.lead_dedup_service import run_duplicate_sentinel
+    if args.max_merges < 0:
+        parser.error('--max-merges must be >= 0')
 
-    app = create_app()
-    with app.app_context():
-        stats = run_duplicate_sentinel(
-            dry_run=bool(args.dry_run),
-            max_merges=max(args.max_merges, 0),
-        )
+    # Suppress migrations and startup CRM/ownership recovery during script boot.
+    prev_migration = os.environ.get('KIRO_MIGRATION')
+    os.environ['KIRO_MIGRATION'] = '1'
+    try:
+        from app import create_app
+        from app.services.lead_dedup_service import run_duplicate_sentinel
+
+        app = create_app()
+        with app.app_context():
+            stats = run_duplicate_sentinel(
+                dry_run=bool(args.dry_run),
+                max_merges=args.max_merges,
+            )
+    finally:
+        if prev_migration is None:
+            os.environ.pop('KIRO_MIGRATION', None)
+        else:
+            os.environ['KIRO_MIGRATION'] = prev_migration
+
     print(json.dumps(stats, indent=2, default=str))
     return 0
 

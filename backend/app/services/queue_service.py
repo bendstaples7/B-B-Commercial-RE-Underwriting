@@ -127,6 +127,7 @@ def _due_task_context(lead_ids: list[int], cutoff: date) -> dict[int, dict]:
             LeadTask.status == 'open',
             LeadTask.due_date.isnot(None),
             LeadTask.due_date <= cutoff,
+            ~_legacy_llc_search_task_sql(),
         )
         .order_by(LeadTask.due_date.asc(), LeadTask.id.asc())
         .all()

@@ -36,15 +36,15 @@ class PropertyMatchReviewService:
         if lead is None:
             raise ValueError(f'Lead {lead_id} not found')
 
-        # Soft-heal incomplete situs before routing / PIN lookup (no commit —
-        # preview must not persist GIS fills until the user applies).
+        # Parse-only soft-heal (no GIS / no review flag) so preview stays side-effect-free.
         if lead.property_street and not is_property_address_complete(lead=lead):
             complete_property_address(
                 lead,
-                try_gis=True,
+                try_gis=False,
                 actor='property_match_preview',
                 commit=False,
                 write_timeline=False,
+                set_review_flag=False,
             )
             lead = db.session.get(Lead, lead_id)
 
@@ -55,8 +55,19 @@ class PropertyMatchReviewService:
             'property_zip': lead.property_zip,
         }
         address_complete = is_property_address_complete(lead=lead)
-        connector = connector_for_lead(lead)
+        if not address_complete:
+            return {
+                'found': False,
+                'entered_address': entered,
+                'recommended_address': None,
+                'pin': None,
+                'connector': None,
+                'address_complete': False,
+                'reason': 'incomplete_address',
+                'message': 'Add city, state, and ZIP before looking up a PIN',
+            }
 
+        connector = connector_for_lead(lead)
         parcel: GISParcel | None = None
         connector_name = connector.connector_name if connector else None
         if connector is not None:
@@ -64,24 +75,10 @@ class PropertyMatchReviewService:
                 parcel = connector.lookup_by_address(lead.property_street)
             if parcel is None and lead.county_assessor_pin:
                 parcel = connector.lookup_by_pin(lead.county_assessor_pin)
-        elif lead.property_street:
-            # Street-only Cook fallback when city/state still blank after completer.
-            from app.services.gis.cook_county_gis_connector import CookCountyGISConnector
-            cook = CookCountyGISConnector()
-            parcel = cook.lookup_by_address(lead.property_street)
-            if parcel is not None:
-                connector = cook
-                connector_name = cook.connector_name
+        # No Cook street-only fallback on preview — incomplete situs already returned
+        # above; out-of-market leads must not attach a Cook parcel.
 
         if connector is None and parcel is None:
-            reason = (
-                'incomplete_address' if not address_complete else 'no_connector'
-            )
-            message = (
-                'Add city, state, and ZIP before looking up a PIN'
-                if reason == 'incomplete_address'
-                else 'No GIS connector for this lead\'s county'
-            )
             return {
                 'found': False,
                 'entered_address': entered,
@@ -89,8 +86,8 @@ class PropertyMatchReviewService:
                 'pin': None,
                 'connector': None,
                 'address_complete': address_complete,
-                'reason': reason,
-                'message': message,
+                'reason': 'no_connector',
+                'message': 'No GIS connector for this lead\'s county',
             }
 
         if parcel is None:

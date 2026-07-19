@@ -128,7 +128,11 @@ def preempt_entity_research_for_lead(
 
     if queue_research:
         research = EntityResolutionService().ensure_researched(
-            lead_id, actor=actor, sync=sync, force=force_research,
+            lead_id,
+            actor=actor,
+            sync=sync,
+            force=force_research,
+            commit=commit,
         )
     else:
         research = {

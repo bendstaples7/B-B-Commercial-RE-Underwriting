@@ -991,6 +991,13 @@ class GoogleSheetsImporter:
                     existing.last_import_job_id = import_job_id
                 existing.updated_at = datetime.utcnow()
                 _fill_deal_source_from_import_source(existing)
+                from app.services.property_address_service import complete_property_address
+                complete_property_address(
+                    existing,
+                    try_gis=False,
+                    actor='google_sheets_importer',
+                    commit=False,
+                )
                 return existing
             try:
                 from app.services.contact_service import ContactService

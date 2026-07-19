@@ -47,10 +47,10 @@ def ensure_owner_organization(
     if org is None:
         if org_type:
             resolved_type = org_type
-        elif is_definite_institutional_name(cleaned):
-            resolved_type = "nonprofit"
         elif is_property_management_name(cleaned):
             resolved_type = "property_management"
+        elif is_definite_institutional_name(cleaned):
+            resolved_type = "nonprofit"
         elif is_entity_name(cleaned):
             resolved_type = "llc"
         else:

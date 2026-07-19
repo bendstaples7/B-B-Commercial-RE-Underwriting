@@ -191,6 +191,7 @@ class PhoneConfidenceService:
         disposition_or_label: object | None,
         *,
         phone_number: str | None = None,
+        called_at: datetime | None = None,
     ) -> bool:
         """Update confidence from a HubSpot call; fall back to HubSpot-primary phone."""
         outcome = cls.outcome_from_hubspot_disposition(disposition_or_label)
@@ -217,6 +218,7 @@ class PhoneConfidenceService:
             outcome,
             contact_phone_id=cp.id,
             phone_number=cp.value,
+            called_at=called_at,
         )
         return True
 
@@ -462,6 +464,7 @@ class PhoneConfidenceService:
         *,
         contact_phone_id: int | None = None,
         phone_number: str | None = None,
+        called_at: datetime | None = None,
     ) -> None:
         cp = None
         if contact_phone_id is not None:
@@ -479,9 +482,13 @@ class PhoneConfidenceService:
             return
         prior = cp.confidence_score if cp.confidence_score is not None else DEFAULT_CONFIDENCE
         prior_outcome = cp.last_outcome
-        cp.last_called_at = datetime.now(timezone.utc)
-        # Wrong-number demotion sticks until a connected/answered call.
-        if prior_outcome == 'wrong_number' and outcome not in ('answered', 'wrong_number'):
+        cp.last_called_at = called_at or datetime.now(timezone.utc)
+        # Non-viable / wrong-number demotion sticks until a connected/answered call
+        # (do not let no_answer/voicemail raise score 5 → 10 via MIN_VIABLE floor).
+        if (
+            (prior_outcome == 'wrong_number' or prior < MIN_VIABLE_CONFIDENCE)
+            and outcome not in ('answered', 'wrong_number')
+        ):
             cp.last_outcome = outcome
             if prior < MIN_VIABLE_CONFIDENCE:
                 cp.confidence_score = prior
@@ -588,7 +595,12 @@ class PhoneConfidenceService:
                 cls.apply_hubspot_call_outcome(
                     lead_id,
                     meta.get('disposition') or meta.get('outcome'),
-                    phone_number=meta.get('phone_number'),
+                    phone_number=(
+                        meta.get('phone_number')
+                        or meta.get('toNumber')
+                        or meta.get('phoneNumber')
+                    ),
+                    called_at=entry.occurred_at,
                 )
                 continue
             outcome = meta.get('outcome')
@@ -605,7 +617,9 @@ class PhoneConfidenceService:
                 mapped,
                 contact_phone_id=meta.get('contact_phone_id'),
                 phone_number=meta.get('phone_number'),
+                called_at=entry.occurred_at,
             )
+        cls.refresh_lead_has_phone(lead_id)
 
     @staticmethod
     def sort_phones_for_display(phones: list[dict]) -> list[dict]:

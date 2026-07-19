@@ -52,11 +52,6 @@ class TestCompletePropertyAddressFields:
 
     def test_street_only_hoyne_gis_fill(self):
         with patch(
-            'app.services.property_address_service.lookup_all_pins_at_address',
-            create=True,
-        ):
-            pass
-        with patch(
             'app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address',
         ) as mock_lookup:
             mock_lookup.return_value = [{

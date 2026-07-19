@@ -34,7 +34,8 @@ LEGACY_ENTITY_RESEARCH_TITLE_RE = re.compile(
 LEGACY_ENTITY_RESEARCH_TITLE_ILIKE = (
     '%llc search%',
     '%entity search%',
-    '%research%llc%',
+    '%research llc%',
+    '%research illinois llc%',
     '%look up llc%',
     '%sos search%',
 )
