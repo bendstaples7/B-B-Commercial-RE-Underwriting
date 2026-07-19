@@ -1657,7 +1657,19 @@ function App() {
               <MenuIcon />
             </IconButton>
           )}
-          <Typography variant="h6" component="h1" noWrap sx={{ flexGrow: 0, mr: 2 }}>
+          <Typography
+            variant="h6"
+            component={Link}
+            to="/dashboard"
+            noWrap
+            sx={{
+              flexGrow: 0,
+              mr: 2,
+              color: 'inherit',
+              textDecoration: 'none',
+              '&:hover': { textDecoration: 'underline' },
+            }}
+          >
             Real Estate Analysis Platform
           </Typography>
           <GlobalSearchBar />

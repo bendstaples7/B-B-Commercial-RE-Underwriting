@@ -146,12 +146,16 @@ describe('App shell smoke test', () => {
     vi.clearAllMocks()
   })
 
-  it('renders the AppBar with the platform title', async () => {
+  it('renders the AppBar with the platform title linking to the activity dashboard', async () => {
     renderApp()
 
     await waitFor(() => {
       expect(screen.getByText('Real Estate Analysis Platform')).toBeInTheDocument()
     }, { timeout: 3000 })
+    expect(screen.getByRole('link', { name: 'Real Estate Analysis Platform' })).toHaveAttribute(
+      'href',
+      '/dashboard',
+    )
   })
 
   it('renders the nav sidebar brand', async () => {
