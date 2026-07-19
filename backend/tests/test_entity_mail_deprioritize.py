@@ -193,6 +193,45 @@ class TestColdMailBlockReason:
                 property_zip="60601",
                 owner_last_name="North Lockwood Jazz Inc",
                 ownership_type="entity",
+                lead_category="residential",
+                lead_status="mailing_no_contact_made",
+            )
+            db.session.add(lead)
+            db.session.commit()
+            assert cold_mail_block_reason(lead) == "unresolved_entity_owner"
+
+    def test_commercial_unresolved_entity_allows_cold_mail(self, app):
+        with app.app_context():
+            from app.models.lead import Lead
+            from app import db
+
+            lead = Lead(
+                property_street="200 Commercial",
+                property_city="Chicago",
+                property_state="IL",
+                property_zip="60601",
+                owner_last_name="North Lockwood Jazz Inc",
+                ownership_type="entity",
+                lead_category="commercial",
+                lead_status="mailing_no_contact_made",
+            )
+            db.session.add(lead)
+            db.session.commit()
+            assert cold_mail_block_reason(lead) is None
+
+    def test_asset_management_is_unresolved_entity_residential(self, app):
+        with app.app_context():
+            from app.models.lead import Lead
+            from app import db
+
+            lead = Lead(
+                property_street="650 Buckingham",
+                property_city="Chicago",
+                property_state="IL",
+                property_zip="60657",
+                owner_first_name="Svigos Asset Management",
+                owner_last_name=None,
+                lead_category="residential",
                 lead_status="mailing_no_contact_made",
             )
             db.session.add(lead)

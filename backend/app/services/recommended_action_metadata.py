@@ -4,7 +4,10 @@ from app.services.outreach_method_service import (
     outreach_action_explanation,
     outreach_action_label,
 )
-from app.services.scoring_rubric import contacts_likely_prior_owner
+from app.services.scoring_rubric import (
+    contacts_likely_prior_owner,
+    contacts_need_post_hold_verification,
+)
 
 # Shared copy for skip-trace after a recent transfer (hold + active skip-trace work).
 RECENT_SALE_OUTDATED_CONTACT_EXPLANATION = (
@@ -20,6 +23,14 @@ RECOMMENDED_ACTION_METADATA = {
             'Next step is to fill gaps that block scoring or outreach — typically '
             'a property match / street address, owner-entity research, or a low '
             'overall score (Tier D). Phones and emails alone do not clear this action.'
+        ),
+    },
+    'enrich_data_recently_sold': {
+        'label': 'Confirm New Owner',
+        'explanation': (
+            'The two-year mail hold has ended. Move this lead to skip trace '
+            '(or finish skip trace) so outreach targets the current owner. '
+            + RECENT_SALE_OUTDATED_CONTACT_EXPLANATION
         ),
     },
     'resolve_match': {
@@ -163,7 +174,10 @@ def _lead_needs_recent_sale_contact_rationale(lead) -> bool:
     status = getattr(lead, 'lead_status', None)
     if status not in ('skip_trace', 'awaiting_skip_trace'):
         return False
-    if not contacts_likely_prior_owner(lead):
+    if not (
+        contacts_likely_prior_owner(lead)
+        or contacts_need_post_hold_verification(lead)
+    ):
         return False
     return bool(getattr(lead, 'needs_skip_trace', False))
 
@@ -208,6 +222,12 @@ def get_recommended_action_display(
     metadata = RECOMMENDED_ACTION_METADATA.get(action, {})
     base_label = metadata.get('label')
     base_explanation = metadata.get('explanation')
+
+    # Post-hold prior-owner path: clearer than generic "Enrich Data".
+    if action == 'enrich_data' and winning_rule == 'recently_sold':
+        sold_meta = RECOMMENDED_ACTION_METADATA['enrich_data_recently_sold']
+        base_label = sold_meta['label']
+        base_explanation = sold_meta['explanation']
 
     channel_label = outreach_action_label(action, contact_method)
     label = channel_label or base_label

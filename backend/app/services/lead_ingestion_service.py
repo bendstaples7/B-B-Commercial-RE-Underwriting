@@ -46,6 +46,9 @@ _GIS_FIELDS = [
     'mailing_city',
     'mailing_state',
     'mailing_zip',
+    'property_city',
+    'property_state',
+    'property_zip',
 ]
 
 

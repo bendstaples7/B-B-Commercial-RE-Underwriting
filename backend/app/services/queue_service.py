@@ -170,13 +170,18 @@ def _lead_awaiting_mail_subquery():
 
 
 def _open_lead_task_due_today_excluding_mail_awaiting(today: date):
-    """Open native task due today, excluding leads waiting in a mail batch."""
+    """Open native task due today, excluding leads waiting in a mail batch.
+
+    Legacy HubSpot \"LLC search\" chores are excluded — entity research is
+    background automation, not Today's Action work.
+    """
     return and_(
         exists().where(
             and_(
                 LeadTask.lead_id == Lead.id,
                 LeadTask.status == 'open',
                 LeadTask.due_date <= today,
+                ~_legacy_llc_search_task_sql(),
             )
         ),
         ~_lead_awaiting_mail_subquery(),
@@ -191,10 +196,19 @@ def _open_lead_task_overdue_excluding_mail_awaiting(today: date):
                 LeadTask.lead_id == Lead.id,
                 LeadTask.status == 'open',
                 LeadTask.due_date < today,
+                ~_legacy_llc_search_task_sql(),
             )
         ),
         ~_lead_awaiting_mail_subquery(),
     )
+
+
+def _legacy_llc_search_task_sql():
+    """SQL predicate matching open HubSpot LLC/entity research chore titles."""
+    from app.utils.call_completable_task import LEGACY_ENTITY_RESEARCH_TITLE_ILIKE
+
+    title = func.coalesce(LeadTask.title, '')
+    return or_(*[title.ilike(pattern) for pattern in LEGACY_ENTITY_RESEARCH_TITLE_ILIKE])
 
 
 # Outreach display filters for Today's Action.

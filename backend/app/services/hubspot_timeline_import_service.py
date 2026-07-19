@@ -208,6 +208,9 @@ class HubSpotTimelineImportService:
         contact_activity_imported = False  # tracks whether any contact-type activity was new
         now = datetime.now(timezone.utc)
         review_cutoff = now - timedelta(days=_REVIEW_RECENCY_DAYS)
+        # Apply call confidence after the loop, sorted by occurred_at (list order
+        # from HubSpot is not guaranteed chronological).
+        pending_call_confidence: list[tuple[datetime, object, object | None, str]] = []
 
         for activity in hubspot_activities:
             activity_id = str(activity.get('id', ''))
@@ -277,6 +280,34 @@ class HubSpotTimelineImportService:
             new_entries_count += 1
             if occurred_at >= review_cutoff:
                 recent_new_entries += 1
+
+            # HubSpot CRM_UI calls often omit toNumber — still update confidence
+            # on the lead's HubSpot-primary phone from disposition (deferred).
+            if event_type == 'hubspot_call':
+                pending_call_confidence.append((
+                    occurred_at,
+                    meta_activity.get('disposition') or meta_activity.get('outcome'),
+                    meta_activity.get('phone_number'),
+                    activity_id,
+                ))
+
+        if pending_call_confidence:
+            from app.services.phone_confidence_service import PhoneConfidenceService
+            pending_call_confidence.sort(key=lambda row: row[0])
+            for _occurred_at, disposition, phone_number, activity_id in pending_call_confidence:
+                try:
+                    PhoneConfidenceService.apply_hubspot_call_outcome(
+                        lead_id,
+                        disposition,
+                        phone_number=phone_number,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        'HubSpot call confidence update failed for lead %s activity %s: %s',
+                        lead_id,
+                        activity_id,
+                        exc,
+                    )
 
         # Update lead signals — only touch sync timestamp when we actually wrote rows
         # so idempotent re-runs do not mark every lead as freshly HubSpot-synced.

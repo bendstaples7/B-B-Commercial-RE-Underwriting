@@ -397,8 +397,8 @@ class TestRecentSaleMailReconciliation:
             expected = sale_date + timedelta(days=730)
             assert recent_sale_mail_eligible_date(lead) == expected
             assert result['rescheduled_to'] == expected.isoformat()
-            assert result['rescheduled_task_count'] == 1
-            assert result['hubspot_task_ids'] == ['recent-sale-hs-1']
+            assert result['rescheduled_task_count'] == 0
+            assert result['completed_obsolete_outreach_ids'] == [native.id]
             assert result['skip_trace_scheduled'] is True
             assert result['skip_trace_task_id'] is not None
             assert result['removed_queue_item_count'] == 1
@@ -410,12 +410,130 @@ class TestRecentSaleMailReconciliation:
                 status='open',
             ).one()
             assert skip_task.due_date == expected
-            assert LeadTask.query.get(native.id).due_date == expected
+            completed_native = LeadTask.query.get(native.id)
+            assert completed_native.status == 'completed'
+            assert completed_native.due_date == date.today() - timedelta(days=10)
             assert LeadTask.query.get(research.id).due_date == date.today()
             refreshed_mirror = Task.query.get(mirror.id)
-            assert refreshed_mirror.due_date.date() == expected
-            assert refreshed_mirror.status == 'open'
+            assert refreshed_mirror.status == 'completed'
             assert db.session.get(MailQueueItem, queued_item.id).status == 'removed'
+
+    def test_hold_completes_follow_up_leaves_todays_action_and_snoozes_mail_batch(
+        self, app,
+    ):
+        """Overdue Follow up must not keep Skip Trace Hold in Today's Action."""
+        from app import db
+        from app.services.lead_refresh import refresh_lead_scoring
+
+        with app.app_context():
+            sale_date = date.today() - timedelta(days=200)
+            lead = _make_lead(
+                app,
+                '3052 N Davlin Hold St',
+                acquisition_date=sale_date,
+                recommended_contact_method='phone',
+                recommended_action='hold',
+                lead_status='skip_trace',
+            )
+            hold_due = sale_date + timedelta(days=730)
+            hold = LeadTask(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                title=(
+                    'Recent-sale hold ended — verify new owner '
+                    'and contact information'
+                ),
+                status='open',
+                due_date=hold_due,
+                workflow_key='recent_sale_hold',
+                created_by='test',
+            )
+            follow_up = LeadTask(
+                lead_id=lead.id,
+                task_type='custom',
+                title='Follow up on 3052 N Davlin 60618',
+                status='open',
+                due_date=date.today() - timedelta(days=60),
+                created_by='test',
+            )
+            mail_batch = LeadTask(
+                lead_id=lead.id,
+                task_type='add_to_mail_batch',
+                title='Direct Mail 3052 N Davlin',
+                status='open',
+                due_date=date.today() - timedelta(days=5),
+                created_by='test',
+            )
+            db.session.add_all([hold, follow_up, mail_batch])
+            db.session.commit()
+            refresh_lead_scoring(lead.id)
+
+            before_ids = [
+                r['id'] for r in QueueService().get_todays_action(per_page=10000)[0]
+            ]
+            assert lead.id in before_ids
+
+            result = reconcile_recent_sale_mail_tasks_for_lead(
+                lead,
+                actor='test',
+                commit=True,
+            )
+            refresh_lead_scoring(lead.id)
+
+            assert follow_up.id in result['completed_obsolete_outreach_ids']
+            assert LeadTask.query.get(follow_up.id).status == 'completed'
+            assert LeadTask.query.get(hold.id).status == 'open'
+            assert LeadTask.query.get(hold.id).due_date == hold_due
+            assert LeadTask.query.get(mail_batch.id).status == 'open'
+            assert LeadTask.query.get(mail_batch.id).due_date == hold_due
+            assert result['rescheduled_task_count'] == 1
+
+            after_ids = [
+                r['id'] for r in QueueService().get_todays_action(per_page=10000)[0]
+            ]
+            assert lead.id not in after_ids
+
+    def test_in_window_hold_without_overdue_outreach_stays_out_of_todays_action(
+        self, app,
+    ):
+        from app import db
+        from app.services.lead_refresh import refresh_lead_scoring
+
+        with app.app_context():
+            sale_date = date.today() - timedelta(days=100)
+            lead = _make_lead(
+                app,
+                'Quiet Hold St',
+                acquisition_date=sale_date,
+                recommended_action='hold',
+                lead_status='skip_trace',
+            )
+            hold_due = sale_date + timedelta(days=730)
+            hold = LeadTask(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                title=(
+                    'Recent-sale hold ended — verify new owner '
+                    'and contact information'
+                ),
+                status='open',
+                due_date=hold_due,
+                workflow_key='recent_sale_hold',
+                created_by='test',
+            )
+            db.session.add(hold)
+            db.session.commit()
+            refresh_lead_scoring(lead.id)
+
+            reconcile_recent_sale_mail_tasks_for_lead(lead, actor='test', commit=True)
+            refresh_lead_scoring(lead.id)
+
+            assert LeadTask.query.get(hold.id).status == 'open'
+            assert LeadTask.query.get(hold.id).due_date == hold_due
+            listed = [
+                r['id'] for r in QueueService().get_todays_action(per_page=10000)[0]
+            ]
+            assert lead.id not in listed
 
     def test_is_idempotent_after_due_date_moves_to_future(self, app):
         with app.app_context():
@@ -464,9 +582,226 @@ class TestRecentSaleMailReconciliation:
             assert activated.lead_status == 'awaiting_skip_trace'
             assert activated.needs_skip_trace is True
             activated_task = db.session.get(LeadTask, scheduled['task_id'])
-            assert activated_task.workflow_key is None
+            assert activated_task.workflow_key == 'awaiting_skip_trace_handoff'
+            assert activated_task.due_date is None
+            assert activated_task.title == 'Awaiting skip trace'
             second = service.activate_due_recent_sale_tasks(actor='test')
             assert second['processed_task_count'] == 0
+
+    def test_schedule_recent_sale_does_not_rehold_after_activation(self, app):
+        from app import db
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '3b Recent Sale No Rehold St',
+                acquisition_date=date.today() - timedelta(days=30),
+            )
+            service = SkipTraceEnqueue()
+            scheduled = service.schedule_recent_sale(
+                lead.id,
+                due_date=date.today(),
+                actor='test',
+            )
+            service.activate_due_recent_sale_tasks(actor='test')
+
+            again = service.schedule_recent_sale(
+                lead.id,
+                due_date=date.today() + timedelta(days=10),
+                actor='test',
+            )
+            lead = db.session.get(Lead, lead.id)
+            task = db.session.get(LeadTask, scheduled['task_id'])
+            assert again['scheduled'] is False
+            assert again['changed'] is False
+            assert lead.lead_status == 'awaiting_skip_trace'
+            assert lead.needs_skip_trace is True
+            assert task.due_date is None
+            assert task.workflow_key == 'awaiting_skip_trace_handoff'
+            assert LeadTask.query.filter_by(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                status='open',
+            ).count() == 1
+
+    def test_heals_stuck_dated_post_hold_verify_task(self, app):
+        from app import db
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '3c Stuck Post Hold Verify St',
+                acquisition_date=date.today() - timedelta(days=800),
+                lead_status='skip_trace',
+            )
+            lead.needs_skip_trace = True
+            stuck = LeadTask(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                title='Recent-sale hold ended — verify new owner and contact information',
+                status='open',
+                due_date=date.today() - timedelta(days=2),
+                workflow_key=None,
+                created_by='test',
+            )
+            db.session.add(stuck)
+            db.session.commit()
+
+            result = SkipTraceEnqueue().activate_due_recent_sale_tasks(actor='test')
+
+            healed = db.session.get(LeadTask, stuck.id)
+            lead = db.session.get(Lead, lead.id)
+            assert stuck.id in result['healed_task_ids']
+            assert lead.lead_status == 'awaiting_skip_trace'
+            assert lead.needs_skip_trace is True
+            assert healed.due_date is None
+            assert healed.title == 'Awaiting skip trace'
+            assert healed.workflow_key == 'awaiting_skip_trace_handoff'
+
+    def test_heals_dated_verify_task_from_mailing_contacted_interested(self, app):
+        from app import db
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '3d Mailing Interested Post Hold St',
+                acquisition_date=date.today() - timedelta(days=800),
+                lead_status='mailing_contacted_interested',
+                recommended_action='call_ready',
+                recommended_contact_method='phone',
+            )
+            lead.needs_skip_trace = True
+            stuck = LeadTask(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                title='Recent-sale hold ended — verify new owner and contact information',
+                status='open',
+                due_date=date.today() - timedelta(days=1),
+                workflow_key=None,
+                created_by='test',
+            )
+            db.session.add(stuck)
+            db.session.commit()
+
+            result = SkipTraceEnqueue().activate_due_recent_sale_tasks(actor='test')
+
+            healed = db.session.get(LeadTask, stuck.id)
+            lead = db.session.get(Lead, lead.id)
+            assert stuck.id in result['healed_task_ids']
+            assert lead.lead_status == 'awaiting_skip_trace'
+            assert lead.needs_skip_trace is True
+            assert healed.due_date is None
+            assert healed.title == 'Awaiting skip trace'
+
+    def test_heals_post_hold_stale_contacts_without_hold_task(self, app):
+        """Mailing lead past 730d with stale contacts gets awaiting handoff."""
+        from app import db
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '3e Post Hold Stale Mailing St',
+                acquisition_date=date.today() - timedelta(days=800),
+                most_recent_sale=(date.today() - timedelta(days=800)).strftime('%m/%d/%Y'),
+                lead_status='mailing_contacted_no_interest',
+                recommended_action='enrich_data',
+            )
+            lead.date_skip_traced = None
+            lead.needs_skip_trace = False
+            db.session.commit()
+
+            result = SkipTraceEnqueue().activate_due_recent_sale_tasks(actor='test')
+
+            lead = db.session.get(Lead, lead.id)
+            assert lead.id in result.get('stale_contact_healed_lead_ids', [])
+            assert lead.lead_status == 'awaiting_skip_trace'
+            assert lead.needs_skip_trace is True
+            handoff = LeadTask.query.filter_by(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                status='open',
+            ).one()
+            assert handoff.due_date is None
+            assert handoff.title == 'Awaiting skip trace'
+            assert handoff.workflow_key == 'awaiting_skip_trace_handoff'
+
+    def test_in_window_hold_not_forced_to_awaiting_by_stale_heal(self, app):
+        from app import db
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        with app.app_context():
+            sale = date.today() - timedelta(days=400)
+            lead = _make_lead(
+                app,
+                '3f Still In Hold Window St',
+                acquisition_date=sale,
+                most_recent_sale=sale.strftime('%m/%d/%Y'),
+                lead_status='skip_trace',
+                recommended_action='hold',
+            )
+            lead.date_skip_traced = sale - timedelta(days=30)
+            lead.needs_skip_trace = False
+            hold = LeadTask(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                title='Recent-sale hold ended — verify new owner and contact information',
+                status='open',
+                due_date=sale + timedelta(days=730),
+                workflow_key='recent_sale_hold',
+                created_by='test',
+            )
+            db.session.add(hold)
+            db.session.commit()
+
+            result = SkipTraceEnqueue().activate_due_recent_sale_tasks(actor='test')
+
+            lead = db.session.get(Lead, lead.id)
+            assert lead.id not in result.get('stale_contact_healed_lead_ids', [])
+            assert lead.lead_status == 'skip_trace'
+            assert db.session.get(LeadTask, hold.id).workflow_key == 'recent_sale_hold'
+            assert LeadTask.query.filter(
+                LeadTask.lead_id == lead.id,
+                LeadTask.status == 'open',
+                LeadTask.due_date.isnot(None),
+                LeadTask.due_date <= date.today(),
+            ).count() == 0
+
+    def test_syncs_mailing_status_to_skip_trace_for_future_hold(self, app):
+        from app import db
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        with app.app_context():
+            sale = date.today() - timedelta(days=100)
+            lead = _make_lead(
+                app,
+                '3g Mailing With Future Hold St',
+                acquisition_date=sale,
+                most_recent_sale=sale.strftime('%m/%d/%Y'),
+                lead_status='mailing_contacted_no_interest',
+                recommended_action='enrich_data',
+            )
+            hold = LeadTask(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                title='Recent-sale hold ended — verify new owner and contact information',
+                status='open',
+                due_date=sale + timedelta(days=730),
+                workflow_key='recent_sale_hold',
+                created_by='test',
+            )
+            db.session.add(hold)
+            db.session.commit()
+
+            SkipTraceEnqueue().activate_due_recent_sale_tasks(actor='test')
+
+            lead = db.session.get(Lead, lead.id)
+            assert lead.lead_status == 'skip_trace'
+            assert lead.needs_skip_trace is False
+            assert lead.recommended_action == 'hold'
 
     def test_retires_matured_hold_task_for_terminal_lead(self, app):
         from app import db

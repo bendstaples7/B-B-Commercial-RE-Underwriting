@@ -481,6 +481,15 @@ export function PropertySidebar({
       )
       if (preview.found && pin) {
         setPinCandidate(pin)
+        await queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
+        return
+      }
+      if (preview.reason === 'incomplete_address' || preview.address_complete === false) {
+        setSidebarSnack(
+          preview.message
+          || 'Add city, state, and ZIP — then look up PIN',
+        )
+        await queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
         return
       }
       await leadTaskService.createTask(commandCenterData.id, {

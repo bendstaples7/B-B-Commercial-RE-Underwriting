@@ -226,10 +226,19 @@ class QuickAddService:
         if priority:
             manual_priority = PRIORITY_TO_MANUAL.get(priority.strip().lower())
 
-        parsed_city, parsed_state, parsed_zip = parse_city_state_zip_from_address(street)
-        city = (property_city or '').strip() or parsed_city
-        state = (property_state or '').strip() or parsed_state
-        zip_code = (property_zip or '').strip() or parsed_zip
+        from app.services.property_address_service import complete_property_address_fields
+
+        completed = complete_property_address_fields(
+            street,
+            property_city,
+            property_state,
+            property_zip,
+            try_gis=True,
+        )
+        street = completed.get('property_street') or street
+        city = completed.get('property_city')
+        state = completed.get('property_state')
+        zip_code = completed.get('property_zip')
 
         existing = self._importer._find_duplicate(  # noqa: SLF001
             {
@@ -289,6 +298,13 @@ class QuickAddService:
             lead.owner_user_id = user_id
             lead.updated_at = datetime.utcnow()
 
+        from app.services.property_address_service import complete_property_address
+        complete_property_address(
+            lead,
+            try_gis=True,
+            actor='quick_add',
+            commit=False,
+        )
         db.session.flush()
         self._add_timeline_entries(
             lead_id=lead.id,

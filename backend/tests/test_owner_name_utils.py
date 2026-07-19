@@ -73,6 +73,18 @@ class TestInstitutionalName:
         assert not is_institutional_name("123 Main Street LLC")
         assert is_entity_name("123 Main Street LLC")
 
+    def test_asset_management_is_entity(self):
+        from app.services.plugins.owner_name_utils import is_property_management_name
+
+        assert is_entity_name("Svigos Asset Management")
+        assert is_property_management_name("Svigos Asset Management")
+        assert is_entity_name("North Side Property Management")
+        assert not is_entity_name("Jane Doe")
+        # Bare soft tokens must not classify person-like names as entities.
+        assert not is_entity_name("Jane Management")
+        assert not is_entity_name("Bob Holdings")
+        assert not is_entity_name("Sue Properties")
+
     def test_ambiguous_inc_not_institutional(self):
         assert not is_institutional_name("North Lockwood Jazz Inc")
         assert is_entity_name("North Lockwood Jazz Inc")

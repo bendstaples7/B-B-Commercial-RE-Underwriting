@@ -316,3 +316,33 @@ class TestDuplicateSentinel:
             db.session.refresh(b)
             assert a.review_required is True
             assert b.review_required is True
+
+    def test_merge_prefers_newer_sale_and_cleaner_street(self, app):
+        from app.services.lead_dedup_service import merge_lead_into_winner
+
+        with app.app_context():
+            winner = Lead(
+                property_street='3052 N Davlin 60618',
+                owner_first_name='Gary',
+                owner_last_name='Briggs',
+                lead_status='mailing_contacted_no_interest',
+                most_recent_sale='5/15/2024',
+            )
+            loser = Lead(
+                property_street='3052 N Davlin Ct 1',
+                owner_first_name='Gary Briggs',
+                owner_last_name=None,
+                lead_status='skip_trace',
+                most_recent_sale='11/8/2024',
+            )
+            db.session.add_all([winner, loser])
+            db.session.commit()
+            loser_id = loser.id
+
+            merge_lead_into_winner(winner, loser, changed_by='test')
+            db.session.commit()
+
+            assert Lead.query.get(loser_id) is None
+            refreshed = Lead.query.get(winner.id)
+            assert refreshed.most_recent_sale == '11/8/2024'
+            assert refreshed.property_street == '3052 N Davlin Ct 1'

@@ -90,6 +90,60 @@ def test_import_maps_call_type_to_hubspot_call_event(app):
         assert entry.event_type == 'hubspot_call'
 
 
+def test_import_call_without_to_number_updates_hubspot_primary_confidence(app):
+    """CRM_UI calls omit toNumber — still raise HubSpot-primary phone confidence."""
+    from app import db
+    from app.models.contact import Contact
+    from app.models.contact_phone import ContactPhone
+    from app.models.property_contact import PropertyContact
+
+    with app.app_context():
+        lead = _make_lead(app, '2b HubSpot Call Confidence St')
+        contact = Contact(first_name='Sam', last_name='Owner', role='owner')
+        db.session.add(contact)
+        db.session.flush()
+        db.session.add(PropertyContact(
+            property_id=lead.id,
+            contact_id=contact.id,
+            role='owner',
+            is_primary=True,
+        ))
+        primary = ContactPhone(
+            contact_id=contact.id,
+            value='+17732715525',
+            label='other',
+            notes='HubSpot primary',
+            source='hubspot_import',
+            confidence_score=50,
+        )
+        scrape = ContactPhone(
+            contact_id=contact.id,
+            value='7734540106',
+            label='other',
+            confidence_score=50,
+        )
+        db.session.add_all([primary, scrape])
+        db.session.commit()
+
+        svc = HubSpotTimelineImportService()
+        activity = _make_activity(
+            'hs-call-no-tonumber',
+            'CALL',
+            'Connected call',
+            outcome='Connected',
+        )
+        # No phone_number / toNumber on the activity (CRM_UI shape).
+        assert 'phone_number' not in activity
+        count = svc.import_activities_for_lead(lead.id, [activity])
+        assert count == 1
+        db.session.commit()
+
+        refreshed = ContactPhone.query.get(primary.id)
+        assert refreshed.confidence_score == 85
+        assert refreshed.last_outcome == 'answered'
+        assert ContactPhone.query.get(scrape.id).confidence_score == 50
+
+
 def test_import_maps_note_type_to_hubspot_note_event(app):
     """NOTE activity type maps to event_type='hubspot_note'."""
     from app.models import LeadTimelineEntry

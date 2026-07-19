@@ -108,12 +108,40 @@ describe('ContactMethodFields', () => {
     )
   })
 
-  it('defaults to the primary contact + first phone (calls) even with multiple contacts', async () => {
+  it('defaults to the highest-confidence phone across contacts', async () => {
     const onChange = vi.fn()
+    const mixed: PropertyContact[] = [
+      {
+        ...contacts[0],
+        phones: [
+          {
+            id: 10,
+            contact_id: 1,
+            value: '5551234567',
+            label: 'other',
+            confidence_score: 50,
+          },
+        ],
+      },
+      {
+        ...contacts[1],
+        phones: [
+          {
+            id: 11,
+            contact_id: 2,
+            value: '5559876543',
+            label: 'other',
+            notes: 'HubSpot primary',
+            source: 'hubspot_import',
+            confidence_score: 85,
+          },
+        ],
+      },
+    ]
     render(
       <ContactMethodFields
         mode="phone"
-        contacts={contacts}
+        contacts={mixed}
         value={EMPTY_CONTACT_METHOD}
         onChange={onChange}
       />,
@@ -121,11 +149,11 @@ describe('ContactMethodFields', () => {
 
     await waitFor(() => expect(onChange).toHaveBeenCalled())
     expect(onChange).toHaveBeenCalledWith({
-      contactId: 1,
-      methodKey: 'phone:10',
-      methodValue: '5551234567',
-      methodLabel: 'mobile',
-      methodRecordId: 10,
+      contactId: 2,
+      methodKey: 'phone:11',
+      methodValue: '5559876543',
+      methodLabel: 'other',
+      methodRecordId: 11,
     })
   })
 
@@ -150,11 +178,35 @@ describe('ContactMethodFields', () => {
     })
   })
 
-  it('falls back to the first contact when none is marked primary', async () => {
+  it('picks highest-confidence phone when no contact is marked primary', async () => {
     const onChange = vi.fn()
     const noPrimary: PropertyContact[] = [
-      { ...contacts[1], is_primary: false }, // John (has a phone) listed first
-      { ...contacts[0], is_primary: false }, // Jane second
+      {
+        ...contacts[0],
+        is_primary: false,
+        phones: [
+          {
+            id: 10,
+            contact_id: 1,
+            value: '5551234567',
+            label: 'other',
+            confidence_score: 40,
+          },
+        ],
+      },
+      {
+        ...contacts[1],
+        is_primary: false,
+        phones: [
+          {
+            id: 11,
+            contact_id: 2,
+            value: '5559876543',
+            label: 'other',
+            confidence_score: 70,
+          },
+        ],
+      },
     ]
     render(
       <ContactMethodFields
@@ -170,7 +222,7 @@ describe('ContactMethodFields', () => {
       contactId: 2,
       methodKey: 'phone:11',
       methodValue: '5559876543',
-      methodLabel: 'work',
+      methodLabel: 'other',
       methodRecordId: 11,
     })
   })

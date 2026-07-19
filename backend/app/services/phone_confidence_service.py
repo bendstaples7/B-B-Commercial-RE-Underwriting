@@ -119,6 +119,108 @@ class PhoneConfidenceService:
         return prior
 
     @classmethod
+    def outcome_from_hubspot_disposition(cls, disposition_or_label: object | None) -> str | None:
+        """Map HubSpot disposition GUID/label to ``confidence_from_outcome`` keys."""
+        from app.services.helpers.hubspot_call_disposition import (
+            resolve_call_disposition_label,
+        )
+
+        label = (resolve_call_disposition_label(disposition_or_label) or '').lower().strip()
+        if not label:
+            raw = str(disposition_or_label or '').strip().lower()
+            label = raw.replace('_', ' ')
+        if label in {'connected', 'answered'}:
+            return 'answered'
+        if label in {'left voicemail', 'voicemail'}:
+            return 'voicemail'
+        if label in {'left live message'}:
+            return 'voicemail'
+        if label in {'no answer', 'no_answer'}:
+            return 'no_answer'
+        if label == 'busy':
+            return 'busy'
+        if label in {'wrong number', 'wrong_number'}:
+            return 'wrong_number'
+        return None
+
+    @classmethod
+    def find_hubspot_primary_phone_for_lead(cls, lead_id: int) -> ContactPhone | None:
+        """Best HubSpot-primary (or sole hubspot_import) phone on the lead."""
+        rows = (
+            ContactPhone.query
+            .join(PropertyContact, PropertyContact.contact_id == ContactPhone.contact_id)
+            .filter(
+                PropertyContact.property_id == lead_id,
+                or_(
+                    PropertyContact.role.is_(None),
+                    PropertyContact.role != 'former_owner',
+                ),
+            )
+            .all()
+        )
+        primary: list[ContactPhone] = []
+        hubspot_rows: list[ContactPhone] = []
+        for cp in rows:
+            notes_l = (cp.notes or '').lower()
+            source_l = (str(cp.source) if cp.source is not None else '').lower()
+            if 'hubspot primary' in notes_l:
+                primary.append(cp)
+            if source_l.startswith('hubspot'):
+                hubspot_rows.append(cp)
+        # Prefer explicit HubSpot-primary notes; otherwise only a sole HubSpot phone.
+        if primary:
+            pool = primary
+        elif len(hubspot_rows) == 1:
+            pool = hubspot_rows
+        else:
+            return None
+
+        def _rank(cp: ContactPhone) -> tuple[int, int]:
+            score = cp.confidence_score if cp.confidence_score is not None else DEFAULT_CONFIDENCE
+            notes_l = (cp.notes or '').lower()
+            preferred = 0 if 'hubspot primary' in notes_l else 1
+            return (-score, preferred)
+
+        pool.sort(key=_rank)
+        return pool[0]
+
+    @classmethod
+    def apply_hubspot_call_outcome(
+        cls,
+        lead_id: int,
+        disposition_or_label: object | None,
+        *,
+        phone_number: str | None = None,
+    ) -> bool:
+        """Update confidence from a HubSpot call; fall back to HubSpot-primary phone."""
+        outcome = cls.outcome_from_hubspot_disposition(disposition_or_label)
+        if not outcome:
+            return False
+        dialed = (str(phone_number).strip() if phone_number is not None else '') or None
+        cp = None
+        if dialed:
+            cp = cls._find_phone_for_lead(lead_id, dialed)
+            if cp is None:
+                # Dialed number present but not on the lead — do not mis-attribute.
+                logger.info(
+                    'HubSpot call outcome skipped for lead %s: unmatched phone %r',
+                    lead_id,
+                    dialed,
+                )
+                return False
+        else:
+            cp = cls.find_hubspot_primary_phone_for_lead(lead_id)
+        if cp is None:
+            return False
+        cls.update_from_call(
+            lead_id,
+            outcome,
+            contact_phone_id=cp.id,
+            phone_number=cp.value,
+        )
+        return True
+
+    @classmethod
     def merge_parsed_phones(
         cls,
         entries: list[tuple[str, str | None, str]],
@@ -376,9 +478,33 @@ class PhoneConfidenceService:
         if cp is None:
             return
         prior = cp.confidence_score if cp.confidence_score is not None else DEFAULT_CONFIDENCE
+        prior_outcome = cp.last_outcome
+        cp.last_called_at = datetime.now(timezone.utc)
+        # Wrong-number demotion sticks until a connected/answered call.
+        if prior_outcome == 'wrong_number' and outcome not in ('answered', 'wrong_number'):
+            cp.last_outcome = outcome
+            if prior < MIN_VIABLE_CONFIDENCE:
+                cp.confidence_score = prior
+            db.session.add(cp)
+            cls.refresh_lead_has_phone(lead_id)
+            return
         cp.confidence_score = cls.confidence_from_outcome(outcome, prior)
         cp.last_outcome = outcome
-        cp.last_called_at = datetime.now(timezone.utc)
+        preserve_low = (
+            prior < MIN_VIABLE_CONFIDENCE
+            or outcome == 'wrong_number'
+        )
+        # Match upsert_phone: synthetic HubSpot-primary marker floors at 85
+        # unless the number was/is marked wrong (or similarly non-viable).
+        if (
+            cls._is_synthetic_hubspot_primary_notes(cp.notes)
+            and not preserve_low
+            and (cp.confidence_score is None or cp.confidence_score >= MIN_VIABLE_CONFIDENCE)
+        ):
+            cp.confidence_score = max(
+                cp.confidence_score if cp.confidence_score is not None else DEFAULT_CONFIDENCE,
+                85,
+            )
         db.session.add(cp)
         cls.refresh_lead_has_phone(lead_id)
 
@@ -408,22 +534,75 @@ class PhoneConfidenceService:
         db.session.add(lead)
 
     @classmethod
+    def _reset_phone_confidence_baseline(cls, lead_id: int) -> None:
+        """Reset lead phones to annotation/default scores before timeline replay."""
+        rows = (
+            ContactPhone.query
+            .join(PropertyContact, PropertyContact.contact_id == ContactPhone.contact_id)
+            .filter(
+                PropertyContact.property_id == lead_id,
+                or_(
+                    PropertyContact.role.is_(None),
+                    PropertyContact.role != 'former_owner',
+                ),
+            )
+            .all()
+        )
+        for cp in rows:
+            notes = cp.notes
+            explicit = cls._explicit_annotation_score(notes)
+            if explicit is not None:
+                cp.confidence_score = explicit
+            elif cls._is_synthetic_hubspot_primary_notes(notes):
+                cp.confidence_score = 85
+            else:
+                annotation = cls.confidence_from_annotation(notes)
+                cp.confidence_score = (
+                    annotation if annotation != DEFAULT_CONFIDENCE else DEFAULT_CONFIDENCE
+                )
+            cp.last_outcome = None
+            cp.last_called_at = None
+            db.session.add(cp)
+
+    @classmethod
     def recompute_for_lead(cls, lead_id: int) -> None:
-        """Replay call_logged timeline entries to refresh per-phone confidence."""
+        """Replay call_logged + hubspot_call timeline entries for confidence.
+
+        Resets to annotation/default baselines first so recompute is idempotent
+        even when import already applied the same HubSpot call outcomes.
+        """
+        cls._reset_phone_confidence_baseline(lead_id)
         entries = (
             LeadTimelineEntry.query
-            .filter_by(lead_id=lead_id, event_type='call_logged', is_deleted=False)
+            .filter(
+                LeadTimelineEntry.lead_id == lead_id,
+                LeadTimelineEntry.event_type.in_(('call_logged', 'hubspot_call')),
+                LeadTimelineEntry.is_deleted.is_(False),
+            )
             .order_by(LeadTimelineEntry.occurred_at.asc())
             .all()
         )
         for entry in entries:
             meta = entry.event_metadata or {}
+            if entry.event_type == 'hubspot_call':
+                cls.apply_hubspot_call_outcome(
+                    lead_id,
+                    meta.get('disposition') or meta.get('outcome'),
+                    phone_number=meta.get('phone_number'),
+                )
+                continue
             outcome = meta.get('outcome')
             if not outcome:
                 continue
+            mapped = cls.outcome_from_hubspot_disposition(outcome) or outcome
+            if mapped not in (
+                'answered', 'wrong_number', 'voicemail', 'no_answer', 'busy',
+            ):
+                # Native call_logged already uses those keys.
+                mapped = outcome
             cls.update_from_call(
                 lead_id,
-                outcome,
+                mapped,
                 contact_phone_id=meta.get('contact_phone_id'),
                 phone_number=meta.get('phone_number'),
             )
@@ -437,11 +616,9 @@ class PhoneConfidenceService:
                 else DEFAULT_CONFIDENCE
             )
             notes = (p.get('notes') or '').lower()
-            label = (p.get('label') or '').lower()
             source = (p.get('source') or '').lower()
             is_primary = (
                 'hubspot primary' in notes
-                or label == 'mobile'
                 or (source.startswith('hubspot') and 'hubspot primary' in notes)
             )
             # Confidence DESC, then HubSpot-primary preference — never alphabetical.
@@ -530,7 +707,7 @@ class PhoneConfidenceService:
             )
             if payload is not None:
                 out.append(payload)
-        return out
+        return cls.sort_phones_for_display(out)
 
     @classmethod
     def build_phones_payload(cls, lead_id: int, lead: Lead) -> list[dict]:

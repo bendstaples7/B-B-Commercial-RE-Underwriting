@@ -269,11 +269,15 @@ class EntityResolutionService:
         *,
         actor: str = "owner_import",
         sync: bool = False,
+        force: bool = False,
     ) -> dict:
         """Queue (or sync-run) entity resolution when an owner org still needs research.
 
         Never raises for missing SOS data — marks ``pending`` and returns so
         imports / company promotion stay non-blocking.
+
+        When status is already ``pending``, skip re-queue unless ``force=True``
+        (used by background reconcile) so Command Center views cannot flood Celery.
         """
         org = self._get_linked_owner_org(lead_id)
         if org is None:
@@ -281,6 +285,15 @@ class EntityResolutionService:
                 "queued": False,
                 "skipped": True,
                 "reason": "no_owner_org",
+            }
+        status = (org.entity_lookup_status or "").strip()
+        if status == "pending" and not force and not sync:
+            return {
+                "queued": False,
+                "skipped": True,
+                "reason": "already_queued",
+                "organization_id": org.id,
+                "entity_lookup_status": org.entity_lookup_status,
             }
         if not self.owner_org_needs_research(org):
             return {
@@ -303,6 +316,10 @@ class EntityResolutionService:
         if not sync:
             try:
                 from celery_worker import entity_resolution_resolve_lead_task
+                if org is not None and status != "pending":
+                    org.entity_lookup_status = "pending"
+                    db.session.add(org)
+                    db.session.commit()
                 entity_resolution_resolve_lead_task.apply_async(
                     args=[lead_id],
                     kwargs={"actor": actor},

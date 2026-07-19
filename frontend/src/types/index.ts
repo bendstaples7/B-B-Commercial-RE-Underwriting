@@ -2114,6 +2114,17 @@ export interface QuickBriefing {
   mode?: 'create' | 'revise';
 }
 
+/** Owner-org entity research summary on command-center Next Step. */
+export interface EntityResearchSummary {
+  organization_id: number
+  organization_name: string | null
+  entity_lookup_status: EntityLookupStatus | string | null
+  entity_lookup_person_found: boolean
+  entity_lookup_checked_at: string | null
+  entity_lookup_error: string | null
+  file_number?: string | null
+}
+
 export interface CommandCenterPayload {
   id: number;
   owner_first_name: string | null;
@@ -2130,6 +2141,8 @@ export interface CommandCenterPayload {
   past_owners?: PastOwnerSnapshot[];
   /** Linked companies / LLCs (HubSpot-style Organizations). */
   organizations?: PropertyOrganizationSummary[];
+  /** Owner-org Illinois LLC / entity research status for Next Step visibility. */
+  entity_research?: EntityResearchSummary | null;
   /** Other buildings owned by the same person (not same-address duplicates). */
   related_properties?: RelatedPropertySummary[];
   property_street: string | null;
@@ -2589,6 +2602,8 @@ export interface PropertyMatchPreview {
   parcel_fields?: Record<string, unknown> | null
   message?: string | null
   lead_id?: number
+  address_complete?: boolean
+  reason?: 'incomplete_address' | 'no_connector' | 'no_match' | null
 }
 
 export interface BuildingOwnershipDetail {

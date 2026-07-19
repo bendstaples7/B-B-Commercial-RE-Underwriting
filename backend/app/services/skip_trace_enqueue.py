@@ -10,7 +10,7 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import text
+from sqlalchemy import and_, or_, text
 
 from app import db
 from app.models.contact import Contact
@@ -426,16 +426,59 @@ class SkipTraceEnqueue:
         }:
             return {'scheduled': False, 'task_id': None, 'changed': False}
 
-        task = (
+        today = date.today()
+        # Hold already converted to undated handoff or released verify work —
+        # do not flip awaiting_skip_trace back to the holding stage / recreate.
+        existing_open = (
             LeadTask.query
             .filter_by(
                 lead_id=lead_id,
                 task_type="skip_trace_owner",
                 status="open",
-                workflow_key="recent_sale_hold",
             )
-            .first()
+            .order_by(LeadTask.due_date.asc().nullslast(), LeadTask.id.asc())
+            .all()
         )
+        for existing in existing_open:
+            if self._is_undated_skip_trace_handoff(existing):
+                return {
+                    'scheduled': False,
+                    'task_id': existing.id,
+                    'changed': False,
+                    'hubspot_task_ids': [],
+                }
+            if (
+                existing.workflow_key is None
+                and self._is_recent_sale_verify_title(existing.title)
+            ):
+                return {
+                    'scheduled': False,
+                    'task_id': existing.id,
+                    'changed': False,
+                    'hubspot_task_ids': [],
+                }
+
+        task = next(
+            (
+                t for t in existing_open
+                if t.workflow_key == "recent_sale_hold"
+            ),
+            None,
+        )
+        # Matured hold with a due date that is still today/past and the
+        # caller is not extending it — leave activation to convert the task.
+        if (
+            task is not None
+            and task.due_date is not None
+            and task.due_date <= today
+            and due_date <= today
+        ):
+            return {
+                'scheduled': False,
+                'task_id': task.id,
+                'changed': False,
+                'hubspot_task_ids': [],
+            }
         title = "Recent-sale hold ended — verify new owner and contact information"
         task_changed = (
             task is None
@@ -515,6 +558,15 @@ class SkipTraceEnqueue:
                 },
             ))
 
+        from app.services.mail_task_lifecycle_service import (
+            complete_obsolete_outreach_during_recent_sale_hold,
+        )
+        completed_outreach = complete_obsolete_outreach_during_recent_sale_hold(
+            lead_id,
+            actor=actor,
+            commit=False,
+        )
+
         if commit:
             db.session.commit()
             if hubspot_task_ids:
@@ -531,8 +583,14 @@ class SkipTraceEnqueue:
         return {
             'scheduled': scheduled,
             'task_id': task.id,
-            'changed': task_changed or mirror_changed or lead_changed,
+            'changed': (
+                task_changed
+                or mirror_changed
+                or lead_changed
+                or bool(completed_outreach)
+            ),
             'hubspot_task_ids': sorted(hubspot_task_ids),
+            'completed_obsolete_outreach_ids': completed_outreach,
         }
 
     def activate_due_recent_sale_tasks(
@@ -542,28 +600,47 @@ class SkipTraceEnqueue:
         commit: bool = True,
         limit: int | None = None,
     ) -> dict:
-        """Move matured recent-sale tasks into active skip-trace work."""
-        query = (
+        """Move matured recent-sale tasks into active skip-trace work.
+
+        Converts dated verify tasks into the undated ``Awaiting skip trace``
+        handoff so leads leave Today's Action after the hold expires. Also
+        heals already-released dated post-hold tasks stuck in the queue.
+        """
+        today = date.today()
+        hold_query = (
             LeadTask.query
             .filter(
                 LeadTask.task_type == "skip_trace_owner",
                 LeadTask.status == "open",
                 LeadTask.due_date.isnot(None),
-                LeadTask.due_date <= date.today(),
+                LeadTask.due_date <= today,
                 LeadTask.workflow_key == "recent_sale_hold",
             )
             .order_by(LeadTask.due_date.asc(), LeadTask.id.asc())
         )
         if limit is not None:
-            query = query.limit(limit)
+            hold_query = hold_query.limit(limit)
 
-        tasks = query.all()
+        hold_tasks = hold_query.all()
         activated_ids: list[int] = []
         retired_task_ids: list[int] = []
         released_hold_task_ids: list[int] = []
+        healed_task_ids: list[int] = []
+        scoring_lead_ids: set[int] = set()
         hubspot_task_ids: set[str] = set()
         now = datetime.now(timezone.utc)
-        for task in tasks:
+
+        # After merges, a future hold task can sit on a mailing-stage lead.
+        # Keep deal stage aligned with the holding workflow.
+        hold_status_synced = self._sync_status_for_future_recent_sale_holds(
+            actor=actor,
+            now=now,
+            today=today,
+            limit=None if limit is None else max(limit, 0),
+        )
+        scoring_lead_ids.update(hold_status_synced)
+        hold_status_synced_ids = list(hold_status_synced)
+        for task in hold_tasks:
             lead = Lead.query.filter_by(id=task.lead_id).with_for_update().first()
             if lead is None or lead.lead_status in {
                 "deprioritize",
@@ -607,11 +684,57 @@ class SkipTraceEnqueue:
                     },
                 ))
                 activated_ids.append(lead.id)
-            task.workflow_key = None
-            db.session.add(task)
+            else:
+                lead.needs_skip_trace = True
+                db.session.add(lead)
+            self._convert_to_awaiting_handoff(task)
             released_hold_task_ids.append(task.id)
+            scoring_lead_ids.add(lead.id)
 
-        if commit and (activated_ids or retired_task_ids or released_hold_task_ids):
+        # Heal already-released dated verify tasks (e.g. workflow_key cleared
+        # but due date left open — still in Today's Action).
+        remaining = None if limit is None else max(limit - len(hold_tasks), 0)
+        if remaining is None or remaining > 0:
+            healed = self._heal_dated_post_hold_skip_trace_tasks(
+                actor=actor,
+                now=now,
+                today=today,
+                limit=remaining,
+                exclude_task_ids=set(released_hold_task_ids + retired_task_ids),
+            )
+            healed_task_ids.extend(healed["healed_task_ids"])
+            activated_ids.extend(healed["activated_lead_ids"])
+            scoring_lead_ids.update(healed["scoring_lead_ids"])
+
+        remaining_stale = None if limit is None else max(
+            limit - len(hold_tasks) - len(healed_task_ids),
+            0,
+        )
+        stale_healed_lead_ids: list[int] = []
+        if remaining_stale is None or remaining_stale > 0:
+            stale = self._heal_post_hold_stale_contact_leads(
+                actor=actor,
+                now=now,
+                limit=remaining_stale,
+                exclude_lead_ids=set(activated_ids) | scoring_lead_ids,
+            )
+            stale_healed_lead_ids = stale["activated_lead_ids"]
+            activated_ids.extend(stale_healed_lead_ids)
+            scoring_lead_ids.update(stale["scoring_lead_ids"])
+
+        processed_lead_ids = list(dict.fromkeys(
+            [task.lead_id for task in hold_tasks]
+            + list(scoring_lead_ids)
+        ))
+
+        if commit and (
+            activated_ids
+            or retired_task_ids
+            or released_hold_task_ids
+            or healed_task_ids
+            or stale_healed_lead_ids
+            or hold_status_synced_ids
+        ):
             db.session.commit()
             if hubspot_task_ids:
                 from app.services.hubspot_task_completion_service import (
@@ -621,7 +744,7 @@ class SkipTraceEnqueue:
             from app.services.lead_refresh import refresh_lead_scoring
             from app.services.queue_order_cache import queue_order_cache
 
-            for lead_id in activated_ids:
+            for lead_id in scoring_lead_ids:
                 refresh_lead_scoring(lead_id)
             queue_order_cache.clear()
 
@@ -631,11 +754,333 @@ class SkipTraceEnqueue:
             "retired_task_count": len(retired_task_ids),
             "retired_task_ids": retired_task_ids,
             "released_hold_task_ids": released_hold_task_ids,
-            "processed_task_count": len(tasks),
-            "processed_lead_ids": list(dict.fromkeys(
-                task.lead_id for task in tasks
-            )),
+            "healed_task_ids": healed_task_ids,
+            "stale_contact_healed_lead_ids": stale_healed_lead_ids,
+            "hold_status_synced_lead_ids": hold_status_synced_ids,
+            "processed_task_count": (
+                len(hold_tasks) + len(healed_task_ids) + len(stale_healed_lead_ids)
+            ),
+            "processed_lead_ids": processed_lead_ids,
         }
+
+    def _sync_status_for_future_recent_sale_holds(
+        self,
+        *,
+        actor: str,
+        now: datetime,
+        today: date,
+        limit: int | None,
+    ) -> set[int]:
+        """Align lead_status to skip_trace and clear obsolete outreach on hold."""
+        hard_terminal = {
+            "deprioritize",
+            "deal_won",
+            "deal_lost",
+            "suppressed",
+            "do_not_contact",
+        }
+        query = (
+            LeadTask.query
+            .filter(
+                LeadTask.task_type == "skip_trace_owner",
+                LeadTask.status == "open",
+                LeadTask.due_date.isnot(None),
+                LeadTask.due_date > today,
+                LeadTask.workflow_key == "recent_sale_hold",
+            )
+            .order_by(LeadTask.due_date.asc(), LeadTask.id.asc())
+        )
+        if limit is not None:
+            query = query.limit(limit)
+
+        from app.services.mail_task_lifecycle_service import (
+            complete_obsolete_outreach_during_recent_sale_hold,
+        )
+
+        scoring_lead_ids: set[int] = set()
+        for task in query.all():
+            lead = Lead.query.filter_by(id=task.lead_id).with_for_update().first()
+            if lead is None or lead.lead_status in hard_terminal:
+                continue
+
+            status_changed = False
+            if lead.lead_status not in ("skip_trace", "awaiting_skip_trace"):
+                old_status = lead.lead_status
+                lead.lead_status = "skip_trace"
+                lead.needs_skip_trace = False
+                db.session.add(lead)
+                db.session.add(LeadTimelineEntry(
+                    lead_id=lead.id,
+                    event_type="status_changed",
+                    occurred_at=now,
+                    source="system",
+                    actor=actor,
+                    summary=(
+                        f"Status changed from '{old_status}' to 'skip_trace' "
+                        "to match an open recent-sale hold task."
+                    ),
+                    event_metadata={
+                        "previous_status": old_status,
+                        "new_status": "skip_trace",
+                        "reason": "recent_sale_hold_status_sync",
+                        "task_id": task.id,
+                    },
+                ))
+                status_changed = True
+            else:
+                lead.needs_skip_trace = False
+                db.session.add(lead)
+
+            completed = complete_obsolete_outreach_during_recent_sale_hold(
+                lead.id,
+                actor=actor,
+                commit=False,
+            )
+            if status_changed or completed:
+                scoring_lead_ids.add(lead.id)
+        return scoring_lead_ids
+
+    def _heal_dated_post_hold_skip_trace_tasks(
+        self,
+        *,
+        actor: str,
+        now: datetime,
+        today: date,
+        limit: int | None,
+        exclude_task_ids: set[int],
+    ) -> dict:
+        """Convert stuck dated post-hold verify tasks into undated handoffs."""
+        query = (
+            LeadTask.query
+            .filter(
+                LeadTask.task_type == "skip_trace_owner",
+                LeadTask.status == "open",
+                LeadTask.due_date.isnot(None),
+                LeadTask.due_date <= today,
+                LeadTask.workflow_key.is_(None),
+            )
+            .order_by(LeadTask.due_date.asc(), LeadTask.id.asc())
+        )
+        if exclude_task_ids:
+            query = query.filter(~LeadTask.id.in_(exclude_task_ids))
+        if limit is not None:
+            query = query.limit(limit)
+
+        healed_task_ids: list[int] = []
+        activated_lead_ids: list[int] = []
+        scoring_lead_ids: set[int] = set()
+        for task in query.all():
+            if self._is_undated_skip_trace_handoff(task):
+                continue
+            if not self._is_recent_sale_verify_title(task.title):
+                continue
+            lead = Lead.query.filter_by(id=task.lead_id).with_for_update().first()
+            if lead is None or lead.lead_status in {
+                "deprioritize",
+                "deal_won",
+                "deal_lost",
+                "suppressed",
+                "do_not_contact",
+            }:
+                continue
+            if lead.lead_status != "awaiting_skip_trace" or not lead.needs_skip_trace:
+                old_status = lead.lead_status
+                lead.lead_status = "awaiting_skip_trace"
+                lead.needs_skip_trace = True
+                db.session.add(lead)
+                db.session.add(LeadTimelineEntry(
+                    lead_id=lead.id,
+                    event_type="status_changed",
+                    occurred_at=now,
+                    source="system",
+                    actor=actor,
+                    summary=(
+                        f"Status changed from '{old_status}' to 'awaiting_skip_trace' "
+                        "when healing a matured recent-sale skip-trace task."
+                    ),
+                    event_metadata={
+                        "previous_status": old_status,
+                        "new_status": "awaiting_skip_trace",
+                        "reason": "recent_sale_hold_heal",
+                        "task_id": task.id,
+                    },
+                ))
+                activated_lead_ids.append(lead.id)
+            else:
+                lead.needs_skip_trace = True
+                db.session.add(lead)
+            self._convert_to_awaiting_handoff(task)
+            healed_task_ids.append(task.id)
+            scoring_lead_ids.add(lead.id)
+
+        return {
+            "healed_task_ids": healed_task_ids,
+            "activated_lead_ids": activated_lead_ids,
+            "scoring_lead_ids": scoring_lead_ids,
+        }
+
+    def _heal_post_hold_stale_contact_leads(
+        self,
+        *,
+        actor: str,
+        now: datetime,
+        limit: int | None,
+        exclude_lead_ids: set[int],
+    ) -> dict:
+        """Move past-hold prior-owner leads into awaiting skip-trace handoff.
+
+        Covers mailing-status (and similar) leads that never had a
+        ``recent_sale_hold`` task — scoring already says confirm ownership via
+        ``contacts_need_post_hold_verification``, but stage/tasks were left unchanged.
+        """
+        from app.services import scoring_rubric as rubric
+
+        terminal = {
+            "deprioritize",
+            "deal_won",
+            "deal_lost",
+            "suppressed",
+            "do_not_contact",
+        }
+        # Oversample then filter in Python (sale dates are mixed string/date).
+        fetch_limit = 500 if limit is None else max(limit * 8, limit)
+        query = (
+            Lead.query
+            .filter(
+                ~Lead.lead_status.in_(terminal),
+                or_(
+                    and_(
+                        Lead.most_recent_sale.isnot(None),
+                        Lead.most_recent_sale != "",
+                    ),
+                    Lead.acquisition_date.isnot(None),
+                ),
+                or_(
+                    Lead.lead_status != "awaiting_skip_trace",
+                    Lead.needs_skip_trace.is_(False),
+                ),
+            )
+            .order_by(Lead.id.desc())
+        )
+        if exclude_lead_ids:
+            query = query.filter(~Lead.id.in_(exclude_lead_ids))
+        candidates = query.limit(fetch_limit).all()
+
+        activated_lead_ids: list[int] = []
+        scoring_lead_ids: set[int] = set()
+        for lead in candidates:
+            if limit is not None and len(activated_lead_ids) >= limit:
+                break
+            if not rubric.contacts_need_post_hold_verification(lead):
+                continue
+            if (
+                lead.lead_status == "awaiting_skip_trace"
+                and lead.needs_skip_trace
+                and self._find_undated_skip_trace_handoff(lead.id) is not None
+            ):
+                continue
+
+            locked = Lead.query.filter_by(id=lead.id).with_for_update().first()
+            if locked is None or locked.lead_status in terminal:
+                continue
+            if not rubric.contacts_need_post_hold_verification(locked):
+                continue
+            if (
+                locked.lead_status == "awaiting_skip_trace"
+                and locked.needs_skip_trace
+                and self._find_undated_skip_trace_handoff(locked.id) is not None
+            ):
+                continue
+
+            old_status = locked.lead_status
+            if (
+                locked.lead_status != "awaiting_skip_trace"
+                or not locked.needs_skip_trace
+            ):
+                locked.lead_status = "awaiting_skip_trace"
+                locked.needs_skip_trace = True
+                db.session.add(locked)
+                if old_status != "awaiting_skip_trace":
+                    db.session.add(LeadTimelineEntry(
+                        lead_id=locked.id,
+                        event_type="status_changed",
+                        occurred_at=now,
+                        source="system",
+                        actor=actor,
+                        summary=(
+                            f"Status changed from '{old_status}' to "
+                            "'awaiting_skip_trace' when post-hold prior-owner "
+                            "contacts needed skip-trace confirmation."
+                        ),
+                        event_metadata={
+                            "previous_status": old_status,
+                            "new_status": "awaiting_skip_trace",
+                            "reason": "post_hold_stale_contacts_heal",
+                        },
+                    ))
+            else:
+                locked.needs_skip_trace = True
+                db.session.add(locked)
+
+            self._ensure_awaiting_skip_trace_handoff(locked.id, actor=actor)
+            activated_lead_ids.append(locked.id)
+            scoring_lead_ids.add(locked.id)
+
+        return {
+            "activated_lead_ids": activated_lead_ids,
+            "scoring_lead_ids": scoring_lead_ids,
+        }
+
+    def _ensure_awaiting_skip_trace_handoff(
+        self,
+        lead_id: int,
+        *,
+        actor: str,
+    ) -> LeadTask:
+        """Create or normalize an undated Awaiting skip trace handoff task."""
+        handoff = self._find_undated_skip_trace_handoff(lead_id)
+        if handoff is not None:
+            return handoff
+        open_skip = (
+            LeadTask.query
+            .filter_by(
+                lead_id=lead_id,
+                task_type="skip_trace_owner",
+                status="open",
+            )
+            .order_by(LeadTask.due_date.asc().nullslast(), LeadTask.id.asc())
+            .first()
+        )
+        if open_skip is not None:
+            self._convert_to_awaiting_handoff(open_skip)
+            return open_skip
+        task = self._tasks.create(
+            lead_id,
+            {
+                "task_type": "skip_trace_owner",
+                "title": "Awaiting skip trace",
+                "due_date": None,
+            },
+            actor=actor,
+            recompute_action=False,
+            commit=False,
+        )
+        task.workflow_key = "awaiting_skip_trace_handoff"
+        db.session.add(task)
+        return task
+
+    @staticmethod
+    def _convert_to_awaiting_handoff(task: LeadTask) -> None:
+        """Normalize a skip-trace task into the undated pipeline placeholder."""
+        task.title = "Awaiting skip trace"
+        task.due_date = None
+        task.workflow_key = "awaiting_skip_trace_handoff"
+        db.session.add(task)
+
+    @staticmethod
+    def _is_recent_sale_verify_title(title: str | None) -> bool:
+        normalized = (title or "").strip().lower()
+        return normalized.startswith("recent-sale hold ended")
 
     @staticmethod
     def _find_undated_skip_trace_handoff(lead_id: int) -> Optional[LeadTask]:

@@ -18,6 +18,7 @@ class LeadTimelineEntry(db.Model):
         'property_analysis_completed', 'lead_imported',
         'mail_queued', 'mail_sent', 'mail_delivered',
         'property_match_approved', 'property_match_rejected',
+        'property_address_incomplete', 'property_address_completed',
         name='timeline_event_type_enum'
     ), nullable=False, index=True)
 

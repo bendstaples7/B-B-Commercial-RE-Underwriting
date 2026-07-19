@@ -38,6 +38,7 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import BarChartIcon from '@mui/icons-material/BarChart'
 import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted'
 import { commandCenterService, leadTaskService, leadScoreService, queueService } from '@/services/api'
+import { entityResolutionApi } from '@/services/entityResolutionApi'
 import { leadService } from '@/services/leadApi'
 import { multifamilyService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
@@ -1365,6 +1366,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               mailEligibleDate={commandCenterData!.mail_eligible_date}
               showOutreachContact={placement === 'recommended_action'}
               embedded
+              entityResearch={commandCenterData!.entity_research ?? null}
+              onRefreshEntityResearch={async () => {
+                await entityResolutionApi.resolve(leadId, { action: 'resolve', async: false })
+                await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+              }}
               onAction={handleRaAction}
               onCreateTask={handleCreateTask}
             />

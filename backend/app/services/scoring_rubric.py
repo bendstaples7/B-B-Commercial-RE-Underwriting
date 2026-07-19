@@ -204,23 +204,48 @@ def format_last_sale_at(lead: Lead) -> str | None:
     return sale.isoformat()
 
 
-def contacts_likely_prior_owner(lead: Lead) -> bool:
-    """True when a recent sale is newer than the last completed skip-trace.
-
-    Uses the same recent-sale window as mail hold (``RECENT_SALE_SUPPRESSION_DAYS``).
-    Default assumption: contact rows may still describe the prior owner until
-    ``date_skip_traced`` is on/after the sale date.
-    """
+def _contacts_skip_trace_before_sale(lead: Lead) -> bool:
+    """True when skip-trace is missing or older than the effective sale date."""
     sale = effective_acquisition_date(lead)
     if sale is None or sale > date.today():
-        return False
-    if (date.today() - sale).days >= RECENT_SALE_SUPPRESSION_DAYS:
         return False
     skip_traced = getattr(lead, 'date_skip_traced', None)
     if skip_traced is None:
         return True
     skip_day = skip_traced.date() if hasattr(skip_traced, 'date') else skip_traced
     return skip_day < sale
+
+
+def contacts_likely_prior_owner(lead: Lead) -> bool:
+    """True when contacts may still describe the prior owner during a recent-sale hold.
+
+    Only applies inside the recent-sale window (``is_recently_sold``) for UI
+    gray-out. Older sales (e.g. year 2000) do not gray out contacts. Post-hold
+    skip-trace handoff uses ``contacts_need_post_hold_verification`` instead.
+    """
+    if not is_recently_sold(lead):
+        return False
+    return _contacts_skip_trace_before_sale(lead)
+
+
+def contacts_need_post_hold_verification(lead: Lead) -> bool:
+    """True when the recent-sale hold ended but contacts are still pre-sale.
+
+    Used for scoring (``enrich_data`` / ``recently_sold``) and post-hold heal.
+    Requires a known sale outside the hold window and skip-trace missing/before
+    that sale — not ancient sales with no recent-sale signal.
+    """
+    if is_recently_sold(lead):
+        return False
+    sale = effective_acquisition_date(lead)
+    if sale is None or sale > date.today():
+        return False
+    # Only treat as post-hold stale when the sale was recently in the hold
+    # window (ended within ~2x the suppression period). Year-2000 sales stay out.
+    days_since = (date.today() - sale).days
+    if days_since >= RECENT_SALE_SUPPRESSION_DAYS * 2:
+        return False
+    return _contacts_skip_trace_before_sale(lead)
 
 
 def contacts_stale_since(lead: Lead) -> str | None:

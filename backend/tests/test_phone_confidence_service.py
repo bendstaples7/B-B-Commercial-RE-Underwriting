@@ -174,6 +174,180 @@ class TestConfidenceHelpers:
         assert payloads[0]['value'] == '6304305720'
         assert payloads[0]['confidence_score'] == 90
 
+    def test_serialize_contact_phones_sorts_by_confidence(self):
+        from app.models.contact_phone import ContactPhone
+
+        phones = [
+            ContactPhone(
+                id=1, contact_id=1, value='7734540106', label='other', confidence_score=50,
+            ),
+            ContactPhone(
+                id=2,
+                contact_id=1,
+                value='7732715525',
+                label='other',
+                notes='HubSpot primary',
+                source='hubspot_import',
+                confidence_score=85,
+            ),
+        ]
+        payloads = PhoneConfidenceService.serialize_contact_phones(phones)
+        assert [p['value'] for p in payloads] == ['7732715525', '7734540106']
+
+
+def test_apply_hubspot_call_outcome_uses_primary_when_no_to_number(app):
+    with app.app_context():
+        from app import db
+        from app.models import Lead
+        from app.models.contact import Contact
+        from app.models.contact_phone import ContactPhone
+        from app.models.property_contact import PropertyContact
+
+        lead = Lead(
+            property_street='4490 Style St',
+            lead_status='mailing_no_contact_made',
+            has_phone=True,
+            has_email=True,
+            has_property_match=True,
+            analysis_complete=True,
+            lead_score=50.0,
+        )
+        db.session.add(lead)
+        db.session.flush()
+        contact = Contact(first_name='Sam', last_name='Owner', role='owner')
+        db.session.add(contact)
+        db.session.flush()
+        db.session.add(PropertyContact(
+            property_id=lead.id,
+            contact_id=contact.id,
+            role='owner',
+            is_primary=True,
+        ))
+        scrape = ContactPhone(
+            contact_id=contact.id,
+            value='7734540106',
+            label='other',
+            confidence_score=50,
+        )
+        primary = ContactPhone(
+            contact_id=contact.id,
+            value='+17732715525',
+            label='other',
+            notes='HubSpot primary',
+            source='hubspot_import',
+            confidence_score=50,
+        )
+        db.session.add_all([scrape, primary])
+        db.session.commit()
+
+        assert PhoneConfidenceService.apply_hubspot_call_outcome(
+            lead.id,
+            'f240bbac-87c9-4f6e-bf70-924b57d47db7',  # Connected
+            phone_number=None,
+        )
+        db.session.commit()
+        refreshed = ContactPhone.query.get(primary.id)
+        assert refreshed.confidence_score == 85
+        assert refreshed.last_outcome == 'answered'
+        assert ContactPhone.query.get(scrape.id).confidence_score == 50
+
+
+def test_hubspot_primary_floor_does_not_resurrect_wrong_number(app):
+    with app.app_context():
+        from app import db
+        from app.models import Lead
+        from app.models.contact import Contact
+        from app.models.contact_phone import ContactPhone
+        from app.models.property_contact import PropertyContact
+
+        lead = Lead(
+            property_street='HS Wrong Number Floor St',
+            lead_status='mailing_no_contact_made',
+            has_phone=True,
+            has_email=True,
+            has_property_match=True,
+            analysis_complete=True,
+            lead_score=50.0,
+        )
+        db.session.add(lead)
+        db.session.flush()
+        contact = Contact(first_name='Sam', last_name='Owner', role='owner')
+        db.session.add(contact)
+        db.session.flush()
+        db.session.add(PropertyContact(
+            property_id=lead.id,
+            contact_id=contact.id,
+            role='owner',
+            is_primary=True,
+        ))
+        primary = ContactPhone(
+            contact_id=contact.id,
+            value='+17732715525',
+            label='other',
+            notes='HubSpot primary',
+            source='hubspot_import',
+            confidence_score=5,
+            last_outcome='wrong_number',
+        )
+        db.session.add(primary)
+        db.session.commit()
+
+        PhoneConfidenceService.update_from_call(
+            lead.id, 'no_answer', contact_phone_id=primary.id,
+        )
+        db.session.commit()
+        refreshed = ContactPhone.query.get(primary.id)
+        assert refreshed.confidence_score == 5
+        assert refreshed.last_outcome == 'no_answer'
+
+
+def test_hubspot_primary_floor_survives_no_answer_outcome(app):
+    with app.app_context():
+        from app import db
+        from app.models import Lead
+        from app.models.contact import Contact
+        from app.models.contact_phone import ContactPhone
+        from app.models.property_contact import PropertyContact
+
+        lead = Lead(
+            property_street='HS Primary Floor St',
+            lead_status='mailing_no_contact_made',
+            has_phone=True,
+            has_email=True,
+            has_property_match=True,
+            analysis_complete=True,
+            lead_score=50.0,
+        )
+        db.session.add(lead)
+        db.session.flush()
+        contact = Contact(first_name='Sam', last_name='Owner', role='owner')
+        db.session.add(contact)
+        db.session.flush()
+        db.session.add(PropertyContact(
+            property_id=lead.id,
+            contact_id=contact.id,
+            role='owner',
+            is_primary=True,
+        ))
+        primary = ContactPhone(
+            contact_id=contact.id,
+            value='+17732715525',
+            label='other',
+            notes='HubSpot primary',
+            source='hubspot_import',
+            confidence_score=85,
+        )
+        db.session.add(primary)
+        db.session.commit()
+
+        PhoneConfidenceService.update_from_call(
+            lead.id, 'no_answer', contact_phone_id=primary.id,
+        )
+        db.session.commit()
+        refreshed = ContactPhone.query.get(primary.id)
+        assert refreshed.confidence_score == 85
+        assert refreshed.last_outcome == 'no_answer'
+
 
 def test_update_from_call_updates_contact_phone(app):
     with app.app_context():

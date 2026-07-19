@@ -370,7 +370,14 @@ def _fetch_improvement_chars(pin: str, improvement_chars_url: str) -> dict:
     return out
 
 
-def _build_parcel(pin: str, chars: dict) -> GISParcel:
+def _build_parcel(
+    pin: str,
+    chars: dict,
+    *,
+    property_city: str | None = None,
+    property_state: str | None = None,
+    property_zip: str | None = None,
+) -> GISParcel:
     """Build a GISParcel from a PIN + improvement characteristics dict."""
     return GISParcel(
         county_assessor_pin=pin,
@@ -386,6 +393,9 @@ def _build_parcel(pin: str, chars: dict) -> GISParcel:
         mailing_city=None,
         mailing_state=None,
         mailing_zip=None,
+        property_city=property_city,
+        property_state=property_state,
+        property_zip=property_zip,
     )
 
 
@@ -429,7 +439,7 @@ class CookCountyGISConnector(GISConnector):
         if not pin:
             return None
         chars = _fetch_improvement_chars(pin, self._improvement_chars_url)
-        return _build_parcel(pin, chars)
+        return self._parcel_with_situs(pin, chars)
 
     def lookup_address_by_pin(self, pin: str) -> Optional[dict]:
         """Return street/city/state/zip for a Cook County PIN, or None if not found."""
@@ -452,7 +462,29 @@ class CookCountyGISConnector(GISConnector):
         chars = _fetch_improvement_chars(normalized_pin, self._improvement_chars_url)
         if not chars:
             return None
-        return _build_parcel(normalized_pin, chars)
+        return self._parcel_with_situs(normalized_pin, chars)
+
+    def _parcel_with_situs(self, pin: str, chars: dict) -> GISParcel:
+        addr = _lookup_address_from_pin(pin, self._parcel_addresses_url) or {}
+        zip_code = (addr.get('property_zip') or '').strip() or None
+        if zip_code and '-' in zip_code:
+            zip_code = zip_code.split('-', 1)[0]
+        city = (addr.get('property_city') or '').strip() or None
+        state_raw = (addr.get('property_state') or '').strip() or None
+        # Only invent IL when the assessor returned some situs (city or ZIP).
+        if state_raw:
+            state = state_raw
+        elif city or zip_code:
+            state = 'IL'
+        else:
+            state = None
+        return _build_parcel(
+            pin,
+            chars,
+            property_city=city,
+            property_state=state,
+            property_zip=zip_code,
+        )
 
 
 # ---------------------------------------------------------------------------

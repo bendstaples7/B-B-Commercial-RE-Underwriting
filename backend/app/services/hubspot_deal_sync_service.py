@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 DEAL_API_PROPERTIES = (
     'dealname,pipeline,dealstage,closedate,amount,'
-    'county_assessor_pin,pin,address,hs_object_id,'
+    'county_assessor_pin,pin,address,city,state,zip,hs_object_id,'
     'createdate,hs_lastmodifieddate,deal_source,description'
 )
 

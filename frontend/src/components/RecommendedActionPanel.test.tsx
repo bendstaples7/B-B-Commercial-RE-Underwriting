@@ -272,7 +272,7 @@ describe('RecommendedActionPanel', () => {
       expect(screen.getByText('No recommended action at this time.')).toBeInTheDocument()
     })
 
-    it('shows the next task instead of a blank nurture heading', () => {
+    it('hides nurture heading when open tasks exist (task lives in Open Tasks)', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('nurture', 'Nurture')}
@@ -282,13 +282,11 @@ describe('RecommendedActionPanel', () => {
         />,
       )
 
-      expect(screen.getByTestId('ra-label')).toHaveTextContent('Follow up on next task')
-      expect(screen.getByTestId('ra-next-task-title')).toHaveTextContent(
-        'Manually skip trace returned letter',
-      )
+      expect(screen.queryByTestId('ra-label')).not.toBeInTheDocument()
+      expect(screen.queryByText('Follow up on next task')).not.toBeInTheDocument()
     })
 
-    it('keeps RA explanation visible under the next-task fallback', () => {
+    it('keeps RA explanation visible for skip-trace nurture without Follow up heading', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA(
@@ -302,11 +300,12 @@ describe('RecommendedActionPanel', () => {
         />,
       )
 
-      expect(screen.getByTestId('ra-next-task-title')).toHaveTextContent('Awaiting skip trace')
+      expect(screen.queryByTestId('ra-label')).not.toBeInTheDocument()
+      expect(screen.queryByText('Follow up on next task')).not.toBeInTheDocument()
       expect(screen.getByTestId('ra-explanation')).toHaveTextContent('recent sale')
     })
 
-    it('shows next task fallback when no recommended action exists', () => {
+    it('shows open task title when no recommended action exists', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={null}
@@ -316,8 +315,8 @@ describe('RecommendedActionPanel', () => {
         />,
       )
 
-      expect(screen.getByText('Follow up on next task')).toBeInTheDocument()
-      expect(screen.getByText('Task 2')).toBeInTheDocument()
+      expect(screen.queryByText('Follow up on next task')).not.toBeInTheDocument()
+      expect(screen.getByTestId('ra-next-task-title')).toHaveTextContent('Task 2')
     })
 
     it('offers Move to Skip Trace as a standardized quick action', async () => {
@@ -386,7 +385,7 @@ describe('RecommendedActionPanel', () => {
       expect(screen.queryByTestId('ra-universal-btn-already-skip-trace')).not.toBeInTheDocument()
     })
 
-    it('frames open skip_trace_owner over competing call_ready RA', () => {
+    it('keeps real RA label when open skip_trace_owner exists (no Follow up framing)', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('call_ready', 'Call Now')}
@@ -401,10 +400,9 @@ describe('RecommendedActionPanel', () => {
         />,
       )
 
-      expect(screen.getByTestId('ra-label')).toHaveTextContent('Follow up on next task')
-      expect(screen.getByTestId('ra-next-task-title')).toHaveTextContent(
-        'Recent-sale hold ended — verify new owner',
-      )
+      expect(screen.getByTestId('ra-label')).toHaveTextContent('Call Now')
+      expect(screen.queryByText('Follow up on next task')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('ra-next-task-title')).not.toBeInTheDocument()
     })
 
     it('keeps Quick actions in a fixed order across leads', () => {
@@ -935,6 +933,85 @@ describe('RecommendedActionPanel', () => {
       expect(screen.queryByText('Confirm Building Ownership')).not.toBeInTheDocument()
       expect(screen.getByTestId('ra-universal-btn-log_note')).toBeInTheDocument()
       expect(screen.getByTestId('ra-action-btn-create_task')).toBeInTheDocument()
+    })
+  })
+
+  describe('entity research status', () => {
+    it('shows Never researched and Refresh when entityResearch has no checked_at', () => {
+      const onRefresh = vi.fn().mockResolvedValue(undefined)
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('enrich_data', 'Enrich Data')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          onAction={vi.fn()}
+          entityResearch={{
+            organization_id: 517,
+            organization_name: 'Svigos Asset Management',
+            entity_lookup_status: 'pending',
+            entity_lookup_person_found: false,
+            entity_lookup_checked_at: null,
+            entity_lookup_error: null,
+          }}
+          onRefreshEntityResearch={onRefresh}
+        />,
+      )
+
+      expect(screen.getByTestId('entity-research-status')).toHaveTextContent(
+        'Never researched (Illinois LLC / org)',
+      )
+      expect(screen.getByTestId('entity-research-status')).toHaveTextContent('pending')
+      expect(screen.getByTestId('entity-research-status')).toHaveTextContent(
+        'Svigos Asset Management',
+      )
+      expect(screen.getByTestId('refresh-entity-research-btn')).toBeInTheDocument()
+    })
+
+    it('shows Last researched date when checked_at is set', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('nurture', 'Nurture')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          onAction={vi.fn()}
+          entityResearch={{
+            organization_id: 10,
+            organization_name: 'Acme LLC',
+            entity_lookup_status: 'no_match',
+            entity_lookup_person_found: false,
+            entity_lookup_checked_at: '2026-07-01T12:00:00Z',
+            entity_lookup_error: null,
+          }}
+          onRefreshEntityResearch={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('entity-research-status')).toHaveTextContent(/Last researched/)
+      expect(screen.getByTestId('entity-research-status')).toHaveTextContent('no match')
+    })
+
+    it('calls onRefreshEntityResearch when Refresh research is clicked', async () => {
+      const onRefresh = vi.fn().mockResolvedValue(undefined)
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('enrich_data', 'Enrich Data')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          onAction={vi.fn()}
+          entityResearch={{
+            organization_id: 1,
+            organization_name: 'Test Org',
+            entity_lookup_status: null,
+            entity_lookup_person_found: false,
+            entity_lookup_checked_at: null,
+            entity_lookup_error: null,
+          }}
+          onRefreshEntityResearch={onRefresh}
+        />,
+      )
+
+      await user.click(screen.getByTestId('refresh-entity-research-btn'))
+      await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1))
     })
   })
 })

@@ -27,9 +27,26 @@ class PropertyMatchReviewService:
         )
 
     def preview_match(self, lead_id: int) -> dict:
+        from app.services.property_address_service import (
+            complete_property_address,
+            is_property_address_complete,
+        )
+
         lead = db.session.get(Lead, lead_id)
         if lead is None:
             raise ValueError(f'Lead {lead_id} not found')
+
+        # Soft-heal incomplete situs before routing / PIN lookup (no commit —
+        # preview must not persist GIS fills until the user applies).
+        if lead.property_street and not is_property_address_complete(lead=lead):
+            complete_property_address(
+                lead,
+                try_gis=True,
+                actor='property_match_preview',
+                commit=False,
+                write_timeline=False,
+            )
+            lead = db.session.get(Lead, lead_id)
 
         entered = {
             'property_street': lead.property_street,
@@ -37,22 +54,44 @@ class PropertyMatchReviewService:
             'property_state': lead.property_state,
             'property_zip': lead.property_zip,
         }
+        address_complete = is_property_address_complete(lead=lead)
         connector = connector_for_lead(lead)
-        if connector is None:
+
+        parcel: GISParcel | None = None
+        connector_name = connector.connector_name if connector else None
+        if connector is not None:
+            if lead.property_street:
+                parcel = connector.lookup_by_address(lead.property_street)
+            if parcel is None and lead.county_assessor_pin:
+                parcel = connector.lookup_by_pin(lead.county_assessor_pin)
+        elif lead.property_street:
+            # Street-only Cook fallback when city/state still blank after completer.
+            from app.services.gis.cook_county_gis_connector import CookCountyGISConnector
+            cook = CookCountyGISConnector()
+            parcel = cook.lookup_by_address(lead.property_street)
+            if parcel is not None:
+                connector = cook
+                connector_name = cook.connector_name
+
+        if connector is None and parcel is None:
+            reason = (
+                'incomplete_address' if not address_complete else 'no_connector'
+            )
+            message = (
+                'Add city, state, and ZIP before looking up a PIN'
+                if reason == 'incomplete_address'
+                else 'No GIS connector for this lead\'s county'
+            )
             return {
                 'found': False,
                 'entered_address': entered,
                 'recommended_address': None,
                 'pin': None,
                 'connector': None,
-                'message': 'No GIS connector for this lead\'s county',
+                'address_complete': address_complete,
+                'reason': reason,
+                'message': message,
             }
-
-        parcel: GISParcel | None = None
-        if lead.property_street:
-            parcel = connector.lookup_by_address(lead.property_street)
-        if parcel is None and lead.county_assessor_pin:
-            parcel = connector.lookup_by_pin(lead.county_assessor_pin)
 
         if parcel is None:
             return {
@@ -60,7 +99,9 @@ class PropertyMatchReviewService:
                 'entered_address': entered,
                 'recommended_address': None,
                 'pin': None,
-                'connector': connector.connector_name,
+                'connector': connector_name,
+                'address_complete': address_complete,
+                'reason': 'no_match',
                 'message': 'No assessor match found',
             }
 
@@ -70,9 +111,22 @@ class PropertyMatchReviewService:
 
         recommended = {
             'property_street': (addr_row or {}).get('property_street') or lead.property_street,
-            'property_city': (addr_row or {}).get('property_city') or lead.property_city,
-            'property_state': (addr_row or {}).get('property_state') or lead.property_state or 'IL',
-            'property_zip': (addr_row or {}).get('property_zip') or lead.property_zip,
+            'property_city': (
+                (addr_row or {}).get('property_city')
+                or getattr(parcel, 'property_city', None)
+                or lead.property_city
+            ),
+            'property_state': (
+                (addr_row or {}).get('property_state')
+                or getattr(parcel, 'property_state', None)
+                or lead.property_state
+                or 'IL'
+            ),
+            'property_zip': (
+                (addr_row or {}).get('property_zip')
+                or getattr(parcel, 'property_zip', None)
+                or lead.property_zip
+            ),
             'property_type': parcel.property_type,
             'county_assessor_pin': parcel.county_assessor_pin,
         }
@@ -82,7 +136,9 @@ class PropertyMatchReviewService:
             'entered_address': entered,
             'recommended_address': recommended,
             'pin': parcel.county_assessor_pin,
-            'connector': connector.connector_name,
+            'connector': connector_name,
+            'address_complete': address_complete,
+            'reason': None,
             'parcel_fields': {
                 'property_type': parcel.property_type,
                 'year_built': parcel.year_built,
@@ -104,9 +160,29 @@ class PropertyMatchReviewService:
         if lead is None:
             raise ValueError(f'Lead {lead_id} not found')
 
+        from app.services.property_address_service import complete_property_address
+
+        complete_property_address(
+            lead,
+            try_gis=True,
+            actor=actor,
+            commit=False,
+            write_timeline=False,
+        )
         connector = connector_for_lead(lead)
         if connector is None:
-            raise ValueError('No GIS connector available')
+            from app.services.property_address_service import is_property_address_complete
+            reason = (
+                'incomplete_address'
+                if not is_property_address_complete(lead=lead)
+                else 'no_connector'
+            )
+            message = (
+                'Add city, state, and ZIP before looking up a PIN'
+                if reason == 'incomplete_address'
+                else 'No GIS connector for this lead\'s county'
+            )
+            raise ValueError(message)
 
         # Preserve skip-trace handoff when the lead is already in that pipeline
         # (Command Center "Look up PIN" / Apply must not wipe needs_skip_trace).
@@ -155,6 +231,26 @@ class PropertyMatchReviewService:
 
             if not preserve_skip_trace:
                 lead.needs_skip_trace = False
+
+            # Backfill situs from parcel address when approve resolves a PIN.
+            if (
+                hasattr(connector, 'lookup_address_by_pin')
+                and lead.county_assessor_pin
+            ):
+                from app.services.property_address_service import (
+                    apply_parcel_address_to_lead,
+                    complete_property_address,
+                )
+                addr_row = connector.lookup_address_by_pin(lead.county_assessor_pin)
+                apply_parcel_address_to_lead(lead, addr_row, replace_street=True)
+                complete_property_address(
+                    lead,
+                    try_gis=False,
+                    actor=actor,
+                    commit=False,
+                    write_timeline=False,
+                )
+
             db.session.add(lead)
             entry = LeadTimelineEntry(
                 lead_id=lead_id,
@@ -270,6 +366,13 @@ class PropertyMatchReviewService:
         if property_zip is not None:
             lead.property_zip = property_zip
         lead.has_property_match = False
+        from app.services.property_address_service import complete_property_address
+        complete_property_address(
+            lead,
+            try_gis=True,
+            actor=actor,
+            commit=False,
+        )
         db.session.add(lead)
         db.session.commit()
 

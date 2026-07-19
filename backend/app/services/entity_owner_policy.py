@@ -70,6 +70,10 @@ def _owner_display_name(lead: Lead, primary: Optional[Contact]) -> str:
 
 
 def _org_name_is_entity(org: Organization) -> bool:
+    if (org.org_type or "") in {
+        "llc", "corporation", "trust", "property_management", "brokerage",
+    }:
+        return True
     return is_entity_name(org.name or "")
 
 
@@ -124,6 +128,13 @@ def _cold_mail_block_reason_with_context(
         entity_shaped = True
 
     if entity_shaped and not _has_natural_person_primary(primary):
+        # Commercial: allow cold mail to the LLC / registered mailing address.
+        # Residential: research for a person first.
+        category = (
+            getattr(lead, "lead_category", None) or "residential"
+        )
+        if isinstance(category, str) and category.strip().lower() == "commercial":
+            return None
         return "unresolved_entity_owner"
 
     return None
