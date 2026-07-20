@@ -140,6 +140,28 @@ def test_todays_action_excludes_nurture_lead(app):
         assert lead.id not in ids
 
 
+def test_todays_action_excludes_awaiting_skip_trace_even_with_dated_task(app):
+    """awaiting_skip_trace is skip-trace staging — never Today's Action work."""
+    with app.app_context():
+        lead = _make_lead(
+            app,
+            '3a Awaiting Skip Trace Leak St',
+            lead_status='awaiting_skip_trace',
+            recommended_action='add_contact_info',
+            needs_skip_trace=False,
+        )
+        _make_task(
+            app,
+            lead.id,
+            due_date=date.today() - timedelta(days=30),
+            title='manual skip trace',
+        )
+        svc = QueueService()
+        rows, _total = svc.get_todays_action()
+        ids = [r['id'] for r in rows]
+        assert lead.id not in ids
+
+
 def test_todays_action_excludes_follow_up_now_when_queued_for_mail(app):
     """Leads staged in the mail batch leave Today's Action (pending undated follow-up)."""
     from app import db

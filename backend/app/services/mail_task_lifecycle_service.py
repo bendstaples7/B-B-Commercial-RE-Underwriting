@@ -507,27 +507,53 @@ def reconcile_recent_sale_mail_tasks(
     )
     from app.services.skip_trace_enqueue import SkipTraceEnqueue
 
+    skip_trace = SkipTraceEnqueue()
+    promote: dict = {
+        'promoted_lead_ids': [],
+        'promoted_lead_count': 0,
+        'candidate_lead_ids': [],
+    }
     if commit:
-        activation = SkipTraceEnqueue().activate_due_recent_sale_tasks(
+        activation = skip_trace.activate_due_recent_sale_tasks(
             actor=actor,
             commit=True,
             limit=effective_limit,
         )
+        promote_limit = max(
+            effective_limit - activation.get('processed_task_count', 0),
+            0,
+        )
+        promote = skip_trace.promote_awaiting_skip_trace_due_leaks(
+            actor=actor,
+            commit=True,
+            limit=promote_limit,
+        )
     else:
         savepoint = db.session.begin_nested()
         try:
-            activation = SkipTraceEnqueue().activate_due_recent_sale_tasks(
+            activation = skip_trace.activate_due_recent_sale_tasks(
                 actor=actor,
                 commit=False,
                 limit=effective_limit,
             )
             db.session.flush()
+            promote_limit = max(
+                effective_limit - activation.get('processed_task_count', 0),
+                0,
+            )
+            promote = skip_trace.promote_awaiting_skip_trace_due_leaks(
+                actor=actor,
+                commit=False,
+                limit=promote_limit,
+            )
         finally:
             savepoint.rollback()
             db.session.expire_all()
 
     remaining_limit = max(
-        effective_limit - activation.get('processed_task_count', 0),
+        effective_limit
+        - activation.get('processed_task_count', 0)
+        - promote.get('promoted_lead_count', 0),
         0,
     )
     terminal_statuses = [
@@ -616,14 +642,25 @@ def reconcile_recent_sale_mail_tasks(
         refresh_leads_after_mail_task_changes(affected_leads)
 
     all_affected_leads = list(dict.fromkeys(
-        activation.get('activated_lead_ids', []) + affected_leads
+        activation.get('activated_lead_ids', [])
+        + promote.get('promoted_lead_ids', [])
+        + affected_leads
     ))
     return {
         **activation,
+        'promoted_awaiting_skip_trace_leak_ids': promote.get('promoted_lead_ids', []),
+        'promoted_awaiting_skip_trace_leak_count': promote.get(
+            'promoted_lead_count', 0,
+        ),
+        'candidate_awaiting_skip_trace_leak_ids': promote.get(
+            'candidate_lead_ids', [],
+        ),
         'affected_lead_count': len(all_affected_leads),
         'affected_lead_ids': all_affected_leads,
         'processed_lead_ids': list(dict.fromkeys(
-            activation.get('processed_lead_ids', []) + ordered_ids
+            activation.get('processed_lead_ids', [])
+            + promote.get('promoted_lead_ids', [])
+            + ordered_ids
         )),
         'skip_trace_scheduled_count': skip_trace_scheduled_count,
         'rescheduled_task_count': task_count,

@@ -175,6 +175,12 @@ celery.conf.update(
             'schedule': crontab(minute=15),
             'options': {'expires': 3300},
         },
+        # Property situs completeness — hourly fill city/state/ZIP with Redis cursor.
+        'property-address-heal-incomplete': {
+            'task': 'property_address.heal_incomplete',
+            'schedule': crontab(minute=45),
+            'options': {'expires': 3300},
+        },
         # Nightly supporting-data invariants — catalog gaps / enrichment silence.
         'cook-county-enrichment-invariants': {
             'task': 'cook_county.enrichment_invariants',
@@ -668,6 +674,65 @@ def cook_county_backfill_sale_dates_task(self):
             except Exception as release_exc:
                 _logger.warning(
                     "cook_county.backfill_sale_dates: failed to release lock: %s",
+                    release_exc,
+                )
+
+
+@celery.task(bind=True, name='property_address.heal_incomplete')
+def property_address_heal_incomplete_task(self):
+    """Hourly task: fill incomplete property city/state/ZIP with Redis cursor."""
+    import logging
+    _logger = logging.getLogger('celery.property_address.heal_incomplete')
+
+    from app.services.property_address_service import HEAL_INCOMPLETE_LOCK_KEY
+
+    lock_key = HEAL_INCOMPLETE_LOCK_KEY
+    lock_ttl_seconds = 50 * 60
+    lock_token: str | None = None
+
+    try:
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            from app.services.deploy_sync_policy import (
+                _redis_client,
+                try_claim_redis_key,
+            )
+            from app.services.property_address_service import (
+                heal_incomplete_property_addresses,
+            )
+
+            client = _redis_client()
+            if client is not None:
+                lock_token = try_claim_redis_key(
+                    lock_key, ttl_seconds=lock_ttl_seconds,
+                )
+                if not lock_token:
+                    _logger.info(
+                        "property_address.heal_incomplete: skipped (lock held)"
+                    )
+                    return {'skipped': True, 'reason': 'lock_held'}
+
+            summary = heal_incomplete_property_addresses(
+                actor='property_address.heal_incomplete',
+                persist_cursor=True,
+                commit=True,
+            )
+            _logger.info("property_address.heal_incomplete: %s", summary)
+            return summary
+    except Exception as exc:
+        _logger.error("property_address.heal_incomplete failed: %s", exc)
+        raise
+    finally:
+        if lock_token:
+            try:
+                from app.services.deploy_sync_policy import (
+                    release_redis_key_if_token,
+                )
+                release_redis_key_if_token(lock_key, lock_token)
+            except Exception as release_exc:
+                _logger.warning(
+                    "property_address.heal_incomplete: failed to release lock: %s",
                     release_exc,
                 )
 
@@ -1578,6 +1643,7 @@ REQUIRED_TASKS = {
     'cook_county.backfill_enrichment',
     'cook_county.backfill_sale_dates',
     'cook_county.enrichment_invariants',
+    'property_address.heal_incomplete',
     'motivation.backfill_signals',
     'gis.backfill_property_matches',
     'cook_county.prospect_feed_sync',

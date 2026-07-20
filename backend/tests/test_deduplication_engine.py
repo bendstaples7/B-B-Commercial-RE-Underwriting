@@ -441,6 +441,23 @@ class TestProcessRecord:
             assert result.conflict_detail is None
             db.session.rollback()
 
+    def test_create_completes_glued_city_state_zip(self, app):
+        """Street-only create with glued city/state/ZIP runs the completer."""
+        with app.app_context():
+            engine = DeduplicationEngine()
+            result = engine.process_record(
+                record={
+                    "property_street": "1239 N Hoyne Ave Chicago IL 60622",
+                    "source_type": "foreclosure",
+                },
+                import_job_id=1,
+            )
+            assert result.outcome == "created"
+            assert result.lead.property_city == "Chicago"
+            assert result.lead.property_state == "IL"
+            assert result.lead.property_zip == "60622"
+            db.session.rollback()
+
     def test_new_lead_is_persisted_to_db(self, app):
         """A created lead is visible in the DB (after flush)."""
         with app.app_context():

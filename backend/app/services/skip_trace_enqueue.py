@@ -10,7 +10,7 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import and_, or_, text
+from sqlalchemy import and_, exists, or_, text
 
 from app import db
 from app.models.contact import Contact
@@ -250,7 +250,9 @@ class SkipTraceEnqueue:
                 already_done=False,
             )
 
-        completed_task: Optional[LeadTask] = None
+        now = datetime.now(timezone.utc)
+        today = date.today()
+        tasks_to_complete: list[LeadTask] = []
         if complete_task_id is not None:
             candidate = (
                 LeadTask.query
@@ -263,9 +265,10 @@ class SkipTraceEnqueue:
                 candidate is not None
                 and not self._is_undated_skip_trace_handoff(candidate)
             ):
-                completed_task = candidate
-
-        if completed_task is None and complete_task_id is None:
+                tasks_to_complete = [candidate]
+        else:
+            # Clear every dated-due non-handoff chore so multi-task leaks cannot
+            # re-enter Today's Action after status becomes skip_trace.
             open_tasks = (
                 LeadTask.query
                 .filter(
@@ -278,18 +281,20 @@ class SkipTraceEnqueue:
                 )
                 .all()
             )
-            completed_task = next(
-                (
-                    task for task in open_tasks
-                    if not self._is_undated_skip_trace_handoff(task)
-                ),
-                None,
-            )
+            for task in open_tasks:
+                if self._is_undated_skip_trace_handoff(task):
+                    continue
+                if task.workflow_key == "recent_sale_hold":
+                    continue
+                if task.due_date is None or task.due_date > today:
+                    continue
+                tasks_to_complete.append(task)
 
-        now = datetime.now(timezone.utc)
         completed_task_id_out: Optional[int] = None
-        pending_hubspot_id: Optional[str] = None
-        if completed_task is not None and completed_task.status == "open":
+        pending_hubspot_ids: set[str] = set()
+        for completed_task in tasks_to_complete:
+            if completed_task.status != "open":
+                continue
             completed_task_id_out = completed_task.id
             if completed_task.hubspot_task_id:
                 from app.services.hubspot_task_completion_service import (
@@ -303,7 +308,7 @@ class SkipTraceEnqueue:
                     reason="moved_to_skip_trace",
                 )
                 if local_completion is not None:
-                    pending_hubspot_id = local_completion.hubspot_task_id
+                    pending_hubspot_ids.add(local_completion.hubspot_task_id)
                 else:
                     self._complete_task_and_log(completed_task, now, actor)
             else:
@@ -382,11 +387,11 @@ class SkipTraceEnqueue:
 
         db.session.commit()
 
-        if pending_hubspot_id:
+        if pending_hubspot_ids:
             from app.services.hubspot_task_completion_service import (
                 sync_pending_hubspot_completions,
             )
-            sync_pending_hubspot_completions([pending_hubspot_id])
+            sync_pending_hubspot_completions(sorted(pending_hubspot_ids))
         if handoff_clear_ids:
             from app.services.hubspot_task_completion_service import (
                 sync_hubspot_task_properties,
@@ -801,6 +806,96 @@ class SkipTraceEnqueue:
                 len(hold_tasks) + len(healed_task_ids) + len(stale_healed_lead_ids)
             ),
             "processed_lead_ids": processed_lead_ids,
+        }
+
+    def list_awaiting_skip_trace_due_leak_ids(
+        self,
+        *,
+        today: date | None = None,
+        limit: int | None = None,
+        exclude_lead_ids: set[int] | None = None,
+    ) -> list[int]:
+        """Lead IDs in awaiting_skip_trace with a dated open task due today/earlier.
+
+        These leak into Today's Action via custom chores (e.g. \"manual skip
+        trace\") instead of the undated skip-trace handoff.
+        """
+        today = today or date.today()
+        due_open = exists().where(
+            and_(
+                LeadTask.lead_id == Lead.id,
+                LeadTask.status == "open",
+                LeadTask.due_date.isnot(None),
+                LeadTask.due_date <= today,
+            )
+        )
+        query = (
+            Lead.query
+            .filter(
+                Lead.lead_status == "awaiting_skip_trace",
+                due_open,
+            )
+            .with_entities(Lead.id)
+            .order_by(Lead.id.asc())
+        )
+        if exclude_lead_ids:
+            query = query.filter(~Lead.id.in_(exclude_lead_ids))
+        if limit is not None:
+            query = query.limit(max(limit, 0))
+        return [row[0] for row in query.all()]
+
+    def promote_awaiting_skip_trace_due_leaks(
+        self,
+        *,
+        actor: str = "awaiting_skip_trace_due_leak_promote",
+        commit: bool = True,
+        limit: int | None = None,
+        exclude_lead_ids: set[int] | None = None,
+    ) -> dict:
+        """Auto-move awaiting + dated-due leaks into active Skip Trace.
+
+        Uses :meth:`move_to_skip_trace` so dated-due chores are completed, status
+        becomes ``skip_trace``, and an undated ``Awaiting skip trace`` handoff
+        is ensured. When ``commit`` is False, returns candidate IDs only.
+        """
+        candidate_ids = self.list_awaiting_skip_trace_due_leak_ids(
+            limit=limit,
+            exclude_lead_ids=exclude_lead_ids,
+        )
+        if not commit:
+            return {
+                "promoted_lead_count": 0,
+                "promoted_lead_ids": [],
+                "failed_lead_ids": [],
+                "candidate_lead_ids": candidate_ids,
+                "candidate_lead_count": len(candidate_ids),
+            }
+
+        promoted_ids: list[int] = []
+        failed_ids: list[int] = []
+        for lead_id in candidate_ids:
+            lead = Lead.query.filter_by(id=lead_id).first()
+            if lead is None or lead.lead_status != "awaiting_skip_trace":
+                continue
+            try:
+                result = self.move_to_skip_trace(lead_id, actor=actor)
+            except Exception as exc:
+                logger.warning(
+                    "promote awaiting skip-trace leak failed lead_id=%s: %s",
+                    lead_id,
+                    exc,
+                )
+                failed_ids.append(lead_id)
+                continue
+            if result.get("lead_status") == "skip_trace":
+                promoted_ids.append(lead_id)
+
+        return {
+            "promoted_lead_count": len(promoted_ids),
+            "promoted_lead_ids": promoted_ids,
+            "failed_lead_ids": failed_ids,
+            "candidate_lead_ids": candidate_ids,
+            "candidate_lead_count": len(candidate_ids),
         }
 
     def _sync_status_for_future_recent_sale_holds(

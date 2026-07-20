@@ -288,6 +288,41 @@ class HubSpotMatcherService:
         lead.last_hubspot_sync_at = datetime.utcnow()
         if 'last_hubspot_sync_at' not in updated_fields:
             updated_fields.append('last_hubspot_sync_at')
+
+        # Street fill-if-blank can leave city/state/ZIP empty — complete situs.
+        # Only run (and only GIS) when this enrich touched address fields.
+        address_fields_touched = any(
+            field in updated_fields
+            for field in (
+                'property_street',
+                'property_city',
+                'property_state',
+                'property_zip',
+            )
+        )
+        if address_fields_touched:
+            try:
+                from app.services.property_address_service import (
+                    ensure_lead_property_address_complete,
+                )
+                addr_result = ensure_lead_property_address_complete(
+                    lead,
+                    actor='hubspot_enrich_lead_from_deal',
+                    try_gis=('property_street' in updated_fields),
+                    commit=False,
+                )
+                if addr_result:
+                    for field in addr_result.get('changed_fields') or []:
+                        if field not in updated_fields:
+                            updated_fields.append(field)
+            except Exception as addr_exc:
+                logger.warning(
+                    "enrich_lead_from_deal: property address completion failed "
+                    "lead_id=%s: %s",
+                    getattr(lead, 'id', '?'),
+                    addr_exc,
+                )
+
         db.session.add(lead)
 
         return updated_fields

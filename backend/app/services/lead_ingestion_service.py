@@ -335,6 +335,26 @@ class LeadIngestionService:
             )
             outcome['error'] = str(exc)
 
+        # Always try canonical situs completion after GIS (or failed GIS).
+        try:
+            from app.services.property_address_service import (
+                ensure_lead_property_address_complete,
+            )
+            # GIS already attempted above — parse-only completion avoids a
+            # second Cook County street lookup for the same address.
+            ensure_lead_property_address_complete(
+                lead,
+                actor='lead_ingestion_gis',
+                try_gis=False,
+                commit=False,
+            )
+        except Exception as addr_exc:
+            logger.warning(
+                "Property address completion after GIS failed for lead_id=%s: %s",
+                getattr(lead, 'id', '?'),
+                addr_exc,
+            )
+
         return outcome
 
     # ------------------------------------------------------------------ #

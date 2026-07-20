@@ -10,6 +10,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
+from sqlalchemy import and_, or_
+
 from app import db
 from app.models import Lead, LeadTimelineEntry
 from app.services.address_parse_service import (
@@ -21,6 +23,10 @@ from app.services.gis.routing import parse_city_state_zip_from_address
 logger = logging.getLogger(__name__)
 
 INCOMPLETE_ADDRESS_REASON = 'incomplete_property_address'
+
+HEAL_INCOMPLETE_BATCH_SIZE = 200
+HEAL_INCOMPLETE_CURSOR_KEY = 'property_address:heal_incomplete:last_id'
+HEAL_INCOMPLETE_LOCK_KEY = 'property_address:heal_incomplete_lock'
 
 _ZIP_RE = re.compile(r'^\d{5}(?:-\d{4})?$')
 
@@ -293,6 +299,219 @@ def apply_parcel_address_to_lead(
         lead.property_street = street
         changed.append('property_street')
     return changed
+
+
+def ensure_lead_property_address_complete(
+    lead: Lead,
+    *,
+    actor: str,
+    try_gis: bool = True,
+    commit: bool = False,
+    write_timeline: bool = True,
+    set_review_flag: bool = True,
+) -> dict[str, Any] | None:
+    """Run the completer when *lead* has a street but is still incomplete.
+
+    Returns ``None`` when there is nothing to do (no street or already complete).
+    """
+    if not _clean(getattr(lead, 'property_street', None)):
+        return None
+    if is_property_address_complete(lead=lead):
+        return None
+    return complete_property_address(
+        lead,
+        try_gis=try_gis,
+        actor=actor,
+        commit=commit,
+        write_timeline=write_timeline,
+        set_review_flag=set_review_flag,
+    )
+
+
+def _incomplete_property_address_clause():
+    """SQL filter: non-empty street with missing city, state, or ZIP."""
+    return and_(
+        Lead.property_street.isnot(None),
+        Lead.property_street != '',
+        or_(
+            Lead.property_city.is_(None),
+            Lead.property_city == '',
+            Lead.property_state.is_(None),
+            Lead.property_state == '',
+            Lead.property_zip.is_(None),
+            Lead.property_zip == '',
+        ),
+    )
+
+
+def _heal_incomplete_cursor() -> int:
+    from app.services.deploy_sync_policy import get_redis_value
+
+    raw = get_redis_value(HEAL_INCOMPLETE_CURSOR_KEY)
+    if raw is None:
+        return 0
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _set_heal_incomplete_cursor(last_id: int) -> None:
+    from app.services.deploy_sync_policy import set_redis_value
+
+    set_redis_value(HEAL_INCOMPLETE_CURSOR_KEY, str(max(0, int(last_id))))
+
+
+def heal_incomplete_property_addresses(
+    *,
+    last_id: int | None = None,
+    limit: int = HEAL_INCOMPLETE_BATCH_SIZE,
+    try_gis: bool = True,
+    actor: str = 'property_address_heal',
+    persist_cursor: bool = True,
+    commit: bool = True,
+    lead_id: int | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Batch-complete incomplete situs addresses; advance Redis cursor.
+
+    When ``dry_run`` is True, runs the pure field completer only (no DB writes).
+    GIS is still contacted when ``try_gis`` is True — pass ``try_gis=False`` for
+    offline previews. When ``lead_id`` is set, processes that lead only and does
+    not touch the cursor.
+    """
+    batch_limit = max(int(limit), 0)
+    cursor = 0 if lead_id is not None else (
+        _heal_incomplete_cursor() if last_id is None else max(0, int(last_id))
+    )
+    summary: dict[str, Any] = {
+        'status': 'completed',
+        'processed': 0,
+        'completed': 0,
+        'still_incomplete': 0,
+        'errors': 0,
+        'last_id': cursor,
+        'wrapped': False,
+        'dry_run': bool(dry_run),
+        'lead_ids': [],
+        'previews': [],
+    }
+    if batch_limit == 0 and lead_id is None:
+        return summary
+
+    if lead_id is not None:
+        leads = (
+            Lead.query
+            .filter(_incomplete_property_address_clause(), Lead.id == lead_id)
+            .limit(1)
+            .all()
+        )
+    else:
+        leads = (
+            Lead.query
+            .filter(_incomplete_property_address_clause(), Lead.id > cursor)
+            .order_by(Lead.id.asc())
+            .limit(batch_limit)
+            .all()
+        )
+        if not leads and cursor > 0:
+            cursor = 0
+            summary['wrapped'] = True
+            leads = (
+                Lead.query
+                .filter(_incomplete_property_address_clause(), Lead.id > cursor)
+                .order_by(Lead.id.asc())
+                .limit(batch_limit)
+                .all()
+            )
+
+    completed_ids: list[int] = []
+    # Advance past attempted leads only; hard errors leave the cursor so Beat
+    # retries them on the next pass instead of burning the backlog once.
+    advanced_cursor = cursor
+    for lead in leads:
+        summary['processed'] += 1
+        summary['lead_ids'].append(lead.id)
+        try:
+            if dry_run:
+                result = complete_property_address_fields(
+                    lead.property_street,
+                    lead.property_city,
+                    lead.property_state,
+                    lead.property_zip,
+                    try_gis=try_gis,
+                )
+                summary['previews'].append({
+                    'lead_id': lead.id,
+                    'before': {
+                        'property_street': lead.property_street,
+                        'property_city': lead.property_city,
+                        'property_state': lead.property_state,
+                        'property_zip': lead.property_zip,
+                    },
+                    'after': {
+                        'property_street': result.get('property_street'),
+                        'property_city': result.get('property_city'),
+                        'property_state': result.get('property_state'),
+                        'property_zip': result.get('property_zip'),
+                    },
+                    'complete': bool(result.get('complete')),
+                    'sources': result.get('sources') or {},
+                })
+                if result.get('complete'):
+                    summary['completed'] += 1
+                else:
+                    summary['still_incomplete'] += 1
+                if lead_id is None:
+                    advanced_cursor = lead.id
+                continue
+
+            with db.session.begin_nested():
+                result = complete_property_address(
+                    lead,
+                    try_gis=try_gis,
+                    actor=actor,
+                    commit=False,
+                )
+            if result.get('complete'):
+                summary['completed'] += 1
+                completed_ids.append(lead.id)
+            else:
+                summary['still_incomplete'] += 1
+            if lead_id is None:
+                advanced_cursor = lead.id
+        except Exception as exc:
+            summary['errors'] += 1
+            logger.warning(
+                'property address heal failed for lead %s: %s',
+                lead.id,
+                exc,
+            )
+
+    if commit and not dry_run and leads:
+        db.session.commit()
+        for completed_lead_id in completed_ids:
+            try:
+                from app.services.lead_refresh import refresh_lead_scoring
+                refresh_lead_scoring(completed_lead_id)
+            except Exception as exc:
+                logger.warning(
+                    'property address heal rescore failed lead=%s: %s',
+                    completed_lead_id,
+                    exc,
+                )
+
+    if lead_id is None:
+        if not leads:
+            advanced_cursor = 0
+            summary['wrapped'] = True
+        summary['last_id'] = advanced_cursor
+        if persist_cursor:
+            _set_heal_incomplete_cursor(advanced_cursor)
+    else:
+        summary['last_id'] = lead_id or 0
+
+    return summary
 
 
 def _zip5(value: Any) -> str | None:

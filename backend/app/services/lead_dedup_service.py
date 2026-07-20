@@ -231,6 +231,7 @@ def _prefer_cleaner_property_street(winner: Lead, loser: Lead) -> None:
     if w_has_zip and not l_has_zip:
         winner.property_street = l_street
         refresh_lead_dedup_fields(winner)
+        # Address completion runs once at merge level — avoid double GIS here.
 
 
 def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedup_sentinel') -> None:
@@ -273,6 +274,21 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
 
     _prefer_newer_sale_onto_winner(winner, loser)
     _prefer_cleaner_property_street(winner, loser)
+    try:
+        from app.services.property_address_service import (
+            ensure_lead_property_address_complete,
+        )
+        ensure_lead_property_address_complete(
+            winner,
+            actor='lead_dedup_merge',
+            commit=False,
+        )
+    except Exception as exc:
+        logger.warning(
+            'property address completion after merge failed winner_id=%s: %s',
+            winner_id,
+            exc,
+        )
 
     db.session.add(LeadAuditTrail(
         lead_id=winner_id,

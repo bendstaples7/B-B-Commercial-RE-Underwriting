@@ -29,110 +29,82 @@ def main() -> int:
     parser.add_argument('--limit', type=int, default=500)
     args = parser.parse_args()
 
-    from app import create_app, db
-    from app.models import Lead
-    from app.services.property_address_service import (
-        complete_property_address,
-        is_property_address_complete,
-    )
-    from sqlalchemy import or_
+    from app import create_app
+    from app.services.property_address_service import heal_incomplete_property_addresses
 
     app = create_app()
     with app.app_context():
-        query = Lead.query.filter(
-            Lead.property_street.isnot(None),
-            Lead.property_street != '',
-            or_(
-                Lead.property_city.is_(None),
-                Lead.property_city == '',
-                Lead.property_state.is_(None),
-                Lead.property_state == '',
-                Lead.property_zip.is_(None),
-                Lead.property_zip == '',
-            ),
-        ).order_by(Lead.id.asc())
-        if args.lead_id is not None:
-            query = query.filter(Lead.id == args.lead_id)
-        leads = query.limit(args.limit).all()
-
-        print('candidates=%s mode=%s' % (
-            len(leads),
-            'apply' if args.apply else 'dry-run',
-        ))
-        completed = 0
-        still_incomplete = 0
-        for lead in leads:
-            before = (
-                lead.property_street,
-                lead.property_city,
-                lead.property_state,
-                lead.property_zip,
+        # Always start from id 0 so admin batches ignore the Beat Redis cursor.
+        result = heal_incomplete_property_addresses(
+            last_id=0 if args.lead_id is None else None,
+            limit=args.limit,
+            lead_id=args.lead_id,
+            dry_run=bool(args.dry_run),
+            commit=bool(args.apply),
+            persist_cursor=False,
+            # Dry-run is offline by default; apply may call Cook County GIS.
+            try_gis=bool(args.apply),
+            actor='heal_incomplete_property_addresses',
+        )
+        print(
+            'mode=%s processed=%s completed=%s still_incomplete=%s errors=%s'
+            % (
+                'apply' if args.apply else 'dry-run',
+                result.get('processed'),
+                result.get('completed'),
+                result.get('still_incomplete'),
+                result.get('errors'),
             )
-            if args.dry_run:
-                from app.services.property_address_service import (
-                    complete_property_address_fields,
-                )
-                result = complete_property_address_fields(
-                    lead.property_street,
-                    lead.property_city,
-                    lead.property_state,
-                    lead.property_zip,
-                    try_gis=True,
-                )
+        )
+        if args.dry_run:
+            for preview in result.get('previews') or []:
+                before = preview.get('before') or {}
+                after = preview.get('after') or {}
                 print(
-                    'lead=%s before=%r after=%r complete=%s sources=%s'
+                    '  lead=%s complete=%s sources=%s'
                     % (
-                        lead.id,
-                        before,
-                        (
-                            result.get('property_street'),
-                            result.get('property_city'),
-                            result.get('property_state'),
-                            result.get('property_zip'),
-                        ),
-                        result.get('complete'),
-                        result.get('sources'),
+                        preview.get('lead_id'),
+                        preview.get('complete'),
+                        preview.get('sources'),
                     )
                 )
-                if result.get('complete'):
-                    completed += 1
-                else:
-                    still_incomplete += 1
-                continue
-
-            result = complete_property_address(
-                lead,
-                try_gis=True,
-                actor='heal_incomplete_property_addresses',
-                commit=False,
-            )
-            print(
-                'lead=%s changed=%s complete=%s city=%r zip=%r'
-                % (
-                    lead.id,
-                    result.get('changed_fields'),
-                    result.get('complete'),
-                    lead.property_city,
-                    lead.property_zip,
+                print(
+                    '    before street=%r city=%r state=%r zip=%r'
+                    % (
+                        before.get('property_street'),
+                        before.get('property_city'),
+                        before.get('property_state'),
+                        before.get('property_zip'),
+                    )
                 )
-            )
-            if result.get('complete'):
-                completed += 1
-            else:
-                still_incomplete += 1
+                print(
+                    '    after  street=%r city=%r state=%r zip=%r'
+                    % (
+                        after.get('property_street'),
+                        after.get('property_city'),
+                        after.get('property_state'),
+                        after.get('property_zip'),
+                    )
+                )
+        else:
+            from app import db
+            from app.models import Lead
 
-        if args.apply:
-            db.session.commit()
-            for lead in leads:
-                if is_property_address_complete(lead=lead):
-                    try:
-                        from app.services.lead_refresh import refresh_lead_scoring
-                        refresh_lead_scoring(lead.id)
-                    except Exception as exc:
-                        print('rescore failed lead=%s: %s' % (lead.id, exc))
-
-        print('done completed=%s still_incomplete=%s' % (completed, still_incomplete))
-    return 0
+            for lead_id in result.get('lead_ids') or []:
+                lead = db.session.get(Lead, lead_id)
+                if lead is None:
+                    continue
+                print(
+                    '  lead=%s street=%r city=%r state=%r zip=%r'
+                    % (
+                        lead.id,
+                        lead.property_street,
+                        lead.property_city,
+                        lead.property_state,
+                        lead.property_zip,
+                    )
+                )
+        return 0
 
 
 if __name__ == '__main__':
