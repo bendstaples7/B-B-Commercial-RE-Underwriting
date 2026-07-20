@@ -566,6 +566,7 @@ export function LeadTimeline({
   const [showAllLoaded, setShowAllLoaded] = useState(false)
   const leadIdRef = useRef(leadId)
   const previousLeadIdRef = useRef(leadId)
+  const requestSeqRef = useRef(0)
   leadIdRef.current = leadId
 
   // Fail-closed at the prop boundary (standalone use + defense when parent
@@ -593,6 +594,7 @@ export function LeadTimeline({
   // Only collapse the expanded timeline when navigating to a different lead —
   // not when the same lead's entries refresh after an activity log.
   useEffect(() => {
+    requestSeqRef.current += 1
     setShowAllLoaded(false)
     setPage(1)
     setLoading(false)
@@ -611,11 +613,14 @@ export function LeadTimeline({
     setLoading(true)
     setError(null)
     const requestedLeadId = leadId
+    const requestSeq = ++requestSeqRef.current
+    const isActiveRequest = () =>
+      requestSeq === requestSeqRef.current && requestedLeadId === leadIdRef.current
     try {
       const nextPage = page + 1
       const result = await onLoadMore(nextPage)
       // Drop late responses after queue advance to another lead.
-      if (requestedLeadId !== leadIdRef.current) return
+      if (!isActiveRequest()) return
       const scoped = scopeRowsToLeadWithTotal(
         result.entries,
         requestedLeadId,
@@ -632,10 +637,10 @@ export function LeadTimeline({
       setPage(nextPage)
       setShowAllLoaded(true)
     } catch (err) {
-      if (requestedLeadId !== leadIdRef.current) return
+      if (!isActiveRequest()) return
       setError(err instanceof Error ? err.message : 'Failed to load more entries.')
     } finally {
-      if (requestedLeadId === leadIdRef.current) {
+      if (isActiveRequest()) {
         setLoading(false)
       }
     }
