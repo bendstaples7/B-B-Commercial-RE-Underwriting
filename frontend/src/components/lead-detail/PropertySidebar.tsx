@@ -940,7 +940,7 @@ export function PropertySidebar({
             {commandCenterData.deal_description || '—'}
           </Typography>
         </SidebarLabeledContent>
-        {data.address_2 && <SidebarRow label="Address 2" value={data.address_2} />}
+        {data.address_2 && <SidebarRow label="Additional Address" value={data.address_2} />}
       </SidebarSection>
 
       {(commandCenterData.related_properties?.length ?? 0) > 0 && (

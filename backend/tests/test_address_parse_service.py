@@ -21,6 +21,10 @@ class TestParseEmbeddedUsAddress:
         result = parse_embedded_us_address('1137 W LELAND AVE, CHICAGO, IL 60640')
         assert result == ('1137 W LELAND AVE', 'CHICAGO', 'IL', '60640')
 
+    def test_two_part_comma_separated(self):
+        result = parse_embedded_us_address('2041 W Cuyler Ave, Chicago IL 60618')
+        assert result == ('2041 W Cuyler Ave', 'Chicago', 'IL', '60618')
+
     def test_property_street_from_investigation(self):
         result = parse_embedded_us_address('847-849 W Sunnyside Ave Chicago IL 60640')
         assert result == ('847-849 W Sunnyside Ave', 'Chicago', 'IL', '60640')

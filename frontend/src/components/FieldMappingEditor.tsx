@@ -59,7 +59,7 @@ export const DATABASE_FIELDS: { value: string; label: string; required: boolean 
   { value: 'email_5', label: 'Email 5', required: false },
   { value: 'socials', label: 'Socials', required: false },
   // Additional address & mailing
-  { value: 'address_2', label: 'Address 2', required: false },
+  { value: 'address_2', label: 'Additional Address', required: false },
   { value: 'returned_addresses', label: 'Returned Addresses', required: false },
   { value: 'up_next_to_mail', label: 'Up Next to Mail', required: false },
   { value: 'mailer_history', label: 'Mailer History', required: false },

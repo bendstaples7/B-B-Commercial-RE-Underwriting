@@ -193,7 +193,7 @@ const COLUMN_DEFS: ColDef<LeadRow>[] = [
   { field: 'mailing_city', headerName: 'Mailing City', width: 130 },
   { field: 'mailing_state', headerName: 'Mailing State', width: 90 },
   { field: 'mailing_zip', headerName: 'Mailing Zip', width: 90 },
-  { field: 'address_2', headerName: 'Address 2', width: 150 },
+  { field: 'address_2', headerName: 'Additional Address', width: 200 },
   { field: 'returned_addresses', headerName: 'Returned Addresses', width: 160 },
   { field: 'source', headerName: 'Source', width: 110 },
   { field: 'date_identified', headerName: 'Date Identified', width: 120 },

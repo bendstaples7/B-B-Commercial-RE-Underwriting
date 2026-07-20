@@ -44,7 +44,7 @@ import { multifamilyService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
 import { primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import { parseLogActivityParam, buildLeadUrl } from '@/utils/queueLogNavigation'
-import { isFromQueueState, fromQueueFromKey, queuePath, type FromQueueState } from '@/utils/fromQueue'
+import { isFromQueueState, fromQueueFromKey, queuePath, SKIP_TRACE_AUTO_ADVANCE_QUEUE_KEYS, type FromQueueState } from '@/utils/fromQueue'
 import { scopeRowsToLead, scopeRowsToLeadWithTotal } from '@/utils/leadScopedRows'
 import {
   LEAD_WORKSPACE_STALE_MS,
@@ -1177,6 +1177,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             lead_score: result.lead_score,
             recommended_action: result.recommended_action,
           })
+          // Status change alone stays put; Move to Skip Trace completes current
+          // work and drops the lead from due-work queues — advance like task done.
+          if (fromQueue && SKIP_TRACE_AUTO_ADVANCE_QUEUE_KEYS.has(fromQueue.key)) {
+            await advanceAfterTaskComplete()
+          }
         }
         return
       }
@@ -1235,6 +1240,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     openTasks,
     fromQueue,
     handleStatusChanged,
+    advanceAfterTaskComplete,
   ])
 
   const handleCreateTask = useCallback(() => {

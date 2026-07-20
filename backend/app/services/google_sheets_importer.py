@@ -219,7 +219,7 @@ FIELD_SYNONYMS: dict[str, list[str]] = {
     "most_recent_sale": ["most recent sale", "most_recent_sale", "last sale", "recent sale", "sale date"],
     "owner_2_first_name": ["owner 2 first name", "owner_2_first_name", "second owner first", "owner2 first"],
     "owner_2_last_name": ["owner 2 last name", "owner_2_last_name", "second owner last", "owner2 last"],
-    "address_2": ["address 2", "address_2", "secondary address", "unit number", "apt"],
+    "address_2": ["address 2", "address_2", "additional address", "secondary address", "unit number", "apt"],
     "returned_addresses": ["returned addresses", "returned_addresses", "bounced", "returned mail", "bad address"],
     "phone_4": ["phone 4", "phone_4", "phone4"],
     "phone_5": ["phone 5", "phone_5", "phone5"],
