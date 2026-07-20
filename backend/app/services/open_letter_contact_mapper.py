@@ -291,11 +291,22 @@ def lead_to_olc_contact(lead: Lead, *, user_id: str | None = None) -> dict[str, 
     if user_id:
         meta['platform_user_id'] = user_id
 
+    # address_2 is often a unit/suite line, but HubSpot additional_addresses may
+    # land here as a full alternate street — never print those as OLC address2.
+    raw_address2 = _clean(getattr(lead, 'address_2', None))
+    address2 = None
+    if raw_address2:
+        lines = [p.strip() for p in re.split(r'[\n;]+', raw_address2) if p.strip()]
+        # Omit when any line is a full US address (alternate mailing), or when
+        # multi-line (ambiguous mix of unit + street).
+        if len(lines) == 1 and not parse_embedded_us_address(lines[0]):
+            address2 = lines[0]
+
     return {
         'firstName': _clean(getattr(lead, 'owner_first_name', None)),
         'lastName': _clean(getattr(lead, 'owner_last_name', None)),
         'address1': address1,
-        'address2': _clean(getattr(lead, 'address_2', None)) or None,
+        'address2': address2,
         'city': city,
         'state': state,
         'zip': zip_code,

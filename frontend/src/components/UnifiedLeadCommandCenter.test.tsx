@@ -997,6 +997,149 @@ describe('UnifiedLeadCommandCenter — queue advance', () => {
       expect.anything(),
     )
   })
+
+  it('advances to the next Today\'s Action lead after Move to Skip Trace', async () => {
+    const api = await import('@/services/api')
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+
+    vi.mocked(api.commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        lead_status: 'mailing_no_contact_made',
+        recommended_action: {
+          value: 'nurture',
+          label: 'Nurture',
+          explanation: null,
+          signals: {},
+        },
+        open_tasks: [{
+          id: 17,
+          lead_id: 1,
+          task_type: 'custom',
+          title: 'Call owner for mailing address',
+          status: 'open',
+          due_date: '2026-07-20',
+          created_at: '2023-01-01T00:00:00Z',
+          completed_at: null,
+          created_by: 'user',
+          source: 'native',
+        }],
+      }),
+    )
+    vi.mocked(api.commandCenterService.moveToSkipTrace).mockResolvedValue({
+      lead_id: 1,
+      lead_status: 'skip_trace',
+      completed_task_id: 17,
+      skip_trace_task_id: 18,
+      changed: true,
+      already_done: false,
+      reason_code: null,
+      lead_score: 70,
+      recommended_action: null,
+    })
+    vi.mocked(api.queueService.getNavigation).mockResolvedValue({
+      queue_key: 'todays-action',
+      lead_id: 1,
+      position: null,
+      total: 4,
+      prev_id: null,
+      next_id: 4405,
+    })
+
+    const fromQueue = { key: 'todays-action', label: "Today's Action" }
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: '/leads/1',
+            search: '?queue=todays-action',
+            state: { fromQueue },
+          },
+        ]}
+      >
+        <UnifiedLeadCommandCenter leadId={1} />
+      </MemoryRouter>,
+    )
+
+    await user.click(
+      await screen.findByTestId('ra-universal-btn-move_to_skip_trace'),
+    )
+
+    await waitFor(() => {
+      expect(api.commandCenterService.moveToSkipTrace).toHaveBeenCalledWith(1, 17)
+    })
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith(
+        '/leads/4405?queue=todays-action',
+        { state: { fromQueue } },
+      )
+    })
+  })
+
+  it('does not advance after Move to Skip Trace when already in the pipeline', async () => {
+    const api = await import('@/services/api')
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+
+    vi.mocked(api.commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        lead_status: 'mailing_no_contact_made',
+        recommended_action: {
+          value: 'nurture',
+          label: 'Nurture',
+          explanation: null,
+          signals: {},
+        },
+        open_tasks: [],
+      }),
+    )
+    vi.mocked(api.commandCenterService.moveToSkipTrace).mockResolvedValue({
+      lead_id: 1,
+      lead_status: 'awaiting_skip_trace',
+      completed_task_id: null,
+      skip_trace_task_id: 42,
+      changed: false,
+      already_done: true,
+      reason_code: 'already_awaiting_skip_trace',
+    })
+    vi.mocked(api.queueService.getNavigation).mockResolvedValue({
+      queue_key: 'todays-action',
+      lead_id: 1,
+      position: 1,
+      total: 5,
+      prev_id: null,
+      next_id: 99,
+    })
+
+    const fromQueue = { key: 'todays-action', label: "Today's Action" }
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: '/leads/1',
+            search: '?queue=todays-action',
+            state: { fromQueue },
+          },
+        ]}
+      >
+        <UnifiedLeadCommandCenter leadId={1} />
+      </MemoryRouter>,
+    )
+
+    mockNavigate.mockClear()
+    await user.click(
+      await screen.findByTestId('ra-universal-btn-move_to_skip_trace'),
+    )
+
+    expect(
+      await screen.findByText('Already awaiting skip trace'),
+    ).toBeInTheDocument()
+    await waitFor(() => {
+      expect(api.commandCenterService.moveToSkipTrace).toHaveBeenCalled()
+    })
+    expect(mockNavigate).not.toHaveBeenCalledWith(
+      expect.stringContaining('/leads/99'),
+      expect.anything(),
+    )
+  })
 })
 
 describe('UnifiedLeadCommandCenter — mail stage toast + continue banner', () => {

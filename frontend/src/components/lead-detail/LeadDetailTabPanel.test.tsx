@@ -130,6 +130,15 @@ describe('LeadDetailTabPanel prior-owner Info', () => {
     expect(screen.getByTestId('info-owner-contact')).toHaveTextContent('200 Alt Ave, Chicago IL')
   })
 
+  it('shows Additional Address from address_2 on Info', () => {
+    renderInfo({}, { address_2: '2041 W Cuyler Ave Chicago IL 60618' })
+
+    expect(screen.getByTestId('info-owner-contact')).toHaveTextContent('Additional Address')
+    expect(screen.getByTestId('info-owner-contact')).toHaveTextContent(
+      '2041 W Cuyler Ave Chicago IL 60618',
+    )
+  })
+
   it('omits Other Addresses when returned_addresses is blank', () => {
     renderInfo({}, { returned_addresses: '   ' })
 

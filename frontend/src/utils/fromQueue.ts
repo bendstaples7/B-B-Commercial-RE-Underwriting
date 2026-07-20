@@ -20,6 +20,17 @@ export const WORK_QUEUE_META: Record<string, { label: string }> = {
   'mail-candidates': { label: 'Ready to Mail' },
 }
 
+/**
+ * Queues where Move to Skip Trace removes the lead from due/work membership
+ * and should auto-advance like task completion.
+ */
+export const SKIP_TRACE_AUTO_ADVANCE_QUEUE_KEYS = new Set([
+  'todays-action',
+  'follow-up-overdue',
+  'previously-warm',
+  'no-next-action',
+])
+
 export function isFromQueueState(value: unknown): value is FromQueueState {
   if (!value || typeof value !== 'object') return false
   const v = value as Record<string, unknown>
