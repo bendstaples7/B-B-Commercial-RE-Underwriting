@@ -297,10 +297,10 @@ def lead_to_olc_contact(lead: Lead, *, user_id: str | None = None) -> dict[str, 
     address2 = None
     if raw_address2:
         lines = [p.strip() for p in re.split(r'[\n;]+', raw_address2) if p.strip()]
-        # Omit when any line is a full US address (alternate mailing), or when
-        # multi-line (ambiguous mix of unit + street).
-        if len(lines) == 1 and not parse_embedded_us_address(lines[0]):
-            address2 = lines[0]
+        # Omit alternate mailing streets, but keep unit/attention details even
+        # when they arrive as multiple lines.
+        if lines and not any(parse_embedded_us_address(line) for line in lines):
+            address2 = '; '.join(lines)
 
     return {
         'firstName': _clean(getattr(lead, 'owner_first_name', None)),

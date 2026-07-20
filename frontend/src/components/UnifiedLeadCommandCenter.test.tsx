@@ -1132,9 +1132,7 @@ describe('UnifiedLeadCommandCenter — queue advance', () => {
     expect(
       await screen.findByText('Already awaiting skip trace'),
     ).toBeInTheDocument()
-    await waitFor(() => {
-      expect(api.commandCenterService.moveToSkipTrace).toHaveBeenCalled()
-    })
+    expect(api.commandCenterService.moveToSkipTrace).toHaveBeenCalled()
     expect(mockNavigate).not.toHaveBeenCalledWith(
       expect.stringContaining('/leads/99'),
       expect.anything(),

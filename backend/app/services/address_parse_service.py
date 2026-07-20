@@ -57,7 +57,15 @@ def street_only_from_glued_city_state_zip(raw: str) -> str | None:
 
 def _parse_comma_separated(raw: str) -> tuple[str, str, str, str] | None:
     parts = [p.strip() for p in raw.split(',') if p.strip()]
-    if len(parts) < 3:
+    if len(parts) < 2:
+        return None
+
+    if len(parts) == 2:
+        street = parts[0].strip()
+        city_state_zip = _parse_city_state_zip(parts[1])
+        if street and city_state_zip:
+            city, state, zip_code = city_state_zip
+            return street, city, state, zip_code
         return None
 
     last = parts[-1].upper()
@@ -81,6 +89,25 @@ def _parse_comma_separated(raw: str) -> tuple[str, str, str, str] | None:
             return street, city, state, zip_code
 
     return None
+
+
+def _parse_city_state_zip(raw: str) -> tuple[str, str, str] | None:
+    parts = re.sub(r'\s+', ' ', raw.strip()).split()
+    if len(parts) < 3:
+        return None
+
+    zip_match = _ZIP_RE.match(parts[-1])
+    if not zip_match:
+        return None
+
+    state = parts[-2].upper()
+    if len(state) != 2 or not state.isalpha() or state not in _US_STATE_CODES:
+        return None
+
+    city = ' '.join(parts[:-2]).strip()
+    if not city:
+        return None
+    return city, state, zip_match.group(1)
 
 
 def _parse_space_separated_with_state(raw: str) -> tuple[str, str, str, str] | None:

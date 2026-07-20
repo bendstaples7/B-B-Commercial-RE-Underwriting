@@ -219,6 +219,23 @@ class TestHubSpotAdditionalAddressesEnrichment:
             assert contact['address1'] == '100 Owner St'
             assert contact['address2'] is None
 
+    def test_olc_omits_comma_separated_full_street_address_2(self, app):
+        with app.app_context():
+            lead = Lead(
+                property_street='100 Property St',
+                mailing_address='100 Owner St',
+                mailing_city='Chicago',
+                mailing_state='IL',
+                mailing_zip='60601',
+                address_2='2041 W Cuyler Ave, Chicago IL 60618',
+                lead_status='mailing_no_contact_made',
+            )
+            db.session.add(lead)
+            db.session.flush()
+
+            contact = lead_to_olc_contact(lead)
+            assert contact['address2'] is None
+
     def test_olc_omits_multiline_address_2_with_full_street(self, app):
         with app.app_context():
             lead = Lead(
@@ -236,6 +253,23 @@ class TestHubSpotAdditionalAddressesEnrichment:
             contact = lead_to_olc_contact(lead)
             assert contact['address2'] is None
 
+    def test_olc_keeps_multiline_unit_style_address_2(self, app):
+        with app.app_context():
+            lead = Lead(
+                property_street='100 Property St',
+                mailing_address='100 Owner St',
+                mailing_city='Chicago',
+                mailing_state='IL',
+                mailing_zip='60601',
+                address_2='Apt 2B\nC/O Jane',
+                lead_status='mailing_no_contact_made',
+            )
+            db.session.add(lead)
+            db.session.flush()
+
+            contact = lead_to_olc_contact(lead)
+            assert contact['address2'] == 'Apt 2B; C/O Jane'
+
     def test_olc_keeps_unit_style_address_2(self, app):
         with app.app_context():
             lead = Lead(
@@ -252,3 +286,25 @@ class TestHubSpotAdditionalAddressesEnrichment:
 
             contact = lead_to_olc_contact(lead)
             assert contact['address2'] == 'Apt 2B'
+
+    def test_unparseable_overlong_additional_does_not_truncate_to_mailing(self, app, caplog):
+        with app.app_context():
+            lead = Lead(
+                property_street='100 Property St',
+                lead_status='mailing_no_contact_made',
+            )
+            db.session.add(lead)
+            db.session.flush()
+
+            hs = _contact({
+                'additional_addresses': 'X' * 501,
+            }, hubspot_id='hs_addr_long')
+            db.session.add(hs)
+            db.session.flush()
+
+            with caplog.at_level('WARNING'):
+                updated = HubSpotMatcherService().enrich_lead_from_contact(lead, hs)
+
+            assert 'mailing_address' not in updated
+            assert lead.mailing_address is None
+            assert 'skip mailing_address write' in caplog.text

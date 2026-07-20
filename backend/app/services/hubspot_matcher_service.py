@@ -696,7 +696,14 @@ class HubSpotMatcherService:
                         if 'mailing_zip' not in updated:
                             updated.append('mailing_zip')
                 else:
-                    lead.mailing_address = line[:500]
+                    if len(line) > 500:
+                        logger.warning(
+                            'enrich mailing: skip mailing_address write; would truncate %s chars lead_id=%s',
+                            len(line),
+                            getattr(lead, 'id', None),
+                        )
+                        continue
+                    lead.mailing_address = line
                     updated.append('mailing_address')
                 continue
 
