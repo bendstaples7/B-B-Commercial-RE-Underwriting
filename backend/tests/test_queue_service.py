@@ -148,7 +148,7 @@ def test_todays_action_excludes_awaiting_skip_trace_even_with_dated_task(app):
             '3a Awaiting Skip Trace Leak St',
             lead_status='awaiting_skip_trace',
             recommended_action='add_contact_info',
-            needs_skip_trace=False,
+            needs_skip_trace=True,
         )
         _make_task(
             app,

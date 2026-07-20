@@ -50,6 +50,20 @@ _ABBREV_PATTERNS = [
 _PUNCT_RE = re.compile(r'[.,#\-/]')
 
 
+def _first_hubspot_prop(props: dict, *keys: str) -> str | None:
+    for key in keys:
+        value = (props.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _hubspot_deal_allows_cook_gis(lead: Lead) -> bool:
+    """Only use Cook GIS when HubSpot has not ruled out an Illinois situs."""
+    state_norm = (getattr(lead, "property_state", None) or "").strip().upper()
+    return not state_norm or state_norm == "IL"
+
+
 class HubSpotMatcherService:
     """Matches HubSpot raw records to internal Platform records.
 
@@ -247,12 +261,15 @@ class HubSpotMatcherService:
                             lead.lead_status = new_lead_status
                             updated_fields.append("lead_status")
 
-        # Address fields — fill in nulls only
+        # Address fields — fill in nulls only.
         field_map = {
-            "address": "property_street",
+            "property_street": ("address",),
+            "property_city": ("city", "hs_city"),
+            "property_state": ("state", "hs_state_code"),
+            "property_zip": ("zip", "hs_zip"),
         }
-        for hs_key, lead_attr in field_map.items():
-            val = (props.get(hs_key) or "").strip() or None
+        for lead_attr, hs_keys in field_map.items():
+            val = _first_hubspot_prop(props, *hs_keys)
             if val and not getattr(lead, lead_attr):
                 setattr(lead, lead_attr, val)
                 updated_fields.append(lead_attr)
@@ -308,7 +325,10 @@ class HubSpotMatcherService:
                 addr_result = ensure_lead_property_address_complete(
                     lead,
                     actor='hubspot_enrich_lead_from_deal',
-                    try_gis=('property_street' in updated_fields),
+                    try_gis=(
+                        'property_street' in updated_fields
+                        and _hubspot_deal_allows_cook_gis(lead)
+                    ),
                     commit=False,
                 )
                 if addr_result:
@@ -670,9 +690,9 @@ class HubSpotMatcherService:
                 source="hubspot_import",
             )
             # Prefer structured deal address props when HubSpot provides them.
-            deal_city = (props.get("city") or props.get("hs_city") or "").strip() or None
-            deal_state = (props.get("state") or props.get("hs_state_code") or "").strip() or None
-            deal_zip = (props.get("zip") or props.get("hs_zip") or "").strip() or None
+            deal_city = _first_hubspot_prop(props, "city", "hs_city")
+            deal_state = _first_hubspot_prop(props, "state", "hs_state_code")
+            deal_zip = _first_hubspot_prop(props, "zip", "hs_zip")
             if deal_city:
                 placeholder.property_city = deal_city
             if deal_state:
@@ -680,16 +700,9 @@ class HubSpotMatcherService:
             if deal_zip:
                 placeholder.property_zip = deal_zip
             from app.services.property_address_service import complete_property_address
-            # Cook street-only GIS: state blank/IL, or city still blank.
-            # Skip when a non-IL state and city are already set.
-            state_norm = (placeholder.property_state or "").strip().upper()
-            city_blank = not bool((placeholder.property_city or "").strip())
-            try_gis = (not state_norm or state_norm == "IL") or city_blank
-            if state_norm and state_norm != "IL" and not city_blank:
-                try_gis = False
             complete_property_address(
                 placeholder,
-                try_gis=try_gis,
+                try_gis=_hubspot_deal_allows_cook_gis(placeholder),
                 actor="hubspot_matcher",
                 commit=False,
             )

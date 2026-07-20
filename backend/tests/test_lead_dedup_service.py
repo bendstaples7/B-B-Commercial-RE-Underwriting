@@ -1,4 +1,6 @@
 """Tests for DB-enforced lead dedup identity and duplicate sentinel."""
+from unittest.mock import patch
+
 import pytest
 from sqlalchemy.exc import IntegrityError
 
@@ -346,3 +348,38 @@ class TestDuplicateSentinel:
             refreshed = Lead.query.get(winner.id)
             assert refreshed.most_recent_sale == '11/8/2024'
             assert refreshed.property_street == '3052 N Davlin Ct 1'
+
+    def test_merge_copies_loser_situs_parts_before_completion(self, app):
+        from app.services.lead_dedup_service import merge_lead_into_winner
+
+        with app.app_context():
+            winner = Lead(
+                property_street='3052 N Davlin Ct',
+                property_city=None,
+                property_state=None,
+                property_zip=None,
+                owner_first_name='Gary',
+                owner_last_name='Briggs',
+            )
+            loser = Lead(
+                property_street='3052 N Davlin Ct',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60618',
+                owner_first_name='Gary',
+                owner_last_name='Briggs',
+            )
+            db.session.add_all([winner, loser])
+            db.session.commit()
+
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+                side_effect=RuntimeError('gis down'),
+            ):
+                merge_lead_into_winner(winner, loser, changed_by='test')
+            db.session.commit()
+
+            refreshed = Lead.query.get(winner.id)
+            assert refreshed.property_city == 'Chicago'
+            assert refreshed.property_state == 'IL'
+            assert refreshed.property_zip == '60618'

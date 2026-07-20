@@ -272,6 +272,14 @@ def merge_lead_into_winner(winner: Lead, loser: Lead, *, changed_by: str = 'dedu
         if (w_val is None or w_val == '') and l_val not in (None, ''):
             setattr(winner, field, l_val)
 
+    for field in ('property_city', 'property_state', 'property_zip'):
+        w_val = getattr(winner, field, None)
+        l_val = getattr(loser, field, None)
+        if not (str(w_val).strip() if w_val is not None else '') and (
+            str(l_val).strip() if l_val is not None else ''
+        ):
+            setattr(winner, field, l_val)
+
     _prefer_newer_sale_onto_winner(winner, loser)
     _prefer_cleaner_property_street(winner, loser)
     try:

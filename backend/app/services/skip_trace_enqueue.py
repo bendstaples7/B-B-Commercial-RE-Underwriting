@@ -827,6 +827,10 @@ class SkipTraceEnqueue:
                 LeadTask.status == "open",
                 LeadTask.due_date.isnot(None),
                 LeadTask.due_date <= today,
+                or_(
+                    LeadTask.workflow_key.is_(None),
+                    LeadTask.workflow_key != "recent_sale_hold",
+                ),
             )
         )
         query = (

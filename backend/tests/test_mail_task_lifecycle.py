@@ -1013,6 +1013,39 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
             assert result['promoted_lead_count'] == 0
             assert lead.lead_status == 'awaiting_skip_trace'
 
+    def test_promote_ignores_recent_sale_hold_tasks(self, app):
+        """Recent-sale hold activation owns those tasks, not leak promotion."""
+        from app import db
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '10b Recent Sale Hold Only St',
+                lead_status='awaiting_skip_trace',
+                needs_skip_trace=False,
+            )
+            db.session.add(LeadTask(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                title='Recent-sale hold ended — verify new owner and contact information',
+                status='open',
+                due_date=date.today(),
+                workflow_key='recent_sale_hold',
+                created_by='test',
+            ))
+            db.session.commit()
+
+            result = SkipTraceEnqueue().promote_awaiting_skip_trace_due_leaks(
+                actor='test',
+                commit=True,
+            )
+
+            lead = db.session.get(Lead, lead.id)
+            assert lead.id not in result['candidate_lead_ids']
+            assert lead.id not in result['promoted_lead_ids']
+            assert lead.lead_status == 'awaiting_skip_trace'
+
     def test_promote_completes_all_dated_due_chores(self, app):
         """Multi-chore leaks must not re-enter Today's Action after promote."""
         from app import db
@@ -1115,6 +1148,50 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
             assert lead.lead_status == 'skip_trace'
             assert leftover.status == 'completed'
             assert lead.id in result['processed_lead_ids']
+
+    def test_reconcile_excludes_promoted_leads_from_remaining_capacity(self, app):
+        """A just-promoted recent-sale leak should not consume the next slot."""
+        from app import db
+
+        with app.app_context():
+            promoted = _make_lead(
+                app,
+                '12b Promoted Recent Leak St',
+                lead_status='awaiting_skip_trace',
+                recommended_action='add_contact_info',
+                needs_skip_trace=False,
+                acquisition_date=date.today() - timedelta(days=20),
+            )
+            other_recent = _make_lead(
+                app,
+                '12c Other Recent Lead St',
+                acquisition_date=date.today() - timedelta(days=20),
+            )
+            db.session.add(LeadTask(
+                lead_id=promoted.id,
+                task_type='custom',
+                title='manual skip trace',
+                status='open',
+                due_date=date.today(),
+                created_by='test',
+            ))
+            db.session.commit()
+
+            with patch(
+                'app.services.mail_task_lifecycle_service.sql_not_recently_sold',
+                return_value=(
+                    Lead.acquisition_date
+                    <= date.today() - timedelta(days=730)
+                ),
+            ):
+                result = reconcile_recent_sale_mail_tasks(
+                    actor='test',
+                    limit=2,
+                    commit=True,
+                )
+
+            assert promoted.id in result['promoted_awaiting_skip_trace_leak_ids']
+            assert other_recent.id in result['processed_lead_ids']
 
 
 class TestCompleteTasksSupersededByMail:

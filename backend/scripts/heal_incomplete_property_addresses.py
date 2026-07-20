@@ -104,7 +104,7 @@ def main() -> int:
                         lead.property_zip,
                     )
                 )
-        return 0
+        return 1 if result.get('errors') else 0
 
 
 if __name__ == '__main__':

@@ -52,8 +52,12 @@ def main() -> int:
                 result.get('promoted_lead_count', 0),
             )
         )
+        leads_by_id = {
+            lead.id: lead
+            for lead in Lead.query.filter(Lead.id.in_(candidate_ids)).all()
+        } if candidate_ids else {}
         for lead_id in candidate_ids:
-            lead = db.session.get(Lead, lead_id)
+            lead = leads_by_id.get(lead_id)
             street = (lead.property_street if lead else None) or ''
             status = lead.lead_status if lead else '?'
             print('  lead_id=%s status=%s street=%s' % (lead_id, status, street))

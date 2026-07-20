@@ -314,6 +314,85 @@ class TestHubSpotDealSyncService:
             mock_ensure.assert_not_called()
             assert lead.property_city is None
 
+    def test_enrich_lead_from_deal_fills_structured_property_address(
+        self, app,
+    ):
+        """Structured HubSpot deal address fields repair incomplete situs data."""
+        with app.app_context():
+            lead = Lead(
+                property_street='1239 N Hoyne Ave',
+                property_city=None,
+                property_state=None,
+                property_zip=None,
+                lead_status='awaiting_skip_trace',
+            )
+            deal = HubSpotDeal(
+                hubspot_id='d-structured-address',
+                raw_payload={
+                    'properties': {
+                        'city': 'Chicago',
+                        'state': 'IL',
+                        'zip': '60622',
+                    },
+                },
+            )
+            db.session.add_all([lead, deal])
+            db.session.commit()
+
+            from app.services.hubspot_matcher_service import HubSpotMatcherService
+            matcher = HubSpotMatcherService()
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+                return_value={'changed_fields': []},
+            ) as mock_ensure:
+                updated = matcher.enrich_lead_from_deal(
+                    lead, deal, stage_label_map={},
+                )
+
+            assert {'property_city', 'property_state', 'property_zip'} <= set(updated)
+            assert lead.property_city == 'Chicago'
+            assert lead.property_state == 'IL'
+            assert lead.property_zip == '60622'
+            mock_ensure.assert_called_once()
+            assert mock_ensure.call_args.kwargs['try_gis'] is False
+
+    def test_enrich_lead_from_deal_disables_gis_for_non_illinois_address(
+        self, app,
+    ):
+        """A HubSpot deal with a non-Illinois state must not run Cook GIS."""
+        with app.app_context():
+            lead = Lead(
+                property_street=None,
+                property_city=None,
+                property_state=None,
+                property_zip=None,
+                lead_status='awaiting_skip_trace',
+            )
+            deal = HubSpotDeal(
+                hubspot_id='d-non-il-address',
+                raw_payload={
+                    'properties': {
+                        'address': '123 Main St',
+                        'city': 'Milwaukee',
+                        'state': 'WI',
+                        'zip': '53202',
+                    },
+                },
+            )
+            db.session.add_all([lead, deal])
+            db.session.commit()
+
+            from app.services.hubspot_matcher_service import HubSpotMatcherService
+            matcher = HubSpotMatcherService()
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+                return_value={'changed_fields': []},
+            ) as mock_ensure:
+                matcher.enrich_lead_from_deal(lead, deal, stage_label_map={})
+
+            mock_ensure.assert_called_once()
+            assert mock_ensure.call_args.kwargs['try_gis'] is False
+
     def test_enrich_lead_deal_context_from_cached_deal(self, app):
         """Lead columns empty but cached deal has context — enrich without API refresh."""
         with app.app_context():

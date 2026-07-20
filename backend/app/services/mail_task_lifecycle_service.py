@@ -565,13 +565,15 @@ def reconcile_recent_sale_mail_tasks(
     ]
     ordered_ids: list[int] = []
     activation_processed_ids = set(activation.get('processed_lead_ids', []))
+    promoted_lead_ids = set(promote.get('promoted_lead_ids', []))
+    excluded_lead_ids = activation_processed_ids | promoted_lead_ids
     if remaining_limit:
         candidates = Lead.query.filter(
             ~sql_not_recently_sold(),
             ~Lead.lead_status.in_(terminal_statuses),
         )
-        if activation_processed_ids:
-            candidates = candidates.filter(~Lead.id.in_(activation_processed_ids))
+        if excluded_lead_ids:
+            candidates = candidates.filter(~Lead.id.in_(excluded_lead_ids))
         candidates = (
             candidates
             .with_entities(Lead.id)

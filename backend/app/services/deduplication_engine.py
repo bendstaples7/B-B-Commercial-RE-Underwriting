@@ -97,6 +97,7 @@ class DeduplicationEngine:
             ensure_lead_property_address_complete(
                 lead,
                 actor=actor,
+                try_gis=False,
                 commit=False,
             )
         except Exception as exc:

@@ -183,8 +183,7 @@ class TestHealIncompletePropertyAddresses:
             assert complete.id not in result['lead_ids']
             assert result['completed'] >= 1
             assert is_property_address_complete(lead=incomplete)
-            set_cursor.assert_called()
-            assert set_cursor.call_args[0][0] == incomplete.id
+            set_cursor.assert_called_once_with(incomplete.id)
 
     def test_dry_run_does_not_mutate(self, app):
         with app.app_context():
@@ -209,9 +208,6 @@ class TestHealIncompletePropertyAddresses:
     def test_wraps_cursor_when_no_candidates_after_cursor(self, app):
         with app.app_context():
             with patch(
-                'app.services.property_address_service._heal_incomplete_cursor',
-                return_value=999999,
-            ), patch(
                 'app.services.property_address_service._set_heal_incomplete_cursor',
             ) as set_cursor:
                 result = heal_incomplete_property_addresses(
@@ -225,6 +221,37 @@ class TestHealIncompletePropertyAddresses:
             assert result['wrapped'] is True
             assert result['last_id'] == 0
             set_cursor.assert_called_with(0)
+
+    def test_heal_includes_whitespace_only_address_parts(self, app):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                property_street='1239 N Hoyne',
+                property_city='   ',
+                property_state=' ',
+                property_zip='',
+            )
+            with patch(
+                'app.services.property_address_service._set_heal_incomplete_cursor',
+            ), patch(
+                'app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address',
+            ) as mock_lookup:
+                mock_lookup.return_value = [{
+                    'pin': '17061270060000',
+                    'property_street': '1239 N HOYNE AVE',
+                    'property_city': 'Chicago',
+                    'property_state': 'IL',
+                    'property_zip': '60622',
+                }]
+                result = heal_incomplete_property_addresses(
+                    last_id=0,
+                    limit=10,
+                    persist_cursor=True,
+                    commit=True,
+                    actor='test',
+                )
+            assert lead.id in result['lead_ids']
+            assert is_property_address_complete(lead=lead)
 
     def test_heal_does_not_advance_cursor_on_hard_error(self, app):
         with app.app_context():
@@ -256,6 +283,59 @@ class TestHealIncompletePropertyAddresses:
             assert result['errors'] >= 1
             assert result['last_id'] == 0
             set_cursor.assert_called_with(0)
+
+    def test_heal_stops_on_hard_error_before_advancing_past_failed_lead(self, app):
+        with app.app_context():
+            first = _make_lead(
+                app,
+                property_street='100 First St',
+                property_city=None,
+                property_state=None,
+                property_zip=None,
+            )
+            failed = _make_lead(
+                app,
+                property_street='200 Failed St',
+                property_city=None,
+                property_state=None,
+                property_zip=None,
+            )
+            later = _make_lead(
+                app,
+                property_street='300 Later St',
+                property_city=None,
+                property_state=None,
+                property_zip=None,
+            )
+
+            def complete_or_fail(lead, **_kwargs):
+                if lead.id == failed.id:
+                    raise RuntimeError('gis down')
+                lead.property_city = 'Chicago'
+                lead.property_state = 'IL'
+                lead.property_zip = '60601'
+                return {'complete': True}
+
+            with patch(
+                'app.services.property_address_service._set_heal_incomplete_cursor',
+            ) as set_cursor, patch(
+                'app.services.property_address_service.complete_property_address',
+                side_effect=complete_or_fail,
+            ):
+                result = heal_incomplete_property_addresses(
+                    last_id=0,
+                    limit=10,
+                    persist_cursor=True,
+                    commit=True,
+                    try_gis=True,
+                    actor='test',
+                )
+
+            assert result['lead_ids'] == [first.id, failed.id]
+            assert result['errors'] == 1
+            assert result['last_id'] == first.id
+            set_cursor.assert_called_with(first.id)
+            assert later.property_city is None
 
     def test_dry_run_includes_before_after_previews(self, app):
         with app.app_context():

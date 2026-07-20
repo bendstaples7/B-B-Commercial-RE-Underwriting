@@ -10,7 +10,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, func, or_
 
 from app import db
 from app.models import Lead, LeadTimelineEntry
@@ -332,14 +332,14 @@ def _incomplete_property_address_clause():
     """SQL filter: non-empty street with missing city, state, or ZIP."""
     return and_(
         Lead.property_street.isnot(None),
-        Lead.property_street != '',
+        func.trim(Lead.property_street) != '',
         or_(
             Lead.property_city.is_(None),
-            Lead.property_city == '',
+            func.trim(Lead.property_city) == '',
             Lead.property_state.is_(None),
-            Lead.property_state == '',
+            func.trim(Lead.property_state) == '',
             Lead.property_zip.is_(None),
-            Lead.property_zip == '',
+            func.trim(Lead.property_zip) == '',
         ),
     )
 
@@ -487,6 +487,7 @@ def heal_incomplete_property_addresses(
                 lead.id,
                 exc,
             )
+            break
 
     if commit and not dry_run and leads:
         db.session.commit()

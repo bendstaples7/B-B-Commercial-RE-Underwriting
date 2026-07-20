@@ -11,6 +11,8 @@ Covers:
 
 Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6
 """
+from unittest.mock import patch
+
 import pytest
 from app.services.deduplication_engine import DeduplicationEngine
 from app import db
@@ -217,6 +219,23 @@ class TestMergeLead:
             )
             assert existing.owner_first_name == "Bob"
             assert result.outcome == "updated"
+            db.session.rollback()
+
+    def test_merge_completion_is_parse_only(self, app):
+        """Dedup completion must not double-hit GIS before ingestion enrichment."""
+        with app.app_context():
+            existing = _make_lead("102 Merge St Chicago IL 60601")
+            engine = DeduplicationEngine()
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+                return_value=None,
+            ) as mock_ensure:
+                engine.merge_lead(
+                    existing=existing,
+                    incoming={"owner_first_name": "Bob"},
+                    import_job_id=1,
+                )
+            assert mock_ensure.call_args.kwargs['try_gis'] is False
             db.session.rollback()
 
     def test_non_null_incoming_over_null_existing_updates_field(self, app):
