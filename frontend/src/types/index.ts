@@ -2149,6 +2149,7 @@ export interface CommandCenterPayload {
   property_city: string | null;
   property_state: string | null;
   property_zip?: string | null;
+  address_2?: string | null;
   property_type?: string | null;
   bedrooms?: number | null;
   bathrooms?: number | null;

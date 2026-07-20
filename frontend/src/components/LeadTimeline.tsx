@@ -3,7 +3,7 @@
  *
  * Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8
  */
-import { useState, useEffect, type KeyboardEvent, type MouseEvent } from 'react'
+import { useState, useEffect, useRef, type KeyboardEvent, type MouseEvent } from 'react'
 import {
   Accordion,
   AccordionDetails,
@@ -28,6 +28,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import HistoryIcon from '@mui/icons-material/History'
 import type { LeadTimelineEntry } from '@/types'
 import { formatPhoneNumber } from '@/utils/phone'
+import { scopeRowsToLead, scopeRowsToLeadWithTotal } from '@/utils/leadScopedRows'
 import { stripHtmlTags } from '@/utils/helpers'
 
 // ---------------------------------------------------------------------------
@@ -515,6 +516,26 @@ export interface LeadTimelineProps {
   highlightEntryId?: number | null
 }
 
+function mergeTimelineEntries(
+  refreshedEntries: LeadTimelineEntry[],
+  existingEntries: LeadTimelineEntry[],
+): LeadTimelineEntry[] {
+  const seen = new Set<number>()
+  const merged: LeadTimelineEntry[] = []
+  const append = (entry: LeadTimelineEntry) => {
+    if (seen.has(entry.id)) return
+    seen.add(entry.id)
+    merged.push(entry)
+  }
+  refreshedEntries.forEach(append)
+  existingEntries.forEach(append)
+  return merged
+}
+
+function timelineEntryIds(entries: readonly LeadTimelineEntry[]): Set<number> {
+  return new Set(entries.map((entry) => entry.id))
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -532,24 +553,64 @@ export function LeadTimeline({
   onLoadMore,
   highlightEntryId = null,
 }: LeadTimelineProps) {
-  const [entries, setEntries] = useState<LeadTimelineEntry[]>(initialEntries)
-  const [total, setTotal] = useState(initialTotal)
+  const initialScopedRef = useRef<ReturnType<typeof scopeRowsToLeadWithTotal<LeadTimelineEntry>> | null>(null)
+  if (initialScopedRef.current === null) {
+    initialScopedRef.current = scopeRowsToLeadWithTotal(
+      initialEntries,
+      leadId,
+      'timeline',
+      initialTotal,
+    )
+  }
+  const [entries, setEntries] = useState<LeadTimelineEntry[]>(() => initialScopedRef.current!.rows)
+  const [total, setTotal] = useState(() => initialScopedRef.current!.total)
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showAllLoaded, setShowAllLoaded] = useState(false)
+  const leadIdRef = useRef(leadId)
+  const previousLeadIdRef = useRef(leadId)
+  const requestSeqRef = useRef(0)
+  const entriesRef = useRef(entries)
+  const baseEntryIdsRef = useRef(timelineEntryIds(initialScopedRef.current.rows))
+  leadIdRef.current = leadId
+  entriesRef.current = entries
 
+  // Fail-closed at the prop boundary (standalone use + defense when parent
+  // already scoped). Same-lead refreshes merge into loaded pages so activity
+  // logs do not collapse pagination back to page 1, while deleted/omitted rows
+  // from the refreshed first page are reconciled away.
   useEffect(() => {
-    setEntries(initialEntries)
-    setTotal(initialTotal)
-    setPage(1)
-  }, [initialEntries, initialTotal])
+    const scoped = scopeRowsToLeadWithTotal(
+      initialEntries,
+      leadId,
+      'timeline',
+      initialTotal,
+    )
+    const leadChanged = previousLeadIdRef.current !== leadId
+    const previousBaseIds = baseEntryIdsRef.current
+    const preservedLoadedEntries = leadChanged
+      ? []
+      : scopeRowsToLead(entriesRef.current, leadId, 'timeline')
+        .filter((entry) => !previousBaseIds.has(entry.id))
+    const nextEntries = leadChanged
+      ? scoped.rows
+      : mergeTimelineEntries(scoped.rows, preservedLoadedEntries)
+
+    setEntries(nextEntries)
+    setTotal(leadChanged ? scoped.total : Math.max(scoped.total, nextEntries.length))
+    baseEntryIdsRef.current = timelineEntryIds(scoped.rows)
+    previousLeadIdRef.current = leadId
+  }, [leadId, initialEntries, initialTotal])
 
   // Only collapse the expanded timeline when navigating to a different lead —
   // not when the same lead's entries refresh after an activity log.
   useEffect(() => {
+    requestSeqRef.current += 1
     setShowAllLoaded(false)
     setPage(1)
+    setLoading(false)
+    setError(null)
   }, [leadId])
 
   const hasMore = entries.length < total
@@ -563,18 +624,37 @@ export function LeadTimeline({
     if (!onLoadMore || loading) return
     setLoading(true)
     setError(null)
+    const requestedLeadId = leadId
+    const requestSeq = ++requestSeqRef.current
+    const isActiveRequest = () =>
+      requestSeq === requestSeqRef.current && requestedLeadId === leadIdRef.current
     try {
       const nextPage = page + 1
       const result = await onLoadMore(nextPage)
-      // Append new entries (do NOT replace existing ones)
-      setEntries((prev) => [...prev, ...result.entries])
-      setTotal(result.total)
+      // Drop late responses after queue advance to another lead.
+      if (!isActiveRequest()) return
+      const scoped = scopeRowsToLeadWithTotal(
+        result.entries,
+        requestedLeadId,
+        'timeline',
+        result.total,
+      )
+      // Append new entries (do NOT replace existing ones); re-scope prev in case
+      // of a race, then adopt the adjusted total from this page response.
+      setEntries((prev) => [
+        ...scopeRowsToLead(prev, requestedLeadId, 'timeline'),
+        ...scoped.rows,
+      ])
+      setTotal(scoped.total)
       setPage(nextPage)
       setShowAllLoaded(true)
     } catch (err) {
+      if (!isActiveRequest()) return
       setError(err instanceof Error ? err.message : 'Failed to load more entries.')
     } finally {
-      setLoading(false)
+      if (isActiveRequest()) {
+        setLoading(false)
+      }
     }
   }
 

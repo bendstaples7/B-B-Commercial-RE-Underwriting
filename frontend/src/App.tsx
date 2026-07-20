@@ -319,7 +319,9 @@ function UnifiedLeadCommandCenterRoute() {
   if (!id || !Number.isInteger(numericId) || numericId <= 0) {
     return <InvalidLeadIdError />
   }
-  return <UnifiedLeadCommandCenter leadId={numericId} />
+  // key remounts the whole command center on lead change so local state
+  // (timeline, dialogs, ownership form, etc.) cannot bleed across queue advance.
+  return <UnifiedLeadCommandCenter key={numericId} leadId={numericId} />
 }
 
 /** Redirects /properties/:leadId → /leads/:leadId (history replace). */

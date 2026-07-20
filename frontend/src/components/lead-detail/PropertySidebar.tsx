@@ -293,7 +293,6 @@ export function PropertySidebar({
     tax_bill_2021?: number | string | null
     most_recent_sale?: string | null
     address_2?: string | null
-    returned_addresses?: string | null
     needs_skip_trace?: boolean
     skip_tracer?: string | null
     date_skip_traced?: string | null
@@ -942,9 +941,6 @@ export function PropertySidebar({
           </Typography>
         </SidebarLabeledContent>
         {data.address_2 && <SidebarRow label="Address 2" value={data.address_2} />}
-        {data.returned_addresses && (
-          <SidebarRow label="Other Addresses" value={data.returned_addresses} />
-        )}
       </SidebarSection>
 
       {(commandCenterData.related_properties?.length ?? 0) > 0 && (

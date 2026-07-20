@@ -250,6 +250,12 @@ export function LeadDetailTabPanel({
     ['State', leadData.mailing_state],
     ['Zip Code', leadData.mailing_zip],
   ]
+  const otherAddresses = typeof leadData.returned_addresses === 'string'
+    ? leadData.returned_addresses.trim()
+    : leadData.returned_addresses
+  if (otherAddresses) {
+    mailingFields.push(['Other Addresses', otherAddresses])
+  }
 
   return (
     <Box data-testid="tab-panel">
