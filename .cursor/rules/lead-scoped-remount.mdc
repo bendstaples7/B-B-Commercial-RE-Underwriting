@@ -15,9 +15,10 @@ not survive that navigation.
    `key={numericId}`)** from the route wrapper in `App.tsx`. CI enforces this
    via `scripts/check_duplication.py`.
 2. **Never paint foreign rows** — timeline/task lists must run through
-   [`scopeRowsToLead`](../../frontend/src/utils/leadScopedRows.ts) so a row
-   whose `lead_id` ≠ active lead is dropped (and logged), even if optimistic
-   merge regresses.
+   [`scopeRowsToLead`](../../frontend/src/utils/leadScopedRows.ts) (or
+   `scopeRowsToLeadWithTotal` when the list also tracks a server total) so a row
+   whose explicit `lead_id` ≠ active lead is dropped (and logged), even if
+   optimistic merge regresses. Rows missing `lead_id` are retained intentionally.
 3. **Do not remove** the `UnifiedLeadCommandCenter.test.tsx` case
    `timeline does not bleed across leads` — CI runs it as a dedicated gate.
 
@@ -25,5 +26,5 @@ not survive that navigation.
 
 Prefer remount (the route key) over one-off `useEffect([leadId])` resets.
 If you must keep instance state across renders, key it by `leadId` or reset
-on `leadId` change — and still fail-closed with `scopeRowsToLead` for list
-data.
+on `leadId` change — and still fail-closed with `scopeRowsToLead` /
+`scopeRowsToLeadWithTotal` for list data.

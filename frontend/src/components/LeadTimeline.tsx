@@ -516,6 +516,22 @@ export interface LeadTimelineProps {
   highlightEntryId?: number | null
 }
 
+function mergeTimelineEntries(
+  refreshedEntries: LeadTimelineEntry[],
+  existingEntries: LeadTimelineEntry[],
+): LeadTimelineEntry[] {
+  const seen = new Set<number>()
+  const merged: LeadTimelineEntry[] = []
+  const append = (entry: LeadTimelineEntry) => {
+    if (seen.has(entry.id)) return
+    seen.add(entry.id)
+    merged.push(entry)
+  }
+  refreshedEntries.forEach(append)
+  existingEntries.forEach(append)
+  return merged
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -533,19 +549,28 @@ export function LeadTimeline({
   onLoadMore,
   highlightEntryId = null,
 }: LeadTimelineProps) {
-  const [entries, setEntries] = useState<LeadTimelineEntry[]>(() =>
-    scopeRowsToLead(initialEntries, leadId, 'timeline'),
-  )
-  const [total, setTotal] = useState(initialTotal)
+  const initialScopedRef = useRef<ReturnType<typeof scopeRowsToLeadWithTotal<LeadTimelineEntry>> | null>(null)
+  if (initialScopedRef.current === null) {
+    initialScopedRef.current = scopeRowsToLeadWithTotal(
+      initialEntries,
+      leadId,
+      'timeline',
+      initialTotal,
+    )
+  }
+  const [entries, setEntries] = useState<LeadTimelineEntry[]>(() => initialScopedRef.current!.rows)
+  const [total, setTotal] = useState(() => initialScopedRef.current!.total)
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showAllLoaded, setShowAllLoaded] = useState(false)
   const leadIdRef = useRef(leadId)
+  const previousLeadIdRef = useRef(leadId)
   leadIdRef.current = leadId
 
   // Fail-closed at the prop boundary (standalone use + defense when parent
-  // already scoped). Do not re-scope during render — that spam-logs drops.
+  // already scoped). Same-lead refreshes merge into loaded pages so activity
+  // logs do not collapse pagination back to page 1.
   useEffect(() => {
     const scoped = scopeRowsToLeadWithTotal(
       initialEntries,
@@ -553,9 +578,16 @@ export function LeadTimeline({
       'timeline',
       initialTotal,
     )
-    setEntries(scoped.rows)
-    setTotal(scoped.total)
-    setPage(1)
+    const leadChanged = previousLeadIdRef.current !== leadId
+    setEntries((prev) => {
+      if (leadChanged) return scoped.rows
+      return mergeTimelineEntries(
+        scoped.rows,
+        scopeRowsToLead(prev, leadId, 'timeline'),
+      )
+    })
+    setTotal((prevTotal) => leadChanged ? scoped.total : Math.max(prevTotal, scoped.total))
+    previousLeadIdRef.current = leadId
   }, [leadId, initialEntries, initialTotal])
 
   // Only collapse the expanded timeline when navigating to a different lead —
@@ -563,6 +595,8 @@ export function LeadTimeline({
   useEffect(() => {
     setShowAllLoaded(false)
     setPage(1)
+    setLoading(false)
+    setError(null)
   }, [leadId])
 
   const hasMore = entries.length < total

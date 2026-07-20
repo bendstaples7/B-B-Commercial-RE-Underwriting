@@ -508,6 +508,86 @@ describe('LeadTimeline', () => {
         expect(screen.getByTestId('timeline-showing')).toHaveTextContent('Showing 4 of 4')
       })
     })
+
+    it('merges same-lead refreshes without discarding loaded pages', async () => {
+      const initialEntries = [makeEntry(1, { summary: 'Entry 1' }), makeEntry(2, { summary: 'Entry 2' })]
+      const moreEntries = [makeEntry(3, { summary: 'Entry 3' }), makeEntry(4, { summary: 'Entry 4' })]
+      const onLoadMore = vi.fn().mockResolvedValue({ entries: moreEntries, total: 4 })
+
+      const { rerender } = render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={initialEntries}
+          initialTotal={4}
+          onLoadMore={onLoadMore}
+        />,
+      )
+
+      await user.click(screen.getByTestId('load-more-btn'))
+      await waitFor(() => {
+        expect(screen.getByTestId('entry-summary-4')).toHaveTextContent('Entry 4')
+      })
+
+      rerender(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[
+            makeEntry(5, { summary: 'Newly logged note' }),
+            makeEntry(1, { summary: 'Entry 1 refreshed' }),
+            makeEntry(2, { summary: 'Entry 2' }),
+          ]}
+          initialTotal={5}
+          onLoadMore={onLoadMore}
+        />,
+      )
+
+      await waitFor(() => {
+        expect(screen.getByTestId('entry-summary-5')).toHaveTextContent('Newly logged note')
+        expect(screen.getByTestId('entry-summary-1')).toHaveTextContent('Entry 1 refreshed')
+        expect(screen.getByTestId('entry-summary-3')).toHaveTextContent('Entry 3')
+        expect(screen.getByTestId('entry-summary-4')).toHaveTextContent('Entry 4')
+        expect(screen.getByTestId('timeline-showing')).toHaveTextContent('Showing 5 of 5')
+      })
+    })
+
+    it('clears pending load-more state on lead change', async () => {
+      let resolveLoad!: (value: { entries: LeadTimelineEntry[]; total: number }) => void
+      const onLoadMore = vi.fn().mockReturnValue(
+        new Promise<{ entries: LeadTimelineEntry[]; total: number }>((resolve) => {
+          resolveLoad = resolve
+        }),
+      )
+
+      const { rerender } = render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[makeEntry(1)]}
+          initialTotal={2}
+          onLoadMore={onLoadMore}
+        />,
+      )
+
+      await user.click(screen.getByTestId('load-more-btn'))
+      expect(screen.getByTestId('load-more-btn')).toBeDisabled()
+
+      rerender(
+        <LeadTimeline
+          leadId={2}
+          initialEntries={[makeEntry(10, { lead_id: 2, summary: 'Lead 2 entry' })]}
+          initialTotal={2}
+          onLoadMore={onLoadMore}
+        />,
+      )
+
+      await waitFor(() => {
+        expect(screen.getByTestId('entry-summary-10')).toHaveTextContent('Lead 2 entry')
+        expect(screen.getByTestId('load-more-btn')).not.toBeDisabled()
+      })
+
+      resolveLoad({ entries: [makeEntry(2, { summary: 'Stale lead 1 entry' })], total: 2 })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(screen.queryByText('Stale lead 1 entry')).not.toBeInTheDocument()
+    })
   })
 
   // -------------------------------------------------------------------------
@@ -792,20 +872,23 @@ describe('LeadTimeline', () => {
   describe('fail-closed lead scope', () => {
     it('does not paint entries whose lead_id belongs to another lead', () => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      render(
-        <LeadTimeline
-          leadId={4404}
-          initialEntries={[
-            makeEntry(1, { lead_id: 4404, summary: 'Andiamo call' }),
-            makeEntry(2, { lead_id: 3415, summary: 'Call with Gilberto Olivares' }),
-          ]}
-          initialTotal={2}
-        />,
-      )
-      expect(screen.getByTestId('lead-timeline')).toHaveTextContent('Andiamo call')
-      expect(screen.getByTestId('lead-timeline')).not.toHaveTextContent('Gilberto Olivares')
-      expect(errorSpy).toHaveBeenCalled()
-      errorSpy.mockRestore()
+      try {
+        render(
+          <LeadTimeline
+            leadId={4404}
+            initialEntries={[
+              makeEntry(1, { lead_id: 4404, summary: 'Andiamo call' }),
+              makeEntry(2, { lead_id: 3415, summary: 'Call with Gilberto Olivares' }),
+            ]}
+            initialTotal={2}
+          />,
+        )
+        expect(screen.getByTestId('lead-timeline')).toHaveTextContent('Andiamo call')
+        expect(screen.getByTestId('lead-timeline')).not.toHaveTextContent('Gilberto Olivares')
+        expect(errorSpy).toHaveBeenCalled()
+      } finally {
+        errorSpy.mockRestore()
+      }
     })
   })
 })

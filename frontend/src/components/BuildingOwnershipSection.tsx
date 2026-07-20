@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   Alert,
   Box,
@@ -56,6 +56,12 @@ const BUILDING_SALE_OPTIONS: { value: BuildingSalePossible; label: string }[] = 
 ]
 
 type CondoizedAnswer = 'yes' | 'no' | 'unclear'
+
+type OwnershipOverridePayload = {
+  condo_risk_status: CondoRiskStatus
+  building_sale_possible: BuildingSalePossible
+  reason: string
+}
 
 type AssessorPinRow = {
   pin?: string
@@ -132,6 +138,8 @@ export function BuildingOwnershipSection({
   commandCenterData,
 }: BuildingOwnershipSectionProps) {
   const queryClient = useQueryClient()
+  const activeLeadIdRef = useRef(leadId)
+  activeLeadIdRef.current = leadId
   const [decisionOpen, setDecisionOpen] = useState(false)
   const [overrideStatus, setOverrideStatus] = useState<CondoRiskStatus>(
     commandCenterData.condo_risk_status ?? 'needs_review',
@@ -191,25 +199,26 @@ export function BuildingOwnershipSection({
     retry: false,
   })
 
-  const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
-    queryClient.invalidateQueries({ queryKey: ['buildingOwnership', leadId] })
+  const invalidate = (targetLeadId = leadId) => {
+    queryClient.invalidateQueries({ queryKey: ['commandCenter', targetLeadId] })
+    queryClient.invalidateQueries({ queryKey: ['buildingOwnership', targetLeadId] })
   }
 
   const analyzeMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (requestedLeadId: number) => {
       // Always force on explicit user click so PIN details refresh instead of a silent skip.
-      const result = (await buildingOwnershipService.analyze(leadId, {
+      const result = (await buildingOwnershipService.analyze(requestedLeadId, {
         force: true,
       })) as BuildingOwnershipAnalyzeResult
       return result
     },
-    onSuccess: (result) => {
+    onSuccess: (result, requestedLeadId) => {
+      if (requestedLeadId !== activeLeadIdRef.current) return
       setAnalyzeSnapshot(result)
       // Seed cache so PIN/reason render immediately from the analyze response
       // (skipped path returns the same shape as GET detail).
       if (result && (result as BuildingOwnershipDetail).id != null) {
-        queryClient.setQueryData(['buildingOwnership', leadId], result)
+        queryClient.setQueryData(['buildingOwnership', requestedLeadId], result)
       }
       setOverrideStatus((result?.condo_risk_status as CondoRiskStatus) ?? 'needs_review')
       setOverrideBuildingSale(
@@ -226,27 +235,43 @@ export function BuildingOwnershipSection({
       } else {
         setAnalyzeFeedback('Analysis updated.')
       }
-      invalidate()
+      invalidate(requestedLeadId)
       void refetch()
     },
   })
 
   const overrideMutation = useMutation({
-    mutationFn: (payload: {
-      condo_risk_status: CondoRiskStatus
-      building_sale_possible: BuildingSalePossible
-      reason: string
-    }) => buildingOwnershipService.override(leadId, payload),
-    onSuccess: () => {
+    mutationFn: ({
+      requestedLeadId,
+      payload,
+    }: {
+      requestedLeadId: number
+      payload: OwnershipOverridePayload
+    }) => buildingOwnershipService.override(requestedLeadId, payload),
+    onSuccess: (_result, variables) => {
+      if (variables.requestedLeadId !== activeLeadIdRef.current) return
       setFormError(null)
       setOverrideReason('')
       setDecisionOpen(false)
       setAnalyzeFeedback('Ownership decision saved. Recommended action has been rescored.')
-      invalidate()
+      invalidate(variables.requestedLeadId)
       void refetch()
     },
-    onError: (err: Error) => setFormError(err.message || 'Save failed'),
+    onError: (err: Error, variables) => {
+      if (variables.requestedLeadId !== activeLeadIdRef.current) return
+      setFormError(err.message || 'Save failed')
+    },
   })
+
+  useEffect(() => {
+    analyzeMutation.reset()
+    overrideMutation.reset()
+  }, [leadId])
+
+  const analyzePendingForActiveLead = analyzeMutation.isPending && analyzeMutation.variables === leadId
+  const analyzeErrorForActiveLead = analyzeMutation.isError && analyzeMutation.variables === leadId
+  const overridePendingForActiveLead =
+    overrideMutation.isPending && overrideMutation.variables?.requestedLeadId === leadId
 
   if (!showSection) return null
 
@@ -289,8 +314,11 @@ export function BuildingOwnershipSection({
     setOverrideStatus(mapped.condo_risk_status)
     setOverrideBuildingSale(mapped.building_sale_possible)
     overrideMutation.mutate({
-      ...mapped,
-      reason: 'Set from Condoized? control',
+      requestedLeadId: leadId,
+      payload: {
+        ...mapped,
+        reason: 'Set from Condoized? control',
+      },
     })
   }
 
@@ -344,7 +372,7 @@ export function BuildingOwnershipSection({
           exclusive
           size="small"
           value={condoizedValue}
-          disabled={overrideMutation.isPending || !hasAnalysisId}
+          disabled={overridePendingForActiveLead || !hasAnalysisId}
           onChange={(_e, next: CondoizedAnswer | null) => {
             if (next) saveCondoized(next)
           }}
@@ -368,7 +396,7 @@ export function BuildingOwnershipSection({
             data-testid="building-ownership-confidence"
           />
         )}
-        {overrideMutation.isPending && <CircularProgress size={16} />}
+        {overridePendingForActiveLead && <CircularProgress size={16} />}
       </Stack>
 
       {displaySale && (
@@ -502,7 +530,7 @@ export function BuildingOwnershipSection({
         </Typography>
       )}
 
-      {analyzeMutation.isError && (
+      {analyzeErrorForActiveLead && (
         <Alert severity="error" sx={{ mb: 1.5 }}>
           {analyzeMutation.error instanceof Error
             ? analyzeMutation.error.message
@@ -524,14 +552,14 @@ export function BuildingOwnershipSection({
             <Button
               variant="outlined"
               size="small"
-              disabled={analyzeMutation.isPending}
+              disabled={analyzePendingForActiveLead}
               onClick={() => {
                 setAnalyzeFeedback(null)
-                analyzeMutation.mutate()
+                analyzeMutation.mutate(leadId)
               }}
               data-testid="building-ownership-run-check"
             >
-              {analyzeMutation.isPending ? (
+              {analyzePendingForActiveLead ? (
                 <CircularProgress size={18} color="inherit" />
               ) : hasAnalysisId ? (
                 'Re-run automated check'
@@ -566,9 +594,12 @@ export function BuildingOwnershipSection({
                   return
                 }
                 overrideMutation.mutate({
-                  condo_risk_status: overrideStatus,
-                  building_sale_possible: overrideBuildingSale,
-                  reason: overrideReason.trim(),
+                  requestedLeadId: leadId,
+                  payload: {
+                    condo_risk_status: overrideStatus,
+                    building_sale_possible: overrideBuildingSale,
+                    reason: overrideReason.trim(),
+                  },
                 })
               }}
             >
@@ -620,10 +651,10 @@ export function BuildingOwnershipSection({
                   type="submit"
                   variant="contained"
                   size="small"
-                  disabled={overrideMutation.isPending}
+                  disabled={overridePendingForActiveLead}
                   data-testid="building-ownership-save-decision"
                 >
-                  {overrideMutation.isPending ? 'Saving…' : 'Save ownership decision'}
+                  {overridePendingForActiveLead ? 'Saving…' : 'Save ownership decision'}
                 </Button>
               </Stack>
             </Box>

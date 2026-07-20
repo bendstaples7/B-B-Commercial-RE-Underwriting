@@ -153,6 +153,7 @@ def check_dead_api_exports() -> list[str]:
 
 
 CC_RENDER_RE = re.compile(r"<UnifiedLeadCommandCenter\b([^>]*)/?>", re.DOTALL)
+CC_KEY_ATTR_RE = re.compile(r"(^|\s)key\s*=\s*\{(?:numericId|leadId)\}")
 
 
 def check_lead_command_center_remount_key() -> list[str]:
@@ -170,7 +171,7 @@ def check_lead_command_center_remount_key() -> list[str]:
         return ["UnifiedLeadCommandCenter is not rendered in App.tsx"]
     errors: list[str] = []
     for attrs in renders:
-        if not re.search(r"\bkey=\{(?:numericId|leadId)\}", attrs):
+        if not CC_KEY_ATTR_RE.search(attrs):
             errors.append(
                 "UnifiedLeadCommandCenter in App.tsx must include "
                 "key={numericId} (or key={leadId}) so queue advance remounts "
@@ -186,15 +187,27 @@ def check_queue_advance_bleed_regression_test() -> list[str]:
         return ["UnifiedLeadCommandCenter.test.tsx missing"]
     text = path.read_text(encoding="utf-8")
     errors: list[str] = []
-    if "timeline does not bleed across leads" not in text:
+    test_name = "timeline does not bleed across leads"
+    test_index = text.find(test_name)
+    if test_index < 0:
         errors.append(
             "Missing describe/it for timeline bleed across leads in "
             "UnifiedLeadCommandCenter.test.tsx"
         )
-    if "rerender(" not in text:
+        bleed_test = ""
+    else:
+        # Keep this scoped to the named regression so an unrelated rerender in
+        # the file cannot satisfy the queue-advance guard.
+        bleed_test = text[test_index:test_index + 5000]
+    if "rerender(" not in bleed_test:
         errors.append(
             "Queue-advance bleed regression must rerender Command Center with a "
             "new leadId (simulates /leads/:a → /leads/:b without remount)"
+        )
+    lead_ids = set(re.findall(r"leadId\s*=\s*\{(\d+)\}", bleed_test))
+    if len(lead_ids) < 2:
+        errors.append(
+            "Queue-advance bleed regression must exercise two distinct lead IDs"
         )
     util = ROOT / "frontend" / "src" / "utils" / "leadScopedRows.ts"
     if not util.exists():
@@ -203,6 +216,8 @@ def check_queue_advance_bleed_regression_test() -> list[str]:
         util_text = util.read_text(encoding="utf-8")
         if "export function scopeRowsToLead" not in util_text:
             errors.append("leadScopedRows.ts must export scopeRowsToLead")
+        if "export function scopeRowsToLeadWithTotal" not in util_text:
+            errors.append("leadScopedRows.ts must export scopeRowsToLeadWithTotal")
     timeline_test = ROOT / "frontend" / "src" / "components" / "LeadTimeline.test.tsx"
     if not timeline_test.exists():
         errors.append("LeadTimeline.test.tsx missing")
