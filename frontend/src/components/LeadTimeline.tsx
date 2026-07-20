@@ -532,6 +532,10 @@ function mergeTimelineEntries(
   return merged
 }
 
+function timelineEntryIds(entries: readonly LeadTimelineEntry[]): Set<number> {
+  return new Set(entries.map((entry) => entry.id))
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -567,11 +571,15 @@ export function LeadTimeline({
   const leadIdRef = useRef(leadId)
   const previousLeadIdRef = useRef(leadId)
   const requestSeqRef = useRef(0)
+  const entriesRef = useRef(entries)
+  const baseEntryIdsRef = useRef(timelineEntryIds(initialScopedRef.current.rows))
   leadIdRef.current = leadId
+  entriesRef.current = entries
 
   // Fail-closed at the prop boundary (standalone use + defense when parent
   // already scoped). Same-lead refreshes merge into loaded pages so activity
-  // logs do not collapse pagination back to page 1.
+  // logs do not collapse pagination back to page 1, while deleted/omitted rows
+  // from the refreshed first page are reconciled away.
   useEffect(() => {
     const scoped = scopeRowsToLeadWithTotal(
       initialEntries,
@@ -580,14 +588,18 @@ export function LeadTimeline({
       initialTotal,
     )
     const leadChanged = previousLeadIdRef.current !== leadId
-    setEntries((prev) => {
-      if (leadChanged) return scoped.rows
-      return mergeTimelineEntries(
-        scoped.rows,
-        scopeRowsToLead(prev, leadId, 'timeline'),
-      )
-    })
-    setTotal((prevTotal) => leadChanged ? scoped.total : Math.max(prevTotal, scoped.total))
+    const previousBaseIds = baseEntryIdsRef.current
+    const preservedLoadedEntries = leadChanged
+      ? []
+      : scopeRowsToLead(entriesRef.current, leadId, 'timeline')
+        .filter((entry) => !previousBaseIds.has(entry.id))
+    const nextEntries = leadChanged
+      ? scoped.rows
+      : mergeTimelineEntries(scoped.rows, preservedLoadedEntries)
+
+    setEntries(nextEntries)
+    setTotal(leadChanged ? scoped.total : Math.max(scoped.total, nextEntries.length))
+    baseEntryIdsRef.current = timelineEntryIds(scoped.rows)
     previousLeadIdRef.current = leadId
   }, [leadId, initialEntries, initialTotal])
 

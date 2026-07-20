@@ -534,9 +534,8 @@ describe('LeadTimeline', () => {
           initialEntries={[
             makeEntry(5, { summary: 'Newly logged note' }),
             makeEntry(1, { summary: 'Entry 1 refreshed' }),
-            makeEntry(2, { summary: 'Entry 2' }),
           ]}
-          initialTotal={5}
+          initialTotal={4}
           onLoadMore={onLoadMore}
         />,
       )
@@ -544,9 +543,10 @@ describe('LeadTimeline', () => {
       await waitFor(() => {
         expect(screen.getByTestId('entry-summary-5')).toHaveTextContent('Newly logged note')
         expect(screen.getByTestId('entry-summary-1')).toHaveTextContent('Entry 1 refreshed')
+        expect(screen.queryByTestId('entry-summary-2')).not.toBeInTheDocument()
         expect(screen.getByTestId('entry-summary-3')).toHaveTextContent('Entry 3')
         expect(screen.getByTestId('entry-summary-4')).toHaveTextContent('Entry 4')
-        expect(screen.getByTestId('timeline-showing')).toHaveTextContent('Showing 5 of 5')
+        expect(screen.getByTestId('timeline-showing')).toHaveTextContent('Showing 4 of 4')
       })
     })
 

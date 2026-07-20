@@ -659,14 +659,25 @@ const ACTIVITY_SUCCESS_MESSAGES: Record<ActivityLogType, string> = {
   email: 'Email logged.',
 }
 
+function normalizeTimelineEntriesForLead(
+  entries: readonly LeadTimelineEntry[],
+  leadId: number,
+): LeadTimelineEntry[] {
+  return entries.map((entry) => ({
+    ...entry,
+    lead_id: entry.lead_id ?? leadId,
+  }))
+}
+
 const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
   function ActivityPanel(
     { leadId, initialEntries, initialTotal, highlightEntryId },
     ref,
   ) {
     const panelRef = useRef<HTMLDivElement>(null)
+    const initialScopedEntries = normalizeTimelineEntriesForLead(initialEntries, leadId)
     const [timelineEntries, setTimelineEntries] = useState<LeadTimelineEntry[]>(() =>
-      scopeRowsToLead(initialEntries, leadId, 'timeline'),
+      scopeRowsToLead(initialScopedEntries, leadId, 'timeline'),
     )
     const [timelineTotal, setTimelineTotal] = useState(initialTotal)
     const leadIdRef = useRef(leadId)
@@ -679,12 +690,13 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
     // fail-closed filter anything foreign before paint. LeadTimeline is a
     // presenter — scoping ownership stays here.
     React.useEffect(() => {
-      const serverIds = new Set(initialEntries.map((e) => e.id))
+      const serverEntries = normalizeTimelineEntriesForLead(initialEntries, leadId)
+      const serverIds = new Set(serverEntries.map((e) => e.id))
       const optimisticOnly = timelineEntriesRef.current.filter(
         (e) => e.lead_id === leadId && !serverIds.has(e.id),
       )
       const scoped = scopeRowsToLeadWithTotal(
-        [...optimisticOnly, ...initialEntries],
+        [...optimisticOnly, ...serverEntries],
         leadId,
         'timeline',
         initialTotal,
@@ -722,7 +734,7 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
         return { entries: [], total: 0 }
       }
       const scoped = scopeRowsToLeadWithTotal(
-        result.entries,
+        normalizeTimelineEntriesForLead(result.entries, requestedLeadId),
         requestedLeadId,
         'timeline',
         result.total,

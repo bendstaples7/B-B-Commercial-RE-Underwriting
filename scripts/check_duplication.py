@@ -154,6 +154,12 @@ def check_dead_api_exports() -> list[str]:
 
 CC_RENDER_RE = re.compile(r"<UnifiedLeadCommandCenter\b([^>]*)/?>", re.DOTALL)
 CC_KEY_ATTR_RE = re.compile(r"(^|\s)key\s*=\s*\{(?:numericId|leadId)\}")
+CC_LEAD_ID_RE = re.compile(r"<UnifiedLeadCommandCenter\b[^>]*\bleadId\s*=\s*\{(\d+)\}", re.DOTALL)
+SCOPE_ROWS_EXPORT_RE = re.compile(r"^export\s+function\s+scopeRowsToLead(?:<|\()", re.MULTILINE)
+SCOPE_ROWS_WITH_TOTAL_EXPORT_RE = re.compile(
+    r"^export\s+function\s+scopeRowsToLeadWithTotal(?:<|\()",
+    re.MULTILINE,
+)
 
 
 def check_lead_command_center_remount_key() -> list[str]:
@@ -204,19 +210,23 @@ def check_queue_advance_bleed_regression_test() -> list[str]:
             "Queue-advance bleed regression must rerender Command Center with a "
             "new leadId (simulates /leads/:a → /leads/:b without remount)"
         )
-    lead_ids = set(re.findall(r"leadId\s*=\s*\{(\d+)\}", bleed_test))
-    if len(lead_ids) < 2:
+    rerender_index = bleed_test.find("rerender(")
+    before_rerender = bleed_test[:rerender_index] if rerender_index >= 0 else ""
+    after_rerender = bleed_test[rerender_index:] if rerender_index >= 0 else ""
+    before_lead_ids = set(CC_LEAD_ID_RE.findall(before_rerender))
+    after_lead_ids = set(CC_LEAD_ID_RE.findall(after_rerender))
+    if not any(before_id != after_id for before_id in before_lead_ids for after_id in after_lead_ids):
         errors.append(
-            "Queue-advance bleed regression must exercise two distinct lead IDs"
+            "Queue-advance bleed regression must rerender with a different leadId"
         )
     util = ROOT / "frontend" / "src" / "utils" / "leadScopedRows.ts"
     if not util.exists():
         errors.append("frontend/src/utils/leadScopedRows.ts missing (fail-closed lead scope)")
     else:
         util_text = util.read_text(encoding="utf-8")
-        if "export function scopeRowsToLead" not in util_text:
+        if not SCOPE_ROWS_EXPORT_RE.search(util_text):
             errors.append("leadScopedRows.ts must export scopeRowsToLead")
-        if "export function scopeRowsToLeadWithTotal" not in util_text:
+        if not SCOPE_ROWS_WITH_TOTAL_EXPORT_RE.search(util_text):
             errors.append("leadScopedRows.ts must export scopeRowsToLeadWithTotal")
     timeline_test = ROOT / "frontend" / "src" / "components" / "LeadTimeline.test.tsx"
     if not timeline_test.exists():
