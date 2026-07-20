@@ -367,7 +367,14 @@ const commandCenterPayloadArb = fc.record({
     explanation: fc.option(fc.string()),
     signals: fc.constant({}),
   }),
-})
+}).map((payload) => ({
+  ...payload,
+  open_tasks: payload.open_tasks.map((t) => ({ ...t, lead_id: payload.id })),
+  timeline: {
+    ...payload.timeline,
+    entries: payload.timeline.entries.map((e) => ({ ...e, lead_id: payload.id })),
+  },
+}))
 
 // Export arbitraries for use in sub-task test files
 export {
@@ -979,12 +986,14 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
 
     await fc.assert(
       fc.asyncProperty(fc.array(taskArb, { maxLength: 10 }), async (tasks) => {
+        // Pin lead_id so this property validates render counts, not fail-closed filtering.
+        const scopedTasks = tasks.map((t, i) => ({ ...t, id: i + 1, lead_id: ACTIVE_LEAD_ID }))
         const payload = {
           id: 1,
           owner_first_name: null, owner_last_name: null,
           property_street: null, property_city: null, property_state: null,
           lead_score: 50, lead_status: 'skip_trace',
-          open_tasks: tasks,
+          open_tasks: scopedTasks,
           timeline: { entries: [], total: 0, page: 1, per_page: 20 },
           recommended_action: { value: null, label: null, explanation: null, signals: {} },
         }
@@ -1014,10 +1023,10 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         expect(tasksPanel).not.toBeNull()
 
         // LeadTaskList renders each task as <ListItem data-testid={`task-item-${task.id}`}>
-        // taskArb uses status: 'open'; foreign lead_id rows are fail-closed by lead scope.
+        // taskArb uses status: 'open'; all rows belong to the active lead.
         const taskItems = tasksPanel!.querySelectorAll('[data-testid^="task-item-"]')
 
-        expect(taskItems.length).toBe(rowsForActiveLead(tasks).length)
+        expect(taskItems.length).toBe(scopedTasks.length)
 
         unmount()
         document.body.removeChild(container)
@@ -1042,7 +1051,8 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
     await fc.assert(
       fc.asyncProperty(fc.array(taskArb, { maxLength: 5 }), async (initialTasks) => {
         // Ensure unique IDs so DOM task-item counts match list length (Property 13 pattern).
-        const tasks = initialTasks.map((t, i) => ({ ...t, id: i + 1 }))
+        const tasks = initialTasks.map((t, i) => ({ ...t, id: i + 1, lead_id: ACTIVE_LEAD_ID }))
+        const scopedTasks = tasks
 
         const payload = {
           id: 1,
@@ -1081,8 +1091,6 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         )
 
         await waitForCommandCenterLoaded(container)
-
-        const scopedTasks = rowsForActiveLead(tasks)
 
         // Get initial task count using the task-item-{id} pattern
         const tasksPanel = container.querySelector('[data-testid="tasks-panel"]')
@@ -1235,9 +1243,13 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         }),
         async (initialEntries) => {
           // Ensure all initial entries have distinct IDs (avoids duplicate key warnings
-          // and makes position assertions unambiguous)
-          const entries = initialEntries.map((e, i) => ({ ...e, id: i + 1 }))
-          const scopedEntries = rowsForActiveLead(entries)
+          // and makes position assertions unambiguous). Pin lead_id to active lead.
+          const entries = initialEntries.map((e, i) => ({
+            ...e,
+            id: i + 1,
+            lead_id: ACTIVE_LEAD_ID,
+          }))
+          const scopedEntries = entries
 
           const payload = {
             id: 1,
