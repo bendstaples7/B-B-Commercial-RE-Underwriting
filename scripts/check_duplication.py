@@ -152,6 +152,67 @@ def check_dead_api_exports() -> list[str]:
     return errors
 
 
+CC_RENDER_RE = re.compile(r"<UnifiedLeadCommandCenter\b([^>]*)/?>", re.DOTALL)
+
+
+def check_lead_command_center_remount_key() -> list[str]:
+    """Command Center must remount on lead change so local state cannot bleed.
+
+    Queue advance navigates /leads/:a → /leads/:b without leaving the route.
+    Without key={leadId} or key={numericId}, ActivityPanel/dialogs retain prior-lead state.
+    """
+    app_tsx = ROOT / "frontend" / "src" / "App.tsx"
+    if not app_tsx.exists():
+        return ["frontend/src/App.tsx missing"]
+    text = app_tsx.read_text(encoding="utf-8")
+    renders = CC_RENDER_RE.findall(text)
+    if not renders:
+        return ["UnifiedLeadCommandCenter is not rendered in App.tsx"]
+    errors: list[str] = []
+    for attrs in renders:
+        if not re.search(r"\bkey=\{(?:numericId|leadId)\}", attrs):
+            errors.append(
+                "UnifiedLeadCommandCenter in App.tsx must include "
+                "key={numericId} (or key={leadId}) so queue advance remounts "
+                "and cannot paint another lead's timeline/tasks"
+            )
+    return errors
+
+
+def check_queue_advance_bleed_regression_test() -> list[str]:
+    """Require the queue-advance timeline bleed regression to stay in the suite."""
+    path = ROOT / "frontend" / "src" / "components" / "UnifiedLeadCommandCenter.test.tsx"
+    if not path.exists():
+        return ["UnifiedLeadCommandCenter.test.tsx missing"]
+    text = path.read_text(encoding="utf-8")
+    errors: list[str] = []
+    if "timeline does not bleed across leads" not in text:
+        errors.append(
+            "Missing describe/it for timeline bleed across leads in "
+            "UnifiedLeadCommandCenter.test.tsx"
+        )
+    if "rerender(" not in text:
+        errors.append(
+            "Queue-advance bleed regression must rerender Command Center with a "
+            "new leadId (simulates /leads/:a → /leads/:b without remount)"
+        )
+    util = ROOT / "frontend" / "src" / "utils" / "leadScopedRows.ts"
+    if not util.exists():
+        errors.append("frontend/src/utils/leadScopedRows.ts missing (fail-closed lead scope)")
+    else:
+        util_text = util.read_text(encoding="utf-8")
+        if "export function scopeRowsToLead" not in util_text:
+            errors.append("leadScopedRows.ts must export scopeRowsToLead")
+    timeline_test = ROOT / "frontend" / "src" / "components" / "LeadTimeline.test.tsx"
+    if not timeline_test.exists():
+        errors.append("LeadTimeline.test.tsx missing")
+    elif "fail-closed lead scope" not in timeline_test.read_text(encoding="utf-8"):
+        errors.append(
+            "LeadTimeline.test.tsx must keep a 'fail-closed lead scope' regression"
+        )
+    return errors
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Check for structural duplication")
     parser.add_argument("--base", default="origin/main", help="Unused; reserved for diff checks")
@@ -164,6 +225,8 @@ def main() -> None:
     errors.extend(check_lead_score_writers())
     errors.extend(check_api_ts_size())
     errors.extend(check_dead_api_exports())
+    errors.extend(check_lead_command_center_remount_key())
+    errors.extend(check_queue_advance_bleed_regression_test())
 
     if errors:
         _fail(errors)

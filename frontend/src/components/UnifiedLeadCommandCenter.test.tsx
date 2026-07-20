@@ -1074,3 +1074,97 @@ describe('UnifiedLeadCommandCenter — mail stage toast + continue banner', () =
     expect(screen.getByTestId('mail-continue-next-lead')).toBeInTheDocument()
   })
 })
+
+describe('UnifiedLeadCommandCenter — timeline does not bleed across leads', () => {
+  it('drops prior lead Activity rows when leadId changes without remounting', async () => {
+    const api = await import('@/services/api')
+    const leadApi = await import('@/services/leadApi')
+
+    vi.mocked(api.commandCenterService.getCommandCenter).mockImplementation(async (id: number) => {
+      if (id === 3415) {
+        return makeCommandCenterPayload({
+          id: 3415,
+          owner_first_name: 'Gilberto',
+          owner_last_name: 'Olivares',
+          property_street: '2553 N Drake Ave 1',
+          timeline: {
+            entries: [
+              {
+                id: 9001,
+                lead_id: 3415,
+                event_type: 'call_logged',
+                occurred_at: '2026-07-14T20:10:50.648867Z',
+                source: 'manual',
+                actor: 'Ben',
+                summary: 'Call with Gilberto Olivares ((630) 202-3839, mobile): voicemail',
+                metadata: null,
+                hubspot_activity_id: null,
+                is_deleted: false,
+                created_at: '2026-07-14T20:10:50.648867Z',
+              },
+            ],
+            total: 1,
+            page: 1,
+            per_page: 25,
+          },
+        })
+      }
+      return makeCommandCenterPayload({
+        id: 4404,
+        owner_first_name: 'Andiamo',
+        owner_last_name: null,
+        property_street: '4507 N Keystone',
+        timeline: {
+          entries: [
+            {
+              id: 161610,
+              lead_id: 4404,
+              event_type: 'recommended_action_changed',
+              occurred_at: '2026-07-07T22:54:46.417209Z',
+              source: 'system',
+              actor: 'System',
+              summary: "Recommended action changed from 'analyze_property' to 'call_ready'.",
+              metadata: null,
+              hubspot_activity_id: null,
+              is_deleted: false,
+              created_at: '2026-07-07T22:54:46.417209Z',
+            },
+          ],
+          total: 1,
+          page: 1,
+          per_page: 25,
+        },
+      })
+    })
+    vi.mocked(leadApi.leadService.getLeadDetail).mockImplementation(async (id: number) =>
+      makePropertyDetail({
+        id,
+        owner_first_name: id === 3415 ? 'Gilberto' : 'Andiamo',
+        owner_last_name: id === 3415 ? 'Olivares' : null,
+        property_street: id === 3415 ? '2553 N Drake Ave 1' : '4507 N Keystone',
+      }),
+    )
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <UnifiedLeadCommandCenter leadId={3415} />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('lead-timeline')).toHaveTextContent('Gilberto Olivares')
+    })
+
+    // Same instance pattern as queue advance (prop change, no remount key).
+    rerender(
+      <MemoryRouter>
+        <UnifiedLeadCommandCenter leadId={4404} />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('lead-timeline')).toHaveTextContent('call_ready')
+    })
+    expect(screen.getByTestId('lead-timeline')).not.toHaveTextContent('Gilberto Olivares')
+  })
+})

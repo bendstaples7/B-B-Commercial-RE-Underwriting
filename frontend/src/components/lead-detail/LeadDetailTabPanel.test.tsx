@@ -121,4 +121,18 @@ describe('LeadDetailTabPanel prior-owner Info', () => {
     expect(screen.getByTestId('info-past-owner-11')).toHaveTextContent('Prior Seller')
     expect(screen.getByTestId('info-past-owner-11')).toHaveTextContent('9 Old St')
   })
+
+  it('shows Other Addresses with mailing fields on Info', () => {
+    renderInfo({}, { returned_addresses: '200 Alt Ave, Chicago IL' })
+
+    expect(screen.getByTestId('info-owner-contact')).toHaveTextContent('100 Prior Ln')
+    expect(screen.getByTestId('info-owner-contact')).toHaveTextContent('Other Addresses')
+    expect(screen.getByTestId('info-owner-contact')).toHaveTextContent('200 Alt Ave, Chicago IL')
+  })
+
+  it('omits Other Addresses when returned_addresses is blank', () => {
+    renderInfo({}, { returned_addresses: '   ' })
+
+    expect(screen.getByTestId('info-owner-contact')).not.toHaveTextContent('Other Addresses')
+  })
 })

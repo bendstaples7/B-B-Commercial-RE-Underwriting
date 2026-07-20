@@ -45,6 +45,7 @@ import openLetterService from '@/services/openLetterApi'
 import { primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import { parseLogActivityParam, buildLeadUrl } from '@/utils/queueLogNavigation'
 import { isFromQueueState, fromQueueFromKey, queuePath, type FromQueueState } from '@/utils/fromQueue'
+import { scopeRowsToLead, scopeRowsToLeadWithTotal } from '@/utils/leadScopedRows'
 import {
   LEAD_WORKSPACE_STALE_MS,
   prefetchAdjacentQueueLeads,
@@ -478,11 +479,13 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
   const queryClient = useQueryClient()
   const panelRef = useRef<HTMLDivElement>(null)
   const taskListRef = useRef<LeadTaskListHandle>(null)
-  const [tasks, setTasks] = useState<LeadTask[]>(initialTasks)
+  const [tasks, setTasks] = useState<LeadTask[]>(() =>
+    scopeRowsToLead(initialTasks, leadId, 'tasks'),
+  )
 
   useEffect(() => {
-    setTasks(initialTasks)
-  }, [initialTasks])
+    setTasks(scopeRowsToLead(initialTasks, leadId, 'tasks'))
+  }, [leadId, initialTasks])
 
   React.useImperativeHandle(ref, () => ({
     scrollIntoView: () => {
@@ -500,20 +503,29 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
   // Replace optimistic placeholder (id=0) when present; otherwise append.
   const handleTaskCreated = (task: LeadTask) => {
     setTasks((prev) => {
-      if (prev.some((t) => t.id === 0)) {
-        return prev.map((t) => (t.id === 0 ? task : t))
-      }
-      if (prev.some((t) => t.id === task.id)) {
-        return prev.map((t) => (t.id === task.id ? { ...t, ...task } : t))
-      }
-      return [task, ...prev]
+      const next = (() => {
+        if (prev.some((t) => t.id === 0)) {
+          return prev.map((t) => (t.id === 0 ? task : t))
+        }
+        if (prev.some((t) => t.id === task.id)) {
+          return prev.map((t) => (t.id === task.id ? { ...t, ...task } : t))
+        }
+        return [task, ...prev]
+      })()
+      return scopeRowsToLead(next, leadId, 'tasks')
     })
     queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
     onTasksChanged()
   }
 
   const handleTaskUpdated = (task: LeadTask) => {
-    setTasks((prev) => prev.map((t) => (t.id === task.id ? { ...t, ...task } : t)))
+    setTasks((prev) =>
+      scopeRowsToLead(
+        prev.map((t) => (t.id === task.id ? { ...t, ...task } : t)),
+        leadId,
+        'tasks',
+      ),
+    )
     queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
     onTasksChanged()
   }
@@ -521,7 +533,9 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
   // Called immediately on form submit (before API call) to add a placeholder
   // so the UI grows from N to N+1 optimistically (Requirement 7.2, Property 12).
   const handleOptimisticTaskCreate = (optimisticTask: LeadTask) => {
-    setTasks(prev => [optimisticTask, ...prev])
+    setTasks((prev) =>
+      scopeRowsToLead([{ ...optimisticTask, lead_id: leadId }, ...prev], leadId, 'tasks'),
+    )
   }
 
   // Called when the create API call fails — roll back the optimistic placeholder
@@ -580,6 +594,7 @@ const TasksPanel = React.forwardRef<TasksPanelHandle, TasksPanelProps>(function 
     await onAfterTaskCompleted?.()
   }
 
+  // Tasks are scoped on every write path; pass state through without re-scoping on render.
   return (
     <Box ref={panelRef} data-testid="tasks-panel" sx={embedded ? { p: 0 } : undefined}>
       {embedded ? (
@@ -650,17 +665,33 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
     ref,
   ) {
     const panelRef = useRef<HTMLDivElement>(null)
-    const [timelineEntries, setTimelineEntries] = useState<LeadTimelineEntry[]>(initialEntries)
+    const [timelineEntries, setTimelineEntries] = useState<LeadTimelineEntry[]>(() =>
+      scopeRowsToLead(initialEntries, leadId, 'timeline'),
+    )
     const [timelineTotal, setTimelineTotal] = useState(initialTotal)
+    const leadIdRef = useRef(leadId)
+    leadIdRef.current = leadId
+    const timelineEntriesRef = useRef(timelineEntries)
+    timelineEntriesRef.current = timelineEntries
 
+    // Drop prior-lead rows entirely when navigating. Only keep optimistic
+    // prepends that belong to the *current* lead (same lead_id), then
+    // fail-closed filter anything foreign before paint. LeadTimeline is a
+    // presenter — scoping ownership stays here.
     React.useEffect(() => {
-      setTimelineEntries((prev) => {
-        const serverIds = new Set(initialEntries.map((e) => e.id))
-        const optimisticOnly = prev.filter((e) => !serverIds.has(e.id))
-        return [...optimisticOnly, ...initialEntries]
-      })
-      setTimelineTotal(initialTotal)
-    }, [initialEntries, initialTotal])
+      const serverIds = new Set(initialEntries.map((e) => e.id))
+      const optimisticOnly = timelineEntriesRef.current.filter(
+        (e) => e.lead_id === leadId && !serverIds.has(e.id),
+      )
+      const scoped = scopeRowsToLeadWithTotal(
+        [...optimisticOnly, ...initialEntries],
+        leadId,
+        'timeline',
+        initialTotal,
+      )
+      setTimelineEntries(scoped.rows)
+      setTimelineTotal(scoped.total)
+    }, [leadId, initialEntries, initialTotal])
 
     React.useImperativeHandle(ref, () => ({
       scrollIntoView: () => {
@@ -670,14 +701,36 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
         }
       },
       prependEntry: (entry: LeadTimelineEntry) => {
-        setTimelineEntries(prev => [entry, ...prev])
-        setTimelineTotal(prev => prev + 1)
+        const activeLeadId = leadIdRef.current
+        // Reject only clearly foreign ids; missing lead_id is treated as current.
+        if (entry.lead_id != null && entry.lead_id !== activeLeadId) return
+        const normalized: LeadTimelineEntry = {
+          ...entry,
+          lead_id: entry.lead_id ?? activeLeadId,
+        }
+        setTimelineEntries((prev) =>
+          scopeRowsToLead([normalized, ...prev], activeLeadId, 'timeline'),
+        )
+        setTimelineTotal((prev) => prev + 1)
       },
     }))
 
     const handleLoadMore = async (page: number): Promise<{ entries: LeadTimelineEntry[]; total: number }> => {
-      const result = await commandCenterService.getTimeline(leadId, page)
-      return { entries: result.entries, total: result.total }
+      const requestedLeadId = leadId
+      const result = await commandCenterService.getTimeline(requestedLeadId, page)
+      if (requestedLeadId !== leadIdRef.current) {
+        return { entries: [], total: 0 }
+      }
+      const scoped = scopeRowsToLeadWithTotal(
+        result.entries,
+        requestedLeadId,
+        'timeline',
+        result.total,
+      )
+      return {
+        entries: scoped.rows,
+        total: scoped.total,
+      }
     }
 
     return (
@@ -1202,6 +1255,13 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
 
   useEffect(() => {
     setMailContinuePrompt(false)
+    setHighlightEntryId(null)
+    setActivityModal(null)
+    setSuppressDialogOpen(false)
+    setDncDialogOpen(false)
+    setDncPending(false)
+    setDncError(null)
+    setActivitySnackbar({ open: false, message: '' })
   }, [leadId])
 
   useEffect(() => {

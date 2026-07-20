@@ -788,4 +788,24 @@ describe('LeadTimeline', () => {
       ).toBe('Email Logged')
     })
   })
+
+  describe('fail-closed lead scope', () => {
+    it('does not paint entries whose lead_id belongs to another lead', () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      render(
+        <LeadTimeline
+          leadId={4404}
+          initialEntries={[
+            makeEntry(1, { lead_id: 4404, summary: 'Andiamo call' }),
+            makeEntry(2, { lead_id: 3415, summary: 'Call with Gilberto Olivares' }),
+          ]}
+          initialTotal={2}
+        />,
+      )
+      expect(screen.getByTestId('lead-timeline')).toHaveTextContent('Andiamo call')
+      expect(screen.getByTestId('lead-timeline')).not.toHaveTextContent('Gilberto Olivares')
+      expect(errorSpy).toHaveBeenCalled()
+      errorSpy.mockRestore()
+    })
+  })
 })

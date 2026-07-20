@@ -1,0 +1,29 @@
+---
+description: Lead detail must remount on leadId change — no cross-lead UI state
+alwaysApply: true
+---
+
+# Lead-Scoped Remount
+
+`/leads/:id` is a hard boundary. Queue advance navigates between leads without
+leaving the route. Local React state (timeline, tasks, dialogs, forms) must
+not survive that navigation.
+
+## Hard rules
+
+1. **`UnifiedLeadCommandCenter` is always rendered with `key={leadId}` (or
+   `key={numericId}`)** from the route wrapper in `App.tsx`. CI enforces this
+   via `scripts/check_duplication.py`.
+2. **Never paint foreign rows** — timeline/task lists must run through
+   [`scopeRowsToLead`](../../frontend/src/utils/leadScopedRows.ts) so a row
+   whose `lead_id` ≠ active lead is dropped (and logged), even if optimistic
+   merge regresses.
+3. **Do not remove** the `UnifiedLeadCommandCenter.test.tsx` case
+   `timeline does not bleed across leads` — CI runs it as a dedicated gate.
+
+## When adding lead-detail UI state
+
+Prefer remount (the route key) over one-off `useEffect([leadId])` resets.
+If you must keep instance state across renders, key it by `leadId` or reset
+on `leadId` change — and still fail-closed with `scopeRowsToLead` for list
+data.

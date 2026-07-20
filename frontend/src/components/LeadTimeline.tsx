@@ -3,7 +3,7 @@
  *
  * Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8
  */
-import { useState, useEffect, type KeyboardEvent, type MouseEvent } from 'react'
+import { useState, useEffect, useRef, type KeyboardEvent, type MouseEvent } from 'react'
 import {
   Accordion,
   AccordionDetails,
@@ -28,6 +28,7 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import HistoryIcon from '@mui/icons-material/History'
 import type { LeadTimelineEntry } from '@/types'
 import { formatPhoneNumber } from '@/utils/phone'
+import { scopeRowsToLead, scopeRowsToLeadWithTotal } from '@/utils/leadScopedRows'
 import { stripHtmlTags } from '@/utils/helpers'
 
 // ---------------------------------------------------------------------------
@@ -532,18 +533,30 @@ export function LeadTimeline({
   onLoadMore,
   highlightEntryId = null,
 }: LeadTimelineProps) {
-  const [entries, setEntries] = useState<LeadTimelineEntry[]>(initialEntries)
+  const [entries, setEntries] = useState<LeadTimelineEntry[]>(() =>
+    scopeRowsToLead(initialEntries, leadId, 'timeline'),
+  )
   const [total, setTotal] = useState(initialTotal)
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showAllLoaded, setShowAllLoaded] = useState(false)
+  const leadIdRef = useRef(leadId)
+  leadIdRef.current = leadId
 
+  // Fail-closed at the prop boundary (standalone use + defense when parent
+  // already scoped). Do not re-scope during render — that spam-logs drops.
   useEffect(() => {
-    setEntries(initialEntries)
-    setTotal(initialTotal)
+    const scoped = scopeRowsToLeadWithTotal(
+      initialEntries,
+      leadId,
+      'timeline',
+      initialTotal,
+    )
+    setEntries(scoped.rows)
+    setTotal(scoped.total)
     setPage(1)
-  }, [initialEntries, initialTotal])
+  }, [leadId, initialEntries, initialTotal])
 
   // Only collapse the expanded timeline when navigating to a different lead —
   // not when the same lead's entries refresh after an activity log.
@@ -563,18 +576,34 @@ export function LeadTimeline({
     if (!onLoadMore || loading) return
     setLoading(true)
     setError(null)
+    const requestedLeadId = leadId
     try {
       const nextPage = page + 1
       const result = await onLoadMore(nextPage)
-      // Append new entries (do NOT replace existing ones)
-      setEntries((prev) => [...prev, ...result.entries])
-      setTotal(result.total)
+      // Drop late responses after queue advance to another lead.
+      if (requestedLeadId !== leadIdRef.current) return
+      const scoped = scopeRowsToLeadWithTotal(
+        result.entries,
+        requestedLeadId,
+        'timeline',
+        result.total,
+      )
+      // Append new entries (do NOT replace existing ones); re-scope prev in case
+      // of a race, then adopt the adjusted total from this page response.
+      setEntries((prev) => [
+        ...scopeRowsToLead(prev, requestedLeadId, 'timeline'),
+        ...scoped.rows,
+      ])
+      setTotal(scoped.total)
       setPage(nextPage)
       setShowAllLoaded(true)
     } catch (err) {
+      if (requestedLeadId !== leadIdRef.current) return
       setError(err instanceof Error ? err.message : 'Failed to load more entries.')
     } finally {
-      setLoading(false)
+      if (requestedLeadId === leadIdRef.current) {
+        setLoading(false)
+      }
     }
   }
 

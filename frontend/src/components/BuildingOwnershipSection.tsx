@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Alert,
   Box,
@@ -148,6 +148,31 @@ export function BuildingOwnershipSection({
   const theme = useTheme()
   const isXs = useMediaQuery(theme.breakpoints.down('sm'))
   const [mobileExpanded, setMobileExpanded] = useState(false)
+
+  // Queue advance reuses this section unless the route remounts — clear local
+  // analyze/decision state so the prior lead's snapshot cannot drive UI.
+  useEffect(() => {
+    setDecisionOpen(false)
+    setOverrideStatus('needs_review')
+    setOverrideBuildingSale('unknown')
+    setOverrideReason('')
+    setFormError(null)
+    setAnalyzeFeedback(null)
+    setAnalyzeSnapshot(null)
+    setMobileExpanded(false)
+  }, [leadId])
+
+  // Re-seed overrides only from a CC payload that matches the active lead.
+  useEffect(() => {
+    if (commandCenterData.id !== leadId) return
+    setOverrideStatus(commandCenterData.condo_risk_status ?? 'needs_review')
+    setOverrideBuildingSale(commandCenterData.building_sale_possible ?? 'unknown')
+  }, [
+    leadId,
+    commandCenterData.id,
+    commandCenterData.condo_risk_status,
+    commandCenterData.building_sale_possible,
+  ])
 
   const hasAnalysisId = Boolean(
     commandCenterData.condo_analysis_id || analyzeSnapshot?.condo_analysis_id,

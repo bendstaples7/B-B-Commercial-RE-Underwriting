@@ -38,6 +38,16 @@ jobs:
         run: npx tsc --noEmit
         working-directory: frontend
 
+      - name: Queue-advance timeline bleed regression (required gate)
+        # Dedicated gate so cross-lead Activity contamination cannot slip past
+        # a broad green suite. Companion structural checks live in
+        # scripts/check_duplication.py (remount key + test presence).
+        run: |
+          npx vitest run src/utils/leadScopedRows.test.ts
+          npx vitest run src/components/UnifiedLeadCommandCenter.test.tsx --testNamePattern='timeline does not bleed across leads'
+          npx vitest run src/components/LeadTimeline.test.tsx --testNamePattern='fail-closed lead scope'
+        working-directory: frontend
+
       - name: Run tests (includes App shell smoke test)
         run: npm test
         working-directory: frontend

@@ -927,3 +927,11 @@ describe('PropertySidebar prior-owner stale contacts', () => {
     expect(screen.queryByRole('button', { name: /Past owners/i })).not.toBeInTheDocument()
   })
 })
+
+describe('PropertySidebar Other Addresses placement', () => {
+  it('does not render Other Addresses in the sidebar (lives on Info instead)', () => {
+    renderSidebar(makePayload())
+
+    expect(screen.queryByText('Other Addresses')).not.toBeInTheDocument()
+  })
+})
