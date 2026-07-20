@@ -635,6 +635,28 @@ class TestGISEnrichment:
             lead = db.session.query(Property).first()
             assert "GIS match not found" in (lead.notes or "")
 
+    def test_no_match_still_runs_property_address_completion(self, app):
+        """No parcel match should not return before canonical situs completion."""
+        with app.app_context():
+            lead = Property(
+                property_street='1239 N Hoyne Ave Chicago IL 60622',
+                lead_category='residential',
+            )
+            db.session.add(lead)
+            db.session.flush()
+            connector = _make_mock_connector(parcel=None)
+            svc = _make_service(gis_registry={"dupage_il": connector})
+
+            with patch(
+                'app.services.property_address_service.ensure_lead_property_address_complete',
+                return_value=None,
+            ) as mock_ensure:
+                outcome = svc._enrich_with_gis(lead, connector, import_job_id=1)
+
+            assert outcome['match_found'] is False
+            assert lead.needs_skip_trace is True
+            mock_ensure.assert_called_once()
+
     def test_gis_error_batch_continues(self, app):
         """Req 8.6: GIS lookup error must not abort the batch."""
         with app.app_context():

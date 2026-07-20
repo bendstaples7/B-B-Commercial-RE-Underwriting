@@ -275,54 +275,53 @@ class LeadIngestionService:
                 lead.needs_skip_trace = True
                 lead.has_property_match = False          # Req 6.2, 6.3
                 _append_note(lead, 'GIS match not found')
-                return outcome
+            else:
+                outcome['parcel_pin'] = getattr(parcel, 'county_assessor_pin', None)
 
-            outcome['parcel_pin'] = getattr(parcel, 'county_assessor_pin', None)
-
-            # Match found — populate null fields (Requirement 8.2)
-            fields_populated = 0
-            for field in _GIS_FIELDS:
-                parcel_value = getattr(parcel, field, None)
-                current_value = getattr(lead, field, None)
-                current_missing = (
-                    current_value is None
-                    or (
-                        isinstance(current_value, str)
-                        and not current_value.strip()
+                # Match found — populate null fields (Requirement 8.2)
+                fields_populated = 0
+                for field in _GIS_FIELDS:
+                    parcel_value = getattr(parcel, field, None)
+                    current_value = getattr(lead, field, None)
+                    current_missing = (
+                        current_value is None
+                        or (
+                            isinstance(current_value, str)
+                            and not current_value.strip()
+                        )
                     )
-                )
-                if parcel_value is not None and current_missing:
-                    setattr(lead, field, parcel_value)
-                    fields_populated += 1
+                    if parcel_value is not None and current_missing:
+                        setattr(lead, field, parcel_value)
+                        fields_populated += 1
 
-            # Mark property match (Requirement 8.3)
-            lead.has_property_match = True
-            outcome['match_found'] = True
-            outcome['fields_populated'] = fields_populated
+                # Mark property match (Requirement 8.3)
+                lead.has_property_match = True
+                outcome['match_found'] = True
+                outcome['fields_populated'] = fields_populated
 
-            if outcome['match_found'] and getattr(lead, 'id', None):
+                if outcome['match_found'] and getattr(lead, 'id', None):
+                    try:
+                        from app import db
+                        from app.services.contact_service import ContactService
+                        with db.session.begin_nested():
+                            ContactService().upsert_owners_from_lead(lead, commit=False)
+                    except Exception as contact_exc:
+                        logger.warning(
+                            "Contact upsert after GIS enrich failed for lead_id=%s: %s",
+                            lead.id, contact_exc,
+                        )
+
                 try:
-                    from app import db
-                    from app.services.contact_service import ContactService
-                    with db.session.begin_nested():
-                        ContactService().upsert_owners_from_lead(lead, commit=False)
-                except Exception as contact_exc:
-                    logger.warning(
-                        "Contact upsert after GIS enrich failed for lead_id=%s: %s",
-                        lead.id, contact_exc,
+                    from app.services.cook_county_enrichment_service import (
+                        maybe_dispatch_after_gis_match,
                     )
-
-            try:
-                from app.services.cook_county_enrichment_service import (
-                    maybe_dispatch_after_gis_match,
-                )
-                maybe_dispatch_after_gis_match(lead, connector)
-            except Exception as dispatch_exc:
-                logger.warning(
-                    "Cook County enrichment dispatch failed for lead %s: %s",
-                    getattr(lead, 'id', '?'),
-                    dispatch_exc,
-                )
+                    maybe_dispatch_after_gis_match(lead, connector)
+                except Exception as dispatch_exc:
+                    logger.warning(
+                        "Cook County enrichment dispatch failed for lead %s: %s",
+                        getattr(lead, 'id', '?'),
+                        dispatch_exc,
+                    )
 
         except Exception as exc:
             # Log and continue — never fail the batch (Requirement 8.6)
@@ -334,6 +333,26 @@ class LeadIngestionService:
                 exc,
             )
             outcome['error'] = str(exc)
+
+        # Always try canonical situs completion after GIS (or failed GIS).
+        try:
+            from app.services.property_address_service import (
+                ensure_lead_property_address_complete,
+            )
+            # GIS already attempted above — parse-only completion avoids a
+            # second Cook County street lookup for the same address.
+            ensure_lead_property_address_complete(
+                lead,
+                actor='lead_ingestion_gis',
+                try_gis=False,
+                commit=False,
+            )
+        except Exception as addr_exc:
+            logger.warning(
+                "Property address completion after GIS failed for lead_id=%s: %s",
+                getattr(lead, 'id', '?'),
+                addr_exc,
+            )
 
         return outcome
 

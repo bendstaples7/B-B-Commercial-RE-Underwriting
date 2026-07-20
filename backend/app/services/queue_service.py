@@ -28,6 +28,12 @@ ACTIVE_PIPELINE_STATUSES = [
     'offer_delivered',
 ]
 
+# Today's Action: active pipeline minus skip-trace staging (awaiting_skip_trace).
+TODAYS_ACTION_STATUSES = [
+    status for status in ACTIVE_PIPELINE_STATUSES
+    if status != 'awaiting_skip_trace'
+]
+
 # Statuses where outreach is in progress (has had contact)
 CONTACTED_STATUSES = [
     'mailing_contacted_no_interest',
@@ -424,11 +430,15 @@ class QueueService:
         return self._todays_action_query(today).count()
 
     def _todays_action_query(self, today: date | None = None, outreach: str | None = None):
-        """Base Today's Action membership query, optionally filtered by outreach label."""
+        """Base Today's Action membership query, optionally filtered by outreach label.
+
+        ``awaiting_skip_trace`` is staging for skip-trace handoff — never Today's
+        Action work (even if a dated custom chore remains open).
+        """
         today = today or date.today()
         open_lead_task_due_today = _open_lead_task_due_today_excluding_mail_awaiting(today)
         query = self._base_query().filter(
-            Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
+            Lead.lead_status.in_(TODAYS_ACTION_STATUSES),
             open_lead_task_due_today,
         )
         clause = _outreach_filter_clause(normalize_todays_outreach_filter(outreach))

@@ -87,6 +87,29 @@ class DeduplicationEngine:
     # Address normalization                                                #
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _complete_property_address_if_needed(lead, *, actor: str) -> None:
+        """Fill city/state/ZIP when create/merge left a street-only situs."""
+        try:
+            from app.services.property_address_service import (
+                ensure_lead_property_address_complete,
+            )
+            ensure_lead_property_address_complete(
+                lead,
+                actor=actor,
+                try_gis=False,
+                commit=False,
+            )
+        except Exception as exc:
+            # Never fail ingestion on address completion; heal Beat covers leftovers.
+            import logging
+            logging.getLogger(__name__).warning(
+                'property address completion skipped lead_id=%s actor=%s: %s',
+                getattr(lead, 'id', None),
+                actor,
+                exc,
+            )
+
     def normalize_address(self, address: str) -> str:
         """Return a normalized address string.
 
@@ -238,6 +261,9 @@ class DeduplicationEngine:
         existing.last_import_job_id = import_job_id
 
         db.session.add(existing)
+        self._complete_property_address_if_needed(
+            existing, actor='deduplication_engine.merge',
+        )
 
         conflict_detail = {'field_conflicts': conflicts} if conflicts else None
         outcome: Literal["updated", "conflict"] = 'conflict' if conflicts else 'updated'
@@ -299,6 +325,9 @@ class DeduplicationEngine:
             new_lead.last_import_job_id = import_job_id
             db.session.add(new_lead)
             db.session.flush()  # populate new_lead.id without committing the transaction
+            self._complete_property_address_if_needed(
+                new_lead, actor='deduplication_engine.create',
+            )
 
             return DeduplicationResult(
                 outcome='created',

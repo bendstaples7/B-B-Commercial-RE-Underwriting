@@ -22,12 +22,15 @@ from hypothesis import strategies as st
 def is_in_todays_action(lead_status, recommended_action, open_task_due_today):
     """Today's Action: lead_status in active pipeline statuses AND
     an open task has due_date <= today (recommended_action alone is not enough).
+
+    ``awaiting_skip_trace`` is excluded — skip-trace staging is not salesperson
+    Today's Action work.
     """
     _TODAYS_ACTION_STATUSES = {
         'mailing_no_contact_made', 'mailing_contacted_no_interest',
         'mailing_contacted_interested', 'negotiating_remote',
         'in_person_appointment', 'offer_delivered',
-        'skip_trace', 'awaiting_skip_trace',
+        'skip_trace',
     }
     return lead_status in _TODAYS_ACTION_STATUSES and open_task_due_today
 
