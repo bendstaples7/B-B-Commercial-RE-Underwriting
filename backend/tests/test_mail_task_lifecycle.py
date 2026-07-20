@@ -1101,6 +1101,45 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
             ]
             assert lead.id not in after_ids
 
+    def test_move_to_skip_trace_returns_all_completed_task_ids(self, app):
+        from app import db
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '11b Multi Chore Move Result St',
+                lead_status='awaiting_skip_trace',
+                recommended_action='add_contact_info',
+                needs_skip_trace=False,
+            )
+            chore_a = LeadTask(
+                lead_id=lead.id,
+                task_type='custom',
+                title='manual skip trace',
+                status='open',
+                due_date=date.today() - timedelta(days=30),
+                created_by='test',
+            )
+            chore_b = LeadTask(
+                lead_id=lead.id,
+                task_type='custom',
+                title='Add Contact Info',
+                status='open',
+                due_date=date.today() - timedelta(days=5),
+                created_by='test',
+            )
+            db.session.add_all([chore_a, chore_b])
+            db.session.commit()
+
+            result = SkipTraceEnqueue().move_to_skip_trace(
+                lead.id,
+                actor='test',
+            )
+
+            assert result['completed_task_ids'] == [chore_a.id, chore_b.id]
+            assert result['completed_task_id'] == chore_b.id
+
     def test_reconcile_promotes_hold_activation_with_leftover_dated_chore(self, app):
         """Activation processed_ids must not block promote of leftover dated chores."""
         from app import db
@@ -1192,6 +1231,56 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
 
             assert promoted.id in result['promoted_awaiting_skip_trace_leak_ids']
             assert other_recent.id in result['processed_lead_ids']
+
+    def test_promote_rolls_back_after_per_lead_failure(self, app):
+        from app import db
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        with app.app_context():
+            failing = _make_lead(
+                app,
+                '12d Failed Promotion St',
+                lead_status='awaiting_skip_trace',
+                recommended_action='add_contact_info',
+                needs_skip_trace=False,
+            )
+            succeeding = _make_lead(
+                app,
+                '12e Succeeding Promotion St',
+                lead_status='awaiting_skip_trace',
+                recommended_action='add_contact_info',
+                needs_skip_trace=False,
+            )
+            for lead in (failing, succeeding):
+                db.session.add(LeadTask(
+                    lead_id=lead.id,
+                    task_type='custom',
+                    title='manual skip trace',
+                    status='open',
+                    due_date=date.today(),
+                    created_by='test',
+                ))
+            db.session.commit()
+
+            service = SkipTraceEnqueue()
+            with patch.object(
+                service,
+                'move_to_skip_trace',
+                side_effect=[
+                    RuntimeError('constraint failed'),
+                    {'lead_status': 'skip_trace'},
+                ],
+            ), patch(
+                'app.services.skip_trace_enqueue.db.session.rollback',
+            ) as rollback:
+                result = service.promote_awaiting_skip_trace_due_leaks(
+                    actor='test',
+                    commit=True,
+                )
+
+            rollback.assert_called_once()
+            assert result['failed_lead_ids'] == [failing.id]
+            assert result['promoted_lead_ids'] == [succeeding.id]
 
 
 class TestCompleteTasksSupersededByMail:

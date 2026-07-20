@@ -142,7 +142,7 @@ class SkipTraceEnqueue:
                 )
                 .all()
             )
-            completed_task_id_out: Optional[int] = None
+            completed_task_ids_out: list[int] = []
             pending_hubspot_ids: set[str] = set()
             handoff_clear_ids: set[str] = set()
             today = date.today()
@@ -154,7 +154,7 @@ class SkipTraceEnqueue:
                 if task.due_date is not None and task.due_date > today:
                     continue
                 # Heal stuck dated/verify work left open after an earlier handoff.
-                completed_task_id_out = task.id
+                completed_task_ids_out.append(task.id)
                 if task.hubspot_task_id:
                     from app.services.hubspot_task_completion_service import (
                         mark_hubspot_task_completed_local,
@@ -235,7 +235,10 @@ class SkipTraceEnqueue:
                 "lead_status": lead.lead_status,
                 "lead_score": lead.lead_score,
                 "recommended_action": lead.recommended_action,
-                "completed_task_id": completed_task_id_out,
+                "completed_task_id": (
+                    completed_task_ids_out[-1] if completed_task_ids_out else None
+                ),
+                "completed_task_ids": completed_task_ids_out,
                 "skip_trace_task_id": skip_trace_task.id,
                 "changed": healed_handoff,
                 "healed": healed_handoff,
@@ -290,12 +293,12 @@ class SkipTraceEnqueue:
                     continue
                 tasks_to_complete.append(task)
 
-        completed_task_id_out: Optional[int] = None
+        completed_task_ids_out: list[int] = []
         pending_hubspot_ids: set[str] = set()
         for completed_task in tasks_to_complete:
             if completed_task.status != "open":
                 continue
-            completed_task_id_out = completed_task.id
+            completed_task_ids_out.append(completed_task.id)
             if completed_task.hubspot_task_id:
                 from app.services.hubspot_task_completion_service import (
                     mark_hubspot_task_completed_local,
@@ -414,7 +417,10 @@ class SkipTraceEnqueue:
             "lead_status": "skip_trace",
             "lead_score": lead.lead_score,
             "recommended_action": lead.recommended_action,
-            "completed_task_id": completed_task_id_out,
+            "completed_task_id": (
+                completed_task_ids_out[-1] if completed_task_ids_out else None
+            ),
+            "completed_task_ids": completed_task_ids_out,
             "skip_trace_task_id": skip_trace_task.id,
             "changed": True,
             "already_done": False,
@@ -884,6 +890,7 @@ class SkipTraceEnqueue:
             try:
                 result = self.move_to_skip_trace(lead_id, actor=actor)
             except Exception as exc:
+                db.session.rollback()
                 logger.warning(
                     "promote awaiting skip-trace leak failed lead_id=%s: %s",
                     lead_id,
