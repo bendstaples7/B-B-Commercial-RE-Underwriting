@@ -932,8 +932,8 @@ describe('PropertySidebar Other Addresses placement', () => {
   it('does not render Other Addresses in the sidebar (lives on Info instead)', () => {
     renderSidebar(makePayload({ address_2: '456 Secondary Ave' }))
 
-    expect(screen.getByText('Additional Address')).toBeInTheDocument()
-    expect(screen.getByText('456 Secondary Ave')).toBeInTheDocument()
+    expect(screen.getAllByText('Additional Address')).toHaveLength(1)
+    expect(screen.getAllByText('456 Secondary Ave')).toHaveLength(1)
     expect(screen.queryByText('Other Addresses')).not.toBeInTheDocument()
   })
 })

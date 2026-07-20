@@ -250,12 +250,6 @@ export function LeadDetailTabPanel({
     ['State', leadData.mailing_state],
     ['Zip Code', leadData.mailing_zip],
   ]
-  const additionalAddress = typeof leadData.address_2 === 'string'
-    ? leadData.address_2.trim()
-    : leadData.address_2
-  if (additionalAddress) {
-    mailingFields.push(['Additional Address', additionalAddress])
-  }
   const otherAddresses = typeof leadData.returned_addresses === 'string'
     ? leadData.returned_addresses.trim()
     : leadData.returned_addresses
