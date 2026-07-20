@@ -18,6 +18,7 @@ import { MemoryRouter, Routes, Route, Navigate, useParams, useLocation } from 'r
 import { primaryOwnerDisplayName } from '@/utils/propertyContacts'
 import { UnifiedLeadCommandCenter, ALL_LEAD_STATUSES } from './UnifiedLeadCommandCenter'
 import { TIMELINE_PREVIEW_COUNT } from './LeadTimeline'
+import { partitionRowsByLead } from '@/utils/leadScopedRows'
 import { QueueTable } from './QueueTable'
 import GlobalSearchBar from './GlobalSearchBar'
 import { ThemeProvider, createTheme } from '@mui/material'
@@ -160,6 +161,12 @@ async function waitForCommandCenterLoaded(container: HTMLElement) {
     },
     { timeout: 5000 },
   )
+}
+
+const ACTIVE_LEAD_ID = 1
+
+function rowsForActiveLead<T extends { lead_id?: number | null }>(rows: readonly T[]): T[] {
+  return partitionRowsByLead(rows, ACTIVE_LEAD_ID).kept
 }
 
 // Mock LogNoteForm — renders a button that calls onSaved with a synthetic entry
@@ -962,9 +969,9 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
     )
   }, 60000)
 
-  // Feature: unified-lead-command-center, Property 11: Open tasks list renders all tasks from payload
+  // Feature: unified-lead-command-center, Property 11: Open tasks list renders scoped tasks from payload
   // **Validates: Requirements 7.1**
-  it('Property 11: Open tasks list renders all tasks from payload', async () => {
+  it('Property 11: Open tasks list renders scoped tasks from payload', async () => {
     const { commandCenterService } = await import('@/services/api')
     const { leadService } = await import('@/services/leadApi')
     const mockGetCommandCenter = commandCenterService.getCommandCenter as ReturnType<typeof vi.fn>
@@ -1007,10 +1014,10 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         expect(tasksPanel).not.toBeNull()
 
         // LeadTaskList renders each task as <ListItem data-testid={`task-item-${task.id}`}>
-        // taskArb uses status: 'open', so all tasks pass the openTasks filter
+        // taskArb uses status: 'open'; foreign lead_id rows are fail-closed by lead scope.
         const taskItems = tasksPanel!.querySelectorAll('[data-testid^="task-item-"]')
 
-        expect(taskItems.length).toBe(tasks.length)
+        expect(taskItems.length).toBe(rowsForActiveLead(tasks).length)
 
         unmount()
         document.body.removeChild(container)
@@ -1075,11 +1082,13 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
 
         await waitForCommandCenterLoaded(container)
 
+        const scopedTasks = rowsForActiveLead(tasks)
+
         // Get initial task count using the task-item-{id} pattern
         const tasksPanel = container.querySelector('[data-testid="tasks-panel"]')
         expect(tasksPanel).not.toBeNull()
         const initialCount = tasksPanel!.querySelectorAll('[data-testid^="task-item-"]').length
-        expect(initialCount).toBe(tasks.length)
+        expect(initialCount).toBe(scopedTasks.length)
 
         // Open the task creation form
         const addBtn = tasksPanel!.querySelector('[data-testid="open-task-form-btn"]')
@@ -1102,9 +1111,9 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           await new Promise(r => setTimeout(r, 0))
         })
 
-        // Assert optimistic update: count should be tasks.length + 1
+        // Assert optimistic update: count should be scoped tasks + 1
         const newCount = tasksPanel!.querySelectorAll('[data-testid^="task-item-"]').length
-        expect(newCount).toBe(tasks.length + 1)
+        expect(newCount).toBe(scopedTasks.length + 1)
 
         unmount()
         document.body.removeChild(container)
@@ -1126,7 +1135,12 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
     await fc.assert(
       fc.asyncProperty(fc.array(taskArb, { minLength: 1, maxLength: 5 }), async (initialTasks) => {
         // Ensure unique IDs so filter-by-id works correctly
-        const tasks = initialTasks.map((t, i) => ({ ...t, id: i + 1 }))
+        const tasks = initialTasks.map((t, i) => ({
+          ...t,
+          id: i + 1,
+          lead_id: i === 0 ? ACTIVE_LEAD_ID : t.lead_id,
+        }))
+        const scopedTasks = rowsForActiveLead(tasks)
 
         const payload = {
           id: 1,
@@ -1169,26 +1183,29 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
 
         // Count task items using the data-testid prefix pattern used by LeadTaskList
         const initialCount = tasksPanel!.querySelectorAll('[data-testid^="task-item-"]').length
-        expect(initialCount).toBe(tasks.length)
+        expect(initialCount).toBe(scopedTasks.length)
 
-        // Click the complete button on the first task (id=1)
-        const firstTaskCompleteBtn = tasksPanel!.querySelector('[data-testid="complete-task-btn-1"]')
+        // Click the complete button on the first visible task
+        const taskToComplete = scopedTasks[0]
+        const firstTaskCompleteBtn = tasksPanel!.querySelector(
+          `[data-testid="complete-task-btn-${taskToComplete.id}"]`,
+        )
         expect(firstTaskCompleteBtn).not.toBeNull()
         firstTaskCompleteBtn!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-        if (tasks.length === 1) {
+        if (scopedTasks.length === 1) {
           await waitFor(() => {
             expect(
-              tasksPanel!.querySelector('[data-testid="last-task-leave-as-is-1"]'),
+              tasksPanel!.querySelector(`[data-testid="last-task-leave-as-is-${taskToComplete.id}"]`),
             ).not.toBeNull()
           })
           tasksPanel!
-            .querySelector('[data-testid="last-task-leave-as-is-1"]')!
+            .querySelector(`[data-testid="last-task-leave-as-is-${taskToComplete.id}"]`)!
             .dispatchEvent(new MouseEvent('click', { bubbles: true }))
         }
 
         await waitFor(() => {
           const newCount = tasksPanel!.querySelectorAll('[data-testid^="task-item-"]').length
-          expect(newCount).toBe(tasks.length - 1)
+          expect(newCount).toBe(scopedTasks.length - 1)
         })
 
         unmount()
@@ -1220,6 +1237,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           // Ensure all initial entries have distinct IDs (avoids duplicate key warnings
           // and makes position assertions unambiguous)
           const entries = initialEntries.map((e, i) => ({ ...e, id: i + 1 }))
+          const scopedEntries = rowsForActiveLead(entries)
 
           const payload = {
             id: 1,
@@ -1291,17 +1309,17 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           // Get all timeline-entry-{id} children within the list
           const entryNodes = timelineList!.querySelectorAll('[data-testid^="timeline-entry-"]')
 
-          // Total entries should be N + 1 (the new note prepended to the N originals)
-          expect(entryNodes.length).toBe(entries.length + 1)
+          // Total entries should be scoped N + 1 (the new note prepended to originals)
+          expect(entryNodes.length).toBe(scopedEntries.length + 1)
 
           // The first node must be the newly added entry (id=999999)
           const firstTestId = entryNodes[0].getAttribute('data-testid')
           expect(firstTestId).toBe('timeline-entry-999999')
 
           // If there were existing entries, the original first entry must now be at index 1
-          if (entries.length > 0) {
+          if (scopedEntries.length > 0) {
             const secondTestId = entryNodes[1].getAttribute('data-testid')
-            expect(secondTestId).toBe(`timeline-entry-${entries[0].id}`)
+            expect(secondTestId).toBe(`timeline-entry-${scopedEntries[0].id}`)
           }
 
           unmount()
@@ -1330,8 +1348,8 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           const mockGetTimeline = commandCenterService.getTimeline as ReturnType<typeof vi.fn>
 
           // Distinct IDs across pages; total > loaded so Load more can appear after preview.
-          const page1 = initialEntries.map((e, i) => ({ ...e, id: i + 1 }))
-          const page2 = moreEntries.map((e, i) => ({ ...e, id: 1000 + i + 1 }))
+          const page1 = initialEntries.map((e, i) => ({ ...e, id: i + 1, lead_id: ACTIVE_LEAD_ID }))
+          const page2 = moreEntries.map((e, i) => ({ ...e, id: 1000 + i + 1, lead_id: ACTIVE_LEAD_ID }))
           const total = page1.length + page2.length
 
           mockGetCommandCenter.mockReset()
