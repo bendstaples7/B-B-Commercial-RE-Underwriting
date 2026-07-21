@@ -172,7 +172,7 @@ suite and production frontend build.
 |------|-----------|
 | `git commit` | Slim hook (mapped pytest/vitest + `tsc` when needed). No `npm run build`. |
 | PR / push to `main` | Path-filtered CI jobs + **CI success** aggregator |
-| After `gh pr create` | Enable auto-merge: `gh pr merge --auto --squash` |
+| After `gh pr create` | Provide the PR URL, then **stop** — the human reviews and merges (agents never merge or enable auto-merge) |
 
 One-time per clone (sets `core.hooksPath=.githooks`):
 

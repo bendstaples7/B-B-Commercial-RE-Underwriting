@@ -1,32 +1,54 @@
 ---
-description: Never merge to main or trigger production deploy without explicit user approval
+description: Never merge to main, enable auto-merge, or trigger production deploys
 alwaysApply: true
 ---
 
 # No direct merges to main
 
-`main` is branch-protected. All changes reach production through a PR the user reviews and merges.
+`main` is branch-protected. All changes reach production through a PR the
+**user** reviews and merges.
 
-## Never do without explicit user request
+## Never merge or schedule a merge
 
-- `gh pr merge` (any merge strategy)
+The agent does **not** merge pull requests or schedule merges. The human merges
+in the GitHub UI. This remains forbidden even if a user explicitly says
+“merge PR #130”, “merge it now”, or “go ahead and merge the PR”.
+
+Forbidden in all cases:
+
+- `gh pr merge` (any flags, including `--auto`, `--squash`, `--merge`, `--rebase`)
+- Any API/UI equivalent that merges or schedules a merge (including enabling
+  repository auto-merge)
 - `git push origin main` or push directly to `main`
 - `gh workflow run Deploy` or other production deploy triggers
 
+These do **NOT** authorize a merge — after them, stop at the PR URL:
+
+- “open a PR”, “commit and open a PR”, “push it”, “ship it”, “land it”
+- “looks good”, “LGTM”, “approve it”
+- Green CI, a passing **CI success** check, or auto-merge being available
+
+When in doubt, do not merge — ask.
+
 ## When planning a new feature
 
-Choose the branch per `.cursor/rules/branch-lifecycle.mdc` (merged → new `feat/*` off `main`; otherwise continue the current branch). Never plan work that commits directly on `main`. When unsure which case applies, ask before branching.
+Choose the branch per `.cursor/rules/branch-lifecycle.mdc` (merged → new
+`feat/*` off `main`; otherwise continue the current branch). Never plan work
+that commits directly on `main`. When unsure which case applies, ask before
+branching.
 
 ## Required workflow
 
-1. Resolve the branch per branch-lifecycle (new `feat/*` off `main`, or continue the existing branch)
-2. Implement changes and open a PR with a clear summary and test plan
-3. **Stop** — wait for the user to review, or enable auto-merge
-   (`gh pr merge --auto --squash`) after they approve opening the PR so green
-   CI merges without babysitting (see `pr-auto-merge`). Do not merge without
-   `--auto` unless they explicitly ask to merge now.
-4. Do not re-trigger deploy after opening the PR unless the user asks
+1. Resolve the branch per branch-lifecycle (new `feat/*` off `main`, or continue
+   the existing branch)
+2. Implement changes, run the required local checks, and ask the user to verify
+   that they work (see `test-before-commit`)
+3. After explicit confirmation, commit, push, and open a PR with a clear summary
+   and test plan
+4. **Stop** — return the PR URL and wait for the user to review and merge
+5. Do not trigger deploy after opening the PR
 
 ## Deploy / infra changes
 
-Changes to `scripts/deploy.sh`, `.github/workflows/deploy.yml`, or VPS setup scripts always go through a PR. Never merge or deploy them autonomously.
+Changes to `scripts/deploy.sh`, `.github/workflows/deploy.yml`, or VPS setup
+scripts always go through a PR. Never merge or deploy them.

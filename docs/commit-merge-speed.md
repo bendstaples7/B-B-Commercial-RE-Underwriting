@@ -4,7 +4,7 @@ Local commits and CI no longer both run the full suite. The intended flow:
 
 1. **Local pre-commit** (`.githooks/pre-commit`) — fast always-on guards + staged-path mapped tests. No `npm run build`.
 2. **CI** (`.github/workflows/ci.yml`) — authoritative full checks, path-filtered per tree, aggregated by the **CI success** job.
-3. **Auto-merge** — after `gh pr create`, run `gh pr merge --auto --squash` so a green **CI success** check merges without waiting on a human click.
+3. **Human merge** — after `gh pr create`, the agent provides the PR URL and **stops**. The user reviews and merges. Agents must never run `gh pr merge` or enable auto-merge.
 
 ## Install hooks
 
@@ -27,9 +27,9 @@ Sets `core.hooksPath=.githooks` for this clone.
 
 Require the single check named **CI success** (not the individual path-filtered jobs). Skipped jobs are treated as OK by the aggregator.
 
-`strict_required_status_checks_policy` is **off** so PRs do not need a rebase onto latest `main` before every merge (that would fight the speedup). Auto-merge still waits for **CI success**.
+`strict_required_status_checks_policy` is **off** so PRs do not need a rebase onto latest `main` before every merge (that would fight the speedup).
 
-Human gate: approve **opening/shipping** the PR (see agent rules). GitHub approval count remains 0; do not treat auto-merge as a substitute for that product review.
+Repository **Allow auto-merge** is **off** (Settings → General → Pull Requests). Leave it off so `gh pr merge --auto` cannot schedule a merge even if an agent is prompted to — a human merges every PR in the GitHub UI.
 
 ## Escape hatches
 

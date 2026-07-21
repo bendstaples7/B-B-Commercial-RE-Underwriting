@@ -554,7 +554,7 @@ jobs:
 
   ci-success:
     name: CI success
-    # Single required check for branch protection / auto-merge. Skipped path-filtered
+    # Single required check for branch protection. Skipped path-filtered
     # jobs are allowed; any failure or cancellation fails this gate.
     if: always()
     needs:
