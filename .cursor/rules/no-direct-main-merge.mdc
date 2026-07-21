@@ -1,5 +1,5 @@
 ---
-description: Never merge to main or trigger production deploy without explicit user approval
+description: Never merge to main, enable auto-merge, or trigger production deploys
 alwaysApply: true
 ---
 
@@ -10,12 +10,11 @@ alwaysApply: true
 
 ## Never merge or schedule a merge
 
-By default the agent does **not** merge pull requests or schedule merges. The
-human merges in the GitHub UI. The **only** exception is an unmistakable,
-present-tense instruction to merge **this** PR now — e.g. “merge PR #130”,
-“merge it now”, “go ahead and merge the PR”.
+The agent does **not** merge pull requests or schedule merges. The human merges
+in the GitHub UI. This remains forbidden even if a user explicitly says
+“merge PR #130”, “merge it now”, or “go ahead and merge the PR”.
 
-Forbidden unless that explicit merge instruction is given:
+Forbidden in all cases:
 
 - `gh pr merge` (any flags, including `--auto`, `--squash`, `--merge`, `--rebase`)
 - Any API/UI equivalent that merges or schedules a merge (including enabling
@@ -44,9 +43,9 @@ branching.
    the existing branch)
 2. Implement changes and open a PR with a clear summary and test plan
 3. **Stop** — return the PR URL and wait for the user to review and merge
-4. Do not re-trigger deploy after opening the PR unless the user asks
+4. Do not trigger deploy after opening the PR
 
 ## Deploy / infra changes
 
 Changes to `scripts/deploy.sh`, `.github/workflows/deploy.yml`, or VPS setup
-scripts always go through a PR. Never merge or deploy them autonomously.
+scripts always go through a PR. Never merge or deploy them.
