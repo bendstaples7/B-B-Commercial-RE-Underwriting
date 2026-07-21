@@ -4,7 +4,7 @@ Local commits and CI no longer both run the full suite. The intended flow:
 
 1. **Local pre-commit** (`.githooks/pre-commit`) — fast always-on guards + staged-path mapped tests. No `npm run build`.
 2. **CI** (`.github/workflows/ci.yml`) — authoritative full checks, path-filtered per tree, aggregated by the **CI success** job.
-3. **Human merge** — after `gh pr create`, the agent **stops**. The user reviews and merges. Agents must never run `gh pr merge` or enable auto-merge.
+3. **Human merge** — after `gh pr create`, the agent provides the PR URL and **stops**. The user reviews and merges. Agents must never run `gh pr merge` or enable auto-merge.
 
 ## Install hooks
 

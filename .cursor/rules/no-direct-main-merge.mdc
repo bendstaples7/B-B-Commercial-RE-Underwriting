@@ -41,9 +41,12 @@ branching.
 
 1. Resolve the branch per branch-lifecycle (new `feat/*` off `main`, or continue
    the existing branch)
-2. Implement changes and open a PR with a clear summary and test plan
-3. **Stop** — return the PR URL and wait for the user to review and merge
-4. Do not trigger deploy after opening the PR
+2. Implement changes, run the required local checks, and ask the user to verify
+   that they work (see `test-before-commit`)
+3. After explicit confirmation, commit, push, and open a PR with a clear summary
+   and test plan
+4. **Stop** — return the PR URL and wait for the user to review and merge
+5. Do not trigger deploy after opening the PR unless the user asks
 
 ## Deploy / infra changes
 
