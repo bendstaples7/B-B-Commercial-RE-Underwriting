@@ -79,3 +79,8 @@ def test_source_not_stale_for_loaded_files_older_than_start(monkeypatch):
     )
 
     assert is_source_stale() is False
+
+
+def test_source_not_stale_when_no_loaded_backend_files(monkeypatch):
+    monkeypatch.setattr("app.runtime_identity._loaded_backend_mtimes", lambda: {})
+    assert is_source_stale() is False

@@ -151,6 +151,9 @@ def group_records_by_dedup_index_key(
     Mirrors the migration predicate exactly: NULL/empty raw owner names are not
     indexed, but whitespace-only names are indexed as an empty trimmed key and
     must be grouped so cleanup can clear the migration blocker.
+
+    Rows without a stored ``normalized_street`` are skipped — deriving a fallback
+    from ``property_street`` can merge distinct legacy leads outside the index.
     """
     from collections import defaultdict
 
@@ -158,7 +161,7 @@ def group_records_by_dedup_index_key(
     for row in records:
         street_key = (row.get('normalized_street') or '').strip()
         if not street_key:
-            street_key = dedup_street_key(row.get('property_street'))
+            continue
         first_raw = row.get('owner_first_name')
         last_raw = row.get('owner_last_name')
         if first_raw is None or last_raw is None:
@@ -168,7 +171,7 @@ def group_records_by_dedup_index_key(
         first = str(first_raw).strip().lower()
         last = str(last_raw).strip().lower()
         owner_user_id = row.get('owner_user_id')
-        if not owner_user_id or not street_key:
+        if not owner_user_id:
             continue
         buckets[(owner_user_id, first, last, street_key)].append(dict(row))
     return [members for members in buckets.values() if len(members) >= 2]

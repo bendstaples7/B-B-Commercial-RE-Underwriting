@@ -201,6 +201,37 @@ class TestDedupMergeGroups:
 
         assert [[row['id'] for row in group] for group in groups] == [[1, 2]]
 
+    def test_skips_rows_without_stored_normalized_street(self):
+        """Exact-index cleanup must not derive fallback keys for blank index values."""
+        key = dedup_street_key('500 W Madison St')
+        rows = [
+            {
+                'id': 10,
+                'owner_user_id': 'u1',
+                'owner_first_name': 'Ada',
+                'owner_last_name': 'Lovelace',
+                'property_street': '500 W Madison St',
+                'normalized_street': key,
+            },
+            {
+                'id': 11,
+                'owner_user_id': 'u1',
+                'owner_first_name': 'Ada',
+                'owner_last_name': 'Lovelace',
+                'property_street': '500 West Madison Street',
+                'normalized_street': None,
+            },
+            {
+                'id': 12,
+                'owner_user_id': 'u1',
+                'owner_first_name': 'Ada',
+                'owner_last_name': 'Lovelace',
+                'property_street': '500 W Madison',
+                'normalized_street': '',
+            },
+        ]
+        assert _find_dedup_merge_groups(rows) == []
+
 
 class TestF9DedupMigrationGate:
     @integration

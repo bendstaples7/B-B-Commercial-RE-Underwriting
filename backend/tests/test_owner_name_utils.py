@@ -107,6 +107,7 @@ class TestOwnerNamesEquivalent:
         assert not is_generic_owner_name('Joseph Kiferbaum')
         assert not is_generic_owner_name('Jane Na')
         assert not is_generic_owner_name('Na Zhang')
+        assert not is_generic_owner_name('Bank of America, N.A.')
         assert not is_matchable_person_name('For Sale By', 'Owner')
         assert not is_matchable_person_name('123', 'Main St')
         assert not owner_names_equivalent('FSBO', None, 'FSBO', None)

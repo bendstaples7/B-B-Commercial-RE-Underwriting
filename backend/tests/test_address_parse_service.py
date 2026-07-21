@@ -97,6 +97,15 @@ class TestZipLookup:
         assert city_state_from_zip('60647-1753') == ('Chicago', 'IL')
         assert city_state_from_zip('not-a-zip') is None
 
+    def test_title_city_usps_preserves_mc_mac_and_short_mac_stems(self):
+        from app.services.helpers.zip_lookup import _title_city_usps
+
+        assert _title_city_usps('MCHENRY') == 'McHenry'
+        assert _title_city_usps('MACARTHUR') == 'MacArthur'
+        # 4-letter MAC* stems must not become MacK / MacH
+        assert _title_city_usps('MACK') == 'Mack'
+        assert _title_city_usps('MACH') == 'Mach'
+
 
 class TestStreetCleanAndTitleCase:
     def test_places_one_liner_collapses_to_street_only(self):

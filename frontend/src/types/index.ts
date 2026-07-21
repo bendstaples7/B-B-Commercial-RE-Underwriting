@@ -20,13 +20,18 @@
  * ----------------------------------------------------------------------------
  */
 
+/** Identity fields returned by ``GET /api/health/runtime`` (and shared by ``/health``). */
 export interface RuntimeHealthResponse {
   status: string
-  db_mode?: string
   build_id?: string
   source_stale?: boolean
   started_at?: string
   pid?: number
+}
+
+/** Full ``GET /api/health`` payload (runtime identity plus dependency checks). */
+export interface HealthCheckResponse extends RuntimeHealthResponse {
+  db_mode?: string
   checks?: Record<string, string>
 }
 

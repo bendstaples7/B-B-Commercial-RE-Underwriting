@@ -158,7 +158,11 @@ export function QuickAddPage() {
       setGpsStatus('error')
       return
     }
-    if (coords) return
+    if (coords) {
+      // Places selection (or a prior GPS fix) already provided coordinates.
+      setGpsStatus((prev) => (prev === 'loading' || prev === 'idle' ? 'ok' : prev))
+      return
+    }
 
     setGpsStatus('loading')
     navigator.geolocation.getCurrentPosition(
@@ -277,6 +281,9 @@ export function QuickAddPage() {
               lat: result.geometry.location.lat(),
               lng: result.geometry.location.lng(),
             })
+            // Places coords supersede an in-flight GPS probe — settle the
+            // indicator so it does not stay on "Getting your location…".
+            setGpsStatus('ok')
           }
           const components: Array<{ long_name: string; short_name: string; types: string[] }> =
             result?.address_components ?? []

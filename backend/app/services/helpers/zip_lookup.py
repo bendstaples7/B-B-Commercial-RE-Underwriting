@@ -101,7 +101,7 @@ def _title_city_usps(city: str) -> str:
         upper = word.upper()
         if upper.startswith('MC') and len(upper) > 2:
             parts.append('Mc' + upper[2:].title())
-        elif upper.startswith('MAC') and len(upper) > 3:
+        elif upper.startswith('MAC') and len(upper) > 4:
             parts.append('Mac' + upper[3:].title())
         else:
             parts.append(word.title())

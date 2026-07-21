@@ -61,8 +61,6 @@ const GENERIC_OWNER_PHRASES = [
   'CURRENT RESIDENT',
   'CURRENT OWNER',
   'NO OWNER',
-  'N/A',
-  'N.A.',
 ]
 
 const STREET_TOKENS = [

@@ -13,6 +13,7 @@ import type {
   SearchResponse,
   SearchParams,
   RuntimeHealthResponse,
+  HealthCheckResponse,
 } from '@/types'
 import {
   HubSpotConfigSchema,
@@ -26,7 +27,7 @@ export const analysisService = {
   /**
    * Health check endpoint
    */
-  healthCheck: async (): Promise<RuntimeHealthResponse> => {
+  healthCheck: async (): Promise<HealthCheckResponse> => {
     const response = await api.get('/health')
     return response.data
   },

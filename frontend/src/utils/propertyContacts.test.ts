@@ -68,6 +68,7 @@ describe('isGenericOwnerName', () => {
     expect(isGenericOwnerName('Joseph Kiferbaum')).toBe(false)
     expect(isGenericOwnerName('Jane Na')).toBe(false)
     expect(isGenericOwnerName('Na Zhang')).toBe(false)
+    expect(isGenericOwnerName('Bank of America, N.A.')).toBe(false)
   })
 })
 
