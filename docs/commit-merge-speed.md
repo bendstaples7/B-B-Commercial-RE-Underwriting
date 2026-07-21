@@ -29,6 +29,8 @@ Require the single check named **CI success** (not the individual path-filtered 
 
 `strict_required_status_checks_policy` is **off** so PRs do not need a rebase onto latest `main` before every merge (that would fight the speedup).
 
+Repository **Allow auto-merge** is **off** (Settings → General → Pull Requests). Leave it off so `gh pr merge --auto` cannot schedule a merge even if an agent is prompted to — a human merges every PR in the GitHub UI.
+
 ## Escape hatches
 
 | Command | Effect |

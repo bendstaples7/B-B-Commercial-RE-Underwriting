@@ -17,4 +17,4 @@ Do **not** ask whether to commit or push after addressing PR comments. That is t
 
 - Do not commit unrelated work that was not part of addressing the PR comments.
 - If a finding is invalid or needs a product decision, note it in the PR or reply to the user — do not block the whole batch on one ambiguous item unless the user says to stop.
-- Still follow `no-direct-main-merge`: push to the feature branch only; never merge to `main` autonomously.
+- Still follow `no-direct-main-merge`: push to the feature branch only; never merge or enable auto-merge autonomously (see that rule).
