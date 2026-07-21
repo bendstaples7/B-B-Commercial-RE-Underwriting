@@ -24,6 +24,11 @@ APPLY_LOCK_TTL_SECONDS = 50 * 60
 APPLY_TIMEOUT_SECONDS = APPLY_LOCK_TTL_SECONDS - 60
 
 
+def apply_timeout_supported() -> bool:
+    """True when the platform can enforce a wall-clock --apply timeout (SIGALRM)."""
+    return hasattr(signal, 'SIGALRM')
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -57,6 +62,15 @@ def main() -> int:
         # Mutating --apply must take the same lock as the hourly Celery task so
         # concurrent runs cannot approve the same PIN-empty rows twice.
         if args.apply:
+            if not apply_timeout_supported():
+                # Windows has no SIGALRM — refuse unlocked long --apply runs that
+                # could outlive the Redis TTL and race another resolver.
+                print(
+                    'ERROR: --apply requires SIGALRM to enforce a lock-safe '
+                    'timeout (run on Linux/macOS, or use --dry-run)',
+                    file=sys.stderr,
+                )
+                return 1
             if _redis_client() is None:
                 print('ERROR: Redis unavailable — refusing unlocked --apply', file=sys.stderr)
                 return 1
@@ -67,15 +81,15 @@ def main() -> int:
             if not lock_token:
                 print('ERROR: resolve_unambiguous_pins lock held — try again later', file=sys.stderr)
                 return 1
-            if hasattr(signal, 'SIGALRM'):
-                def _timeout_handler(_signum, _frame):
-                    raise TimeoutError(
-                        'resolve_unambiguous_pins --apply exceeded lock-safe runtime'
-                    )
 
-                signal.signal(signal.SIGALRM, _timeout_handler)
-                signal.alarm(APPLY_TIMEOUT_SECONDS)
-                alarm_armed = True
+            def _timeout_handler(_signum, _frame):
+                raise TimeoutError(
+                    'resolve_unambiguous_pins --apply exceeded lock-safe runtime'
+                )
+
+            signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(APPLY_TIMEOUT_SECONDS)
+            alarm_armed = True
         try:
             result = PropertyMatchReviewService().resolve_unambiguous_pins_batch(
                 limit=args.limit,

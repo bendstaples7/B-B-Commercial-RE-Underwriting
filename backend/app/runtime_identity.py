@@ -79,17 +79,25 @@ def compute_source_fingerprint() -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _is_under_backend(path: str) -> bool:
+    """True when *path* resolves inside the backend tree (not a sibling like backend-old)."""
+    try:
+        Path(path).resolve().relative_to(_BACKEND_DIR.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def _loaded_backend_mtimes() -> dict[str, int]:
     """``path → st_mtime_ns`` for currently loaded backend ``.py`` modules."""
     import sys
 
-    backend_str = str(_BACKEND_DIR)
     out: dict[str, int] = {}
     for module in list(sys.modules.values()):
         file = getattr(module, "__file__", None)
         if not file or not file.endswith(".py"):
             continue
-        if not file.startswith(backend_str):
+        if not _is_under_backend(file):
             continue
         try:
             out[file] = os.stat(file).st_mtime_ns

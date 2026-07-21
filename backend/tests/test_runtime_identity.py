@@ -84,3 +84,23 @@ def test_source_not_stale_for_loaded_files_older_than_start(monkeypatch):
 def test_source_not_stale_when_no_loaded_backend_files(monkeypatch):
     monkeypatch.setattr("app.runtime_identity._loaded_backend_mtimes", lambda: {})
     assert is_source_stale() is False
+
+
+def test_is_under_backend_rejects_sibling_prefix_paths(tmp_path, monkeypatch):
+    """``backend-old/...`` must not count as under ``backend/``."""
+    import app.runtime_identity as ri
+
+    backend = tmp_path / "backend"
+    sibling = tmp_path / "backend-old"
+    backend.mkdir()
+    sibling.mkdir()
+    inside = backend / "app" / "models.py"
+    outside = sibling / "module.py"
+    inside.parent.mkdir(parents=True)
+    inside.write_text("# inside\n", encoding="utf-8")
+    outside.write_text("# outside\n", encoding="utf-8")
+
+    monkeypatch.setattr(ri, "_BACKEND_DIR", backend)
+    assert ri._is_under_backend(str(inside)) is True
+    assert ri._is_under_backend(str(outside)) is False
+    assert ri._is_under_backend(str(sibling / "app" / "x.py")) is False
