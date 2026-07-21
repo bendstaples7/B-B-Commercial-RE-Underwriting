@@ -46,7 +46,7 @@ branching.
 3. After explicit confirmation, commit, push, and open a PR with a clear summary
    and test plan
 4. **Stop** — return the PR URL and wait for the user to review and merge
-5. Do not trigger deploy after opening the PR unless the user asks
+5. Do not trigger deploy after opening the PR
 
 ## Deploy / infra changes
 
