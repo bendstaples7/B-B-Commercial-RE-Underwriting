@@ -90,7 +90,7 @@ def _seed_duplicate_leads(db_url: str) -> None:
                     owner_first_name, owner_last_name, owner_user_id
                 ) VALUES (
                     :street, :normalized_street,
-                    '107 S Grant Street', 'LLC', 'test-dedup-user'
+                    'Jane', 'Doe', 'test-dedup-user'
                 )
             """), {
                 'street': street,
