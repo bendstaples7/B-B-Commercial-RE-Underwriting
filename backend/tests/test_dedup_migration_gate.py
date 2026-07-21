@@ -18,6 +18,7 @@ from scripts.preflight_dedup_migration import (
     build_report,
     count_street_duplicate_clusters,
 )
+from scripts.merge_duplicate_leads import _find_dedup_merge_groups
 
 MIGRATION_TEST_DB_URL = os.environ.get('MIGRATION_TEST_DB_URL')
 
@@ -141,6 +142,40 @@ class TestPreflightDedupMigration:
 
             assert count == 1
             assert examples[0]['cluster_size'] == 2
+
+
+class TestDedupMergeGroups:
+    def test_groups_exact_owner_street_key_for_entity_like_owner_names(self):
+        rows = [
+            {
+                'id': 1,
+                'owner_user_id': 'test-dedup-user',
+                'owner_first_name': '107 S Grant Street',
+                'owner_last_name': 'LLC',
+                'property_street': '107 S Grant Street',
+                'normalized_street': dedup_street_key('107 S Grant Street'),
+            },
+            {
+                'id': 2,
+                'owner_user_id': 'test-dedup-user',
+                'owner_first_name': '107 S Grant Street',
+                'owner_last_name': 'LLC',
+                'property_street': '107 S Grant St',
+                'normalized_street': dedup_street_key('107 S Grant St'),
+            },
+            {
+                'id': 3,
+                'owner_user_id': 'other-user',
+                'owner_first_name': '107 S Grant Street',
+                'owner_last_name': 'LLC',
+                'property_street': '107 S Grant Street',
+                'normalized_street': dedup_street_key('107 S Grant Street'),
+            },
+        ]
+
+        groups = _find_dedup_merge_groups(rows)
+
+        assert [[row['id'] for row in group] for group in groups] == [[1, 2]]
 
 
 class TestF9DedupMigrationGate:

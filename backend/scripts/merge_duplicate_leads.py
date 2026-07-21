@@ -24,7 +24,6 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 from app.services.lead_dedup_service import COPYABLE_FIELDS  # noqa: E402
 from app.services.lead_merge_utils import (  # noqa: E402
     cluster_leads_by_normalized_street,
-    cluster_same_building_by_owner_name,
     dedup_street_key,
     merge_mailer_history,
     owner_group_key,
@@ -231,13 +230,18 @@ def _find_normalized_merge_groups(rows: list[dict]) -> list[list[dict]]:
 
 def _find_dedup_merge_groups(rows: list[dict]) -> list[list[dict]]:
     """Group by owner + building-level dedup_street_key (matches DB unique index)."""
-    return cluster_same_building_by_owner_name(
-        [dict(row) for row in rows],
-        owner_user_id_of=lambda r: r.get('owner_user_id'),
-        street_of=lambda r: r.get('property_street'),
-        first_of=lambda r: r.get('owner_first_name'),
-        last_of=lambda r: r.get('owner_last_name'),
-    )
+    buckets: dict[tuple, list[dict]] = defaultdict(list)
+    for row in rows:
+        street_key = (row.get('normalized_street') or '').strip()
+        if not street_key:
+            street_key = dedup_street_key(row.get('property_street'))
+        first = (row.get('owner_first_name') or '').strip().lower()
+        last = (row.get('owner_last_name') or '').strip().lower()
+        owner_user_id = row.get('owner_user_id')
+        if not owner_user_id or not first or not last or not street_key:
+            continue
+        buckets[(owner_user_id, first, last, street_key)].append(dict(row))
+    return [members for members in buckets.values() if len(members) >= 2]
 
 
 def _find_pin_merge_groups(rows: list[dict]) -> list[list[dict]]:
@@ -287,6 +291,7 @@ def run(dry_run: bool = False, mode: str = 'unit'):
             else:
                 cur.execute("""
                     SELECT id, owner_first_name, owner_last_name, property_street,
+                           normalized_street,
                            owner_user_id, lead_status, has_phone, has_email,
                            last_hubspot_sync_at
                     FROM leads
