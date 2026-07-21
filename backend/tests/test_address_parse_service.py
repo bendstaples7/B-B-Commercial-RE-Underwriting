@@ -1,5 +1,4 @@
 """Tests for embedded US address parsing."""
-import pytest
 
 from app.services.address_parse_service import parse_embedded_us_address
 from app.services.helpers.zip_lookup import city_state_from_zip
@@ -32,6 +31,14 @@ class TestParseEmbeddedUsAddress:
     def test_davlin_zip_resolves_chicago_not_davlin(self):
         result = parse_embedded_us_address('3052 N Davlin 60618')
         assert result == ('3052 N Davlin', 'Chicago', 'IL', '60618')
+
+    def test_unknown_zip_fallback_uses_sheriff_street(self, monkeypatch):
+        monkeypatch.setattr(
+            'app.services.address_parse_service.city_state_from_zip',
+            lambda _zip: None,
+        )
+        result = parse_embedded_us_address('1831 WEST RACE AVENUE CHICAGO 99999')
+        assert result == ('1831 West Race Avenue', 'Chicago', 'IL', '99999')
 
     def test_street_suffix_never_becomes_city(self):
         result = parse_embedded_us_address('2100 North Campbell Ave 60647')

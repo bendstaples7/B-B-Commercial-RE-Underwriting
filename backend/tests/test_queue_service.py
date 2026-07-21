@@ -200,6 +200,49 @@ def test_status_change_to_skip_trace_clears_dated_chores_out_of_todays_action(ap
         assert lead.id not in ids
 
 
+def test_recent_sale_hold_status_sync_propagates_cleared_hubspot_ids(app):
+    with app.app_context():
+        from app import db
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        lead = _make_lead(
+            app,
+            '100 Hold Sync St',
+            lead_status='mailing_no_contact_made',
+            needs_skip_trace=True,
+        )
+        hold_task = _make_task(
+            app,
+            lead.id,
+            due_date=date.today() + timedelta(days=30),
+            task_type='skip_trace_owner',
+            title='Recent sale hold',
+        )
+        hold_task.workflow_key = 'recent_sale_hold'
+        db.session.add(hold_task)
+        db.session.commit()
+
+        with patch(
+            'app.services.skip_trace_enqueue.clear_dated_due_chores_entering_skip_trace',
+            return_value=([123], {'hs-cleared'}),
+        ), patch(
+            'app.services.mail_task_lifecycle_service.'
+            'complete_obsolete_outreach_during_recent_sale_hold',
+            return_value=([456], ['hs-obsolete']),
+        ):
+            scoring_ids, hubspot_ids = (
+                SkipTraceEnqueue()._sync_status_for_future_recent_sale_holds(
+                    actor='test',
+                    now=datetime.now(timezone.utc),
+                    today=date.today(),
+                    limit=None,
+                )
+            )
+
+        assert lead.id in scoring_ids
+        assert hubspot_ids == ['hs-cleared', 'hs-obsolete']
+
+
 def test_todays_action_includes_lead_with_task_due_today(app):
     """Today's Action includes active lead with an open task due today."""
     with app.app_context():

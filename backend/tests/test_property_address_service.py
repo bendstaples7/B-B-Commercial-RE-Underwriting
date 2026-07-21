@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from app.models.lead import Lead
 from app.services.property_address_service import (
+    apply_parcel_address_to_lead,
     complete_property_address,
     complete_property_address_fields,
     display_street,
@@ -92,6 +93,17 @@ class TestCompletePropertyAddressFields:
         assert result['complete'] is True
         assert result['property_city'] == 'Chicago'
         assert result['sources'] == []
+
+    def test_full_state_name_maps_to_postal_code(self):
+        result = complete_property_address_fields(
+            '123 Peach St',
+            'Atlanta',
+            'Georgia',
+            '30303',
+            try_gis=False,
+        )
+        assert result['complete'] is True
+        assert result['property_state'] == 'GA'
 
     def test_glued_one_liner_parse(self):
         result = complete_property_address_fields(
@@ -213,6 +225,24 @@ class TestCompletePropertyAddressLead:
             assert result['complete'] is False
             assert result['flagged_incomplete'] is True
             assert lead.review_required is True
+
+    def test_apply_parcel_address_maps_full_state_name(self, app):
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                property_city=None,
+                property_state=None,
+                property_zip=None,
+            )
+
+            changed = apply_parcel_address_to_lead(lead, {
+                'property_city': 'Atlanta',
+                'property_state': 'Georgia',
+                'property_zip': '30303',
+            })
+
+            assert 'property_state' in changed
+            assert lead.property_state == 'GA'
 
 
 class TestHealIncompletePropertyAddresses:

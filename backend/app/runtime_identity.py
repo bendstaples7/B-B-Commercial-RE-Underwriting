@@ -7,6 +7,7 @@ process started — typical with ``use_reloader=False`` during local development
 
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 from datetime import datetime, timezone
@@ -69,11 +70,13 @@ def _git_sha() -> str:
 
 
 def compute_source_fingerprint() -> str:
-    """Legacy max-mtime fingerprint (kept for tests / diagnostics)."""
-    max_mtime_ns = 0
-    for mtime_ns in _loaded_backend_mtimes().values():
-        max_mtime_ns = max(max_mtime_ns, mtime_ns)
-    return str(max_mtime_ns // 1_000_000_000)
+    """Stable hash of per-file nanosecond mtimes for loaded backend modules."""
+    mtimes = _loaded_backend_mtimes()
+    payload = "\n".join(
+        f"{os.path.relpath(path, str(_BACKEND_DIR))}:{mtime_ns}"
+        for path, mtime_ns in sorted(mtimes.items())
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _loaded_backend_mtimes() -> dict[str, int]:

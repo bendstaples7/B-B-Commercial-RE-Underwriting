@@ -85,6 +85,11 @@ beforeEach(() => {
   vi.mocked(commandCenterService.updateStatus).mockResolvedValue({
     lead_status: 'mailing_no_contact_made',
   })
+  vi.mocked(leadService.quickAdd).mockResolvedValue({
+    created: true,
+    lead_id: 99,
+    hubspot_push_status: 'disabled',
+  } as any)
 })
 
 describe('QuickAddPage deprioritized matches', () => {
@@ -160,5 +165,26 @@ describe('QuickAddPage deprioritized matches', () => {
         name: 'Reactivate 123 Main St for outreach',
       }),
     ).not.toBeInTheDocument()
+  })
+
+  it('preserves the full manual address on submit', async () => {
+    vi.mocked(leadService.lookupQuickAdd).mockResolvedValue({ matches: [] })
+    renderPage()
+
+    fireEvent.change(screen.getByLabelText('Property address'), {
+      target: { value: '123 Main St, Chicago, IL 60601' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save to Skip Trace' }))
+
+    await waitFor(() => {
+      expect(leadService.quickAdd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          property_street: '123 Main St, Chicago, IL 60601',
+          property_city: null,
+          property_state: null,
+          property_zip: null,
+        }),
+      )
+    })
   })
 })

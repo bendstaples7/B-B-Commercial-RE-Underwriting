@@ -1,5 +1,5 @@
 """Tests for analysis completion wiring and defensive resolve."""
-import pytest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.services.analysis_completion_service import (
@@ -184,6 +184,49 @@ def test_complete_run_property_analysis_sets_analysis_complete(app):
         db.session.refresh(lead)
         assert lead.analysis_complete is True
         assert lead.recommended_action != 'analyze_property'
+
+
+def test_skip_trace_chore_clear_marks_hubspot_analysis_task_complete(app):
+    with app.app_context():
+        from datetime import date, timedelta
+
+        from app import db
+        from app.models import LeadTask
+        from app.services.skip_trace_enqueue import clear_dated_due_chores_entering_skip_trace
+
+        lead = _make_lead(app, analysis_complete=False, recommended_action='analyze_property')
+        task = LeadTask(
+            lead_id=lead.id,
+            task_type='run_property_analysis',
+            title='Run property analysis',
+            status='open',
+            due_date=date.today() - timedelta(days=1),
+            created_by='test',
+            hubspot_task_id='hs-analysis-1',
+        )
+        db.session.add(task)
+        db.session.commit()
+
+        with patch(
+            'app.services.hubspot_task_completion_service.mark_hubspot_task_completed_local',
+            return_value=SimpleNamespace(hubspot_task_id='hs-analysis-1'),
+        ), patch(
+            'app.services.analysis_completion_service.mark_lead_analysis_complete',
+        ) as mark_complete:
+            completed_ids, pending_hubspot_ids = clear_dated_due_chores_entering_skip_trace(
+                lead.id,
+                actor='test',
+            )
+
+        assert completed_ids == [task.id]
+        assert pending_hubspot_ids == {'hs-analysis-1'}
+        mark_complete.assert_called_once_with(
+            lead.id,
+            source='manual',
+            actor='test',
+            recompute_action=False,
+            commit=False,
+        )
 
 
 # ---------------------------------------------------------------------------

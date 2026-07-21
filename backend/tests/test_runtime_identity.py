@@ -52,8 +52,9 @@ def test_identity_exposed_outside_production(monkeypatch):
     assert "build_id" in get_runtime_identity()
 
 
-def test_source_fingerprint_is_mtime_only():
+def test_source_fingerprint_is_source_mtime_hash():
     # Stale comparison must not include the git SHA (checkout must not read
-    # as a stale process) — fingerprint is a bare integer string.
+    # as a stale process) — fingerprint hashes loaded source path mtimes.
     fingerprint = compute_source_fingerprint()
-    assert fingerprint.isdigit()
+    assert len(fingerprint) == 64
+    int(fingerprint, 16)

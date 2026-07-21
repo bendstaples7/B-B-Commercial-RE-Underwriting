@@ -37,6 +37,7 @@ import { commandCenterService, leadTaskService } from '@/services/api'
 import { propertyMatchService } from '@/services/propertyMatchApi'
 import {
   isEntityContactName,
+  isGenericOwnerName,
   ownerDisplayEntries,
 } from '@/utils/propertyContacts'
 import { formatImportNote } from './leadDetailFormatters'
@@ -314,6 +315,16 @@ export function PropertySidebar({
   const data = commandCenterData as CommandCenterPayload & SidebarExtras
   const contacts: PropertyContactSummary[] = commandCenterData.contacts ?? []
   const useContacts = contacts.length > 0
+  const flatOwnerName = [data.owner_first_name, data.owner_last_name].filter(Boolean).join(' ')
+  const linkedOwnerHasNonGenericName = contacts.some((contact) => {
+    if (contact.role !== 'owner') return false
+    const name = [contact.first_name, contact.last_name].filter(Boolean).join(' ')
+    return Boolean(name) && !isGenericOwnerName(name)
+  })
+  const showRelatedProperties = (
+    (commandCenterData.related_properties?.length ?? 0) > 0
+    && (!isGenericOwnerName(flatOwnerName) || linkedOwnerHasNonGenericName)
+  )
 
   const ownerEntries = ownerDisplayEntries(
     contacts,
@@ -934,7 +945,7 @@ export function PropertySidebar({
         {data.address_2 && <SidebarRow label="Additional Address" value={data.address_2} />}
       </SidebarSection>
 
-      {(commandCenterData.related_properties?.length ?? 0) > 0 && (
+      {showRelatedProperties && (
         <SidebarSection title="Other properties">
           <Box
             data-testid="sidebar-related-properties"

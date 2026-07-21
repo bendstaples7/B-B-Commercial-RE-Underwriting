@@ -412,6 +412,7 @@ export function QuickAddPage() {
           label="Property address"
           value={address}
           onChange={(e) => {
+            placesRequestIdRef.current += 1
             setAddress(e.target.value)
             setExistingActionFeedback(null)
             setParsedAddress({ city: null, state: null, zip: null })

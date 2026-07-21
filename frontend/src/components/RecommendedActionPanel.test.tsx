@@ -353,6 +353,23 @@ describe('RecommendedActionPanel', () => {
       expect(screen.getByTestId('ra-universal-btn-move_to_skip_trace')).toBeDisabled()
     })
 
+    it('exposes disabled Move to Skip Trace reason to keyboard users', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('enrich_data')}
+          leadStatus="suppressed"
+          openTasks={[]}
+          onAction={vi.fn()}
+        />,
+      )
+
+      const reason = screen.getByRole('group', {
+        name: /Move to Skip Trace:/i,
+      })
+      expect(reason).toHaveAttribute('tabindex', '0')
+      expect(screen.getByTestId('ra-universal-btn-move_to_skip_trace')).toBeDisabled()
+    })
+
     it.each([
       ['skip_trace', 'In Skip Trace'],
     ] as const)('shows already-done skip-trace control for status %s', (leadStatus, label) => {
