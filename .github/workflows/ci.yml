@@ -7,8 +7,96 @@ on:
     branches: [main]
 
 jobs:
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.filter.outputs.backend }}
+      migrations: ${{ steps.filter.outputs.migrations }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed paths
+        id: filter
+        run: |
+          set -euo pipefail
+          FULL_REBUILD=false
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            if [ -z "$BASE" ]; then
+              echo "::error::pull_request.base.sha is empty — cannot classify changes"
+              exit 1
+            fi
+            if ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+              echo "::error::Base commit $BASE is not available in this clone"
+              exit 1
+            fi
+          else
+            BASE="${{ github.event.before }}"
+            # New branch / force-push / missing before SHA — full rebuild (do not
+            # diff against repo root; that mis-classifies and can under-test).
+            if [ -z "$BASE" ] || [[ "$BASE" =~ ^0+$ ]]; then
+              echo "Push before SHA missing or zero — forcing full rebuild"
+              FULL_REBUILD=true
+            elif ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+              echo "Push before SHA $BASE not in clone — forcing full rebuild"
+              FULL_REBUILD=true
+            fi
+          fi
+
+          if [ "$FULL_REBUILD" = "true" ]; then
+            frontend=true
+            backend=true
+            migrations=true
+            echo "Changed files: (full rebuild — before SHA unresolvable)"
+          else
+            # Fail loud on diff errors; empty output means no files changed.
+            FILES="$(git diff --name-only "$BASE" HEAD)"
+            echo "Changed files vs $BASE:"
+            echo "$FILES"
+
+            frontend=false
+            backend=false
+            migrations=false
+
+            while IFS= read -r path; do
+              [ -z "$path" ] && continue
+              case "$path" in
+                frontend/*|.github/workflows/ci.yml)
+                  frontend=true
+                  ;;
+              esac
+              case "$path" in
+                backend/*|scripts/check_duplication.py|scripts/map_changed_to_tests.py|.githooks/*|dev.py|.github/workflows/ci.yml)
+                  backend=true
+                  ;;
+              esac
+              case "$path" in
+                backend/alembic_migrations/*|backend/migrations/*|backend/app/models/*|backend/scripts/lint_migrations.py|backend/scripts/check_migration_chain.py|backend/scripts/check_model_schema.py|backend/scripts/check_enum_drift.py|backend/scripts/ci_test_dedup_migration_gate.py)
+                  migrations=true
+                  ;;
+              esac
+            done <<< "$FILES"
+          fi
+
+          # Push to main always builds frontend so Deploy can download frontend-dist.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            frontend=true
+          fi
+
+          echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
+          echo "backend=$backend" >> "$GITHUB_OUTPUT"
+          echo "migrations=$migrations" >> "$GITHUB_OUTPUT"
+          echo "Outputs: frontend=$frontend backend=$backend migrations=$migrations"
+
   frontend:
     name: Frontend — typecheck, build, tests
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -227,6 +315,8 @@ jobs:
 
   backend:
     name: Backend — pytest
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
 
     services:
@@ -273,14 +363,6 @@ jobs:
           CELERY_BROKER_URL: redis://localhost:6379/0
           REDIS_URL: redis://localhost:6379/0
 
-      - name: Lint migration files for dangerous patterns
-        # Static analysis — no database needed.
-        # Catches patterns that cause production crashes but are invisible in
-        # SQLite-based tests: raw_conn.execute(), bind.connection used without
-        # unwrapping the pool proxy, etc.
-        run: python scripts/lint_migrations.py
-        working-directory: backend
-
       - name: Run tests
         run: pytest -n auto -m "not performance"
         working-directory: backend
@@ -289,6 +371,49 @@ jobs:
           FLASK_ENV: testing
           SECRET_KEY: ci-test-secret-key
           JWT_SECRET_KEY: ci-test-jwt-secret
+
+  migrations:
+    name: Backend — migration validation
+    needs: changes
+    if: needs.changes.outputs.migrations == 'true'
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+        working-directory: backend
+
+      - name: Lint migration files for dangerous patterns
+        # Static analysis — no database needed.
+        # Catches patterns that cause production crashes but are invisible in
+        # SQLite-based tests: raw_conn.execute(), bind.connection used without
+        # unwrapping the pool proxy, etc.
+        run: python scripts/lint_migrations.py
+        working-directory: backend
 
       - name: Create isolated migration test database
         # Create a second PostgreSQL database that pytest never touches.
@@ -426,3 +551,57 @@ jobs:
         working-directory: backend
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migration_test_db
+
+  ci-success:
+    name: CI success
+    # Single required check for branch protection / auto-merge. Skipped path-filtered
+    # jobs are allowed; any failure or cancellation fails this gate.
+    if: always()
+    needs:
+      - changes
+      - frontend
+      - backend
+      - migrations
+      - validate-workflows
+      - deploy-contract
+      - duplication-check
+      - vps-readiness
+      - vps-smoke-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate required job results
+        run: |
+          set -euo pipefail
+          echo "Job results:"
+          echo "  changes=${{ needs.changes.result }}"
+          echo "  frontend=${{ needs.frontend.result }}"
+          echo "  backend=${{ needs.backend.result }}"
+          echo "  migrations=${{ needs.migrations.result }}"
+          echo "  validate-workflows=${{ needs.validate-workflows.result }}"
+          echo "  deploy-contract=${{ needs.deploy-contract.result }}"
+          echo "  duplication-check=${{ needs.duplication-check.result }}"
+          echo "  vps-readiness=${{ needs.vps-readiness.result }}"
+          echo "  vps-smoke-test=${{ needs.vps-smoke-test.result }}"
+
+          fail=0
+          for result in \
+            "${{ needs.changes.result }}" \
+            "${{ needs.frontend.result }}" \
+            "${{ needs.backend.result }}" \
+            "${{ needs.migrations.result }}" \
+            "${{ needs.validate-workflows.result }}" \
+            "${{ needs.deploy-contract.result }}" \
+            "${{ needs.duplication-check.result }}" \
+            "${{ needs.vps-readiness.result }}" \
+            "${{ needs.vps-smoke-test.result }}"
+          do
+            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
+              echo "Unsuccessful job result: $result"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::One or more CI jobs failed or were cancelled."
+            exit 1
+          fi
+          echo "All required CI jobs succeeded or were skipped."

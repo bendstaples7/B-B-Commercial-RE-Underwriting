@@ -12,4 +12,5 @@
 - [ ] No parallel routes, services, or components introduced
 - [ ] If this replaces something: legacy code deleted (not left alongside redirect)
 - [ ] No new per-file copies of shared infra (`handle_errors`, `formatDate`, etc.)
-- [ ] `python scripts/check_duplication.py` passes (once wired into pre-pr-check)
+- [ ] `python scripts/check_duplication.py` passes
+- [ ] Enable auto-merge after create: `gh pr merge --auto --squash` (required check: **CI success**)

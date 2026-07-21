@@ -5,9 +5,10 @@ alwaysApply: true
 
 # Test Before Commit
 
-The pre-commit hook runs the full backend test suite plus a frontend build, which
-takes several minutes. Do **not** pay that cost until the user has verified the
-change works. Committing prematurely wastes the user's time.
+The local pre-commit hook is **slim**: Alembic/Celery/duplication guards plus
+**staged-path mapped** pytest/vitest (and `tsc` when frontend changed). It does
+**not** run the full suite or `npm run build` — CI is the authoritative heavy
+gate. Still avoid committing until the user has verified the change works.
 
 ## Workflow
 
@@ -17,9 +18,9 @@ change works. Committing prematurely wastes the user's time.
    the user to test in a browser.
 2. **Stop before committing.** Tell the user it's ready to test and say exactly
    what to check and where (which page/lead/flow in the browser).
-3. **Wait for the user to explicitly confirm** it works before doing anything
-   that triggers the pre-commit hook.
-4. Only after their OK: `git add` / `git commit` / `git push` / open the PR.
+3. **Wait for the user to explicitly confirm** it works before committing.
+4. Only after their OK: `git add` / `git commit` / `git push` / open the PR
+   (enable auto-merge when opening — see `pr-auto-merge`).
 
 ## Hard rules
 
@@ -29,3 +30,10 @@ change works. Committing prematurely wastes the user's time.
   `main` (see no-direct-main-merge).
 - If the user explicitly says "commit now" / "go ahead and commit", that counts
   as approval — proceed without making them test first.
+
+## Escape hatches
+
+- `PRE_COMMIT_FULL=1 git commit ...` — full backend pytest + frontend `tsc`
+  locally (still no production build).
+- `make pre-pr` / `make pre-pr-quick` — broader readiness gate vs `origin/main`.
+- `git commit --no-verify` — emergency only; CI must still pass.

@@ -146,7 +146,7 @@ Redis is started automatically by `python dev.py`. If you need to run it manuall
 ### Backend Tests
 ```bash
 cd backend
-pytest
+pytest -n auto -m "not performance"
 ```
 
 ### Frontend Tests
@@ -159,8 +159,41 @@ npm test
 
 1. Backend API development in `backend/app/`
 2. Frontend component development in `frontend/src/`
-3. Run both servers concurrently for full-stack development
+3. Run both servers concurrently for full-stack development (`python dev.py` + `npm run dev`)
 4. API requests from frontend are proxied to backend via Vite
+
+### Commit → PR → merge (fast path)
+
+Local commits use a **slim** versioned hook (`.githooks/pre-commit`): Alembic /
+Celery / duplication guards plus **staged-path mapped** tests. CI owns the full
+suite and production frontend build.
+
+| Step | What runs |
+|------|-----------|
+| `git commit` | Slim hook (mapped pytest/vitest + `tsc` when needed). No `npm run build`. |
+| PR / push to `main` | Path-filtered CI jobs + **CI success** aggregator |
+| After `gh pr create` | Enable auto-merge: `gh pr merge --auto --squash` |
+
+One-time per clone (sets `core.hooksPath=.githooks`):
+
+```powershell
+powershell -File scripts/install-git-hooks.ps1
+```
+
+```bash
+make hooks
+# or: bash scripts/install-git-hooks.sh
+```
+
+Escape hatches:
+
+- `PRE_COMMIT_FULL=1 git commit ...` — full backend pytest + frontend `tsc` locally
+- `make pre-pr` / `make pre-pr-quick` — broader readiness vs `origin/main`
+- `git commit --no-verify` — emergency only; CI must still pass
+
+Path filters skip frontend or backend/migration jobs when those trees did not
+change. **Push to `main` always builds the frontend** so Deploy can download the
+`frontend-dist` artifact.
 
 ## Technology Stack
 

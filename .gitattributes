@@ -2,3 +2,5 @@
 # so they run correctly on the Linux VPS without dos2unix conversion.
 scripts/*.sh text eol=lf
 *.sh text eol=lf
+# Versioned git hooks (no .sh extension) must stay LF for Unix shebang compatibility.
+.githooks/** text eol=lf

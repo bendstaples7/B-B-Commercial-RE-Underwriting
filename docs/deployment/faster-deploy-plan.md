@@ -182,12 +182,13 @@ Skipping full pipeline on code-only deploys is safe if these remain healthy. Log
 
 ### Deferred
 
-- **Path-filtered CI** — skip backend pytest on frontend-only changes (separate PR; branch-protection implications)
+- _(none for path filtering — shipped with commit→merge speedups)_
 
 **Checklist:**
 
-- [ ] **5a** — `pytest-xdist` + parallel CI pytest
-- [ ] **5b** — Frontend artifact upload/download between CI and Deploy
+- [x] **5a** — `pytest-xdist` + parallel CI pytest
+- [x] **5b** — Frontend artifact upload/download between CI and Deploy
+- [x] **Path-filtered CI** — skip frontend / backend pytest / migration jobs when those trees did not change; **CI success** aggregator for branch protection; push to `main` always builds frontend for Deploy
 
 ---
 
