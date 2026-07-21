@@ -4,6 +4,7 @@ import type { PropertyContactSummary } from '@/types'
 import {
   isAddressLikeContactName,
   isEntityContactName,
+  isGenericOwnerName,
   ownerDisplayEntries,
   primaryOwnerDisplayName,
   rankOwnersForDisplay,
@@ -54,6 +55,20 @@ describe('isAddressLikeContactName', () => {
 
   it('does not flag LLCs as address-like', () => {
     expect(isAddressLikeContactName({ first_name: 'Kdg Avondale', last_name: 'LLC' })).toBe(false)
+  })
+})
+
+describe('isGenericOwnerName', () => {
+  it('recognizes listing placeholders without classifying real people', () => {
+    expect(isGenericOwnerName('FSBO')).toBe(true)
+    expect(isGenericOwnerName('For Sale By Owner +')).toBe(true)
+    expect(isGenericOwnerName('Current Resident')).toBe(true)
+    expect(isGenericOwnerName('N/A')).toBe(true)
+    expect(isGenericOwnerName('NA')).toBe(true)
+    expect(isGenericOwnerName('Joseph Kiferbaum')).toBe(false)
+    expect(isGenericOwnerName('Jane Na')).toBe(false)
+    expect(isGenericOwnerName('Na Zhang')).toBe(false)
+    expect(isGenericOwnerName('Bank of America, N.A.')).toBe(false)
   })
 })
 

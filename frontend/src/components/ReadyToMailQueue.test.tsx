@@ -17,6 +17,7 @@ vi.mock('@/services/api', () => ({
 vi.mock('@/services/openLetterApi', () => ({
   default: {
     getQueue: vi.fn(),
+    getAllQueued: vi.fn(),
     getConfig: vi.fn(),
     listCampaigns: vi.fn(),
     enqueue: vi.fn(),
@@ -128,7 +129,7 @@ beforeEach(() => {
 
 describe('ReadyToMailQueue', () => {
   it('renders batch summary and staged accordion when queue loads', async () => {
-    vi.mocked(openLetterService.getQueue).mockResolvedValue(queueSummary)
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
 
     renderPage()
 
@@ -142,7 +143,7 @@ describe('ReadyToMailQueue', () => {
   })
 
   it('shows last mailed on recommended candidates', async () => {
-    vi.mocked(openLetterService.getQueue).mockResolvedValue({
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue({
       ...queueSummary,
       items: [],
       queued_count: 0,
@@ -158,7 +159,7 @@ describe('ReadyToMailQueue', () => {
   })
 
   it('shows API error message and still renders recommended section', async () => {
-    vi.mocked(openLetterService.getQueue).mockRejectedValue(
+    vi.mocked(openLetterService.getAllQueued).mockRejectedValue(
       new Error('Network error. Please check your connection.'),
     )
 
@@ -173,7 +174,7 @@ describe('ReadyToMailQueue', () => {
   })
 
   it('retry button refetches the mail queue', async () => {
-    vi.mocked(openLetterService.getQueue)
+    vi.mocked(openLetterService.getAllQueued)
       .mockRejectedValueOnce(new Error('Internal server error'))
       .mockResolvedValueOnce(queueSummary)
 
@@ -188,11 +189,11 @@ describe('ReadyToMailQueue', () => {
     await waitFor(() => {
       expect(screen.getByTestId('mail-batch-summary')).toBeInTheDocument()
     })
-    expect(openLetterService.getQueue).toHaveBeenCalledTimes(2)
+    expect(openLetterService.getAllQueued).toHaveBeenCalledTimes(2)
   })
 
   it('renders add-all button and confirms via dry-run preflight before enqueue', async () => {
-    vi.mocked(openLetterService.getQueue).mockResolvedValue(queueSummary)
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
 
     renderPage()
 
@@ -218,7 +219,7 @@ describe('ReadyToMailQueue', () => {
   })
 
   it('places recommended section before staged accordion in DOM order', async () => {
-    vi.mocked(openLetterService.getQueue).mockResolvedValue(queueSummary)
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
 
     renderPage()
 
@@ -233,7 +234,7 @@ describe('ReadyToMailQueue', () => {
   })
 
   it('hides staged table inside collapsed accordion when items exist', async () => {
-    vi.mocked(openLetterService.getQueue).mockResolvedValue(queueSummary)
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
 
     renderPage()
 
@@ -252,7 +253,7 @@ describe('ReadyToMailQueue', () => {
   })
 
   it('shows reach-minimum button when below batch minimum', async () => {
-    vi.mocked(openLetterService.getQueue).mockResolvedValue({
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue({
       ...queueSummary,
       queued_count: 30,
     })

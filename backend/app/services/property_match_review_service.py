@@ -14,6 +14,27 @@ from app.services.lead_status_service import apply_lead_status_change
 
 logger = logging.getLogger(__name__)
 
+RESOLVE_UNAMBIGUOUS_PINS_LOCK_KEY = 'property_match:resolve_unambiguous_pins_lock'
+RESOLVE_UNAMBIGUOUS_PINS_CURSOR_KEY = 'property_match:resolve_unambiguous_pins_cursor'
+
+
+def _resolve_pins_cursor() -> int:
+    from app.services.deploy_sync_policy import get_redis_value
+
+    raw = get_redis_value(RESOLVE_UNAMBIGUOUS_PINS_CURSOR_KEY)
+    if raw is None:
+        return 0
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _set_resolve_pins_cursor(last_id: int) -> None:
+    from app.services.deploy_sync_policy import set_redis_value
+
+    set_redis_value(RESOLVE_UNAMBIGUOUS_PINS_CURSOR_KEY, str(max(0, int(last_id))))
+
 
 class PropertyMatchReviewService:
     """GIS match preview and confirmation for missing-property-match queue."""
@@ -25,6 +46,20 @@ class PropertyMatchReviewService:
             dedup_engine=DeduplicationEngine(),
             gis_registry=GISConnectorRegistry,
         )
+
+    @staticmethod
+    def _cook_pins_at_address(address: str) -> list[str]:
+        """Return distinct Cook County PINs reported for a situs address."""
+        from app.services.gis.cook_county_gis_connector import lookup_all_pins_at_address
+
+        pins: list[str] = []
+        seen: set[str] = set()
+        for row in lookup_all_pins_at_address(address):
+            pin = str((row or {}).get('pin') or '').strip()
+            if pin and pin not in seen:
+                seen.add(pin)
+                pins.append(pin)
+        return pins
 
     def preview_match(self, lead_id: int) -> dict:
         from app.services.property_address_service import (
@@ -70,6 +105,47 @@ class PropertyMatchReviewService:
         connector = connector_for_lead(lead)
         parcel: GISParcel | None = None
         connector_name = connector.connector_name if connector else None
+        is_cook = getattr(connector, 'market', None) == 'cook_county_il'
+        cook_pins = self._cook_pins_at_address(lead.property_street) if (
+            is_cook and lead.property_street
+        ) else []
+        pin_count = len(cook_pins) if is_cook else None
+        if is_cook and pin_count >= 2:
+            return {
+                'found': True,
+                'entered_address': entered,
+                'recommended_address': None,
+                'pin': None,
+                'pins': cook_pins,
+                'pin_count': pin_count,
+                'connector': connector_name,
+                'address_complete': address_complete,
+                'reason': None,
+                'parcel_fields': None,
+                'message': 'Multiple assessor PINs found; review and apply the property match.',
+            }
+        if is_cook and pin_count == 1:
+            pin = cook_pins[0]
+            return {
+                'found': True,
+                'entered_address': entered,
+                'recommended_address': {
+                    'property_street': lead.property_street,
+                    'property_city': lead.property_city,
+                    'property_state': lead.property_state,
+                    'property_zip': lead.property_zip,
+                    'property_type': None,
+                    'county_assessor_pin': pin,
+                },
+                'pin': pin,
+                'pins': cook_pins,
+                'pin_count': pin_count,
+                'connector': connector_name,
+                'address_complete': address_complete,
+                'reason': None,
+                'parcel_fields': None,
+                'message': None,
+            }
         if connector is not None:
             if lead.property_street:
                 parcel = connector.lookup_by_address(lead.property_street)
@@ -84,6 +160,7 @@ class PropertyMatchReviewService:
                 'entered_address': entered,
                 'recommended_address': None,
                 'pin': None,
+                'pin_count': pin_count,
                 'connector': None,
                 'address_complete': address_complete,
                 'reason': 'no_connector',
@@ -96,6 +173,7 @@ class PropertyMatchReviewService:
                 'entered_address': entered,
                 'recommended_address': None,
                 'pin': None,
+                'pin_count': pin_count,
                 'connector': connector_name,
                 'address_complete': address_complete,
                 'reason': 'no_match',
@@ -133,6 +211,7 @@ class PropertyMatchReviewService:
             'entered_address': entered,
             'recommended_address': recommended,
             'pin': parcel.county_assessor_pin,
+            'pin_count': pin_count,
             'connector': connector_name,
             'address_complete': address_complete,
             'reason': None,
@@ -145,6 +224,115 @@ class PropertyMatchReviewService:
             },
             'message': None,
         }
+
+    def resolve_unambiguous_pins_batch(
+        self,
+        *,
+        limit: int = 100,
+        dry_run: bool = False,
+        actor: str = 'property_match.resolve_unambiguous_pins',
+        last_id: int | None = None,
+        persist_cursor: bool = True,
+    ) -> dict:
+        """Persist only Cook County PINs with exactly one address-level result.
+
+        Scans PIN-empty leads in ascending id order from an exclusive cursor
+        (``last_id`` > cursor), so unresolvable head rows (non-Cook, incomplete,
+        ambiguous, no-match) do not monopolize the window every run. The cursor
+        advances past every scanned id and wraps to 0 when a pass ends, so the
+        job eventually reaches eligible Cook leads further down the table.
+        """
+        from sqlalchemy import or_
+        from app.services.property_address_service import is_property_address_complete
+
+        batch_size = max(1, int(limit))
+        cursor = _resolve_pins_cursor() if last_id is None else max(0, int(last_id))
+
+        candidates = (
+            Lead.query
+            .filter(
+                or_(
+                    Lead.county_assessor_pin.is_(None),
+                    db.func.trim(Lead.county_assessor_pin) == '',
+                ),
+                Lead.id > cursor,
+            )
+            .order_by(Lead.id.asc())
+            .limit(batch_size)
+            .all()
+        )
+        # Empty window past a non-zero cursor means we reached the end — wrap so
+        # the next run re-scans from the top (picking up newly-eligible rows).
+        if not candidates and cursor > 0:
+            if persist_cursor and not dry_run:
+                _set_resolve_pins_cursor(0)
+            candidates = (
+                Lead.query
+                .filter(
+                    or_(
+                        Lead.county_assessor_pin.is_(None),
+                        db.func.trim(Lead.county_assessor_pin) == '',
+                    ),
+                )
+                .order_by(Lead.id.asc())
+                .limit(batch_size)
+                .all()
+            )
+            cursor = 0
+        result = {
+            'processed': 0,
+            'resolved': 0,
+            'skipped_incomplete': 0,
+            'skipped_no_connector': 0,
+            'skipped_ambiguous': 0,
+            'skipped_no_match': 0,
+            'errors': 0,
+            'lead_ids': [],
+            'previews': [],
+            'last_id': cursor,
+        }
+        max_scanned_id = cursor
+        for lead in candidates:
+            result['processed'] += 1
+            max_scanned_id = max(max_scanned_id, lead.id)
+            if not is_property_address_complete(lead=lead):
+                result['skipped_incomplete'] += 1
+                continue
+            connector = connector_for_lead(lead)
+            if getattr(connector, 'market', None) != 'cook_county_il':
+                result['skipped_no_connector'] += 1
+                continue
+            try:
+                pins = self._cook_pins_at_address(lead.property_street)
+            except Exception:
+                logger.exception('PIN batch lookup failed for lead %s', lead.id)
+                result['errors'] += 1
+                continue
+            if not pins:
+                result['skipped_no_match'] += 1
+                continue
+            if len(pins) != 1:
+                result['skipped_ambiguous'] += 1
+                continue
+            pin = pins[0]
+            if dry_run:
+                result['previews'].append({'lead_id': lead.id, 'pin': pin})
+                continue
+            try:
+                self.approve_match(lead.id, actor=actor, pin=pin)
+                result['resolved'] += 1
+                result['lead_ids'].append(lead.id)
+            except Exception:
+                logger.exception('PIN batch approval failed for lead %s', lead.id)
+                result['errors'] += 1
+
+        # Advance past everything scanned this run. A short page means the pass
+        # ended — wrap to 0 so the next run restarts from the top.
+        next_cursor = 0 if len(candidates) < batch_size else max_scanned_id
+        result['last_id'] = next_cursor
+        if persist_cursor and not dry_run:
+            _set_resolve_pins_cursor(next_cursor)
+        return result
 
     def approve_match(
         self,

@@ -99,6 +99,9 @@ def _seed_duplicate_leads(conn: sa.Connection) -> None:
         'email_lower': TEST_EMAIL.lower(),
     })
 
+    # Use a matchable person name — address-like / LLC seeds are intentionally
+    # refused by owner_names_merge_safe, so the merge step would leave the
+    # SQL-level duplicate cluster untouched and fail this gate.
     streets = [
         '107 S Grant Street',
         '107 S Grant St',
@@ -112,7 +115,7 @@ def _seed_duplicate_leads(conn: sa.Connection) -> None:
                 owner_first_name, owner_last_name, owner_user_id
             ) VALUES (
                 :street, :normalized_street,
-                '107 S Grant Street', 'LLC', :owner_user_id
+                'Jane', 'Doe', :owner_user_id
             )
         """), {
             'street': street,

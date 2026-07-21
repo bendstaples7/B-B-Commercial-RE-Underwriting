@@ -143,6 +143,40 @@ def cluster_leads_by_normalized_street(
     return [c for c in clusters if len(c) >= 2]
 
 
+def group_records_by_dedup_index_key(
+    records: Sequence[dict[str, Any]],
+) -> list[list[dict[str, Any]]]:
+    """Group records by the f9 owner+normalized_street unique-index key.
+
+    Mirrors the migration predicate exactly: NULL/empty raw owner names are not
+    indexed, but whitespace-only names are indexed as an empty trimmed key and
+    must be grouped so cleanup can clear the migration blocker.
+
+    Rows without a stored ``normalized_street`` are skipped — deriving a fallback
+    from ``property_street`` can merge distinct legacy leads outside the index.
+    """
+    from collections import defaultdict
+
+    buckets: dict[tuple, list[dict[str, Any]]] = defaultdict(list)
+    for row in records:
+        street_key = (row.get('normalized_street') or '').strip()
+        if not street_key:
+            continue
+        first_raw = row.get('owner_first_name')
+        last_raw = row.get('owner_last_name')
+        if first_raw is None or last_raw is None:
+            continue
+        if first_raw == '' or last_raw == '':
+            continue
+        first = str(first_raw).strip().lower()
+        last = str(last_raw).strip().lower()
+        owner_user_id = row.get('owner_user_id')
+        if not owner_user_id:
+            continue
+        buckets[(owner_user_id, first, last, street_key)].append(dict(row))
+    return [members for members in buckets.values() if len(members) >= 2]
+
+
 def winner_sort_key(
     record: dict[str, Any],
     confirmed_hubspot_lead_ids: set[int],

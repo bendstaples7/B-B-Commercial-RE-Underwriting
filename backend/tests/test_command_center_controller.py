@@ -463,6 +463,44 @@ class TestUpdateStatus:
             assert lead.lead_status == 'skip_trace'
             assert lead.hubspot_deal_stage is None
 
+    def test_status_change_to_skip_trace_converts_dated_handoff_no_duplicate(
+        self, client, app,
+    ):
+        """Status selector must reuse canonical handoff logic: a leftover dated
+        skip_trace_owner is converted into a single undated handoff, not left
+        alongside a freshly-created one."""
+        from datetime import date, timedelta
+        from app.models import LeadTask
+
+        with app.app_context():
+            lead = _make_lead(app, '7e Status St', lead_status='mailing_no_contact_made')
+            dated = LeadTask(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                title='Skip trace owner',
+                status='open',
+                due_date=date.today() - timedelta(days=3),
+            )
+            db.session.add(dated)
+            db.session.commit()
+
+            client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({'status': 'skip_trace'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+
+            open_handoffs = (
+                LeadTask.query
+                .filter_by(lead_id=lead.id, task_type='skip_trace_owner', status='open')
+                .all()
+            )
+            assert len(open_handoffs) == 1
+            handoff = open_handoffs[0]
+            assert handoff.due_date is None
+            assert handoff.workflow_key == 'awaiting_skip_trace_handoff'
+
     @patch('app.services.hubspot_writeback_service.HubSpotWriteBackService.push_deal_stage_for_lead')
     def test_status_change_pushes_hubspot_stage_for_linked_deal(self, mock_push, client, app):
         """PATCH /api/leads/<id>/status triggers HubSpot stage writeback for linked deals."""
@@ -943,6 +981,7 @@ class TestMoveToSkipTrace:
                 app,
                 f'825b {pipeline_status} St',
                 lead_status=pipeline_status,
+                needs_skip_trace=True,
             )
             handoff = _make_task(
                 app,
@@ -2010,12 +2049,12 @@ class TestHubSpotTimelineImport:
 
 class TestSaleDateVerification:
     @patch('app.services.cook_county_enrichment_service.ensure_automated_data_sources')
-    @patch('app.services.cook_county_enrichment_service.enqueue_cook_county_enrichment')
-    @patch('app.services.cook_county_enrichment_service.enrich_cook_county_lead')
+    @patch('app.services.cook_county_enrichment_service.enqueue_cook_county_sale_date_verification')
+    @patch('app.services.cook_county_enrichment_service.enrich_cook_county_sale_date')
     def test_verify_sale_date_runs_sync_when_worker_unavailable(
         self, mock_enrich, mock_enqueue, mock_ensure, client, app,
     ):
-        """Explicit verify endpoint uses canonical enrichment and returns sale metadata."""
+        """Explicit verify endpoint uses sale-date-only enrichment and returns metadata."""
         with app.app_context():
             lead = _make_lead(
                 app,
@@ -2049,8 +2088,8 @@ class TestSaleDateVerification:
             mock_enrich.assert_called_once_with(lead.id)
 
     @patch('app.services.cook_county_enrichment_service.ensure_automated_data_sources')
-    @patch('app.services.cook_county_enrichment_service.enqueue_cook_county_enrichment')
-    @patch('app.services.cook_county_enrichment_service.enrich_cook_county_lead')
+    @patch('app.services.cook_county_enrichment_service.enqueue_cook_county_sale_date_verification')
+    @patch('app.services.cook_county_enrichment_service.enrich_cook_county_sale_date')
     def test_verify_sale_date_surfaces_skip_reason(
         self, mock_enrich, mock_enqueue, mock_ensure, client, app,
     ):

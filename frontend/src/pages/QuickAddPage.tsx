@@ -93,6 +93,7 @@ export function QuickAddPage() {
   const queryClient = useQueryClient()
   const mapsLoaded = useGoogleMapsLoaded()
   const suggestionsRef = useRef<HTMLUListElement>(null)
+  const coordSourceRef = useRef<'gps' | 'place-pending' | 'place' | null>(null)
 
   const [note, setNote] = useState('')
   const [priority, setPriority] = useState<Priority | null>(null)
@@ -107,6 +108,8 @@ export function QuickAddPage() {
     state: string | null
     zip: string | null
   }>({ city: null, state: null, zip: null })
+  // Bumped on every Places selection so older getDetails callbacks are ignored.
+  const placesRequestIdRef = useRef(0)
   const [successResult, setSuccessResult] = useState<QuickAddResponse | null>(null)
   const [existingActionFeedback, setExistingActionFeedback] = useState<{
     severity: 'success' | 'warning' | 'error'
@@ -155,11 +158,19 @@ export function QuickAddPage() {
       setGpsStatus('error')
       return
     }
-    if (coords) return
+    if (coords) {
+      // Places selection (or a prior GPS fix) already provided coordinates.
+      setGpsStatus((prev) => (prev === 'loading' || prev === 'idle' ? 'ok' : prev))
+      return
+    }
 
     setGpsStatus('loading')
     navigator.geolocation.getCurrentPosition(
       (position) => {
+        if (coordSourceRef.current === 'place-pending' || coordSourceRef.current === 'place') {
+          return
+        }
+        coordSourceRef.current = 'gps'
         setCoords({
           lat: position.coords.latitude,
           lng: position.coords.longitude,
@@ -243,7 +254,14 @@ export function QuickAddPage() {
   })
 
   const handleSelect = (description: string, placeId: string) => {
-    setAddress(description, false)
+    // Show the suggestion immediately; replace with street-line once details load
+    // so we never submit the full Places description (city/state/ZIP duplicated).
+    const requestId = ++placesRequestIdRef.current
+    const streetGuess = description.split(',')[0]?.trim() || description
+    setAddress(streetGuess, false)
+    setParsedAddress({ city: null, state: null, zip: null })
+    coordSourceRef.current = 'place-pending'
+    setCoords(null)
     clearSuggestions()
     setAddressError('')
     try {
@@ -253,19 +271,30 @@ export function QuickAddPage() {
       service.getDetails(
         { placeId, fields: ['geometry', 'address_components'] },
         (result: any, placeStatus: any) => {
+          if (requestId !== placesRequestIdRef.current) return
           if (
             placeStatus === (window as any).google.maps.places.PlacesServiceStatus.OK &&
             result?.geometry?.location
           ) {
+            coordSourceRef.current = 'place'
             setCoords({
               lat: result.geometry.location.lat(),
               lng: result.geometry.location.lng(),
             })
+            // Places coords supersede an in-flight GPS probe — settle the
+            // indicator so it does not stay on "Getting your location…".
+            setGpsStatus('ok')
           }
           const components: Array<{ long_name: string; short_name: string; types: string[] }> =
             result?.address_components ?? []
           const find = (type: string) =>
             components.find((c) => c.types.includes(type))
+          const streetNumber = find('street_number')?.long_name
+          const route = find('route')?.long_name
+          const streetLine = [streetNumber, route].filter(Boolean).join(' ').trim()
+          if (streetLine) {
+            setAddress(streetLine, false)
+          }
           const city =
             find('locality')?.long_name ??
             find('sublocality')?.long_name ??
@@ -283,7 +312,18 @@ export function QuickAddPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    const street = address.trim()
+    // Places selections carry structured city/state/ZIP — persist street-only.
+    // Manual free-form entries keep the raw input so city/state/ZIP embedded in
+    // the one-liner are not silently dropped when parsedAddress is empty.
+    const hasStructured =
+      Boolean(parsedAddress.city)
+      || Boolean(parsedAddress.state)
+      || Boolean(parsedAddress.zip)
+    const street = (
+      hasStructured
+        ? (address.split(',')[0] || address)
+        : address
+    ).trim()
     if (!street) {
       setAddressError('Property address is required')
       return
@@ -386,6 +426,8 @@ export function QuickAddPage() {
           label="Property address"
           value={address}
           onChange={(e) => {
+            placesRequestIdRef.current += 1
+            coordSourceRef.current = null
             setAddress(e.target.value)
             setExistingActionFeedback(null)
             setParsedAddress({ city: null, state: null, zip: null })

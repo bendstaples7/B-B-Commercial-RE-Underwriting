@@ -947,7 +947,10 @@ class ContactService:
         Excludes same-building address/PIN variants.
         Only traverses **owner** role links within the lead's ``owner_user_id`` scope.
         """
-        from app.services.plugins.owner_name_utils import owner_names_equivalent
+        from app.services.plugins.owner_name_utils import (
+            is_matchable_person_name,
+            owner_names_equivalent,
+        )
         from sqlalchemy import case, or_
 
         cap = self.RELATED_PROPERTIES_CAP if limit is None else limit
@@ -986,7 +989,7 @@ class ContactService:
                 related_ids.add(pid)
 
         first, last = self._owner_names_for_related(lead)
-        if first or last:
+        if is_matchable_person_name(first, last):
             q = Property.query.filter(
                 Property.id != lead_id,
                 scope,
@@ -1044,7 +1047,22 @@ class ContactService:
         ``contact:<id>``.
         """
         import re
-        from app.services.plugins.owner_name_utils import expand_owner_name_parts
+        from app.services.plugins.owner_name_utils import (
+            expand_owner_name_parts,
+            is_generic_owner_name,
+        )
+
+        raw_owner_name = ' '.join(
+            part for part in (
+                (lead.owner_first_name or '').strip(),
+                (lead.owner_last_name or '').strip(),
+            ) if part
+        )
+        if is_generic_owner_name(raw_owner_name):
+            return {
+                'person_key': f'lead:{lead.id}',
+                'owner_display_name': raw_owner_name or None,
+            }
 
         scope = self._user_property_scope_filter(lead.owner_user_id)
         for (cid,) in (
@@ -1115,7 +1133,22 @@ class ContactService:
     ) -> dict[str, str | None]:
         """Build person identity using preloaded contact / property maps (no queries)."""
         import re
-        from app.services.plugins.owner_name_utils import expand_owner_name_parts
+        from app.services.plugins.owner_name_utils import (
+            expand_owner_name_parts,
+            is_generic_owner_name,
+        )
+
+        raw_owner_name = ' '.join(
+            part for part in (
+                (lead.owner_first_name or '').strip(),
+                (lead.owner_last_name or '').strip(),
+            ) if part
+        )
+        if is_generic_owner_name(raw_owner_name):
+            return {
+                'person_key': f'lead:{lead.id}',
+                'owner_display_name': raw_owner_name or None,
+            }
 
         for cid in sorted(lead_contacts.get(lead.id, set())):
             if len(contact_scoped_props.get(cid, set())) < 2:
@@ -1166,6 +1199,7 @@ class ContactService:
         from collections import defaultdict
         from app.services.plugins.owner_name_utils import (
             expand_owner_name_parts,
+            is_matchable_person_name,
             owner_names_equivalent,
         )
         from sqlalchemy import or_
@@ -1257,7 +1291,7 @@ class ContactService:
         for lead in leads:
             first, last = _names_for_page_lead(lead)
             names_by_lead[lead.id] = (first, last)
-            if not last:
+            if not last or not is_matchable_person_name(first, last):
                 continue
             name_buckets[(lead.owner_user_id, last.lower())].append(lead)
 

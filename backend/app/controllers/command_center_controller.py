@@ -63,6 +63,13 @@ def _format_lead_score(value) -> str | None:
         return None
 
 
+def _display_street(street: str | None) -> str | None:
+    """Street-only form for display — delegates to canonical helper."""
+    from app.services.property_address_service import display_street
+
+    return display_street(street)
+
+
 def _status_change_summary(
     old_status: str | None,
     new_status: str,
@@ -756,7 +763,7 @@ def get_command_center(lead_id: int):
         'entity_research': entity_research_payload,
         'related_properties': related_properties,
         # Property details
-        'property_street': lead.property_street,
+        'property_street': _display_street(lead.property_street),
         'property_city': lead.property_city,
         'property_state': lead.property_state,
         'property_zip': lead.property_zip,
@@ -1004,6 +1011,38 @@ def update_status(lead_id: int):
     if new_status in ('skip_trace', 'awaiting_skip_trace'):
         lead.needs_skip_trace = True
 
+    # Status-selector entry into skip_trace must clear leftover dated chores the
+    # same way Move to Skip Trace does — otherwise May follow-ups re-enter
+    # Today's Action under status=skip_trace with RA=add_contact_info.
+    skip_trace_pending_hubspot_ids: set[str] = set()
+    skip_trace_handoff_clear_ids: set[str] = set()
+    if (
+        new_status == 'skip_trace'
+        and old_status != 'skip_trace'
+    ):
+        from app.services.skip_trace_enqueue import (
+            SkipTraceEnqueue,
+            clear_dated_due_chores_entering_skip_trace,
+        )
+        _, skip_trace_pending_hubspot_ids = (
+            clear_dated_due_chores_entering_skip_trace(
+                lead_id,
+                actor=str(actor_raw),
+                reason='status_selector_skip_trace',
+            )
+        )
+        # Reuse the canonical handoff logic (find undated → convert leftover
+        # dated skip_trace_owner → create) so the status selector cannot leave
+        # two open skip-trace tasks the way a create-only path would.
+        _, skip_trace_handoff_clear_ids, extra_hs = (
+            SkipTraceEnqueue().ensure_awaiting_skip_trace_handoff(
+                lead_id,
+                actor=str(actor_raw),
+                commit=False,
+            )
+        )
+        skip_trace_pending_hubspot_ids.update(extra_hs)
+
     # Match the dedicated DNC action: DNC always cancels open next-action work,
     # regardless of whether it came from Quick Actions or the status selector.
     if new_status in ('do_not_contact', 'suppressed'):
@@ -1034,6 +1073,24 @@ def update_status(lead_id: int):
     )
     db.session.add(entry)
     db.session.commit()
+
+    # Mirror move_to_skip_trace: after the transaction commits, complete the
+    # HubSpot-backed chores we cleared and clear due-dates on converted handoffs.
+    if skip_trace_pending_hubspot_ids:
+        from app.services.hubspot_task_completion_service import (
+            sync_pending_hubspot_completions,
+        )
+        sync_pending_hubspot_completions(sorted(skip_trace_pending_hubspot_ids))
+    if skip_trace_handoff_clear_ids:
+        from app.services.hubspot_task_completion_service import (
+            sync_hubspot_task_properties,
+        )
+        for hs_id in sorted(skip_trace_handoff_clear_ids):
+            sync_hubspot_task_properties(
+                hs_id,
+                title='Awaiting skip trace',
+                clear_due_date=True,
+            )
 
     from app.services.queue_order_cache import queue_order_cache
     queue_order_cache.clear()
@@ -1664,8 +1721,8 @@ def verify_sale_date(lead_id: int):
     """
     from app.controllers.property_controller import _current_user_is_admin
     from app.services.cook_county_enrichment_service import (
-        enrich_cook_county_lead,
-        enqueue_cook_county_enrichment,
+        enrich_cook_county_sale_date,
+        enqueue_cook_county_sale_date_verification,
         ensure_automated_data_sources,
     )
 
@@ -1692,12 +1749,12 @@ def verify_sale_date(lead_id: int):
     ran_sync = False
     summary = None
     if workers_available:
-        queued = enqueue_cook_county_enrichment(lead_id)
+        queued = enqueue_cook_county_sale_date_verification(lead_id)
 
     if not queued:
         flask_env = os.getenv('FLASK_ENV', 'production')
         if flask_env in ('development', 'testing'):
-            summary = enrich_cook_county_lead(lead_id)
+            summary = enrich_cook_county_sale_date(lead_id)
             ran_sync = True
         else:
             return jsonify({

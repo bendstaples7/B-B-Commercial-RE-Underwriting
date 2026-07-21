@@ -96,10 +96,29 @@ def _warn_celery_not_running():
     )
 
 
+def _assert_flask_port_free(port: int = 5000) -> None:
+    """Refuse to start when another process already owns the Flask port."""
+    from port_guard import assert_port_free
+
+    assert_port_free(port)
+
+
+if __name__ == '__main__':
+    # Fail fast BEFORE building the app so we don't waste create_app() work when
+    # the port is already owned. Only runs for `python run.py` (not gunicorn /
+    # `flask run`, which import `app` and never set __main__).
+    _assert_flask_port_free(5000)
+
 _check_migration_revision_uniqueness()
 app = create_app()
 
 if __name__ == '__main__':
+    # Re-check just before binding to shrink the TOCTOU window between the early
+    # assert and app.run. This cannot fully close it: Werkzeug's dev server sets
+    # SO_REUSEADDR, so on Windows two processes can still both bind port 5000 if
+    # they race. `python dev.py` and `python run.py` are the only supported local
+    # launchers; dev.py additionally sweeps stale listeners before starting.
+    _assert_flask_port_free(5000)
     _check_redis()
     _warn_celery_not_running()
     with app.app_context():

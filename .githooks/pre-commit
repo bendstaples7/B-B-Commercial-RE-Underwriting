@@ -227,12 +227,19 @@ has_src = sys.argv[3] == "1"
 paths = mapping.get("frontend") or []
 shell = sys.platform == "win32"
 if paths:
-    print("Running mapped frontend tests:", " ".join(paths))
-    cmd = ["npm", "test", "--", "--run", *paths]
+    # Mapper returns repo-root paths (frontend/src/...); vitest runs with cwd=frontend.
+    rel_paths = [
+        p[len("frontend/") :] if p.startswith("frontend/") else p
+        for p in paths
+    ]
+    print("Running mapped frontend tests:", " ".join(rel_paths))
+    # package.json "test" is already `vitest --run` — do not pass --run again
+    # (vitest rejects duplicate boolean flags).
+    cmd = ["npm", "test", "--", *rel_paths]
     raise SystemExit(subprocess.call(cmd, cwd=frontend_dir, shell=shell))
 if has_src:
     print("No co-located frontend tests — running full frontend suite")
-    cmd = ["npm", "test", "--", "--run"]
+    cmd = ["npm", "test"]
     raise SystemExit(subprocess.call(cmd, cwd=frontend_dir, shell=shell))
 print("No frontend/src changes staged — skipping vitest")
 PY

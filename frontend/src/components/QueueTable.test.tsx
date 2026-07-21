@@ -755,12 +755,19 @@ describe('QueueTable', () => {
     it('renders property address', () => {
       render(
         <QueueTable
-          rows={[makeRow(1, { property_street: '123 Oak Ave', property_city: 'Chicago', property_state: 'IL' })]}
+          rows={[makeRow(1, {
+            property_street: '123 Oak Ave',
+            property_city: 'Chicago',
+            property_state: 'IL',
+            property_zip: '60622',
+          })]}
           total={1}
         />
       )
 
-      expect(screen.getByTestId('row-address-1')).toHaveTextContent('123 Oak Ave, Chicago, IL')
+      expect(screen.getByTestId('row-address-1')).toHaveTextContent(
+        '123 Oak Ave, Chicago, IL, 60622',
+      )
     })
 
     it('renders lead score', () => {

@@ -28,6 +28,81 @@ from app.services.lead_task_service import (
 logger = logging.getLogger(__name__)
 
 
+def clear_dated_due_chores_entering_skip_trace(
+    lead_id: int,
+    *,
+    actor: str,
+    reason: str = 'entered_skip_trace',
+    today: date | None = None,
+    now: datetime | None = None,
+) -> tuple[list[int], set[str]]:
+    """Complete dated-due non-handoff chores when a lead enters ``skip_trace``.
+
+    Prevents leftover custom/follow-up tasks from re-entering Today's Action
+    after status becomes ``skip_trace`` without going through Move to Skip Trace.
+    Skips undated skip-trace handoffs and open ``recent_sale_hold`` tasks.
+
+    Returns ``(completed_task_ids, pending_hubspot_task_ids)``.
+    """
+    as_of = today or date.today()
+    completed_at = now or datetime.now(timezone.utc)
+    open_tasks = (
+        LeadTask.query
+        .filter(
+            LeadTask.lead_id == lead_id,
+            LeadTask.status == "open",
+        )
+        .order_by(
+            LeadTask.due_date.asc().nullslast(),
+            LeadTask.id.asc(),
+        )
+        .all()
+    )
+    completed_ids: list[int] = []
+    pending_hubspot_ids: set[str] = set()
+    for task in open_tasks:
+        if SkipTraceEnqueue._is_undated_skip_trace_handoff(task):
+            continue
+        if task.workflow_key == "recent_sale_hold":
+            continue
+        if task.due_date is None or task.due_date > as_of:
+            continue
+        completed_via_hubspot = False
+        if task.hubspot_task_id:
+            from app.services.hubspot_task_completion_service import (
+                mark_hubspot_task_completed_local,
+            )
+
+            local_completion = mark_hubspot_task_completed_local(
+                lead_id,
+                task.id,
+                actor=actor,
+                reason=reason,
+            )
+            if local_completion is not None:
+                completed_ids.append(task.id)
+                if local_completion.hubspot_task_id:
+                    pending_hubspot_ids.add(local_completion.hubspot_task_id)
+                completed_via_hubspot = True
+        if not completed_via_hubspot:
+            SkipTraceEnqueue._complete_task_and_log(
+                task, completed_at, actor, reason=reason,
+            )
+            completed_ids.append(task.id)
+        if task.task_type == 'run_property_analysis':
+            from app.services.analysis_completion_service import (
+                mark_lead_analysis_complete,
+            )
+            mark_lead_analysis_complete(
+                lead_id,
+                source='manual',
+                actor=actor,
+                recompute_action=False,
+                commit=False,
+            )
+    return completed_ids, pending_hubspot_ids
+
+
 def _contact_display_name(contact_id: int) -> Optional[str]:
     contact = Contact.query.filter_by(id=contact_id).first()
     if contact is None:
@@ -127,85 +202,33 @@ class SkipTraceEnqueue:
 
         eligibility = evaluate_move_to_skip_trace(lead)
         if eligibility.already_done:
-            healed_handoff = False
+            # Reuse shared helpers so leftover dated custom/follow-ups (not only
+            # skip_trace_owner) leave Today's Action, matching a fresh move.
             now = datetime.now(timezone.utc)
-            open_skip_tasks = (
-                LeadTask.query
-                .filter_by(
-                    lead_id=lead_id,
-                    task_type="skip_trace_owner",
-                    status="open",
-                )
-                .order_by(
-                    LeadTask.due_date.asc().nullslast(),
-                    LeadTask.id.asc(),
-                )
-                .all()
-            )
-            completed_task_ids_out: list[int] = []
-            pending_hubspot_ids: set[str] = set()
-            handoff_clear_ids: set[str] = set()
             today = date.today()
-            for task in open_skip_tasks:
-                if self._is_undated_skip_trace_handoff(task):
-                    continue
-                if task.workflow_key == "recent_sale_hold":
-                    continue
-                if task.due_date is not None and task.due_date > today:
-                    continue
-                # Heal stuck dated/verify work left open after an earlier handoff.
-                completed_task_ids_out.append(task.id)
-                if task.hubspot_task_id:
-                    from app.services.hubspot_task_completion_service import (
-                        mark_hubspot_task_completed_local,
-                    )
-                    local_completion = mark_hubspot_task_completed_local(
-                        lead_id,
-                        task.id,
-                        actor=actor,
-                        reason="moved_to_skip_trace",
-                    )
-                    if local_completion is not None:
-                        pending_hubspot_ids.add(local_completion.hubspot_task_id)
-                    else:
-                        self._complete_task_and_log(task, now, actor)
-                else:
-                    self._complete_task_and_log(task, now, actor)
-                healed_handoff = True
-
-            skip_trace_task = self._find_undated_skip_trace_handoff(lead_id)
-            if skip_trace_task is None:
-                skip_trace_task = (
-                    LeadTask.query
-                    .filter_by(
-                        lead_id=lead_id,
-                        task_type="skip_trace_owner",
-                        status="open",
-                    )
-                    .order_by(
-                        LeadTask.due_date.asc().nullslast(),
-                        LeadTask.id.asc(),
-                    )
-                    .first()
-                )
-            if skip_trace_task is None:
-                skip_trace_task = self._tasks.create(
+            completed_task_ids_out, pending_hubspot_ids = (
+                clear_dated_due_chores_entering_skip_trace(
                     lead_id,
-                    {
-                        "task_type": "skip_trace_owner",
-                        "title": "Awaiting skip trace",
-                        "due_date": None,
-                    },
                     actor=actor,
-                    recompute_action=False,
-                    commit=False,
+                    reason='moved_to_skip_trace',
+                    today=today,
+                    now=now,
                 )
-                skip_trace_task.workflow_key = "awaiting_skip_trace_handoff"
-                db.session.add(skip_trace_task)
-                healed_handoff = True
-            elif not self._is_undated_skip_trace_handoff(skip_trace_task):
-                self._convert_to_awaiting_handoff(skip_trace_task, handoff_clear_ids)
-                healed_handoff = True
+            )
+            had_undated = self._find_undated_skip_trace_handoff(lead_id) is not None
+            skip_trace_task, handoff_clear_ids, extra_hs = (
+                self.ensure_awaiting_skip_trace_handoff(
+                    lead_id, actor=actor, commit=False,
+                )
+            )
+            pending_hubspot_ids.update(extra_hs)
+            healed_handoff = (
+                bool(completed_task_ids_out)
+                or bool(handoff_clear_ids)
+                or bool(extra_hs)
+                or not had_undated
+                or not lead.needs_skip_trace
+            )
 
             if healed_handoff:
                 lead.needs_skip_trace = True
@@ -255,78 +278,63 @@ class SkipTraceEnqueue:
 
         now = datetime.now(timezone.utc)
         today = date.today()
-        tasks_to_complete: list[LeadTask] = []
+        # Clear every dated-due non-handoff chore so multi-task leaks cannot
+        # re-enter Today's Action after status becomes skip_trace.
+        completed_task_ids_out, pending_hubspot_ids = (
+            clear_dated_due_chores_entering_skip_trace(
+                lead_id,
+                actor=actor,
+                reason='moved_to_skip_trace',
+                today=today,
+                now=now,
+            )
+        )
+        # Also honor an explicit complete_task_id (may be undated — e.g. a
+        # current "Review returned mail" chore) without completing the handoff.
         if complete_task_id is not None:
             candidate = (
                 LeadTask.query
                 .filter_by(id=complete_task_id, lead_id=lead_id)
                 .first()
             )
-            # Never complete the undated skip-trace handoff placeholder itself;
-            # ignore stale/missing client ids so the handoff still succeeds.
             if (
                 candidate is not None
+                and candidate.status == "open"
                 and not self._is_undated_skip_trace_handoff(candidate)
+                and candidate.id not in completed_task_ids_out
             ):
-                tasks_to_complete = [candidate]
-        else:
-            # Clear every dated-due non-handoff chore so multi-task leaks cannot
-            # re-enter Today's Action after status becomes skip_trace.
-            open_tasks = (
-                LeadTask.query
-                .filter(
-                    LeadTask.lead_id == lead_id,
-                    LeadTask.status == "open",
-                )
-                .order_by(
-                    LeadTask.due_date.asc().nullslast(),
-                    LeadTask.id.asc(),
-                )
-                .all()
-            )
-            for task in open_tasks:
-                if self._is_undated_skip_trace_handoff(task):
-                    continue
-                if task.workflow_key == "recent_sale_hold":
-                    continue
-                if task.due_date is None or task.due_date > today:
-                    continue
-                tasks_to_complete.append(task)
+                if candidate.hubspot_task_id:
+                    from app.services.hubspot_task_completion_service import (
+                        mark_hubspot_task_completed_local,
+                    )
 
-        completed_task_ids_out: list[int] = []
-        pending_hubspot_ids: set[str] = set()
-        for completed_task in tasks_to_complete:
-            if completed_task.status != "open":
-                continue
-            completed_task_ids_out.append(completed_task.id)
-            if completed_task.hubspot_task_id:
-                from app.services.hubspot_task_completion_service import (
-                    mark_hubspot_task_completed_local,
-                )
-
-                local_completion = mark_hubspot_task_completed_local(
-                    lead_id,
-                    completed_task.id,
-                    actor=actor,
-                    reason="moved_to_skip_trace",
-                )
-                if local_completion is not None:
-                    pending_hubspot_ids.add(local_completion.hubspot_task_id)
+                    local_completion = mark_hubspot_task_completed_local(
+                        lead_id,
+                        candidate.id,
+                        actor=actor,
+                        reason="moved_to_skip_trace",
+                    )
+                    if local_completion is not None:
+                        completed_task_ids_out.append(candidate.id)
+                        if local_completion.hubspot_task_id:
+                            pending_hubspot_ids.add(local_completion.hubspot_task_id)
+                    else:
+                        self._complete_task_and_log(candidate, now, actor)
+                        completed_task_ids_out.append(candidate.id)
                 else:
-                    self._complete_task_and_log(completed_task, now, actor)
-            else:
-                self._complete_task_and_log(completed_task, now, actor)
-            if completed_task.task_type == 'run_property_analysis':
-                from app.services.analysis_completion_service import (
-                    mark_lead_analysis_complete,
-                )
-                mark_lead_analysis_complete(
-                    lead_id,
-                    source='manual',
-                    actor=actor,
-                    recompute_action=False,
-                    commit=False,
-                )
+                    self._complete_task_and_log(candidate, now, actor)
+                    completed_task_ids_out.append(candidate.id)
+                if candidate.task_type == 'run_property_analysis':
+                    from app.services.analysis_completion_service import (
+                        mark_lead_analysis_complete,
+                    )
+                    mark_lead_analysis_complete(
+                        lead_id,
+                        source='manual',
+                        actor=actor,
+                        recompute_action=False,
+                        commit=False,
+                    )
 
         old_status = lead.lead_status
         lead.lead_status = "skip_trace"
@@ -351,42 +359,12 @@ class SkipTraceEnqueue:
 
         # Prefer an existing undated handoff; otherwise convert leftover open
         # skip_trace_owner rows, or create a fresh undated placeholder.
-        skip_trace_task = self._find_undated_skip_trace_handoff(lead_id)
-        if skip_trace_task is None:
-            skip_trace_task = (
-                LeadTask.query
-                .filter_by(
-                    lead_id=lead_id,
-                    task_type="skip_trace_owner",
-                    status="open",
-                )
-                .order_by(
-                    LeadTask.due_date.asc().nullslast(),
-                    LeadTask.id.asc(),
-                )
-                .first()
+        skip_trace_task, handoff_clear_ids, extra_hs = (
+            self.ensure_awaiting_skip_trace_handoff(
+                lead_id, actor=actor, commit=False,
             )
-        handoff_clear_ids: set[str] = set()
-        if skip_trace_task is not None and not self._is_undated_skip_trace_handoff(
-            skip_trace_task,
-        ):
-            # Dated verify work should already have been completed above; if an
-            # open skip_trace_owner remains, normalize it into the handoff.
-            self._convert_to_awaiting_handoff(skip_trace_task, handoff_clear_ids)
-        elif skip_trace_task is None:
-            skip_trace_task = self._tasks.create(
-                lead_id,
-                {
-                    "task_type": "skip_trace_owner",
-                    "title": "Awaiting skip trace",
-                    "due_date": None,
-                },
-                actor=actor,
-                recompute_action=False,
-                commit=False,
-            )
-            skip_trace_task.workflow_key = "awaiting_skip_trace_handoff"
-            db.session.add(skip_trace_task)
+        )
+        pending_hubspot_ids.update(extra_hs)
 
         db.session.commit()
 
@@ -758,6 +736,7 @@ class SkipTraceEnqueue:
                 limit=remaining_stale,
                 exclude_lead_ids=set(activated_ids) | scoring_lead_ids,
                 hubspot_handoff_clear_ids=hubspot_handoff_clear_ids,
+                hubspot_completion_ids=hubspot_task_ids,
             )
             stale_healed_lead_ids = stale["activated_lead_ids"]
             activated_ids.extend(stale_healed_lead_ids)
@@ -958,6 +937,7 @@ class SkipTraceEnqueue:
             if lead.lead_status not in ("skip_trace", "awaiting_skip_trace"):
                 old_status = lead.lead_status
                 lead.lead_status = "skip_trace"
+                # Hold period: skip work is not yet needed (flag stays False).
                 lead.needs_skip_trace = False
                 db.session.add(lead)
                 db.session.add(LeadTimelineEntry(
@@ -978,6 +958,16 @@ class SkipTraceEnqueue:
                     },
                 ))
                 status_changed = True
+                # Clear leftover dated custom/follow-ups so hold status cannot
+                # re-enter Today's Action via stale May chores.
+                _, cleared_hs = clear_dated_due_chores_entering_skip_trace(
+                    lead.id,
+                    actor=actor,
+                    reason='recent_sale_hold_status_sync',
+                    today=today,
+                    now=now,
+                )
+                hubspot_completion_ids.extend(cleared_hs)
             elif lead.needs_skip_trace:
                 lead.needs_skip_trace = False
                 db.session.add(lead)
@@ -1083,6 +1073,7 @@ class SkipTraceEnqueue:
         limit: int | None,
         exclude_lead_ids: set[int],
         hubspot_handoff_clear_ids: set[str] | None = None,
+        hubspot_completion_ids: set[str] | None = None,
     ) -> dict:
         """Move past-hold prior-owner leads into awaiting skip-trace handoff.
 
@@ -1183,6 +1174,7 @@ class SkipTraceEnqueue:
                 locked.id,
                 actor=actor,
                 hubspot_handoff_clear_ids=hubspot_handoff_clear_ids,
+                hubspot_completion_ids=hubspot_completion_ids,
             )
             activated_lead_ids.append(locked.id)
             scoring_lead_ids.add(locked.id)
@@ -1198,38 +1190,158 @@ class SkipTraceEnqueue:
         *,
         actor: str,
         hubspot_handoff_clear_ids: set[str] | None = None,
+        hubspot_completion_ids: set[str] | None = None,
     ) -> LeadTask:
         """Create or normalize an undated Awaiting skip trace handoff task."""
         handoff = self._find_undated_skip_trace_handoff(lead_id)
-        if handoff is not None:
-            return handoff
-        open_skip = (
-            LeadTask.query
-            .filter_by(
-                lead_id=lead_id,
-                task_type="skip_trace_owner",
-                status="open",
+        if handoff is None:
+            open_skip = (
+                LeadTask.query
+                .filter_by(
+                    lead_id=lead_id,
+                    task_type="skip_trace_owner",
+                    status="open",
+                )
+                .order_by(LeadTask.due_date.asc().nullslast(), LeadTask.id.asc())
+                .first()
             )
-            .order_by(LeadTask.due_date.asc().nullslast(), LeadTask.id.asc())
-            .first()
-        )
-        if open_skip is not None:
-            self._convert_to_awaiting_handoff(open_skip, hubspot_handoff_clear_ids)
-            return open_skip
-        task = self._tasks.create(
+            if open_skip is not None:
+                self._convert_to_awaiting_handoff(open_skip, hubspot_handoff_clear_ids)
+                handoff = open_skip
+            else:
+                handoff = self._tasks.create(
+                    lead_id,
+                    {
+                        "task_type": "skip_trace_owner",
+                        "title": "Awaiting skip trace",
+                        "due_date": None,
+                    },
+                    actor=actor,
+                    recompute_action=False,
+                    commit=False,
+                )
+                handoff.workflow_key = "awaiting_skip_trace_handoff"
+                db.session.add(handoff)
+        extra_hs = self._retire_extra_open_skip_trace_owners(
             lead_id,
-            {
-                "task_type": "skip_trace_owner",
-                "title": "Awaiting skip trace",
-                "due_date": None,
-            },
+            keep_id=handoff.id,
             actor=actor,
-            recompute_action=False,
-            commit=False,
         )
-        task.workflow_key = "awaiting_skip_trace_handoff"
-        db.session.add(task)
-        return task
+        if hubspot_completion_ids is not None:
+            hubspot_completion_ids.update(extra_hs)
+        return handoff
+
+    def ensure_awaiting_skip_trace_handoff(
+        self,
+        lead_id: int,
+        *,
+        actor: str,
+        commit: bool = False,
+    ) -> tuple[LeadTask, set[str], set[str]]:
+        """Guarantee exactly one undated ``awaiting_skip_trace_handoff`` task.
+
+        Shared by ``move_to_skip_trace`` and the Command Center status selector
+        so every path that enters ``skip_trace`` uses the same rule: reuse an
+        existing undated handoff, else convert a leftover open ``skip_trace_owner``
+        (dated) into the handoff, else create a fresh placeholder. Any other open
+        ``skip_trace_owner`` rows (including future-dated) are completed so the
+        single-handoff guarantee holds.
+
+        Returns ``(handoff_task, hubspot_handoff_clear_ids, hubspot_completion_ids)``.
+        """
+        skip_trace_task = self._find_undated_skip_trace_handoff(lead_id)
+        if skip_trace_task is None:
+            skip_trace_task = (
+                LeadTask.query
+                .filter_by(
+                    lead_id=lead_id,
+                    task_type="skip_trace_owner",
+                    status="open",
+                )
+                .order_by(
+                    LeadTask.due_date.asc().nullslast(),
+                    LeadTask.id.asc(),
+                )
+                .first()
+            )
+        handoff_clear_ids: set[str] = set()
+        if skip_trace_task is not None and not self._is_undated_skip_trace_handoff(
+            skip_trace_task,
+        ):
+            # Normalize a leftover open skip_trace_owner into the handoff.
+            self._convert_to_awaiting_handoff(skip_trace_task, handoff_clear_ids)
+        elif skip_trace_task is None:
+            skip_trace_task = self._tasks.create(
+                lead_id,
+                {
+                    "task_type": "skip_trace_owner",
+                    "title": "Awaiting skip trace",
+                    "due_date": None,
+                },
+                actor=actor,
+                recompute_action=False,
+                commit=False,
+            )
+            skip_trace_task.workflow_key = "awaiting_skip_trace_handoff"
+            db.session.add(skip_trace_task)
+
+        completion_ids = self._retire_extra_open_skip_trace_owners(
+            lead_id,
+            keep_id=skip_trace_task.id,
+            actor=actor,
+        )
+
+        if commit:
+            db.session.commit()
+        return skip_trace_task, handoff_clear_ids, completion_ids
+
+    def _retire_extra_open_skip_trace_owners(
+        self,
+        lead_id: int,
+        *,
+        keep_id: int,
+        actor: str,
+    ) -> set[str]:
+        """Complete other open skip_trace_owner tasks so only *keep_id* remains."""
+        now = datetime.now(timezone.utc)
+        pending_hubspot_ids: set[str] = set()
+        extras = (
+            LeadTask.query
+            .filter(
+                LeadTask.lead_id == lead_id,
+                LeadTask.task_type == "skip_trace_owner",
+                LeadTask.status == "open",
+                LeadTask.id != keep_id,
+            )
+            .all()
+        )
+        for task in extras:
+            completed_via_hubspot = False
+            if task.hubspot_task_id:
+                from app.services.hubspot_task_completion_service import (
+                    mark_hubspot_task_completed_local,
+                )
+
+                local_completion = mark_hubspot_task_completed_local(
+                    lead_id,
+                    task.id,
+                    actor=actor,
+                    reason="dedupe_skip_trace_handoff",
+                )
+                if local_completion is not None:
+                    completed_via_hubspot = True
+                    if local_completion.hubspot_task_id:
+                        pending_hubspot_ids.add(str(local_completion.hubspot_task_id))
+            if not completed_via_hubspot:
+                self._complete_task_and_log(
+                    task,
+                    now,
+                    actor,
+                    reason="dedupe_skip_trace_handoff",
+                )
+                if task.hubspot_task_id:
+                    pending_hubspot_ids.add(str(task.hubspot_task_id))
+        return pending_hubspot_ids
 
     @staticmethod
     def _convert_to_awaiting_handoff(
@@ -1286,6 +1398,8 @@ class SkipTraceEnqueue:
         task: LeadTask,
         completed_at: datetime,
         actor: str,
+        *,
+        reason: str = 'moved_to_skip_trace',
     ) -> None:
         """Complete native/mirrored work and preserve task side effects."""
         task.status = 'completed'
@@ -1302,7 +1416,7 @@ class SkipTraceEnqueue:
                 'task_id': task.id,
                 'task_type': task.task_type,
                 'title': task.title,
-                'reason': 'moved_to_skip_trace',
+                'reason': reason,
             },
         ))
 

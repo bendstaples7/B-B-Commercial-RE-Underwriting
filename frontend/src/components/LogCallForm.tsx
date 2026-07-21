@@ -123,6 +123,9 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
   const [createFollowUp, setCreateFollowUp] = useState(Boolean(callTask))
   const [followUpPreset, setFollowUpPreset] = useState<FollowUpPreset>('3')
   const [customDueDate, setCustomDueDate] = useState('')
+  const [nextStepExpanded, setNextStepExpanded] = useState(false)
+  const [nextStepType, setNextStepType] = useState<'call_owner_today' | 'add_to_mail_batch' | 'custom'>('call_owner_today')
+  const [customTaskTitle, setCustomTaskTitle] = useState('')
 
   const [outcomeError, setOutcomeError] = useState<string | null>(null)
   const [durationError, setDurationError] = useState<string | null>(null)
@@ -225,9 +228,13 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
       complete_task_id: completedTaskId,
       follow_up: followUpDue
         ? {
-            title: 'Follow up call',
+            title: nextStepType === 'add_to_mail_batch'
+              ? 'Add to mail queue'
+              : nextStepType === 'custom'
+                ? customTaskTitle.trim() || 'Custom task'
+                : 'Follow up call',
             due_date: followUpDue,
-            task_type: 'call_owner_today',
+            task_type: nextStepType,
           }
         : null,
     }
@@ -285,6 +292,9 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
       setCreateFollowUp(Boolean(callTask))
       setFollowUpPreset('3')
       setCustomDueDate('')
+      setNextStepExpanded(false)
+      setNextStepType('call_owner_today')
+      setCustomTaskTitle('')
     } catch (err) {
       setSubmitError(
         err instanceof Error ? err.message : 'Failed to log call. Please try again.'
@@ -508,6 +518,46 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
 
             {createFollowUp && (
               <Box sx={{ width: '100%', minWidth: 0 }}>
+                <Button
+                  size="small"
+                  variant="text"
+                  onClick={() => setNextStepExpanded((expanded) => !expanded)}
+                  data-testid="change-next-step-btn"
+                  sx={{ px: 0, mb: 0.5 }}
+                >
+                  Change next step
+                </Button>
+                {nextStepExpanded && (
+                  <>
+                    <FormControl fullWidth size="small" sx={{ mb: 1 }}>
+                      <InputLabel id="next-step-type-label">Task type</InputLabel>
+                      <Select
+                        labelId="next-step-type-label"
+                        label="Task type"
+                        value={nextStepType}
+                        onChange={(e) => setNextStepType(
+                          e.target.value as 'call_owner_today' | 'add_to_mail_batch' | 'custom',
+                        )}
+                        inputProps={{ 'data-testid': 'next-step-type-select' }}
+                      >
+                        <MenuItem value="call_owner_today">Follow-up call</MenuItem>
+                        <MenuItem value="add_to_mail_batch">Add to mail queue</MenuItem>
+                        <MenuItem value="custom">Custom task</MenuItem>
+                      </Select>
+                    </FormControl>
+                    {nextStepType === 'custom' && (
+                      <TextField
+                        label="Task title"
+                        size="small"
+                        fullWidth
+                        value={customTaskTitle}
+                        onChange={(e) => setCustomTaskTitle(e.target.value)}
+                        inputProps={{ 'data-testid': 'next-step-custom-title', maxLength: 255 }}
+                        sx={{ mb: 1 }}
+                      />
+                    )}
+                  </>
+                )}
                 <FollowUpHorizonControls
                   variant="list"
                   preset={followUpPreset}

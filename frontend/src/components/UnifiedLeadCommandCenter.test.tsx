@@ -1070,7 +1070,7 @@ describe('UnifiedLeadCommandCenter — queue advance', () => {
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith(
         '/leads/4405?queue=todays-action',
-        { state: { fromQueue } },
+        { state: { fromQueue: { ...fromQueue, visitedHistory: [1], forwardStack: [] } } },
       )
     })
   })

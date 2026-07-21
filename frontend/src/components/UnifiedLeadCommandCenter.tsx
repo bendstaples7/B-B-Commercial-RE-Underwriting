@@ -774,6 +774,8 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     if (isFromQueueState(state?.fromQueue)) return state.fromQueue
     return fromQueueFromKey(searchParams.get('queue'))
   }, [location.state, searchParams])
+  const visitedHistory = fromQueue?.visitedHistory ?? []
+  const forwardStack = fromQueue?.forwardStack ?? []
 
   const {
     data: commandCenterData,
@@ -801,6 +803,13 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     enabled: !!fromQueue,
     staleTime: LEAD_WORKSPACE_STALE_MS,
   })
+  const sessionQueueNavigation = queueNavigation
+    ? {
+        ...queueNavigation,
+        prev_id: visitedHistory.at(-1) ?? queueNavigation.prev_id,
+        next_id: forwardStack.at(-1) ?? queueNavigation.next_id,
+      }
+    : queueNavigation
 
   const {
     data: scoreData,
@@ -880,9 +889,22 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     (nextLeadId: number) => {
       if (!fromQueue) return
       setMailContinuePrompt(false)
-      navigate(buildLeadUrl(nextLeadId, fromQueue.key), { state: { fromQueue } })
+      const isBack = visitedHistory.at(-1) === nextLeadId
+      const isForward = forwardStack.at(-1) === nextLeadId
+      const nextQueueState: FromQueueState = {
+        ...fromQueue,
+        visitedHistory: isBack
+          ? visitedHistory.slice(0, -1)
+          : [...visitedHistory, leadId],
+        forwardStack: isBack
+          ? [...forwardStack, leadId]
+          : isForward
+            ? forwardStack.slice(0, -1)
+            : [],
+      }
+      navigate(buildLeadUrl(nextLeadId, fromQueue.key), { state: { fromQueue: nextQueueState } })
     },
-    [fromQueue, navigate],
+    [fromQueue, forwardStack, leadId, navigate, visitedHistory],
   )
 
   const exitQueueCaughtUp = useCallback(() => {
@@ -895,7 +917,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     })
   }, [fromQueue, navigate])
 
-  const advanceAfterTaskComplete = useCallback(async () => {
+  const advanceAfterTaskComplete = useCallback(async (snapshottedNextId?: number | null) => {
     if (!fromQueue) return
     const queueListKey = `queue-${fromQueue.key}`
     // Refresh list/counts before leaving so Back lands on fresh data; clear
@@ -914,15 +936,19 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     queryClient.removeQueries({ queryKey: [queueListKey] })
 
     try {
-      // Membership may have changed. Always ask for fresh navigation rather
-      // than using the pre-mutation neighbour cached in queueNavigation.
-      const nav = await queueService.getNavigation(fromQueue.key, leadId, {
-        outreach: fromQueue.outreach,
-      })
-      if (nav.next_id) {
-        advanceInQueue(nav.next_id)
+      // The neighbour must be captured before completion removes this lead.
+      // A fresh queue query can otherwise return the queue head, skipping work.
+      if (snapshottedNextId) {
+        advanceInQueue(snapshottedNextId)
       } else {
-        exitQueueCaughtUp()
+        const nav = await queueService.getNavigation(fromQueue.key, leadId, {
+          outreach: fromQueue.outreach,
+        })
+        if (nav.next_id) {
+          advanceInQueue(nav.next_id)
+        } else {
+          exitQueueCaughtUp()
+        }
       }
     } catch {
       exitQueueCaughtUp()
@@ -1003,9 +1029,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       fromQueue
       && (meta?.completedTaskId != null || meta?.completedHubSpotTaskId != null)
     ) {
-      void advanceAfterTaskComplete()
+      void advanceAfterTaskComplete(queueNavigation?.next_id)
     }
-  }, [queryClient, leadId, fromQueue, advanceAfterTaskComplete])
+  }, [queryClient, leadId, fromQueue, advanceAfterTaskComplete, queueNavigation?.next_id])
 
   const handleRaAction = useCallback(async (action: string) => {
     switch (action) {
@@ -1180,7 +1206,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           // Status change alone stays put; Move to Skip Trace completes current
           // work and drops the lead from due-work queues — advance like task done.
           if (fromQueue && SKIP_TRACE_AUTO_ADVANCE_QUEUE_KEYS.has(fromQueue.key)) {
-            await advanceAfterTaskComplete()
+            await advanceAfterTaskComplete(queueNavigation?.next_id)
           }
         }
         return
@@ -1241,6 +1267,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     fromQueue,
     handleStatusChanged,
     advanceAfterTaskComplete,
+    queueNavigation?.next_id,
   ])
 
   const handleCreateTask = useCallback(() => {
@@ -1349,7 +1376,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         {fromQueue && (
           <QueueWorkHeader
             fromQueue={fromQueue}
-            navigation={queueNavigation}
+            navigation={sessionQueueNavigation}
             isLoading={queueNavLoading}
             onAdvance={advanceInQueue}
             onPrefetchLead={prefetchQueueLead}
@@ -1386,7 +1413,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                     size="small"
                     variant="outlined"
                     data-testid="mail-continue-next-lead"
-                    onClick={() => { void advanceAfterTaskComplete() }}
+                    onClick={() => { void advanceAfterTaskComplete(queueNavigation?.next_id) }}
                   >
                     Next lead
                   </Button>
@@ -1471,7 +1498,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 upNextToMail={Boolean(commandCenterData!.up_next_to_mail)}
                 embedded
                 onTasksChanged={() => queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })}
-                onAfterTaskCompleted={fromQueue ? () => { void advanceAfterTaskComplete() } : undefined}
+                onAfterTaskCompleted={fromQueue ? () => { void advanceAfterTaskComplete(queueNavigation?.next_id) } : undefined}
               />
             </Box>
           </Paper>

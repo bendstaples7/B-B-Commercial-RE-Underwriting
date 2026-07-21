@@ -89,6 +89,27 @@ class TestGetMailQueue:
             ids = [item['lead_id'] for item in data['items']]
             assert lead.id in ids
 
+    def test_queue_items_are_paginated(self, client, app):
+        with app.app_context():
+            for street in ('2 Mail Queue St', '3 Mail Queue St'):
+                lead = _make_lead(app, street)
+                db.session.add(MailQueueItem(
+                    lead_id=lead.id, user_id='test-user', status='queued',
+                ))
+            db.session.commit()
+
+            response = client.get(
+                '/api/mail-queue/?page=1&per_page=1',
+                headers=_AUTH_HEADERS,
+            )
+            data = json.loads(response.data)
+
+            assert response.status_code == 200
+            assert data['page'] == 1
+            assert data['per_page'] == 1
+            assert data['total'] >= 2
+            assert len(data['items']) == 1
+
 
 class TestEnqueueMailQueue:
     def test_enqueue_rejects_invalid_lead_ids(self, client, app):

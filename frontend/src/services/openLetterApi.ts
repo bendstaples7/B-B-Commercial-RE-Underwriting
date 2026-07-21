@@ -45,6 +45,9 @@ export interface MailQueueSummary {
   estimated_cost_per_piece?: number | null
   estimated_total?: number | null
   items: MailQueueItem[]
+  page?: number
+  per_page?: number
+  total?: number
 }
 
 export interface EnqueueLeadResult {
@@ -132,8 +135,29 @@ export const openLetterService = {
   listTemplates: (params?: { page?: number; page_size?: number }): Promise<{ data?: unknown[] }> =>
     api.get('/open-letter/templates', { params }).then((r) => r.data),
 
-  getQueue: (): Promise<MailQueueSummary> =>
-    api.get('/mail-queue/').then((r) => r.data),
+  getQueue: (params?: { page?: number; per_page?: number }): Promise<MailQueueSummary> =>
+    api.get('/mail-queue/', { params }).then((r) => r.data),
+
+  // The staged batch view must show every queued item, but /mail-queue/ now
+  // paginates (max 100/page). Aggregate all pages so batches above the page
+  // size are not silently hidden while queued_count reports the full total.
+  getAllQueued: async (): Promise<MailQueueSummary> => {
+    const perPage = 100
+    const first: MailQueueSummary = await api
+      .get('/mail-queue/', { params: { page: 1, per_page: perPage } })
+      .then((r) => r.data)
+    const total = first.total ?? first.items.length
+    if (first.items.length >= total) return first
+    const pageCount = Math.ceil(total / perPage)
+    const restPages = await Promise.all(
+      Array.from({ length: pageCount - 1 }, (_, i) =>
+        api
+          .get('/mail-queue/', { params: { page: i + 2, per_page: perPage } })
+          .then((r) => (r.data as MailQueueSummary).items ?? []),
+      ),
+    )
+    return { ...first, items: [...first.items, ...restPages.flat()] }
+  },
 
   enqueue: (leadIds: number[], sourceQueue?: string): Promise<EnqueueResult> =>
     api.post('/mail-queue/', {

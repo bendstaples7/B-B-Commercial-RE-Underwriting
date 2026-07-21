@@ -353,6 +353,24 @@ describe('RecommendedActionPanel', () => {
       expect(screen.getByTestId('ra-universal-btn-move_to_skip_trace')).toBeDisabled()
     })
 
+    it('exposes disabled Move to Skip Trace reason to keyboard users', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('enrich_data')}
+          leadStatus="suppressed"
+          openTasks={[]}
+          onAction={vi.fn()}
+        />,
+      )
+
+      const reason = screen.getByRole('button', {
+        name: /Move to Skip Trace unavailable:/i,
+      })
+      expect(reason).toHaveAttribute('aria-disabled', 'true')
+      expect(reason).toHaveAttribute('tabindex', '0')
+      expect(screen.getByTestId('ra-universal-btn-move_to_skip_trace')).toBeDisabled()
+    })
+
     it.each([
       ['skip_trace', 'In Skip Trace'],
     ] as const)('shows already-done skip-trace control for status %s', (leadStatus, label) => {
@@ -773,7 +791,7 @@ describe('RecommendedActionPanel', () => {
       expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeDisabled()
     })
 
-    it('explains a recent-sale hold and grays out Add to Mail Queue', () => {
+    it('explains a recent-sale hold and grays out Add to Mail Queue', async () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('hold')}
@@ -798,8 +816,11 @@ describe('RecommendedActionPanel', () => {
       )
       expect(screen.getByRole('button', { name: 'Adjust for Recent Sale' })).toBeInTheDocument()
       expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeDisabled()
-      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toHaveAttribute(
-        'title',
+      // Disabled buttons have pointer-events:none — hover the Tooltip's wrapping span.
+      const wrapper = screen.getByTestId('ra-universal-btn-add_to_mail_batch').parentElement
+      expect(wrapper).toBeTruthy()
+      await user.hover(wrapper!)
+      expect(await screen.findByRole('tooltip')).toHaveTextContent(
         `Held after recent sale until ${formatDateOnly('2027-03-31')}`,
       )
     })

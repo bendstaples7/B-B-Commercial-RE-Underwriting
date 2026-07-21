@@ -350,14 +350,35 @@ def _enrich_cook_county_lead_with_plugins(lead_id: int, plugin_resolver) -> dict
 
 def enqueue_cook_county_enrichment(lead_id: int) -> bool:
     """Enqueue async Cook County enrichment (no sync fallback)."""
+    return _enqueue_cook_county_task(
+        'cook_county.enrich_lead',
+        'cook_county_enrich_lead_task',
+        lead_id,
+    )
+
+
+def enqueue_cook_county_sale_date_verification(lead_id: int) -> bool:
+    """Enqueue the narrow sale-date verification task for one lead."""
+    return _enqueue_cook_county_task(
+        'cook_county.verify_sale_date',
+        'cook_county_verify_sale_date_task',
+        lead_id,
+    )
+
+
+def _enqueue_cook_county_task(task_name: str, attr: str, lead_id: int) -> bool:
+    """Shared Celery dispatch for Cook County lead tasks."""
     try:
-        from celery_worker import cook_county_enrich_lead_task
-        cook_county_enrich_lead_task.apply_async(args=[lead_id], ignore_result=True)
-        logger.info("Dispatched cook_county.enrich_lead for lead %s", lead_id)
+        import celery_worker
+
+        task_func = getattr(celery_worker, attr)
+        task_func.apply_async(args=[lead_id], ignore_result=True)
+        logger.info("Dispatched %s for lead %s", task_name, lead_id)
         return True
     except Exception as exc:
         logger.warning(
-            "Could not enqueue cook_county.enrich_lead for lead %s: %s",
+            "Could not enqueue %s for lead %s: %s",
+            task_name,
             lead_id,
             exc,
         )

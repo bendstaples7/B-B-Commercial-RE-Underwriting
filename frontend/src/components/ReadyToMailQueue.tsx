@@ -56,8 +56,9 @@ export function ReadyToMailQueue() {
 
   const { data: queueData, isLoading: queueLoading, error: queueError, refetch: refetchQueue, isFetching: queueFetching } = useQuery({
     queryKey: ['mail-queue'],
-    queryFn: () => openLetterService.getQueue(),
-    refetchInterval: 15000,
+    // Fetch the full staged batch (all pages) — the accordion shows every item.
+    queryFn: () => openLetterService.getAllQueued(),
+    refetchInterval: 60_000,
   })
 
   const { data: candidatesData, isLoading: candidatesLoading } = useQuery({

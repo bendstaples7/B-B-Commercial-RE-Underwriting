@@ -58,6 +58,19 @@ describe('actionEligibility', () => {
     )
   })
 
+  it('uses isMailable only for legacy payloads missing mailEligible', () => {
+    expect(evaluateAddToMailBatch({ isMailable: true })).toMatchObject({ ok: true })
+    expect(evaluateAddToMailBatch({ mailEligible: false, isMailable: true })).toMatchObject({
+      ok: false,
+      reasonCode: REASON_MAIL_INVALID_ADDRESS,
+    })
+    expect(evaluateAddToMailBatch({
+      isMailable: true,
+      mailIneligibleReason: 'recently_sold',
+      mailEligibleDate: '2027-03-31',
+    }).reasonCode).toBe(REASON_MAIL_RECENTLY_SOLD)
+  })
+
   it('blocks outreach logs on DNC but allows notes', () => {
     expect(evaluateOutreachLog('do_not_contact', 'log_call').reasonCode).toBe(
       REASON_DNC_BLOCKS_OUTREACH,

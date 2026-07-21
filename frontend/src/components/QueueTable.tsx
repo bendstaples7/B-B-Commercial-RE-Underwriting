@@ -96,9 +96,13 @@ function getOwnerName(row: QueueRow): string {
 }
 
 function getAddress(row: QueueRow): string {
-  return [row.property_street, row.property_city, row.property_state]
+  const street = (row.property_street || '').trim()
+  const cityStateZip = [row.property_city, row.property_state, row.property_zip]
+    .map((part) => (part || '').trim())
     .filter(Boolean)
-    .join(', ') || '—'
+    .join(', ')
+  if (street && cityStateZip) return `${street}, ${cityStateZip}`
+  return street || cityStateZip || '—'
 }
 
 function isInteractiveTarget(target: EventTarget | null): boolean {

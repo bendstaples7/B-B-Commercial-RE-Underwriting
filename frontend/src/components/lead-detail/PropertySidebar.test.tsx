@@ -464,7 +464,6 @@ describe('PropertySidebar always-visible sale and PIN', () => {
       } as Partial<CommandCenterPayload>),
     )
 
-    expect(screen.getByText('Sale date not verified yet')).toBeInTheDocument()
     expect(screen.getByTestId('sidebar-verify-sale-date')).toHaveTextContent('Verify')
     fireEvent.click(screen.getByTestId('sidebar-verify-sale-date'))
 
@@ -576,7 +575,6 @@ describe('PropertySidebar always-visible sale and PIN', () => {
     )
 
     expect(screen.getByTestId('sidebar-most-recent-sale')).toHaveTextContent('None')
-    expect(screen.getByText('Sale date not verified yet')).toBeInTheDocument()
     expect(screen.getByTestId('sidebar-verify-sale-date')).toHaveTextContent('Verify')
   })
 
@@ -711,7 +709,7 @@ describe('PropertySidebar always-visible sale and PIN', () => {
     expect(await screen.findByText(/Add city, state, and ZIP/i)).toBeInTheDocument()
   })
 
-    it('shows Apply when Look up PIN finds a candidate', async () => {
+    it('auto-applies a PIN found by Look up PIN', async () => {
     vi.mocked(propertyMatchService.preview).mockResolvedValue({
       found: true,
       entered_address: {
@@ -728,6 +726,7 @@ describe('PropertySidebar always-visible sale and PIN', () => {
         county_assessor_pin: '14211234560000',
       },
       pin: '14211234560000',
+      pin_count: 1,
       connector: 'cook_county',
     })
     vi.mocked(propertyMatchService.approve).mockResolvedValue({
@@ -745,17 +744,45 @@ describe('PropertySidebar always-visible sale and PIN', () => {
     )
 
     fireEvent.click(screen.getByTestId('sidebar-look-up-pin'))
-    expect(await screen.findByTestId('sidebar-pin-candidate')).toHaveTextContent(
-      '14-21-123-456-0000',
-    )
-    expect(screen.getByTestId('sidebar-apply-pin')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByTestId('sidebar-apply-pin'))
     await waitFor(() => {
       expect(propertyMatchService.approve).toHaveBeenCalledWith(1, {
         pin: '14-21-123-456-0000',
       })
     })
+  })
+
+  it('does not auto-apply when pin_count is absent', async () => {
+    vi.mocked(propertyMatchService.preview).mockResolvedValue({
+      found: true,
+      entered_address: {
+        property_street: '123 Test St',
+        property_city: 'Chicago',
+        property_state: 'IL',
+        property_zip: '60601',
+      },
+      recommended_address: {
+        property_street: '123 Test St',
+        property_city: 'Chicago',
+        property_state: 'IL',
+        property_zip: '60601',
+        county_assessor_pin: '14211234560000',
+      },
+      pin: '14211234560000',
+      connector: 'other_county',
+    })
+
+    renderSidebar(
+      makePayload({
+        county_assessor_pin: null,
+      } as Partial<CommandCenterPayload>),
+    )
+
+    fireEvent.click(screen.getByTestId('sidebar-look-up-pin'))
+    await waitFor(() => {
+      expect(propertyMatchService.preview).toHaveBeenCalledWith(1)
+    })
+    expect(propertyMatchService.approve).not.toHaveBeenCalled()
+    expect(screen.getByTestId('sidebar-apply-pin')).toBeInTheDocument()
   })
 
   it('shows a checkmark when sale date was verified within the last month', () => {

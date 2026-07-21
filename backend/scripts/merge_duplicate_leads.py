@@ -24,8 +24,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 from app.services.lead_dedup_service import COPYABLE_FIELDS  # noqa: E402
 from app.services.lead_merge_utils import (  # noqa: E402
     cluster_leads_by_normalized_street,
-    cluster_same_building_by_owner_name,
-    dedup_street_key,
+    group_records_by_dedup_index_key,
     merge_mailer_history,
     owner_group_key,
     pick_merge_winner,
@@ -231,14 +230,7 @@ def _find_normalized_merge_groups(rows: list[dict]) -> list[list[dict]]:
 
 def _find_dedup_merge_groups(rows: list[dict]) -> list[list[dict]]:
     """Group by owner + building-level dedup_street_key (matches DB unique index)."""
-    return cluster_same_building_by_owner_name(
-        [dict(row) for row in rows],
-        owner_user_id_of=lambda r: r.get('owner_user_id'),
-        street_of=lambda r: r.get('property_street'),
-        first_of=lambda r: r.get('owner_first_name'),
-        last_of=lambda r: r.get('owner_last_name'),
-    )
-
+    return group_records_by_dedup_index_key(rows)
 
 def _find_pin_merge_groups(rows: list[dict]) -> list[list[dict]]:
     """Group leads with the same normalized county assessor PIN."""
@@ -287,6 +279,7 @@ def run(dry_run: bool = False, mode: str = 'unit'):
             else:
                 cur.execute("""
                     SELECT id, owner_first_name, owner_last_name, property_street,
+                           normalized_street,
                            owner_user_id, lead_status, has_phone, has_email,
                            last_hubspot_sync_at
                     FROM leads
