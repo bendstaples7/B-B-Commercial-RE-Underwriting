@@ -92,14 +92,30 @@ def _list_listening_pids_posix(port: int) -> list[int]:
 
     if ss_out is not None:
         pids: set[int] = set()
-        for part in ss_out.replace(",", " ").split():
-            if part.startswith("pid="):
-                try:
-                    pids.add(int(part.split("=", 1)[1]))
-                except ValueError:
-                    continue
+        listener_lines = 0
+        for line in ss_out.splitlines():
+            upper = line.upper()
+            # Skip headers / blank lines; real rows contain LISTEN.
+            if "LISTEN" not in upper:
+                continue
+            if upper.strip().startswith("STATE") or "NETID" in upper.split():
+                continue
+            listener_lines += 1
+            for part in line.replace(",", " ").split():
+                if part.startswith("pid="):
+                    try:
+                        pids.add(int(part.split("=", 1)[1]))
+                    except ValueError:
+                        continue
         if pids:
             return sorted(pids)
+        if listener_lines:
+            # Unprivileged ``ss -p`` often omits other users' PIDs while still
+            # showing LISTEN rows — treat that as unknown, not free.
+            raise PortProbeError(
+                "ss found listening sockets but no PIDs "
+                "(unprivileged probe; cannot confirm port is free)"
+            )
         # ss ran and reported no listeners — definitive empty.
         return []
 
@@ -158,6 +174,19 @@ def describe_pid(pid: int) -> str:
             if raw:
                 return raw[:200]
     except OSError:
+        pass
+    # macOS / BSD: no /proc — fall back to ps.
+    try:
+        out = subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "command="],
+            text=True,
+            errors="replace",
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        ).strip()
+        if out:
+            return out[:200]
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         pass
     return "process (details unavailable)"
 

@@ -23,7 +23,11 @@ class TestParseEmbeddedUsAddress:
         assert city == 'Chicago'
         assert state == 'IL'
         assert zip_code == '60622'
-        assert street != street.upper() or 'WEST' in street  # not forced ALL CAPS city
+        assert not city.isupper(), 'city should not be forced ALL CAPS'
+
+    def test_city_and_zip_only_is_not_an_address(self):
+        assert parse_embedded_us_address('Chicago 60657') is None
+        assert parse_embedded_us_address('60657') is None
 
     def test_davlin_zip_resolves_chicago_not_davlin(self):
         result = parse_embedded_us_address('3052 N Davlin 60618')

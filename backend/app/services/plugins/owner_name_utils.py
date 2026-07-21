@@ -55,8 +55,10 @@ _PHRASE_MARKERS = _INSTITUTIONAL_PHRASES
 # as "Tbdale" does not match the ``TBD`` placeholder token.
 _GENERIC_OWNER_TOKENS = frozenset({
     "FSBO", "OWNER", "UNKNOWN", "OCCUPANT", "RESIDENT", "SELLER", "NONE",
-    "TBD", "EMPTY", "NA",
+    "TBD", "EMPTY",
 })
+# Sole-token placeholders only — "NA" as a surname token (e.g. "Jane Na") is real.
+_GENERIC_OWNER_SOLE_TOKENS = frozenset({"NA"})
 _GENERIC_OWNER_PHRASES = (
     "FOR SALE BY OWNER",
     "FOR RENT",
@@ -65,6 +67,8 @@ _GENERIC_OWNER_PHRASES = (
     "CURRENT RESIDENT",
     "CURRENT OWNER",
     "NO OWNER",
+    "N/A",
+    "N.A.",
 )
 
 
@@ -130,6 +134,9 @@ def is_generic_owner_name(name: str | None) -> bool:
     if any(phrase in upper for phrase in _GENERIC_OWNER_PHRASES):
         return True
     tokens = {_normalize_token(token) for token in upper.split()}
+    tokens.discard("")
+    if len(tokens) == 1 and tokens & _GENERIC_OWNER_SOLE_TOKENS:
+        return True
     return bool(tokens & _GENERIC_OWNER_TOKENS)
 
 

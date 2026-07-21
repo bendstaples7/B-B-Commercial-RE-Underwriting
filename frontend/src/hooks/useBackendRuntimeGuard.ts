@@ -10,17 +10,20 @@ import { useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { analysisService } from '@/services/api'
 import { useAuth } from '@/context/AuthContext'
+import type { RuntimeHealthResponse } from '@/types'
 
 const BUILD_ID_STORAGE_KEY = 'bb_backend_build_id'
 
-export type BackendRuntimeHealth = {
-  status: string
-  build_id?: string
-  source_stale?: boolean
-  started_at?: string
-  pid?: number
-  db_mode?: string
+function readStoredBuildId(): string | null {
+  try {
+    if (typeof sessionStorage === 'undefined') return null
+    return sessionStorage.getItem(BUILD_ID_STORAGE_KEY)
+  } catch {
+    return null
+  }
 }
+
+export type BackendRuntimeHealth = RuntimeHealthResponse
 
 export function useBackendRuntimeGuard(): {
   sourceStale: boolean
@@ -28,11 +31,7 @@ export function useBackendRuntimeGuard(): {
 } {
   const { user } = useAuth()
   const queryClient = useQueryClient()
-  const lastBuildId = useRef<string | null>(
-    typeof sessionStorage !== 'undefined'
-      ? sessionStorage.getItem(BUILD_ID_STORAGE_KEY)
-      : null,
-  )
+  const lastBuildId = useRef<string | null>(readStoredBuildId())
 
   const { data } = useQuery({
     queryKey: ['backend', 'health', 'runtime'],

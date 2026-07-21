@@ -143,8 +143,6 @@ export function QueueSidebar() {
                       primaryTypographyProps={{
                         variant: 'body2',
                         noWrap: true,
-                        textOverflow: 'ellipsis',
-                        overflow: 'hidden',
                       }}
                     />
                     {count > 0 && (

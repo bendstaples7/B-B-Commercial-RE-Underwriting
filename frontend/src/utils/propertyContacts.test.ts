@@ -64,7 +64,10 @@ describe('isGenericOwnerName', () => {
     expect(isGenericOwnerName('For Sale By Owner +')).toBe(true)
     expect(isGenericOwnerName('Current Resident')).toBe(true)
     expect(isGenericOwnerName('N/A')).toBe(true)
+    expect(isGenericOwnerName('NA')).toBe(true)
     expect(isGenericOwnerName('Joseph Kiferbaum')).toBe(false)
+    expect(isGenericOwnerName('Jane Na')).toBe(false)
+    expect(isGenericOwnerName('Na Zhang')).toBe(false)
   })
 })
 

@@ -156,7 +156,9 @@ def _parse_space_separated_no_state(raw: str) -> tuple[str, str, str, str] | Non
     ``AVE``/``ST``/… are never treated as cities.
     """
     parts = re.sub(r'\s+', ' ', raw.strip()).split()
-    if len(parts) < 2:
+    # Need street + locality + ZIP (at least 3 tokens) so "Chicago 60657" is
+    # not misclassified as a street address.
+    if len(parts) < 3:
         return None
     zip_match = _ZIP_RE.match(parts[-1])
     if not zip_match:
@@ -184,6 +186,10 @@ def _parse_space_separated_no_state(raw: str) -> tuple[str, str, str, str] | Non
         ):
             street = ' '.join(street_parts[:-len(city_tokens)]).strip()
         if not street:
+            return None
+        # After stripping the city, require a remaining street token so
+        # ``Chicago 60657`` does not become a street-only parse.
+        if len(street.split()) < 1 or street.upper() == city.upper():
             return None
         return street, city, state, zip_code
 

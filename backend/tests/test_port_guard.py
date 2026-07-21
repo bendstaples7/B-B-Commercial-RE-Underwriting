@@ -59,3 +59,22 @@ def test_assert_port_free_fail_open_escape_hatch(monkeypatch):
     monkeypatch.setenv("PORT_GUARD_ALLOW_FAIL_OPEN", "1")
     # Should not raise when the escape hatch is set.
     assert_port_free(5000)
+
+
+def test_posix_ss_listeners_without_pids_fail_closed(monkeypatch):
+    """Unprivileged ss may show LISTEN rows with no pid= — not 'free'."""
+    import port_guard
+
+    monkeypatch.setattr(port_guard.sys, "platform", "linux")
+
+    def fake_check_output(cmd, **kwargs):
+        if cmd and cmd[0] == "ss":
+            return (
+                "State Recv-Q Send-Q Local Address:Port Peer Address:Port Process\n"
+                "LISTEN 0 128 *:5000 *:*\n"
+            )
+        raise OSError("unexpected")
+
+    monkeypatch.setattr(port_guard.subprocess, "check_output", fake_check_output)
+    with pytest.raises(PortProbeError, match="no PIDs"):
+        port_guard._list_listening_pids_posix(5000)

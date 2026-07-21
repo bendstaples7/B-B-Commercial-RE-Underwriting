@@ -981,6 +981,7 @@ class TestMoveToSkipTrace:
                 app,
                 f'825b {pipeline_status} St',
                 lead_status=pipeline_status,
+                needs_skip_trace=True,
             )
             handoff = _make_task(
                 app,

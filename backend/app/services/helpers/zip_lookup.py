@@ -92,6 +92,22 @@ def normalize_zip5(zip_code: str | None) -> str | None:
     return match.group(1)
 
 
+def _title_city_usps(city: str) -> str:
+    """Title-case an ALL-CAPS USPS city without mangling Mc*/Mac* prefixes."""
+    if not city.isupper():
+        return city
+    parts: list[str] = []
+    for word in city.split():
+        upper = word.upper()
+        if upper.startswith('MC') and len(upper) > 2:
+            parts.append('Mc' + upper[2:].title())
+        elif upper.startswith('MAC') and len(upper) > 3:
+            parts.append('Mac' + upper[3:].title())
+        else:
+            parts.append(word.title())
+    return ' '.join(parts)
+
+
 def city_state_from_zip(zip5: str | None) -> tuple[str, str] | None:
     """Resolve ``(city, state)`` for a ZIP5.
 
@@ -105,7 +121,7 @@ def city_state_from_zip(zip5: str | None) -> tuple[str, str] | None:
     treat None as "unknown", not "invalid". Keep the package pinned so
     nationwide coverage is deterministic.
 
-    City is title-cased; state is a 2-letter uppercase code.
+    City is title-cased (Mc*/Mac*-aware); state is a 2-letter uppercase code.
     """
     zip_norm = normalize_zip5(zip5)
     if not zip_norm:
@@ -118,7 +134,7 @@ def city_state_from_zip(zip5: str | None) -> tuple[str, str] | None:
             city = (matches[0].get('city') or '').strip()
             state = (matches[0].get('state') or '').strip().upper()
             if city and len(state) == 2:
-                return city.title() if city.isupper() else city, state
+                return _title_city_usps(city), state
     except Exception:
         pass
 

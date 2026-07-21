@@ -552,7 +552,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
                         fullWidth
                         value={customTaskTitle}
                         onChange={(e) => setCustomTaskTitle(e.target.value)}
-                        inputProps={{ 'data-testid': 'next-step-custom-title' }}
+                        inputProps={{ 'data-testid': 'next-step-custom-title', maxLength: 255 }}
                         sx={{ mb: 1 }}
                       />
                     )}

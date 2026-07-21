@@ -52,9 +52,8 @@ def test_identity_exposed_outside_production(monkeypatch):
     assert "build_id" in get_runtime_identity()
 
 
-def test_source_fingerprint_is_mtime_only(monkeypatch):
+def test_source_fingerprint_is_mtime_only():
     # Stale comparison must not include the git SHA (checkout must not read
     # as a stale process) — fingerprint is a bare integer string.
-    monkeypatch.setattr("app.runtime_identity._git_sha", lambda: "deadbeef")
     fingerprint = compute_source_fingerprint()
     assert fingerprint.isdigit()

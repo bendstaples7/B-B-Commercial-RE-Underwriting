@@ -46,6 +46,8 @@ class TestStreetOnlyLine:
             == '2430 N Avers Ave 2'
         )
 
+
+class TestDisplayStreet:
     def test_display_street_cleans_dirty_one_liner(self):
         assert (
             display_street('3745 W Addison St 1 Chicago IL 60618')
@@ -54,6 +56,12 @@ class TestStreetOnlyLine:
 
     def test_display_street_preserves_clean_street(self):
         assert display_street('500 W Madison St') == '500 W Madison St'
+
+    def test_display_zip_recovers_trailing_from_street(self):
+        from app.services.property_address_service import display_zip
+
+        assert display_zip('3745 W Addison St Chicago IL 60618', None) == '60618'
+        assert display_zip('500 W Madison St', '60661') == '60661'
 
 
 def _make_lead(app, **kwargs):

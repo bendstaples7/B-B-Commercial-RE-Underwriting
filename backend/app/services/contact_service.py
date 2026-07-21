@@ -1291,7 +1291,7 @@ class ContactService:
         for lead in leads:
             first, last = _names_for_page_lead(lead)
             names_by_lead[lead.id] = (first, last)
-            if not is_matchable_person_name(first, last):
+            if not last or not is_matchable_person_name(first, last):
                 continue
             name_buckets[(lead.owner_user_id, last.lower())].append(lead)
 

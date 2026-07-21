@@ -75,6 +75,18 @@ def display_street(street: str | None) -> str | None:
     return cleaned if cleaned and len(cleaned) >= 3 else street
 
 
+def display_zip(street: str | None, zip_code: str | None) -> str | None:
+    """ZIP for API/UI display, recovering a trailing ZIP stripped by ``display_street``."""
+    text = (zip_code or '').strip()
+    if text:
+        return text
+    raw = (street or '').strip()
+    if not raw:
+        return None
+    match = _TRAILING_ZIP_RE.search(raw)
+    return match.group(1) if match else None
+
+
 _US_STATE_NAMES = {
     'ALABAMA': 'AL', 'ALASKA': 'AK', 'ARIZONA': 'AZ', 'ARKANSAS': 'AR',
     'CALIFORNIA': 'CA', 'COLORADO': 'CO', 'CONNECTICUT': 'CT', 'DELAWARE': 'DE',

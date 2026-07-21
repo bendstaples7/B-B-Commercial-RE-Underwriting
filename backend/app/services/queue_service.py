@@ -16,7 +16,7 @@ from app.services.scoring_rubric import (
     sql_not_recently_sold,
 )
 from app.services.entity_owner_policy import cold_mail_block_reasons_for_leads
-from app.services.property_address_service import display_street
+from app.services.property_address_service import display_street, display_zip
 
 # Statuses that represent active outreach pipeline (not terminal or suppressed)
 ACTIVE_PIPELINE_STATUSES = [
@@ -89,7 +89,7 @@ def _lead_to_queue_row(
         'property_street': display_street(lead.property_street),
         'property_city': lead.property_city,
         'property_state': lead.property_state,
-        'property_zip': lead.property_zip,
+        'property_zip': display_zip(lead.property_street, lead.property_zip),
         'lead_score': lead.lead_score,
         'lead_status': lead.lead_status,
         'recommended_action': lead.recommended_action,

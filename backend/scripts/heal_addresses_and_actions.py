@@ -351,6 +351,8 @@ def _heal_skip_trace_todays_action_leaks(*, dry_run: bool, lead_id: int | None) 
 
     healed = []
     scanned = 0
+    pending_hubspot_ids: set[str] = set()
+    handoff_clear_ids: set[str] = set()
     for lead in q.yield_per(200):
         scanned += 1
         open_dated_due = (
@@ -396,26 +398,44 @@ def _heal_skip_trace_todays_action_leaks(*, dry_run: bool, lead_id: int | None) 
             continue
 
         if leak_chores:
-            clear_dated_due_chores_entering_skip_trace(
+            _, hs_ids = clear_dated_due_chores_entering_skip_trace(
                 lead.id,
                 actor='heal_skip_trace_todays_action',
                 reason='heal_skip_trace_todays_action',
                 today=today,
             )
+            pending_hubspot_ids.update(hs_ids)
         # During active recent-sale hold, keep needs_skip_trace=False.
         if not has_hold:
             lead.needs_skip_trace = True
             # Canonical handoff logic: reuse/convert/create (no duplicate tasks).
-            enqueue.ensure_awaiting_skip_trace_handoff(
+            _, clear_ids, extra_hs = enqueue.ensure_awaiting_skip_trace_handoff(
                 lead.id,
                 actor='heal_skip_trace_todays_action',
                 commit=False,
             )
+            handoff_clear_ids.update(clear_ids)
+            pending_hubspot_ids.update(extra_hs)
         db.session.add(lead)
         healed.append(row)
 
     if not dry_run and healed:
         db.session.commit()
+        if pending_hubspot_ids:
+            from app.services.hubspot_task_completion_service import (
+                sync_pending_hubspot_completions,
+            )
+            sync_pending_hubspot_completions(sorted(pending_hubspot_ids))
+        if handoff_clear_ids:
+            from app.services.hubspot_task_completion_service import (
+                sync_hubspot_task_properties,
+            )
+            for hs_id in sorted(handoff_clear_ids):
+                sync_hubspot_task_properties(
+                    hs_id,
+                    title='Awaiting skip trace',
+                    clear_due_date=True,
+                )
 
     return {
         'scanned': scanned,
@@ -449,6 +469,20 @@ def _heal_generic_owner_contacts(*, dry_run: bool, lead_id: int | None) -> dict:
             continue
         links = PropertyContact.query.filter_by(contact_id=cid, role='owner').all()
         if lead_id is not None and not any(pc.property_id == lead_id for pc in links):
+            continue
+        if lead_id is not None:
+            # Lead-scoped: only unlink THIS lead's shared generic link.
+            for pc in links:
+                if pc.property_id != lead_id:
+                    continue
+                unlinked.append({
+                    'contact_id': cid,
+                    'property_id': pc.property_id,
+                    'name': display,
+                    'was_linked_count': count,
+                })
+                if not dry_run:
+                    db.session.delete(pc)
             continue
         # Keep the oldest link; unlink the rest so each property no longer shares.
         links_sorted = sorted(links, key=lambda pc: pc.id)

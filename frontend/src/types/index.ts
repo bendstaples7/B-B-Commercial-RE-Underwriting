@@ -20,6 +20,16 @@
  * ----------------------------------------------------------------------------
  */
 
+export interface RuntimeHealthResponse {
+  status: string
+  db_mode?: string
+  build_id?: string
+  source_stale?: boolean
+  started_at?: string
+  pid?: number
+  checks?: Record<string, string>
+}
+
 export enum PropertyType {
   SINGLE_FAMILY = 'SINGLE_FAMILY',
   MULTI_FAMILY = 'MULTI_FAMILY',

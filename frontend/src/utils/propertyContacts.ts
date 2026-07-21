@@ -48,8 +48,10 @@ const GENERIC_OWNER_TOKENS = new Set([
   'NONE',
   'TBD',
   'EMPTY',
-  'NA',
 ])
+
+/** Placeholders that are only generic when they are the entire name. */
+const GENERIC_OWNER_SOLE_TOKENS = new Set(['NA'])
 
 const GENERIC_OWNER_PHRASES = [
   'FOR SALE BY OWNER',
@@ -59,6 +61,8 @@ const GENERIC_OWNER_PHRASES = [
   'CURRENT RESIDENT',
   'CURRENT OWNER',
   'NO OWNER',
+  'N/A',
+  'N.A.',
 ]
 
 const STREET_TOKENS = [
@@ -142,10 +146,12 @@ export function isGenericOwnerName(name: string | null | undefined): boolean {
   if (!normalized) return true
   const upper = normalized.toUpperCase()
   if (GENERIC_OWNER_PHRASES.some((phrase) => upper.includes(phrase))) return true
-  return upper
+  const tokens = upper
     .split(/\s+/)
     .map((token) => token.replace(/[^A-Z0-9]/g, ''))
-    .some((token) => GENERIC_OWNER_TOKENS.has(token))
+    .filter(Boolean)
+  if (tokens.length === 1 && GENERIC_OWNER_SOLE_TOKENS.has(tokens[0])) return true
+  return tokens.some((token) => GENERIC_OWNER_TOKENS.has(token))
 }
 
 /**

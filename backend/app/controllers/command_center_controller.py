@@ -1034,13 +1034,14 @@ def update_status(lead_id: int):
         # Reuse the canonical handoff logic (find undated → convert leftover
         # dated skip_trace_owner → create) so the status selector cannot leave
         # two open skip-trace tasks the way a create-only path would.
-        _, skip_trace_handoff_clear_ids = (
+        _, skip_trace_handoff_clear_ids, extra_hs = (
             SkipTraceEnqueue().ensure_awaiting_skip_trace_handoff(
                 lead_id,
                 actor=str(actor_raw),
                 commit=False,
             )
         )
+        skip_trace_pending_hubspot_ids.update(extra_hs)
 
     # Match the dedicated DNC action: DNC always cancels open next-action work,
     # regardless of whether it came from Quick Actions or the status selector.

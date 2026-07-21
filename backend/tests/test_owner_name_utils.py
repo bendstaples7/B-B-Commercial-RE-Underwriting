@@ -101,9 +101,12 @@ class TestOwnerNamesEquivalent:
     def test_generic_labels_are_not_matchable_or_equivalent(self):
         assert is_generic_owner_name('For Sale By Owner +')
         assert is_generic_owner_name('N/A')
+        assert is_generic_owner_name('NA')
         assert is_generic_owner_name('current resident')
         assert is_generic_owner_name('')
         assert not is_generic_owner_name('Joseph Kiferbaum')
+        assert not is_generic_owner_name('Jane Na')
+        assert not is_generic_owner_name('Na Zhang')
         assert not is_matchable_person_name('For Sale By', 'Owner')
         assert not is_matchable_person_name('123', 'Main St')
         assert not owner_names_equivalent('FSBO', None, 'FSBO', None)

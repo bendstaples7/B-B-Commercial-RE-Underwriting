@@ -801,7 +801,7 @@ describe('RecommendedActionPanel', () => {
       // Disabled buttons have pointer-events:none — hover the Tooltip's wrapping span.
       const wrapper = screen.getByTestId('ra-universal-btn-add_to_mail_batch').parentElement
       expect(wrapper).toBeTruthy()
-      await userEvent.hover(wrapper!)
+      await user.hover(wrapper!)
       expect(await screen.findByRole('tooltip')).toHaveTextContent(
         `Held after recent sale until ${formatDateOnly('2027-03-31')}`,
       )

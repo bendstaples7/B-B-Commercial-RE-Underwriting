@@ -110,15 +110,15 @@ def _cmdline_for_pid(pid: int) -> str:
         return ""
 
 
-def _cmdline_matches(pid: int, expect_any: tuple[str, ...]) -> bool:
-    """True when the process cmdline contains any expected token (case-insensitive)."""
-    if not expect_any:
+def _cmdline_matches(pid: int, expect_all: tuple[str, ...]) -> bool:
+    """True when the process cmdline contains every expected token (case-insensitive)."""
+    if not expect_all:
         return True
     cmd = _cmdline_for_pid(pid).lower()
     if not cmd:
         # No cmdline visibility — refuse to kill rather than risk a wrong target.
         return False
-    return any(tok.lower() in cmd for tok in expect_any)
+    return all(tok.lower() in cmd for tok in expect_all)
 
 
 def _stop_pid(
@@ -169,13 +169,13 @@ def _clear_pid_file(name: str) -> None:
         pass
 
 
-# Expected cmdline tokens per recorded child, so a stale/recycled PID from a
-# previous run is never force-killed unless it still looks like our process.
+# Expected cmdline tokens per recorded child (ALL must match), so a stale/recycled
+# PID from a previous run is never force-killed unless it still looks like ours.
 _EXPECT_TOKENS: dict[str, tuple[str, ...]] = {
-    "celery": ("celery",),
-    "celery-beat": ("celery",),
-    "flask": ("run.py", "flask"),
-    "redis": ("redis-server", "redis"),
+    "celery": ("celery", "worker"),
+    "celery-beat": ("celery", "beat"),
+    "flask": ("run.py",),
+    "redis": ("redis-server",),
 }
 # A Flask-port listener we did not record must look like our server before we
 # kill it (avoid nuking an unrelated process that grabbed 5000).
