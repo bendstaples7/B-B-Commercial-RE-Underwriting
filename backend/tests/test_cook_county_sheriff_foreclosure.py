@@ -11,8 +11,8 @@ class TestSheriffForeclosureParser:
         street, city, state = parse_sheriff_property_address(
             '2900 NORTH HARLEM AVENUE  ELMWOOD PARK 60707'
         )
-        assert street == '2900 NORTH HARLEM AVENUE'
-        assert city == 'ELMWOOD PARK'
+        assert street == '2900 North Harlem Avenue'
+        assert city == 'Elmwood Park'
         assert state == 'IL'
 
     def test_parse_html_table_extracts_open_rows(self):
@@ -34,7 +34,8 @@ class TestSheriffForeclosureParser:
         rows = _parse_html_table(html)
         assert len(rows) == 2
         assert rows[0]['case_number'] == '2024CH08121'
-        assert rows[0]['property_city'] == 'CHICAGO'
+        assert rows[0]['property_city'] == 'Chicago'
+        assert rows[0]['property_street'] == '1831 West Race Avenue'
         assert rows[1]['case_status'] == 'Cancelled'
 
     def test_parse_sale_date_unrecognized_returns_none(self):
