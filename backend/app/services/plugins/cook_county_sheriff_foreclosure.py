@@ -26,22 +26,38 @@ _CITY_SECOND_WORDS = frozenset({
 })
 
 
+def _title_case_tokens(text: str) -> str:
+    """Title-case address tokens while preserving original non-letter chars."""
+    return " ".join(
+        (part[:1].upper() + part[1:].lower()) if part else part
+        for part in text.split(" ")
+    )
+
+
 def parse_sheriff_property_address(raw: str) -> tuple[str, str, str]:
-    """Parse 'STREET  CITY  ZIP' from sheriff listing text."""
-    text = re.sub(r"\s+", " ", (raw or "").strip().upper())
+    """Parse 'STREET  CITY  ZIP' from sheriff listing text.
+
+    Token analysis is case-insensitive; returned street/city are human-cased
+    (not ALL CAPS) so downstream CRM display stays readable.
+    """
+    original = re.sub(r"\s+", " ", (raw or "").strip())
+    text = original.upper()
     if not text:
         return "", "", "IL"
     parts = text.split()
+    orig_parts = original.split()
     if len(parts) < 3 or not parts[-1].isdigit() or len(parts[-1]) != 5:
-        return (raw or "").strip(), "", "IL"
+        return original, "", "IL"
 
     if len(parts) >= 4 and parts[-2] in _CITY_SECOND_WORDS and parts[-3] not in _STREET_SUFFIXES:
-        city = f"{parts[-3]} {parts[-2]}"
-        street = " ".join(parts[:-3])
+        city_parts = orig_parts[-3:-1]
+        street_parts = orig_parts[:-3]
     else:
-        city = parts[-2]
-        street = " ".join(parts[:-2])
-    return street.strip(), city.strip(), "IL"
+        city_parts = orig_parts[-2:-1]
+        street_parts = orig_parts[:-2]
+    street = _title_case_tokens(" ".join(street_parts)).strip()
+    city = _title_case_tokens(" ".join(city_parts)).strip()
+    return street, city, "IL"
 
 
 def _parse_sale_date(raw: str) -> Optional[str]:

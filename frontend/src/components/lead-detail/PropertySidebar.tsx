@@ -37,6 +37,7 @@ import { commandCenterService, leadTaskService } from '@/services/api'
 import { propertyMatchService } from '@/services/propertyMatchApi'
 import {
   isEntityContactName,
+  isGenericOwnerName,
   ownerDisplayEntries,
 } from '@/utils/propertyContacts'
 import { formatImportNote } from './leadDetailFormatters'
@@ -45,7 +46,7 @@ import { ccCardSx } from '@/components/lead-detail/commandCenterChrome'
 import { PriorOwnerStaleOverlay } from '@/components/lead-detail/PriorOwnerStaleCallout'
 
 /** Poll delays after queued sale-date verify (overridable in tests). */
-export let saleVerifyPollDelaysMs = [2000, 3000, 5000, 8000, 13000]
+export let saleVerifyPollDelaysMs = [2000, 3000, 5000, 8000, 13000, 21000, 34000]
 
 const SidebarStackedContext = createContext(false)
 
@@ -396,7 +397,9 @@ export function PropertySidebar({
       || commandCenterData.sale_date_meta?.status === 'failed'
     ),
   )
-  const pinMissing = !commandCenterData.county_assessor_pin?.trim()
+  const optimisticPin = pinApplyPending ? pinCandidate : null
+  const displayedPin = optimisticPin || commandCenterData.county_assessor_pin || ''
+  const pinMissing = !displayedPin.trim()
   const contactsLikelyPriorOwner = Boolean(commandCenterData.contacts_likely_prior_owner)
 
   useEffect(() => {
@@ -488,8 +491,12 @@ export function PropertySidebar({
         return
       }
       if (preview.found && pin) {
+        const pinCount = typeof preview.pin_count === 'number' ? preview.pin_count : 1
         setPinCandidate(pin)
-        await queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
+        // Auto-apply only when GIS reports a unique PIN; multi-PIN needs Apply.
+        if (pinCount === 1) {
+          await applyPin(pin)
+        }
         return
       }
       await leadTaskService.createTask(commandCenterData.id, {
@@ -505,21 +512,24 @@ export function PropertySidebar({
     }
   }
 
-  const handleApplyPinCandidate = async () => {
-    if (!pinCandidate) return
+  const applyPin = async (pin: string) => {
     setPinApplyPending(true)
     try {
       const result = await propertyMatchService.approve(commandCenterData.id, {
-        pin: pinCandidate,
+        pin,
       })
-      setPinCandidate(null)
       const appliedPin = formatCookCountyPin(
         (result as { county_assessor_pin?: string | null })?.county_assessor_pin,
+      ) || pin
+      queryClient.setQueryData<CommandCenterPayload>(
+        ['commandCenter', commandCenterData.id],
+        (current) => current
+          ? { ...current, county_assessor_pin: appliedPin }
+          : current,
       )
+      setPinCandidate(null)
       setSidebarSnack(
-        appliedPin
-          ? `PIN applied: ${appliedPin}`
-          : 'PIN applied from property match',
+        `PIN applied: ${appliedPin}`,
       )
       await queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
     } catch (error) {
@@ -527,6 +537,10 @@ export function PropertySidebar({
     } finally {
       setPinApplyPending(false)
     }
+  }
+
+  const handleApplyPinCandidate = async () => {
+    if (pinCandidate) await applyPin(pinCandidate)
   }
 
   const stacked = variant === 'inline'
@@ -742,8 +756,14 @@ export function PropertySidebar({
                   </Button>
                 )}
               </Box>
+            ) : pinApplyPending ? (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <CopyablePin pin={displayedPin} valueTestId="sidebar-pin-value" />
+                <CircularProgress size={12} aria-label="Applying PIN" />
+                <Typography variant="caption" component="span">Applying…</Typography>
+              </Box>
             ) : (
-              <CopyablePin pin={commandCenterData.county_assessor_pin || ''} />
+              <CopyablePin pin={displayedPin} valueTestId="sidebar-pin-value" />
             )
           }
           alwaysShow
@@ -788,6 +808,17 @@ export function PropertySidebar({
                   >
                     {displayText}
                   </Typography>
+                  {canVerifySaleDate && !saleVerifyPending ? (
+                    <Button
+                      size="small"
+                      variant="text"
+                      onClick={handleVerifySaleDate}
+                      data-testid="sidebar-verify-sale-date"
+                      sx={{ minWidth: 0, px: 0.5, py: 0, fontSize: '0.7rem' }}
+                    >
+                      Verify
+                    </Button>
+                  ) : null}
                   {saleVerifyPending ? (
                     <CircularProgress
                       size={12}
@@ -874,50 +905,11 @@ export function PropertySidebar({
               ) : null}
             </Box>
           ) : null}
-          {(canVerifySaleDate || saleVerifyMessage) ? (
+          {saleVerifyMessage ? (
             <Box sx={{ textAlign: 'right', mt: -0.25, mb: 0.5 }}>
-              <Typography
-                variant="caption"
-                color="text.disabled"
-                component="span"
-                sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', justifyContent: 'flex-end' }}
-              >
-                {canVerifySaleDate && !saleVerifyPending && !commandCenterData.sale_date_meta?.last_checked_at ? (
-                  <Box component="span">Sale date not verified yet</Box>
-                ) : null}
-                {canVerifySaleDate && !saleVerifyPending ? (
-                  <Box
-                    component="button"
-                    type="button"
-                    onClick={handleVerifySaleDate}
-                    data-testid="sidebar-verify-sale-date"
-                    aria-label="Verify sale date"
-                    sx={{
-                      appearance: 'none',
-                      border: 0,
-                      background: 'none',
-                      p: 0,
-                      m: 0,
-                      cursor: 'pointer',
-                      font: 'inherit',
-                      color: 'primary.main',
-                      textDecoration: 'underline',
-                      textUnderlineOffset: '2px',
-                    }}
-                  >
-                    Verify
-                  </Box>
-                ) : null}
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                {saleVerifyMessage}
               </Typography>
-              {saleVerifyMessage ? (
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  sx={{ display: 'block' }}
-                >
-                  {saleVerifyMessage}
-                </Typography>
-              ) : null}
             </Box>
           ) : null}
         </Box>
@@ -943,7 +935,9 @@ export function PropertySidebar({
         {data.address_2 && <SidebarRow label="Additional Address" value={data.address_2} />}
       </SidebarSection>
 
-      {(commandCenterData.related_properties?.length ?? 0) > 0 && (
+      {!isGenericOwnerName(
+        [data.owner_first_name, data.owner_last_name].filter(Boolean).join(' '),
+      ) && (commandCenterData.related_properties?.length ?? 0) > 0 && (
         <SidebarSection title="Other properties">
           <Box
             data-testid="sidebar-related-properties"
@@ -1182,8 +1176,6 @@ export function PropertySidebar({
           mb: 0,
           position: 'sticky',
           top: 80,
-          maxHeight: 'calc(100vh - 100px)',
-          overflowY: 'auto',
           display: { xs: 'none', sm: 'none', md: 'none', lg: 'block' },
           minWidth: 340,
           maxWidth: 400,

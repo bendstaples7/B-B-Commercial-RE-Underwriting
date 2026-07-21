@@ -464,7 +464,6 @@ describe('PropertySidebar always-visible sale and PIN', () => {
       } as Partial<CommandCenterPayload>),
     )
 
-    expect(screen.getByText('Sale date not verified yet')).toBeInTheDocument()
     expect(screen.getByTestId('sidebar-verify-sale-date')).toHaveTextContent('Verify')
     fireEvent.click(screen.getByTestId('sidebar-verify-sale-date'))
 
@@ -576,7 +575,6 @@ describe('PropertySidebar always-visible sale and PIN', () => {
     )
 
     expect(screen.getByTestId('sidebar-most-recent-sale')).toHaveTextContent('None')
-    expect(screen.getByText('Sale date not verified yet')).toBeInTheDocument()
     expect(screen.getByTestId('sidebar-verify-sale-date')).toHaveTextContent('Verify')
   })
 
@@ -711,7 +709,7 @@ describe('PropertySidebar always-visible sale and PIN', () => {
     expect(await screen.findByText(/Add city, state, and ZIP/i)).toBeInTheDocument()
   })
 
-    it('shows Apply when Look up PIN finds a candidate', async () => {
+    it('auto-applies a PIN found by Look up PIN', async () => {
     vi.mocked(propertyMatchService.preview).mockResolvedValue({
       found: true,
       entered_address: {
@@ -745,12 +743,6 @@ describe('PropertySidebar always-visible sale and PIN', () => {
     )
 
     fireEvent.click(screen.getByTestId('sidebar-look-up-pin'))
-    expect(await screen.findByTestId('sidebar-pin-candidate')).toHaveTextContent(
-      '14-21-123-456-0000',
-    )
-    expect(screen.getByTestId('sidebar-apply-pin')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByTestId('sidebar-apply-pin'))
     await waitFor(() => {
       expect(propertyMatchService.approve).toHaveBeenCalledWith(1, {
         pin: '14-21-123-456-0000',

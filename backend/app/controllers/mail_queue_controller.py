@@ -56,12 +56,29 @@ def _serialize_queue_item(item: MailQueueItem, *, last_mailed_at: str | None = N
 def get_queue():
     from app.services.last_mailed_service import format_last_mailed_at, get_last_mailed_at_by_lead_ids
 
+    try:
+        page = parse_positive_int(request.args.get('page'), default=1, field_name='page')
+        per_page = parse_positive_int(
+            request.args.get('per_page'),
+            default=100,
+            maximum=100,
+            field_name='per_page',
+        )
+    except ValueError as exc:
+        return jsonify({'error': 'Invalid request', 'message': str(exc)}), 400
     user_id = g.user_id
     summary = _queue_service.get_summary(user_id)
-    items = _queue_service.list_queued(user_id)
+    items, total = _queue_service.list_queued(
+        user_id,
+        page=page,
+        per_page=per_page,
+    )
     last_mailed = get_last_mailed_at_by_lead_ids([item.lead_id for item in items])
     return jsonify({
         **summary,
+        'page': page,
+        'per_page': per_page,
+        'total': total,
         'items': [
             _serialize_queue_item(
                 item,

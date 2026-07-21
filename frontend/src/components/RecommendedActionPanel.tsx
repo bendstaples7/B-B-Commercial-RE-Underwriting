@@ -13,6 +13,7 @@ import {
   Chip,
   CircularProgress,
   Stack,
+  Tooltip,
   Typography,
 } from '@mui/material'
 import BlockIcon from '@mui/icons-material/Block'
@@ -299,14 +300,14 @@ export function RecommendedActionPanel({
         ? 'Hide this lead from active queues until a future re-activation date'
         : undefined)
 
-    return (
+    const button = (
       <Button
         key={btn.action}
         variant="outlined"
         size="small"
         disabled={isDisabled || pendingAction !== null}
         onClick={() => handleAction(btn.action)}
-        title={title}
+        title={isDisabled ? undefined : title}
         startIcon={
           isLoading ? (
             <CircularProgress size={14} color="inherit" />
@@ -326,6 +327,11 @@ export function RecommendedActionPanel({
         {isLoading ? 'Working…' : btn.label}
       </Button>
     )
+    return isDisabled && unavailableReason ? (
+      <Tooltip key={btn.action} title={unavailableReason}>
+        <span>{button}</span>
+      </Tooltip>
+    ) : button
   }
 
   const actionStackSx = {

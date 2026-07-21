@@ -37,6 +37,7 @@ PUBLIC_ENDPOINTS = {
     'POST /api/auth/login',
     'POST /api/auth/set-password',
     'GET /api/health',
+    'GET /api/health/runtime',
 }
 
 _login_schema = LoginSchema()

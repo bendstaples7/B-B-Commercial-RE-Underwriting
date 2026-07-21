@@ -73,10 +73,10 @@ export function evaluateAddToMailBatch(input: {
       true,
     )
   }
-  // Match backend SoT exactly. `isMailable` only validates the address;
-  // `mailEligible` also applies recent-sale and other operational holds.
-  const mailReady = input.mailEligible === true
-  if (mailReady) return ok()
+  // `mailEligible` is the backend eligibility contract. A missing value is a
+  // backwards-compatible payload: use address readiness only when no other
+  // known hold contradicts it.
+  if (input.mailEligible === true) return ok()
   if (input.mailIneligibleReason === 'recently_sold') {
     if (input.mailEligibleDate) {
       // Backend keeps ISO copy for API/log consumers; UI intentionally formats
@@ -90,6 +90,14 @@ export function evaluateAddToMailBatch(input: {
       REASON_MAIL_RECENTLY_SOLD,
       'Held after recent sale until the two-year hold ends',
     )
+  }
+  if (
+    input.mailEligible === undefined
+    && input.isMailable === true
+    && !input.mailIneligibleReason
+    && !input.mailEligibleDate
+  ) {
+    return ok()
   }
   return blocked(
     REASON_MAIL_INVALID_ADDRESS,

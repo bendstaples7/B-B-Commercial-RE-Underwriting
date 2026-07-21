@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timezone
 
 from flask import current_app
+from sqlalchemy.orm import selectinload
 
 from app import db
 from app.exceptions import MailQueueError
@@ -107,12 +108,22 @@ class MailQueueService:
             ),
         }
 
-    def list_queued(self, user_id: str | None = None) -> list[MailQueueItem]:
-        return (
+    def list_queued(
+        self,
+        user_id: str | None = None,
+        *,
+        page: int = 1,
+        per_page: int = 100,
+    ) -> tuple[list[MailQueueItem], int]:
+        """Return a paginated queued batch with leads eagerly loaded."""
+        query = (
             self._queued_query(user_id)
+            .options(selectinload(MailQueueItem.lead))
             .order_by(MailQueueItem.created_at.asc())
-            .all()
         )
+        total = query.count()
+        items = query.offset((page - 1) * per_page).limit(per_page).all()
+        return items, total
 
     @staticmethod
     def serialize_attempt(

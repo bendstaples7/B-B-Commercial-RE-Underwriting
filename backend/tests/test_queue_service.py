@@ -5,7 +5,12 @@ import pytest
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
 
-from app.services.queue_service import QueueService
+from app.services.queue_service import (
+    ACTIVE_PIPELINE_STATUSES,
+    QueueService,
+    _complete_owner_mail_clause,
+    _filter_mail_eligible_leads,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +105,98 @@ def test_todays_action_excludes_bare_follow_up_now_without_due_task(app):
         svc = QueueService()
         rows, _total = svc.get_todays_action()
         ids = [r['id'] for r in rows]
+        assert lead.id not in ids
+
+
+def test_todays_action_excludes_suppress_recommended_action(app):
+    """Suppress / do_not_contact next actions never appear in Today's Action."""
+    with app.app_context():
+        suppressed = _make_lead(
+            app,
+            '10665 Suppress St',
+            lead_status='mailing_no_contact_made',
+            recommended_action='suppress',
+        )
+        dnc_action = _make_lead(
+            app,
+            '10666 Dnc Action St',
+            lead_status='mailing_no_contact_made',
+            recommended_action='do_not_contact',
+        )
+        _make_task(app, suppressed.id, due_date=date.today())
+        _make_task(app, dnc_action.id, due_date=date.today())
+        svc = QueueService()
+        ids = [r['id'] for r in svc.get_todays_action()[0]]
+        assert suppressed.id not in ids
+        assert dnc_action.id not in ids
+        assert svc.get_counts()['todays_action'] == len(ids)
+
+
+def test_queue_row_includes_clean_street_and_zip(app):
+    """Queue rows strip embedded locality from street and expose property_zip."""
+    with app.app_context():
+        from app.services.queue_service import _lead_to_queue_row
+
+        lead = _make_lead(
+            app,
+            '4414 N Campbell Ave Chicago IL 60625',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60625',
+        )
+        row = _lead_to_queue_row(lead)
+        assert row['property_street'] == '4414 N Campbell Ave'
+        assert row['property_zip'] == '60625'
+        assert row['property_city'] == 'Chicago'
+
+
+def test_status_change_to_skip_trace_clears_dated_chores_out_of_todays_action(app):
+    """Entering skip_trace via status change must leave Today's Action."""
+    with app.app_context():
+        from app import db
+        from app.models import LeadTask
+        from app.services.skip_trace_enqueue import clear_dated_due_chores_entering_skip_trace
+
+        lead = _make_lead(
+            app,
+            '99 Skip Leak St',
+            lead_status='mailing_no_contact_made',
+            recommended_action='add_contact_info',
+            needs_skip_trace=False,
+            has_phone=False,
+            has_email=False,
+        )
+        chore = _make_task(
+            app, lead.id, due_date=date.today() - timedelta(days=30),
+            title='Follow up on 99 Skip Leak St',
+        )
+        svc = QueueService()
+        assert lead.id in [r['id'] for r in svc.get_todays_action()[0]]
+
+        # Simulate the shared clear used by status-selector / hold-sync writers.
+        lead.lead_status = 'skip_trace'
+        lead.needs_skip_trace = True
+        db.session.add(lead)
+        clear_dated_due_chores_entering_skip_trace(
+            lead.id,
+            actor='test',
+            reason='status_selector_skip_trace',
+        )
+        handoff = LeadTask(
+            lead_id=lead.id,
+            task_type='skip_trace_owner',
+            title='Awaiting skip trace',
+            status='open',
+            due_date=None,
+            created_by='test',
+            workflow_key='awaiting_skip_trace_handoff',
+        )
+        db.session.add(handoff)
+        db.session.commit()
+
+        db.session.refresh(chore)
+        assert chore.status == 'completed'
+        ids = [r['id'] for r in svc.get_todays_action()[0]]
         assert lead.id not in ids
 
 
@@ -696,6 +793,44 @@ def test_mail_candidates_excludes_recently_sold(app):
         svc = QueueService(owner_user_id='test-owner')
         rows, total = svc.get_mail_candidates('test-owner')
         assert lead.id not in [r['id'] for r in rows]
+
+
+def test_mail_candidate_sql_filter_matches_python_eligibility_oracle(app):
+    """The SQL recent-sale predicate matches the retained Python eligibility oracle."""
+    from app.models import Lead
+
+    with app.app_context():
+        eligible = _make_mail_ready_lead(
+            app,
+            '20 SQL Eligible St',
+            most_recent_sale='6/15/2010',
+        )
+        recent = _make_mail_ready_lead(
+            app,
+            '20 SQL Recent St',
+            most_recent_sale=(date.today() - timedelta(days=60)).strftime('%m/%d/%Y'),
+        )
+        svc = QueueService(owner_user_id='test-owner')
+        if not svc._uses_postgres_recent_sale_sql():
+            pytest.skip('effective_acquisition_date_sql requires PostgreSQL')
+        oracle_candidates = Lead.query.filter(
+            Lead.owner_user_id == 'test-owner',
+            Lead.lead_status.in_(ACTIVE_PIPELINE_STATUSES),
+            Lead.recommended_action == 'mail_ready',
+            _complete_owner_mail_clause(),
+        ).all()
+
+        oracle_ids = {lead.id for lead in _filter_mail_eligible_leads(oracle_candidates)}
+        sql_ids = {
+            row[0]
+            for row in svc._mail_candidates_query('test-owner')
+            .with_entities(Lead.id)
+            .all()
+        }
+
+        assert eligible.id in sql_ids
+        assert recent.id not in sql_ids
+        assert sql_ids == oracle_ids
 
 
 def test_mail_candidates_accepts_parseable_one_line_owner_address(app):

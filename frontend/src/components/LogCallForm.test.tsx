@@ -527,6 +527,30 @@ describe('LogCallForm', () => {
         )
       })
     })
+
+    it('uses the selected mail-queue next step in the nested follow_up payload', async () => {
+      mockLogCall.mockResolvedValue(makeTimelineEntry())
+      render(<LogCallForm leadId={1} onSaved={vi.fn()} />)
+
+      selectOutcome('voicemail')
+      await user.click(screen.getByTestId('create-follow-up-checkbox'))
+      await user.click(screen.getByTestId('change-next-step-btn'))
+      fireEvent.mouseDown(screen.getByLabelText('Task type'))
+      fireEvent.click(screen.getByRole('listbox').querySelector('[data-value="add_to_mail_batch"]')!)
+      await user.click(screen.getByTestId('call-save-btn'))
+
+      await waitFor(() => {
+        expect(mockLogCall).toHaveBeenCalledWith(
+          1,
+          expect.objectContaining({
+            follow_up: expect.objectContaining({
+              title: 'Add to mail queue',
+              task_type: 'add_to_mail_batch',
+            }),
+          }),
+        )
+      })
+    })
   })
 
   // -------------------------------------------------------------------------

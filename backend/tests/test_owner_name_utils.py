@@ -5,7 +5,9 @@ from app.services.plugins.owner_name_utils import (
     is_address_like_name,
     is_definite_institutional_name,
     is_entity_name,
+    is_generic_owner_name,
     is_institutional_name,
+    is_matchable_person_name,
     owner_names_equivalent,
 )
 
@@ -96,6 +98,16 @@ class TestInstitutionalName:
 
 
 class TestOwnerNamesEquivalent:
+    def test_generic_labels_are_not_matchable_or_equivalent(self):
+        assert is_generic_owner_name('For Sale By Owner +')
+        assert is_generic_owner_name('N/A')
+        assert is_generic_owner_name('current resident')
+        assert is_generic_owner_name('')
+        assert not is_generic_owner_name('Joseph Kiferbaum')
+        assert not is_matchable_person_name('For Sale By', 'Owner')
+        assert not is_matchable_person_name('123', 'Main St')
+        assert not owner_names_equivalent('FSBO', None, 'FSBO', None)
+
     def test_middle_initial_matches(self):
         from app.services.plugins.owner_name_utils import owner_names_equivalent
         assert owner_names_equivalent("Joseph", "Kiferbaum", "JOSEPH A", "KIFERBAUM")

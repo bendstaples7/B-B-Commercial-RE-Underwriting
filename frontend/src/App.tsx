@@ -1,6 +1,7 @@
 import { useState, Component } from 'react'
 import { Routes, Route, Link, Navigate, useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
+import { BackendRestartRequiredBanner } from './components/BackendRestartRequiredBanner'
 import { LoginPage } from './pages/LoginPage'
 import { SetPasswordPage } from './pages/SetPasswordPage'
 import { useLoadScript } from '@react-google-maps/api'
@@ -115,7 +116,10 @@ import { PipelineConfigAdminPage } from './pages/PipelineConfigAdminPage'
 import DataSourcesPanel from '@/components/DataSourcesPanel'
 import type { QueueCounts } from './types'
 
-const DRAWER_WIDTH = 240
+// Minimum width that fits the longest nav label ("Missing Property Match")
+// at its indent + icon + badge without clipping. Do not shrink below this or
+// the left rail clips content and shows a horizontal scrollbar.
+const DRAWER_WIDTH = 280
 
 // ---------------------------------------------------------------------------
 // Google Maps context — provides isLoaded state to child components
@@ -1385,7 +1389,11 @@ function App() {
   }
 
   const drawerContent = (
-    <Box sx={{ width: DRAWER_WIDTH }} role="navigation" aria-label="Main navigation">
+    <Box
+      sx={{ width: DRAWER_WIDTH, minWidth: DRAWER_WIDTH }}
+      role="navigation"
+      aria-label="Main navigation"
+    >
       <Box sx={{ p: 2 }}>
         <Typography variant="h6" component="span" noWrap>
           RE Analysis
@@ -1483,7 +1491,8 @@ function App() {
                                   onClick={() => isMobile && setDrawerOpen(false)}
                                   selected={isActive}
                                   sx={{
-                                    pl: 5,
+                                    pl: 3.5,
+                                    pr: 1.5,
                                     py: 0.75,
                                     borderLeft: isActive ? '3px solid' : '3px solid transparent',
                                     borderColor: isActive ? 'primary.main' : 'transparent',
@@ -1495,9 +1504,13 @@ function App() {
                                   </ListItemIcon>
                                   <ListItemText
                                     primary={item.label}
+                                    sx={{ minWidth: 0 }}
                                     primaryTypographyProps={{
                                       variant: 'body2',
                                       fontWeight: isActive ? 600 : 400,
+                                      noWrap: true,
+                                      textOverflow: 'ellipsis',
+                                      overflow: 'hidden',
                                     }}
                                   />
                                   {badgeCount > 0 && (
@@ -1505,7 +1518,7 @@ function App() {
                                       label={badgeCount}
                                       size="small"
                                       color={isActive ? 'default' : 'primary'}
-                                      sx={{ ml: 0.5, height: 18, fontSize: '0.65rem', minWidth: 24 }}
+                                      sx={{ ml: 0.5, height: 18, fontSize: '0.65rem', minWidth: 24, flexShrink: 0 }}
                                     />
                                   )}
                                 </ListItemButton>
@@ -1755,7 +1768,7 @@ function App() {
           onClose={toggleDrawer}
           ModalProps={{ keepMounted: true }}
           sx={{
-            '& .MuiDrawer-paper': { width: DRAWER_WIDTH },
+            '& .MuiDrawer-paper': { width: DRAWER_WIDTH, overflowX: 'hidden' },
           }}
         >
           {drawerContent}
@@ -1765,10 +1778,20 @@ function App() {
           variant="permanent"
           sx={{
             width: DRAWER_WIDTH,
+            minWidth: DRAWER_WIDTH,
             flexShrink: 0,
             '& .MuiDrawer-paper': {
               width: DRAWER_WIDTH,
+              minWidth: DRAWER_WIDTH,
               boxSizing: 'border-box',
+              // Keep the desktop rail in normal document flow so the page has
+              // one vertical scrollbar. A fixed Drawer paper creates its own
+              // scrollbar, which can overlay the queue-count chips.
+              position: 'relative',
+              height: 'auto',
+              minHeight: '100vh',
+              overflowX: 'hidden',
+              overflowY: 'visible',
             },
           }}
         >
@@ -1791,6 +1814,7 @@ function App() {
           width: { xs: '100%', md: `calc(100% - ${DRAWER_WIDTH}px)` },
         }}
       >
+        <BackendRestartRequiredBanner />
         <Routes>
           {/* Public route — no AuthGuard */}
           <Route path="/login" element={<LoginPage />} />

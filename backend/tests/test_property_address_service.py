@@ -6,9 +6,54 @@ from app.models.lead import Lead
 from app.services.property_address_service import (
     complete_property_address,
     complete_property_address_fields,
+    display_street,
     heal_incomplete_property_addresses,
     is_property_address_complete,
+    street_only_line,
 )
+
+
+class TestStreetOnlyLine:
+    """Street-only cleaner must strip embedded locality without eating suffixes."""
+
+    def test_strips_glued_city_state_zip(self):
+        assert (
+            street_only_line('4414 N Campbell Ave Chicago IL 60625')
+            == '4414 N Campbell Ave'
+        )
+
+    def test_strips_trailing_zip_only(self):
+        assert street_only_line('3819 N Troy 60618') == '3819 N Troy'
+
+    def test_strips_full_state_name(self):
+        assert (
+            street_only_line('2834 N Drake Ave Chicago Illinois 60618')
+            == '2834 N Drake Ave'
+        )
+
+    def test_preserves_court_suffix(self):
+        # "CT" is Court, not Connecticut — must never be stripped as a state.
+        assert street_only_line('1369 OXFORD CT') == '1369 OXFORD CT'
+        assert street_only_line('WAKE ROBIN CT') == 'WAKE ROBIN CT'
+        assert street_only_line('309-D MILTON CT') == '309-D MILTON CT'
+
+    def test_preserves_clean_street(self):
+        assert street_only_line('500 W Madison St') == '500 W Madison St'
+
+    def test_keeps_unit_before_locality(self):
+        assert (
+            street_only_line('2430 N Avers Ave 2 Chicago IL 60647')
+            == '2430 N Avers Ave 2'
+        )
+
+    def test_display_street_cleans_dirty_one_liner(self):
+        assert (
+            display_street('3745 W Addison St 1 Chicago IL 60618')
+            == '3745 W Addison St 1'
+        )
+
+    def test_display_street_preserves_clean_street(self):
+        assert display_street('500 W Madison St') == '500 W Madison St'
 
 
 def _make_lead(app, **kwargs):
@@ -67,10 +112,11 @@ class TestCompletePropertyAddressFields:
                 try_gis=True,
             )
         assert result['complete'] is True
-        assert result['property_city'] == 'CHICAGO'
+        # GIS output is title-cased for human display (no ALL CAPS).
+        assert result['property_city'] == 'Chicago'
         assert result['property_state'] == 'IL'
         assert result['property_zip'] == '60622'
-        assert result['property_street'] == '1239 N HOYNE AVE'
+        assert result['property_street'] == '1239 N Hoyne Ave'
         assert 'gis' in result['sources']
 
 
@@ -114,6 +160,27 @@ class TestCompletePropertyAddressLead:
             assert lead.property_zip == '60622'
             assert lead.review_required is False
             assert is_property_address_complete(lead=lead)
+
+    def test_normalizes_dirty_street_on_complete_lead(self, app):
+        # Complete row whose street still embeds the locality — the writer must
+        # persist the street-only form so the UI stops rendering city/state twice.
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                property_street='4414 N Campbell Ave Chicago IL 60625',
+                property_city='Chicago',
+                property_state='IL',
+                property_zip='60625',
+            )
+            result = complete_property_address(
+                lead,
+                actor='test',
+                commit=True,
+                try_gis=False,
+            )
+            assert result['complete'] is True
+            assert lead.property_street == '4414 N Campbell Ave'
+            assert lead.property_city == 'Chicago'
 
     def test_flags_review_when_still_incomplete(self, app):
         with app.app_context():

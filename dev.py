@@ -10,7 +10,9 @@ Starts:
     2. Celery worker (background)
     3. Flask dev server (foreground)
 
-All processes are cleaned up on Ctrl+C.
+All processes are cleaned up on Ctrl+C. Prior children from a previous
+``dev.py`` run (tracked via ``.dev/pids/*.pid``) are stopped first so a
+second launch cannot leave stale Flask listeners on port 5000.
 """
 
 import os
@@ -26,9 +28,15 @@ import atexit
 # Configuration
 # ---------------------------------------------------------------------------
 
-BACKEND_DIR = os.path.join(os.path.dirname(__file__), "backend")
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+BACKEND_DIR = os.path.join(ROOT_DIR, "backend")
+PID_DIR = os.path.join(ROOT_DIR, ".dev", "pids")
 REDIS_PORT = 6379
 FLASK_PORT = 5000
+
+# Ensure backend/ is importable for port_guard (shared with run.py).
+if BACKEND_DIR not in sys.path:
+    sys.path.insert(0, BACKEND_DIR)
 
 
 def _is_local_database_url(url: str) -> bool:
@@ -43,6 +51,166 @@ def _is_local_database_url(url: str) -> bool:
 
 # Processes we start (so we can clean them up)
 _processes: list[subprocess.Popen] = []
+_pid_files_written: list[str] = []
+
+
+def _pid_path(name: str) -> str:
+    return os.path.join(PID_DIR, f"{name}.pid")
+
+
+def _write_pid(name: str, pid: int) -> None:
+    os.makedirs(PID_DIR, exist_ok=True)
+    path = _pid_path(name)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(str(pid))
+    _pid_files_written.append(path)
+
+
+def _read_pid(name: str) -> int | None:
+    path = _pid_path(name)
+    if not os.path.isfile(path):
+        return None
+    try:
+        raw = open(path, encoding="utf-8").read().strip()
+        return int(raw) if raw else None
+    except (OSError, ValueError):
+        return None
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        try:
+            # /FO CSV /NH yields one quoted row per process; match the exact
+            # PID column so PID 123 never matches 1236.
+            out = subprocess.check_output(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                text=True,
+                errors="replace",
+                stderr=subprocess.DEVNULL,
+            )
+            return f'"{pid}"' in out
+        except (OSError, subprocess.CalledProcessError):
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _cmdline_for_pid(pid: int) -> str:
+    """Best-effort process command line (empty string if unavailable)."""
+    try:
+        from port_guard import describe_pid
+
+        return describe_pid(pid) or ""
+    except Exception:
+        return ""
+
+
+def _cmdline_matches(pid: int, expect_any: tuple[str, ...]) -> bool:
+    """True when the process cmdline contains any expected token (case-insensitive)."""
+    if not expect_any:
+        return True
+    cmd = _cmdline_for_pid(pid).lower()
+    if not cmd:
+        # No cmdline visibility — refuse to kill rather than risk a wrong target.
+        return False
+    return any(tok.lower() in cmd for tok in expect_any)
+
+
+def _stop_pid(
+    pid: int,
+    label: str = "process",
+    *,
+    expect_any: tuple[str, ...] = (),
+) -> None:
+    if not _pid_alive(pid):
+        return
+    # Guard against stale pidfiles / recycled PIDs: only kill when the running
+    # process looks like what we expect (e.g. redis-server, celery, run.py).
+    if not _cmdline_matches(pid, expect_any):
+        print(
+            f"  Skipping {label} (PID {pid}): running process does not match "
+            f"{expect_any!r} — likely a recycled PID."
+        )
+        return
+    print(f"  Stopping prior {label} (PID {pid})...")
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/F", "/T"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    else:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            return
+        deadline = time.time() + 5
+        while time.time() < deadline and _pid_alive(pid):
+            time.sleep(0.2)
+        if _pid_alive(pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+
+def _clear_pid_file(name: str) -> None:
+    path = _pid_path(name)
+    try:
+        if os.path.isfile(path):
+            os.remove(path)
+    except OSError:
+        pass
+
+
+# Expected cmdline tokens per recorded child, so a stale/recycled PID from a
+# previous run is never force-killed unless it still looks like our process.
+_EXPECT_TOKENS: dict[str, tuple[str, ...]] = {
+    "celery": ("celery",),
+    "celery-beat": ("celery",),
+    "flask": ("run.py", "flask"),
+    "redis": ("redis-server", "redis"),
+}
+# A Flask-port listener we did not record must look like our server before we
+# kill it (avoid nuking an unrelated process that grabbed 5000).
+_FLASK_LISTENER_TOKENS: tuple[str, ...] = ("run.py", "flask")
+
+
+def _stop_prior_dev_children() -> None:
+    """Stop processes recorded by a previous ``dev.py`` run and free Flask port."""
+    for name in ("celery", "celery-beat", "flask", "redis"):
+        pid = _read_pid(name)
+        if pid is not None:
+            _stop_pid(pid, label=name, expect_any=_EXPECT_TOKENS.get(name, ()))
+            _clear_pid_file(name)
+
+    # Also kill anything still listening on the Flask port (orphans from
+    # ``python run.py`` without going through this launcher) — but only if it
+    # matches our server signature.
+    try:
+        from port_guard import list_listening_pids
+    except ImportError:
+        return
+
+    listeners = list_listening_pids(FLASK_PORT)
+    for pid in listeners:
+        _stop_pid(
+            pid,
+            label=f"port-{FLASK_PORT} listener",
+            expect_any=_FLASK_LISTENER_TOKENS,
+        )
+    # Poll until the port is released (Windows can lag on handle release),
+    # rather than a fixed sleep that may be too short.
+    if listeners:
+        deadline = time.time() + 5
+        while time.time() < deadline and list_listening_pids(FLASK_PORT):
+            time.sleep(0.25)
 
 
 def _cleanup():
@@ -50,11 +218,26 @@ def _cleanup():
     for proc in _processes:
         if proc.poll() is None:  # still running
             print(f"  Stopping PID {proc.pid}...")
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+            if sys.platform == "win32":
+                # Tree-kill so grandchild workers (celery pool, flask) don't orphan.
+                subprocess.run(
+                    ["taskkill", "/PID", str(proc.pid), "/F", "/T"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            else:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+    for path in _pid_files_written:
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except OSError:
+            pass
 
 
 atexit.register(_cleanup)
@@ -79,7 +262,14 @@ def _is_port_open(host: str, port: int) -> bool:
         return s.connect_ex((host, port)) == 0
 
 
-def _start(label: str, cmd: list[str], cwd: str = None, env: dict = None) -> subprocess.Popen:
+def _start(
+    label: str,
+    cmd: list[str],
+    cwd: str = None,
+    env: dict = None,
+    *,
+    pid_name: str | None = None,
+) -> subprocess.Popen:
     """Start a subprocess and register it for cleanup."""
     merged_env = {**os.environ, **(env or {})}
     print(f"  Starting {label}...")
@@ -87,11 +277,12 @@ def _start(label: str, cmd: list[str], cwd: str = None, env: dict = None) -> sub
         cmd,
         cwd=cwd or BACKEND_DIR,
         env=merged_env,
-        # Let output flow to the terminal
         stdout=None,
         stderr=None,
     )
     _processes.append(proc)
+    if pid_name:
+        _write_pid(pid_name, proc.pid)
     return proc
 
 
@@ -101,7 +292,7 @@ def _start(label: str, cmd: list[str], cwd: str = None, env: dict = None) -> sub
 
 def ensure_local_prod_data() -> bool:
     """Auto-restore production DB dump when local leads are missing."""
-    root = os.path.dirname(__file__)
+    root = ROOT_DIR
     scripts = os.path.join(root, "scripts")
 
     if sys.platform == "win32":
@@ -223,7 +414,6 @@ def run_checks() -> bool:
             ctx = MigrationContext.configure(conn)
             current_heads = set(ctx.get_current_heads())
 
-        # Re-use the already-loaded script if available
         try:
             expected_heads = set(script.get_heads())
         except NameError:
@@ -328,15 +518,18 @@ def main():
     print("=" * 60)
 
     # ------------------------------------------------------------------
+    # 0. Stop prior children / free Flask port (before Redis / Celery)
+    # ------------------------------------------------------------------
+    print("\n  Releasing prior dev processes (if any)...")
+    _stop_prior_dev_children()
+
+    # ------------------------------------------------------------------
     # 1. Redis
     # ------------------------------------------------------------------
     if _is_port_open("127.0.0.1", REDIS_PORT):
         print(f"  Redis already running on port {REDIS_PORT} ✓")
     else:
         print(f"  Redis not detected on port {REDIS_PORT}, starting...")
-        # Try redis-server (works if Redis is on PATH — e.g. via Memurai,
-        # WSL, or a native Windows Redis install)
-        # Try redis-server on PATH first, then fall back to the portable install location
         redis_exe = "redis-server"
         portable_path = os.path.join(os.path.expanduser("~"), "redis", "redis-server.exe")
         if not any(
@@ -346,8 +539,8 @@ def main():
             redis_exe = portable_path
 
         try:
-            redis_proc = _start("Redis", [redis_exe, "--port", str(REDIS_PORT)])
-            time.sleep(1.5)  # give it a moment to bind
+            _start("Redis", [redis_exe, "--port", str(REDIS_PORT)], pid_name="redis")
+            time.sleep(1.5)
             if not _is_port_open("127.0.0.1", REDIS_PORT):
                 print("\n  ⚠️  Redis failed to start.")
                 print("     Make sure Redis (or Memurai) is installed and on your PATH.")
@@ -380,28 +573,39 @@ def main():
         [sys.executable, "-m", "celery", "-A", "celery_worker", "worker", "--loglevel=info", "--pool=threads", "--concurrency=2"],
         cwd=BACKEND_DIR,
         env=celery_env,
+        pid_name="celery",
     )
-    # Option 2: also start Celery Beat for scheduled tasks (nightly signal extraction)
     _start(
         "Celery beat",
         [sys.executable, "-m", "celery", "-A", "celery_worker", "beat", "--loglevel=info"],
         cwd=BACKEND_DIR,
         env=celery_env,
+        pid_name="celery-beat",
     )
-    time.sleep(1)  # let Celery connect to Redis before Flask starts
+    time.sleep(1)
 
     # ------------------------------------------------------------------
     # 4. Flask dev server (foreground — blocks until Ctrl+C)
     # ------------------------------------------------------------------
+    from port_guard import assert_port_free
+    assert_port_free(FLASK_PORT)
+
     print(f"\n  Flask starting on http://localhost:{FLASK_PORT}")
     print("  Press Ctrl+C to stop all services.\n")
     print("=" * 60 + "\n")
 
-    flask_proc = subprocess.run(
+    flask_proc = subprocess.Popen(
         [sys.executable, "run.py"],
         cwd=BACKEND_DIR,
         env={**os.environ, "PYTHONPATH": BACKEND_DIR},
     )
+    _processes.append(flask_proc)
+    _write_pid("flask", flask_proc.pid)
+    try:
+        flask_proc.wait()
+    except KeyboardInterrupt:
+        pass
+    sys.exit(flask_proc.returncode or 0)
 
 
 if __name__ == "__main__":

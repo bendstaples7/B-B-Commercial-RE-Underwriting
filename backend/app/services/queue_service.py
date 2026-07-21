@@ -13,8 +13,10 @@ from app.services.outreach_method_service import resolve_outreach_contacts_for_l
 from app.services.scoring_rubric import (
     format_last_sale_at,
     is_recently_sold,
+    sql_not_recently_sold,
 )
 from app.services.entity_owner_policy import cold_mail_block_reasons_for_leads
+from app.services.property_address_service import display_street
 
 # Statuses that represent active outreach pipeline (not terminal or suppressed)
 ACTIVE_PIPELINE_STATUSES = [
@@ -84,9 +86,10 @@ def _lead_to_queue_row(
         'owner_display_name': owner_display_name,
         'best_phone': best_phone,
         'best_email': best_email,
-        'property_street': lead.property_street,
+        'property_street': display_street(lead.property_street),
         'property_city': lead.property_city,
         'property_state': lead.property_state,
+        'property_zip': lead.property_zip,
         'lead_score': lead.lead_score,
         'lead_status': lead.lead_status,
         'recommended_action': lead.recommended_action,
@@ -382,12 +385,12 @@ class QueueService:
 
         effective_mail_user = mail_user_id or self._owner_user_id
         if effective_mail_user:
-            candidates = (
+            candidate = (
                 self._mail_candidates_query(effective_mail_user)
                 .filter(Lead.id == lead_id)
-                .all()
+                .first()
             )
-            if _filter_mail_eligible_leads(candidates):
+            if candidate is not None and _filter_mail_eligible_leads([candidate]):
                 label, path = WORK_QUEUE_DISPLAY['mail-candidates']
                 memberships.append({
                     'key': 'mail-candidates',
@@ -419,6 +422,7 @@ class QueueService:
     def count_mail_candidates(self, mail_user_id: str) -> int:
         """Leads recommended for mail that are not already queued by this user."""
         query = self._mail_candidates_query(mail_user_id)
+        # Count what the list/ids paths return — Python eligibility included.
         return len(_filter_mail_eligible_leads(query.all()))
 
     # ------------------------------------------------------------------
@@ -440,6 +444,11 @@ class QueueService:
         query = self._base_query().filter(
             Lead.lead_status.in_(TODAYS_ACTION_STATUSES),
             open_lead_task_due_today,
+            # Stale/suppress recommendations must never surface as Today's Action work.
+            or_(
+                Lead.recommended_action.is_(None),
+                ~Lead.recommended_action.in_(('suppress', 'do_not_contact')),
+            ),
         )
         clause = _outreach_filter_clause(normalize_todays_outreach_filter(outreach))
         if clause is not None:
@@ -819,7 +828,16 @@ class QueueService:
                 ~already_queued,
             )
         )
+        # effective_acquisition_date_sql uses PostgreSQL regex/date functions.
+        # Production runs PostgreSQL; SQLite tests retain the Python oracle
+        # until it has a compatible SQL implementation.
+        if self._uses_postgres_recent_sale_sql():
+            q = q.filter(sql_not_recently_sold())
         return q
+
+    @staticmethod
+    def _uses_postgres_recent_sale_sql() -> bool:
+        return db.engine.dialect.name == 'postgresql'
 
     def get_mail_candidates(
         self,
@@ -832,14 +850,17 @@ class QueueService:
         """Paginated mail-ready leads not yet staged for the next batch."""
         from app.services.last_mailed_service import format_last_mailed_at, get_last_mailed_at_by_lead_ids
 
-        query = self._mail_candidates_query(mail_user_id)
-        sort_col = getattr(Lead, sort_by, Lead.lead_score)
-        if sort_order == 'desc':
-            order = (sort_col.desc(), Lead.motivation_score.desc())
-        else:
-            order = (sort_col.asc(), Lead.motivation_score.desc())
-        ordered = query.order_by(*order).all()
-        eligible = _filter_mail_eligible_leads(ordered)
+        query = _apply_queue_sort(
+            self._mail_candidates_query(mail_user_id),
+            sort_by,
+            sort_order,
+        )
+        # The SQL recent-sale prefilter (Postgres) narrows the set, but
+        # returned-mail (is_owner_mailable_lead) and entity cold-mail policy are
+        # only expressible in Python — always run _filter_mail_eligible_leads so
+        # Ready to Mail never surfaces returned/blocked owners. Paginate after
+        # filtering so counts and page bounds stay consistent.
+        eligible = _filter_mail_eligible_leads(query.all())
         total = len(eligible)
         start = (page - 1) * per_page
         leads = eligible[start:start + per_page]
@@ -865,14 +886,15 @@ class QueueService:
         sort_order: str = 'desc',
     ) -> list[int]:
         """All mail-ready lead IDs not yet staged, excluding recently sold."""
-        query = self._mail_candidates_query(mail_user_id)
-        sort_col = getattr(Lead, sort_by, Lead.lead_score)
-        if sort_order == 'desc':
-            order = (sort_col.desc(), Lead.motivation_score.desc())
-        else:
-            order = (sort_col.asc(), Lead.motivation_score.desc())
-        ordered = query.order_by(*order).all()
-        return [lead.id for lead in _filter_mail_eligible_leads(ordered)]
+        query = _apply_queue_sort(
+            self._mail_candidates_query(mail_user_id),
+            sort_by,
+            sort_order,
+        )
+        # Must match get_mail_candidates: apply Python eligibility (returned-mail
+        # + entity cold-mail) even on Postgres, or "select all"/send would target
+        # leads the list view hides.
+        return [lead.id for lead in _filter_mail_eligible_leads(query.all())]
 
     # Cap for prev/next neighbor lookup (same order as list endpoints).
     QUEUE_NAV_CAP = 500

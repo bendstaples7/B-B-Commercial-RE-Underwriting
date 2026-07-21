@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 
+from app.services.helpers.zip_lookup import city_state_from_zip
 from app.services.plugins.cook_county_sheriff_foreclosure import (
     _CITY_SECOND_WORDS,
     _STREET_SUFFIXES,
@@ -147,16 +148,53 @@ def _parse_space_separated_with_state(raw: str) -> tuple[str, str, str, str] | N
 
 
 def _parse_space_separated_no_state(raw: str) -> tuple[str, str, str, str] | None:
+    """Parse ``street … ZIP`` with no explicit state token.
+
+    Prefer ZIP → city/state lookup and keep everything before the ZIP as the
+    street (preserves original casing). Fall back to the sheriff token-as-city
+    heuristic only when ZIP lookup fails, with a street-suffix guard so
+    ``AVE``/``ST``/… are never treated as cities.
+    """
     parts = re.sub(r'\s+', ' ', raw.strip()).split()
-    if len(parts) < 3:
+    if len(parts) < 2:
         return None
-    if not _ZIP_RE.match(parts[-1]):
+    zip_match = _ZIP_RE.match(parts[-1])
+    if not zip_match:
         return None
 
-    zip_code = parts[-1][:5]
-    street, city, state = parse_sheriff_property_address(raw)
-    if not street or not city:
+    zip_code = zip_match.group(1)
+    street_parts = parts[:-1]
+    if not street_parts:
         return None
-    if city.upper() in ('IL', 'IN', 'WI') and len(city) == 2:
+    street = ' '.join(street_parts).strip()
+    if not street:
         return None
-    return street, city, state or 'IL', zip_code
+
+    looked_up = city_state_from_zip(zip_code)
+    if looked_up:
+        city, state = looked_up
+        # Sheriff-style lines often include the city before the ZIP
+        # (``… AVENUE CHICAGO 60622``). Strip a trailing city that matches the
+        # ZIP lookup so the street is street-only.
+        city_tokens = city.upper().split()
+        street_upper_parts = [p.upper() for p in street_parts]
+        if (
+            len(street_upper_parts) > len(city_tokens)
+            and street_upper_parts[-len(city_tokens):] == city_tokens
+        ):
+            street = ' '.join(street_parts[:-len(city_tokens)]).strip()
+        if not street:
+            return None
+        return street, city, state, zip_code
+
+    # ZIP unknown — fall back to sheriff heuristic, but never accept a street
+    # suffix (AVE/ST/DR/…) as the city token.
+    sher_street, sher_city, sher_state = parse_sheriff_property_address(raw)
+    if not sher_street or not sher_city:
+        return None
+    if sher_city.upper() in _STREET_SUFFIXES:
+        return None
+    if sher_city.upper() in ('IL', 'IN', 'WI') and len(sher_city) == 2:
+        return None
+    # Prefer the original-cased street from the input; use sheriff city/state.
+    return street, sher_city.title() if sher_city.isupper() else sher_city, sher_state or 'IL', zip_code

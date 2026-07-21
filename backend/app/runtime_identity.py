@@ -1,0 +1,136 @@
+"""Process identity for /api/health — detect stale Flask processes after code edits.
+
+``build_id`` is unique per process start. ``source_stale`` becomes true when
+Python sources under ``backend/app`` (plus entrypoints) change after the
+process started — typical with ``use_reloader=False`` during local development.
+"""
+
+from __future__ import annotations
+
+import os
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
+_REPO_ROOT = _BACKEND_DIR.parent
+
+_STARTED_AT = time.time()
+_PID = os.getpid()
+_FINGERPRINT_AT_START: str | None = None
+_BUILD_ID: str | None = None
+
+
+def _git_sha() -> str:
+    """Best-effort short repo SHA. Never raises."""
+    # Prefer DEPLOY_SHA (prod), then local .git — mirror resolve_deploy_sha without
+    # importing routes (avoids circular import via create_app → runtime_identity).
+    deploy_sha = _REPO_ROOT / "DEPLOY_SHA"
+    try:
+        if deploy_sha.is_file():
+            sha = deploy_sha.read_text(encoding="utf-8").strip()
+            if sha:
+                return sha[:12]
+    except OSError:
+        pass
+
+    git_head = _REPO_ROOT / ".git" / "HEAD"
+    try:
+        if git_head.is_file():
+            head = git_head.read_text(encoding="utf-8").strip()
+            if head.startswith("ref: "):
+                ref_path = _REPO_ROOT / ".git" / head[5:]
+                if ref_path.is_file():
+                    sha = ref_path.read_text(encoding="utf-8").strip()
+                    if sha:
+                        return sha[:12]
+            elif len(head) >= 12:
+                return head[:12]
+    except OSError:
+        pass
+
+    try:
+        import subprocess
+
+        sha = (
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(_REPO_ROOT),
+                stderr=subprocess.DEVNULL,
+            )
+            .decode()
+            .strip()
+        )
+        if sha:
+            return sha[:12]
+    except Exception:
+        pass
+    return "unknown"
+
+
+def compute_source_fingerprint() -> str:
+    """Max mtime across currently-loaded backend Python modules.
+
+    Intentionally excludes the git SHA (a checkout/commit must not read as a
+    stale process) and only inspects modules that are actually imported, so an
+    unrelated file elsewhere in the tree does not trigger a false restart
+    banner. Only loaded code affects the running process.
+    """
+    import sys
+
+    backend_str = str(_BACKEND_DIR)
+    max_mtime = 0.0
+    # Snapshot values() to avoid "dict changed size during iteration" if an
+    # import races a health poll.
+    for module in list(sys.modules.values()):
+        file = getattr(module, "__file__", None)
+        if not file or not file.endswith(".py"):
+            continue
+        if not file.startswith(backend_str):
+            continue
+        try:
+            max_mtime = max(max_mtime, os.path.getmtime(file))
+        except OSError:
+            continue
+    return str(int(max_mtime))
+
+
+def init_runtime_identity() -> None:
+    """Capture fingerprints once at process start (call from create_app)."""
+    global _FINGERPRINT_AT_START, _BUILD_ID
+    if _BUILD_ID is not None:
+        return
+    _FINGERPRINT_AT_START = compute_source_fingerprint()
+    started = datetime.fromtimestamp(_STARTED_AT, tz=timezone.utc).strftime(
+        "%Y%m%dT%H%M%SZ"
+    )
+    _BUILD_ID = f"{_git_sha()}-{started}-pid{_PID}"
+
+
+def runtime_identity_exposed() -> bool:
+    """Only expose process identity outside production.
+
+    ``source_stale`` is a local-dev aid (``run.py`` runs with
+    ``use_reloader=False``); production is managed by systemd/gunicorn and must
+    not leak pid / build_id / restart timing to unauthenticated callers.
+    """
+    return os.environ.get("FLASK_ENV", "development") != "production"
+
+
+def get_runtime_identity() -> dict:
+    """Payload fields for the health endpoints (empty in production)."""
+    if not runtime_identity_exposed():
+        return {}
+    if _BUILD_ID is None:
+        init_runtime_identity()
+    assert _BUILD_ID is not None
+    assert _FINGERPRINT_AT_START is not None
+    current = compute_source_fingerprint()
+    return {
+        "build_id": _BUILD_ID,
+        "pid": _PID,
+        "started_at": datetime.fromtimestamp(_STARTED_AT, tz=timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "source_stale": current != _FINGERPRINT_AT_START,
+    }

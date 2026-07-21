@@ -181,6 +181,12 @@ celery.conf.update(
             'schedule': crontab(minute=45),
             'options': {'expires': 3300},
         },
+        # PIN resolve follows situs healing so newly complete Cook addresses are ready.
+        'property-match-resolve-unambiguous-pins': {
+            'task': 'property_match.resolve_unambiguous_pins',
+            'schedule': crontab(minute=5),
+            'options': {'expires': 3300},
+        },
         # Nightly supporting-data invariants — catalog gaps / enrichment silence.
         'cook-county-enrichment-invariants': {
             'task': 'cook_county.enrichment_invariants',
@@ -546,6 +552,23 @@ def cook_county_enrich_lead_task(lead_id: int) -> dict:
         raise
 
 
+@celery.task(name='cook_county.verify_sale_date')
+def cook_county_verify_sale_date_task(lead_id: int) -> dict:
+    """Run only the Cook County plugins needed to verify a sale date."""
+    import logging
+    _logger = logging.getLogger('celery.cook_county.verify_sale_date')
+
+    try:
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            from app.services.cook_county_enrichment_service import enrich_cook_county_sale_date
+            return enrich_cook_county_sale_date(lead_id)
+    except Exception as exc:
+        _logger.error("cook_county.verify_sale_date failed for lead %s: %s", lead_id, exc)
+        raise
+
+
 @celery.task(name='entity_resolution.resolve_lead')
 def entity_resolution_resolve_lead_task(lead_id: int, actor: str = "entity_resolution") -> dict:
     """Resolve Illinois LLC primary contact for one lead."""
@@ -733,6 +756,58 @@ def property_address_heal_incomplete_task(self):
             except Exception as release_exc:
                 _logger.warning(
                     "property_address.heal_incomplete: failed to release lock: %s",
+                    release_exc,
+                )
+
+
+@celery.task(bind=True, name='property_match.resolve_unambiguous_pins')
+def property_match_resolve_unambiguous_pins_task(self):
+    """Hourly task: persist only uniquely resolved Cook County address PINs."""
+    import logging
+    _logger = logging.getLogger('celery.property_match.resolve_unambiguous_pins')
+
+    from app.services.property_match_review_service import RESOLVE_UNAMBIGUOUS_PINS_LOCK_KEY
+
+    lock_key = RESOLVE_UNAMBIGUOUS_PINS_LOCK_KEY
+    lock_ttl_seconds = 50 * 60
+    lock_token: str | None = None
+    try:
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            from app.services.deploy_sync_policy import (
+                _redis_client,
+                try_claim_redis_key,
+            )
+            from app.services.property_match_review_service import PropertyMatchReviewService
+
+            client = _redis_client()
+            if client is not None:
+                lock_token = try_claim_redis_key(
+                    lock_key, ttl_seconds=lock_ttl_seconds,
+                )
+                if not lock_token:
+                    _logger.info(
+                        'property_match.resolve_unambiguous_pins: skipped (lock held)'
+                    )
+                    return {'skipped': True, 'reason': 'lock_held'}
+
+            summary = PropertyMatchReviewService().resolve_unambiguous_pins_batch(
+                actor='property_match.resolve_unambiguous_pins',
+            )
+            _logger.info('property_match.resolve_unambiguous_pins: %s', summary)
+            return summary
+    except Exception as exc:
+        _logger.error('property_match.resolve_unambiguous_pins failed: %s', exc)
+        raise
+    finally:
+        if lock_token:
+            try:
+                from app.services.deploy_sync_policy import release_redis_key_if_token
+                release_redis_key_if_token(lock_key, lock_token)
+            except Exception as release_exc:
+                _logger.warning(
+                    'property_match.resolve_unambiguous_pins: failed to release lock: %s',
                     release_exc,
                 )
 
@@ -1644,6 +1719,7 @@ REQUIRED_TASKS = {
     'cook_county.backfill_sale_dates',
     'cook_county.enrichment_invariants',
     'property_address.heal_incomplete',
+    'property_match.resolve_unambiguous_pins',
     'motivation.backfill_signals',
     'gis.backfill_property_matches',
     'cook_county.prospect_feed_sync',

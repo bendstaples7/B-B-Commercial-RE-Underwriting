@@ -50,6 +50,23 @@ _INSTITUTIONAL_PHRASES = _DEFINITE_INSTITUTIONAL_PHRASES
 _SINGLE_WORD_MARKERS = _ENTITY_MARKERS | _INSTITUTIONAL_MARKERS
 _PHRASE_MARKERS = _INSTITUTIONAL_PHRASES
 
+# Placeholder labels from imports and public listings are not owner identities.
+# Token matching is deliberately bounded like entity detection, so a name such
+# as "Tbdale" does not match the ``TBD`` placeholder token.
+_GENERIC_OWNER_TOKENS = frozenset({
+    "FSBO", "OWNER", "UNKNOWN", "OCCUPANT", "RESIDENT", "SELLER", "NONE",
+    "TBD", "EMPTY", "NA",
+})
+_GENERIC_OWNER_PHRASES = (
+    "FOR SALE BY OWNER",
+    "FOR RENT",
+    "FOR LEASE",
+    "BARE OWNER",
+    "CURRENT RESIDENT",
+    "CURRENT OWNER",
+    "NO OWNER",
+)
+
 
 def _normalize_token(token: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", token.upper())
@@ -102,6 +119,18 @@ def is_entity_name(cleaned: str) -> bool:
         return True
     tokens = {_normalize_token(t) for t in upper.split()}
     return bool(tokens & _ENTITY_MARKERS)
+
+
+def is_generic_owner_name(name: str | None) -> bool:
+    """Return True for placeholder / listing labels, never real owner names."""
+    cleaned = re.sub(r"\s+", " ", (name or "").strip())
+    if not cleaned:
+        return True
+    upper = cleaned.upper()
+    if any(phrase in upper for phrase in _GENERIC_OWNER_PHRASES):
+        return True
+    tokens = {_normalize_token(token) for token in upper.split()}
+    return bool(tokens & _GENERIC_OWNER_TOKENS)
 
 
 def is_property_management_name(cleaned: str) -> bool:
@@ -171,6 +200,19 @@ def is_address_like_contact(first_name: str | None, last_name: str | None) -> bo
     if not display:
         return False
     return is_address_like_name(display)
+
+
+def is_matchable_person_name(first_name: str | None, last_name: str | None) -> bool:
+    """Whether owner fields describe a person safe for cross-property matching."""
+    display = contact_display_name(first_name, last_name)
+    if not display:
+        return False
+    return not (
+        is_entity_name(display)
+        or is_institutional_name(display)
+        or is_address_like_name(display)
+        or is_generic_owner_name(display)
+    )
 
 
 _GENERATIONAL_SUFFIX_RE = re.compile(
@@ -276,6 +318,11 @@ def owner_names_equivalent(
     ``Joseph Kiferbaum`` matches ``JOSEPH A KIFERBAUM``; jammed assessor forms
     ``GARCIA ADALBERTO`` match both ``GARCIA``/``ADALBERTO`` and reverse order.
     """
+    if not (
+        is_matchable_person_name(first_a, last_a)
+        and is_matchable_person_name(first_b, last_b)
+    ):
+        return False
     for fa, la in _owner_name_variants(first_a, last_a):
         tok_a, last_norm_a = _first_token_and_last(fa, la)
         if not last_norm_a or not tok_a:
@@ -301,6 +348,11 @@ def owner_names_merge_safe(
     tokens they must be compatible (exact or initials). Prevents auto-merging
     ``Gilbert E Janson`` with ``Gilbert A Janson`` at the same building.
     """
+    if not (
+        is_matchable_person_name(first_a, last_a)
+        and is_matchable_person_name(first_b, last_b)
+    ):
+        return False
     for fa, la in _owner_name_variants(first_a, last_a):
         tok_a, last_norm_a = _first_token_and_last(fa, la)
         if not last_norm_a or not tok_a:

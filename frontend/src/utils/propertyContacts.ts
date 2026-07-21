@@ -38,6 +38,29 @@ const INSTITUTIONAL_PHRASES = [
   'NON-PROFIT',
 ]
 
+const GENERIC_OWNER_TOKENS = new Set([
+  'FSBO',
+  'OWNER',
+  'UNKNOWN',
+  'OCCUPANT',
+  'RESIDENT',
+  'SELLER',
+  'NONE',
+  'TBD',
+  'EMPTY',
+  'NA',
+])
+
+const GENERIC_OWNER_PHRASES = [
+  'FOR SALE BY OWNER',
+  'FOR RENT',
+  'FOR LEASE',
+  'BARE OWNER',
+  'CURRENT RESIDENT',
+  'CURRENT OWNER',
+  'NO OWNER',
+]
+
 const STREET_TOKENS = [
   'ST',
   'STREET',
@@ -111,6 +134,18 @@ export function isEntityContactName(
   if (!name) return false
   const upper = name.toUpperCase()
   return nameMatchesMarkers(upper, ENTITY_PATTERNS)
+}
+
+/** True for placeholder owner labels that cannot identify a real person. */
+export function isGenericOwnerName(name: string | null | undefined): boolean {
+  const normalized = (name || '').trim().replace(/\s+/g, ' ')
+  if (!normalized) return true
+  const upper = normalized.toUpperCase()
+  if (GENERIC_OWNER_PHRASES.some((phrase) => upper.includes(phrase))) return true
+  return upper
+    .split(/\s+/)
+    .map((token) => token.replace(/[^A-Z0-9]/g, ''))
+    .some((token) => GENERIC_OWNER_TOKENS.has(token))
 }
 
 /**

@@ -29,12 +29,184 @@ HEAL_INCOMPLETE_CURSOR_KEY = 'property_address:heal_incomplete:last_id'
 HEAL_INCOMPLETE_LOCK_KEY = 'property_address:heal_incomplete_lock'
 
 _ZIP_RE = re.compile(r'^\d{5}(?:-\d{4})?$')
+_TRAILING_ZIP_RE = re.compile(r'[\s,]+(\d{5})(?:-\d{4})?\s*$')
+_TRAILING_CITY_STATE_ZIP_RE = re.compile(
+    r'[\s,]+'
+    r'([A-Za-z][A-Za-z .\'-]{1,40}?)'
+    r'[\s,]+'
+    r'([A-Za-z]{2})'
+    r'(?:[\s,]+(\d{5})(?:-\d{4})?)?'
+    r'\s*$'
+)
 
 
 def _clean(value: Any) -> str:
     if value is None:
         return ''
     return str(value).strip()
+
+
+def title_case_address_part(value: str | None) -> str:
+    """Human-readable title case for street/city; leaves empty strings alone."""
+    text = _clean(value)
+    if not text:
+        return ''
+    # Preserve mixed-case intentional input (e.g. McDonald) unless ALL CAPS / all lower.
+    if not text.isupper() and not text.islower():
+        return text
+    return ' '.join(
+        (part[:1].upper() + part[1:].lower()) if part else part
+        for part in text.split(' ')
+    )
+
+
+def display_street(street: str | None) -> str | None:
+    """Street-only form for API/UI display.
+
+    Defends against rows whose ``property_street`` still embeds City/State/ZIP
+    (e.g. duplicate leads that can't be healed in-place because cleaning would
+    collide on ``uq_leads_owner_normalized_street``). Uses the structural
+    cleaner — never trusts a possibly-wrong city column — and falls back to
+    the raw value if cleaning would blank it.
+    """
+    if not street:
+        return street
+    cleaned = street_only_line(street)
+    return cleaned if cleaned and len(cleaned) >= 3 else street
+
+
+_US_STATE_NAMES = {
+    'ALABAMA': 'AL', 'ALASKA': 'AK', 'ARIZONA': 'AZ', 'ARKANSAS': 'AR',
+    'CALIFORNIA': 'CA', 'COLORADO': 'CO', 'CONNECTICUT': 'CT', 'DELAWARE': 'DE',
+    'FLORIDA': 'FL', 'GEORGIA': 'GA', 'HAWAII': 'HI', 'IDAHO': 'ID',
+    'ILLINOIS': 'IL', 'INDIANA': 'IN', 'IOWA': 'IA', 'KANSAS': 'KS',
+    'KENTUCKY': 'KY', 'LOUISIANA': 'LA', 'MAINE': 'ME', 'MARYLAND': 'MD',
+    'MASSACHUSETTS': 'MA', 'MICHIGAN': 'MI', 'MINNESOTA': 'MN',
+    'MISSISSIPPI': 'MS', 'MISSOURI': 'MO', 'MONTANA': 'MT', 'NEBRASKA': 'NE',
+    'NEVADA': 'NV', 'NEW HAMPSHIRE': 'NH', 'NEW JERSEY': 'NJ',
+    'NEW MEXICO': 'NM', 'NEW YORK': 'NY', 'NORTH CAROLINA': 'NC',
+    'NORTH DAKOTA': 'ND', 'OHIO': 'OH', 'OKLAHOMA': 'OK', 'OREGON': 'OR',
+    'PENNSYLVANIA': 'PA', 'RHODE ISLAND': 'RI', 'SOUTH CAROLINA': 'SC',
+    'SOUTH DAKOTA': 'SD', 'TENNESSEE': 'TN', 'TEXAS': 'TX', 'UTAH': 'UT',
+    'VERMONT': 'VT', 'VIRGINIA': 'VA', 'WASHINGTON': 'WA',
+    'WEST VIRGINIA': 'WV', 'WISCONSIN': 'WI', 'WYOMING': 'WY',
+    'DISTRICT OF COLUMBIA': 'DC',
+}
+
+# Trailing ``<City> <Full State Name> [ZIP]`` — full names are unambiguous
+# (never a street suffix like CT/Court), so unlike the 2-letter code case this
+# may strip without also requiring a ZIP. Multi-word names first for greediness.
+_TRAILING_CITY_FULLSTATE_RE = re.compile(
+    r'[\s,]+'
+    r'([A-Za-z][A-Za-z.\'-]{1,30})'  # single-word city (no internal spaces)
+    r'[\s,]+'
+    r'(?:' + '|'.join(
+        re.escape(name) for name in sorted(_US_STATE_NAMES, key=len, reverse=True)
+    ) + r')'
+    r'(?:[\s,]+(?:\d{5})(?:-\d{4})?)?'
+    r'\s*$',
+    re.IGNORECASE,
+)
+
+
+def street_only_line(
+    street: str | None,
+    *,
+    city: str | None = None,
+    state: str | None = None,
+    zip_code: str | None = None,
+) -> str:
+    """Strip trailing ZIP / ``City, ST`` / ``City ST ZIP`` from a street line."""
+    text = _clean(street)
+    if not text:
+        return ''
+
+    # Prefer the structured completer when the line still embeds locality.
+    glued = street_only_from_glued_city_state_zip(text)
+    if glued:
+        text = glued
+
+    parsed = parse_embedded_us_address(text)
+    if parsed:
+        p_street, p_city, _p_state, p_zip = parsed
+        # Collapse when the raw line clearly contained locality beyond street.
+        if p_street and len(p_street) < len(text) and (
+            ',' in text
+            or (p_city and p_city.upper() in text.upper())
+            or (p_zip and p_zip in text)
+        ):
+            text = p_street
+
+    # Places one-liners: ``street, City, Illinois, 60625[, USA]``
+    if ',' in text:
+        parts = [p.strip() for p in text.split(',') if p.strip()]
+        if len(parts) >= 2:
+            # Drop trailing country / ZIP / state-name / city tokens.
+            while len(parts) > 1:
+                tail = parts[-1].upper()
+                tail_zip = _zip5(parts[-1])
+                if tail in {'USA', 'US', 'UNITED STATES'} or tail_zip:
+                    parts.pop()
+                    continue
+                if tail in _US_STATE_NAMES or (len(tail) == 2 and tail.isalpha()):
+                    parts.pop()
+                    continue
+                city_c = _clean(city)
+                if city_c and tail == city_c.upper():
+                    parts.pop()
+                    continue
+                break
+            text = parts[0]
+
+    # Strip known trailing city/state/zip using resolved components when present.
+    city_c = _clean(city)
+    state_c = _clean(state).upper()
+    if len(state_c) > 2:
+        state_c = _US_STATE_NAMES.get(state_c, state_c[:2])
+    zip_c = _zip5(zip_code) or ''
+    if city_c:
+        # ``, Chicago`` / `` Chicago IL`` / `` Chicago, Illinois``
+        state_alt = '|'.join(
+            re.escape(s) for s in ({state_c} | {n for n, c in _US_STATE_NAMES.items() if c == state_c})
+            if s
+        ) or re.escape(state_c or 'IL')
+        pattern = re.compile(
+            rf'[\s,]+{re.escape(city_c)}'
+            rf'(?:\s*,?\s*(?:{state_alt}))?'
+            rf'(?:\s*,?\s*{re.escape(zip_c)})?'
+            rf'\s*$',
+            re.IGNORECASE,
+        )
+        text = pattern.sub('', text).strip(' ,')
+    if zip_c:
+        text = re.sub(rf'[\s,]+{re.escape(zip_c)}(?:-\d{{4}})?\s*$', '', text).strip(' ,')
+
+    # Trailing ``<City> <Full State Name> [ZIP]`` (e.g. ``… Chicago Illinois``).
+    # Full state names are unambiguous, so strip even without a ZIP.
+    fs_match = _TRAILING_CITY_FULLSTATE_RE.search(text)
+    if fs_match:
+        text = text[:fs_match.start()].strip(' ,')
+
+    # Generic trailing ZIP cleanup (e.g. leftover ``… 60618``).
+    text = _TRAILING_ZIP_RE.sub('', text).strip(' ,')
+
+    # Generic ``City ST ZIP`` trailing locality when city still appears at end.
+    # Require the trailing ZIP: a bare ``Word ST`` (e.g. ``OXFORD CT``) must never
+    # be treated as ``City, <state>`` or we would amputate the street suffix
+    # (CT=Court, not Connecticut). The structured ``street City ST ZIP`` case is
+    # already handled above via street_only_from_glued_city_state_zip.
+    match = _TRAILING_CITY_STATE_ZIP_RE.search(text)
+    if match and match.group(3) and match.group(2).upper() in {
+        'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
+        'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
+        'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+        'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
+        'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
+        'DC',
+    }:
+        text = text[:match.start()].strip(' ,')
+
+    return text
 
 
 def is_property_address_complete(
@@ -140,6 +312,21 @@ def complete_property_address_fields(
                 zip_out = _zip5(gis_fill['property_zip']) or zip_out
                 sources.append('gis')
 
+    # Collapse one-liners / ZIP-in-street leftovers to street-only, then title-case.
+    if street_out:
+        cleaned_street = street_only_line(
+            street_out, city=city_out, state=state_out, zip_code=zip_out,
+        )
+        if cleaned_street:
+            street_out = cleaned_street
+        street_out = title_case_address_part(street_out)
+    if city_out:
+        city_out = title_case_address_part(city_out)
+    if state_out:
+        state_out = state_out.upper()[:2] if len(state_out.strip()) >= 2 else state_out.upper()
+    if zip_out:
+        zip_out = _zip5(zip_out) or zip_out
+
     complete = is_property_address_complete(street_out, city_out, state_out, zip_out)
     return {
         'property_street': street_out or None,
@@ -195,7 +382,23 @@ def complete_property_address(
             # Never blank out an existing structured field.
             if not _clean(old_val) or field == 'property_street':
                 if field == 'property_street' and _clean(old_val):
-                    if not _should_replace_street(_clean(old_val), _clean(new_val)):
+                    old_clean = _clean(old_val)
+                    # Always allow persisting a pure normalization of the same
+                    # street (strip embedded City/ST/ZIP, fix casing) even when
+                    # the address is already "complete" — otherwise dirty
+                    # one-liners like "4414 N Campbell Ave Chicago IL 60625"
+                    # survive and the UI renders the city/state twice. Use the
+                    # structural cleaner (no city hint) so a corrupt city column
+                    # can never amputate the real street.
+                    normalized_old = title_case_address_part(street_only_line(old_clean))
+                    is_pure_normalization = (
+                        bool(normalized_old)
+                        and _clean(new_val) == normalized_old
+                        and normalized_old != old_clean
+                    )
+                    if not is_pure_normalization and not _should_replace_street(
+                        old_clean, _clean(new_val),
+                    ):
                         continue
                 setattr(lead, field, new_val)
                 changed_fields.append(field)
@@ -283,10 +486,10 @@ def apply_parcel_address_to_lead(
     street = _clean(addr_row.get('property_street'))
 
     if city and not _clean(lead.property_city):
-        lead.property_city = city
+        lead.property_city = title_case_address_part(city)
         changed.append('property_city')
     if state and not _clean(lead.property_state):
-        lead.property_state = state
+        lead.property_state = state.upper()[:2]
         changed.append('property_state')
     if zip_code and not _clean(lead.property_zip):
         lead.property_zip = zip_code
@@ -296,7 +499,9 @@ def apply_parcel_address_to_lead(
         and street
         and _should_replace_street(_clean(lead.property_street), street)
     ):
-        lead.property_street = street
+        lead.property_street = title_case_address_part(
+            street_only_line(street, city=city, state=state, zip_code=zip_code) or street,
+        )
         changed.append('property_street')
     return changed
 

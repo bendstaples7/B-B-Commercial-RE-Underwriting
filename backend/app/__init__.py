@@ -1290,5 +1290,13 @@ def create_app(config_name='development'):
                     app.logger.warning("Building ownership startup check skipped: %s", e)
 
     app.logger.info("Flask application initialized successfully")
-    
+
+    # Capture process build_id / source fingerprint for /api/health stale detection.
+    try:
+        from app.runtime_identity import init_runtime_identity
+
+        init_runtime_identity()
+    except Exception as e:
+        app.logger.warning("runtime identity init skipped: %s", e)
+
     return app

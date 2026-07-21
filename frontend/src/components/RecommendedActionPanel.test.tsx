@@ -773,7 +773,7 @@ describe('RecommendedActionPanel', () => {
       expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeDisabled()
     })
 
-    it('explains a recent-sale hold and grays out Add to Mail Queue', () => {
+    it('explains a recent-sale hold and grays out Add to Mail Queue', async () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('hold')}
@@ -798,8 +798,11 @@ describe('RecommendedActionPanel', () => {
       )
       expect(screen.getByRole('button', { name: 'Adjust for Recent Sale' })).toBeInTheDocument()
       expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeDisabled()
-      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toHaveAttribute(
-        'title',
+      // Disabled buttons have pointer-events:none — hover the Tooltip's wrapping span.
+      const wrapper = screen.getByTestId('ra-universal-btn-add_to_mail_batch').parentElement
+      expect(wrapper).toBeTruthy()
+      await userEvent.hover(wrapper!)
+      expect(await screen.findByRole('tooltip')).toHaveTextContent(
         `Held after recent sale until ${formatDateOnly('2027-03-31')}`,
       )
     })

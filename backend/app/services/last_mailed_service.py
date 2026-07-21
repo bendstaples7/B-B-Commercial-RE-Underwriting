@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 
 from app import db
 from app.models import Lead, MailQueueItem
@@ -174,13 +174,24 @@ def _sibling_mailer_history_dates(leads: list[Lead]) -> dict[int, datetime | Non
         for row in q.all():
             sibling_leads[row.id] = row
 
-    for owner_user_id, first, last, _street_key in owner_keys:
-        q = Lead.query.filter(
+    owner_identity_clauses = [
+        (
+            Lead.owner_user_id == owner_user_id,
             func.lower(func.trim(Lead.owner_first_name)) == first,
             func.lower(func.trim(Lead.owner_last_name)) == last,
-            Lead.owner_user_id == owner_user_id,
         )
-        for row in q.all():
+        for owner_user_id, first, last in {
+            (owner_user_id, first, last)
+            for owner_user_id, first, last, _street_key in owner_keys
+        }
+    ]
+    if owner_identity_clauses:
+        for row in Lead.query.filter(
+            or_(*[
+                and_(*identity_clause)
+                for identity_clause in owner_identity_clauses
+            ])
+        ).all():
             sibling_leads[row.id] = row
 
     pin_group_dates: dict[str, datetime | None] = {}

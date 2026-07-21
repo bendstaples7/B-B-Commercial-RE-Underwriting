@@ -364,6 +364,22 @@ def enqueue_cook_county_enrichment(lead_id: int) -> bool:
         return False
 
 
+def enqueue_cook_county_sale_date_verification(lead_id: int) -> bool:
+    """Enqueue the narrow sale-date verification task for one lead."""
+    try:
+        from celery_worker import cook_county_verify_sale_date_task
+        cook_county_verify_sale_date_task.apply_async(args=[lead_id], ignore_result=True)
+        logger.info("Dispatched cook_county.verify_sale_date for lead %s", lead_id)
+        return True
+    except Exception as exc:
+        logger.warning(
+            "Could not enqueue cook_county.verify_sale_date for lead %s: %s",
+            lead_id,
+            exc,
+        )
+        return False
+
+
 def dispatch_cook_county_enrichment(lead_id: int) -> bool:
     """Enqueue async Cook County enrichment; fall back to sync if broker unavailable."""
     if enqueue_cook_county_enrichment(lead_id):

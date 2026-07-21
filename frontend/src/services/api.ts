@@ -25,8 +25,34 @@ export const analysisService = {
   /**
    * Health check endpoint
    */
-  healthCheck: async (): Promise<{ status: string }> => {
+  healthCheck: async (): Promise<{
+    status: string
+    db_mode?: string
+    build_id?: string
+    source_stale?: boolean
+    started_at?: string
+    pid?: number
+    checks?: Record<string, string>
+  }> => {
     const response = await api.get('/health')
+    return response.data
+  },
+
+  /**
+   * Lightweight process-identity probe (no DB/Celery/queue checks) used by the
+   * backend restart guard. Tolerates 503 so a degraded backend still yields
+   * build_id / source_stale.
+   */
+  runtimeHealth: async (): Promise<{
+    status: string
+    build_id?: string
+    source_stale?: boolean
+    started_at?: string
+    pid?: number
+  }> => {
+    const response = await api.get('/health/runtime', {
+      validateStatus: (s) => s < 500 || s === 503,
+    })
     return response.data
   },
 

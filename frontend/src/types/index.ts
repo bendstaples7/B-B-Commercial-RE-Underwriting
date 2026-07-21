@@ -2599,6 +2599,8 @@ export interface PropertyMatchPreview {
     county_assessor_pin?: string | null
   } | null
   pin: string | null
+  pins?: string[]
+  pin_count?: number | null
   connector: string | null
   parcel_fields?: Record<string, unknown> | null
   message?: string | null

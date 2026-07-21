@@ -96,6 +96,51 @@ class TestContactReuseAcrossProperties:
 
 
 class TestRelatedProperties:
+    def test_generic_owner_name_does_not_link_by_name(self, app):
+        with app.app_context():
+            svc = ContactService()
+            a = _make_lead(
+                property_street='10 Alpha St',
+                owner_user_id='user-1',
+                owner_first_name='Current',
+                owner_last_name='Resident',
+            )
+            b = _make_lead(
+                property_street='20 Beta St',
+                owner_user_id='user-1',
+                owner_first_name='Current',
+                owner_last_name='Resident',
+            )
+            db.session.commit()
+
+            assert svc.get_related_properties(a.id) == []
+            assert svc.person_identity_for_lead(a)['person_key'] == f'lead:{a.id}'
+            enrichment = svc.portfolio_enrichment_for_leads([a.id])
+            assert enrichment[a.id]['person_key'] == f'lead:{a.id}'
+            assert enrichment[a.id]['property_count'] == 1
+
+    def test_generic_owner_name_keeps_shared_contact_links(self, app):
+        with app.app_context():
+            svc = ContactService()
+            a = _make_lead(
+                property_street='10 Alpha St',
+                owner_user_id='user-1',
+                owner_first_name='For Sale By',
+                owner_last_name='Owner',
+            )
+            b = _make_lead(
+                property_street='20 Beta St',
+                owner_user_id='user-1',
+                owner_first_name='For Sale By',
+                owner_last_name='Owner',
+            )
+            db.session.commit()
+            contact = svc.create_contact({'first_name': 'Pat', 'last_name': 'Lee'})
+            svc.link_contact_to_property(a.id, contact.id, role='owner', is_primary=True)
+            svc.link_contact_to_property(b.id, contact.id, role='owner', is_primary=True)
+
+            assert [row['id'] for row in svc.get_related_properties(a.id)] == [b.id]
+
     def test_related_by_owner_name_different_streets(self, app):
         with app.app_context():
             svc = ContactService()

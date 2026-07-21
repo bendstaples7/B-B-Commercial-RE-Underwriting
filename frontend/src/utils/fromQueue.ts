@@ -6,6 +6,10 @@ export interface FromQueueState {
   label: string
   /** Today's Action outreach filter (mail_now, call_now, …) for prev/next nav. */
   outreach?: string
+  /** Leads visited in this queue session, oldest to newest. */
+  visitedHistory?: number[]
+  /** Leads available to revisit after moving backwards. */
+  forwardStack?: number[]
 }
 
 /** Known work queues — used for ?queue= URL param and navigation labels. */
@@ -36,6 +40,8 @@ export function isFromQueueState(value: unknown): value is FromQueueState {
   const v = value as Record<string, unknown>
   if (typeof v.key !== 'string' || typeof v.label !== 'string') return false
   if (v.outreach !== undefined && typeof v.outreach !== 'string') return false
+  if (v.visitedHistory !== undefined && (!Array.isArray(v.visitedHistory) || !v.visitedHistory.every(Number.isInteger))) return false
+  if (v.forwardStack !== undefined && (!Array.isArray(v.forwardStack) || !v.forwardStack.every(Number.isInteger))) return false
   return true
 }
 

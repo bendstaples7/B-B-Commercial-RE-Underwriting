@@ -103,3 +103,6 @@ backend/data/il_sos_bulk/
 
 # VPS runtime deploy marker (written by deploy.sh, not committed)
 DEPLOY_SHA
+
+# Local supervised-dev PID files (python dev.py)
+.dev/

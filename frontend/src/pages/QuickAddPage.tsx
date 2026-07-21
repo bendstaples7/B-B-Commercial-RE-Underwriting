@@ -243,7 +243,10 @@ export function QuickAddPage() {
   })
 
   const handleSelect = (description: string, placeId: string) => {
-    setAddress(description, false)
+    // Show the suggestion immediately; replace with street-line once details load
+    // so we never submit the full Places description (city/state/ZIP duplicated).
+    const streetGuess = description.split(',')[0]?.trim() || description
+    setAddress(streetGuess, false)
     clearSuggestions()
     setAddressError('')
     try {
@@ -266,6 +269,12 @@ export function QuickAddPage() {
             result?.address_components ?? []
           const find = (type: string) =>
             components.find((c) => c.types.includes(type))
+          const streetNumber = find('street_number')?.long_name
+          const route = find('route')?.long_name
+          const streetLine = [streetNumber, route].filter(Boolean).join(' ').trim()
+          if (streetLine) {
+            setAddress(streetLine, false)
+          }
           const city =
             find('locality')?.long_name ??
             find('sublocality')?.long_name ??
@@ -283,7 +292,8 @@ export function QuickAddPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    const street = address.trim()
+    // Street-line only — never the full Places one-liner with city/state/ZIP.
+    const street = (address.split(',')[0] || address).trim()
     if (!street) {
       setAddressError('Property address is required')
       return

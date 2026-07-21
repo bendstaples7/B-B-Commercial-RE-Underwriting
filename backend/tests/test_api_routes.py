@@ -15,6 +15,10 @@ class TestHealthCheck:
         assert response.status_code in [200, 503]
         data = json.loads(response.data)
         assert data['status'] in ['healthy', 'degraded']
+        assert data.get('build_id')
+        assert 'source_stale' in data
+        assert 'pid' in data
+        assert 'started_at' in data
 
 
 class TestStartAnalysis:

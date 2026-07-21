@@ -136,6 +136,20 @@ def version():
     return jsonify({'sha': resolve_deploy_sha()}), 200
 
 
+@api_bp.route('/health/runtime', methods=['GET'])
+def health_runtime():
+    """Lightweight process-identity probe for the frontend restart guard.
+
+    Deliberately cheap (no DB / Alembic / Celery / queue checks) so tabs can
+    poll it frequently. Returns identity only outside production.
+    """
+    from app.runtime_identity import get_runtime_identity
+
+    payload = {'status': 'ok'}
+    payload.update(get_runtime_identity())
+    return jsonify(payload), 200
+
+
 @api_bp.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint — verifies DB connectivity, migration state, and data integrity.
@@ -352,8 +366,12 @@ def health_check():
     status = 'degraded' if degraded else 'healthy'
     http_status = 503 if degraded else 200
     from flask import current_app
+    from app.runtime_identity import get_runtime_identity
+
     db_mode = current_app.config.get('DB_MODE', 'cloud')
-    return jsonify({'status': status, 'checks': checks, 'db_mode': db_mode}), http_status
+    payload = {'status': status, 'checks': checks, 'db_mode': db_mode}
+    payload.update(get_runtime_identity())
+    return jsonify(payload), http_status
 
 
 @api_bp.route('/analysis/start', methods=['POST'])
