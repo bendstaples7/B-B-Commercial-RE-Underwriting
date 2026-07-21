@@ -726,6 +726,7 @@ describe('PropertySidebar always-visible sale and PIN', () => {
         county_assessor_pin: '14211234560000',
       },
       pin: '14211234560000',
+      pin_count: 1,
       connector: 'cook_county',
     })
     vi.mocked(propertyMatchService.approve).mockResolvedValue({
@@ -748,6 +749,40 @@ describe('PropertySidebar always-visible sale and PIN', () => {
         pin: '14-21-123-456-0000',
       })
     })
+  })
+
+  it('does not auto-apply when pin_count is absent', async () => {
+    vi.mocked(propertyMatchService.preview).mockResolvedValue({
+      found: true,
+      entered_address: {
+        property_street: '123 Test St',
+        property_city: 'Chicago',
+        property_state: 'IL',
+        property_zip: '60601',
+      },
+      recommended_address: {
+        property_street: '123 Test St',
+        property_city: 'Chicago',
+        property_state: 'IL',
+        property_zip: '60601',
+        county_assessor_pin: '14211234560000',
+      },
+      pin: '14211234560000',
+      connector: 'other_county',
+    })
+
+    renderSidebar(
+      makePayload({
+        county_assessor_pin: null,
+      } as Partial<CommandCenterPayload>),
+    )
+
+    fireEvent.click(screen.getByTestId('sidebar-look-up-pin'))
+    await waitFor(() => {
+      expect(propertyMatchService.preview).toHaveBeenCalledWith(1)
+    })
+    expect(propertyMatchService.approve).not.toHaveBeenCalled()
+    expect(screen.getByTestId('sidebar-apply-pin')).toBeInTheDocument()
   })
 
   it('shows a checkmark when sale date was verified within the last month', () => {

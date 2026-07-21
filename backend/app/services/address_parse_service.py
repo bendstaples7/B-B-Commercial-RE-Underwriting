@@ -196,5 +196,8 @@ def _parse_space_separated_no_state(raw: str) -> tuple[str, str, str, str] | Non
         return None
     if sher_city.upper() in ('IL', 'IN', 'WI') and len(sher_city) == 2:
         return None
-    # Prefer the original-cased street from the input; use sheriff city/state.
-    return street, sher_city.title() if sher_city.isupper() else sher_city, sher_state or 'IL', zip_code
+    # Use the sheriff-cleaned street (locality stripped) with original casing when
+    # available; sher_street is already street-only after the city token was taken.
+    cleaned = sher_street.strip()
+    city_out = sher_city.title() if sher_city.isupper() else sher_city
+    return cleaned, city_out, sher_state or 'IL', zip_code

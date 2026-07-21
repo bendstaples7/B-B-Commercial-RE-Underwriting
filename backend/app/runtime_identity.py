@@ -16,8 +16,8 @@ _BACKEND_DIR = Path(__file__).resolve().parents[1]
 _REPO_ROOT = _BACKEND_DIR.parent
 
 _STARTED_AT = time.time()
+_STARTED_AT_NS = time.time_ns()
 _PID = os.getpid()
-_FINGERPRINT_AT_START: str | None = None
 _BUILD_ID: str | None = None
 
 
@@ -69,19 +69,19 @@ def _git_sha() -> str:
 
 
 def compute_source_fingerprint() -> str:
-    """Max mtime across currently-loaded backend Python modules.
+    """Legacy max-mtime fingerprint (kept for tests / diagnostics)."""
+    max_mtime_ns = 0
+    for mtime_ns in _loaded_backend_mtimes().values():
+        max_mtime_ns = max(max_mtime_ns, mtime_ns)
+    return str(max_mtime_ns // 1_000_000_000)
 
-    Intentionally excludes the git SHA (a checkout/commit must not read as a
-    stale process) and only inspects modules that are actually imported, so an
-    unrelated file elsewhere in the tree does not trigger a false restart
-    banner. Only loaded code affects the running process.
-    """
+
+def _loaded_backend_mtimes() -> dict[str, int]:
+    """``path → st_mtime_ns`` for currently loaded backend ``.py`` modules."""
     import sys
 
     backend_str = str(_BACKEND_DIR)
-    max_mtime = 0.0
-    # Snapshot values() to avoid "dict changed size during iteration" if an
-    # import races a health poll.
+    out: dict[str, int] = {}
     for module in list(sys.modules.values()):
         file = getattr(module, "__file__", None)
         if not file or not file.endswith(".py"):
@@ -89,18 +89,29 @@ def compute_source_fingerprint() -> str:
         if not file.startswith(backend_str):
             continue
         try:
-            max_mtime = max(max_mtime, os.path.getmtime(file))
+            out[file] = os.stat(file).st_mtime_ns
         except OSError:
             continue
-    return str(int(max_mtime))
+    return out
+
+
+def is_source_stale() -> bool:
+    """True when any loaded backend ``.py`` was modified after process start.
+
+    Uses nanosecond mtimes so same-second edits are not missed. Lazily imported
+    modules that predate process start do not trip the banner.
+    """
+    for mtime_ns in _loaded_backend_mtimes().values():
+        if mtime_ns > _STARTED_AT_NS:
+            return True
+    return False
 
 
 def init_runtime_identity() -> None:
-    """Capture fingerprints once at process start (call from create_app)."""
-    global _FINGERPRINT_AT_START, _BUILD_ID
+    """Capture build_id once at process start (call from create_app)."""
+    global _BUILD_ID
     if _BUILD_ID is not None:
         return
-    _FINGERPRINT_AT_START = compute_source_fingerprint()
     started = datetime.fromtimestamp(_STARTED_AT, tz=timezone.utc).strftime(
         "%Y%m%dT%H%M%SZ"
     )
@@ -124,13 +135,11 @@ def get_runtime_identity() -> dict:
     if _BUILD_ID is None:
         init_runtime_identity()
     assert _BUILD_ID is not None
-    assert _FINGERPRINT_AT_START is not None
-    current = compute_source_fingerprint()
     return {
         "build_id": _BUILD_ID,
         "pid": _PID,
         "started_at": datetime.fromtimestamp(_STARTED_AT, tz=timezone.utc)
         .isoformat()
         .replace("+00:00", "Z"),
-        "source_stale": current != _FINGERPRINT_AT_START,
+        "source_stale": is_source_stale(),
     }

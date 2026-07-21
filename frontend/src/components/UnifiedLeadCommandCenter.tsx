@@ -1267,6 +1267,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     fromQueue,
     handleStatusChanged,
     advanceAfterTaskComplete,
+    queueNavigation?.next_id,
   ])
 
   const handleCreateTask = useCallback(() => {

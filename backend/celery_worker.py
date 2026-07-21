@@ -782,15 +782,20 @@ def property_match_resolve_unambiguous_pins_task(self):
             from app.services.property_match_review_service import PropertyMatchReviewService
 
             client = _redis_client()
-            if client is not None:
-                lock_token = try_claim_redis_key(
-                    lock_key, ttl_seconds=lock_ttl_seconds,
+            if client is None:
+                _logger.warning(
+                    'property_match.resolve_unambiguous_pins: skipped '
+                    '(redis unavailable — refusing to run unlocked)'
                 )
-                if not lock_token:
-                    _logger.info(
-                        'property_match.resolve_unambiguous_pins: skipped (lock held)'
-                    )
-                    return {'skipped': True, 'reason': 'lock_held'}
+                return {'skipped': True, 'reason': 'redis_unavailable'}
+            lock_token = try_claim_redis_key(
+                lock_key, ttl_seconds=lock_ttl_seconds,
+            )
+            if not lock_token:
+                _logger.info(
+                    'property_match.resolve_unambiguous_pins: skipped (lock held)'
+                )
+                return {'skipped': True, 'reason': 'lock_held'}
 
             summary = PropertyMatchReviewService().resolve_unambiguous_pins_batch(
                 actor='property_match.resolve_unambiguous_pins',

@@ -93,6 +93,21 @@ _US_STATE_NAMES = {
     'DISTRICT OF COLUMBIA': 'DC',
 }
 
+
+def _state_code(state: str | None) -> str | None:
+    """Normalize a state name or code to a 2-letter uppercase code."""
+    text = (state or '').strip()
+    if not text:
+        return None
+    upper = text.upper()
+    if len(upper) == 2 and upper.isalpha():
+        return upper
+    mapped = _US_STATE_NAMES.get(upper)
+    if mapped:
+        return mapped
+    return upper[:2] if len(upper) >= 2 else upper
+
+
 # Trailing ``<City> <Full State Name> [ZIP]`` — full names are unambiguous
 # (never a street suffix like CT/Court), so unlike the 2-letter code case this
 # may strip without also requiring a ZIP. Multi-word names first for greediness.
@@ -323,7 +338,7 @@ def complete_property_address_fields(
     if city_out:
         city_out = title_case_address_part(city_out)
     if state_out:
-        state_out = state_out.upper()[:2] if len(state_out.strip()) >= 2 else state_out.upper()
+        state_out = _state_code(state_out) or state_out.upper()
     if zip_out:
         zip_out = _zip5(zip_out) or zip_out
 
@@ -489,7 +504,7 @@ def apply_parcel_address_to_lead(
         lead.property_city = title_case_address_part(city)
         changed.append('property_city')
     if state and not _clean(lead.property_state):
-        lead.property_state = state.upper()[:2]
+        lead.property_state = _state_code(state) or state.upper()[:2]
         changed.append('property_state')
     if zip_code and not _clean(lead.property_zip):
         lead.property_zip = zip_code

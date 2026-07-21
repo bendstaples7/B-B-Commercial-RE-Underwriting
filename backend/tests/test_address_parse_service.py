@@ -100,7 +100,6 @@ class TestStreetCleanAndTitleCase:
         assert result['property_city'] == 'Chicago'
         assert result['property_state'] == 'IL'
         assert result['property_zip'] == '60625'
-        assert 'Chicago' not in (result['property_street'] or '').split(',')[-1] or True
         assert result['property_street'].count('Chicago') == 0
 
     def test_street_only_strips_trailing_zip(self):

@@ -122,8 +122,6 @@ _KNOWN_REVISIONS = frozenset({
     'p7q8r9s0t1u2',
     # Multifamily deal priority score
     'q8r9s0t1u2v3',
-    # Ready-to-mail queue filter/sort composite index
-    'rtm_idx_20260721',
 })
 
 

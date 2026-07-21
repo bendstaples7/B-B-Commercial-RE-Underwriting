@@ -36,17 +36,45 @@ def main() -> int:
     args = parser.parse_args()
 
     from app import create_app
-    from app.services.property_match_review_service import PropertyMatchReviewService
+    from app.services.deploy_sync_policy import (
+        _redis_client,
+        release_redis_key_if_token,
+        try_claim_redis_key,
+    )
+    from app.services.property_match_review_service import (
+        RESOLVE_UNAMBIGUOUS_PINS_LOCK_KEY,
+        PropertyMatchReviewService,
+    )
 
     app = create_app()
+    lock_token: str | None = None
     with app.app_context():
-        result = PropertyMatchReviewService().resolve_unambiguous_pins_batch(
-            limit=args.limit,
-            dry_run=bool(args.dry_run),
-            actor='resolve_unambiguous_pins',
-            last_id=max(0, args.start_id),
-            persist_cursor=False,
-        )
+        # Mutating --apply must take the same lock as the hourly Celery task so
+        # concurrent runs cannot approve the same PIN-empty rows twice.
+        if args.apply:
+            if _redis_client() is None:
+                print('ERROR: Redis unavailable — refusing unlocked --apply', file=sys.stderr)
+                return 1
+            lock_token = try_claim_redis_key(
+                RESOLVE_UNAMBIGUOUS_PINS_LOCK_KEY,
+                ttl_seconds=50 * 60,
+            )
+            if not lock_token:
+                print('ERROR: resolve_unambiguous_pins lock held — try again later', file=sys.stderr)
+                return 1
+        try:
+            result = PropertyMatchReviewService().resolve_unambiguous_pins_batch(
+                limit=args.limit,
+                dry_run=bool(args.dry_run),
+                actor='resolve_unambiguous_pins',
+                last_id=max(0, args.start_id),
+                persist_cursor=False,
+            )
+        finally:
+            if lock_token:
+                release_redis_key_if_token(
+                    RESOLVE_UNAMBIGUOUS_PINS_LOCK_KEY, lock_token,
+                )
     print(
         'mode=%s processed=%s resolved=%s ambiguous=%s no_match=%s incomplete=%s '
         'no_connector=%s errors=%s'

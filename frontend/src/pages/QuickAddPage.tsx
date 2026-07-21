@@ -107,6 +107,8 @@ export function QuickAddPage() {
     state: string | null
     zip: string | null
   }>({ city: null, state: null, zip: null })
+  // Bumped on every Places selection so older getDetails callbacks are ignored.
+  const placesRequestIdRef = useRef(0)
   const [successResult, setSuccessResult] = useState<QuickAddResponse | null>(null)
   const [existingActionFeedback, setExistingActionFeedback] = useState<{
     severity: 'success' | 'warning' | 'error'
@@ -245,8 +247,11 @@ export function QuickAddPage() {
   const handleSelect = (description: string, placeId: string) => {
     // Show the suggestion immediately; replace with street-line once details load
     // so we never submit the full Places description (city/state/ZIP duplicated).
+    const requestId = ++placesRequestIdRef.current
     const streetGuess = description.split(',')[0]?.trim() || description
     setAddress(streetGuess, false)
+    setParsedAddress({ city: null, state: null, zip: null })
+    setCoords(null)
     clearSuggestions()
     setAddressError('')
     try {
@@ -256,6 +261,7 @@ export function QuickAddPage() {
       service.getDetails(
         { placeId, fields: ['geometry', 'address_components'] },
         (result: any, placeStatus: any) => {
+          if (requestId !== placesRequestIdRef.current) return
           if (
             placeStatus === (window as any).google.maps.places.PlacesServiceStatus.OK &&
             result?.geometry?.location
@@ -292,8 +298,18 @@ export function QuickAddPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    // Street-line only — never the full Places one-liner with city/state/ZIP.
-    const street = (address.split(',')[0] || address).trim()
+    // Places selections carry structured city/state/ZIP — persist street-only.
+    // Manual free-form entries keep the raw input so city/state/ZIP embedded in
+    // the one-liner are not silently dropped when parsedAddress is empty.
+    const hasStructured =
+      Boolean(parsedAddress.city)
+      || Boolean(parsedAddress.state)
+      || Boolean(parsedAddress.zip)
+    const street = (
+      hasStructured
+        ? (address.split(',')[0] || address)
+        : address
+    ).trim()
     if (!street) {
       setAddressError('Property address is required')
       return

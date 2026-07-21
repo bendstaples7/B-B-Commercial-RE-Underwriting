@@ -37,7 +37,6 @@ import { commandCenterService, leadTaskService } from '@/services/api'
 import { propertyMatchService } from '@/services/propertyMatchApi'
 import {
   isEntityContactName,
-  isGenericOwnerName,
   ownerDisplayEntries,
 } from '@/utils/propertyContacts'
 import { formatImportNote } from './leadDetailFormatters'
@@ -491,10 +490,10 @@ export function PropertySidebar({
         return
       }
       if (preview.found && pin) {
-        const pinCount = typeof preview.pin_count === 'number' ? preview.pin_count : 1
         setPinCandidate(pin)
-        // Auto-apply only when GIS reports a unique PIN; multi-PIN needs Apply.
-        if (pinCount === 1) {
+        // Auto-apply only when GIS reports a unique PIN. Absent/null pin_count
+        // (non-Cook previews) must stay on the explicit Apply path.
+        if (preview.pin_count === 1) {
           await applyPin(pin)
         }
         return
@@ -935,9 +934,7 @@ export function PropertySidebar({
         {data.address_2 && <SidebarRow label="Additional Address" value={data.address_2} />}
       </SidebarSection>
 
-      {!isGenericOwnerName(
-        [data.owner_first_name, data.owner_last_name].filter(Boolean).join(' '),
-      ) && (commandCenterData.related_properties?.length ?? 0) > 0 && (
+      {(commandCenterData.related_properties?.length ?? 0) > 0 && (
         <SidebarSection title="Other properties">
           <Box
             data-testid="sidebar-related-properties"

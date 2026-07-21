@@ -329,7 +329,14 @@ export function RecommendedActionPanel({
     )
     return isDisabled && unavailableReason ? (
       <Tooltip key={btn.action} title={unavailableReason}>
-        <span>{button}</span>
+        <span
+          tabIndex={0}
+          role="group"
+          aria-label={`${btn.label}: ${unavailableReason}`}
+          style={{ display: 'inline-flex', maxWidth: '100%' }}
+        >
+          {button}
+        </span>
       </Tooltip>
     ) : button
   }
