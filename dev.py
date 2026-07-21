@@ -105,8 +105,19 @@ def _cmdline_for_pid(pid: int) -> str:
     try:
         from port_guard import describe_pid
 
-        return describe_pid(pid) or ""
+        cmdline = describe_pid(pid) or ""
+        if cmdline:
+            return cmdline
     except Exception:
+        pass
+    try:
+        return subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "command="],
+            text=True,
+            errors="replace",
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
         return ""
 
 

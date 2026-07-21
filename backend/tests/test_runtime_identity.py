@@ -3,6 +3,7 @@ from app.runtime_identity import (
     compute_source_fingerprint,
     get_runtime_identity,
     init_runtime_identity,
+    is_source_stale,
     runtime_identity_exposed,
 )
 
@@ -58,3 +59,23 @@ def test_source_fingerprint_is_source_mtime_hash():
     fingerprint = compute_source_fingerprint()
     assert len(fingerprint) == 64
     int(fingerprint, 16)
+
+
+def test_source_stale_when_loaded_file_modified_after_start(monkeypatch):
+    monkeypatch.setattr("app.runtime_identity._STARTED_AT_NS", 1_000)
+    monkeypatch.setattr(
+        "app.runtime_identity._loaded_backend_mtimes",
+        lambda: {"loaded.py": 1_001},
+    )
+
+    assert is_source_stale() is True
+
+
+def test_source_not_stale_for_loaded_files_older_than_start(monkeypatch):
+    monkeypatch.setattr("app.runtime_identity._STARTED_AT_NS", 1_000)
+    monkeypatch.setattr(
+        "app.runtime_identity._loaded_backend_mtimes",
+        lambda: {"lazy_old.py": 999},
+    )
+
+    assert is_source_stale() is False

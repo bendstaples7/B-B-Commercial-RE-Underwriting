@@ -235,10 +235,16 @@ def _find_dedup_merge_groups(rows: list[dict]) -> list[list[dict]]:
         street_key = (row.get('normalized_street') or '').strip()
         if not street_key:
             street_key = dedup_street_key(row.get('property_street'))
-        first = (row.get('owner_first_name') or '').strip().lower()
-        last = (row.get('owner_last_name') or '').strip().lower()
+        first_raw = row.get('owner_first_name')
+        last_raw = row.get('owner_last_name')
+        if first_raw is None or last_raw is None:
+            continue
+        if first_raw == '' or last_raw == '':
+            continue
+        first = str(first_raw).strip().lower()
+        last = str(last_raw).strip().lower()
         owner_user_id = row.get('owner_user_id')
-        if not owner_user_id or not first or not last or not street_key:
+        if not owner_user_id or not street_key:
             continue
         buckets[(owner_user_id, first, last, street_key)].append(dict(row))
     return [members for members in buckets.values() if len(members) >= 2]

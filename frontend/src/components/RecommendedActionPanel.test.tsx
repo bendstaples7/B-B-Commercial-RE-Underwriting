@@ -363,9 +363,10 @@ describe('RecommendedActionPanel', () => {
         />,
       )
 
-      const reason = screen.getByRole('group', {
-        name: /Move to Skip Trace:/i,
+      const reason = screen.getByRole('button', {
+        name: /Move to Skip Trace unavailable:/i,
       })
+      expect(reason).toHaveAttribute('aria-disabled', 'true')
       expect(reason).toHaveAttribute('tabindex', '0')
       expect(screen.getByTestId('ra-universal-btn-move_to_skip_trace')).toBeDisabled()
     })

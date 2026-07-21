@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import sys
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -18,6 +19,9 @@ sys.path.insert(0, BACKEND_DIR)
 from env_loader import load_project_env
 
 load_project_env()
+
+APPLY_LOCK_TTL_SECONDS = 50 * 60
+APPLY_TIMEOUT_SECONDS = APPLY_LOCK_TTL_SECONDS - 60
 
 
 def main() -> int:
@@ -48,6 +52,7 @@ def main() -> int:
 
     app = create_app()
     lock_token: str | None = None
+    alarm_armed = False
     with app.app_context():
         # Mutating --apply must take the same lock as the hourly Celery task so
         # concurrent runs cannot approve the same PIN-empty rows twice.
@@ -57,11 +62,20 @@ def main() -> int:
                 return 1
             lock_token = try_claim_redis_key(
                 RESOLVE_UNAMBIGUOUS_PINS_LOCK_KEY,
-                ttl_seconds=50 * 60,
+                ttl_seconds=APPLY_LOCK_TTL_SECONDS,
             )
             if not lock_token:
                 print('ERROR: resolve_unambiguous_pins lock held — try again later', file=sys.stderr)
                 return 1
+            if hasattr(signal, 'SIGALRM'):
+                def _timeout_handler(_signum, _frame):
+                    raise TimeoutError(
+                        'resolve_unambiguous_pins --apply exceeded lock-safe runtime'
+                    )
+
+                signal.signal(signal.SIGALRM, _timeout_handler)
+                signal.alarm(APPLY_TIMEOUT_SECONDS)
+                alarm_armed = True
         try:
             result = PropertyMatchReviewService().resolve_unambiguous_pins_batch(
                 limit=args.limit,
@@ -71,6 +85,8 @@ def main() -> int:
                 persist_cursor=False,
             )
         finally:
+            if alarm_armed:
+                signal.alarm(0)
             if lock_token:
                 release_redis_key_if_token(
                     RESOLVE_UNAMBIGUOUS_PINS_LOCK_KEY, lock_token,

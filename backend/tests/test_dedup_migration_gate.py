@@ -177,6 +177,30 @@ class TestDedupMergeGroups:
 
         assert [[row['id'] for row in group] for group in groups] == [[1, 2]]
 
+    def test_groups_whitespace_owner_names_that_match_migration_index(self):
+        rows = [
+            {
+                'id': 1,
+                'owner_user_id': 'test-dedup-user',
+                'owner_first_name': '   ',
+                'owner_last_name': 'LLC',
+                'property_street': '107 S Grant Street',
+                'normalized_street': dedup_street_key('107 S Grant Street'),
+            },
+            {
+                'id': 2,
+                'owner_user_id': 'test-dedup-user',
+                'owner_first_name': '\t',
+                'owner_last_name': 'LLC',
+                'property_street': '107 S Grant St',
+                'normalized_street': dedup_street_key('107 S Grant St'),
+            },
+        ]
+
+        groups = _find_dedup_merge_groups(rows)
+
+        assert [[row['id'] for row in group] for group in groups] == [[1, 2]]
+
 
 class TestF9DedupMigrationGate:
     @integration

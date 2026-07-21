@@ -93,6 +93,7 @@ export function QuickAddPage() {
   const queryClient = useQueryClient()
   const mapsLoaded = useGoogleMapsLoaded()
   const suggestionsRef = useRef<HTMLUListElement>(null)
+  const coordSourceRef = useRef<'gps' | 'place-pending' | 'place' | null>(null)
 
   const [note, setNote] = useState('')
   const [priority, setPriority] = useState<Priority | null>(null)
@@ -162,6 +163,10 @@ export function QuickAddPage() {
     setGpsStatus('loading')
     navigator.geolocation.getCurrentPosition(
       (position) => {
+        if (coordSourceRef.current === 'place-pending' || coordSourceRef.current === 'place') {
+          return
+        }
+        coordSourceRef.current = 'gps'
         setCoords({
           lat: position.coords.latitude,
           lng: position.coords.longitude,
@@ -251,6 +256,7 @@ export function QuickAddPage() {
     const streetGuess = description.split(',')[0]?.trim() || description
     setAddress(streetGuess, false)
     setParsedAddress({ city: null, state: null, zip: null })
+    coordSourceRef.current = 'place-pending'
     setCoords(null)
     clearSuggestions()
     setAddressError('')
@@ -266,6 +272,7 @@ export function QuickAddPage() {
             placeStatus === (window as any).google.maps.places.PlacesServiceStatus.OK &&
             result?.geometry?.location
           ) {
+            coordSourceRef.current = 'place'
             setCoords({
               lat: result.geometry.location.lat(),
               lng: result.geometry.location.lng(),
@@ -413,6 +420,7 @@ export function QuickAddPage() {
           value={address}
           onChange={(e) => {
             placesRequestIdRef.current += 1
+            coordSourceRef.current = null
             setAddress(e.target.value)
             setExistingActionFeedback(null)
             setParsedAddress({ city: null, state: null, zip: null })
