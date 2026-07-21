@@ -19,8 +19,8 @@ gate. Still avoid committing until the user has verified the change works.
 2. **Stop before committing.** Tell the user it's ready to test and say exactly
    what to check and where (which page/lead/flow in the browser).
 3. **Wait for the user to explicitly confirm** it works before committing.
-4. Only after their OK: `git add` / `git commit` / `git push` / open the PR
-   (enable auto-merge when opening — see `pr-auto-merge`).
+4. Only after their OK: `git add` / `git commit` / `git push` / open the PR.
+   Then **stop** — do not merge or enable auto-merge (see `no-direct-main-merge`).
 
 ## Hard rules
 

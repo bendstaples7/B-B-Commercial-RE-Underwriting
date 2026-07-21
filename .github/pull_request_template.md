@@ -13,4 +13,4 @@
 - [ ] If this replaces something: legacy code deleted (not left alongside redirect)
 - [ ] No new per-file copies of shared infra (`handle_errors`, `formatDate`, etc.)
 - [ ] `python scripts/check_duplication.py` passes
-- [ ] Enable auto-merge after create: `gh pr merge --auto --squash` (required check: **CI success**)
+- [ ] Required check **CI success** is green before merge (human merges; agents do not)

@@ -5,28 +5,41 @@ alwaysApply: true
 
 # No direct merges to main
 
-`main` is branch-protected. All changes reach production through a PR the user reviews and merges.
+`main` is branch-protected. All changes reach production through a PR the
+**user** reviews and merges.
 
-## Never do without explicit user request
+## Never do (agent hard ban)
 
-- `gh pr merge` (any merge strategy)
+The agent must **never** merge a pull request or enable auto-merge — including
+when the user asked only to open a PR, push, or “ship it.”
+
+Forbidden unless the user **explicitly** says to merge **now** (e.g. “merge the
+PR”, “merge it now”):
+
+- `gh pr merge` (any flags, including `--auto`, `--squash`, `--merge`, `--rebase`)
+- Any API/UI equivalent that merges or schedules a merge
 - `git push origin main` or push directly to `main`
 - `gh workflow run Deploy` or other production deploy triggers
 
+Opening a PR is **not** permission to merge. Green CI is **not** permission to
+merge. “Commit and open a PR” means stop after the PR URL.
+
 ## When planning a new feature
 
-Choose the branch per `.cursor/rules/branch-lifecycle.mdc` (merged → new `feat/*` off `main`; otherwise continue the current branch). Never plan work that commits directly on `main`. When unsure which case applies, ask before branching.
+Choose the branch per `.cursor/rules/branch-lifecycle.mdc` (merged → new
+`feat/*` off `main`; otherwise continue the current branch). Never plan work
+that commits directly on `main`. When unsure which case applies, ask before
+branching.
 
 ## Required workflow
 
-1. Resolve the branch per branch-lifecycle (new `feat/*` off `main`, or continue the existing branch)
+1. Resolve the branch per branch-lifecycle (new `feat/*` off `main`, or continue
+   the existing branch)
 2. Implement changes and open a PR with a clear summary and test plan
-3. **Stop** — wait for the user to review, or enable auto-merge
-   (`gh pr merge --auto --squash`) after they approve opening the PR so green
-   CI merges without babysitting (see `pr-auto-merge`). Do not merge without
-   `--auto` unless they explicitly ask to merge now.
+3. **Stop** — return the PR URL and wait for the user to review and merge
 4. Do not re-trigger deploy after opening the PR unless the user asks
 
 ## Deploy / infra changes
 
-Changes to `scripts/deploy.sh`, `.github/workflows/deploy.yml`, or VPS setup scripts always go through a PR. Never merge or deploy them autonomously.
+Changes to `scripts/deploy.sh`, `.github/workflows/deploy.yml`, or VPS setup
+scripts always go through a PR. Never merge or deploy them autonomously.
