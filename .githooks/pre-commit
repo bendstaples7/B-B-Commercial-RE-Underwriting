@@ -1,0 +1,246 @@
+#!/bin/sh
+# Slim pre-commit hook (versioned via core.hooksPath=.githooks).
+#
+# Always:
+#   1. Alembic duplicate revision + multi-head check
+#   2. Celery worker import smoke
+#   3. Structural duplication guard
+#
+# When staged paths change:
+#   4. Mapped backend pytest and/or frontend tsc + vitest
+#
+# Escape hatches:
+#   PRE_COMMIT_FULL=1  — full backend pytest + frontend tsc (still no npm build)
+#   git commit --no-verify — skip entirely (emergency only)
+#
+# Install: scripts/install-git-hooks.ps1 (Windows) or make hooks / install-git-hooks.sh
+
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+BACKEND_DIR="$REPO_ROOT/backend"
+FRONTEND_DIR="$REPO_ROOT/frontend"
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
+
+resolve_dup_base() {
+  if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+    echo origin/main
+  elif git rev-parse --verify --quiet main >/dev/null 2>&1; then
+    echo main
+  else
+    echo ""
+  fi
+}
+
+run_pytest() {
+  cd "$BACKEND_DIR"
+  python - "$@" <<'PY'
+import sys
+import subprocess
+
+args = sys.argv[1:]
+cmd = [sys.executable, "-m", "pytest", "-m", "not performance", "--tb=short", "-q"]
+try:
+    import xdist  # noqa: F401
+    cmd.extend(["-n", "auto"])
+except ImportError:
+    print(
+        "WARNING: pytest-xdist not installed; running serial pytest. "
+        "Activate the backend venv and pip install -r requirements.txt for -n auto.",
+        file=sys.stderr,
+    )
+cmd.extend(args)
+raise SystemExit(subprocess.call(cmd))
+PY
+}
+
+# ---------------------------------------------------------------------------
+# Checks 1 & 2: Alembic migration chain
+# ---------------------------------------------------------------------------
+
+python - "$BACKEND_DIR" <<'EOF'
+import sys, os
+
+backend_dir = sys.argv[1] if len(sys.argv) > 1 else 'backend'
+migrations_dir = os.path.join(backend_dir, 'alembic_migrations')
+
+import glob, re
+
+revision_pattern = re.compile(r"^revision\s*=\s*'([^']+)'", re.MULTILINE)
+seen = {}
+duplicates = []
+
+for filepath in glob.glob(os.path.join(migrations_dir, 'versions', '*.py')):
+    try:
+        with open(filepath, encoding='utf-8') as f:
+            content = f.read()
+    except Exception:
+        continue
+    match = revision_pattern.search(content)
+    if match:
+        rev = match.group(1)
+        filename = os.path.basename(filepath)
+        if rev in seen:
+            duplicates.append(f"  '{rev}' in both '{seen[rev]}' and '{filename}'")
+        else:
+            seen[rev] = filename
+
+if duplicates:
+    print("ERROR: Duplicate Alembic revision IDs detected:")
+    for d in duplicates:
+        print(d)
+    print("\nFix: rename the duplicate revision ID in one of the listed files.")
+    sys.exit(1)
+
+sys.path.insert(0, backend_dir)
+try:
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config()
+    cfg.set_main_option('script_location', migrations_dir)
+    script = ScriptDirectory.from_config(cfg)
+    heads = script.get_heads()
+
+    if len(heads) > 1:
+        print(f"ERROR: Migration chain has {len(heads)} heads: {heads}")
+        print("Fix: flask db merge -m 'merge branches' " + " ".join(heads))
+        sys.exit(1)
+except Exception as e:
+    print(f"WARNING: Could not check migration heads: {e}")
+    sys.exit(0)
+
+sys.exit(0)
+EOF
+
+# ---------------------------------------------------------------------------
+# Check 3: Celery worker import smoke
+# ---------------------------------------------------------------------------
+
+echo "Checking Celery worker imports..."
+(
+  cd "$BACKEND_DIR"
+  python -c "import sys; sys.path.insert(0, '.'); import celery_worker; print('celery_worker imports OK')"
+)
+
+# ---------------------------------------------------------------------------
+# Check 4: Structural duplication guard
+# ---------------------------------------------------------------------------
+
+DUP_BASE="$(resolve_dup_base)"
+if [ -n "$DUP_BASE" ]; then
+  echo "Running duplication guard (base=$DUP_BASE)..."
+  python "$REPO_ROOT/scripts/check_duplication.py" --base "$DUP_BASE"
+else
+  echo "WARNING: Neither origin/main nor main found — skipping duplication guard."
+  echo "         Run: git fetch origin main"
+fi
+
+# ---------------------------------------------------------------------------
+# Check 5: Tests — full (escape hatch) or staged-path mapped
+# ---------------------------------------------------------------------------
+
+if [ "${PRE_COMMIT_FULL:-0}" = "1" ]; then
+  echo "PRE_COMMIT_FULL=1 — running full backend pytest + frontend tsc..."
+  run_pytest
+  echo "Running TypeScript type-check..."
+  (
+    cd "$FRONTEND_DIR"
+    npx tsc --noEmit
+  )
+  echo "All pre-commit checks passed (full mode)."
+  exit 0
+fi
+
+# Single JSON parse → flags + map file (pytest/vitest consume JSON lists — no shell splitting).
+eval "$(python - "$REPO_ROOT" <<'PY'
+import json, shlex, subprocess, sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+raw = subprocess.check_output(
+    [sys.executable, str(root / "scripts" / "map_changed_to_tests.py"), "--staged", "--format", "json"],
+    cwd=root,
+    text=True,
+)
+d = json.loads(raw)
+backend = d.get("backend") or []
+out = root / ".git" / "pre-commit-map.json"
+out.write_text(json.dumps(d), encoding="utf-8")
+
+def sh_bool(v: bool) -> str:
+    return "1" if v else "0"
+
+print(f"HAS_BACKEND={sh_bool(bool(d.get('has_backend')))}")
+print(f"HAS_FRONTEND={sh_bool(bool(d.get('has_frontend')))}")
+print(f"HAS_FRONTEND_SRC={sh_bool(bool(d.get('has_frontend_src')))}")
+print(f"BACKEND_FULL={sh_bool(backend == ['tests/'] or (bool(d.get('has_backend')) and not backend))}")
+print(f"MAP_JSON={shlex.quote(str(out))}")
+PY
+)"
+
+if [ "$HAS_BACKEND" = "1" ]; then
+  if [ "$BACKEND_FULL" = "1" ]; then
+    echo "No specific backend mapping — running full backend suite (excluding performance)"
+    run_pytest
+  else
+    echo "Running mapped backend tests..."
+    python - "$MAP_JSON" "$BACKEND_DIR" <<'PY'
+import json, subprocess, sys
+from pathlib import Path
+
+mapping = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+backend_dir = Path(sys.argv[2])
+paths = mapping.get("backend") or []
+cmd = [sys.executable, "-m", "pytest", "-m", "not performance", "--tb=short", "-q"]
+try:
+    import xdist  # noqa: F401
+    cmd.extend(["-n", "auto"])
+except ImportError:
+    print(
+        "WARNING: pytest-xdist not installed; running serial pytest. "
+        "Activate the backend venv and pip install -r requirements.txt for -n auto.",
+        file=sys.stderr,
+    )
+cmd.extend(paths)
+raise SystemExit(subprocess.call(cmd, cwd=backend_dir))
+PY
+  fi
+else
+  echo "No backend changes staged — skipping pytest"
+fi
+
+if [ "$HAS_FRONTEND" = "1" ]; then
+  echo "Running TypeScript type-check..."
+  (
+    cd "$FRONTEND_DIR"
+    npx tsc --noEmit
+  )
+  python - "$MAP_JSON" "$FRONTEND_DIR" "$HAS_FRONTEND_SRC" <<'PY'
+import json, subprocess, sys
+from pathlib import Path
+
+mapping = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+frontend_dir = Path(sys.argv[2])
+has_src = sys.argv[3] == "1"
+paths = mapping.get("frontend") or []
+shell = sys.platform == "win32"
+if paths:
+    print("Running mapped frontend tests:", " ".join(paths))
+    cmd = ["npm", "test", "--", "--run", *paths]
+    raise SystemExit(subprocess.call(cmd, cwd=frontend_dir, shell=shell))
+if has_src:
+    print("No co-located frontend tests — running full frontend suite")
+    cmd = ["npm", "test", "--", "--run"]
+    raise SystemExit(subprocess.call(cmd, cwd=frontend_dir, shell=shell))
+print("No frontend/src changes staged — skipping vitest")
+PY
+else
+  echo "No frontend changes staged — skipping tsc/vitest"
+fi
+
+rm -f "$MAP_JSON" 2>/dev/null || true
+
+echo "All pre-commit checks passed."
+echo "Note: full suite + production build run in CI (authoritative gate)."

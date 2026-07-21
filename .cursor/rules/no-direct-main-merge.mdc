@@ -21,7 +21,10 @@ Choose the branch per `.cursor/rules/branch-lifecycle.mdc` (merged → new `feat
 
 1. Resolve the branch per branch-lifecycle (new `feat/*` off `main`, or continue the existing branch)
 2. Implement changes and open a PR with a clear summary and test plan
-3. **Stop** — wait for the user to review and merge
+3. **Stop** — wait for the user to review, or enable auto-merge
+   (`gh pr merge --auto --squash`) after they approve opening the PR so green
+   CI merges without babysitting (see `pr-auto-merge`). Do not merge without
+   `--auto` unless they explicitly ask to merge now.
 4. Do not re-trigger deploy after opening the PR unless the user asks
 
 ## Deploy / infra changes

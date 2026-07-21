@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -24,15 +25,29 @@ BACKEND_RULES: list[tuple[str, list[str]]] = [
     ("backend/app/controllers/command_center", ["tests/test_command_center_*.py"]),
     ("backend/app/services/om_intake", ["tests/test_om_intake_*.py"]),
     ("backend/app/controllers/om_intake", ["tests/test_om_intake_*.py"]),
-]
-
-# Direct file -> test mapping for common edits
-BACKEND_FILE_RULES: list[tuple[str, list[str]]] = [
-    ("backend/tests/", []),  # if only tests changed, run those files directly
+    ("scripts/map_changed_to_tests.py", ["tests/test_map_changed_to_tests.py"]),
 ]
 
 
-def _git_changed_files(base: str) -> list[str]:
+def _git_changed_files(base: str, *, staged_only: bool = False) -> list[str]:
+    paths: set[str] = set()
+
+    if staged_only:
+        # Pre-commit: only the index (what this commit is about to include).
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "--cached", "-z"],
+            cwd=ROOT,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout:
+            paths.update(
+                p.decode("utf-8", errors="replace")
+                for p in result.stdout.split(b"\0")
+                if p
+            )
+        return sorted(paths)
+
     merge_base = subprocess.run(
         ["git", "merge-base", "HEAD", base],
         cwd=ROOT,
@@ -41,15 +56,18 @@ def _git_changed_files(base: str) -> list[str]:
         check=True,
     ).stdout.strip()
 
-    paths: set[str] = set()
     for cmd in (
-        ["git", "diff", "--name-only", f"{merge_base}..HEAD"],
-        ["git", "diff", "--name-only"],
-        ["git", "diff", "--name-only", "--cached"],
+        ["git", "diff", "--name-only", "-z", f"{merge_base}..HEAD"],
+        ["git", "diff", "--name-only", "-z"],
+        ["git", "diff", "--name-only", "--cached", "-z"],
     ):
-        result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, check=False)
-        if result.returncode == 0:
-            paths.update(line.strip() for line in result.stdout.splitlines() if line.strip())
+        result = subprocess.run(cmd, cwd=ROOT, capture_output=True, check=False)
+        if result.returncode == 0 and result.stdout:
+            paths.update(
+                p.decode("utf-8", errors="replace")
+                for p in result.stdout.split(b"\0")
+                if p
+            )
     return sorted(paths)
 
 
@@ -73,7 +91,7 @@ def map_backend_tests(changed: list[str]) -> list[str]:
 
     for path in changed:
         for prefix, patterns in BACKEND_RULES:
-            if path.startswith(prefix):
+            if path.startswith(prefix) or path == prefix:
                 selected.update(_expand_globs(patterns))
 
     if not selected and any(p.startswith("backend/") for p in changed):
@@ -98,33 +116,47 @@ def map_frontend_tests(changed: list[str]) -> list[str]:
     return sorted(selected)
 
 
+def build_mapping(changed: list[str]) -> dict:
+    return {
+        "changed": changed,
+        "backend": map_backend_tests(changed),
+        "frontend": map_frontend_tests(changed),
+        "has_backend": any(p.startswith("backend/") for p in changed)
+        or any(p.startswith("scripts/map_changed_to_tests") for p in changed),
+        "has_frontend": any(p.startswith("frontend/") for p in changed),
+        "has_frontend_src": any(p.startswith("frontend/src/") for p in changed),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="origin/main")
+    parser.add_argument(
+        "--staged",
+        action="store_true",
+        help="Only map staged (index) files — used by the pre-commit hook",
+    )
     parser.add_argument("--format", choices=["text", "json"], default="text")
     args = parser.parse_args()
 
-    changed = _git_changed_files(args.base)
-    backend = map_backend_tests(changed)
-    frontend = map_frontend_tests(changed)
+    changed = _git_changed_files(args.base, staged_only=args.staged)
+    mapping = build_mapping(changed)
 
     if args.format == "json":
-        import json
-
-        print(json.dumps({"changed": changed, "backend": backend, "frontend": frontend}))
+        print(json.dumps(mapping))
         return 0
 
     print("Changed files:")
-    for path in changed:
+    for path in mapping["changed"]:
         print(f"  {path}")
     print()
     print("Suggested backend pytest paths:")
-    for path in backend:
+    for path in mapping["backend"]:
         print(f"  {path}")
     print()
     print("Suggested frontend vitest files:")
-    if frontend:
-        for path in frontend:
+    if mapping["frontend"]:
+        for path in mapping["frontend"]:
             print(f"  {path}")
     else:
         print("  (none — run full suite if frontend src changed)")

@@ -1,0 +1,36 @@
+---
+description: After opening a PR (once the user has approved commit/push), enable GitHub auto-merge so green CI merges without babysitting.
+alwaysApply: true
+---
+
+# PR Auto-Merge
+
+CI is the **authoritative full suite**. Local pre-commit is slim/mapped only.
+After the user has approved shipping a change:
+
+1. Push the feature branch.
+2. Open the PR with `gh pr create` (summary + test plan).
+3. **Immediately enable auto-merge** so the PR merges when required checks
+   pass (and review rules are satisfied):
+
+```bash
+gh pr merge --auto --squash
+```
+
+If the repo default merge method differs, still prefer `--auto` with the
+method the user usually uses (`--squash` is the default for this project).
+
+## Hard rules
+
+- Do **not** enable auto-merge before the user has approved opening/shipping
+  the PR (see test-before-commit).
+- Do **not** call `gh pr merge` **without** `--auto` unless the user explicitly
+  asks to merge now (see no-direct-main-merge).
+- Auto-merge still waits for the **CI success** aggregator check — it does not
+  bypass CI.
+- Human product review is approving **open/ship** of the PR (this repo does not
+  require a GitHub approving review count). Do not enable auto-merge until that
+  approval exists.
+- Addressing PR review comments: after pushing fixes, leave auto-merge on if
+  it was already enabled; re-enable with `gh pr merge --auto --squash` if it
+  was cancelled.
