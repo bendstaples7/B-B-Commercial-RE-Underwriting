@@ -4,7 +4,6 @@ Revision ID: mail_cre_20260722
 Revises: lead_stg_20260722
 """
 from alembic import op
-import sqlalchemy as sa
 
 revision = 'mail_cre_20260722'
 down_revision = 'lead_stg_20260722'
@@ -13,21 +12,26 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column(
-        'open_letter_config',
-        sa.Column('creative_presets', sa.JSON(), nullable=True),
-    )
-    op.add_column(
-        'open_letter_config',
-        sa.Column('active_creative_preset_id', sa.String(length=64), nullable=True),
-    )
-    op.add_column(
-        'mail_campaigns',
-        sa.Column('creative', sa.JSON(), nullable=True),
-    )
+    op.execute("""
+        ALTER TABLE open_letter_config
+        ADD COLUMN IF NOT EXISTS creative_presets JSONB
+    """)
+    op.execute("""
+        ALTER TABLE open_letter_config
+        ADD COLUMN IF NOT EXISTS active_creative_preset_id VARCHAR(64)
+    """)
+    op.execute("""
+        ALTER TABLE mail_campaigns
+        ADD COLUMN IF NOT EXISTS creative JSONB
+    """)
 
 
 def downgrade():
-    op.drop_column('mail_campaigns', 'creative')
-    op.drop_column('open_letter_config', 'active_creative_preset_id')
-    op.drop_column('open_letter_config', 'creative_presets')
+    op.execute("ALTER TABLE mail_campaigns DROP COLUMN IF EXISTS creative")
+    op.execute(
+        "ALTER TABLE open_letter_config "
+        "DROP COLUMN IF EXISTS active_creative_preset_id"
+    )
+    op.execute(
+        "ALTER TABLE open_letter_config DROP COLUMN IF EXISTS creative_presets"
+    )
