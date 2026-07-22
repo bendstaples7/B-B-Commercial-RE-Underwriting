@@ -6,8 +6,10 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Chip,
   CircularProgress,
+  FormControlLabel,
   Grid,
   List,
   ListItem,
@@ -29,15 +31,18 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import openLetterService from '@/services/openLetterApi'
+import openLetterService, { type MailCreativePreset } from '@/services/openLetterApi'
 import {
   extractOlcListRows,
   getDirectMailSetupSteps,
   isDirectMailReadyToSend,
 } from '@/utils/directMailSetup'
+import { formatPhoneNumber } from '@/utils/phone'
 import {
   describeOlcProduct,
+  findOlcProductForEnvelope,
   formatOlcProductLabel,
+  listOlcEnvelopeTypes,
   OLC_PRICING_URL,
   POSTAGE_COMPARISON,
   sortOlcProducts,
@@ -47,12 +52,33 @@ import {
 const OLC_TEMPLATE_URL = 'https://app.openletterconnect.com/'
 
 const EMPTY_RETURN_ADDRESS = {
-  name: '',
   address1: '',
   address2: '',
   city: '',
   state: '',
   zip: '',
+}
+
+function newPreset(partial?: Partial<MailCreativePreset>): MailCreativePreset {
+  const id = partial?.id || (typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `preset-${Date.now()}`)
+  return {
+    id,
+    label: partial?.label || 'New creative',
+    first_name: partial?.first_name || '',
+    last_name: partial?.last_name || '',
+    phone: partial?.phone ? formatPhoneNumber(partial.phone) : '',
+    email: partial?.email || '',
+    website: partial?.website || '',
+    include_email: partial?.include_email ?? false,
+    include_website: partial?.include_website ?? false,
+    envelope_color: partial?.envelope_color || '',
+    font_name: partial?.font_name || '',
+    font_color: partial?.font_color || '',
+    olc_template_id: partial?.olc_template_id ?? null,
+    olc_template_name: partial?.olc_template_name || null,
+  }
 }
 
 type OlcTemplate = {
@@ -102,6 +128,8 @@ export const OpenLetterSetupPanel: React.FC = () => {
   const [templateId, setTemplateId] = useState<number | ''>('')
   const [templateName, setTemplateName] = useState('')
   const [returnAddress, setReturnAddress] = useState(EMPTY_RETURN_ADDRESS)
+  const [presets, setPresets] = useState<MailCreativePreset[]>([])
+  const [activePresetId, setActivePresetId] = useState<string>('')
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
 
   const {
@@ -118,8 +146,6 @@ export const OpenLetterSetupPanel: React.FC = () => {
   const configured = config?.configured === true
   const usesEnvToken = config?.uses_env_token === true
   const needsUserToken = !configured
-  const setupSteps = getDirectMailSetupSteps(config)
-  const readyToSend = isDirectMailReadyToSend(config)
 
   const {
     data: productsData,
@@ -148,6 +174,41 @@ export const OpenLetterSetupPanel: React.FC = () => {
     refetchOnMount: 'always',
   })
 
+  const { data: liveTemplateStyle } = useQuery({
+    queryKey: ['open-letter-template-style', templateId],
+    queryFn: () => openLetterService.getTemplateStyle(Number(templateId)),
+    enabled: configured && templateId !== '',
+    retry: 1,
+    staleTime: 60_000,
+  })
+
+  useEffect(() => {
+    if (!liveTemplateStyle?.font_name || !activePresetId) return
+    setPresets((prev) =>
+      prev.map((p) =>
+        (p.id === activePresetId
+          ? {
+              ...p,
+              font_name: liveTemplateStyle.font_name || p.font_name,
+              font_color: liveTemplateStyle.font_color || p.font_color,
+              olc_template_id: Number(templateId) || p.olc_template_id,
+              olc_template_name: templateName || p.olc_template_name,
+            }
+          : p),
+      ),
+    )
+  }, [liveTemplateStyle, activePresetId, templateId, templateName])
+
+  const setupConfig = React.useMemo(() => {
+    if (!config) return config
+    if (liveTemplateStyle?.font_name) {
+      return { ...config, template_style: liveTemplateStyle }
+    }
+    return config
+  }, [config, liveTemplateStyle])
+  const setupSteps = getDirectMailSetupSteps(setupConfig)
+  const readyToSend = isDirectMailReadyToSend(setupConfig)
+
   useEffect(() => {
     if (!config) return
     setBatchMinimum(config.batch_minimum ?? 50)
@@ -158,7 +219,6 @@ export const OpenLetterSetupPanel: React.FC = () => {
     if (config.return_address && typeof config.return_address === 'object') {
       const ra = config.return_address as Record<string, string>
       setReturnAddress({
-        name: ra.name || '',
         address1: ra.address1 || '',
         address2: ra.address2 || '',
         city: ra.city || '',
@@ -166,7 +226,19 @@ export const OpenLetterSetupPanel: React.FC = () => {
         zip: ra.zip || '',
       })
     }
+    const loaded = (config.creative_presets || []).map((p) => newPreset(p))
+    setPresets(loaded)
+    setActivePresetId(config.active_creative_preset_id || loaded[0]?.id || '')
   }, [config])
+
+  const activePreset = presets.find((p) => p.id === activePresetId) || presets[0]
+
+  const updateActivePreset = (patch: Partial<MailCreativePreset>) => {
+    if (!activePreset) return
+    setPresets((prev) =>
+      prev.map((p) => (p.id === activePreset.id ? { ...p, ...patch } : p)),
+    )
+  }
 
   const saveMutation = useMutation({
     mutationFn: () =>
@@ -185,6 +257,11 @@ export const OpenLetterSetupPanel: React.FC = () => {
           && returnAddress.zip.trim()
             ? returnAddress
             : null,
+        creative_presets: presets.map((p) => ({
+          ...p,
+          phone: p.phone ? formatPhoneNumber(p.phone) : p.phone,
+        })),
+        active_creative_preset_id: activePresetId || presets[0]?.id || null,
       }),
     onSuccess: () => {
       setApiTokenInput('')
@@ -198,8 +275,17 @@ export const OpenLetterSetupPanel: React.FC = () => {
   const products = sortOlcProducts(extractOlcListRows(productsData) as OlcProduct[])
   const templates = extractOlcListRows(templatesData) as OlcTemplate[]
   const selectedProduct = productId !== '' ? products.find((p) => Number(p.id) === productId) : undefined
+  const envelopeOptions = listOlcEnvelopeTypes(products, selectedProduct?.productType)
   const canSaveMailSettings = configured && productId !== '' && templateId !== ''
 
+  const handleProductChange = (nextId: number | '') => {
+    setProductId(nextId)
+    if (nextId === '' || !activePreset) return
+    const product = products.find((p) => Number(p.id) === nextId)
+    if (product?.envelopeType) {
+      updateActivePreset({ envelope_color: product.envelopeType })
+    }
+  }
   if (configLoading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
@@ -396,7 +482,7 @@ export const OpenLetterSetupPanel: React.FC = () => {
               fullWidth
               label="Product (envelope / postage)"
               value={productId}
-              onChange={(e) => setProductId(e.target.value === '' ? '' : Number(e.target.value))}
+              onChange={(e) => handleProductChange(e.target.value === '' ? '' : Number(e.target.value))}
               margin="normal"
               size="small"
               required
@@ -435,9 +521,14 @@ export const OpenLetterSetupPanel: React.FC = () => {
               value={templateId}
               onChange={(e) => {
                 const id = e.target.value === '' ? '' : Number(e.target.value)
-                setTemplateId(id)
                 const t = templates.find((x) => Number(x.id) === id)
-                setTemplateName(t?.title || t?.name || '')
+                const name = t?.title || t?.name || ''
+                setTemplateId(id)
+                setTemplateName(name)
+                updateActivePreset({
+                  olc_template_id: id === '' ? null : id,
+                  olc_template_name: name || null,
+                })
               }}
               margin="normal"
               size="small"
@@ -502,16 +593,287 @@ export const OpenLetterSetupPanel: React.FC = () => {
 
           <Paper sx={{ p: 2, mb: 2 }}>
             <Typography variant="subtitle1" gutterBottom>
+              Creative presets
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Track sender name (e.g. Ben vs Bessy), envelope/font, and whether email/website
+              appear on the letter. Keep your Open Letter Connect template aligned with the
+              declared envelope/font. Scan and response rates compare by these fields over time.
+            </Typography>
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2 }}>
+              <TextField
+                select
+                size="small"
+                label="Active preset"
+                value={activePreset?.id || ''}
+                onChange={(e) => setActivePresetId(e.target.value)}
+                sx={{ minWidth: 220 }}
+              >
+                {presets.map((p) => (
+                  <MenuItem key={p.id} value={p.id}>
+                    {p.label || p.sender_display_name || p.id}
+                  </MenuItem>
+                ))}
+              </TextField>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => {
+                  const created = newPreset({ label: `Creative ${presets.length + 1}` })
+                  setPresets((prev) => [...prev, created])
+                  setActivePresetId(created.id)
+                }}
+              >
+                Add preset
+              </Button>
+              {activePreset && presets.length > 1 && (
+                <Button
+                  size="small"
+                  color="warning"
+                  onClick={() => {
+                    const next = presets.filter((p) => p.id !== activePreset.id)
+                    setPresets(next)
+                    setActivePresetId(next[0]?.id || '')
+                  }}
+                >
+                  Delete active
+                </Button>
+              )}
+            </Box>
+            {activePreset ? (
+              <Grid container spacing={2}>
+                <Grid item xs={12} sm={6}>
+                  <TextField
+                    fullWidth
+                    label="Preset label"
+                    size="small"
+                    value={activePreset.label || ''}
+                    onChange={(e) => updateActivePreset({ label: e.target.value })}
+                  />
+                </Grid>
+                <Grid item xs={12} sm={3}>
+                  <TextField
+                    fullWidth
+                    label="Sender first name"
+                    size="small"
+                    value={activePreset.first_name || ''}
+                    onChange={(e) => {
+                      const first_name = e.target.value
+                      updateActivePreset({
+                        first_name,
+                        label: [
+                          first_name.trim(),
+                          (activePreset.last_name || '').trim(),
+                        ].filter(Boolean).join(' ') || activePreset.label,
+                      })
+                    }}
+                    required
+                  />
+                </Grid>
+                <Grid item xs={12} sm={3}>
+                  <TextField
+                    fullWidth
+                    label="Sender last name"
+                    size="small"
+                    value={activePreset.last_name || ''}
+                    onChange={(e) => {
+                      const last_name = e.target.value
+                      updateActivePreset({
+                        last_name,
+                        label: [
+                          (activePreset.first_name || '').trim(),
+                          last_name.trim(),
+                        ].filter(Boolean).join(' ') || activePreset.label,
+                      })
+                    }}
+                  />
+                </Grid>
+                <Grid item xs={12} sm={4}>
+                  <TextField
+                    fullWidth
+                    label="Sender phone (Please call…)"
+                    size="small"
+                    value={activePreset.phone || ''}
+                    onChange={(e) => updateActivePreset({ phone: e.target.value })}
+                    onBlur={(e) => {
+                      const formatted = formatPhoneNumber(e.target.value.trim())
+                      if (formatted !== (activePreset.phone || '')) {
+                        updateActivePreset({ phone: formatted })
+                      }
+                    }}
+                    placeholder="(312) 555-0100"
+                    helperText="Saved as (XXX) XXX-XXXX"
+                    required
+                  />
+                </Grid>
+                <Grid item xs={12} sm={4}>
+                  <TextField
+                    fullWidth
+                    label="Sender email"
+                    size="small"
+                    value={activePreset.email || ''}
+                    onChange={(e) => {
+                      const email = e.target.value
+                      updateActivePreset({
+                        email,
+                        ...(email.trim() ? { include_email: true } : {}),
+                      })
+                    }}
+                  />
+                </Grid>
+                <Grid item xs={12} sm={4}>
+                  <TextField
+                    fullWidth
+                    label="Website"
+                    size="small"
+                    value={activePreset.website || ''}
+                    onChange={(e) => {
+                      const website = e.target.value
+                      updateActivePreset({
+                        website,
+                        ...(website.trim() ? { include_website: true } : {}),
+                      })
+                    }}
+                  />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <FormControlLabel
+                    control={(
+                      <Checkbox
+                        checked={Boolean(activePreset.include_email)}
+                        onChange={(e) => updateActivePreset({ include_email: e.target.checked })}
+                      />
+                    )}
+                    label="Include email on mailer"
+                  />
+                </Grid>
+                <Grid item xs={12} sm={6}>
+                  <FormControlLabel
+                    control={(
+                      <Checkbox
+                        checked={Boolean(activePreset.include_website)}
+                        onChange={(e) => updateActivePreset({ include_website: e.target.checked })}
+                      />
+                    )}
+                    label="Include website on mailer"
+                  />
+                </Grid>
+                <Grid item xs={12} sm={4}>
+                  <TextField
+                    select
+                    fullWidth
+                    label="Envelope (OLC)"
+                    size="small"
+                    value={activePreset.envelope_color || ''}
+                    onChange={(e) => {
+                      const envelope = e.target.value
+                      updateActivePreset({ envelope_color: envelope })
+                      const match = findOlcProductForEnvelope(products, productId, envelope)
+                      if (match) {
+                        const nextId = Number(match.id)
+                        setProductId(nextId)
+                        // Keep product/template selection consistent with envelope SKU.
+                      }
+                    }}
+                    helperText={
+                      envelopeOptions.length
+                        ? 'From your selected Open Letter product type'
+                        : 'Load products / pick a product first'
+                    }
+                  >
+                    <MenuItem value="">
+                      <em>Select envelope</em>
+                    </MenuItem>
+                    {envelopeOptions.map((envelope) => (
+                      <MenuItem key={envelope} value={envelope}>
+                        {envelope}
+                      </MenuItem>
+                    ))}
+                    {activePreset.envelope_color
+                      && !envelopeOptions.includes(activePreset.envelope_color) && (
+                      <MenuItem value={activePreset.envelope_color}>
+                        {activePreset.envelope_color} (saved)
+                      </MenuItem>
+                    )}
+                  </TextField>
+                </Grid>
+                <Grid item xs={12} sm={8}>
+                  {(() => {
+                    const font = liveTemplateStyle?.font_name
+                      || activePreset.font_name
+                      || config?.template_style?.font_name
+                    const ink = liveTemplateStyle?.font_color
+                      || activePreset.font_color
+                      || config?.template_style?.font_color
+                    if (font) {
+                      return (
+                        <Alert severity="success" sx={{ py: 0.5 }}>
+                          Confirmed from template:{' '}
+                          <strong>{font}</strong>
+                          {ink ? <> · ink <strong>{ink}</strong></> : null}
+                          . Change font/ink in Open Letter Connect, then refresh templates / save.
+                        </Alert>
+                      )
+                    }
+                    return (
+                      <Alert severity="warning" sx={{ py: 0.5 }}>
+                        Select a letter template above to auto-confirm font and ink from Connect.
+                      </Alert>
+                    )
+                  })()}
+                </Grid>
+              </Grid>
+            ) : (
+              <Alert severity="info">Add a creative preset with sender name and phone before sending.</Alert>
+            )}
+          </Paper>
+
+          <Paper sx={{ p: 2, mb: 2 }}>
+            <Typography variant="subtitle1" gutterBottom>
               Return address
             </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Name on the envelope comes from the active creative’s sender first/last name
+              (same fields as above — edit either place). Street below is the return street.
+            </Typography>
             <Grid container spacing={2}>
-              <Grid item xs={12}>
+              <Grid item xs={12} sm={6}>
                 <TextField
                   fullWidth
-                  label="Name / company"
+                  label="Return first name"
                   size="small"
-                  value={returnAddress.name}
-                  onChange={(e) => setReturnAddress((prev) => ({ ...prev, name: e.target.value }))}
+                  value={activePreset?.first_name || ''}
+                  onChange={(e) => {
+                    const first_name = e.target.value
+                    updateActivePreset({
+                      first_name,
+                      label: [
+                        first_name.trim(),
+                        (activePreset?.last_name || '').trim(),
+                      ].filter(Boolean).join(' ') || activePreset?.label,
+                    })
+                  }}
+                  disabled={!activePreset}
+                  required
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="Return last name"
+                  size="small"
+                  value={activePreset?.last_name || ''}
+                  onChange={(e) => {
+                    const last_name = e.target.value
+                    updateActivePreset({
+                      last_name,
+                      label: [
+                        (activePreset?.first_name || '').trim(),
+                        last_name.trim(),
+                      ].filter(Boolean).join(' ') || activePreset?.label,
+                    })
+                  }}
+                  disabled={!activePreset}
                 />
               </Grid>
               <Grid item xs={12}>

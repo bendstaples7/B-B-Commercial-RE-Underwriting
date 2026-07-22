@@ -10,6 +10,8 @@ export function mailCampaignStatusColor(
     case 'pending':
     case 'processing':
       return 'info'
+    case 'cancelled':
+      return 'default'
     default:
       return 'default'
   }

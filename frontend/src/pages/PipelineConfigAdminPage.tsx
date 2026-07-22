@@ -59,7 +59,7 @@ export function PipelineConfigAdminPage() {
   }, [stages])
 
   const saveMutation = useMutation({
-    mutationFn: (payload: { stage_name: string; weight: number }[]) =>
+    mutationFn: (payload: { stage_name: string; order: number; weight: number }[]) =>
       pipelineConfigService.updateWeights(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pipeline-stages'] })
@@ -70,7 +70,7 @@ export function PipelineConfigAdminPage() {
 
   const handleWeightChange = (stageId: number, value: string) => {
     const num = parseFloat(value)
-    if (!isNaN(num) && num >= 0) {
+    if (!isNaN(num)) {
       setEdits((prev) => ({ ...prev, [stageId]: num }))
     }
   }
@@ -79,6 +79,7 @@ export function PipelineConfigAdminPage() {
     if (!stages) return
     const payload = stages.map((s) => ({
       stage_name: s.stage_name,
+      order: s.order,
       weight: edits[s.id] ?? s.weight,
     }))
     saveMutation.mutate(payload)
@@ -106,7 +107,7 @@ export function PipelineConfigAdminPage() {
             </IconButton>
           </Tooltip>
           <Typography variant="h5" component="h1" fontWeight={600}>
-            Pipeline Stage Configuration
+            Lead Pipeline Stage Weights
           </Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 1 }}>
@@ -132,10 +133,14 @@ export function PipelineConfigAdminPage() {
         </Box>
       </Box>
 
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        These weights match Kanban <code>lead_status</code> values and are added to{' '}
+        <code>lead_score</code> (farther-along stages should score higher).
+      </Typography>
+
       {saved && (
         <Alert severity="success" sx={{ mb: 2 }}>
-          Stage weights saved successfully. Priority scores will be recalculated
-          on next status change or via the recompute command.
+          Stage weights saved. Scores refresh on the next status change or rescore.
         </Alert>
       )}
 
@@ -162,13 +167,13 @@ export function PipelineConfigAdminPage() {
 
       {stages && stages.length > 0 && (
         <TableContainer component={Paper} variant="outlined">
-          <Table aria-label="Pipeline stage configuration">
+          <Table aria-label="Lead pipeline stage weights">
             <TableHead>
               <TableRow>
                 <TableCell>Order</TableCell>
-                <TableCell>Stage Name</TableCell>
-                <TableCell align="right">Weight (Score)</TableCell>
-                <TableCell>Description</TableCell>
+                <TableCell>Stage</TableCell>
+                <TableCell align="right">Score bonus</TableCell>
+                <TableCell>Status key</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -178,7 +183,9 @@ export function PipelineConfigAdminPage() {
                   <TableRow key={stage.id}>
                     <TableCell>{stage.order}</TableCell>
                     <TableCell>
-                      <Typography fontWeight={600}>{stage.stage_name}</Typography>
+                      <Typography fontWeight={600}>
+                        {stage.label || stage.stage_name}
+                      </Typography>
                     </TableCell>
                     <TableCell align="right">
                       <TextField
@@ -189,17 +196,16 @@ export function PipelineConfigAdminPage() {
                           handleWeightChange(stage.id, e.target.value)
                         }
                         inputProps={{
-                          min: 0,
-                          max: 100,
-                          step: 0.5,
+                          step: 1,
                           style: { textAlign: 'right', width: 80 },
                         }}
                         sx={{ width: 100 }}
+                        aria-label={`Weight for ${stage.label || stage.stage_name}`}
                       />
                     </TableCell>
                     <TableCell>
-                      <Typography variant="caption" color="text.secondary">
-                        Determines priority score when a deal is in this stage
+                      <Typography variant="caption" fontFamily="monospace" color="text.secondary">
+                        {stage.stage_name}
                       </Typography>
                     </TableCell>
                   </TableRow>
@@ -209,17 +215,14 @@ export function PipelineConfigAdminPage() {
         </TableContainer>
       )}
 
-      {/* Info box */}
       <Paper variant="outlined" sx={{ mt: 3, p: 2 }}>
         <Typography variant="subtitle2" gutterBottom>
-          How Priority Scoring Works
+          How this affects lead score
         </Typography>
         <Typography variant="body2" color="text.secondary">
-          The priority score for a deal is derived primarily from the stage
-          weight. Higher weight = higher priority. Scores are recalculated
-          automatically when a deal's status changes (via drag-and-drop or API
-          update). To recalculate all scores at once, run the CLI command:{' '}
-          <code>flask recompute-deal-priority-scores</code>.
+          Each lead&apos;s <code>lead_status</code> adds this bonus (or penalty) to{' '}
+          <code>lead_score</code>. Farther-along stages should have higher weights.
+          Scores refresh when status changes or when leads are rescored.
         </Typography>
       </Paper>
     </Box>

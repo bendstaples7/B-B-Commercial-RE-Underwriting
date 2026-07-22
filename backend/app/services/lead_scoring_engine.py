@@ -18,6 +18,7 @@ from app.models.hubspot_signal import HubSpotSignal
 from app.models.lead import Lead
 from app.models.lead_score import LeadScore
 from app.models.lead_scoring import ScoringWeights
+from app.models.pipeline_stage_config import PipelineStageConfig
 from app.models.lead_task import LeadTask
 from app.models.lead_timeline_entry import LeadTimelineEntry
 from app.models.lead_crm_flags_view import LeadCRMFlagsView
@@ -346,6 +347,11 @@ class LeadScoringEngine:
         "DO_NOT_CONTACT": -50.0,
         "WRONG_NUMBER": -30.0,
     }
+
+    def __init__(self) -> None:
+        # Populated lazily inside an app context and shared by every lead scored
+        # through this engine instance (notably bulk-rescore batches).
+        self._pipeline_stage_weights: dict[str, float] | None = None
 
     # ------------------------------------------------------------------
     # Core unified compute
@@ -1390,18 +1396,35 @@ class LeadScoringEngine:
 
         return max(-ENGAGEMENT_MODIFIER_CAP, min(modifier, ENGAGEMENT_MODIFIER_CAP))
 
-    @staticmethod
-    def _pipeline_stage_bonus(lead: Lead) -> float:
-        STAGE_BONUS = {
-            'skip_trace': -5.0, 'awaiting_skip_trace': -5.0,
-            'mailing_no_contact_made': 0.0,
-            'mailing_contacted_no_interest': -10.0,
-            'mailing_contacted_interested': 15.0,
-            'negotiating_remote': 25.0,
-            'in_person_appointment': 30.0,
-            'offer_delivered': 35.0,
-        }
-        return STAGE_BONUS.get(getattr(lead, 'lead_status', None), 0.0)
+    def _pipeline_stage_bonus(self, lead: Lead) -> float:
+        """Score delta from lead_status — Admin Pipeline Stages weights (with defaults)."""
+        status = getattr(lead, 'lead_status', None)
+        try:
+            from flask import has_app_context
+
+            if not has_app_context():
+                from app.services.lead_pipeline_stages import DEFAULT_STAGE_WEIGHTS
+                return float(DEFAULT_STAGE_WEIGHTS.get(status, 0)) if status else 0.0
+            if self._pipeline_stage_weights is None:
+                self._pipeline_stage_weights = {
+                    config.stage_name: float(config.weight)
+                    for config in PipelineStageConfig.query.all()
+                }
+            if status in self._pipeline_stage_weights:
+                return self._pipeline_stage_weights[status]
+            from app.services.lead_pipeline_stages import DEFAULT_STAGE_WEIGHTS
+            return float(DEFAULT_STAGE_WEIGHTS.get(status, 0)) if status else 0.0
+        except Exception as exc:  # narrow: DB/config failures fall back to defaults
+            from sqlalchemy.exc import SQLAlchemyError
+
+            if not isinstance(exc, (SQLAlchemyError, LookupError, TypeError, ValueError, RuntimeError)):
+                raise
+            import logging
+            logging.getLogger(__name__).warning(
+                'Pipeline stage bonus lookup failed; using defaults: %s', exc,
+            )
+            from app.services.lead_pipeline_stages import DEFAULT_STAGE_WEIGHTS
+            return float(DEFAULT_STAGE_WEIGHTS.get(status, 0)) if status else 0.0
 
 
 # Deprecated alias — use LeadScoringEngine directly.

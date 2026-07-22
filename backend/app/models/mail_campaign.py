@@ -12,7 +12,7 @@ class MailCampaign(db.Model):
     olc_order_id = db.Column(db.String(50), nullable=True, index=True)
     status = db.Column(
         db.Enum(
-            'pending', 'submitted', 'processing', 'mailed', 'failed',
+            'pending', 'submitted', 'processing', 'mailed', 'failed', 'cancelled',
             name='mail_campaign_status_enum',
         ),
         nullable=False,
@@ -25,6 +25,7 @@ class MailCampaign(db.Model):
     product_id = db.Column(db.Integer, nullable=True)
     template_id = db.Column(db.Integer, nullable=True)
     template_name = db.Column(db.String(255), nullable=True)
+    creative = db.Column(db.JSON, nullable=True)
     delivery_stats = db.Column(db.JSON, nullable=True)
     scan_stats = db.Column(db.JSON, nullable=True)
     response_count = db.Column(db.Integer, nullable=False, default=0)

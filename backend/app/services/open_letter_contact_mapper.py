@@ -247,8 +247,18 @@ def validate_lead_mail_address(lead: Lead) -> str | None:
     return None
 
 
-def lead_to_olc_contact(lead: Lead, *, user_id: str | None = None) -> dict[str, Any]:
-    """Build an OLC contact dict from a lead."""
+def lead_to_olc_contact(
+    lead: Lead,
+    *,
+    user_id: str | None = None,
+    campaign_phone: str | None = None,
+) -> dict[str, Any]:
+    """Build an OLC contact dict from a lead.
+
+    ``campaign_phone`` is the seller CTA phone (SPF / Please call). When omitted,
+    falls back to the lead's first phone for legacy callers — prefer passing the
+    configured seller phone from the active creative preset.
+    """
     mailing_street = _clean(getattr(lead, 'mailing_address', None))
     mailing_city = _clean(getattr(lead, 'mailing_city', None))
     mailing_state = _clean(getattr(lead, 'mailing_state', None))
@@ -280,12 +290,13 @@ def lead_to_olc_contact(lead: Lead, *, user_id: str | None = None) -> dict[str, 
         state = mailing_state or property_state
         zip_code = mailing_zip or property_zip
 
-    phone = None
-    for slot in ('phone_1', 'phone_2', 'phone_3', 'phone_4', 'phone_5', 'phone_6', 'phone_7'):
-        raw = _clean(getattr(lead, slot, None))
-        if raw:
-            phone = raw
-            break
+    phone = _clean(campaign_phone)
+    if not phone:
+        for slot in ('phone_1', 'phone_2', 'phone_3', 'phone_4', 'phone_5', 'phone_6', 'phone_7'):
+            raw = _clean(getattr(lead, slot, None))
+            if raw:
+                phone = raw
+                break
 
     meta: dict[str, Any] = {'lead_id': lead.id}
     if user_id:
@@ -323,9 +334,10 @@ def lead_to_owner_olc_contact(
     lead: Lead,
     *,
     user_id: str | None = None,
+    campaign_phone: str | None = None,
 ) -> dict[str, Any]:
     """Build an OLC payload using only the owner mailing destination."""
-    contact = lead_to_olc_contact(lead, user_id=user_id)
+    contact = lead_to_olc_contact(lead, user_id=user_id, campaign_phone=campaign_phone)
     street, city, state, zip_code = owner_mailing_address(lead)
     contact.update({
         'address1': street,

@@ -14,6 +14,10 @@ vi.mock('@/services/api', () => ({
   },
 }))
 
+vi.mock('@/context/AuthContext', () => ({
+  useAuth: () => ({ user: { is_admin: true } }),
+}))
+
 vi.mock('@/services/openLetterApi', () => ({
   default: {
     getQueue: vi.fn(),

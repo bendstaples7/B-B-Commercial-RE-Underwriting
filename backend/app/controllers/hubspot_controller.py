@@ -369,6 +369,10 @@ def get_pipeline_status():
 
         {
           "pipeline_running": bool,
+          "pipeline_stage": str | null,
+          "pipeline_stage_label": str | null,
+          "pipeline_stage_index": int | null,
+          "pipeline_stage_total": int | null,
           "matches": {"total": int, "high": int, "medium": int, "unmatched": int},
           "interactions": int,
           "tasks": int,
@@ -393,6 +397,11 @@ def get_pipeline_status():
     except Exception:
         pass  # If Celery inspect fails, just report not running
 
+    from app.services.hubspot_pipeline_progress import get_pipeline_stage
+    pipeline_stage = get_pipeline_stage()
+    if pipeline_stage.get('stage') not in (None, 'idle', 'done'):
+        pipeline_running = True
+
     # Match counts by confidence
     match_rows = (
         HubSpotMatch.query
@@ -404,6 +413,10 @@ def get_pipeline_status():
 
     return jsonify({
         'pipeline_running': pipeline_running,
+        'pipeline_stage': pipeline_stage.get('stage'),
+        'pipeline_stage_label': pipeline_stage.get('label'),
+        'pipeline_stage_index': pipeline_stage.get('stage_index'),
+        'pipeline_stage_total': pipeline_stage.get('stage_total'),
         'matches': {
             'total': HubSpotMatch.query.count(),
             'high': match_counts.get('HIGH', 0),

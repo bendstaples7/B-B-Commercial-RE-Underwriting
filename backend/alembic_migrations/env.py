@@ -59,6 +59,10 @@ _KNOWN_REVISIONS = frozenset({
     'addr_tl_20260719',
     # ready-to-mail queue filter/sort index
     'rtm_idx_20260721',
+    # lead_status pipeline stage weights (replace legacy Draft/Lead seed)
+    'lead_stg_20260722',
+    'mail_cre_20260722',
+    'mail_can_20260722',
     's0t1u2v3w4x5', 't0u1v2w3x4y5', 'u1v2w3x4y5z6',
     'v1w2x3y4z5a6', 'w2x3y4z5a6b7', 'x3y4z5a6b7c8',
     'y4z5a6b7c8d9', 'z5a6b7c8d9e0',

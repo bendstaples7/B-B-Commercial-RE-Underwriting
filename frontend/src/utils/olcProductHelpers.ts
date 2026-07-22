@@ -112,3 +112,43 @@ export function sortOlcProducts(products: OlcProduct[]): OlcProduct[] {
     return formatOlcProductLabel(a).localeCompare(formatOlcProductLabel(b))
   })
 }
+
+/** Envelope styles exposed by OLC products (unique `envelopeType` values). */
+export function listOlcEnvelopeTypes(
+  products: OlcProduct[],
+  productType?: string | null,
+): string[] {
+  const filtered = productType
+    ? products.filter((p) => p.productType === productType)
+    : products
+  const values = new Set<string>()
+  for (const product of filtered) {
+    const envelope = (product.envelopeType || '').trim()
+    if (envelope) values.add(envelope)
+  }
+  return [...values].sort((a, b) => a.localeCompare(b))
+}
+
+/** Prefer same product type, postage, and delivery when swapping envelope SKU. */
+export function findOlcProductForEnvelope(
+  products: OlcProduct[],
+  currentProductId: number | '' | null | undefined,
+  envelopeType: string,
+): OlcProduct | undefined {
+  const wanted = envelopeType.trim()
+  if (!wanted) return undefined
+  const current = products.find((p) => Number(p.id) === Number(currentProductId))
+  const matches = products.filter((p) => (p.envelopeType || '').trim() === wanted)
+  if (!matches.length) return undefined
+  if (current?.productType) {
+    const sameType = matches.filter((p) => p.productType === current.productType)
+    const samePostage = sameType.filter((p) => p.postageType === current.postageType)
+    const sameDelivery = samePostage.find((p) => p.deliveryType === current.deliveryType)
+    if (sameDelivery) return sameDelivery
+    if (samePostage[0]) return samePostage[0]
+    const sameDeliveryFallback = sameType.find((p) => p.deliveryType === current.deliveryType)
+    if (sameDeliveryFallback) return sameDeliveryFallback
+    if (sameType[0]) return sameType[0]
+  }
+  return matches[0]
+}

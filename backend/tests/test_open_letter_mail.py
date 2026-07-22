@@ -51,6 +51,11 @@ class TestOpenLetterContactMapper:
         assert contact['city'] == 'Chicago'
         assert contact['meta_data']['lead_id'] == 1
 
+    def test_campaign_phone_prefers_seller_override(self):
+        lead = _make_lead(phone_1='312-555-OWNER')
+        contact = lead_to_olc_contact(lead, campaign_phone='312-555-SELLER')
+        assert contact['campaign_phone'] == '312-555-SELLER'
+
     def test_falls_back_to_property_address(self):
         lead = _make_lead(mailing_address=None, mailing_city=None, mailing_state=None, mailing_zip=None)
         contact = lead_to_olc_contact(lead)
@@ -376,6 +381,30 @@ class TestOpenLetterPerUserConfig:
             assert cfg.user_id == OTHER_USER_ID
             assert svc.token_source(OTHER_USER_ID) == 'database'
             assert OpenLetterClientService.decrypt_token(cfg.encrypted_api_token) == 'user-specific-token'
+
+    def test_replacing_presets_resets_deleted_active_id(self, app, fernet_key, monkeypatch):
+        from app import db
+        from app.services.open_letter_client_service import OpenLetterClientService
+
+        monkeypatch.setenv('HUBSPOT_ENCRYPTION_KEY', fernet_key)
+
+        with app.app_context():
+            config = OpenLetterConfig(
+                user_id=OTHER_USER_ID,
+                encrypted_api_token=OpenLetterClientService.encrypt_token('test-token'),
+                creative_presets=[{'id': 'old', 'first_name': 'Old', 'phone': '3125550100'}],
+                active_creative_preset_id='old',
+            )
+            db.session.add(config)
+            db.session.commit()
+
+            updated = OpenLetterConfigService().save_config(
+                OTHER_USER_ID,
+                creative_presets=[{'id': 'new', 'first_name': 'New', 'phone': '3125550101'}],
+            )
+            active_id = updated.active_creative_preset_id
+
+        assert active_id == 'new'
 
 
 class TestMailQueueSummary:

@@ -102,4 +102,38 @@ if ($migrateProc.ExitCode -ne 0) {
     Die "flask db upgrade failed (exit $($migrateProc.ExitCode))"
 }
 
+# Re-apply designated admin after dump (prod dumps may carry is_admin=false).
+$adminEmail = $env:ADMIN_EMAIL
+if (-not $adminEmail) {
+    $envFile = Join-Path (Split-Path $PSScriptRoot -Parent) ".env"
+    if (Test-Path $envFile) {
+        Get-Content $envFile | ForEach-Object {
+            if ($_ -match '^ADMIN_EMAIL=(.*)$') {
+                $adminEmail = $Matches[1].Trim().Trim('"').Trim("'")
+            }
+        }
+    }
+}
+if ($adminEmail) {
+    $emailLower = $adminEmail.ToLowerInvariant()
+    $escapedEmail = $emailLower.Replace("'", "''")
+    Write-Host "Ensuring is_admin for ADMIN_EMAIL=$emailLower ..."
+    [System.Environment]::SetEnvironmentVariable("PGPASSWORD", $LOCAL_DB_PASS, "Process")
+    $updatedEmails = @(
+        & $PSQL -U $LOCAL_DB_USER -h $LOCAL_DB_HOST -p $LOCAL_DB_PORT `
+            -d $LOCAL_DB_NAME -qAt -c `
+            "UPDATE users SET is_admin = TRUE WHERE email_lower = '$escapedEmail' RETURNING email_lower;" 2>&1 |
+            ForEach-Object { "$_".Trim() } |
+            Where-Object { $_ }
+    )
+    $psqlExit = $LASTEXITCODE
+    [System.Environment]::SetEnvironmentVariable("PGPASSWORD", $null, "Process")
+    if ($psqlExit -ne 0) {
+        Die "psql failed (exit $psqlExit) while ensuring ADMIN_EMAIL is admin: $($updatedEmails -join '; ')"
+    }
+    if ($updatedEmails.Count -ne 1 -or $updatedEmails[0] -ne $emailLower) {
+        Die "ADMIN_EMAIL=$emailLower did not match exactly one user to update."
+    }
+}
+
 Write-Host "Restore complete." -ForegroundColor Green

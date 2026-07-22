@@ -3,6 +3,24 @@
  */
 import api from '@/services/api'
 
+export interface MailCreativePreset {
+  id: string
+  label: string
+  first_name?: string | null
+  last_name?: string | null
+  phone?: string | null
+  email?: string | null
+  website?: string | null
+  include_email?: boolean
+  include_website?: boolean
+  envelope_color?: string | null
+  font_name?: string | null
+  font_color?: string | null
+  olc_template_id?: number | null
+  olc_template_name?: string | null
+  sender_display_name?: string | null
+}
+
 export interface OpenLetterConfig {
   configured: boolean
   token_source?: 'environment' | 'database' | null
@@ -15,6 +33,16 @@ export interface OpenLetterConfig {
   batch_minimum?: number
   allow_send_below_minimum?: boolean
   return_address?: Record<string, unknown> | null
+  creative_presets?: MailCreativePreset[]
+  active_creative_preset_id?: string | null
+  /** Auto-confirmed from the selected OLC template design (not user-selected). */
+  template_style?: {
+    font_name?: string | null
+    font_color?: string | null
+    fill?: string | null
+    template_id?: number | string | null
+    confirmed_from?: string
+  } | null
   estimated_cost_per_piece?: number | null
   updated_at?: string | null
 }
@@ -107,6 +135,7 @@ export interface MailCampaign {
   product_id?: number | null
   template_id?: number | null
   template_name?: string | null
+  creative?: MailCreativePreset | null
   delivery_stats?: Record<string, number> | null
   scan_stats?: { scanned?: number; not_scanned?: number } | null
   scan_rate?: number | null
@@ -117,6 +146,26 @@ export interface MailCampaign {
   error_message?: string | null
   analytics_synced_at?: string | null
   created_at?: string | null
+  address_feedback?: {
+    corrected?: number
+    failed?: number
+    verified?: number
+    unchanged?: number
+  } | null
+}
+
+export interface CreativeRollupRow {
+  sender_display_name: string
+  envelope_color: string
+  font_name: string
+  font_color: string
+  include_email: boolean
+  include_website: boolean
+  campaign_count: number
+  lead_count: number
+  response_count: number
+  response_rate?: number | null
+  scan_rate?: number | null
 }
 
 export const openLetterService = {
@@ -134,6 +183,15 @@ export const openLetterService = {
 
   listTemplates: (params?: { page?: number; page_size?: number }): Promise<{ data?: unknown[] }> =>
     api.get('/open-letter/templates', { params }).then((r) => r.data),
+
+  getTemplateStyle: (templateId: number): Promise<{
+    font_name?: string | null
+    font_color?: string | null
+    fill?: string | null
+    template_id?: number | string | null
+    confirmed_from?: string
+  }> =>
+    api.get(`/open-letter/templates/${templateId}/style`).then((r) => r.data),
 
   getQueue: (params?: { page?: number; per_page?: number }): Promise<MailQueueSummary> =>
     api.get('/mail-queue/', { params }).then((r) => r.data),
@@ -185,11 +243,32 @@ export const openLetterService = {
   sendBatch: (force = false): Promise<MailCampaign> =>
     api.post('/mail-queue/send', { force }).then((r) => r.data),
 
-  listCampaigns: (page = 1, perPage = 25): Promise<{ campaigns: MailCampaign[]; total: number }> =>
+  listCampaigns: (page = 1, perPage = 25): Promise<{
+    campaigns: MailCampaign[]
+    total: number
+    creative_rollup?: CreativeRollupRow[]
+  }> =>
     api.get('/mail-queue/campaigns', { params: { page, per_page: perPage } }).then((r) => r.data),
 
   getCampaign: (id: number, refresh = false): Promise<MailCampaign> =>
     api.get(`/mail-queue/campaigns/${id}`, { params: refresh ? { refresh: 'true' } : {} }).then((r) => r.data),
+
+  redispatchCampaign: (id: number): Promise<MailCampaign> =>
+    api.post(`/mail-queue/campaigns/${id}/redispatch`).then((r) => r.data),
+
+  cancelCampaign: (
+    id: number,
+    opts?: { release_queue?: boolean },
+  ): Promise<MailCampaign & {
+    olc_cancel_ok?: boolean
+    olc_cancel_detail?: string
+    requeued_count?: number
+    queue_held?: boolean
+    warning?: string | null
+  }> =>
+    api.post(`/mail-queue/campaigns/${id}/cancel`, {
+      release_queue: Boolean(opts?.release_queue),
+    }).then((r) => r.data),
 
   campaignsForLead: (leadId: number, days = 90): Promise<{ campaigns: MailCampaign[] }> =>
     api.get(`/mail-queue/campaigns/for-lead/${leadId}`, { params: { days } }).then((r) => r.data),

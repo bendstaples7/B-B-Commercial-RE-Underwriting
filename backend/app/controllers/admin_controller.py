@@ -189,3 +189,17 @@ def update_user(user_id):
     email = body.get('email', None)
     result = AdminService().update_user(user_id, display_name, email)
     return jsonify(result), 200
+
+
+@admin_bp.route('/background-jobs', methods=['GET'])
+@handle_errors
+@require_auth
+@require_admin
+def get_background_jobs():
+    """Return Celery active/reserved/queued work, HubSpot pipeline stage, mail in-flight.
+
+    Admin-only. Used by ``/admin/background-jobs``.
+    """
+    from app.services.background_jobs_service import get_background_jobs_snapshot
+
+    return jsonify(get_background_jobs_snapshot()), 200

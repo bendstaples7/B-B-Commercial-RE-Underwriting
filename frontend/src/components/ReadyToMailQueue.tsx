@@ -17,6 +17,7 @@ import {
   Stack,
   Typography,
 } from '@mui/material'
+import { Link as RouterLink } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { MailBatchSummary } from './MailBatchSummary'
 import { MailQueueStagedAccordion } from './MailQueueStagedAccordion'
@@ -40,9 +41,11 @@ import {
   resolveBulkActions,
 } from './queueBulkActions'
 import { useQueueSelection } from '@/hooks/useQueueSelection'
+import { useAuth } from '@/context/AuthContext'
 
 export function ReadyToMailQueue() {
   const queryClient = useQueryClient()
+  const { user } = useAuth()
   const [candidatesPage, setCandidatesPage] = useState(1)
   const { selectedIds, onSelectionChange, onPageChangeWithClear, clearSelection } =
     useQueueSelection()
@@ -67,6 +70,15 @@ export function ReadyToMailQueue() {
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
   })
+
+  const { data: campaignsData } = useQuery({
+    queryKey: ['mail-campaigns', 'in-flight'],
+    queryFn: () => openLetterService.listCampaigns(1, 100),
+    refetchInterval: 15_000,
+  })
+  const inFlightCampaigns = (campaignsData?.campaigns ?? []).filter(
+    (c) => ['pending', 'submitted', 'processing'].includes(c.status),
+  )
 
   const showEnqueueFeedback = (result: EnqueueCounts) => {
     setSnackbarSeverity(enqueueResultSeverity(result))
@@ -195,6 +207,28 @@ export function ReadyToMailQueue() {
         only — add members here (or via &quot;Add to mail queue&quot;) when they are ready to mail.
         Stage leads, send when you hit your minimum, and review recent sends.
       </Typography>
+
+      {inFlightCampaigns.length > 0 && (
+        <Alert
+          severity="info"
+          sx={{ mb: 2 }}
+          data-testid="mail-submitting-banner"
+          action={user?.is_admin ? (
+            <Button
+              color="inherit"
+              size="small"
+              component={RouterLink}
+              to="/admin/background-jobs"
+            >
+              View queue
+            </Button>
+          ) : undefined}
+        >
+          Submitting… {inFlightCampaigns.length} campaign
+          {inFlightCampaigns.length === 1 ? '' : 's'} waiting on the background worker
+          {inFlightCampaigns[0] ? ` (#${inFlightCampaigns[0].id})` : ''}.
+        </Alert>
+      )}
 
       {queueError ? (
         <Alert

@@ -8,14 +8,29 @@ from decimal import Decimal
 class PipelineConfigService:
     """Service for managing PipelineStageConfig records."""
 
+    @staticmethod
+    def _get_stage_config(stage_name: str | None) -> PipelineStageConfig | None:
+        """Return the configured stage row when a stage name is supplied."""
+        if not stage_name:
+            return None
+        return PipelineStageConfig.query.filter_by(stage_name=stage_name).first()
+
     def get_all_stages_ordered(self) -> List[PipelineStageConfig]:
         """Retrieves all PipelineStageConfig entries, ordered by 'order'."""
         return PipelineStageConfig.query.order_by(PipelineStageConfig.order).all()
 
     def get_stage_weight(self, stage_name: str) -> Decimal:
         """Returns the weight for a given stage_name. Defaults to 0 if not found."""
-        config = PipelineStageConfig.query.filter_by(stage_name=stage_name).first()
+        config = self._get_stage_config(stage_name)
         return config.weight if config else Decimal("0.0")
+
+    def get_lead_status_bonus(self, stage_name: str | None) -> float:
+        """Score bonus for a lead_status — DB weight, else canonical defaults."""
+        config = self._get_stage_config(stage_name)
+        if config is not None:
+            return float(config.weight)
+        from app.services.lead_pipeline_stages import DEFAULT_STAGE_WEIGHTS
+        return float(DEFAULT_STAGE_WEIGHTS.get(stage_name, 0))
 
     def update_stage_weights(self, updates: List[Dict[str, Any]]) -> List[PipelineStageConfig]:
         """Updates weights for multiple stages and handles creation of new stages.

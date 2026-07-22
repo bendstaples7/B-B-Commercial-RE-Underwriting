@@ -76,27 +76,36 @@ def run_post_import_pipeline_sync(force_full_rescore: bool = False) -> None:
         run_rescore_leads_after_import,
         run_sync_hubspot_tasks_for_confirmed_leads,
     )
+    from app.services.hubspot_pipeline_progress import (
+        clear_pipeline_stage,
+        set_pipeline_stage,
+    )
 
     reset_pipeline_affected_leads()
 
     try:
+        set_pipeline_stage('matching')
         run_hubspot_matching()
         logger.info("Post-import pipeline: matching complete")
 
+        set_pipeline_stage('enrich')
         run_enrich_leads_from_hubspot()
         logger.info("Post-import pipeline: lead enrichment complete")
 
         # Legacy engagement payloads can be stale for task status — convert first,
         # then live CRM v3 sync so authoritative HubSpot status wins each run.
+        set_pipeline_stage('convert')
         run_convert_hubspot_activities()
         logger.info("Post-import pipeline: activity conversion complete")
 
+        set_pipeline_stage('task_sync')
         run_sync_hubspot_tasks_for_confirmed_leads()
         logger.info("Post-import pipeline: HubSpot task sync complete")
 
         from app.services.mail_task_lifecycle_service import (
             reconcile_recent_sale_mail_tasks,
         )
+        set_pipeline_stage('recent_sale_reconcile')
         reconciliation = reconcile_recent_sale_mail_tasks(
             actor='hubspot_post_import',
         )
@@ -105,9 +114,11 @@ def run_post_import_pipeline_sync(force_full_rescore: bool = False) -> None:
             reconciliation['rescheduled_task_count'],
         )
 
+        set_pipeline_stage('signals')
         run_extract_hubspot_signals()
         logger.info("Post-import pipeline: signal extraction complete")
 
+        set_pipeline_stage('rescore')
         affected = get_pipeline_affected_leads()
         rescored = run_rescore_leads_after_import(
             lead_ids=affected,
@@ -117,7 +128,9 @@ def run_post_import_pipeline_sync(force_full_rescore: bool = False) -> None:
 
         record_pipeline_completed(rescore_count=rescored)
         logger.info("Post-import pipeline: rescore complete")
+        set_pipeline_stage('done')
     finally:
+        clear_pipeline_stage()
         reset_pipeline_affected_leads()
 
 

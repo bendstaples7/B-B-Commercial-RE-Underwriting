@@ -190,6 +190,10 @@ export type LeadListParsed = z.infer<typeof LeadListSchema>
 
 export const PipelineStatusSchema = z.object({
   pipeline_running: z.boolean(),
+  pipeline_stage: z.string().optional().nullable(),
+  pipeline_stage_label: z.string().optional().nullable(),
+  pipeline_stage_index: z.number().optional().nullable(),
+  pipeline_stage_total: z.number().optional().nullable(),
   matches: z.object({
     total: z.number(),
     high: z.number(),

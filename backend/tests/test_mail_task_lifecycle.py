@@ -31,6 +31,22 @@ from app.services.queue_service import QueueService
 USER_ID = 'test-user'
 
 
+def _campaign_creative():
+    return {
+        'first_name': 'Test',
+        'last_name': 'Sender',
+        'phone': '3125550100',
+        'font_name': 'Waiting for the Sunrise',
+        'font_color': '#25408F',
+        'return_address': {
+            'address1': '123 Main St',
+            'city': 'Chicago',
+            'state': 'IL',
+            'zip': '60601',
+        },
+    }
+
+
 @pytest.fixture
 def fernet_key():
     return Fernet.generate_key().decode()
@@ -1794,6 +1810,7 @@ class TestSubmitCampaignFollowUp:
                 lead_count=1,
                 product_id='prod-1',
                 template_id='tmpl-1',
+                creative=_campaign_creative(),
                 created_by=USER_ID,
             )
             db.session.add_all([config, campaign])
@@ -1848,6 +1865,7 @@ class TestSubmitCampaignFollowUp:
                 lead_count=1,
                 product_id='prod-1',
                 template_id='tmpl-1',
+                creative=_campaign_creative(),
                 created_by=USER_ID,
             )
             db.session.add_all([config, campaign])
