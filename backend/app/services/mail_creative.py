@@ -10,6 +10,7 @@ _RGBA_RE = re.compile(
     r'rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*[\d.]+)?\s*\)',
     re.I,
 )
+_HEX_RE = re.compile(r'#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})')
 
 
 def _clean(value: Any) -> str | None:
@@ -24,8 +25,8 @@ def fill_to_hex(fill: Any) -> str | None:
     raw = _clean(fill)
     if not raw:
         return None
-    if raw.startswith('#') and len(raw) in (4, 7):
-        if not re.fullmatch(r'#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?', raw):
+    if raw.startswith('#'):
+        if not _HEX_RE.fullmatch(raw):
             return None
         if len(raw) == 4:
             return '#' + ''.join(ch * 2 for ch in raw[1:]).upper()
@@ -41,6 +42,8 @@ def fill_to_hex(fill: Any) -> str | None:
     match = _RGBA_RE.fullmatch(raw)
     if match:
         r, g, b = (int(match.group(i)) for i in (1, 2, 3))
+        if any(channel > 255 for channel in (r, g, b)):
+            return None
         return f'#{r:02X}{g:02X}{b:02X}'
     return raw
 

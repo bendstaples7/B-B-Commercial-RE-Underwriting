@@ -382,6 +382,30 @@ class TestOpenLetterPerUserConfig:
             assert svc.token_source(OTHER_USER_ID) == 'database'
             assert OpenLetterClientService.decrypt_token(cfg.encrypted_api_token) == 'user-specific-token'
 
+    def test_replacing_presets_resets_deleted_active_id(self, app, fernet_key, monkeypatch):
+        from app import db
+        from app.services.open_letter_client_service import OpenLetterClientService
+
+        monkeypatch.setenv('HUBSPOT_ENCRYPTION_KEY', fernet_key)
+
+        with app.app_context():
+            config = OpenLetterConfig(
+                user_id=OTHER_USER_ID,
+                encrypted_api_token=OpenLetterClientService.encrypt_token('test-token'),
+                creative_presets=[{'id': 'old', 'first_name': 'Old', 'phone': '3125550100'}],
+                active_creative_preset_id='old',
+            )
+            db.session.add(config)
+            db.session.commit()
+
+            updated = OpenLetterConfigService().save_config(
+                OTHER_USER_ID,
+                creative_presets=[{'id': 'new', 'first_name': 'New', 'phone': '3125550101'}],
+            )
+            active_id = updated.active_creative_preset_id
+
+        assert active_id == 'new'
+
 
 class TestMailQueueSummary:
     def test_can_send_when_at_minimum(self, app, fernet_key, monkeypatch):

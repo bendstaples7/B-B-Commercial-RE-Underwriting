@@ -76,15 +76,14 @@ def run_post_import_pipeline_sync(force_full_rescore: bool = False) -> None:
         run_rescore_leads_after_import,
         run_sync_hubspot_tasks_for_confirmed_leads,
     )
+    from app.services.hubspot_pipeline_progress import (
+        clear_pipeline_stage,
+        set_pipeline_stage,
+    )
 
     reset_pipeline_affected_leads()
 
     try:
-        from app.services.hubspot_pipeline_progress import (
-            clear_pipeline_stage,
-            set_pipeline_stage,
-        )
-
         set_pipeline_stage('matching')
         run_hubspot_matching()
         logger.info("Post-import pipeline: matching complete")
@@ -131,10 +130,7 @@ def run_post_import_pipeline_sync(force_full_rescore: bool = False) -> None:
         logger.info("Post-import pipeline: rescore complete")
         set_pipeline_stage('done')
     finally:
-        try:
-            clear_pipeline_stage()
-        except Exception:
-            pass
+        clear_pipeline_stage()
         reset_pipeline_affected_leads()
 
 

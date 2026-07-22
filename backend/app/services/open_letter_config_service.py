@@ -182,20 +182,17 @@ class OpenLetterConfigService:
                 config.return_address = street
         if creative_presets is not None:
             config.creative_presets = normalize_presets(creative_presets)
-            ids = {p['id'] for p in config.creative_presets}
-            if not config.creative_presets:
-                config.active_creative_preset_id = None
-            elif config.active_creative_preset_id not in ids:
-                config.active_creative_preset_id = config.creative_presets[0]['id']
         if active_creative_preset_id is not None:
             if not isinstance(active_creative_preset_id, str):
                 raise ValueError('active_creative_preset_id must be a string')
             cleaned = (active_creative_preset_id or '').strip() or None
             config.active_creative_preset_id = cleaned
-            if cleaned and config.creative_presets:
-                ids = {p['id'] for p in config.creative_presets}
-                if cleaned not in ids and config.creative_presets:
-                    config.active_creative_preset_id = config.creative_presets[0]['id']
+        if config.creative_presets:
+            ids = {p['id'] for p in config.creative_presets}
+            if config.active_creative_preset_id not in ids:
+                config.active_creative_preset_id = config.creative_presets[0]['id']
+        else:
+            config.active_creative_preset_id = None
         if estimated_cost_per_piece is not None:
             config.estimated_cost_per_piece = max(Decimal('0'), Decimal(str(estimated_cost_per_piece)))
 

@@ -155,7 +155,7 @@ def _mail_campaigns_in_flight(
             'created_by': c.created_by,
             'error_message': c.error_message,
             # Only trust "orphan" when Celery inspect answered; otherwise a live
-            # submit may simply be missing from a partial broker peek.
+            # submit may simply be missing from a partial or truncated broker peek.
             'orphan': (
                 celery_inspect_ok
                 and queue_depth <= _QUEUED_PEEK_LIMIT

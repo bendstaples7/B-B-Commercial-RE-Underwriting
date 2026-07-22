@@ -100,6 +100,7 @@ export default function BackgroundJobsPage() {
     onSuccess: () => {
       setRedispatchError(null)
       void queryClient.invalidateQueries({ queryKey: ['admin', 'background-jobs'] })
+      void queryClient.invalidateQueries({ queryKey: ['mail-campaigns', 'in-flight'] })
       void queryClient.invalidateQueries({ queryKey: ['mail-campaigns'] })
     },
     onError: (err: Error) => setRedispatchError(err.message),

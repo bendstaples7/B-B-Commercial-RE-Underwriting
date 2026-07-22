@@ -135,6 +135,31 @@ def test_background_jobs_snapshot_orders_tasks(app, monkeypatch):
     assert snap['busy'] is True
 
 
+def test_mail_campaign_orphan_requires_complete_broker_peek(app):
+    from app import db
+    from app.models.mail_campaign import MailCampaign
+    from app.services import background_jobs_service as bjs
+
+    with app.app_context():
+        campaign = MailCampaign(status='pending', lead_count=1, created_by='u1')
+        db.session.add(campaign)
+        db.session.commit()
+
+        truncated = bjs._mail_campaigns_in_flight(
+            [],
+            celery_inspect_ok=True,
+            queue_depth=bjs._QUEUED_PEEK_LIMIT + 1,
+        )
+        complete = bjs._mail_campaigns_in_flight(
+            [],
+            celery_inspect_ok=True,
+            queue_depth=bjs._QUEUED_PEEK_LIMIT,
+        )
+
+    assert truncated[0]['orphan'] is False
+    assert complete[0]['orphan'] is True
+
+
 def test_admin_background_jobs_forbidden_for_non_admin(client, app):
     from app.services.auth_service import AuthService
 

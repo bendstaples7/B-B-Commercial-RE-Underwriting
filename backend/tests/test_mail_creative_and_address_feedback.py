@@ -8,6 +8,7 @@ import pytest
 
 from app.services.mail_creative import (
     build_olc_return_address,
+    fill_to_hex,
     normalize_preset,
     snapshot_creative,
     validate_sender_ready,
@@ -88,6 +89,12 @@ def test_extract_letter_body_style_prefers_merge_tag_body():
     style = extract_letter_body_style(design)
     assert style['font_name'] == 'Waiting for the Sunrise'
     assert style['font_color'] == '#25408F'
+
+
+def test_fill_to_hex_rejects_invalid_hex_values():
+    assert fill_to_hex('#ggg') is None
+    assert fill_to_hex('#12345z') is None
+    assert fill_to_hex('#123') == '#112233'
 
 
 def test_snapshot_creative_freezes_fields():
@@ -478,3 +485,22 @@ def test_fetch_template_design_sends_no_auth_header(monkeypatch):
     assert captured['url'] == 'https://d123.cloudfront.net/design.json'
     assert captured['headers'] is None or 'Authorization' not in (captured['headers'] or {})
     assert captured['allow_redirects'] is False
+
+
+def test_find_template_scans_until_pages_are_exhausted():
+    from app.services.open_letter_client_service import OpenLetterClientService
+
+    config = SimpleNamespace(use_demo_api=True, encrypted_api_token='x')
+    client = OpenLetterClientService(config, api_token='secret-token')
+    seen_pages = []
+
+    def fake_list_templates(page=0, page_size=50, product_types=None):
+        seen_pages.append(page)
+        if page == 21:
+            return {'data': [{'id': 'target', 'name': 'Late template'}]}
+        return {'data': [{'id': f'{page}-{i}'} for i in range(page_size)]}
+
+    client.list_templates = fake_list_templates
+
+    assert client.find_template('target') == {'id': 'target', 'name': 'Late template'}
+    assert max(seen_pages) == 21
