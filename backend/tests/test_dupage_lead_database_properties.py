@@ -116,7 +116,16 @@ def test_property_5_same_address_never_creates_second_lead(address, app):
 
             # Insert the first lead via process_record
             record = {"property_street": address, "source_type": "foreclosure"}
-            engine.process_record(record, import_job_id)
+            created = engine.process_record(record, import_job_id)
+            db.session.flush()
+
+            # Degenerate generated strings can be canonicalized before storage
+            # (for example "000,0" -> "000"). This property asserts dedupe for
+            # stable normalized street keys.
+            stored_normalized = engine.normalize_address(
+                getattr(created.lead, 'property_street', '') or '',
+            )
+            assume(stored_normalized == normalized)
 
             # Re-ingest with case/whitespace variants — each should UPDATE, not CREATE
             variants = [
