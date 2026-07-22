@@ -48,7 +48,10 @@ def save_config():
     if 'creative_presets' in data:
         kwargs['creative_presets'] = data.get('creative_presets') or []
     if 'active_creative_preset_id' in data:
-        kwargs['active_creative_preset_id'] = data.get('active_creative_preset_id')
+        active_id = data.get('active_creative_preset_id')
+        if active_id is not None and not isinstance(active_id, str):
+            raise ValueError('active_creative_preset_id must be a string')
+        kwargs['active_creative_preset_id'] = active_id
     _config_service.save_config(user_id, **kwargs)
     return jsonify(_config_service.serialize_public(user_id)), 200
 
