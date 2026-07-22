@@ -2724,7 +2724,7 @@ class TestBug8RescoreOnChange:
 #      signal_type must contribute its adjustment AT MOST ONCE.
 #   B) _pipeline_stage_bonus rewarded 'mailing_contacted_no_interest' with
 #      +5, so explicit disinterest had a net-positive effect. It now carries
-#      a minor -10 penalty so a "no interest" lead ranks slightly BELOW an
+#      a -15 penalty so a "no interest" lead ranks BELOW an
 #      uncontacted one.
 #
 # A third fix (C) makes signal extraction idempotent: re-extracting the same
@@ -2821,7 +2821,7 @@ class TestBug9SignalDedupAndNoInterest:
             )
 
     def test_bug9_no_interest_status_minor_penalty(self, app):
-        """_pipeline_stage_bonus returns -10.0 for 'mailing_contacted_no_interest'
+        """_pipeline_stage_bonus returns -15.0 for 'mailing_contacted_no_interest'
         (was +5.0), and a lead in that status scores LOWER than the same lead
         in 'mailing_no_contact_made' (0-bonus baseline), all else equal.
 
@@ -2833,7 +2833,7 @@ class TestBug9SignalDedupAndNoInterest:
             engine = LeadScoringEngine()
             weights = engine.get_weights('default')
 
-            # The stage bonus itself flipped from +5.0 to -10.0.
+            # The stage bonus itself flipped from +5.0 to -15.0.
             probe = Lead(
                 property_street="x",
                 lead_status="mailing_contacted_no_interest",
@@ -2876,7 +2876,7 @@ class TestBug9SignalDedupAndNoInterest:
 
         Under the OLD code L outranked J (no-interest +5 bonus and +75 from five
         stacked warm signals pushed the data-thin lead above the active one).
-        The dedup (+15 once) and the -10 no-interest penalty correct it.
+        The dedup (+15 once) and the -15 no-interest penalty correct it.
 
         **Validates: Bug 9 Fixes A + B — corrected ranking**
         """
@@ -2936,7 +2936,7 @@ class TestBug9SignalDedupAndNoInterest:
             assert score_j > score_l, (
                 f"Inverted ranking persists: J(negotiating)={score_j} should beat "
                 f"L(no-interest, duplicate warm signals)={score_l}. The dedup "
-                f"(+15 once, not +75) and the -10 no-interest penalty must "
+                f"(+15 once, not +75) and the -15 no-interest penalty must "
                 f"correct the inversion."
             )
 
