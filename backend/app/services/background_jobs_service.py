@@ -57,7 +57,12 @@ def _peek_broker_queue(limit: int = _QUEUED_PEEK_LIMIT) -> tuple[int, list[dict[
     queue_name = os.environ.get('CELERY_DEFAULT_QUEUE', 'celery')
     client = None
     try:
-        client = redis.from_url(redis_url, decode_responses=False, socket_connect_timeout=1)
+        client = redis.from_url(
+            redis_url,
+            decode_responses=False,
+            socket_connect_timeout=1,
+            socket_timeout=1,
+        )
         depth = int(client.llen(queue_name) or 0)
         raw_items = client.lrange(queue_name, 0, max(0, limit - 1)) or []
     except Exception:
@@ -110,7 +115,7 @@ def _mail_campaigns_in_flight(
 ) -> list[dict[str, Any]]:
     from app.models.mail_campaign import MailCampaign
 
-    in_flight = ('pending', 'processing')
+    in_flight = ('pending', 'submitted', 'processing')
     rows = (
         MailCampaign.query
         .filter(MailCampaign.status.in_(in_flight))

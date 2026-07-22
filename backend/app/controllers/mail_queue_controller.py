@@ -5,6 +5,7 @@ import logging
 
 from flask import Blueprint, g, jsonify, request
 
+from app import db
 from app.api_utils import require_auth
 from app.controllers.mail_api_errors import handle_mail_api_errors as handle_errors
 from app.controllers.request_parsing import parse_bool, parse_positive_int
@@ -210,7 +211,15 @@ def get_campaign(campaign_id: int):
     campaign = _campaign_service.get_campaign(campaign_id, g.user_id)
     refresh = parse_bool(request.args.get('refresh'))
     if refresh and campaign.olc_order_id:
-        campaign = _campaign_service.sync_campaign_analytics(campaign.id)
+        try:
+            campaign = _campaign_service.sync_campaign_analytics(campaign.id)
+        except Exception:  # noqa: BLE001 - stale analytics must not block campaign reads.
+            db.session.rollback()
+            logger.warning(
+                'Campaign analytics refresh failed for campaign %s; returning cached campaign',
+                campaign.id,
+                exc_info=True,
+            )
     return jsonify(_campaign_service.serialize_campaign(campaign)), 200
 
 

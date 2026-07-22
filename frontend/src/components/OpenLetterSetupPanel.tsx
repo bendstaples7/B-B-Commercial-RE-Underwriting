@@ -521,9 +521,14 @@ export const OpenLetterSetupPanel: React.FC = () => {
               value={templateId}
               onChange={(e) => {
                 const id = e.target.value === '' ? '' : Number(e.target.value)
-                setTemplateId(id)
                 const t = templates.find((x) => Number(x.id) === id)
-                setTemplateName(t?.title || t?.name || '')
+                const name = t?.title || t?.name || ''
+                setTemplateId(id)
+                setTemplateName(name)
+                updateActivePreset({
+                  olc_template_id: id === '' ? null : id,
+                  olc_template_name: name || null,
+                })
               }}
               margin="normal"
               size="small"
@@ -794,12 +799,12 @@ export const OpenLetterSetupPanel: React.FC = () => {
                 </Grid>
                 <Grid item xs={12} sm={8}>
                   {(() => {
-                    const font = config?.template_style?.font_name
+                    const font = liveTemplateStyle?.font_name
                       || activePreset.font_name
-                      || liveTemplateStyle?.font_name
-                    const ink = config?.template_style?.font_color
+                      || config?.template_style?.font_name
+                    const ink = liveTemplateStyle?.font_color
                       || activePreset.font_color
-                      || liveTemplateStyle?.font_color
+                      || config?.template_style?.font_color
                     if (font) {
                       return (
                         <Alert severity="success" sx={{ py: 0.5 }}>

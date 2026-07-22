@@ -121,6 +121,9 @@ def split_legacy_name(name: str | None) -> tuple[str | None, str | None]:
     raw = _clean(name)
     if not raw:
         return None, None
+    raw = raw.split('/', 1)[0].strip()
+    if not raw:
+        return None, None
     parts = raw.split(None, 1)
     if len(parts) == 1:
         return parts[0], None

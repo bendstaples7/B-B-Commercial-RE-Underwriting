@@ -50,7 +50,12 @@ def _redis_client():
     redis_url = os.environ.get('REDIS_URL') or os.environ.get(
         'CELERY_BROKER_URL', 'redis://localhost:6379/0',
     )
-    return redis.from_url(redis_url, decode_responses=True, socket_connect_timeout=1)
+    return redis.from_url(
+        redis_url,
+        decode_responses=True,
+        socket_connect_timeout=1,
+        socket_timeout=1,
+    )
 
 
 def _with_redis(fn):

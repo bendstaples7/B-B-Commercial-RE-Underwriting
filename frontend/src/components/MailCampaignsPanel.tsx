@@ -183,8 +183,10 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
       void queryClient.invalidateQueries({ queryKey: ['mail-campaigns'] })
       void queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
     },
-    onError: () => {
-      setCancelWarning('Failed to cancel campaign.')
+    onError: (e: unknown) => {
+      setCancelWarning(
+        e instanceof Error && e.message ? e.message : 'Failed to cancel campaign.',
+      )
     },
   })
 

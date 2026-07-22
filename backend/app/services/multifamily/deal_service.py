@@ -264,12 +264,13 @@ class DealService:
         # Get the stage weight for the deal's current status.
         # Lead Admin stages use lead_status names; multifamily deals keep a
         # small local fallback so wiping legacy Draft/Lead rows does not zero all deals.
+        normalized_status = (deal.status or '').strip().lower().replace(' ', '_')
         config = PipelineStageConfig.query.filter_by(
-            stage_name=deal.status
+            stage_name=normalized_status
         ).first()
-        if config is None and deal.status:
+        if config is None and normalized_status:
             config = PipelineStageConfig.query.filter_by(
-                stage_name=deal.status.replace('_', ' ').title()
+                stage_name=normalized_status.replace('_', ' ').title()
             ).first()
 
         if config is not None:
@@ -287,7 +288,7 @@ class DealService:
                 'closed lost': Decimal('0'),
             }
             deal.priority_score = deal_fallback.get(
-                (deal.status or '').lower(), Decimal('0.0'),
+                normalized_status, Decimal('0.0'),
             )
 
         db.session.flush()

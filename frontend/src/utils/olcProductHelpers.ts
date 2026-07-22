@@ -129,7 +129,7 @@ export function listOlcEnvelopeTypes(
   return [...values].sort((a, b) => a.localeCompare(b))
 }
 
-/** Prefer same product type + delivery, swap only the envelope SKU. */
+/** Prefer same product type, postage, and delivery when swapping envelope SKU. */
 export function findOlcProductForEnvelope(
   products: OlcProduct[],
   currentProductId: number | '' | null | undefined,
@@ -142,8 +142,12 @@ export function findOlcProductForEnvelope(
   if (!matches.length) return undefined
   if (current?.productType) {
     const sameType = matches.filter((p) => p.productType === current.productType)
-    const sameDelivery = sameType.find((p) => p.deliveryType === current.deliveryType)
+    const samePostage = sameType.filter((p) => p.postageType === current.postageType)
+    const sameDelivery = samePostage.find((p) => p.deliveryType === current.deliveryType)
     if (sameDelivery) return sameDelivery
+    if (samePostage[0]) return samePostage[0]
+    const sameDeliveryFallback = sameType.find((p) => p.deliveryType === current.deliveryType)
+    if (sameDeliveryFallback) return sameDeliveryFallback
     if (sameType[0]) return sameType[0]
   }
   return matches[0]

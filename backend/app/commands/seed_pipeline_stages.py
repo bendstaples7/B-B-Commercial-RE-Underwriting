@@ -4,7 +4,10 @@ from flask.cli import with_appcontext
 
 from app import db
 from app.models.pipeline_stage_config import PipelineStageConfig
-from app.services.lead_pipeline_stages import LEAD_PIPELINE_STAGES
+from app.services.lead_pipeline_stages import (
+    LEAD_PIPELINE_STAGES,
+    LEGACY_PIPELINE_STAGE_NAMES,
+)
 
 
 @click.command("seed-pipeline-stages", help="Seed lead_status pipeline stage weights.")
@@ -19,9 +22,30 @@ def seed_pipeline_stages(force: bool = False):
     """Insert (and optionally update) PipelineStageConfig rows for each lead_status."""
     click.echo("Seeding lead pipeline stages...")
 
+    # Remove known legacy labels first so unique(order) inserts cannot collide.
+    legacy_rows = PipelineStageConfig.query.filter(
+        PipelineStageConfig.stage_name.in_(LEGACY_PIPELINE_STAGE_NAMES)
+    ).all()
+    for row in legacy_rows:
+        click.echo(f"  Removed legacy stage: {row.stage_name}")
+        db.session.delete(row)
+    if legacy_rows:
+        db.session.flush()
+
     created_count = 0
     updated_count = 0
     skipped_count = 0
+
+    if force:
+        # Park orders to avoid unique collisions while rewriting.
+        for i, stage_data in enumerate(LEAD_PIPELINE_STAGES):
+            existing = PipelineStageConfig.query.filter_by(
+                stage_name=stage_data["stage_name"]
+            ).first()
+            if existing is not None:
+                existing.order = 10_000 + i
+        db.session.flush()
+
     for stage_data in LEAD_PIPELINE_STAGES:
         existing = PipelineStageConfig.query.filter_by(
             stage_name=stage_data["stage_name"]
@@ -49,17 +73,9 @@ def seed_pipeline_stages(force: bool = False):
         else:
             skipped_count += 1
 
-    # Drop legacy multifamily/CRM labels that are not lead_status values.
-    known = {s["stage_name"] for s in LEAD_PIPELINE_STAGES}
-    stale = PipelineStageConfig.query.filter(
-        ~PipelineStageConfig.stage_name.in_(known)
-    ).all()
-    for row in stale:
-        click.echo(f"  Removed legacy stage: {row.stage_name}")
-        db.session.delete(row)
-
     db.session.commit()
     click.echo(
         f"Done — created={created_count}, updated={updated_count}, "
-        f"skipped_existing={skipped_count}, removed_legacy={len(stale)}."
+        f"skipped_existing={skipped_count}, removed_legacy={len(legacy_rows)}. "
+        f"(Unknown/custom stages left intact.)"
     )

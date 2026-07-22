@@ -1392,6 +1392,7 @@ function App() {
   // never left scrolled out of view after sidebar interactions.
   useEffect(() => {
     if (!location.pathname.startsWith('/admin')) return
+    setAdminNavOpen(true)
     window.scrollTo(0, 0)
     document.documentElement.scrollTop = 0
     document.body.scrollTop = 0

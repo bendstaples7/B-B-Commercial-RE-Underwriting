@@ -278,12 +278,22 @@ class OpenLetterConfigService:
             return presets
         stamped = []
         for preset in presets:
-            item = apply_template_style_to_preset(preset, style) or dict(preset)
+            item = dict(preset)
+            preset_tid = item.get('olc_template_id')
+            # Only stamp font/ink onto presets that use this template (or have none yet).
+            same_template = (
+                template_id is None
+                or preset_tid is None
+                or str(preset_tid) == str(template_id)
+            )
+            if same_template:
+                item = apply_template_style_to_preset(item, style) or item
             if active_id and item.get('id') == active_id:
                 if template_id is not None:
                     item['olc_template_id'] = template_id
                 if template_name:
                     item['olc_template_name'] = template_name
+                item = apply_template_style_to_preset(item, style) or item
             stamped.append(item)
         return stamped
 

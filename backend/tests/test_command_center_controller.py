@@ -393,7 +393,7 @@ class TestUpdateStatus:
             LeadScoringEngine().score_and_persist(lead.id)
             db.session.refresh(lead)
             before = float(lead.lead_score or 0)
-            assert LeadScoringEngine._pipeline_stage_bonus(lead) == 0.0
+            assert LeadScoringEngine()._pipeline_stage_bonus(lead) == 0.0
 
             response = client.patch(
                 f'/api/leads/{lead.id}/status',
@@ -407,7 +407,7 @@ class TestUpdateStatus:
             assert float(body['lead_score']) == pytest.approx(before + 45.0, abs=0.15)
             assert body['recommended_action'] == 'call_ready'
             db.session.refresh(lead)
-            assert LeadScoringEngine._pipeline_stage_bonus(lead) == 45.0
+            assert LeadScoringEngine()._pipeline_stage_bonus(lead) == 45.0
 
     def test_status_change_persists(self, client, app):
         """PATCH /api/leads/<id>/status persists the new status to the database."""

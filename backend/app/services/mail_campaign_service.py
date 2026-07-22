@@ -44,6 +44,30 @@ logger = logging.getLogger(__name__)
 _STATUS_PRIORITY = {'Failed': 3, 'Corrected': 2, 'Verified': 1}
 
 
+def collapse_recipients_by_lead(
+    recipients: list[dict[str, Any]],
+) -> dict[int, dict[str, Any]]:
+    """Collapse OLC contact rows to one recipient per lead_id (Failed > Corrected > Verified)."""
+    by_lead: dict[int, dict[str, Any]] = {}
+    for recip in recipients:
+        if not isinstance(recip, dict):
+            continue
+        meta = recip.get('meta') if isinstance(recip.get('meta'), dict) else {}
+        data = meta.get('data') if isinstance(meta.get('data'), dict) else {}
+        lead_raw = data.get('lead_id')
+        try:
+            lead_id = int(lead_raw)
+        except (TypeError, ValueError):
+            continue
+        status = (recip.get('addressStatus') or '').strip() or 'Unknown'
+        prior = by_lead.get(lead_id)
+        if prior is None or _STATUS_PRIORITY.get(status, 0) > _STATUS_PRIORITY.get(
+            prior.get('addressStatus') or '', 0,
+        ):
+            by_lead[lead_id] = recip
+    return by_lead
+
+
 class MailCampaignService:
     """Create and submit mail campaigns via Open Letter Connect."""
 
@@ -128,6 +152,10 @@ class MailCampaignService:
             ),
             created_by=user_id,
         )
+        if campaign.creative is not None:
+            # Freeze the full sender payload, including the street address, before
+            # dispatching. A later config edit must not alter an in-flight order.
+            campaign.creative['return_address'] = dict(street)
         db.session.add(campaign)
         db.session.flush()
 
@@ -186,14 +214,25 @@ class MailCampaignService:
                 status_code=409,
             )
 
+        # Commit the local cancellation before any network or Celery work. This
+        # releases the row lock quickly and lets an in-flight submit see the
+        # cancellation before it can place an order.
+        prior_status = campaign.status
+        order_id = str(campaign.olc_order_id) if campaign.olc_order_id else None
+        campaign.status = 'cancelled'
+        db.session.flush()
+        db.session.commit()
+
+        # All slow external work occurs outside the FOR UPDATE transaction.
+        self._best_effort_revoke_submit(campaign_id)
         olc_cancel_ok = True
         olc_cancel_detail = 'no_olc_order'
-        if campaign.olc_order_id:
+        if order_id:
             olc_cancel_ok = False
             olc_cancel_detail = 'olc_cancel_not_attempted'
             try:
-                client = self._config_service.get_client(campaign.created_by)
-                result = client.cancel_order(str(campaign.olc_order_id))
+                client = self._config_service.get_client(user_id)
+                result = client.cancel_order(order_id)
                 olc_cancel_ok = bool(result.get('ok'))
                 olc_cancel_detail = str(result.get('detail') or ('ok' if olc_cancel_ok else 'failed'))
             except Exception as exc:  # noqa: BLE001
@@ -201,22 +240,30 @@ class MailCampaignService:
                 olc_cancel_detail = str(exc)
                 logger.warning(
                     'OLC cancel_order raised for campaign %s order %s: %s',
-                    campaign.id, campaign.olc_order_id, exc,
+                    campaign_id, order_id, exc,
                 )
 
+        # A missing OLC ID is only safe to release when the job had not started
+        # (pending) or already failed. submitted/processing may still be in
+        # place_order, which can create an order after this local cancellation.
+        do_requeue = (
+            (bool(order_id) and olc_cancel_ok)
+            or (not order_id and prior_status in ('pending', 'failed'))
+        )
         note = f'olc_cancel: {"ok" if olc_cancel_ok else "failed"}:{olc_cancel_detail}'
+        campaign = (
+            MailCampaign.query
+            .filter_by(id=campaign_id, created_by=user_id)
+            .with_for_update()
+            .first()
+        )
+        if campaign is None:
+            raise MailQueueError('Campaign not found', status_code=404)
         if campaign.error_message:
             campaign.error_message = f'{campaign.error_message}\n{note}'
         else:
             campaign.error_message = note
 
-        # Mark cancelled before any lead/queue mutation so in-flight Celery submit
-        # can see cancelled on refresh before place_order.
-        campaign.status = 'cancelled'
-        db.session.flush()
-        self._best_effort_revoke_submit(campaign.id)
-
-        do_requeue = (not campaign.olc_order_id) or olc_cancel_ok
         requeued_count = 0
         if do_requeue:
             requeued_count = self._requeue_campaign_items(campaign, user_id)
@@ -397,6 +444,12 @@ class MailCampaignService:
                 f'Campaign {campaign_id} status is {campaign.status}; cannot redispatch',
                 status_code=409,
             )
+        failed_items = MailQueueItem.query.filter_by(
+            campaign_id=campaign.id, status='failed',
+        ).all()
+        for item in failed_items:
+            item.status = 'queued'
+            item.validation_error = None
         queued = MailQueueItem.query.filter_by(
             campaign_id=campaign.id, status='queued',
         ).count()
@@ -446,7 +499,16 @@ class MailCampaignService:
 
         config = self._config_service.require_config(campaign.created_by)
         olc = self._config_service.get_client(campaign.created_by)
-        preset, street = self._resolve_creative(config)
+        frozen_creative = campaign.creative if isinstance(campaign.creative, dict) else None
+        if frozen_creative is not None:
+            preset = dict(frozen_creative)
+            frozen_return = (
+                frozen_creative.get('return_address')
+                or frozen_creative.get('returnAddress')
+            )
+            street = street_return_address(frozen_return)
+        else:
+            preset, street = self._resolve_creative(config)
         sender_err = validate_sender_ready(preset)
         if sender_err:
             campaign.status = 'failed'
@@ -454,7 +516,7 @@ class MailCampaignService:
             db.session.commit()
             raise MailQueueError(sender_err)
 
-        if campaign.template_id:
+        if campaign.template_id and not (preset or {}).get('font_name'):
             try:
                 style = extract_letter_body_style(
                     olc.fetch_template_design(campaign.template_id),
@@ -483,13 +545,16 @@ class MailCampaignService:
             raise MailQueueError(msg)
 
         seller_phone = (preset or {}).get('phone')
-        campaign.creative = snapshot_creative(
-            preset,
-            template_id=campaign.template_id,
-            template_name=campaign.template_name,
-            product_id=campaign.product_id,
-            envelope_type=(preset or {}).get('envelope_color'),
-        )
+        if frozen_creative is None:
+            campaign.creative = snapshot_creative(
+                preset,
+                template_id=campaign.template_id,
+                template_name=campaign.template_name,
+                product_id=campaign.product_id,
+                envelope_type=(preset or {}).get('envelope_color'),
+            )
+            if campaign.creative is not None and street is not None:
+                campaign.creative['return_address'] = dict(street)
 
         items = MailQueueItem.query.filter_by(
             campaign_id=campaign.id, status='queued',
@@ -846,18 +911,12 @@ class MailCampaignService:
 
     def _sync_order_address_statuses(self, campaign: MailCampaign, client) -> dict[str, int]:
         summary = {'corrected': 0, 'failed': 0, 'verified': 0, 'unchanged': 0}
-        by_lead: dict[int, dict[str, Any]] = {}
+        recipients: list[dict[str, Any]] = []
         for row in client.iter_order_contacts(campaign.olc_order_id):
             recip = self._recipient_from_contact_row(row if isinstance(row, dict) else {})
-            lead_id = self._lead_id_from_recipient(recip)
-            if lead_id is None:
-                continue
-            status = (recip.get('addressStatus') or '').strip() or 'Unknown'
-            prior = by_lead.get(lead_id)
-            if prior is None or _STATUS_PRIORITY.get(status, 0) > _STATUS_PRIORITY.get(
-                prior.get('addressStatus') or '', 0,
-            ):
-                by_lead[lead_id] = recip
+            if recip:
+                recipients.append(recip)
+        by_lead = collapse_recipients_by_lead(recipients)
 
         items_by_lead = {
             item.lead_id: item

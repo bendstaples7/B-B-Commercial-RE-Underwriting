@@ -51,6 +51,7 @@ import { hubSpotService } from '@/services/api'
 import type { HubSpotConfig, HubSpotImportRun } from '@/types'
 import { WebhookSyncPanel } from '@/components/WebhookSyncPanel'
 import { usePipelineStatus } from '@/context/PipelineStatusContext'
+import { useAuth } from '@/context/AuthContext'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -110,6 +111,7 @@ function formatDateTime(iso: string | null | undefined): string {
 
 export const HubSpotImportArea: React.FC = () => {
   const queryClient = useQueryClient()
+  const { user } = useAuth()
 
   // ── Config form state ────────────────────────────────────────────────────
   const [tokenInput, setTokenInput] = useState('')
@@ -673,13 +675,17 @@ export const HubSpotImportArea: React.FC = () => {
                 {pipelineStatus.pipeline_stage_label
                   ? ` — ${pipelineStatus.pipeline_stage_label}`
                   : ' — matching and enrichment in progress'}
-                {pipelineStatus.pipeline_stage_index && pipelineStatus.pipeline_stage_total
+                {pipelineStatus.pipeline_stage_index != null && pipelineStatus.pipeline_stage_total != null
                   ? ` (${pipelineStatus.pipeline_stage_index}/${pipelineStatus.pipeline_stage_total})`
                   : ''}
                 .{' '}
-                <MuiLink component={RouterLink} to="/admin/background-jobs" underline="hover">
-                  View queue
-                </MuiLink>
+                {user?.is_admin ? (
+                  <MuiLink component={RouterLink} to="/admin/background-jobs" underline="hover">
+                    View queue
+                  </MuiLink>
+                ) : (
+                  'Background work is in progress.'
+                )}
               </Alert>
             )}
             <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>

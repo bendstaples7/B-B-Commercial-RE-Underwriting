@@ -214,27 +214,21 @@ def test_apply_failed_marks_item_and_returned(app):
 
 
 def test_failed_wins_over_corrected_when_collapsing():
-    rows = [
-        {'recipient': {
+    from app.services.mail_campaign_service import collapse_recipients_by_lead
+
+    recipients = [
+        {
             'addressStatus': 'Corrected',
             'meta': {'data': {'lead_id': 7}},
             'address1': 'A',
-        }},
-        {'recipient': {
+        },
+        {
             'addressStatus': 'Failed',
             'meta': {'data': {'lead_id': 7}},
             'addressFailureReason': 'bad',
-        }},
+        },
     ]
-    by_lead = {}
-    priority = {'Failed': 3, 'Corrected': 2, 'Verified': 1}
-    for row in rows:
-        recip = row['recipient']
-        lead_id = recip['meta']['data']['lead_id']
-        status = recip['addressStatus']
-        prior = by_lead.get(lead_id)
-        if prior is None or priority.get(status, 0) > priority.get(prior.get('addressStatus') or '', 0):
-            by_lead[lead_id] = recip
+    by_lead = collapse_recipients_by_lead(recipients)
     assert by_lead[7]['addressStatus'] == 'Failed'
 
 
@@ -367,6 +361,93 @@ def test_cancel_campaign_without_olc_order(app):
         assert lead.up_next_to_mail is True
 
 
+def test_cancel_campaign_holds_processing_without_olc_order_id(app):
+    with app.app_context():
+        from app import db
+        from app.models import Lead, MailCampaign, MailQueueItem
+
+        lead = Lead(
+            property_street='3 Main',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            owner_user_id='user-1',
+        )
+        db.session.add(lead)
+        db.session.flush()
+        campaign = MailCampaign(
+            status='processing',
+            lead_count=1,
+            created_by='user-1',
+        )
+        db.session.add(campaign)
+        db.session.flush()
+        item = MailQueueItem(
+            lead_id=lead.id,
+            user_id='user-1',
+            status='sent',
+            campaign_id=campaign.id,
+        )
+        db.session.add(item)
+        db.session.commit()
+
+        svc = MailCampaignService()
+        svc._best_effort_revoke_submit = MagicMock()
+        cancelled, meta = svc.cancel_campaign(campaign.id, 'user-1')
+
+        assert cancelled.status == 'cancelled'
+        assert meta['queue_held'] is True
+        assert meta['requeued_count'] == 0
+        assert meta['warning']
+        assert item.status == 'sent'
+        assert item.campaign_id == campaign.id
+
+
+def test_redispatch_restores_failed_items(app, monkeypatch):
+    with app.app_context():
+        from app import db
+        from app.models import Lead, MailCampaign, MailQueueItem
+
+        lead = Lead(
+            property_street='4 Main',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            owner_user_id='user-1',
+        )
+        db.session.add(lead)
+        db.session.flush()
+        campaign = MailCampaign(
+            status='failed',
+            lead_count=1,
+            created_by='user-1',
+        )
+        db.session.add(campaign)
+        db.session.flush()
+        item = MailQueueItem(
+            lead_id=lead.id,
+            user_id='user-1',
+            status='failed',
+            validation_error='Open Letter timed out',
+            campaign_id=campaign.id,
+        )
+        db.session.add(item)
+        db.session.commit()
+
+        send_task = MagicMock()
+        monkeypatch.setattr('celery.current_app.send_task', send_task)
+
+        redispatched = MailCampaignService().redispatch_submit(campaign.id)
+
+        assert redispatched.status == 'pending'
+        assert item.status == 'queued'
+        assert item.validation_error is None
+        send_task.assert_called_once_with(
+            'open_letter.submit_campaign',
+            args=[campaign.id],
+        )
+
+
 def test_fetch_template_design_sends_no_auth_header(monkeypatch):
     from app.services.open_letter_client_service import OpenLetterClientService
 
@@ -381,17 +462,19 @@ def test_fetch_template_design_sends_no_auth_header(monkeypatch):
     def fake_get(url, **kwargs):
         captured['url'] = url
         captured['headers'] = kwargs.get('headers')
+        captured['allow_redirects'] = kwargs.get('allow_redirects')
         return FakeResp()
 
     config = SimpleNamespace(use_demo_api=True, encrypted_api_token='x')
     client = OpenLetterClientService(config, api_token='secret-token')
     monkeypatch.setattr(client, 'find_template', lambda _id: {
         'id': 1,
-        'templateUrl': 'https://cdn.example.com/design.json',
+        'templateUrl': 'https://d123.cloudfront.net/design.json',
     })
     monkeypatch.setattr('app.services.open_letter_client_service.requests.get', fake_get)
 
     design = client.fetch_template_design(1)
     assert design == {'pages': []}
-    assert captured['url'] == 'https://cdn.example.com/design.json'
+    assert captured['url'] == 'https://d123.cloudfront.net/design.json'
     assert captured['headers'] is None or 'Authorization' not in (captured['headers'] or {})
+    assert captured['allow_redirects'] is False

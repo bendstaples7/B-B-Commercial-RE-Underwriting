@@ -2838,7 +2838,7 @@ class TestBug9SignalDedupAndNoInterest:
                 property_street="x",
                 lead_status="mailing_contacted_no_interest",
             )
-            assert LeadScoringEngine._pipeline_stage_bonus(probe) == -15.0, (
+            assert engine._pipeline_stage_bonus(probe) == -15.0, (
                 "mailing_contacted_no_interest stage bonus must be -15.0."
             )
 

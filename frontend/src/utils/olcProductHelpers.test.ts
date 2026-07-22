@@ -45,4 +45,32 @@ describe('OLC envelope options', () => {
     expect(next?.id).toBe(28)
     expect(next?.deliveryType).toBe('First Class')
   })
+
+  it('keeps postage matched before falling back to delivery', () => {
+    const variants: OlcProduct[] = [
+      {
+        id: 1,
+        productType: 'Personal Letters',
+        deliveryType: 'First Class',
+        postageType: 'Forever',
+        envelopeType: 'Blue',
+      },
+      {
+        id: 2,
+        productType: 'Personal Letters',
+        deliveryType: 'Standard Class',
+        postageType: 'Forever',
+        envelopeType: 'Lavender',
+      },
+      {
+        id: 3,
+        productType: 'Personal Letters',
+        deliveryType: 'First Class',
+        postageType: 'Live',
+        envelopeType: 'Lavender',
+      },
+    ]
+
+    expect(findOlcProductForEnvelope(variants, 1, 'Lavender')?.id).toBe(2)
+  })
 })

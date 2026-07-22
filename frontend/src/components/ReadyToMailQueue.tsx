@@ -41,9 +41,11 @@ import {
   resolveBulkActions,
 } from './queueBulkActions'
 import { useQueueSelection } from '@/hooks/useQueueSelection'
+import { useAuth } from '@/context/AuthContext'
 
 export function ReadyToMailQueue() {
   const queryClient = useQueryClient()
+  const { user } = useAuth()
   const [candidatesPage, setCandidatesPage] = useState(1)
   const { selectedIds, onSelectionChange, onPageChangeWithClear, clearSelection } =
     useQueueSelection()
@@ -71,11 +73,11 @@ export function ReadyToMailQueue() {
 
   const { data: campaignsData } = useQuery({
     queryKey: ['mail-campaigns'],
-    queryFn: () => openLetterService.listCampaigns(),
+    queryFn: () => openLetterService.listCampaigns(1, 100),
     refetchInterval: 15_000,
   })
   const inFlightCampaigns = (campaignsData?.campaigns ?? []).filter(
-    (c) => c.status === 'pending' || c.status === 'processing',
+    (c) => ['pending', 'submitted', 'processing'].includes(c.status),
   )
 
   const showEnqueueFeedback = (result: EnqueueCounts) => {
@@ -211,7 +213,7 @@ export function ReadyToMailQueue() {
           severity="info"
           sx={{ mb: 2 }}
           data-testid="mail-submitting-banner"
-          action={
+          action={user?.is_admin ? (
             <Button
               color="inherit"
               size="small"
@@ -220,7 +222,7 @@ export function ReadyToMailQueue() {
             >
               View queue
             </Button>
-          }
+          ) : undefined}
         >
           Submitting… {inFlightCampaigns.length} campaign
           {inFlightCampaigns.length === 1 ? '' : 's'} waiting on the background worker

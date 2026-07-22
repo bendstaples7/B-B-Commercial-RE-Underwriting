@@ -48,3 +48,14 @@ DEFAULT_STAGE_WEIGHTS: dict[str, Decimal] = {
 }
 
 STAGE_LABELS: dict[str, str] = {s["stage_name"]: s["label"] for s in LEAD_PIPELINE_STAGES}
+
+# Retired multifamily CRM labels only — seed/migration must not delete custom stages.
+LEGACY_PIPELINE_STAGE_NAMES: frozenset[str] = frozenset({
+    'Draft',
+    'Lead',
+    'Qualification',
+    'Proposal',
+    'Negotiation',
+    'Closed Won',
+    'Closed Lost',
+})

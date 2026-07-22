@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
@@ -119,7 +120,11 @@ class OpenLetterClientService:
             body = resp.text[:500]
             raise ExternalServiceError(
                 f'Open Letter API error (HTTP {resp.status_code}): {body}',
-                payload={'error_type': 'open_letter_client_error', 'path': path},
+                payload={
+                    'error_type': 'open_letter_client_error',
+                    'path': path,
+                    'http_status': resp.status_code,
+                },
             )
 
         if not resp.content:
@@ -197,13 +202,18 @@ class OpenLetterClientService:
             except OpenLetterAuthenticationError as exc:
                 last_detail = f'{method} {path}: {exc.message}'
                 logger.warning('OLC cancel auth/forbidden for %s %s', method, path)
+                return {'ok': False, 'detail': last_detail, 'order_id': order_id}
             except ExternalServiceError as exc:
                 last_detail = f'{method} {path}: {exc.message}'
-                # 404 → try next path; other client/server errors also continue
+                if (exc.payload or {}).get('http_status') == 404:
+                    logger.info('OLC cancel endpoint not found for %s %s', method, path)
+                    continue
                 logger.warning('OLC cancel attempt failed for %s %s: %s', method, path, exc.message)
+                return {'ok': False, 'detail': last_detail, 'order_id': order_id}
             except Exception as exc:  # noqa: BLE001 — best-effort; never block local cancel
                 last_detail = f'{method} {path}: {exc}'
                 logger.warning('OLC cancel attempt error for %s %s: %s', method, path, exc)
+                return {'ok': False, 'detail': last_detail, 'order_id': order_id}
         return {'ok': False, 'detail': last_detail, 'order_id': order_id}
 
     def get_order_analytics(self, order_id: str) -> dict[str, Any]:
@@ -240,14 +250,24 @@ class OpenLetterClientService:
                 f'Open Letter template {template_id} has no templateUrl',
                 payload={'error_type': 'open_letter_template_missing_url'},
             )
+        if not self._is_allowed_template_url(url):
+            raise ExternalServiceError(
+                f'Open Letter template {template_id} has an untrusted templateUrl',
+                payload={'error_type': 'open_letter_template_untrusted_url'},
+            )
         try:
             # Design JSON lives on object storage — do not forward the API Bearer token.
-            resp = requests.get(url, timeout=self.TIMEOUT)
+            resp = requests.get(url, timeout=self.TIMEOUT, allow_redirects=False)
         except requests.exceptions.RequestException as exc:
             raise ExternalServiceError(
                 f'Failed to download Open Letter template design: {exc}',
                 payload={'error_type': 'open_letter_template_download_error'},
             ) from exc
+        if 300 <= resp.status_code < 400:
+            raise ExternalServiceError(
+                'Open Letter template download redirected to an untrusted location',
+                payload={'error_type': 'open_letter_template_untrusted_redirect'},
+            )
         if resp.status_code >= 400:
             raise ExternalServiceError(
                 f'Open Letter template download failed (HTTP {resp.status_code})',
@@ -266,6 +286,24 @@ class OpenLetterClientService:
                 payload={'error_type': 'open_letter_template_invalid_json'},
             )
         return design
+
+    @staticmethod
+    def _is_allowed_template_url(url: str) -> bool:
+        """Allow only HTTPS OLC and known object-storage/CDN hosts."""
+        parsed = urlparse(url)
+        hostname = (parsed.hostname or '').lower()
+        if parsed.scheme != 'https' or not hostname:
+            return False
+        return (
+            hostname == 'openletterconnect.com'
+            or hostname.endswith('.openletterconnect.com')
+            or hostname == 'amazonaws.com'
+            or hostname.endswith('.amazonaws.com')
+            or hostname == 'cloudfront.net'
+            or hostname.endswith('.cloudfront.net')
+            or hostname == 'googleapis.com'
+            or hostname.endswith('.googleapis.com')
+        )
 
     def list_order_contacts(
         self,
@@ -311,3 +349,12 @@ class OpenLetterClientService:
             if len(rows) < page_size:
                 break
             page += 1
+        else:
+            raise ExternalServiceError(
+                f'Open Letter order {order_id} contacts exceeded {max_pages} pages',
+                payload={
+                    'error_type': 'open_letter_contacts_incomplete',
+                    'order_id': str(order_id),
+                    'max_pages': max_pages,
+                },
+            )
