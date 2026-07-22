@@ -72,7 +72,7 @@ export function ReadyToMailQueue() {
   })
 
   const { data: campaignsData } = useQuery({
-    queryKey: ['mail-campaigns'],
+    queryKey: ['mail-campaigns', 'in-flight'],
     queryFn: () => openLetterService.listCampaigns(1, 100),
     refetchInterval: 15_000,
   })

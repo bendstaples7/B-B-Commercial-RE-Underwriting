@@ -28,7 +28,8 @@ function formatPct(rate: number | null | undefined): string {
   return `${(rate * 100).toFixed(1)}%`
 }
 
-function yn(value: boolean | undefined): string {
+function yn(value: boolean | null | undefined): string {
+  if (value == null) return '—'
   return value ? 'Yes' : 'No'
 }
 

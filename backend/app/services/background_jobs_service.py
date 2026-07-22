@@ -112,6 +112,7 @@ def _mail_campaigns_in_flight(
     celery_tasks: list[dict[str, Any]] | None = None,
     *,
     celery_inspect_ok: bool = False,
+    queue_depth: int = 0,
 ) -> list[dict[str, Any]]:
     from app.models.mail_campaign import MailCampaign
 
@@ -157,6 +158,7 @@ def _mail_campaigns_in_flight(
             # submit may simply be missing from a partial broker peek.
             'orphan': (
                 celery_inspect_ok
+                and queue_depth <= _QUEUED_PEEK_LIMIT
                 and c.id not in submit_campaign_ids
                 and not c.olc_order_id
             ),
@@ -206,7 +208,11 @@ def get_background_jobs_snapshot() -> dict[str, Any]:
     queue_depth, queued = _peek_broker_queue()
     pipeline = get_pipeline_stage()
     celery_tasks = active + reserved + scheduled + queued
-    mail = _mail_campaigns_in_flight(celery_tasks, celery_inspect_ok=inspect_ok)
+    mail = _mail_campaigns_in_flight(
+        celery_tasks,
+        celery_inspect_ok=inspect_ok,
+        queue_depth=queue_depth,
+    )
 
     pipeline_running = any(t['is_hubspot_pipeline'] for t in active) or (
         pipeline.get('stage') not in (None, 'idle', 'done')

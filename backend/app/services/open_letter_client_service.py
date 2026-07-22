@@ -219,11 +219,11 @@ class OpenLetterClientService:
     def get_order_analytics(self, order_id: str) -> dict[str, Any]:
         return self._request('GET', f'/orders/detail/analytics/{order_id}')
 
-    def find_template(self, template_id: str | int) -> dict[str, Any] | None:
+    def find_template(self, template_id: str | int, *, max_pages: int = 200) -> dict[str, Any] | None:
         """Locate a template row by id (paginated list scan)."""
         wanted = str(template_id).strip()
         page = 0
-        while page < 20:
+        while page < max_pages:
             raw = self.list_templates(page=page, page_size=50)
             rows = raw.get('data') or []
             if not rows:
@@ -234,6 +234,11 @@ class OpenLetterClientService:
             if len(rows) < 50:
                 break
             page += 1
+        if page >= max_pages:
+            raise ExternalServiceError(
+                f'Open Letter template scan exceeded {max_pages} pages',
+                payload={'error_type': 'open_letter_template_scan_incomplete'},
+            )
         return None
 
     def fetch_template_design(self, template_id: str | int) -> dict[str, Any]:
@@ -324,7 +329,7 @@ class OpenLetterClientService:
         order_id: str,
         *,
         page_size: int = 100,
-        max_pages: int = 50,
+        max_pages: int = 200,
     ):
         """Yield contact rows for an order, paginating until exhausted."""
         page = 0

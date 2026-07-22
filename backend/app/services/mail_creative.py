@@ -25,6 +25,8 @@ def fill_to_hex(fill: Any) -> str | None:
     if not raw:
         return None
     if raw.startswith('#') and len(raw) in (4, 7):
+        if not re.fullmatch(r'#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?', raw):
+            return None
         if len(raw) == 4:
             return '#' + ''.join(ch * 2 for ch in raw[1:]).upper()
         return raw.upper()
