@@ -369,6 +369,10 @@ def get_pipeline_status():
 
         {
           "pipeline_running": bool,
+          "pipeline_stage": str | null,
+          "pipeline_stage_label": str | null,
+          "pipeline_stage_index": int | null,
+          "pipeline_stage_total": int | null,
           "matches": {"total": int, "high": int, "medium": int, "unmatched": int},
           "interactions": int,
           "tasks": int,

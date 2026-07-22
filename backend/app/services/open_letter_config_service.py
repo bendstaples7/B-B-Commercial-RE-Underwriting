@@ -337,13 +337,6 @@ class OpenLetterConfigService:
             config.creative_presets,
             config.active_creative_preset_id,
         )
-        # Lazily persist migrated presets so sender UI has data to edit.
-        if presets and not config.creative_presets:
-            config.creative_presets = presets
-            config.active_creative_preset_id = active_id
-            if street is not None:
-                config.return_address = street
-            db.session.commit()
 
         active = get_active_preset(presets, active_id or config.active_creative_preset_id)
         style = None

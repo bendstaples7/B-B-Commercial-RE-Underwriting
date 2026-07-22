@@ -1391,8 +1391,9 @@ function App() {
   // Admin pages are short; keep the document at the top so the main panel is
   // never left scrolled out of view after sidebar interactions.
   useEffect(() => {
-    if (!location.pathname.startsWith('/admin')) return
-    setAdminNavOpen(true)
+    const onAdminRoute = location.pathname.startsWith('/admin')
+    setAdminNavOpen(onAdminRoute)
+    if (!onAdminRoute) return
     window.scrollTo(0, 0)
     document.documentElement.scrollTop = 0
     document.body.scrollTop = 0

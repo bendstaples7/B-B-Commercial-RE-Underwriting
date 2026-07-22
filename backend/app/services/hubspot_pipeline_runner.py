@@ -132,7 +132,6 @@ def run_post_import_pipeline_sync(force_full_rescore: bool = False) -> None:
         set_pipeline_stage('done')
     finally:
         try:
-            from app.services.hubspot_pipeline_progress import clear_pipeline_stage
             clear_pipeline_stage()
         except Exception:
             pass

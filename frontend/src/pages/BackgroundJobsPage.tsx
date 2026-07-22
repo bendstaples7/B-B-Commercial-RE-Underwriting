@@ -115,7 +115,9 @@ export default function BackgroundJobsPage() {
     pipeline && pipeline.stage_total > 0 && pipeline.stage_index > 0
       ? Math.min(100, (pipeline.stage_index / pipeline.stage_total) * 100)
       : 0
-  const orphanCampaigns = (data?.mail_campaigns_in_flight ?? []).filter((c) => c.orphan)
+  const orphanCampaigns = (data?.mail_campaigns_in_flight ?? []).filter(
+    (c) => c.orphan && c.status === 'pending',
+  )
 
   return (
     <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1100 }} data-testid="background-jobs-page">

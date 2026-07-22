@@ -1,9 +1,6 @@
 """Tests for admin background-jobs snapshot and HubSpot pipeline stage stamps."""
 from __future__ import annotations
 
-from app.services.auth_service import AuthService
-
-
 def _make_user(email: str, display_name: str, *, is_admin: bool = False):
     import uuid
     from app import db
@@ -41,6 +38,9 @@ def test_pipeline_stage_round_trip(monkeypatch):
 
         def delete(self, key):
             store.pop(key, None)
+
+        def close(self):
+            pass
 
     monkeypatch.setattr(prog, '_redis_client', lambda: FakeRedis())
     prog.set_pipeline_stage('enrich')
@@ -136,6 +136,8 @@ def test_background_jobs_snapshot_orders_tasks(app, monkeypatch):
 
 
 def test_admin_background_jobs_forbidden_for_non_admin(client, app):
+    from app.services.auth_service import AuthService
+
     with app.app_context():
         user = _make_user('bgjobs-user@test.com', 'BG User', is_admin=False)
         token = AuthService().issue_token(user)

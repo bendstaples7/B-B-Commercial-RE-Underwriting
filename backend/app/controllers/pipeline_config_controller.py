@@ -8,6 +8,7 @@ from app import db
 from app.api_utils import require_auth
 from app.exceptions import RealEstateAnalysisException
 from app.schemas import PipelineStageConfigSchema
+from app.services.lead_pipeline_stages import STAGE_LABELS
 from app.services.pipeline_config_service import PipelineConfigService
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,6 @@ def handle_errors(f):
 # ---------------------------------------------------------------------------
 
 def _serialize_stages(stages):
-    from app.services.lead_pipeline_stages import STAGE_LABELS
     dumped = _pipeline_stage_config_schema.dump(stages)
     for row in dumped:
         name = row.get('stage_name') or ''
