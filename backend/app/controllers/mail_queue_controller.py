@@ -199,6 +199,7 @@ def list_campaigns():
         'total': total,
         'page': page,
         'per_page': per_page,
+        'creative_rollup': _campaign_service.creative_rollup(g.user_id),
     }), 200
 
 
@@ -206,13 +207,33 @@ def list_campaigns():
 @require_auth
 @handle_errors
 def get_campaign(campaign_id: int):
-    user_id = g.user_id
-    campaign = _campaign_service.get_campaign(campaign_id, user_id)
-    if request.args.get('refresh') == 'true' and campaign.olc_order_id:
-        try:
-            campaign = _campaign_service.sync_campaign_analytics(campaign_id)
-        except Exception as exc:
-            logger.warning('Analytics refresh failed for campaign %s: %s', campaign_id, exc)
+    campaign = _campaign_service.get_campaign(campaign_id, g.user_id)
+    refresh = parse_bool(request.args.get('refresh'))
+    if refresh and campaign.olc_order_id:
+        campaign = _campaign_service.sync_campaign_analytics(campaign.id)
+    return jsonify(_campaign_service.serialize_campaign(campaign)), 200
+
+
+@mail_queue_bp.route('/campaigns/<int:campaign_id>/redispatch', methods=['POST'])
+@require_auth
+@handle_errors
+def redispatch_campaign(campaign_id: int):
+    """Re-queue Celery submit for a stuck pending campaign (orphan recovery)."""
+    campaign = _campaign_service.get_campaign(campaign_id, g.user_id)
+    campaign = _campaign_service.redispatch_submit(campaign.id)
+    return jsonify(_campaign_service.serialize_campaign(campaign)), 202
+
+
+@mail_queue_bp.route('/campaigns/<int:campaign_id>/cancel', methods=['POST'])
+@require_auth
+@handle_errors
+def cancel_campaign(campaign_id: int):
+    """Soft-cancel a campaign; optionally release a held queue after Connect cancel."""
+    data = request.get_json(silent=True) or {}
+    release_queue = parse_bool(data.get('release_queue'))
+    campaign, _meta = _campaign_service.cancel_campaign(
+        campaign_id, g.user_id, release_queue=release_queue,
+    )
     return jsonify(_campaign_service.serialize_campaign(campaign)), 200
 
 

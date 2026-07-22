@@ -170,5 +170,144 @@ class OpenLetterClientService:
     def get_order(self, order_id: str) -> dict[str, Any]:
         return self._request('GET', f'/orders/{order_id}')
 
+    def cancel_order(self, order_id: str) -> dict[str, Any]:
+        """Best-effort cancel/delete of an OLC order.
+
+        OLC does not document a stable cancel API; try common paths. Callers must
+        treat ``ok: False`` as non-fatal and cancel locally (Connect UI may still
+        be required).
+        """
+        order_id = str(order_id).strip()
+        attempts = (
+            ('DELETE', f'/orders/{order_id}'),
+            ('POST', f'/orders/{order_id}/cancel'),
+            ('POST', f'/orders/cancel/{order_id}'),
+            ('DELETE', f'/orders/cancel/{order_id}'),
+        )
+        last_detail = 'no cancel endpoint succeeded'
+        for method, path in attempts:
+            try:
+                self._request(method, path)
+                return {
+                    'ok': True,
+                    'detail': f'{method} {path}',
+                    'path': path,
+                    'method': method,
+                }
+            except OpenLetterAuthenticationError as exc:
+                last_detail = f'{method} {path}: {exc.message}'
+                logger.warning('OLC cancel auth/forbidden for %s %s', method, path)
+            except ExternalServiceError as exc:
+                last_detail = f'{method} {path}: {exc.message}'
+                # 404 → try next path; other client/server errors also continue
+                logger.warning('OLC cancel attempt failed for %s %s: %s', method, path, exc.message)
+            except Exception as exc:  # noqa: BLE001 — best-effort; never block local cancel
+                last_detail = f'{method} {path}: {exc}'
+                logger.warning('OLC cancel attempt error for %s %s: %s', method, path, exc)
+        return {'ok': False, 'detail': last_detail, 'order_id': order_id}
+
     def get_order_analytics(self, order_id: str) -> dict[str, Any]:
         return self._request('GET', f'/orders/detail/analytics/{order_id}')
+
+    def find_template(self, template_id: str | int) -> dict[str, Any] | None:
+        """Locate a template row by id (paginated list scan)."""
+        wanted = str(template_id).strip()
+        page = 0
+        while page < 20:
+            raw = self.list_templates(page=page, page_size=50)
+            rows = raw.get('data') or []
+            if not rows:
+                break
+            for row in rows:
+                if isinstance(row, dict) and str(row.get('id')) == wanted:
+                    return row
+            if len(rows) < 50:
+                break
+            page += 1
+        return None
+
+    def fetch_template_design(self, template_id: str | int) -> dict[str, Any]:
+        """Download the template design JSON used by Connect's builder."""
+        row = self.find_template(template_id)
+        if row is None:
+            raise ExternalServiceError(
+                f'Open Letter template {template_id} not found',
+                payload={'error_type': 'open_letter_template_not_found'},
+            )
+        url = row.get('templateUrl') or row.get('template_url')
+        if not url:
+            raise ExternalServiceError(
+                f'Open Letter template {template_id} has no templateUrl',
+                payload={'error_type': 'open_letter_template_missing_url'},
+            )
+        try:
+            # Design JSON lives on object storage — do not forward the API Bearer token.
+            resp = requests.get(url, timeout=self.TIMEOUT)
+        except requests.exceptions.RequestException as exc:
+            raise ExternalServiceError(
+                f'Failed to download Open Letter template design: {exc}',
+                payload={'error_type': 'open_letter_template_download_error'},
+            ) from exc
+        if resp.status_code >= 400:
+            raise ExternalServiceError(
+                f'Open Letter template download failed (HTTP {resp.status_code})',
+                payload={'error_type': 'open_letter_template_download_error'},
+            )
+        try:
+            design = resp.json()
+        except ValueError as exc:
+            raise ExternalServiceError(
+                'Open Letter template design was not JSON',
+                payload={'error_type': 'open_letter_template_invalid_json'},
+            ) from exc
+        if not isinstance(design, dict):
+            raise ExternalServiceError(
+                'Open Letter template design had unexpected shape',
+                payload={'error_type': 'open_letter_template_invalid_json'},
+            )
+        return design
+
+    def list_order_contacts(
+        self,
+        order_id: str,
+        *,
+        page: int = 0,
+        page_size: int = 100,
+    ) -> dict[str, Any]:
+        params = {'page': page, 'pageSize': page_size}
+        return self._request(
+            'GET',
+            f'/orders/detail/contacts/{order_id}',
+            params=params,
+        )
+
+    def iter_order_contacts(
+        self,
+        order_id: str,
+        *,
+        page_size: int = 100,
+        max_pages: int = 50,
+    ):
+        """Yield contact rows for an order, paginating until exhausted."""
+        page = 0
+        seen = 0
+        total = None
+        while page < max_pages:
+            raw = self.list_order_contacts(order_id, page=page, page_size=page_size)
+            data = raw.get('data') or {}
+            rows = data.get('rows') or []
+            if total is None:
+                try:
+                    total = int(data.get('count') or 0)
+                except (TypeError, ValueError):
+                    total = 0
+            if not rows:
+                break
+            for row in rows:
+                yield row
+            seen += len(rows)
+            if total and seen >= total:
+                break
+            if len(rows) < page_size:
+                break
+            page += 1

@@ -1012,6 +1012,10 @@ export const hubSpotService = {
   /** GET /api/hubspot/pipeline/status — current pipeline running state and counts */
   getPipelineStatus: async (): Promise<{
     pipeline_running: boolean
+    pipeline_stage?: string | null
+    pipeline_stage_label?: string | null
+    pipeline_stage_index?: number | null
+    pipeline_stage_total?: number | null
     matches: { total: number; high: number; medium: number; unmatched: number }
     interactions: number
     tasks: number
@@ -1504,7 +1508,7 @@ export const pipelineConfigService = {
   },
 
   /** PUT /api/pipeline-stages/weights — update stage weights (admin only) */
-  updateWeights: async (stages: { stage_name: string; weight: number }[]): Promise<PipelineStage[]> => {
+  updateWeights: async (stages: { stage_name: string; order: number; weight: number }[]): Promise<PipelineStage[]> => {
     const response = await api.put<PipelineStage[]>('/pipeline-stages/weights', stages)
     return response.data
   },

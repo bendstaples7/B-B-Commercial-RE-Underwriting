@@ -51,6 +51,11 @@ class TestOpenLetterContactMapper:
         assert contact['city'] == 'Chicago'
         assert contact['meta_data']['lead_id'] == 1
 
+    def test_campaign_phone_prefers_seller_override(self):
+        lead = _make_lead(phone_1='312-555-OWNER')
+        contact = lead_to_olc_contact(lead, campaign_phone='312-555-SELLER')
+        assert contact['campaign_phone'] == '312-555-SELLER'
+
     def test_falls_back_to_property_address(self):
         lead = _make_lead(mailing_address=None, mailing_city=None, mailing_state=None, mailing_zip=None)
         contact = lead_to_olc_contact(lead)

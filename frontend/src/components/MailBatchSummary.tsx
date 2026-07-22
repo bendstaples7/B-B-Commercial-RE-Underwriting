@@ -15,7 +15,7 @@ import SendIcon from '@mui/icons-material/Send'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link as RouterLink } from 'react-router-dom'
 import openLetterService, { type MailQueueSummary } from '@/services/openLetterApi'
-import { isDirectMailReadyToSend } from '@/utils/directMailSetup'
+import { getActiveCreativePreset, isDirectMailReadyToSend } from '@/utils/directMailSetup'
 
 export interface MailBatchSummaryProps {
   title?: string
@@ -59,6 +59,7 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
   const progress = batchMinimum > 0 ? Math.min(100, (queuedCount / batchMinimum) * 100) : 0
   const canSend = queueData?.can_send ?? false
   const readyToSend = isDirectMailReadyToSend(olcConfig)
+  const activeCreative = getActiveCreativePreset(olcConfig)
 
   return (
     <>
@@ -73,6 +74,14 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
               {queuedCount} of {batchMinimum} leads staged for the next batch
             </Typography>
+            {activeCreative && (
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                Active creative:{' '}
+                <strong>{activeCreative.label || activeCreative.sender_display_name}</strong>
+                {activeCreative.envelope_color ? ` · ${activeCreative.envelope_color} envelope` : ''}
+                {activeCreative.font_name ? ` · ${activeCreative.font_name}` : ''}
+              </Typography>
+            )}
             <LinearProgress variant="determinate" value={progress} sx={{ mb: 2, height: 8, borderRadius: 1 }} />
             {queueData?.estimated_total != null && (
               <Typography variant="body2" sx={{ mb: 1 }}>
@@ -93,7 +102,8 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
             </Button>
             {!readyToSend && (
               <Alert severity="warning" sx={{ mt: 2 }}>
-                Choose a product and template in{' '}
+                Finish Open Letter setup (product, template, creative sender name/phone, and return
+                street) in{' '}
                 <RouterLink to="/marketing/direct-mail">Setup</RouterLink>
                 {' '}before sending.
               </Alert>
@@ -118,7 +128,11 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
         <DialogTitle>Send mail batch?</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            This will submit {queuedCount} mailers to Open Letter Connect.
+            This will submit {queuedCount} mailers to Open Letter Connect
+            {activeCreative
+              ? ` using creative “${activeCreative.label || activeCreative.sender_display_name}”`
+              : ''}
+            .
             {queueData?.estimated_total != null && (
               <> Estimated charge: ~${queueData.estimated_total.toFixed(2)} on your OLC payment method.</>
             )}

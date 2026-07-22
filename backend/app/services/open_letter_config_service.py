@@ -11,6 +11,14 @@ from app.exceptions import ExternalServiceError
 from app.models.open_letter_config import OpenLetterConfig
 from app.models.user import User
 from app.services.open_letter_client_service import OpenLetterClientService
+from app.services.mail_creative import (
+    apply_template_style_to_preset,
+    extract_letter_body_style,
+    get_active_preset,
+    migrate_legacy_return_into_presets,
+    normalize_presets,
+    street_return_address,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +137,8 @@ class OpenLetterConfigService:
         batch_minimum: int | None = None,
         allow_send_below_minimum: bool | None = None,
         return_address: dict | None = None,
+        creative_presets: list | None = None,
+        active_creative_preset_id: str | None = None,
         estimated_cost_per_piece: Decimal | float | None = None,
     ) -> OpenLetterConfig:
         if api_token and self.uses_env_token(user_id):
@@ -164,9 +174,33 @@ class OpenLetterConfigService:
         if allow_send_below_minimum is not None:
             config.allow_send_below_minimum = allow_send_below_minimum
         if return_address is not None:
-            config.return_address = return_address
+            # Persist street fields only when complete; empty dict clears.
+            if return_address == {} or return_address is False:
+                config.return_address = None
+            else:
+                street = street_return_address(return_address)
+                config.return_address = street
+        if creative_presets is not None:
+            config.creative_presets = normalize_presets(creative_presets)
+            if not config.active_creative_preset_id and config.creative_presets:
+                config.active_creative_preset_id = config.creative_presets[0]['id']
+        if active_creative_preset_id is not None:
+            cleaned = (active_creative_preset_id or '').strip() or None
+            config.active_creative_preset_id = cleaned
+            if cleaned and config.creative_presets:
+                ids = {p['id'] for p in config.creative_presets}
+                if cleaned not in ids and config.creative_presets:
+                    config.active_creative_preset_id = config.creative_presets[0]['id']
         if estimated_cost_per_piece is not None:
             config.estimated_cost_per_piece = max(Decimal('0'), Decimal(str(estimated_cost_per_piece)))
+
+        # Auto-confirm font/ink from the selected Connect template (not user-selected).
+        style = self.resolve_template_style(user_id, config.default_template_id)
+        if config.creative_presets:
+            config.creative_presets = self._stamp_presets_with_template_style(
+                normalize_presets(config.creative_presets),
+                style,
+            )
 
         config.updated_at = datetime.utcnow()
         db.session.commit()
@@ -205,6 +239,54 @@ class OpenLetterConfigService:
             'estimated_cost_per_piece': None,
         }
 
+    def resolve_template_style(self, user_id: str, template_id: int | str | None) -> dict | None:
+        """Auto-confirm body font/ink from the Connect template design JSON."""
+        if template_id is None or str(template_id).strip() == '':
+            return None
+        try:
+            client = self.get_client(user_id)
+            design = client.fetch_template_design(template_id)
+            style = extract_letter_body_style(design)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('Failed to resolve OLC template style for %s: %s', template_id, exc)
+            return None
+        if not style.get('font_name'):
+            return None
+        return {
+            'font_name': style.get('font_name'),
+            'font_color': style.get('font_color'),
+            'fill': style.get('fill'),
+            'template_id': int(template_id) if str(template_id).isdigit() else template_id,
+            'confirmed_from': 'olc_template',
+        }
+
+    def _stamp_presets_with_template_style(
+        self,
+        presets: list[dict],
+        style: dict | None,
+        *,
+        template_id: int | None = None,
+        template_name: str | None = None,
+        active_id: str | None = None,
+    ) -> list[dict]:
+        """Stamp font/ink from the template onto presets.
+
+        Does not overwrite each preset's ``olc_template_id`` unless ``active_id``
+        is provided (then only that preset gets template id/name).
+        """
+        if not presets:
+            return presets
+        stamped = []
+        for preset in presets:
+            item = apply_template_style_to_preset(preset, style) or dict(preset)
+            if active_id and item.get('id') == active_id:
+                if template_id is not None:
+                    item['olc_template_id'] = template_id
+                if template_name:
+                    item['olc_template_name'] = template_name
+            stamped.append(item)
+        return stamped
+
     def serialize_public(self, user_id: str) -> dict:
         config = self.get_config(user_id)
         source = self.token_source(user_id)
@@ -219,6 +301,7 @@ class OpenLetterConfigService:
 
         if config is None:
             settings = self.get_readonly_settings(user_id)
+            template_id = _env_int(ENV_TEMPLATE_ID)
             return {
                 'configured': True,
                 'token_source': source,
@@ -226,13 +309,40 @@ class OpenLetterConfigService:
                 'requires_user_api_token': False,
                 'use_demo_api': _env_bool(ENV_USE_DEMO, False),
                 'default_product_id': _env_int(ENV_PRODUCT_ID),
-                'default_template_id': _env_int(ENV_TEMPLATE_ID),
+                'default_template_id': template_id,
                 'default_template_name': os.environ.get(ENV_TEMPLATE_NAME) or None,
                 'batch_minimum': settings['batch_minimum'],
                 'allow_send_below_minimum': settings['allow_send_below_minimum'],
                 'return_address': None,
+                'creative_presets': [],
+                'active_creative_preset_id': None,
+                # GET is read-only — use /templates/:id/style to confirm fonts.
+                'template_style': None,
                 'estimated_cost_per_piece': settings['estimated_cost_per_piece'],
                 'updated_at': None,
+            }
+
+        presets, active_id, street = migrate_legacy_return_into_presets(
+            config.return_address,
+            config.creative_presets,
+            config.active_creative_preset_id,
+        )
+        # Lazily persist migrated presets so sender UI has data to edit.
+        if presets and not config.creative_presets:
+            config.creative_presets = presets
+            config.active_creative_preset_id = active_id
+            if street is not None:
+                config.return_address = street
+            db.session.commit()
+
+        active = get_active_preset(presets, active_id or config.active_creative_preset_id)
+        style = None
+        if active and active.get('font_name'):
+            style = {
+                'font_name': active.get('font_name'),
+                'font_color': active.get('font_color'),
+                'template_id': active.get('olc_template_id') or config.default_template_id,
+                'confirmed_from': 'preset',
             }
 
         return {
@@ -246,7 +356,12 @@ class OpenLetterConfigService:
             'default_template_name': config.default_template_name,
             'batch_minimum': config.batch_minimum,
             'allow_send_below_minimum': config.allow_send_below_minimum,
-            'return_address': config.return_address,
+            'return_address': street if street is not None else street_return_address(config.return_address),
+            'creative_presets': presets,
+            'active_creative_preset_id': active_id or (
+                presets[0]['id'] if presets else None
+            ),
+            'template_style': style,
             'estimated_cost_per_piece': (
                 float(config.estimated_cost_per_piece)
                 if config.estimated_cost_per_piece is not None else None

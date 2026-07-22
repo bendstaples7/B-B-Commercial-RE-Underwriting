@@ -404,10 +404,10 @@ class TestUpdateStatus:
             assert response.status_code == 200
             body = response.get_json()
             assert body['lead_status'] == 'in_person_appointment'
-            assert float(body['lead_score']) == pytest.approx(before + 30.0, abs=0.15)
+            assert float(body['lead_score']) == pytest.approx(before + 45.0, abs=0.15)
             assert body['recommended_action'] == 'call_ready'
             db.session.refresh(lead)
-            assert LeadScoringEngine._pipeline_stage_bonus(lead) == 30.0
+            assert LeadScoringEngine._pipeline_stage_bonus(lead) == 45.0
 
     def test_status_change_persists(self, client, app):
         """PATCH /api/leads/<id>/status persists the new status to the database."""

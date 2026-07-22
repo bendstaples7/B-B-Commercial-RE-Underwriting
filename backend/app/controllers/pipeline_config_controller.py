@@ -68,20 +68,29 @@ def handle_errors(f):
 # Routes
 # ---------------------------------------------------------------------------
 
+def _serialize_stages(stages):
+    from app.services.lead_pipeline_stages import STAGE_LABELS
+    dumped = _pipeline_stage_config_schema.dump(stages)
+    for row in dumped:
+        name = row.get('stage_name') or ''
+        row['label'] = STAGE_LABELS.get(name, name.replace('_', ' ').title())
+    return dumped
+
+
 @pipeline_config_bp.route('/pipeline-stages', methods=['GET'])
 @require_auth
 @handle_errors
 def get_pipeline_stages():
-    """Returns an ordered list of pipeline stages with stage_name, order, weight."""
+    """Returns ordered lead_status stages with stage_name, label, order, weight."""
     stages = _pipeline_config_service.get_all_stages_ordered()
-    return jsonify(_pipeline_stage_config_schema.dump(stages)), 200
+    return jsonify(_serialize_stages(stages)), 200
 
 
 @pipeline_config_bp.route('/pipeline-stages/weights', methods=['PUT'])
 @require_auth
 @handle_errors
 def update_pipeline_stage_weights():
-    """Accepts a list of {stage_name: weight} pairs to update stage weights (admin-only)."""
+    """Accepts a list of {stage_name, order, weight} to update stage weights (admin-only)."""
     # Admin access check using is_admin set by auth middleware
     if not getattr(g, 'is_admin', False):
         raise RealEstateAnalysisException("Admin access required to update stage weights", status_code=403)
@@ -101,4 +110,4 @@ def update_pipeline_stage_weights():
     updated_stages = _pipeline_config_service.update_stage_weights(validated_updates)
     # Service already commits; no need for a redundant commit here
 
-    return jsonify(_pipeline_stage_config_schema.dump(updated_stages)), 200
+    return jsonify(_serialize_stages(updated_stages)), 200

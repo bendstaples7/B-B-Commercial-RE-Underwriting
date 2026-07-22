@@ -1,4 +1,4 @@
-import { useState, Component } from 'react'
+import { useState, useEffect, Component } from 'react'
 import { Routes, Route, Link, Navigate, useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import { BackendRestartRequiredBanner } from './components/BackendRestartRequiredBanner'
@@ -113,13 +113,14 @@ import { DealKanbanPage } from './pages/DealKanbanPage'
 import { ActivityDashboardPage } from './pages/ActivityDashboardPage'
 import { QuickAddPage } from './pages/QuickAddPage'
 import { PipelineConfigAdminPage } from './pages/PipelineConfigAdminPage'
+import BackgroundJobsPage from './pages/BackgroundJobsPage'
 import DataSourcesPanel from '@/components/DataSourcesPanel'
 import type { QueueCounts } from './types'
 
 // Minimum width that fits the longest nav label ("Missing Property Match")
-// at its indent + icon + badge without clipping. Do not shrink below this or
-// the left rail clips content and shows a horizontal scrollbar.
-const DRAWER_WIDTH = 280
+// at its indent + icon + badge, plus room for a thin vertical scrollbar so
+// queue-count chips are not clipped (overflowX:hidden + overflowY:auto).
+const DRAWER_WIDTH = 312
 
 // ---------------------------------------------------------------------------
 // Google Maps context — provides isLoaded state to child components
@@ -1383,6 +1384,18 @@ function App() {
     '/properties': true,
     '/marketing/direct-mail': true,
   })
+  const [adminNavOpen, setAdminNavOpen] = useState(
+    () => typeof window !== 'undefined' && window.location.pathname.startsWith('/admin'),
+  )
+
+  // Admin pages are short; keep the document at the top so the main panel is
+  // never left scrolled out of view after sidebar interactions.
+  useEffect(() => {
+    if (!location.pathname.startsWith('/admin')) return
+    window.scrollTo(0, 0)
+    document.documentElement.scrollTop = 0
+    document.body.scrollTop = 0
+  }, [location.pathname])
 
   const toggleSection = (path: string) => {
     setExpandedSections((prev) => ({ ...prev, [path]: !prev[path] }))
@@ -1390,7 +1403,7 @@ function App() {
 
   const drawerContent = (
     <Box
-      sx={{ width: DRAWER_WIDTH, minWidth: DRAWER_WIDTH }}
+      sx={{ width: '100%', minWidth: 0, boxSizing: 'border-box' }}
       role="navigation"
       aria-label="Main navigation"
     >
@@ -1492,10 +1505,11 @@ function App() {
                                   selected={isActive}
                                   sx={{
                                     pl: 3.5,
-                                    pr: 1.5,
+                                    pr: 2,
                                     py: 0.75,
                                     borderLeft: isActive ? '3px solid' : '3px solid transparent',
                                     borderColor: isActive ? 'primary.main' : 'transparent',
+                                    gap: 0.5,
                                   }}
                                   aria-label={`Navigate to ${item.label}`}
                                 >
@@ -1504,7 +1518,7 @@ function App() {
                                   </ListItemIcon>
                                   <ListItemText
                                     primary={item.label}
-                                    sx={{ minWidth: 0 }}
+                                    sx={{ minWidth: 0, flex: '1 1 auto' }}
                                     primaryTypographyProps={{
                                       variant: 'body2',
                                       fontWeight: isActive ? 600 : 400,
@@ -1518,7 +1532,13 @@ function App() {
                                       label={badgeCount}
                                       size="small"
                                       color={isActive ? 'default' : 'primary'}
-                                      sx={{ ml: 0.5, height: 18, fontSize: '0.65rem', minWidth: 24, flexShrink: 0 }}
+                                      sx={{
+                                        ml: 0.5,
+                                        height: 18,
+                                        fontSize: '0.65rem',
+                                        minWidth: 24,
+                                        flexShrink: 0,
+                                      }}
                                     />
                                   )}
                                 </ListItemButton>
@@ -1563,9 +1583,11 @@ function App() {
                           selected={isActive}
                           sx={{
                             pl: 4,
+                            pr: 2,
                             py: 0.75,
                             borderLeft: isActive ? '3px solid' : '3px solid transparent',
                             borderColor: isActive ? 'primary.main' : 'transparent',
+                            gap: 0.5,
                           }}
                           aria-label={`Navigate to ${item.label}`}
                         >
@@ -1574,9 +1596,13 @@ function App() {
                           </ListItemIcon>
                           <ListItemText
                             primary={item.label}
+                            sx={{ minWidth: 0, flex: '1 1 auto' }}
                             primaryTypographyProps={{
                               variant: 'body2',
                               fontWeight: isActive ? 600 : 400,
+                              noWrap: true,
+                              textOverflow: 'ellipsis',
+                              overflow: 'hidden',
                             }}
                           />
                           {badgeCount > 0 && (
@@ -1584,7 +1610,13 @@ function App() {
                               label={badgeCount}
                               size="small"
                               color={isActive ? 'default' : 'primary'}
-                              sx={{ ml: 0.5, height: 18, fontSize: '0.65rem', minWidth: 24 }}
+                              sx={{
+                                ml: 0.5,
+                                height: 18,
+                                fontSize: '0.65rem',
+                                minWidth: 24,
+                                flexShrink: 0,
+                              }}
                             />
                           )}
                         </ListItemButton>
@@ -1604,18 +1636,17 @@ function App() {
         ))}
       </List>
       {user?.is_admin && (
-        <List disablePadding>
+        <List disablePadding data-testid="admin-nav-section">
           <ListItemButton
-            component={Link}
-            to="/admin"
-            onClick={() => isMobile && setDrawerOpen(false)}
+            onClick={() => setAdminNavOpen((open) => !open)}
             selected={location.pathname.startsWith('/admin')}
             sx={{
               py: 1.5,
               borderLeft: location.pathname.startsWith('/admin') ? '3px solid' : '3px solid transparent',
               borderColor: location.pathname.startsWith('/admin') ? 'primary.main' : 'transparent',
             }}
-            aria-label="Navigate to Admin panel"
+            aria-label="Toggle Admin navigation"
+            aria-expanded={adminNavOpen}
           >
             <ListItemIcon sx={{ minWidth: 40, color: location.pathname.startsWith('/admin') ? 'primary.main' : 'text.secondary' }}>
               <AdminPanelSettingsIcon />
@@ -1624,7 +1655,58 @@ function App() {
               primary="Admin"
               primaryTypographyProps={{ fontWeight: 600 }}
             />
+            {adminNavOpen ? <ExpandLess /> : <ExpandMore />}
           </ListItemButton>
+          <Collapse
+            in={adminNavOpen}
+            timeout="auto"
+            unmountOnExit
+            onEntered={(node) => {
+              // Scroll only the drawer paper — never the document (that hides main content).
+              const paper = node.closest('.MuiDrawer-paper')
+              if (!(paper instanceof HTMLElement)) return
+              const overflow =
+                node.getBoundingClientRect().bottom - paper.getBoundingClientRect().bottom
+              if (overflow > 0) {
+                paper.scrollTop += overflow + 8
+              }
+            }}
+          >
+            <List disablePadding>
+              {[
+                { label: 'Users', path: '/admin' },
+                { label: 'Background Jobs', path: '/admin/background-jobs' },
+                { label: 'Pipeline Stages', path: '/admin/pipeline-stages' },
+              ].map((item) => {
+                const isActive = location.pathname === item.path
+                return (
+                  <ListItemButton
+                    key={item.path}
+                    component={Link}
+                    to={item.path}
+                    onClick={() => isMobile && setDrawerOpen(false)}
+                    selected={isActive}
+                    sx={{
+                      pl: 3.5,
+                      pr: 1.5,
+                      py: 0.75,
+                      borderLeft: isActive ? '3px solid' : '3px solid transparent',
+                      borderColor: isActive ? 'primary.main' : 'transparent',
+                    }}
+                    aria-label={`Navigate to ${item.label}`}
+                  >
+                    <ListItemText
+                      primary={item.label}
+                      primaryTypographyProps={{
+                        variant: 'body2',
+                        fontWeight: isActive ? 600 : 400,
+                      }}
+                    />
+                  </ListItemButton>
+                )
+              })}
+            </List>
+          </Collapse>
         </List>
       )}
     </Box>
@@ -1678,8 +1760,33 @@ function App() {
           <GlobalSearchBar />
           <Box sx={{ flexGrow: 1 }} />
           {pipelineStatus?.pipeline_running && (
-            <Tooltip title="HubSpot pipeline processing…">
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mr: 1 }}>
+            <Tooltip
+              title={
+                user?.is_admin
+                  ? 'HubSpot pipeline processing — open Background Jobs'
+                  : 'HubSpot pipeline processing'
+              }
+            >
+              <Box
+                component={user?.is_admin ? Link : 'div'}
+                {...(user?.is_admin
+                  ? { to: '/admin/background-jobs' as const }
+                  : {})}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1,
+                  mr: 1,
+                  color: 'inherit',
+                  textDecoration: 'none',
+                  cursor: user?.is_admin ? 'pointer' : 'default',
+                }}
+                aria-label={
+                  user?.is_admin
+                    ? 'View background jobs queue'
+                    : 'HubSpot pipeline processing'
+                }
+              >
                 <CircularProgress size={18} color="inherit" sx={{ opacity: 0.8 }} />
                 <Typography variant="caption" sx={{ opacity: 0.8, display: { xs: 'none', sm: 'block' } }}>
                   Processing…
@@ -1784,14 +1891,22 @@ function App() {
               width: DRAWER_WIDTH,
               minWidth: DRAWER_WIDTH,
               boxSizing: 'border-box',
-              // Keep the desktop rail in normal document flow so the page has
-              // one vertical scrollbar. A fixed Drawer paper creates its own
-              // scrollbar, which can overlay the queue-count chips.
+              // Stay in document flow; scroll the rail itself so expanding Admin
+              // at the bottom does not push short admin pages off-screen.
+              // Do NOT use scrollbarGutter:stable — it permanently steals width
+              // and clips queue-count chips (regression of #131).
+              // Thin overlay-style scrollbar + 312px paper keeps chips visible.
               position: 'relative',
-              height: 'auto',
-              minHeight: '100vh',
+              height: '100vh',
+              maxHeight: '100vh',
               overflowX: 'hidden',
-              overflowY: 'visible',
+              overflowY: 'auto',
+              scrollbarWidth: 'thin',
+              '&::-webkit-scrollbar': { width: 8 },
+              '&::-webkit-scrollbar-thumb': {
+                backgroundColor: 'rgba(0,0,0,0.25)',
+                borderRadius: 4,
+              },
             },
           }}
         >
@@ -1875,6 +1990,7 @@ function App() {
           {/* Admin routes — guarded by is_admin claim */}
           <Route path="/admin" element={user?.is_admin ? <AdminPanel /> : <Navigate to="/" replace />} />
           <Route path="/admin/users/:userId" element={user?.is_admin ? <AdminUserDetail /> : <Navigate to="/" replace />} />
+          <Route path="/admin/background-jobs" element={user?.is_admin ? <BackgroundJobsPage /> : <Navigate to="/" replace />} />
           <Route path="/admin/pipeline-stages" element={user?.is_admin ? <PipelineConfigAdminPage /> : <Navigate to="/" replace />} />
           {/* Settings — scoring weights configuration */}
           <Route path="/settings/scoring-weights" element={<ScoringWeightsEditor />} />

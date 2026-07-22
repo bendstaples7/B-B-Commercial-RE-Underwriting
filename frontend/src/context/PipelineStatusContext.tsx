@@ -12,6 +12,10 @@ import { hubSpotService } from '@/services/api'
 
 interface PipelineStatus {
   pipeline_running: boolean
+  pipeline_stage?: string | null
+  pipeline_stage_label?: string | null
+  pipeline_stage_index?: number | null
+  pipeline_stage_total?: number | null
   matches: { total: number; high: number; medium: number; unmatched: number }
   interactions: number
   tasks: number

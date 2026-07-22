@@ -103,3 +103,24 @@ if ($migrateProc.ExitCode -ne 0) {
 }
 
 Write-Host "Restore complete." -ForegroundColor Green
+
+# Re-apply designated admin after dump (prod dumps may carry is_admin=false).
+$adminEmail = $env:ADMIN_EMAIL
+if (-not $adminEmail) {
+    $envFile = Join-Path (Split-Path $PSScriptRoot -Parent) ".env"
+    if (Test-Path $envFile) {
+        Get-Content $envFile | ForEach-Object {
+            if ($_ -match '^ADMIN_EMAIL=(.*)$') {
+                $adminEmail = $Matches[1].Trim().Trim('"').Trim("'")
+            }
+        }
+    }
+}
+if ($adminEmail) {
+    $emailLower = $adminEmail.ToLowerInvariant()
+    Write-Host "Ensuring is_admin for ADMIN_EMAIL=$emailLower ..."
+    [System.Environment]::SetEnvironmentVariable("PGPASSWORD", $LOCAL_DB_PASS, "Process")
+    & $PSQL -U $LOCAL_DB_USER -h $LOCAL_DB_HOST -p $LOCAL_DB_PORT -d $LOCAL_DB_NAME -c `
+        "UPDATE users SET is_admin = TRUE WHERE email_lower = '$emailLower';" | Out-Null
+    [System.Environment]::SetEnvironmentVariable("PGPASSWORD", $null, "Process")
+}

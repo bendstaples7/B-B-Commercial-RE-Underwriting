@@ -2431,6 +2431,7 @@ export interface AdminLeadListResponse {
 export interface PipelineStage {
   id: number
   stage_name: string
+  label?: string
   order: number
   weight: number
 }

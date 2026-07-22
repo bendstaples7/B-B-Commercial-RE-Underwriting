@@ -18,6 +18,8 @@ class OpenLetterConfig(db.Model):
     batch_minimum = db.Column(db.Integer, nullable=False, default=50)
     allow_send_below_minimum = db.Column(db.Boolean, nullable=False, default=False)
     return_address = db.Column(db.JSON, nullable=True)
+    creative_presets = db.Column(db.JSON, nullable=True)
+    active_creative_preset_id = db.Column(db.String(64), nullable=True)
     estimated_cost_per_piece = db.Column(db.Numeric(10, 4), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(

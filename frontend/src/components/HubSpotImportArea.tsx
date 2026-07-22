@@ -35,6 +35,7 @@ import {
   LinearProgress,
   Tooltip,
   Badge,
+  Link as MuiLink,
 } from '@mui/material'
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
@@ -45,6 +46,7 @@ import BackupIcon from '@mui/icons-material/Backup'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import RateReviewIcon from '@mui/icons-material/RateReview'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link as RouterLink } from 'react-router-dom'
 import { hubSpotService } from '@/services/api'
 import type { HubSpotConfig, HubSpotImportRun } from '@/types'
 import { WebhookSyncPanel } from '@/components/WebhookSyncPanel'
@@ -667,7 +669,17 @@ export const HubSpotImportArea: React.FC = () => {
           <Box>
             {pipelineStatus.pipeline_running && (
               <Alert severity="info" sx={{ mb: 2 }} icon={<CircularProgress size={16} />}>
-                Pipeline is running — matching and enrichment in progress…
+                Pipeline is running
+                {pipelineStatus.pipeline_stage_label
+                  ? ` — ${pipelineStatus.pipeline_stage_label}`
+                  : ' — matching and enrichment in progress'}
+                {pipelineStatus.pipeline_stage_index && pipelineStatus.pipeline_stage_total
+                  ? ` (${pipelineStatus.pipeline_stage_index}/${pipelineStatus.pipeline_stage_total})`
+                  : ''}
+                .{' '}
+                <MuiLink component={RouterLink} to="/admin/background-jobs" underline="hover">
+                  View queue
+                </MuiLink>
               </Alert>
             )}
             <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>

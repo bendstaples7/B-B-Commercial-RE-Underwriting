@@ -17,6 +17,16 @@ class PipelineConfigService:
         config = PipelineStageConfig.query.filter_by(stage_name=stage_name).first()
         return config.weight if config else Decimal("0.0")
 
+    def get_lead_status_bonus(self, stage_name: str | None) -> float:
+        """Score bonus for a lead_status — DB weight, else canonical defaults."""
+        if not stage_name:
+            return 0.0
+        config = PipelineStageConfig.query.filter_by(stage_name=stage_name).first()
+        if config is not None:
+            return float(config.weight)
+        from app.services.lead_pipeline_stages import DEFAULT_STAGE_WEIGHTS
+        return float(DEFAULT_STAGE_WEIGHTS.get(stage_name, 0))
+
     def update_stage_weights(self, updates: List[Dict[str, Any]]) -> List[PipelineStageConfig]:
         """Updates weights for multiple stages and handles creation of new stages.
 

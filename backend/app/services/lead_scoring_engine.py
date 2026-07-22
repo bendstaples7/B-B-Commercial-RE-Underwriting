@@ -1392,16 +1392,27 @@ class LeadScoringEngine:
 
     @staticmethod
     def _pipeline_stage_bonus(lead: Lead) -> float:
-        STAGE_BONUS = {
-            'skip_trace': -5.0, 'awaiting_skip_trace': -5.0,
-            'mailing_no_contact_made': 0.0,
-            'mailing_contacted_no_interest': -10.0,
-            'mailing_contacted_interested': 15.0,
-            'negotiating_remote': 25.0,
-            'in_person_appointment': 30.0,
-            'offer_delivered': 35.0,
-        }
-        return STAGE_BONUS.get(getattr(lead, 'lead_status', None), 0.0)
+        """Score delta from lead_status — Admin Pipeline Stages weights (with defaults)."""
+        status = getattr(lead, 'lead_status', None)
+        try:
+            from flask import has_app_context
+
+            if not has_app_context():
+                from app.services.lead_pipeline_stages import DEFAULT_STAGE_WEIGHTS
+                return float(DEFAULT_STAGE_WEIGHTS.get(status, 0)) if status else 0.0
+            from app.services.pipeline_config_service import PipelineConfigService
+            return PipelineConfigService().get_lead_status_bonus(status)
+        except Exception as exc:  # narrow: DB/config failures fall back to defaults
+            from sqlalchemy.exc import SQLAlchemyError
+
+            if not isinstance(exc, (SQLAlchemyError, LookupError, TypeError, ValueError, RuntimeError)):
+                raise
+            import logging
+            logging.getLogger(__name__).warning(
+                'Pipeline stage bonus lookup failed; using defaults: %s', exc,
+            )
+            from app.services.lead_pipeline_stages import DEFAULT_STAGE_WEIGHTS
+            return float(DEFAULT_STAGE_WEIGHTS.get(status, 0)) if status else 0.0
 
 
 # Deprecated alias — use LeadScoringEngine directly.
