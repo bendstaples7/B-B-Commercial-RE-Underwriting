@@ -1794,6 +1794,19 @@ class TestSubmitCampaignFollowUp:
                 lead_count=1,
                 product_id='prod-1',
                 template_id='tmpl-1',
+                creative={
+                    'first_name': 'Test',
+                    'last_name': 'Sender',
+                    'phone': '(312) 555-0100',
+                    'font_name': 'Arial',
+                    'font_color': '#000000',
+                    'return_address': {
+                        'address1': '1 Sender St',
+                        'city': 'Chicago',
+                        'state': 'IL',
+                        'zip': '60601',
+                    },
+                },
                 created_by=USER_ID,
             )
             db.session.add_all([config, campaign])
@@ -1848,6 +1861,19 @@ class TestSubmitCampaignFollowUp:
                 lead_count=1,
                 product_id='prod-1',
                 template_id='tmpl-1',
+                creative={
+                    'first_name': 'Test',
+                    'last_name': 'Sender',
+                    'phone': '(312) 555-0100',
+                    'font_name': 'Arial',
+                    'font_color': '#000000',
+                    'return_address': {
+                        'address1': '1 Sender St',
+                        'city': 'Chicago',
+                        'state': 'IL',
+                        'zip': '60601',
+                    },
+                },
                 created_by=USER_ID,
             )
             db.session.add_all([config, campaign])

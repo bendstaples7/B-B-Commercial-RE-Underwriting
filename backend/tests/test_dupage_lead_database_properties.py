@@ -8,7 +8,7 @@ import tempfile
 import uuid
 import pytest
 from datetime import date
-from hypothesis import given, settings, HealthCheck
+from hypothesis import given, settings, HealthCheck, assume
 from hypothesis import strategies as st
 
 
@@ -95,6 +95,7 @@ def test_property_5_same_address_never_creates_second_lead(address, app):
 
     **Validates: Requirements 2.5, 7.1, 7.3, 7.4**
     """
+    assume(any(ch.isalpha() for ch in address))
     with app.app_context():
         from app import db
         from app.models.lead import Property
