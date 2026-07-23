@@ -239,6 +239,11 @@ def runtime_identity_exposed() -> bool:
     return os.environ.get("FLASK_ENV", "development") != "production"
 
 
+def is_loopback_restart_caller(remote_addr: str | None) -> bool:
+    """True when health may schedule a local spawn-restart for this client."""
+    return remote_addr in ("127.0.0.1", "::1")
+
+
 def get_runtime_identity(*, allow_restart: bool = False) -> dict:
     """Payload fields for the health endpoints (empty in production).
 

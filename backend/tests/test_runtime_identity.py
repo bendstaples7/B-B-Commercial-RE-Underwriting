@@ -157,3 +157,23 @@ def test_auto_restart_disabled_under_pytest_env(monkeypatch):
     monkeypatch.delenv("BB_DISABLE_AUTO_RESTART", raising=False)
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "test_foo")
     assert ri._auto_restart_enabled() is False
+
+
+def test_auto_restart_disabled_in_production(monkeypatch):
+    import app.runtime_identity as ri
+
+    monkeypatch.delenv("BB_DISABLE_AUTO_RESTART", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("WERKZEUG_RUN_MAIN", raising=False)
+    monkeypatch.setenv("FLASK_SKIP_RELOADER", "1")
+    monkeypatch.setenv("FLASK_ENV", "production")
+    assert ri._auto_restart_enabled() is False
+
+
+def test_loopback_restart_caller():
+    from app.runtime_identity import is_loopback_restart_caller
+
+    assert is_loopback_restart_caller("127.0.0.1") is True
+    assert is_loopback_restart_caller("::1") is True
+    assert is_loopback_restart_caller("192.168.1.10") is False
+    assert is_loopback_restart_caller(None) is False

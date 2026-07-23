@@ -1,6 +1,8 @@
 /**
  * SkipTraceQueue — active Skip Trace work (lead_status = skip_trace).
- * Kanban Skip Trace column as a list work queue.
+ *
+ * Same composition as NeedsReviewQueue / DoNotContactQueue (useQuery +
+ * QueueTable). QueuePage in types is the API response shape, not a React page.
  */
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'

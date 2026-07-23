@@ -31,5 +31,5 @@ code after Python edits:
 ## Escape hatches
 
 - `BB_DISABLE_AUTO_RESTART=1` — tests / special debugging only.
-- `FLASK_SKIP_RELOADER=1` — attach a debugger; prefer auto-restart via health
-  still works unless auto-restart is also disabled.
+- `FLASK_SKIP_RELOADER=1` — attach a debugger; auto-restart via health still
+  fires unless you also set `BB_DISABLE_AUTO_RESTART=1`.

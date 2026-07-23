@@ -658,6 +658,9 @@ def test_scrub_refuses_mailed_evidence_unless_force(app):
 
         forced = scrub_unsent_cancelled_campaign(campaign.id, apply=False, force=True)
         assert forced['force'] is True
+
+
+def test_apply_failed_requeued_queued_becomes_invalid_address(app):
     """After cancel/requeue, OLC Failed must drop Ready-to-Mail rows."""
     with app.app_context():
         from app import db

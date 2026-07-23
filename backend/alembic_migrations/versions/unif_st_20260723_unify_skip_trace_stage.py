@@ -38,7 +38,10 @@ _STAGES = (
 def upgrade():
     conn = op.get_bind()
 
-    # 1) Complete dated leak chores on awaiting leads (not recent_sale_hold).
+    # 1) Complete dated non-hold chores on awaiting leads (any task_type).
+    #    Matches clear_dated_due_chores_entering_skip_trace — leftover call /
+    #    follow-up / custom dated work would flood Today's Action once status
+    #    becomes skip_trace. Preserve open recent_sale_hold rows.
     conn.execute(sa.text("""
         UPDATE lead_tasks AS t
         SET status = 'completed',

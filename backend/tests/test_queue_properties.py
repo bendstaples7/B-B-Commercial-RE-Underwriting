@@ -783,6 +783,8 @@ _lead_record = st.fixed_dictionaries({
     'is_warm':             st.booleans(),
     'review_required':     st.booleans(),
     'has_property_match':  st.booleans(),
+    'needs_skip_trace':    st.booleans(),
+    'skip_trace_exhausted': st.booleans(),
 })
 
 
@@ -794,7 +796,7 @@ def test_property_2_badge_counts_equal_paginated_totals(app, lead_dicts):
     Property 2: Badge counts equal paginated totals.
 
     For any state of the leads table, QueueService.get_counts() returns a count
-    for each of the 7 queues that equals the `total` value returned by the
+    for each queue that equals the `total` value returned by the
     corresponding paginated get_* method called with no pagination constraints.
 
     # Feature: source-agnostic-crm-queues, Property 2: badge counts equal paginated totals
@@ -804,6 +806,8 @@ def test_property_2_badge_counts_equal_paginated_totals(app, lead_dicts):
     with app.app_context():
         try:
             # Seed the database with the Hypothesis-generated lead population
+            from datetime import datetime, timezone
+
             for i, ld in enumerate(lead_dicts):
                 lead = Lead(
                     property_street=f'{i} Property 2 Test St',
@@ -812,6 +816,13 @@ def test_property_2_badge_counts_equal_paginated_totals(app, lead_dicts):
                     is_warm=ld['is_warm'],
                     review_required=ld['review_required'],
                     has_property_match=ld['has_property_match'],
+                    needs_skip_trace=(
+                        True if ld['lead_status'] == 'skip_trace' and ld['needs_skip_trace']
+                        else False
+                    ),
+                    skip_trace_exhausted_at=(
+                        datetime.now(timezone.utc) if ld['skip_trace_exhausted'] else None
+                    ),
                     lead_score=50.0,
                     has_phone=False,
                     has_email=False,
@@ -858,6 +869,19 @@ def test_property_2_badge_counts_equal_paginated_totals(app, lead_dicts):
             assert counts['needs_review'] == total_needs_review, (
                 f"needs_review count mismatch: get_counts()={counts['needs_review']}, "
                 f"get_needs_review total={total_needs_review}"
+            )
+
+            _, total_skip_trace = svc.get_skip_trace(per_page=10000)
+            assert counts['skip_trace'] == total_skip_trace, (
+                f"skip_trace count mismatch: get_counts()={counts['skip_trace']}, "
+                f"get_skip_trace total={total_skip_trace}"
+            )
+
+            _, total_skip_trace_exhausted = svc.get_skip_trace_exhausted(per_page=10000)
+            assert counts['skip_trace_exhausted'] == total_skip_trace_exhausted, (
+                f"skip_trace_exhausted count mismatch: "
+                f"get_counts()={counts['skip_trace_exhausted']}, "
+                f"get_skip_trace_exhausted total={total_skip_trace_exhausted}"
             )
 
             _, total_do_not_contact = svc.get_do_not_contact(per_page=10000)

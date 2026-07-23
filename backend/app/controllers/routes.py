@@ -145,9 +145,9 @@ def health_runtime():
     Spawn-restart is loopback-only so LAN clients cannot kill the process.
     """
     from flask import request
-    from app.runtime_identity import get_runtime_identity
+    from app.runtime_identity import get_runtime_identity, is_loopback_restart_caller
 
-    allow_restart = request.remote_addr in ('127.0.0.1', '::1')
+    allow_restart = is_loopback_restart_caller(request.remote_addr)
     payload = {'status': 'ok'}
     payload.update(get_runtime_identity(allow_restart=allow_restart))
     return jsonify(payload), 200
@@ -369,11 +369,11 @@ def health_check():
     status = 'degraded' if degraded else 'healthy'
     http_status = 503 if degraded else 200
     from flask import current_app, request
-    from app.runtime_identity import get_runtime_identity
+    from app.runtime_identity import get_runtime_identity, is_loopback_restart_caller
 
     db_mode = current_app.config.get('DB_MODE', 'cloud')
     payload = {'status': status, 'checks': checks, 'db_mode': db_mode}
-    allow_restart = request.remote_addr in ('127.0.0.1', '::1')
+    allow_restart = is_loopback_restart_caller(request.remote_addr)
     payload.update(get_runtime_identity(allow_restart=allow_restart))
     return jsonify(payload), http_status
 

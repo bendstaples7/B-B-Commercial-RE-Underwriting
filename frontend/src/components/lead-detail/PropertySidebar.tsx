@@ -972,7 +972,8 @@ export function PropertySidebar({
       )}
 
       {(data.needs_skip_trace != null || data.skip_tracer || data.date_skip_traced
-        || data.skip_trace_next_source_id || data.skip_trace_exhausted_at) && (
+        || data.skip_trace_next_source_id || data.skip_trace_exhausted_at
+        || (Array.isArray(data.skip_trace_attempts) && data.skip_trace_attempts.length > 0)) && (
         <SidebarSection title="Skip Trace">
           <SidebarRow
             label="Needed (phone/email)"

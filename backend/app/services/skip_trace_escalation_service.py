@@ -250,6 +250,7 @@ class SkipTraceEscalationService:
         if olc_order_id:
             prior.olc_order_id = olc_order_id
         db.session.add(prior)
+
     def _assign_next_source(
         self,
         lead: Lead,
@@ -264,67 +265,69 @@ class SkipTraceEscalationService:
     ) -> dict[str, Any]:
         from app.services.skip_trace_enqueue import SkipTraceEnqueue
 
-        lead.skip_trace_next_source_id = source['id']
-        lead.skip_trace_exhausted_at = None
-        db.session.add(lead)
-
-        started = (
-            SkipTraceAttempt.query
-            .filter_by(
-                lead_id=lead.id,
-                cycle=cycle,
-                source_id=source['id'],
-                outcome='started',
-            )
-            .first()
-        )
-        if started is None:
-            db.session.add(SkipTraceAttempt(
-                lead_id=lead.id,
-                cycle=cycle,
-                source_id=source['id'],
-                source_label=source['label'],
-                started_at=datetime.now(timezone.utc),
-                outcome='started',
-                trigger='invalid_mail',
-                mail_queue_item_id=mail_queue_item_id,
-                olc_order_id=olc_order_id,
-            ))
-
         label = source['label']
-        db.session.add(LeadTimelineEntry(
-            lead_id=lead.id,
-            event_type='note_added',
-            occurred_at=datetime.now(timezone.utc),
-            source='system',
-            actor=actor,
-            summary=f'Skip trace — try {label} after undeliverable mail',
-            event_metadata={
-                'reason': 'invalid_mail_escalation',
-                'source_id': source['id'],
-                'source_label': label,
-                'mail_queue_item_id': mail_queue_item_id,
-                'olc_order_id': olc_order_id,
-                'validation_error': (validation_error or '')[:300] or None,
-            },
-            is_deleted=False,
-        ))
-
-        # Move / ensure skip_trace handoff (idempotent when already there)
-        enqueue = SkipTraceEnqueue()
         try:
-            move_result = enqueue.move_to_skip_trace(
-                lead.id,
-                actor=actor,
-                commit=False,
-                reason='invalid_mail_escalation',
-            )
+            # Savepoint so commit=False callers (campaign sync / _apply_failed)
+            # keep their outer transaction if the move fails.
+            with db.session.begin_nested():
+                lead.skip_trace_next_source_id = source['id']
+                lead.skip_trace_exhausted_at = None
+                db.session.add(lead)
+
+                started = (
+                    SkipTraceAttempt.query
+                    .filter_by(
+                        lead_id=lead.id,
+                        cycle=cycle,
+                        source_id=source['id'],
+                        outcome='started',
+                    )
+                    .first()
+                )
+                if started is None:
+                    db.session.add(SkipTraceAttempt(
+                        lead_id=lead.id,
+                        cycle=cycle,
+                        source_id=source['id'],
+                        source_label=source['label'],
+                        started_at=datetime.now(timezone.utc),
+                        outcome='started',
+                        trigger='invalid_mail',
+                        mail_queue_item_id=mail_queue_item_id,
+                        olc_order_id=olc_order_id,
+                    ))
+
+                db.session.add(LeadTimelineEntry(
+                    lead_id=lead.id,
+                    event_type='note_added',
+                    occurred_at=datetime.now(timezone.utc),
+                    source='system',
+                    actor=actor,
+                    summary=f'Skip trace — try {label} after undeliverable mail',
+                    event_metadata={
+                        'reason': 'invalid_mail_escalation',
+                        'source_id': source['id'],
+                        'source_label': label,
+                        'mail_queue_item_id': mail_queue_item_id,
+                        'olc_order_id': olc_order_id,
+                        'validation_error': (validation_error or '')[:300] or None,
+                    },
+                    is_deleted=False,
+                ))
+
+                enqueue = SkipTraceEnqueue()
+                move_result = enqueue.move_to_skip_trace(
+                    lead.id,
+                    actor=actor,
+                    commit=False,
+                    reason='invalid_mail_escalation',
+                )
+                self._retitle_open_handoff(lead.id, label)
         except Exception:
             logger.exception(
-                'skip-trace escalation move failed for lead %s; rolling back assignment',
+                'skip-trace escalation move failed for lead %s; rolled back assignment savepoint',
                 lead.id,
             )
-            db.session.rollback()
             return {
                 'lead_id': lead.id,
                 'action': 'move_failed',
@@ -332,8 +335,6 @@ class SkipTraceEscalationService:
                 'source_label': label,
                 'error': True,
             }
-
-        self._retitle_open_handoff(lead.id, label)
 
         if commit:
             db.session.commit()

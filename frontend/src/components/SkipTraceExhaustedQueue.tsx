@@ -1,6 +1,8 @@
 /**
  * SkipTraceExhaustedQueue — leads where every connected skip-trace source
  * has been tried after undeliverable mail. Investigate new vendors when this grows.
+ *
+ * Same composition as NeedsReviewQueue / DoNotContactQueue (useQuery + QueueTable).
  */
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
