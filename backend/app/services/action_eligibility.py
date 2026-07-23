@@ -20,12 +20,10 @@ TERMINAL_LEAD_STATUSES = frozenset({
 
 SKIP_TRACE_PIPELINE_STATUSES = frozenset({
     'skip_trace',
-    'awaiting_skip_trace',
 })
 
 # Stable reason codes — mirrored in frontend actionEligibility.ts
 REASON_ALREADY_SKIP_TRACE = 'already_skip_trace'
-REASON_ALREADY_AWAITING_SKIP_TRACE = 'already_awaiting_skip_trace'
 REASON_TERMINAL_STATUS = 'terminal_status'
 REASON_DNC_BLOCKS_OUTREACH = 'dnc_blocks_outreach'
 REASON_MAIL_RECENTLY_SOLD = 'mail_recently_sold'
@@ -66,9 +64,8 @@ def _blocked(
 def evaluate_move_to_skip_trace(lead: _LeadStatusLike) -> ActionEligibilityResult:
     """Whether Move to Skip Trace may mutate this lead.
 
-    ``skip_trace`` is already on the Skip Trace work column (already done).
-    ``awaiting_skip_trace`` (e.g. recent-sale hold ended) still needs an active
-    handoff into that queue — Move to Skip Trace must stay available.
+    ``skip_trace`` is already on the Skip Trace stage (already done). Hold vs
+    active work is expressed via ``needs_skip_trace`` + hold/handoff tasks.
     """
     status = lead.lead_status
     if status == 'skip_trace':

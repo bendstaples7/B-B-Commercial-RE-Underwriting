@@ -47,12 +47,13 @@ def _mock_action_engine_db(monkeypatch):
 # ---------------------------------------------------------------------------
 
 lead_status_strategy = st.sampled_from([
-    'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+    'skip_trace', 'mailing_no_contact_made',
     'mailing_contacted_no_interest', 'mailing_contacted_interested',
     'negotiating_remote', 'in_person_appointment', 'offer_delivered',
     'deprioritize', 'deal_won', 'deal_lost', 'suppressed', 'do_not_contact',
 ])
 active_lead_status_strategy = st.sampled_from([
+    'skip_trace',
     'mailing_no_contact_made', 'mailing_contacted_no_interest',
     'mailing_contacted_interested', 'negotiating_remote',
     'in_person_appointment', 'offer_delivered',

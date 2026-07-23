@@ -389,11 +389,11 @@ describe('RecommendedActionPanel', () => {
       expect(screen.queryByTestId('ra-universal-btn-move_to_skip_trace')).not.toBeInTheDocument()
     })
 
-    it('keeps Move to Skip Trace enabled for awaiting_skip_trace', () => {
+    it('keeps Move to Skip Trace enabled for mailing statuses', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('enrich_data')}
-          leadStatus="awaiting_skip_trace"
+          leadStatus="mailing_no_contact_made"
           openTasks={[]}
           onAction={vi.fn()}
         />,
@@ -407,7 +407,7 @@ describe('RecommendedActionPanel', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('call_ready', 'Call Now')}
-          leadStatus="awaiting_skip_trace"
+          leadStatus="mailing_no_contact_made"
           openTasks={[
             makeTask(1, {
               task_type: 'skip_trace_owner',
@@ -809,7 +809,7 @@ describe('RecommendedActionPanel', () => {
         'Held in Skip Trace',
       )
       expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent(
-        'move to Awaiting Skip Trace',
+        'undated handoff becomes active work',
       )
       expect(screen.getByTestId('recent-sale-mail-hold')).toHaveTextContent(
         formatDateOnly('2027-03-31'),

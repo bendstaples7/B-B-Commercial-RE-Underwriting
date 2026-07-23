@@ -1191,9 +1191,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         setActivitySnackbar({
           open: true,
           message: result.already_done
-            ? (result.reason_code === 'already_awaiting_skip_trace'
-              ? 'Already awaiting skip trace'
-              : 'Already in Skip Trace pipeline')
+            ? 'Already in Skip Trace pipeline'
             : result.completed_task_id
               ? 'Current task completed and lead moved to Skip Trace'
               : 'Lead moved to Skip Trace',

@@ -23,8 +23,8 @@ def is_in_todays_action(lead_status, recommended_action, open_task_due_today):
     """Today's Action: lead_status in active pipeline statuses AND
     an open task has due_date <= today (recommended_action alone is not enough).
 
-    ``awaiting_skip_trace`` is excluded — skip-trace staging is not salesperson
-    Today's Action work.
+    Undated skip-trace handoffs stay out via null due_date; dated due chores
+    on skip_trace can appear until promote heals them.
     """
     _TODAYS_ACTION_STATUSES = {
         'mailing_no_contact_made', 'mailing_contacted_no_interest',
@@ -40,7 +40,7 @@ def is_in_previously_warm(lead_status, has_hubspot_activity, recent_platform_con
     and lead is in an active pipeline status.
     """
     _PREVIOUSLY_WARM_STATUSES = {
-        'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+        'skip_trace', 'mailing_no_contact_made',
         'mailing_contacted_no_interest', 'mailing_contacted_interested',
         'negotiating_remote', 'in_person_appointment', 'offer_delivered',
     }
@@ -74,7 +74,7 @@ def is_in_no_next_action(lead_status, recommended_action, has_open_tasks):
     AND no open tasks.
     """
     _NNA_STATUSES = {
-        'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+        'skip_trace', 'mailing_no_contact_made',
         'mailing_contacted_no_interest', 'mailing_contacted_interested',
         'negotiating_remote', 'in_person_appointment', 'offer_delivered',
     }
@@ -140,7 +140,7 @@ def is_in_any_active_work_queue(
 # ---------------------------------------------------------------------------
 
 all_lead_statuses = st.sampled_from([
-    'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+    'skip_trace', 'mailing_no_contact_made',
     'mailing_contacted_no_interest', 'mailing_contacted_interested',
     'negotiating_remote', 'in_person_appointment', 'offer_delivered',
     'deprioritize', 'deal_won', 'deal_lost', 'suppressed', 'do_not_contact',
@@ -344,7 +344,7 @@ def test_property_10_queue_membership_pure_function_of_lead_state(
         'mailing_no_contact_made', 'mailing_contacted_no_interest',
         'mailing_contacted_interested', 'negotiating_remote',
         'in_person_appointment', 'offer_delivered',
-        'skip_trace', 'awaiting_skip_trace',
+        'skip_trace',
     }
     if in_todays_action:
         assert lead_status in _TODAYS_ACTION_STATUSES, (
@@ -357,7 +357,7 @@ def test_property_10_queue_membership_pure_function_of_lead_state(
 
     # Previously Warm requires active pipeline status AND hubspot activity
     _PREVIOUSLY_WARM_STATUSES = {
-        'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+        'skip_trace', 'mailing_no_contact_made',
         'mailing_contacted_no_interest', 'mailing_contacted_interested',
         'negotiating_remote', 'in_person_appointment', 'offer_delivered',
     }
@@ -374,7 +374,7 @@ def test_property_10_queue_membership_pure_function_of_lead_state(
 
     # No Next Action requires active pipeline status
     _NNA_STATUSES = {
-        'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+        'skip_trace', 'mailing_no_contact_made',
         'mailing_contacted_no_interest', 'mailing_contacted_interested',
         'negotiating_remote', 'in_person_appointment', 'offer_delivered',
     }
@@ -568,7 +568,7 @@ def test_property_4_warm_signal_sets_is_warm(signals_batch, initial_is_warm):
 
 # All valid lead statuses and recommended_action values for Property 1
 _NNA_LEAD_STATUSES = [
-    'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+    'skip_trace', 'mailing_no_contact_made',
     'mailing_contacted_no_interest', 'mailing_contacted_interested',
     'negotiating_remote', 'in_person_appointment', 'offer_delivered',
     'deprioritize', 'deal_won', 'deal_lost', 'suppressed', 'do_not_contact',
@@ -604,7 +604,7 @@ _task_variant_st = st.sampled_from(_TASK_VARIANTS)
 # no specific recommended action and no open tasks.
 _NNA_ALLOWED_ACTIONS = {None, 'create_task', 'ready_for_outreach', 'add_contact_info'}
 _NNA_ALLOWED_STATUSES = {
-    'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+    'skip_trace', 'mailing_no_contact_made',
     'mailing_contacted_no_interest', 'mailing_contacted_interested',
     'negotiating_remote', 'in_person_appointment', 'offer_delivered',
 }
@@ -762,7 +762,7 @@ from app.services.queue_service import QueueService
 
 # Strategies for lead field values
 _lead_statuses = st.sampled_from([
-    'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+    'skip_trace', 'mailing_no_contact_made',
     'mailing_contacted_no_interest', 'mailing_contacted_interested',
     'negotiating_remote', 'in_person_appointment', 'offer_delivered',
     'deprioritize', 'deal_won', 'deal_lost', 'suppressed', 'do_not_contact',
@@ -783,6 +783,8 @@ _lead_record = st.fixed_dictionaries({
     'is_warm':             st.booleans(),
     'review_required':     st.booleans(),
     'has_property_match':  st.booleans(),
+    'needs_skip_trace':    st.booleans(),
+    'skip_trace_exhausted': st.booleans(),
 })
 
 
@@ -794,7 +796,7 @@ def test_property_2_badge_counts_equal_paginated_totals(app, lead_dicts):
     Property 2: Badge counts equal paginated totals.
 
     For any state of the leads table, QueueService.get_counts() returns a count
-    for each of the 7 queues that equals the `total` value returned by the
+    for each queue that equals the `total` value returned by the
     corresponding paginated get_* method called with no pagination constraints.
 
     # Feature: source-agnostic-crm-queues, Property 2: badge counts equal paginated totals
@@ -804,6 +806,8 @@ def test_property_2_badge_counts_equal_paginated_totals(app, lead_dicts):
     with app.app_context():
         try:
             # Seed the database with the Hypothesis-generated lead population
+            from datetime import datetime, timezone
+
             for i, ld in enumerate(lead_dicts):
                 lead = Lead(
                     property_street=f'{i} Property 2 Test St',
@@ -812,6 +816,13 @@ def test_property_2_badge_counts_equal_paginated_totals(app, lead_dicts):
                     is_warm=ld['is_warm'],
                     review_required=ld['review_required'],
                     has_property_match=ld['has_property_match'],
+                    needs_skip_trace=(
+                        True if ld['lead_status'] == 'skip_trace' and ld['needs_skip_trace']
+                        else False
+                    ),
+                    skip_trace_exhausted_at=(
+                        datetime.now(timezone.utc) if ld['skip_trace_exhausted'] else None
+                    ),
                     lead_score=50.0,
                     has_phone=False,
                     has_email=False,
@@ -858,6 +869,19 @@ def test_property_2_badge_counts_equal_paginated_totals(app, lead_dicts):
             assert counts['needs_review'] == total_needs_review, (
                 f"needs_review count mismatch: get_counts()={counts['needs_review']}, "
                 f"get_needs_review total={total_needs_review}"
+            )
+
+            _, total_skip_trace = svc.get_skip_trace(per_page=10000)
+            assert counts['skip_trace'] == total_skip_trace, (
+                f"skip_trace count mismatch: get_counts()={counts['skip_trace']}, "
+                f"get_skip_trace total={total_skip_trace}"
+            )
+
+            _, total_skip_trace_exhausted = svc.get_skip_trace_exhausted(per_page=10000)
+            assert counts['skip_trace_exhausted'] == total_skip_trace_exhausted, (
+                f"skip_trace_exhausted count mismatch: "
+                f"get_counts()={counts['skip_trace_exhausted']}, "
+                f"get_skip_trace_exhausted total={total_skip_trace_exhausted}"
             )
 
             _, total_do_not_contact = svc.get_do_not_contact(per_page=10000)
@@ -914,7 +938,7 @@ def test_property_3_previously_warm_equals_is_warm(app, lead_dicts):
             for i, ld in enumerate(lead_dicts):
                 lead = Lead(
                     property_street=f'{i} Property 3 Test St',
-                    lead_status='awaiting_skip_trace',
+                    lead_status='skip_trace',
                     is_warm=ld['is_warm'],
                     lead_score=50.0,
                     has_phone=False,

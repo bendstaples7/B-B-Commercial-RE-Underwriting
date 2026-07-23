@@ -806,18 +806,31 @@ export const OpenLetterSetupPanel: React.FC = () => {
                       || activePreset.font_color
                       || config?.template_style?.font_color
                     if (font) {
+                      const templateLabel = (
+                        templateName
+                        || activePreset.olc_template_name
+                        || config?.default_template_name
+                        || (templateId !== '' ? `Template #${templateId}` : '')
+                      )
                       return (
-                        <Alert severity="success" sx={{ py: 0.5 }}>
-                          Confirmed from template:{' '}
-                          <strong>{font}</strong>
-                          {ink ? <> · ink <strong>{ink}</strong></> : null}
-                          . Change font/ink in Open Letter Connect, then refresh templates / save.
+                        <Alert severity="success" sx={{ py: 0.5 }} data-testid="olc-template-design-confirmed">
+                          Connect template design is readable
+                          {templateLabel ? <> for <strong>{templateLabel}</strong></> : null}
+                          . Typeface/ink live inside that template in Connect (not a separate SKU we
+                          send). Change handwriting style in Open Letter Connect, then refresh
+                          templates / save.
+                          <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 0.5 }}>
+                            Internal Connect typeface (for our records only): {font}
+                            {ink ? ` · ${ink}` : ''}
+                          </Typography>
                         </Alert>
                       )
                     }
                     return (
                       <Alert severity="warning" sx={{ py: 0.5 }}>
-                        Select a letter template above to auto-confirm font and ink from Connect.
+                        Select a letter template above so we can confirm the Connect template design
+                        is readable. Font/ink are part of the template in Connect — we only send
+                        productId + templateId.
                       </Alert>
                     )
                   })()}

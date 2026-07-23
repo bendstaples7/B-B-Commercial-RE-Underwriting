@@ -21,7 +21,6 @@ from app.services.property_address_service import display_street, display_zip
 # Statuses that represent active outreach pipeline (not terminal or suppressed)
 ACTIVE_PIPELINE_STATUSES = [
     'skip_trace',
-    'awaiting_skip_trace',
     'mailing_no_contact_made',
     'mailing_contacted_no_interest',
     'mailing_contacted_interested',
@@ -30,11 +29,8 @@ ACTIVE_PIPELINE_STATUSES = [
     'offer_delivered',
 ]
 
-# Today's Action: active pipeline minus skip-trace staging (awaiting_skip_trace).
-TODAYS_ACTION_STATUSES = [
-    status for status in ACTIVE_PIPELINE_STATUSES
-    if status != 'awaiting_skip_trace'
-]
+# Today's Action uses the full active pipeline (undated handoffs stay out via due_date).
+TODAYS_ACTION_STATUSES = list(ACTIVE_PIPELINE_STATUSES)
 
 # Statuses where outreach is in progress (has had contact)
 CONTACTED_STATUSES = [
@@ -108,6 +104,13 @@ def _lead_to_queue_row(
         'is_warm': lead.is_warm,
         'last_mailed_at': last_mailed_at,
         'last_sale_at': format_last_sale_at(lead),
+        'skip_trace_next_source_id': getattr(lead, 'skip_trace_next_source_id', None),
+        'skip_trace_exhausted_at': (
+            lead.skip_trace_exhausted_at.isoformat()
+            if getattr(lead, 'skip_trace_exhausted_at', None)
+            else None
+        ),
+        'skip_tracer': getattr(lead, 'skip_tracer', None),
     }
 
 
@@ -300,6 +303,8 @@ WORK_QUEUE_DISPLAY: dict[str, tuple[str, str]] = {
     'follow-up-overdue': ('Follow-Up Overdue', '/queues/follow-up-overdue'),
     'no-next-action': ('No Next Action', '/queues/no-next-action'),
     'needs-review': ('Needs Review', '/queues/needs-review'),
+    'skip-trace': ('Skip Trace', '/queues/skip-trace'),
+    'skip-trace-exhausted': ('Skip Trace Exhausted', '/queues/skip-trace-exhausted'),
     'do-not-contact': ('Do Not Contact', '/queues/do-not-contact'),
     'missing-property-match': ('Missing Property Match', '/queues/missing-property-match'),
     'mail-candidates': ('Ready to Mail', '/queues/ready-to-mail'),
@@ -373,6 +378,11 @@ class QueueService:
             ('follow-up-overdue', self._follow_up_overdue_query()),
             ('no-next-action', self._no_next_action_query()),
             ('needs-review', self._base_query().filter(Lead.review_required.is_(True))),
+            ('skip-trace', self._active_skip_trace_query()),
+            (
+                'skip-trace-exhausted',
+                self._base_query().filter(Lead.skip_trace_exhausted_at.isnot(None)),
+            ),
             ('do-not-contact', self._base_query().filter(Lead.lead_status == 'do_not_contact')),
             ('missing-property-match', self._missing_property_match_query()),
         ]
@@ -415,6 +425,8 @@ class QueueService:
             "follow_up_overdue": self._count_follow_up_overdue(today, seven_days_ago),
             "no_next_action": self._count_no_next_action(),
             "needs_review": self._count_needs_review(),
+            "skip_trace": self._count_skip_trace(),
+            "skip_trace_exhausted": self._count_skip_trace_exhausted(),
             "do_not_contact": self._count_do_not_contact(),
             "missing_property_match": self._count_missing_property_match(),
         }
@@ -436,8 +448,9 @@ class QueueService:
     def _todays_action_query(self, today: date | None = None, outreach: str | None = None):
         """Base Today's Action membership query, optionally filtered by outreach label.
 
-        ``awaiting_skip_trace`` is staging for skip-trace handoff — never Today's
-        Action work (even if a dated custom chore remains open).
+        Undated skip-trace handoffs stay out (due_date null). Future-dated hold
+        chores stay out until due. Dated due chores on skip_trace can appear —
+        hold-expiry / promote heal keeps those from flooding TA.
         """
         today = today or date.today()
         open_lead_task_due_today = _open_lead_task_due_today_excluding_mail_awaiting(today)
@@ -581,6 +594,21 @@ class QueueService:
         """Needs Review: review_required = true."""
         return self._base_query().filter(Lead.review_required.is_(True)).count()
 
+    def _active_skip_trace_query(self):
+        """Active Skip Trace work — excludes mid-hold (needs_skip_trace=False)."""
+        return self._base_query().filter(
+            Lead.lead_status == 'skip_trace',
+            Lead.needs_skip_trace.is_(True),
+        )
+
+    def _count_skip_trace(self) -> int:
+        """Active Skip Trace work: skip_trace + needs_skip_trace."""
+        return self._active_skip_trace_query().count()
+
+    def _count_skip_trace_exhausted(self) -> int:
+        """Skip-trace sources exhausted — investigate later."""
+        return self._base_query().filter(Lead.skip_trace_exhausted_at.isnot(None)).count()
+
     def _count_do_not_contact(self) -> int:
         """Do Not Contact: lead_status = 'do_not_contact'."""
         return self._base_query().filter(Lead.lead_status == 'do_not_contact').count()
@@ -660,18 +688,15 @@ class QueueService:
         """No Next Action: active/new leads with no recommended action and no open tasks."""
         query = self._no_next_action_query()
         total = query.count()
-        status_order = case((Lead.lead_status == 'awaiting_skip_trace', 0), else_=1)
         sort_col = getattr(Lead, sort_by, Lead.lead_score)
         if sort_by == 'lead_score':
             query = query.order_by(
-                status_order.asc(),
                 sort_col.desc() if sort_order == 'desc' else sort_col.asc(),
                 Lead.motivation_score.desc(),
                 Lead.id.asc(),
             )
         else:
             query = query.order_by(
-                status_order.asc(),
                 sort_col.desc() if sort_order == 'desc' else sort_col.asc(),
                 Lead.id.asc(),
             )
@@ -767,6 +792,38 @@ class QueueService:
         sort_col = getattr(Lead, sort_by, Lead.review_triggered_at)
         if sort_by == 'lead_score':
             query = _apply_queue_sort(query, sort_by, sort_order, Lead.review_triggered_at)
+        else:
+            query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
+        leads = query.offset((page - 1) * per_page).limit(per_page).all()
+        return [_leads_to_queue_rows(leads), total]
+
+    def get_skip_trace(
+        self,
+        page: int = 1,
+        per_page: int = 20,
+        sort_by: str = 'lead_score',
+        sort_order: str = 'desc',
+    ) -> tuple[list[dict], int]:
+        """Active Skip Trace work queue (excludes recent-sale mid-hold)."""
+        query = self._active_skip_trace_query()
+        total = query.count()
+        query = _apply_queue_sort(query, sort_by, sort_order)
+        leads = query.offset((page - 1) * per_page).limit(per_page).all()
+        return [_leads_to_queue_rows(leads), total]
+
+    def get_skip_trace_exhausted(
+        self,
+        page: int = 1,
+        per_page: int = 20,
+        sort_by: str = 'skip_trace_exhausted_at',
+        sort_order: str = 'desc',
+    ) -> tuple[list[dict], int]:
+        """Leads where every connected skip-trace source has been tried this cycle."""
+        query = self._base_query().filter(Lead.skip_trace_exhausted_at.isnot(None))
+        total = query.count()
+        sort_col = getattr(Lead, sort_by, Lead.skip_trace_exhausted_at)
+        if sort_by == 'lead_score':
+            query = _apply_queue_sort(query, sort_by, sort_order, Lead.skip_trace_exhausted_at)
         else:
             query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
         leads = query.offset((page - 1) * per_page).limit(per_page).all()
@@ -906,6 +963,8 @@ class QueueService:
         'follow-up-overdue': ('get_follow_up_overdue', 'last_contact_date', 'asc'),
         'no-next-action': ('get_no_next_action', 'lead_score', 'desc'),
         'needs-review': ('get_needs_review', 'review_triggered_at', 'desc'),
+        'skip-trace': ('get_skip_trace', 'lead_score', 'desc'),
+        'skip-trace-exhausted': ('get_skip_trace_exhausted', 'skip_trace_exhausted_at', 'desc'),
         'do-not-contact': ('get_do_not_contact', 'lead_score', 'desc'),
         'missing-property-match': ('get_missing_property_match', 'lead_score', 'desc'),
         'mail-candidates': ('get_mail_candidates', 'lead_score', 'desc'),
@@ -986,17 +1045,14 @@ class QueueService:
                 ),
                 ~has_open_lead_task,
             )
-            status_order = case((Lead.lead_status == 'awaiting_skip_trace', 0), else_=1)
             sort_col = getattr(Lead, sort_by, Lead.lead_score)
             if sort_by == 'lead_score':
                 query = query.order_by(
-                    status_order.asc(),
                     sort_col.desc() if sort_order == 'desc' else sort_col.asc(),
                     Lead.motivation_score.desc(),
                 )
             else:
                 query = query.order_by(
-                    status_order.asc(),
                     sort_col.desc() if sort_order == 'desc' else sort_col.asc(),
                 )
             return self._ordered_ids_from_query(query, cap)
@@ -1006,6 +1062,23 @@ class QueueService:
             sort_col = getattr(Lead, sort_by, Lead.review_triggered_at)
             if sort_by == 'lead_score':
                 query = _apply_queue_sort(query, sort_by, sort_order, Lead.review_triggered_at)
+            else:
+                query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
+            return self._ordered_ids_from_query(query, cap)
+
+        if queue_key == 'skip-trace':
+            query = _apply_queue_sort(
+                self._active_skip_trace_query(),
+                sort_by,
+                sort_order,
+            )
+            return self._ordered_ids_from_query(query, cap)
+
+        if queue_key == 'skip-trace-exhausted':
+            query = self._base_query().filter(Lead.skip_trace_exhausted_at.isnot(None))
+            sort_col = getattr(Lead, sort_by, Lead.skip_trace_exhausted_at)
+            if sort_by == 'lead_score':
+                query = _apply_queue_sort(query, sort_by, sort_order, Lead.skip_trace_exhausted_at)
             else:
                 query = query.order_by(sort_col.desc() if sort_order == 'desc' else sort_col.asc())
             return self._ordered_ids_from_query(query, cap)

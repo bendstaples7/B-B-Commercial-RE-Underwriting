@@ -285,7 +285,7 @@ const queueRowArb = fc.record({
   property_state: fc.option(fc.string()),
   lead_score: fc.integer({ min: 0, max: 100 }),
   lead_status: fc.constantFrom(
-    'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+    'skip_trace', 'mailing_no_contact_made',
     'mailing_contacted_no_interest', 'mailing_contacted_interested',
     'negotiating_remote', 'in_person_appointment', 'offer_delivered',
     'deprioritize', 'deal_won', 'deal_lost', 'suppressed', 'do_not_contact'
@@ -768,7 +768,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         //   - Unknown statuses → replace underscores with spaces, capitalize each word
         const LEAD_STATUS_LABELS: Record<string, string> = {
           skip_trace: 'Skip Trace',
-          awaiting_skip_trace: 'Awaiting Skip Trace',
+          
           mailing_no_contact_made: 'Mailing, No Contact Made',
           mailing_contacted_no_interest: 'Mailing, Contact Made, No Interest',
           mailing_contacted_interested: 'Mailing, Contact Made, Interested',

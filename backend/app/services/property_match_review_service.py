@@ -373,10 +373,7 @@ class PropertyMatchReviewService:
         # (Command Center "Look up PIN" / Apply must not wipe needs_skip_trace).
         # Missing-property-match queue leads often have needs_skip_trace=True from
         # a prior GIS miss — those still clear the flag on approve.
-        preserve_skip_trace = lead.lead_status in (
-            'skip_trace',
-            'awaiting_skip_trace',
-        )
+        preserve_skip_trace = lead.lead_status == 'skip_trace'
 
         # Sidebar Apply may pass a previewed PIN for lookup_by_pin fallback when
         # address lookup is flaky — do not persist it until GIS confirms the parcel.

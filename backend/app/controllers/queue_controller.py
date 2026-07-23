@@ -176,6 +176,26 @@ def get_needs_review():
     return jsonify({'rows': rows, 'total': total, 'page': page, 'per_page': per_page}), 200
 
 
+@queue_bp.route('/skip-trace', methods=['GET'])
+@handle_errors
+def get_skip_trace():
+    """GET /api/queues/skip-trace — active Skip Trace work (lead_status=skip_trace)."""
+    page, per_page, sort_by, sort_order = _parse_pagination_params()
+    rows, total = _get_queue_service().get_skip_trace(page, per_page, sort_by, sort_order)
+    return jsonify({'rows': rows, 'total': total, 'page': page, 'per_page': per_page}), 200
+
+
+@queue_bp.route('/skip-trace-exhausted', methods=['GET'])
+@handle_errors
+def get_skip_trace_exhausted():
+    """GET /api/queues/skip-trace-exhausted — sources exhausted, investigate later."""
+    page, per_page, sort_by, sort_order = _parse_pagination_params()
+    rows, total = _get_queue_service().get_skip_trace_exhausted(
+        page, per_page, sort_by, sort_order,
+    )
+    return jsonify({'rows': rows, 'total': total, 'page': page, 'per_page': per_page}), 200
+
+
 @queue_bp.route('/do-not-contact', methods=['GET'])
 @handle_errors
 def get_do_not_contact():

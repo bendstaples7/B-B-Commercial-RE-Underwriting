@@ -415,6 +415,36 @@ class MailQueueService:
         )
         db.session.add(attempt)
         db.session.commit()
+        # After commit: escalate invalid_address leads into skip-trace ladder
+        from app.services.skip_trace_escalation_helpers import escalate_invalid_mail_safe
+        for outcome in results:
+            if outcome.get('status') != 'invalid_address':
+                continue
+            lid = outcome.get('lead_id')
+            if not lid:
+                continue
+            item_id = None
+            try:
+                row = (
+                    MailQueueItem.query
+                    .filter_by(lead_id=lid, user_id=user_id, status='invalid_address')
+                    .order_by(MailQueueItem.id.desc())
+                    .first()
+                )
+                item_id = row.id if row else None
+            except Exception:
+                logger.warning(
+                    'Could not resolve invalid_address queue item for lead %s',
+                    lid,
+                    exc_info=True,
+                )
+            escalate_invalid_mail_safe(
+                int(lid),
+                actor=user_id,
+                mail_queue_item_id=item_id,
+                validation_error=outcome.get('error'),
+                commit=True,
+            )
         sync_pending_hubspot_completions(hubspot_sync_ids)
         for task_id, due_date in recent_sale_hubspot_sync.items():
             sync_recent_sale_hubspot_due_dates(

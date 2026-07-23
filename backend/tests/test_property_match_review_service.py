@@ -14,7 +14,7 @@ def _seed_lead(**overrides) -> Lead:
         property_zip='60601',
         has_property_match=False,
         needs_skip_trace=True,
-        lead_status='awaiting_skip_trace',
+        lead_status='skip_trace',
         recommended_action='call_ready',  # plain str — must not call .value
         owner_user_id='test-user',
     )

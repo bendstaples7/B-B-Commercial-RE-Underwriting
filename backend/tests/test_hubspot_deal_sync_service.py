@@ -228,7 +228,7 @@ class TestHubSpotDealSyncService:
 
     def test_enrich_lead_from_deal_sets_last_hubspot_sync_at(self, app):
         with app.app_context():
-            lead = Lead(property_street='1 Main', lead_status='awaiting_skip_trace')
+            lead = Lead(property_street='1 Main', lead_status='skip_trace')
             deal = HubSpotDeal(
                 hubspot_id='d1',
                 raw_payload={'properties': {'dealstage': 'unknown_id'}},
@@ -251,7 +251,7 @@ class TestHubSpotDealSyncService:
                 property_city=None,
                 property_state=None,
                 property_zip=None,
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
             )
             deal = HubSpotDeal(
                 hubspot_id='d-addr-complete',
@@ -289,7 +289,7 @@ class TestHubSpotDealSyncService:
                 property_city=None,
                 property_state=None,
                 property_zip=None,
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
             )
             deal = HubSpotDeal(
                 hubspot_id='d-no-addr-touch',
@@ -324,7 +324,7 @@ class TestHubSpotDealSyncService:
                 property_city=None,
                 property_state=None,
                 property_zip=None,
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
             )
             deal = HubSpotDeal(
                 hubspot_id='d-structured-address',
@@ -366,7 +366,7 @@ class TestHubSpotDealSyncService:
                 property_city=None,
                 property_state=None,
                 property_zip=None,
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
             )
             deal = HubSpotDeal(
                 hubspot_id='d-non-il-address',

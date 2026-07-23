@@ -16,24 +16,22 @@ from sqlalchemy import text
 # ---------------------------------------------------------------------------
 COLUMN_DEFS: List[Dict[str, Any]] = [
     {"id": "skip_trace",                  "label": "Skip Trace",                    "icon": "\U0001f50d", "sort_order": 0},
-    {"id": "awaiting_skip_trace",         "label": "Awaiting Skip Trace",           "icon": "\u23f3",     "sort_order": 1},
-    {"id": "mailing_no_contact_made",     "label": "Mailing, No Contact Made",      "icon": "\U0001f4ec", "sort_order": 2},
-    {"id": "mailing_contacted_no_interest","label": "Mailing, Contacted, No Interest","icon": "\U0001f4ed", "sort_order": 3},
-    {"id": "mailing_contacted_interested", "label": "Mailing, Contacted, Interested","icon": "\U0001f4e8", "sort_order": 4},
-    {"id": "negotiating_remote",          "label": "Negotiating Remote",             "icon": "\U0001f91d", "sort_order": 5},
-    {"id": "in_person_appointment",       "label": "In Person Appointment",         "icon": "\U0001f4c5", "sort_order": 6},
-    {"id": "offer_delivered",             "label": "Offer Delivered",               "icon": "\U0001f4c4", "sort_order": 7},
-    {"id": "deprioritize",                "label": "Deprioritize",                  "icon": "\u23f8\ufe0f", "sort_order": 8},
-    {"id": "deal_won",                    "label": "Deal Won",                      "icon": "\U0001f389", "sort_order": 9},
-    {"id": "deal_lost",                   "label": "Deal Lost",                     "icon": "\u274c",     "sort_order": 10},
-    {"id": "suppressed",                  "label": "Suppressed",                    "icon": "\U0001f6ab", "sort_order": 11},
-    {"id": "do_not_contact",              "label": "Do Not Contact",                "icon": "\u26d4",     "sort_order": 12},
+    {"id": "mailing_no_contact_made",     "label": "Mailing, No Contact Made",      "icon": "\U0001f4ec", "sort_order": 1},
+    {"id": "mailing_contacted_no_interest","label": "Mailing, Contacted, No Interest","icon": "\U0001f4ed", "sort_order": 2},
+    {"id": "mailing_contacted_interested", "label": "Mailing, Contacted, Interested","icon": "\U0001f4e8", "sort_order": 3},
+    {"id": "negotiating_remote",          "label": "Negotiating Remote",             "icon": "\U0001f91d", "sort_order": 4},
+    {"id": "in_person_appointment",       "label": "In Person Appointment",         "icon": "\U0001f4c5", "sort_order": 5},
+    {"id": "offer_delivered",             "label": "Offer Delivered",               "icon": "\U0001f4c4", "sort_order": 6},
+    {"id": "deprioritize",                "label": "Deprioritize",                  "icon": "\u23f8\ufe0f", "sort_order": 7},
+    {"id": "deal_won",                    "label": "Deal Won",                      "icon": "\U0001f389", "sort_order": 8},
+    {"id": "deal_lost",                   "label": "Deal Lost",                     "icon": "\u274c",     "sort_order": 9},
+    {"id": "suppressed",                  "label": "Suppressed",                    "icon": "\U0001f6ab", "sort_order": 10},
+    {"id": "do_not_contact",              "label": "Do Not Contact",                "icon": "\u26d4",     "sort_order": 11},
 ]
 
 # Map column IDs (lead_status values) to themselves — each column maps 1:1.
 _STATUS_MAP: Dict[str, Optional[str]] = {
     "skip_trace":                   "skip_trace",
-    "awaiting_skip_trace":          "awaiting_skip_trace",
     "mailing_no_contact_made":      "mailing_no_contact_made",
     "mailing_contacted_no_interest":"mailing_contacted_no_interest",
     "mailing_contacted_interested": "mailing_contacted_interested",
@@ -180,7 +178,19 @@ class LeadKanbanService:
                 f"Invalid target_status '{target_status}'. Must be one of: {', '.join(sorted(_VALID_STATUSES))}"
             )
 
-        # Update lead_status
+        # Skip Trace entry must clear dated chores + ensure handoff (or preserve
+        # mid-hold) — same rules as Move to Skip Trace / status selector.
+        if target_status == 'skip_trace':
+            from app.services.skip_trace_enqueue import SkipTraceEnqueue
+            SkipTraceEnqueue().move_to_skip_trace(
+                lead_id,
+                actor=str(user_id),
+                commit=True,
+                reason='kanban_move_to_skip_trace',
+            )
+            db.session.refresh(lead)
+            return _lead_to_summary(lead)
+
         lead.lead_status = target_status
 
         db.session.commit()
@@ -226,18 +236,17 @@ class LeadKanbanService:
             ORDER BY
                 CASE lead_status
                     WHEN 'skip_trace'                    THEN 0
-                    WHEN 'awaiting_skip_trace'           THEN 1
-                    WHEN 'mailing_no_contact_made'       THEN 2
-                    WHEN 'mailing_contacted_no_interest' THEN 3
-                    WHEN 'mailing_contacted_interested'  THEN 4
-                    WHEN 'negotiating_remote'            THEN 5
-                    WHEN 'in_person_appointment'         THEN 6
-                    WHEN 'offer_delivered'               THEN 7
-                    WHEN 'deprioritize'                  THEN 8
-                    WHEN 'deal_won'                      THEN 9
-                    WHEN 'deal_lost'                     THEN 10
-                    WHEN 'suppressed'                    THEN 11
-                    WHEN 'do_not_contact'                THEN 12
+                    WHEN 'mailing_no_contact_made'       THEN 1
+                    WHEN 'mailing_contacted_no_interest' THEN 2
+                    WHEN 'mailing_contacted_interested'  THEN 3
+                    WHEN 'negotiating_remote'            THEN 4
+                    WHEN 'in_person_appointment'         THEN 5
+                    WHEN 'offer_delivered'               THEN 6
+                    WHEN 'deprioritize'                  THEN 7
+                    WHEN 'deal_won'                      THEN 8
+                    WHEN 'deal_lost'                     THEN 9
+                    WHEN 'suppressed'                    THEN 10
+                    WHEN 'do_not_contact'                THEN 11
                     ELSE 99
                 END,
                 lead_score DESC NULLS LAST

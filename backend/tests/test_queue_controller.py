@@ -69,14 +69,15 @@ class TestGetCounts:
             assert response.status_code == 200
 
     def test_counts_returns_all_seven_keys(self, client, app):
-        """Response contains all 7 queue keys."""
+        """Response contains all work-queue count keys."""
         with app.app_context():
             response = client.get('/api/queues/counts', headers=_AUTH_HEADERS)
             data = json.loads(response.data)
             expected_keys = {
                 'todays_action', 'previously_warm', 'follow_up_overdue',
-                'no_next_action', 'needs_review', 'do_not_contact',
-                'missing_property_match', 'ready_to_mail', 'mail_candidates', 'prospect_candidates',
+                'no_next_action', 'needs_review', 'skip_trace', 'skip_trace_exhausted',
+                'do_not_contact', 'missing_property_match', 'ready_to_mail',
+                'mail_candidates', 'prospect_candidates',
             }
             assert set(data.keys()) == expected_keys
 

@@ -130,6 +130,8 @@ from app.models.open_letter_config import OpenLetterConfig
 from app.models.mail_queue_item import MailQueueItem
 from app.models.mail_campaign import MailCampaign
 from app.models.mail_enqueue_attempt import MailEnqueueAttempt
+from app.models.skip_trace_config import SkipTraceConfig
+from app.models.skip_trace_attempt import SkipTraceAttempt
 
 # CRM activity dashboard goals
 from app.models.user_activity_goal import UserActivityGoal
@@ -243,6 +245,8 @@ __all__ = [
     'MailQueueItem',
     'MailCampaign',
     'MailEnqueueAttempt',
+    'SkipTraceConfig',
+    'SkipTraceAttempt',
     # CRM activity dashboard
     'UserActivityGoal',
 ]

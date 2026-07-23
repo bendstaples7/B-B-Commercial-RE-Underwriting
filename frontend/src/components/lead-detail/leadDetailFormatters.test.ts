@@ -15,7 +15,7 @@ function payload(overrides: Partial<CommandCenterPayload> = {}): CommandCenterPa
     property_city: null,
     property_state: null,
     lead_score: 0,
-    lead_status: 'awaiting_skip_trace',
+    lead_status: 'skip_trace',
     has_property_match: false,
     analysis_session_id: null,
     recommended_action: { value: null, label: null, explanation: null, signals: {} },

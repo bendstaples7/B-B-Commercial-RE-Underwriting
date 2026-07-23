@@ -593,7 +593,7 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 })
     vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
       makeCommandCenterPayload({
-        lead_status: 'awaiting_skip_trace',
+        lead_status: 'mailing_no_contact_made',
         recommended_action: {
           value: 'nurture',
           label: 'Nurture',
@@ -637,8 +637,6 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
 
   it('shows already-done snackbar when skip-trace pipeline is unchanged', async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 })
-    // Force-enable the quick action path via mock that still returns already_done
-    // (button is normally grayed for awaiting_skip_trace; call service via enabled status).
     vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
       makeCommandCenterPayload({
         lead_status: 'mailing_no_contact_made',
@@ -653,12 +651,12 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
     )
     vi.mocked(commandCenterService.moveToSkipTrace).mockResolvedValue({
       lead_id: 1,
-      lead_status: 'awaiting_skip_trace',
+      lead_status: 'skip_trace',
       completed_task_id: null,
       skip_trace_task_id: 42,
       changed: false,
       already_done: true,
-      reason_code: 'already_awaiting_skip_trace',
+      reason_code: 'already_skip_trace',
     })
 
     renderComponent()
@@ -667,7 +665,7 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
     )
 
     expect(
-      await screen.findByText('Already awaiting skip trace'),
+      await screen.findByText('Already in Skip Trace pipeline'),
     ).toBeInTheDocument()
   })
 
@@ -1093,12 +1091,12 @@ describe('UnifiedLeadCommandCenter — queue advance', () => {
     )
     vi.mocked(api.commandCenterService.moveToSkipTrace).mockResolvedValue({
       lead_id: 1,
-      lead_status: 'awaiting_skip_trace',
+      lead_status: 'skip_trace',
       completed_task_id: null,
       skip_trace_task_id: 42,
       changed: false,
       already_done: true,
-      reason_code: 'already_awaiting_skip_trace',
+      reason_code: 'already_skip_trace',
     })
     vi.mocked(api.queueService.getNavigation).mockResolvedValue({
       queue_key: 'todays-action',
@@ -1130,7 +1128,7 @@ describe('UnifiedLeadCommandCenter — queue advance', () => {
     )
 
     expect(
-      await screen.findByText('Already awaiting skip trace'),
+      await screen.findByText('Already in Skip Trace pipeline'),
     ).toBeInTheDocument()
     expect(api.commandCenterService.moveToSkipTrace).toHaveBeenCalled()
     expect(mockNavigate).not.toHaveBeenCalledWith(

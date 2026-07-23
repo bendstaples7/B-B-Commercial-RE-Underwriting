@@ -182,6 +182,15 @@ def _resolve_actor(user_id_or_label: str | None, _cache: dict | None = None) -> 
     return resolved
 
 
+def _skip_trace_attempts_for_lead(lead_id: int) -> list:
+    try:
+        from app.services.skip_trace_escalation_service import SkipTraceEscalationService
+        return SkipTraceEscalationService().list_attempts_for_lead(lead_id)
+    except Exception:
+        logger.exception('skip_trace_attempts serialize failed for lead %s', lead_id)
+        return []
+
+
 def _serialize_timeline_entry(entry: LeadTimelineEntry) -> dict:
     """Serialize a timeline entry for API responses with resolved actor display name."""
     data = LeadTimelineEntrySchema().dump(entry)
@@ -852,6 +861,13 @@ def get_command_center(lead_id: int):
         'needs_skip_trace': lead.needs_skip_trace,
         'skip_tracer': lead.skip_tracer,
         'date_skip_traced': lead.date_skip_traced.isoformat() if lead.date_skip_traced else None,
+        'skip_trace_next_source_id': getattr(lead, 'skip_trace_next_source_id', None),
+        'skip_trace_exhausted_at': (
+            lead.skip_trace_exhausted_at.isoformat()
+            if getattr(lead, 'skip_trace_exhausted_at', None)
+            else None
+        ),
+        'skip_trace_attempts': _skip_trace_attempts_for_lead(lead.id),
         'up_next_to_mail': lead.up_next_to_mail,
         'mail_queue_status': resolve_mail_queue_status(lead),
         'mailer_history': lead.mailer_history,
@@ -1005,11 +1021,12 @@ def update_status(lead_id: int):
 
     lead.lead_status = new_status
 
-    # Entering the skip-trace pipeline means skip work is still needed. Without
-    # this flag, scoring's residential mailing promotion immediately reverts
-    # manual awaiting_skip_trace / skip_trace changes when a mailing address exists.
-    if new_status in ('skip_trace', 'awaiting_skip_trace'):
-        lead.needs_skip_trace = True
+    # Entering skip_trace from another status means skip work is still needed —
+    # unless a future recent-sale hold is already parking the lead.
+    if new_status == 'skip_trace' and old_status != 'skip_trace':
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+        if SkipTraceEnqueue._find_open_future_recent_sale_hold(lead_id) is None:
+            lead.needs_skip_trace = True
 
     # Status-selector entry into skip_trace must clear leftover dated chores the
     # same way Move to Skip Trace does — otherwise May follow-ups re-enter
@@ -1034,6 +1051,7 @@ def update_status(lead_id: int):
         # Reuse the canonical handoff logic (find undated → convert leftover
         # dated skip_trace_owner → create) so the status selector cannot leave
         # two open skip-trace tasks the way a create-only path would.
+        # Mid-hold future recent_sale_hold is preserved by ensure_*.
         _, skip_trace_handoff_clear_ids, extra_hs = (
             SkipTraceEnqueue().ensure_awaiting_skip_trace_handoff(
                 lead_id,

@@ -258,7 +258,7 @@ class CallLogService:
 
         _CONTACTED_NO_INTEREST_OUTCOMES = {'not_interested'}
         if (outcome in _CONTACTED_NO_INTEREST_OUTCOMES
-                and lead.lead_status in ('awaiting_skip_trace', 'mailing_no_contact_made', 'skip_trace')):
+                and lead.lead_status in ('mailing_no_contact_made', 'skip_trace')):
             lead.lead_status = 'mailing_contacted_no_interest'
 
         db.session.add(lead)

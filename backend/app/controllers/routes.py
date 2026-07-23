@@ -142,11 +142,14 @@ def health_runtime():
 
     Deliberately cheap (no DB / Alembic / Celery / queue checks) so tabs can
     poll it frequently. Returns identity only outside production.
+    Spawn-restart is loopback-only so LAN clients cannot kill the process.
     """
-    from app.runtime_identity import get_runtime_identity
+    from flask import request
+    from app.runtime_identity import get_runtime_identity, is_loopback_restart_caller
 
+    allow_restart = is_loopback_restart_caller(request.remote_addr)
     payload = {'status': 'ok'}
-    payload.update(get_runtime_identity())
+    payload.update(get_runtime_identity(allow_restart=allow_restart))
     return jsonify(payload), 200
 
 
@@ -365,12 +368,13 @@ def health_check():
 
     status = 'degraded' if degraded else 'healthy'
     http_status = 503 if degraded else 200
-    from flask import current_app
-    from app.runtime_identity import get_runtime_identity
+    from flask import current_app, request
+    from app.runtime_identity import get_runtime_identity, is_loopback_restart_caller
 
     db_mode = current_app.config.get('DB_MODE', 'cloud')
     payload = {'status': status, 'checks': checks, 'db_mode': db_mode}
-    payload.update(get_runtime_identity())
+    allow_restart = is_loopback_restart_caller(request.remote_addr)
+    payload.update(get_runtime_identity(allow_restart=allow_restart))
     return jsonify(payload), http_status
 
 

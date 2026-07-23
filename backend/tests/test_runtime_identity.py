@@ -15,6 +15,7 @@ def test_runtime_identity_includes_build_id_and_flags():
     assert payload["pid"] > 0
     assert payload["started_at"].endswith("Z")
     assert payload["source_stale"] is False
+    assert payload["restart_scheduled"] is False
     assert isinstance(compute_source_fingerprint(), str)
 
 
@@ -26,6 +27,7 @@ def test_health_includes_runtime_identity(client):
     assert data["build_id"]
     assert "source_stale" in data
     assert data["source_stale"] is False
+    assert data.get("restart_scheduled") is False
     assert "started_at" in data
     assert "pid" in data
 
@@ -104,3 +106,74 @@ def test_is_under_backend_rejects_sibling_prefix_paths(tmp_path, monkeypatch):
     assert ri._is_under_backend(str(inside)) is True
     assert ri._is_under_backend(str(outside)) is False
     assert ri._is_under_backend(str(sibling / "app" / "x.py")) is False
+
+
+def test_stale_identity_schedules_restart(monkeypatch):
+    """Local/dev health path schedules restart instead of leaving a user banner."""
+    import app.runtime_identity as ri
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(ri, "_STARTED_AT_NS", 1_000)
+    monkeypatch.setattr(
+        ri,
+        "_loaded_backend_mtimes",
+        lambda: {"loaded.py": 1_001},
+    )
+    monkeypatch.setattr(ri, "_auto_restart_enabled", lambda: True)
+    monkeypatch.setattr(ri, "_RESTART_SCHEDULED", False)
+    monkeypatch.setattr(
+        ri,
+        "schedule_local_dev_restart",
+        lambda **kwargs: calls.append(kwargs.get("reason", "")) or True,
+    )
+
+    # Without allow_restart, identity reports stale but does not spawn.
+    quiet = get_runtime_identity(allow_restart=False)
+    assert quiet["source_stale"] is True
+    assert quiet["restart_scheduled"] is False
+    assert calls == []
+
+    payload = get_runtime_identity(allow_restart=True)
+    assert payload["source_stale"] is True
+    assert payload["restart_scheduled"] is True
+    assert calls == ["source_stale"]
+
+
+def test_auto_restart_disabled_under_reloader(monkeypatch):
+    import app.runtime_identity as ri
+
+    monkeypatch.delenv("BB_DISABLE_AUTO_RESTART", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setenv("WERKZEUG_RUN_MAIN", "true")
+    monkeypatch.setenv("FLASK_ENV", "development")
+    assert ri._reloader_owns_restarts() is True
+    assert ri._auto_restart_enabled() is False
+
+
+def test_auto_restart_disabled_under_pytest_env(monkeypatch):
+    import app.runtime_identity as ri
+
+    monkeypatch.delenv("BB_DISABLE_AUTO_RESTART", raising=False)
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "test_foo")
+    assert ri._auto_restart_enabled() is False
+
+
+def test_auto_restart_disabled_in_production(monkeypatch):
+    import app.runtime_identity as ri
+
+    monkeypatch.delenv("BB_DISABLE_AUTO_RESTART", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("WERKZEUG_RUN_MAIN", raising=False)
+    monkeypatch.setenv("FLASK_SKIP_RELOADER", "1")
+    monkeypatch.setenv("FLASK_ENV", "production")
+    assert ri._auto_restart_enabled() is False
+
+
+def test_loopback_restart_caller():
+    from app.runtime_identity import is_loopback_restart_caller
+
+    assert is_loopback_restart_caller("127.0.0.1") is True
+    assert is_loopback_restart_caller("::1") is True
+    assert is_loopback_restart_caller("192.168.1.10") is False
+    assert is_loopback_restart_caller(None) is False

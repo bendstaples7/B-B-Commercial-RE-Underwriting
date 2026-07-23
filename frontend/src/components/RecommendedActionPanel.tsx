@@ -251,7 +251,7 @@ export function RecommendedActionPanel({
       {mailEligibleDate
         ? ` until ${formatDateOnly(mailEligibleDate)}.`
         : ' until the two-year hold ends.'}
-      {' '}It will move to Awaiting Skip Trace when the hold expires.
+      {' '}It stays in Skip Trace; when the hold expires the undated handoff becomes active work.
     </Alert>
   ) : null
 

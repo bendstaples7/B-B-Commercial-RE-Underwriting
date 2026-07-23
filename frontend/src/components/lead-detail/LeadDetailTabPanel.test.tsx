@@ -16,7 +16,7 @@ function renderInfo(
     property_city: 'Chicago',
     property_state: 'IL',
     lead_score: 50,
-    lead_status: 'awaiting_skip_trace',
+    lead_status: 'skip_trace',
     contacts: [
       {
         id: 10,

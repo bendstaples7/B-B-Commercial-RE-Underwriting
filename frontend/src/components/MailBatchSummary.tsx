@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react'
+import React, { useCallback, useMemo, useState } from 'react'
 import {
   Alert,
   Button,
@@ -15,7 +15,13 @@ import SendIcon from '@mui/icons-material/Send'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link as RouterLink } from 'react-router-dom'
 import openLetterService, { type MailQueueSummary } from '@/services/openLetterApi'
-import { getActiveCreativePreset, isDirectMailReadyToSend } from '@/utils/directMailSetup'
+import {
+  extractOlcListRows,
+  getActiveCreativePreset,
+  getOlcCatalogSendLines,
+  isDirectMailReadyToSend,
+} from '@/utils/directMailSetup'
+import type { OlcProduct } from '@/utils/olcProductHelpers'
 
 export interface MailBatchSummaryProps {
   title?: string
@@ -36,6 +42,17 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
     queryKey: ['open-letter-config'],
     queryFn: () => openLetterService.getConfig(),
   })
+
+  const { data: productsPayload } = useQuery({
+    queryKey: ['open-letter-products'],
+    queryFn: () => openLetterService.listProducts(),
+    enabled: Boolean(olcConfig?.configured),
+  })
+
+  const products = useMemo(
+    () => extractOlcListRows(productsPayload) as OlcProduct[],
+    [productsPayload],
+  )
 
   const sendMutation = useMutation({
     mutationFn: (force: boolean) => openLetterService.sendBatch(force),
@@ -60,6 +77,7 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
   const canSend = queueData?.can_send ?? false
   const readyToSend = isDirectMailReadyToSend(olcConfig)
   const activeCreative = getActiveCreativePreset(olcConfig)
+  const catalog = getOlcCatalogSendLines(olcConfig, products)
 
   return (
     <>
@@ -74,12 +92,21 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
               {queuedCount} of {batchMinimum} leads staged for the next batch
             </Typography>
-            {activeCreative && (
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                Active creative:{' '}
-                <strong>{activeCreative.label || activeCreative.sender_display_name}</strong>
-                {activeCreative.envelope_color ? ` · ${activeCreative.envelope_color} envelope` : ''}
-                {activeCreative.font_name ? ` · ${activeCreative.font_name}` : ''}
+            {(catalog.productLine || catalog.templateLine) && (
+              <Typography variant="body2" sx={{ mb: 0.5 }} data-testid="mail-batch-olc-catalog">
+                Open Letter product:{' '}
+                <strong>{catalog.productLine || '—'}</strong>
+                {catalog.templateLine ? (
+                  <>
+                    {' · Template: '}
+                    <strong>{catalog.templateLine}</strong>
+                  </>
+                ) : null}
+              </Typography>
+            )}
+            {catalog.senderLine && (
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                Sender / creative: <strong>{catalog.senderLine}</strong>
               </Typography>
             )}
             <LinearProgress variant="determinate" value={progress} sx={{ mb: 2, height: 8, borderRadius: 1 }} />
@@ -129,9 +156,12 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
         <DialogContent>
           <DialogContentText>
             This will submit {queuedCount} mailers to Open Letter Connect
-            {activeCreative
-              ? ` using creative “${activeCreative.label || activeCreative.sender_display_name}”`
-              : ''}
+            {catalog.productLine
+              ? ` as “${catalog.productLine}”`
+              : activeCreative
+                ? ` using creative “${activeCreative.label || activeCreative.sender_display_name}”`
+                : ''}
+            {catalog.templateLine ? ` (template ${catalog.templateLine})` : ''}
             .
             {queueData?.estimated_total != null && (
               <> Estimated charge: ~${queueData.estimated_total.toFixed(2)} on your OLC payment method.</>

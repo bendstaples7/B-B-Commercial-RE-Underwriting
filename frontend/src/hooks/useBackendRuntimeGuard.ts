@@ -1,10 +1,12 @@
 /**
  * Poll /api/health for backend process identity.
  *
- * - When ``build_id`` changes (backend process restarted), invalidate React Query
- *   caches so queue rows cannot keep stale payloads.
- * - When ``source_stale`` is true (Python sources changed after process start),
- *   surface a banner telling the user to restart the backend.
+ * When ``build_id`` changes (backend process restarted — including automatic
+ * source_stale restarts), invalidate React Query caches so queue rows cannot
+ * keep stale payloads.
+ *
+ * Never surfaces a “restart required” banner. Local/dev auto-restarts when
+ * sources are stale; the UI just refreshes caches after the new build_id.
  */
 import { useEffect, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -26,8 +28,8 @@ function readStoredBuildId(): string | null {
 export type BackendRuntimeHealth = RuntimeHealthResponse
 
 export function useBackendRuntimeGuard(): {
-  sourceStale: boolean
   buildId: string | null
+  restartScheduled: boolean
 } {
   const { user } = useAuth()
   const queryClient = useQueryClient()
@@ -67,7 +69,7 @@ export function useBackendRuntimeGuard(): {
   }, [data?.build_id, queryClient])
 
   return {
-    sourceStale: Boolean(data?.source_stale),
     buildId: data?.build_id ?? null,
+    restartScheduled: Boolean(data?.restart_scheduled),
   }
 }

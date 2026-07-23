@@ -422,12 +422,12 @@ class TestUpdateStatus:
             db.session.refresh(lead)
             assert lead.lead_status == 'deprioritize'
 
-    def test_awaiting_skip_trace_sticks_when_mailing_address_present(self, client, app):
-        """Manual awaiting_skip_trace must not be undone by residential mailing promotion."""
+    def test_skip_trace_sticks_when_mailing_address_present(self, client, app):
+        """Manual skip_trace must not be undone by residential mailing promotion."""
         with app.app_context():
             lead = _make_lead(
                 app,
-                '7 Await Stick St',
+                '7 Skip Stick St',
                 lead_status='mailing_no_contact_made',
                 needs_skip_trace=False,
                 mailing_address='100 Main St',
@@ -438,16 +438,30 @@ class TestUpdateStatus:
             )
             response = client.patch(
                 f'/api/leads/{lead.id}/status',
-                data=json.dumps({'status': 'awaiting_skip_trace'}),
+                data=json.dumps({'status': 'skip_trace'}),
                 content_type='application/json',
                 headers=_AUTH_HEADERS,
             )
             assert response.status_code == 200
             body = response.get_json()
-            assert body['lead_status'] == 'awaiting_skip_trace'
+            assert body['lead_status'] == 'skip_trace'
             db.session.refresh(lead)
-            assert lead.lead_status == 'awaiting_skip_trace'
+            assert lead.lead_status == 'skip_trace'
             assert lead.needs_skip_trace is True
+
+    def test_status_patch_rejects_awaiting_skip_trace(self, client, app):
+        """VALID_LEAD_STATUSES no longer accepts awaiting_skip_trace."""
+        with app.app_context():
+            lead = _make_lead(app, '7z Reject Awaiting St', lead_status='mailing_no_contact_made')
+            response = client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({'status': 'awaiting_skip_trace'}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 400
+            db.session.refresh(lead)
+            assert lead.lead_status == 'mailing_no_contact_made'
 
     def test_status_change_does_not_set_hubspot_deal_stage_without_match(self, client, app):
         """PATCH /api/leads/<id>/status leaves hubspot_deal_stage unset without a HubSpot deal."""
@@ -1014,18 +1028,18 @@ class TestMoveToSkipTrace:
                 event_type='status_changed',
             ).count() == 0
 
-    def test_move_to_skip_trace_from_awaiting_enqueues_skip_trace_column(
+    def test_move_to_skip_trace_from_mailing_enqueues_skip_trace_column(
         self,
         client,
         app,
     ):
-        """Recent-sale hold end leaves awaiting_skip_trace; Move completes verify work."""
+        """Move from mailing completes verify work and lands on skip_trace."""
         with app.app_context():
             lead = _make_lead(
                 app,
-                '825c Awaiting Enqueue St',
-                lead_status='awaiting_skip_trace',
-                needs_skip_trace=True,
+                '825c Mailing Enqueue St',
+                lead_status='mailing_no_contact_made',
+                needs_skip_trace=False,
             )
             verify = _make_task(
                 app,
@@ -1058,6 +1072,7 @@ class TestMoveToSkipTrace:
             assert handoffs[0].id == body['skip_trace_task_id']
             assert handoffs[0].title == 'Awaiting skip trace'
             assert handoffs[0].due_date is None
+            assert handoffs[0].workflow_key == 'awaiting_skip_trace_handoff'
 
     def test_moves_selected_task_due_date_without_changing_task(self, client, app):
         with app.app_context():

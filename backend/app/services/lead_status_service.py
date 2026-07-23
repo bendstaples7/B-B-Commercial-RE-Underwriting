@@ -18,22 +18,23 @@ def apply_lead_status_change(
     """Update lead status with DNC/suppress side effects and timeline entry."""
     old_status = lead.lead_status
     if new_status == old_status:
-        if (
-            new_status in ('skip_trace', 'awaiting_skip_trace')
-            and not lead.needs_skip_trace
-        ):
-            lead.needs_skip_trace = True
-            db.session.add(lead)
-            db.session.commit()
+        # Do not force needs_skip_trace mid recent-sale hold.
+        if new_status == 'skip_trace' and not lead.needs_skip_trace:
+            from app.services.skip_trace_enqueue import SkipTraceEnqueue
+            if SkipTraceEnqueue._find_open_future_recent_sale_hold(lead.id) is None:
+                lead.needs_skip_trace = True
+                db.session.add(lead)
+                db.session.commit()
         return
 
     lead.lead_status = new_status
 
-    # Entering the skip-trace pipeline means skip work is still needed. Without
-    # this flag, scoring's residential mailing promotion immediately reverts
-    # manual awaiting_skip_trace / skip_trace changes when a mailing address exists.
-    if new_status in ('skip_trace', 'awaiting_skip_trace'):
-        lead.needs_skip_trace = True
+    # Entering skip_trace means skip work is still needed, unless a future
+    # recent-sale hold is already parking the lead.
+    if new_status == 'skip_trace':
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+        if SkipTraceEnqueue._find_open_future_recent_sale_hold(lead.id) is None:
+            lead.needs_skip_trace = True
 
     if new_status == 'do_not_contact':
         lead.recommended_action = None

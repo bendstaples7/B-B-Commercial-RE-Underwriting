@@ -172,7 +172,7 @@ def _lead_needs_recent_sale_contact_rationale(lead) -> bool:
     if lead is None:
         return False
     status = getattr(lead, 'lead_status', None)
-    if status not in ('skip_trace', 'awaiting_skip_trace'):
+    if status != 'skip_trace':
         return False
     if not (
         contacts_likely_prior_owner(lead)

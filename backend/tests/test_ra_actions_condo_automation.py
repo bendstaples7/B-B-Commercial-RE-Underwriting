@@ -48,7 +48,7 @@ class TestNoNextActionBulk:
                 property_street='200 Bulk St',
                 property_city='Chicago',
                 property_state='IL',
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
                 lead_score=40,
                 has_property_match=True,
                 recommended_action=None,

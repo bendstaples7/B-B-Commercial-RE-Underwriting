@@ -34,6 +34,8 @@ const mockCounts: QueueCounts = {
   follow_up_overdue: 7,
   no_next_action: 2,
   needs_review: 1,
+  skip_trace: 0,
+  skip_trace_exhausted: 0,
   do_not_contact: 4,
   missing_property_match: 6,
   ready_to_mail: 2,
