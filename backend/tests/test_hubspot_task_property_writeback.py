@@ -93,7 +93,7 @@ def test_mirror_crm_task_from_lead_task_clears_due_date(app):
     from app.services.hubspot_task_completion_service import mirror_crm_task_from_lead_task
 
     with app.app_context():
-        lead = Lead(property_street='1 Due Clear St', lead_status='awaiting_skip_trace')
+        lead = Lead(property_street='1 Due Clear St', lead_status='skip_trace')
         db.session.add(lead)
         db.session.flush()
 

@@ -504,3 +504,478 @@ def test_find_template_scans_until_pages_are_exhausted():
 
     assert client.find_template('target') == {'id': 'target', 'name': 'Late template'}
     assert max(seen_pages) == 21
+
+
+def test_scrub_unsent_cancelled_campaign_removes_false_send(app):
+    with app.app_context():
+        from datetime import date
+
+        from app import db
+        from app.models import Lead, LeadTask, MailCampaign, MailQueueItem
+        from app.models.lead_timeline_entry import LeadTimelineEntry
+        from app.services.mail_campaign_scrub import scrub_unsent_cancelled_campaign
+
+        lead = Lead(
+            property_street='9 Scrub St',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            owner_user_id='user-1',
+            up_next_to_mail=False,
+            mailer_history=[
+                'Legacy free text mailer',
+                {
+                    'campaign_id': 1,
+                    'olc_order_id': '2128215',
+                    'sent_at': '2026-07-22T16:05:50+00:00',
+                    'template_name': 'Standard',
+                },
+            ],
+        )
+        db.session.add(lead)
+        db.session.flush()
+        campaign = MailCampaign(
+            status='cancelled',
+            lead_count=1,
+            olc_order_id='2128215',
+            created_by='user-1',
+            error_message='olc_cancel: failed',
+        )
+        db.session.add(campaign)
+        db.session.flush()
+        # Rewrite history to use real campaign id
+        lead.mailer_history = [
+            'Legacy free text mailer',
+            {
+                'campaign_id': campaign.id,
+                'olc_order_id': '2128215',
+                'sent_at': '2026-07-22T16:05:50+00:00',
+                'template_name': 'Standard',
+            },
+        ]
+        db.session.add(MailQueueItem(
+            lead_id=lead.id,
+            user_id='user-1',
+            status='queued',
+            campaign_id=None,
+        ))
+        db.session.add(LeadTimelineEntry(
+            lead_id=lead.id,
+            event_type='mail_sent',
+            occurred_at=date.today(),
+            source='system',
+            actor='user-1',
+            summary=f'Mailer sent (campaign {campaign.id})',
+            event_metadata={
+                'campaign_id': campaign.id,
+                'olc_order_id': '2128215',
+            },
+            is_deleted=False,
+        ))
+        db.session.add(LeadTask(
+            lead_id=lead.id,
+            task_type='call_owner_today',
+            title='Follow up after mailer — 9 Scrub St',
+            status='open',
+            due_date=None,  # undated — scrub may cancel these
+            created_by='user-1',
+        ))
+        db.session.add(LeadTask(
+            lead_id=lead.id,
+            task_type='call_owner_today',
+            title='Later follow up after other mail — 9 Scrub St',
+            status='open',
+            due_date=date(2026, 8, 15),  # dated — must not be cancelled by scrub
+            created_by='user-1',
+        ))
+        db.session.commit()
+
+        dry = scrub_unsent_cancelled_campaign(campaign.id, apply=False)
+        assert dry['history_entries_removed'] == 1
+        assert dry['timeline_mail_sent_deleted'] == 1
+        assert dry['follow_ups_cancelled'] == 1
+        assert dry['up_next_restored'] == 1
+        db.session.refresh(lead)
+        assert isinstance(lead.mailer_history, list) and len(lead.mailer_history) == 2
+
+        applied = scrub_unsent_cancelled_campaign(campaign.id, apply=True)
+        assert applied['apply'] is True
+        db.session.refresh(lead)
+        assert lead.mailer_history == ['Legacy free text mailer']
+        assert lead.up_next_to_mail is True
+        tl = LeadTimelineEntry.query.filter_by(lead_id=lead.id, event_type='mail_sent').one()
+        assert tl.is_deleted is True
+        undated = LeadTask.query.filter_by(
+            lead_id=lead.id, due_date=None,
+        ).one()
+        assert undated.status == 'cancelled'
+        dated = LeadTask.query.filter(
+            LeadTask.lead_id == lead.id,
+            LeadTask.due_date.isnot(None),
+        ).one()
+        assert dated.status == 'open'
+
+
+def test_scrub_refuses_mailed_evidence_unless_force(app):
+    with app.app_context():
+        from app import db
+        from app.exceptions import MailQueueError
+        from app.models import Lead, MailCampaign, MailQueueItem
+        from app.services.mail_campaign_scrub import scrub_unsent_cancelled_campaign
+
+        lead = Lead(
+            property_street='10 Force Scrub St',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            owner_user_id='user-1',
+            mailer_history=[],
+        )
+        db.session.add(lead)
+        db.session.flush()
+        campaign = MailCampaign(
+            status='cancelled',
+            lead_count=1,
+            olc_order_id='9990001',
+            created_by='user-1',
+        )
+        db.session.add(campaign)
+        db.session.flush()
+        db.session.add(MailQueueItem(
+            lead_id=lead.id,
+            user_id='user-1',
+            status='sent',
+            campaign_id=campaign.id,
+        ))
+        db.session.commit()
+
+        try:
+            scrub_unsent_cancelled_campaign(campaign.id, apply=False)
+            assert False, 'expected MailQueueError'
+        except MailQueueError as exc:
+            assert exc.status_code == 409
+            assert 'mailed' in str(exc).lower() or 'force' in str(exc).lower()
+
+        forced = scrub_unsent_cancelled_campaign(campaign.id, apply=False, force=True)
+        assert forced['force'] is True
+    """After cancel/requeue, OLC Failed must drop Ready-to-Mail rows."""
+    with app.app_context():
+        from app import db
+        from app.models import Lead, MailCampaign, MailQueueItem
+
+        lead = Lead(
+            property_street='1 Main',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            mailing_address='9719 LAVELL AVE',
+            mailing_city='Skokie',
+            mailing_state='IL',
+            mailing_zip='60076',
+            owner_user_id='user-1',
+            up_next_to_mail=True,
+        )
+        db.session.add(lead)
+        db.session.flush()
+        campaign = MailCampaign(
+            status='cancelled',
+            lead_count=1,
+            olc_order_id='2128215',
+            created_by='user-1',
+        )
+        db.session.add(campaign)
+        db.session.flush()
+        item = MailQueueItem(
+            lead_id=lead.id,
+            user_id='user-1',
+            status='queued',
+            campaign_id=None,
+        )
+        db.session.add(item)
+        db.session.commit()
+
+        svc = MailCampaignService()
+        svc._timeline = MagicMock()
+        changed = svc._apply_failed(
+            lead,
+            item,
+            {'addressFailureReason': 'The address does not exist in the USPS database.'},
+            campaign,
+        )
+        assert changed is True
+        assert item.status == 'invalid_address'
+        assert 'USPS' in (item.validation_error or '')
+        assert lead.up_next_to_mail is False
+        assert lead.returned_addresses
+
+
+def test_apply_failed_idempotent_when_queue_already_invalid(app):
+    """Partial prior apply (queue flipped, no history stamp) must not duplicate timeline."""
+    with app.app_context():
+        from app import db
+        from app.models import Lead, MailCampaign, MailQueueItem
+
+        lead = Lead(
+            property_street='1 Main',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            mailing_address='Bad',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60601',
+            owner_user_id='user-1',
+            returned_addresses='Bad, Chicago, IL 60601',
+        )
+        db.session.add(lead)
+        db.session.flush()
+        campaign = MailCampaign(
+            status='cancelled',
+            lead_count=1,
+            olc_order_id='2128215',
+            created_by='user-1',
+        )
+        db.session.add(campaign)
+        db.session.flush()
+        item = MailQueueItem(
+            lead_id=lead.id,
+            user_id='user-1',
+            status='invalid_address',
+            campaign_id=None,
+            validation_error='The address does not exist in the USPS database.',
+        )
+        db.session.add(item)
+        db.session.commit()
+
+        svc = MailCampaignService()
+        svc._timeline = MagicMock()
+        changed = svc._apply_failed(
+            lead,
+            item,
+            {'addressFailureReason': 'The address does not exist in the USPS database.'},
+            campaign,
+        )
+        assert changed is False
+        svc._timeline.append.assert_not_called()
+        hist = lead.mailer_history
+        assert isinstance(hist, list)
+        assert any(
+            isinstance(e, dict) and e.get('address_feedback') == 'Failed'
+            for e in hist
+        )
+
+
+def test_stamp_address_feedback_persists_json_mutation(app):
+    with app.app_context():
+        from app import db
+        from app.models import Lead
+
+        lead = Lead(
+            property_street='1 Main',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            mailer_history=['Legacy free text'],
+        )
+        db.session.add(lead)
+        db.session.commit()
+
+        MailCampaignService._stamp_address_feedback(lead, '2128215', 'Corrected')
+        db.session.commit()
+        db.session.refresh(lead)
+        assert any(
+            isinstance(e, dict)
+            and e.get('olc_order_id') == '2128215'
+            and e.get('address_feedback') == 'Corrected'
+            for e in (lead.mailer_history or [])
+        )
+
+
+def test_sync_address_feedback_resolves_requeued_item_by_lead(app):
+    """Sync must find queue rows even when campaign_id was cleared on requeue."""
+    with app.app_context():
+        from app import db
+        from app.models import Lead, MailCampaign, MailQueueItem
+
+        lead_failed = Lead(
+            property_street='2 Fail St',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            mailing_address='Bad Addr',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60601',
+            owner_user_id='user-1',
+            up_next_to_mail=True,
+        )
+        lead_corrected = Lead(
+            property_street='3 Fix St',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            mailing_address='Old St',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60601',
+            owner_user_id='user-1',
+        )
+        db.session.add_all([lead_failed, lead_corrected])
+        db.session.flush()
+        campaign = MailCampaign(
+            status='cancelled',
+            lead_count=2,
+            olc_order_id='2128215',
+            created_by='user-1',
+        )
+        db.session.add(campaign)
+        db.session.flush()
+        item_failed = MailQueueItem(
+            lead_id=lead_failed.id,
+            user_id='user-1',
+            status='queued',
+            campaign_id=None,
+        )
+        item_corrected = MailQueueItem(
+            lead_id=lead_corrected.id,
+            user_id='user-1',
+            status='queued',
+            campaign_id=None,
+        )
+        db.session.add_all([item_failed, item_corrected])
+        db.session.commit()
+
+        client = MagicMock()
+        client.iter_order_contacts.return_value = [
+            {
+                'addressStatus': 'Failed',
+                'addressFailureReason': 'USPS unknown',
+                'meta': {'data': {'lead_id': lead_failed.id}},
+            },
+            {
+                'addressStatus': 'Corrected',
+                'address1': '2041 W Cuyler Ave',
+                'city': 'Chicago',
+                'state': 'IL',
+                'zip': '60618-3005',
+                'meta': {'data': {'lead_id': lead_corrected.id}},
+            },
+            {
+                'addressStatus': 'Verified',
+                'meta': {'data': {'lead_id': 999999}},
+            },
+        ]
+
+        svc = MailCampaignService()
+        svc._timeline = MagicMock()
+        summary = svc._sync_order_address_statuses(
+            campaign, client, refresh_scoring=False,
+        )
+
+        assert summary['failed'] == 1
+        assert summary['corrected'] == 1
+        assert summary['verified'] == 1
+        db.session.refresh(item_failed)
+        db.session.refresh(lead_corrected)
+        assert item_failed.status == 'invalid_address'
+        assert lead_corrected.mailing_address == '2041 W Cuyler Ave'
+
+
+def test_queue_feedback_fallback_ignores_other_campaign_items(app):
+    """Failed sync for an old order must not mutate another campaign's queue row."""
+    with app.app_context():
+        from app import db
+        from app.models import Lead, MailCampaign, MailQueueItem
+
+        lead = Lead(
+            property_street='4 Other Camp St',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            mailing_address='Bad Addr',
+            mailing_city='Chicago',
+            mailing_state='IL',
+            mailing_zip='60601',
+            owner_user_id='user-1',
+            up_next_to_mail=True,
+        )
+        db.session.add(lead)
+        db.session.flush()
+        old_campaign = MailCampaign(
+            status='cancelled',
+            lead_count=1,
+            olc_order_id='111',
+            created_by='user-1',
+        )
+        new_campaign = MailCampaign(
+            status='submitted',
+            lead_count=1,
+            olc_order_id='222',
+            created_by='user-1',
+        )
+        db.session.add_all([old_campaign, new_campaign])
+        db.session.flush()
+        new_item = MailQueueItem(
+            lead_id=lead.id,
+            user_id='user-1',
+            status='queued',
+            campaign_id=new_campaign.id,
+        )
+        db.session.add(new_item)
+        db.session.commit()
+
+        svc = MailCampaignService()
+        by_lead = svc._queue_items_by_lead_for_feedback(old_campaign, [lead.id])
+        assert by_lead.get(lead.id) is None
+
+        client = MagicMock()
+        client.iter_order_contacts.return_value = [
+            {
+                'addressStatus': 'Failed',
+                'addressFailureReason': 'USPS unknown',
+                'meta': {'data': {'lead_id': lead.id}},
+            },
+        ]
+        svc._timeline = MagicMock()
+        summary = svc._sync_order_address_statuses(
+            old_campaign, client, refresh_scoring=False,
+        )
+        assert summary['failed'] == 1
+        db.session.refresh(new_item)
+        db.session.refresh(lead)
+        assert new_item.status == 'queued'
+        assert lead.up_next_to_mail is True
+
+
+def test_sync_campaign_analytics_keeps_cancelled_status(app):
+    """Refreshing a cancelled campaign with olc_order_id must not flip to mailed."""
+    with app.app_context():
+        from app import db
+        from app.models import MailCampaign
+
+        campaign = MailCampaign(
+            status='cancelled',
+            lead_count=0,
+            olc_order_id='2128215',
+            created_by='user-1',
+        )
+        db.session.add(campaign)
+        db.session.commit()
+
+        client = MagicMock()
+        client.get_order_analytics.return_value = {
+            'data': {
+                'orderItemStatuses': {'Mailed': 10, 'Delivered': 2},
+                'geoChart': {'scannedOrderItems': 1, 'notScannedOrderItems': 9},
+            },
+        }
+        client.iter_order_contacts.return_value = []
+
+        svc = MailCampaignService()
+        svc._config_service = MagicMock()
+        svc._config_service.get_client.return_value = client
+
+        updated = svc.sync_campaign_analytics(campaign.id)
+        assert updated.status == 'cancelled'
+        assert updated.delivery_stats == {'Mailed': 10, 'Delivered': 2}
+        assert updated._address_feedback_summary['verified'] == 0

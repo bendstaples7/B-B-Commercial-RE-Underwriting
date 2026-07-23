@@ -39,7 +39,7 @@ def _make_lead(app, street: str, **kwargs) -> Lead:
     """Create and persist a minimal Lead with the given overrides."""
     defaults = dict(
         property_street=street,
-        lead_status='awaiting_skip_trace',
+        lead_status='skip_trace',
         lead_score=50.0,
         has_phone=False,
         has_email=False,
@@ -159,7 +159,7 @@ class TestTodaysActionQueue:
     def test_lead_with_new_status_and_no_tasks_does_not_appear(self, app, client):
         """A plain new lead with no tasks does not appear in Today's Action."""
         with app.app_context():
-            lead = _make_lead(app, '3 Todays Action St', lead_status='awaiting_skip_trace')
+            lead = _make_lead(app, '3 Todays Action St', lead_status='skip_trace')
 
             svc = QueueService()
             rows, _ = svc.get_todays_action()
@@ -293,7 +293,7 @@ class TestNoNextActionQueue:
     def test_new_lead_with_no_tasks_appears(self, app, client):
         """A new lead with no tasks and no recommended_action appears."""
         with app.app_context():
-            lead = _make_lead(app, '1 No Action St', lead_status='awaiting_skip_trace')
+            lead = _make_lead(app, '1 No Action St', lead_status='skip_trace')
 
             svc = QueueService()
             rows, total = svc.get_no_next_action()
@@ -304,7 +304,7 @@ class TestNoNextActionQueue:
     def test_open_hubspot_task_alone_still_appears(self, app, client):
         """CRM Task mirrors do not satisfy next-action — lead stays in No Next Action."""
         with app.app_context():
-            lead = _make_lead(app, '2 No Action St', lead_status='awaiting_skip_trace')
+            lead = _make_lead(app, '2 No Action St', lead_status='skip_trace')
             _make_hubspot_task(lead.id, status='open',
                                due_date=datetime.now(timezone.utc) + timedelta(days=7))
 
@@ -316,7 +316,7 @@ class TestNoNextActionQueue:
     def test_lead_with_open_lead_task_does_not_appear(self, app, client):
         """A lead with an open CRM lead_task does not appear in No Next Action."""
         with app.app_context():
-            lead = _make_lead(app, '3 No Action St', lead_status='awaiting_skip_trace')
+            lead = _make_lead(app, '3 No Action St', lead_status='skip_trace')
             _make_lead_task(lead.id, status='open',
                             due_date=date.today() + timedelta(days=3))
 
@@ -435,7 +435,7 @@ class TestMissingPropertyMatchQueue:
 
 class TestQueueCountsEndpoint:
     def test_counts_endpoint_returns_all_7_keys(self, app, client):
-        """GET /api/queues/counts returns all 7 queue count keys."""
+        """GET /api/queues/counts returns all queue count keys."""
         with app.app_context():
             resp = client.get('/api/queues/counts', headers=_AUTH_HEADERS)
             assert resp.status_code == 200
@@ -443,7 +443,9 @@ class TestQueueCountsEndpoint:
             expected_keys = {
                 'todays_action', 'previously_warm', 'follow_up_overdue',
                 'no_next_action', 'needs_review', 'do_not_contact',
-                'missing_property_match', 'ready_to_mail', 'mail_candidates', 'prospect_candidates',
+                'missing_property_match', 'ready_to_mail', 'mail_candidates',
+                'prospect_candidates',
+                'skip_trace', 'skip_trace_exhausted',
             }
             assert set(data.keys()) == expected_keys
 
@@ -570,18 +572,18 @@ class TestDuPageLeadQueueVisibility:
 
     def test_no_next_action_both_sources_appear(self, app, client):
         """Both HubSpot-sourced (no source_type) and DuPage-sourced leads
-        with lead_status='awaiting_skip_trace', recommended_action=None, and no tasks appear
+        with lead_status='skip_trace', recommended_action=None, and no tasks appear
         in get_no_next_action()."""
         with app.app_context():
             hubspot_lead = _make_lead(
                 app, '10 DuPage NNA HubSpot St',
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
                 recommended_action=None,
                 source_type=None,
             )
             dupage_lead = _make_lead(
                 app, '10 DuPage NNA DuPage St',
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
                 recommended_action=None,
                 source_type='foreclosure',
             )

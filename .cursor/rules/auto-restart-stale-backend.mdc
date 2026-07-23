@@ -1,0 +1,35 @@
+---
+description: Never show “backend restart required”; auto-restart stale local Flask
+alwaysApply: true
+---
+
+# Auto-restart stale local backend
+
+Users must **never** see a “Backend restart required” (or similar) banner.
+
+## Product rule
+
+- The yellow restart banner UI is **forbidden**. Do not reintroduce
+  `BackendRestartRequiredBanner` or any equivalent alert that tells the user
+  to restart Flask.
+- Local/dev detects `source_stale` via `/api/health` and **schedules an
+  automatic restart** (`runtime_identity.schedule_local_dev_restart`). The FE
+  only mounts silent `BackendRuntimeGuard` (cache invalidation on `build_id`
+  change).
+
+## Agent workflow
+
+When local health reports `source_stale: true`, or UI/API looks stuck on old
+code after Python edits:
+
+1. Restart the backend yourself (kill the listener on port **5000**, then
+   `python run.py` from `backend/` or `python dev.py` from the repo root).
+2. Confirm `/api/health` returns `source_stale: false` before asking the user
+   to verify UI.
+3. Do **not** tell the user to restart, or leave them staring at a warning bar.
+
+## Escape hatches
+
+- `BB_DISABLE_AUTO_RESTART=1` — tests / special debugging only.
+- `FLASK_SKIP_RELOADER=1` — attach a debugger; prefer auto-restart via health
+  still works unless auto-restart is also disabled.

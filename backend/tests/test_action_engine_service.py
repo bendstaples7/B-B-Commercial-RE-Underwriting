@@ -121,7 +121,7 @@ def test_priority_2_deal_won_returns_none():
 
 
 # ---------------------------------------------------------------------------
-# Priority 2.5: skip_trace / awaiting_skip_trace → add_contact_info always
+# Priority 2.5: skip_trace → add_contact_info always
 # ---------------------------------------------------------------------------
 
 def test_priority_2_5_skip_trace_returns_add_contact_info_even_with_phone_email():
@@ -133,19 +133,10 @@ def test_priority_2_5_skip_trace_returns_add_contact_info_even_with_phone_email(
     assert result == 'add_contact_info'
 
 
-def test_priority_2_5_awaiting_skip_trace_returns_add_contact_info():
-    """awaiting_skip_trace without mailing address returns add_contact_info."""
-    lead = make_lead(lead_status='awaiting_skip_trace', has_phone=True, has_email=True, is_warm=True)
-    lead.mailing_address = None
-    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
-        result = ActionEngineService.compute_recommended_action(lead)
-    assert result == 'add_contact_info'
-
-
 def test_priority_2_5_residential_with_mailing_does_not_force_add_contact_info():
     """Residential skip_trace with mailing address falls through (not forced add_contact_info)."""
     lead = make_lead(
-        lead_status='awaiting_skip_trace',
+        lead_status='skip_trace',
         has_phone=True,
         has_email=True,
         has_property_match=True,
@@ -256,7 +247,7 @@ def test_scoring_never_returns_analyze_property():
     from hypothesis import strategies as st
 
     lead_statuses = [
-        'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+        'skip_trace', 'mailing_no_contact_made',
         'mailing_contacted_no_interest', 'mailing_contacted_interested',
         'negotiating_remote', 'in_person_appointment', 'offer_delivered',
     ]

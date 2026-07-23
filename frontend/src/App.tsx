@@ -1,7 +1,7 @@
 import { useState, useEffect, Component } from 'react'
 import { Routes, Route, Link, Navigate, useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
-import { BackendRestartRequiredBanner } from './components/BackendRestartRequiredBanner'
+import { BackendRuntimeGuard } from './components/BackendRuntimeGuard'
 import { LoginPage } from './pages/LoginPage'
 import { SetPasswordPage } from './pages/SetPasswordPage'
 import { useLoadScript } from '@react-google-maps/api'
@@ -98,6 +98,8 @@ import { PreviouslyWarmQueue } from './components/PreviouslyWarmQueue'
 import { FollowUpOverdueQueue } from './components/FollowUpOverdueQueue'
 import { NoNextActionQueue } from './components/NoNextActionQueue'
 import { NeedsReviewQueue } from './components/NeedsReviewQueue'
+import { SkipTraceQueue } from './components/SkipTraceQueue'
+import { SkipTraceExhaustedQueue } from './components/SkipTraceExhaustedQueue'
 import { DoNotContactQueue } from './components/DoNotContactQueue'
 import { MissingPropertyMatchQueue } from './components/MissingPropertyMatchQueue'
 import { ReadyToMailQueue } from './components/ReadyToMailQueue'
@@ -131,7 +133,7 @@ import { GoogleMapsLoadedContext } from '@/context/GoogleMapsContext'
 // Declare it outside the component so it's stable across renders.
 const GOOGLE_MAPS_LIBRARIES: ['places'] = ['places']
 
-/** Work queue sub-groups under the top-level Work Queues nav section. */
+/** Work queue sub-groups under the top-level Work Queue Kanban nav section. */
 type NavQueueItem = {
   label: string
   path: string
@@ -153,14 +155,8 @@ const WORK_QUEUE_SUBGROUPS = [
     items: [
       { label: "Today's Action", path: '/queues/todays-action', icon: <TodayIcon />, badgeKey: 'todays_action' as keyof QueueCounts },
       { label: 'Follow-Up Overdue', path: '/queues/follow-up-overdue', icon: <AlarmIcon />, badgeKey: 'follow_up_overdue' as keyof QueueCounts },
+      { label: 'Skip Trace', path: '/queues/skip-trace', icon: <TravelExploreIcon />, badgeKey: 'skip_trace' as keyof QueueCounts },
       { label: 'Ready to Mail', path: '/queues/ready-to-mail', icon: <LocalPostOfficeIcon />, badgeKey: 'ready_to_mail' as keyof QueueCounts },
-    ],
-  },
-  {
-    label: 'Pipeline views',
-    description: 'Visual deal stage',
-    items: [
-      { label: 'Kanban', path: '/kanban', icon: <ViewKanbanIcon />, badgeKey: null },
     ],
   },
   {
@@ -168,6 +164,7 @@ const WORK_QUEUE_SUBGROUPS = [
     description: 'Fix data and routing gaps',
     items: [
       { label: 'Needs Review', path: '/queues/needs-review', icon: <RateReviewIcon />, badgeKey: 'needs_review' as keyof QueueCounts },
+      { label: 'Skip Trace Exhausted', path: '/queues/skip-trace-exhausted', icon: <TravelExploreIcon />, badgeKey: 'skip_trace_exhausted' as keyof QueueCounts },
       { label: 'Missing Property Match', path: '/queues/missing-property-match', icon: <LocationOffIcon />, badgeKey: 'missing_property_match' as keyof QueueCounts },
       { label: 'No Next Action', path: '/queues/no-next-action', icon: <RadioButtonUncheckedIcon />, badgeKey: 'no_next_action' as keyof QueueCounts },
     ],
@@ -200,9 +197,9 @@ type NavGroup = NavItemGroup | NavSubgroupGroup
 /** Nav structure: top-level sections, each with grouped child items. */
 const NAV_SECTIONS = [
   {
-    label: 'Work Queues',
-    path: '/queues/todays-action',
-    icon: <TodayIcon />,
+    label: 'Work Queue Kanban',
+    path: '/kanban',
+    icon: <ViewKanbanIcon />,
     headerNavigates: true,
     groups: [
       {
@@ -1378,7 +1375,7 @@ function App() {
 
   // Track which top-level sections are expanded; default all open
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
-    '/queues/todays-action': true,
+    '/kanban': true,
     '/dashboard': true,
     '/analysis': true,
     '/properties': true,
@@ -1931,7 +1928,7 @@ function App() {
           width: { xs: '100%', md: `calc(100% - ${DRAWER_WIDTH}px)` },
         }}
       >
-        <BackendRestartRequiredBanner />
+        <BackendRuntimeGuard />
         <Routes>
           {/* Public route — no AuthGuard */}
           <Route path="/login" element={<LoginPage />} />
@@ -1949,6 +1946,8 @@ function App() {
           <Route path="/queues/follow-up-overdue" element={<FollowUpOverdueQueue />} />
           <Route path="/queues/no-next-action" element={<NoNextActionQueue />} />
           <Route path="/queues/needs-review" element={<NeedsReviewQueue />} />
+          <Route path="/queues/skip-trace" element={<SkipTraceQueue />} />
+          <Route path="/queues/skip-trace-exhausted" element={<SkipTraceExhaustedQueue />} />
           <Route path="/queues/do-not-contact" element={<DoNotContactQueue />} />
           <Route path="/queues/missing-property-match" element={<MissingPropertyMatchQueue />} />
           <Route path="/queues/ready-to-mail" element={<ReadyToMailQueue />} />

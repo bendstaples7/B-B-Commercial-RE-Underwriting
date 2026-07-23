@@ -47,6 +47,10 @@ export const queueService = {
     api.post('/queues/no-next-action/bulk-update-status', payload).then(r => r.data),
   getNeedsReview: (page = 1, perPage = 20): Promise<QueuePage> =>
     api.get('/queues/needs-review', { params: { page, per_page: perPage } }).then(r => r.data),
+  getSkipTrace: (page = 1, perPage = 20): Promise<QueuePage> =>
+    api.get('/queues/skip-trace', { params: { page, per_page: perPage } }).then(r => r.data),
+  getSkipTraceExhausted: (page = 1, perPage = 20): Promise<QueuePage> =>
+    api.get('/queues/skip-trace-exhausted', { params: { page, per_page: perPage } }).then(r => r.data),
   getDoNotContact: (page = 1, perPage = 20): Promise<QueuePage> =>
     api.get('/queues/do-not-contact', { params: { page, per_page: perPage } }).then(r => r.data),
   getMissingPropertyMatch: (page = 1, perPage = 20): Promise<QueuePage> =>

@@ -36,14 +36,8 @@ const WORK_QUEUE_SUBGROUPS: QueueSubgroup[] = [
     links: [
       { label: "Today's Action", path: '/queues/todays-action', badgeKey: 'todays_action' },
       { label: 'Follow-Up Overdue', path: '/queues/follow-up-overdue', badgeKey: 'follow_up_overdue' },
+      { label: 'Skip Trace', path: '/queues/skip-trace', badgeKey: 'skip_trace' },
       { label: 'Ready to Mail', path: '/queues/ready-to-mail', badgeKey: 'ready_to_mail' },
-    ],
-  },
-  {
-    label: 'Pipeline views',
-    description: 'Lead status columns',
-    links: [
-      { label: 'Kanban', path: '/kanban', badgeKey: null },
     ],
   },
   {
@@ -51,6 +45,7 @@ const WORK_QUEUE_SUBGROUPS: QueueSubgroup[] = [
     description: 'Fix data and routing gaps',
     links: [
       { label: 'Needs Review', path: '/queues/needs-review', badgeKey: 'needs_review' },
+      { label: 'Skip Trace Exhausted', path: '/queues/skip-trace-exhausted', badgeKey: 'skip_trace_exhausted' },
       { label: 'Missing Property Match', path: '/queues/missing-property-match', badgeKey: 'missing_property_match' },
       { label: 'No Next Action', path: '/queues/no-next-action', badgeKey: 'no_next_action' },
     ],
@@ -91,10 +86,21 @@ export function QueueSidebar() {
 
       <Box sx={{ px: 2, pt: 0.5, pb: 0.25 }}>
         <Typography
+          component={Link}
+          to="/kanban"
           variant="overline"
-          sx={{ fontSize: '0.7rem', letterSpacing: 1, color: 'text.secondary', lineHeight: 1 }}
+          data-testid="queue-link-kanban"
+          sx={{
+            fontSize: '0.7rem',
+            letterSpacing: 1,
+            color: location.pathname === '/kanban' ? 'primary.main' : 'text.secondary',
+            lineHeight: 1,
+            textDecoration: 'none',
+            fontWeight: 700,
+            '&:hover': { color: 'primary.main', textDecoration: 'underline' },
+          }}
         >
-          Work Queues
+          Work Queue Kanban
         </Typography>
       </Box>
 

@@ -94,6 +94,8 @@ const defaultQueueCounts = {
   follow_up_overdue: 0,
   no_next_action: 0,
   needs_review: 0,
+  skip_trace: 0,
+  skip_trace_exhausted: 0,
   do_not_contact: 0,
   missing_property_match: 0,
   ready_to_mail: 0,

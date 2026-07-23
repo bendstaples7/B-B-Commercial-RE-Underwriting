@@ -59,7 +59,7 @@ class TestBug1StageLabelFallback:
 
             lead = Lead(
                 property_street="2553 N Drake Ave",
-                lead_status="awaiting_skip_trace",
+                lead_status="skip_trace",
             )
             db.session.add(lead)
             db.session.flush()
@@ -114,7 +114,7 @@ class TestBug1StageLabelFallback:
 
             lead = Lead(
                 property_street="2553 N Drake Ave",
-                lead_status="awaiting_skip_trace",
+                lead_status="skip_trace",
             )
             db.session.add(lead)
             db.session.flush()
@@ -160,7 +160,7 @@ class TestBug1StageLabelFallback:
         with app.app_context():
             lead = Lead(
                 property_street="2553 N Drake Ave",
-                lead_status="awaiting_skip_trace",
+                lead_status="skip_trace",
             )
             db.session.add(lead)
             db.session.flush()
@@ -198,7 +198,7 @@ class TestBug1StageLabelFallback:
             # overwritten with the raw ID.
             assert lead.hubspot_deal_stage is None
             # lead_status is not changed off an unmappable stage.
-            assert lead.lead_status == "awaiting_skip_trace"
+            assert lead.lead_status == "skip_trace"
 
     @given(
         stage_id=st.text(
@@ -222,7 +222,7 @@ class TestBug1StageLabelFallback:
         with app.app_context():
             lead = Lead(
                 property_street="100 Test St",
-                lead_status="awaiting_skip_trace",
+                lead_status="skip_trace",
             )
             db.session.add(lead)
             db.session.flush()
@@ -277,7 +277,7 @@ class TestBug2PendingContactMatch:
             # Create a lead
             lead = Lead(
                 property_street="2553 N Drake Ave",
-                lead_status="awaiting_skip_trace",
+                lead_status="skip_trace",
             )
             db.session.add(lead)
             db.session.flush()
@@ -488,7 +488,7 @@ class TestBug3aOrphanedInteraction:
             # Create a lead
             lead = Lead(
                 property_street="2553 N Drake Ave",
-                lead_status="awaiting_skip_trace",
+                lead_status="skip_trace",
             )
             db.session.add(lead)
             db.session.flush()
@@ -689,7 +689,7 @@ class TestBug3bEmailEngagement:
             # Create a lead and confirmed deal match for the association
             lead = Lead(
                 property_street="2553 N Drake Ave",
-                lead_status="awaiting_skip_trace",
+                lead_status="skip_trace",
             )
             db.session.add(lead)
             db.session.flush()
@@ -894,7 +894,7 @@ class TestPreservation1NonNullFieldsNotOverwritten:
         with app.app_context():
             lead = Lead(
                 property_street="999 Preservation St",
-                lead_status="awaiting_skip_trace",
+                lead_status="skip_trace",
                 phone_1=phone_val,
                 email_1=email_val,
                 mailing_address=mailing_val,
@@ -1101,7 +1101,7 @@ class TestPreservation3IdempotencyOfActivityConversion:
             # Create a lead and confirmed deal match for associations
             lead = Lead(
                 property_street="200 Idempotent Ave",
-                lead_status="awaiting_skip_trace",
+                lead_status="skip_trace",
             )
             db.session.add(lead)
             db.session.flush()
@@ -1211,7 +1211,7 @@ class TestPreservation4NoDuplicatePropertyContact:
         with app.app_context():
             lead = Lead(
                 property_street="300 NoDupes Blvd",
-                lead_status="awaiting_skip_trace",
+                lead_status="skip_trace",
             )
             db.session.add(lead)
             db.session.flush()
@@ -1278,7 +1278,7 @@ class TestPreservation5ConfirmedRejectedMatchNotReMatched:
         with app.app_context():
             lead = Lead(
                 property_street="400 Stable Match Rd",
-                lead_status="awaiting_skip_trace",
+                lead_status="skip_trace",
             )
             db.session.add(lead)
             db.session.flush()
@@ -1403,14 +1403,14 @@ class TestBug4DanglingConfirmedMatch:
             db.session.flush()
 
             # Lead A — the lead the deal was originally confirmed against
-            lead_a = Lead(property_street="2553 N Drake Ave", lead_status="awaiting_skip_trace")
+            lead_a = Lead(property_street="2553 N Drake Ave", lead_status="skip_trace")
             db.session.add(lead_a)
             db.session.flush()
             a_id = lead_a.id
 
             # Keeper lead at an unrelated address so SQLite cannot reuse A's rowid
             # for B after A is deleted (which would mask the bug).
-            keeper = Lead(property_street="9999 Unrelated Ave", lead_status="awaiting_skip_trace")
+            keeper = Lead(property_street="9999 Unrelated Ave", lead_status="skip_trace")
             db.session.add(keeper)
             db.session.flush()
 
@@ -1477,7 +1477,7 @@ class TestBug4DanglingConfirmedMatch:
             db.session.commit()
 
             # Surviving duplicate lead at the same address
-            lead_b = Lead(property_street="2553 N Drake Ave", lead_status="awaiting_skip_trace")
+            lead_b = Lead(property_street="2553 N Drake Ave", lead_status="skip_trace")
             db.session.add(lead_b)
             db.session.commit()
             b_id = lead_b.id
@@ -1551,7 +1551,7 @@ class TestBug4DanglingConfirmedMatch:
             db.session.add(config)
             db.session.flush()
 
-            lead = Lead(property_street="123 Keep Confirmed Ave", lead_status="awaiting_skip_trace")
+            lead = Lead(property_street="123 Keep Confirmed Ave", lead_status="skip_trace")
             db.session.add(lead)
             db.session.flush()
             lead_id = lead.id
@@ -1866,7 +1866,7 @@ class TestBug5StrandedAssociation:
 
         with app.app_context():
             # Surviving lead B at the address.
-            lead_b = Lead(property_street="2553 N Drake Ave", lead_status="awaiting_skip_trace")
+            lead_b = Lead(property_street="2553 N Drake Ave", lead_status="skip_trace")
             db.session.add(lead_b)
             db.session.flush()
             b_id = lead_b.id
@@ -1985,7 +1985,7 @@ class TestBug5StrandedAssociation:
         MISSING_LEAD_ID = 9999999
 
         with app.app_context():
-            lead_b = Lead(property_street="2553 N Drake Ave", lead_status="awaiting_skip_trace")
+            lead_b = Lead(property_street="2553 N Drake Ave", lead_status="skip_trace")
             db.session.add(lead_b)
             db.session.flush()
             b_id = lead_b.id
@@ -2078,7 +2078,7 @@ class TestBug5StrandedAssociation:
         from app.tasks.hubspot_tasks import run_convert_hubspot_activities
 
         with app.app_context():
-            lead_b = Lead(property_street="100 Existing Lead Ln", lead_status="awaiting_skip_trace")
+            lead_b = Lead(property_street="100 Existing Lead Ln", lead_status="skip_trace")
             db.session.add(lead_b)
             db.session.flush()
             b_id = lead_b.id
@@ -2188,7 +2188,7 @@ class TestBug7LeadDeleteCleanup:
         from app.models.task_association import TaskAssociation
 
         with app.app_context():
-            lead = Lead(property_street="2553 N Drake Ave", lead_status="awaiting_skip_trace")
+            lead = Lead(property_street="2553 N Drake Ave", lead_status="skip_trace")
             db.session.add(lead)
             db.session.flush()
             lead_id = lead.id
@@ -2289,8 +2289,8 @@ class TestBug7LeadDeleteCleanup:
         from app.models.task_association import TaskAssociation
 
         with app.app_context():
-            doomed = Lead(property_street="1 Doomed St", lead_status="awaiting_skip_trace")
-            survivor = Lead(property_street="2 Survivor Ave", lead_status="awaiting_skip_trace")
+            doomed = Lead(property_street="1 Doomed St", lead_status="skip_trace")
+            survivor = Lead(property_street="2 Survivor Ave", lead_status="skip_trace")
             db.session.add_all([doomed, survivor])
             db.session.flush()
             doomed_id = doomed.id

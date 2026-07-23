@@ -26,13 +26,6 @@ describe('actionEligibility', () => {
     })
   })
 
-  it('allows move_to_skip_trace when awaiting skip trace after a hold', () => {
-    expect(evaluateMoveToSkipTrace('awaiting_skip_trace')).toMatchObject({
-      ok: true,
-      alreadyDone: false,
-    })
-  })
-
   it('blocks terminal statuses for skip trace', () => {
     expect(evaluateMoveToSkipTrace('do_not_contact').reasonCode).toBe(REASON_TERMINAL_STATUS)
   })
@@ -88,7 +81,7 @@ describe('actionEligibility', () => {
     ).toBeNull()
     expect(
       unavailableReasonForQuickAction('move_to_skip_trace', {
-        leadStatus: 'awaiting_skip_trace',
+        leadStatus: 'mailing_no_contact_made',
       }),
     ).toBeNull()
     expect(

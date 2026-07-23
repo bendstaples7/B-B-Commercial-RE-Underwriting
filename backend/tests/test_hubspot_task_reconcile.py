@@ -30,7 +30,7 @@ def lead(app):
             owner_first_name='Test',
             owner_last_name='Owner',
             property_street='1 Test St',
-            lead_status='awaiting_skip_trace',
+            lead_status='skip_trace',
         )
         db.session.add(row)
         db.session.commit()

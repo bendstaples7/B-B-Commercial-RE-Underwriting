@@ -10,6 +10,6 @@ Use this rule together with `no-direct-main-merge.mdc`.
 ## Choose the branch before starting work
 
 - If the previous feature branch is **already merged into `main`** → create a new `feat/<topic>` branch off latest `main` as step 0.
-- If the existing branch is **uncommitted or not yet merged into `main`** → continue on that existing branch; do **not** cut a new branch off `main` and do **not** stash WIP onto a fresh branch.
+- If the existing branch is **uncommitted or not yet merged into `main`** → **continue on that existing branch**. Do **not** cut a new branch off `main`, do **not** stash WIP onto a fresh branch, and do **not** invent a second branch because the new request is a “different topic.” Uncommitted / unmerged work on `HEAD` always wins until that branch is merged.
 
 When unsure which case applies, ask before branching.

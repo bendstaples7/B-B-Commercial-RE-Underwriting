@@ -215,7 +215,9 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
     const campaigns = data?.campaigns ?? []
     const results = await Promise.allSettled(
       campaigns
-        .filter((c) => c.olc_order_id && c.status !== 'cancelled')
+        // Include cancelled campaigns that still have an OLC order so address
+        // feedback (Failed/Corrected) can be imported after cancel/requeue.
+        .filter((c) => !!c.olc_order_id)
         .map((c) => openLetterService.getCampaign(c.id, true)),
     )
     const totals = { corrected: 0, failed: 0, verified: 0 }

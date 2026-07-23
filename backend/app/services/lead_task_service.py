@@ -347,6 +347,15 @@ class LeadTaskService:
                 # the skip-trace stamp when the last handoff is completed.
                 if not lead.needs_skip_trace:
                     lead.date_skip_traced = date.today()
+                    from app.services.skip_trace_escalation_service import (
+                        SkipTraceEscalationService,
+                    )
+                    SkipTraceEscalationService().record_source_completed(
+                        lead_id,
+                        source_id=lead.skip_trace_next_source_id,
+                        actor=actor,
+                        commit=False,
+                    )
                     # Same residential/mailable/not-recently-sold gate as scoring —
                     # do not force commercial or address-less leads into mailing.
                     from app.services.lead_scoring_engine import (

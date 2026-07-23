@@ -280,22 +280,29 @@ def test_todays_action_excludes_nurture_lead(app):
         assert lead.id not in ids
 
 
-def test_todays_action_excludes_awaiting_skip_trace_even_with_dated_task(app):
-    """awaiting_skip_trace is skip-trace staging — never Today's Action work."""
+def test_todays_action_excludes_undated_skip_trace_handoff(app):
+    """Undated skip-trace handoffs must not flood Today's Action."""
     with app.app_context():
+        from app import db
+        from app.models import LeadTask
+
         lead = _make_lead(
             app,
-            '3a Awaiting Skip Trace Leak St',
-            lead_status='awaiting_skip_trace',
+            '3a Skip Trace Handoff St',
+            lead_status='skip_trace',
             recommended_action='add_contact_info',
             needs_skip_trace=True,
         )
-        _make_task(
-            app,
-            lead.id,
-            due_date=date.today() - timedelta(days=30),
-            title='manual skip trace',
-        )
+        db.session.add(LeadTask(
+            lead_id=lead.id,
+            task_type='skip_trace_owner',
+            title='Awaiting skip trace',
+            status='open',
+            due_date=None,
+            created_by='test',
+            workflow_key='awaiting_skip_trace_handoff',
+        ))
+        db.session.commit()
         svc = QueueService()
         rows, _total = svc.get_todays_action()
         ids = [r['id'] for r in rows]
@@ -790,7 +797,7 @@ def test_missing_property_match_excludes_lead_with_research_task(app):
 # ---------------------------------------------------------------------------
 
 def test_get_counts_returns_all_queue_keys(app):
-    """get_counts returns a dict with all 7 queue keys."""
+    """get_counts returns a dict with all queue badge keys."""
     with app.app_context():
         svc = QueueService()
         counts = svc.get_counts()
@@ -799,6 +806,7 @@ def test_get_counts_returns_all_queue_keys(app):
             'todays_action', 'previously_warm', 'follow_up_overdue',
             'no_next_action', 'needs_review', 'do_not_contact',
             'missing_property_match',
+            'skip_trace', 'skip_trace_exhausted',
         }
         assert set(counts.keys()) == expected_keys
         for key, val in counts.items():
@@ -934,4 +942,71 @@ def test_get_counts_reflects_actual_leads(app):
         counts = svc.get_counts()
 
         assert counts['do_not_contact'] >= 2
+
+
+def test_skip_trace_queue_by_status_exhausted_separate(app):
+    """Active Skip Trace queue requires needs_skip_trace; exhausted stays separate."""
+    with app.app_context():
+        from datetime import datetime, timezone
+
+        from app import db
+        from app.models import LeadTask
+
+        active = _make_lead(
+            app,
+            '901 Skip Trace St',
+            lead_status='skip_trace',
+            needs_skip_trace=True,
+        )
+        mid_hold = _make_lead(
+            app,
+            '902 Mid Hold Skip St',
+            lead_status='skip_trace',
+            needs_skip_trace=False,
+        )
+        hold = LeadTask(
+            lead_id=mid_hold.id,
+            task_type='skip_trace_owner',
+            title='Recent-sale hold',
+            status='open',
+            due_date=date.today() + timedelta(days=14),
+            workflow_key='recent_sale_hold',
+            created_by='test',
+        )
+        db.session.add(hold)
+        db.session.commit()
+        exhausted = _make_lead(
+            app,
+            '903 Exhausted Skip St',
+            lead_status='mailing_no_contact_made',
+            skip_trace_exhausted_at=datetime.now(timezone.utc),
+        )
+        other = _make_lead(app, '904 Other Pipeline St', lead_status='mailing_no_contact_made')
+
+        svc = QueueService()
+        st_rows, st_total = svc.get_skip_trace(per_page=5000)
+        ex_rows, ex_total = svc.get_skip_trace_exhausted(per_page=5000)
+        counts = svc.get_counts()
+
+        st_ids = {r['id'] for r in st_rows}
+        ex_ids = {r['id'] for r in ex_rows}
+
+        assert active.id in st_ids
+        assert mid_hold.id not in st_ids
+        assert exhausted.id not in st_ids
+        assert other.id not in st_ids
+
+        assert exhausted.id in ex_ids
+        assert active.id not in ex_ids
+
+        assert counts['skip_trace'] == st_total
+        assert 'awaiting_skip_trace' not in counts
+        assert counts['skip_trace_exhausted'] == ex_total
+
+        membership = {m['key'] for m in svc.membership_for_lead(active.id)}
+        assert 'skip-trace' in membership
+        assert 'awaiting-skip-trace' not in membership
+
+        hold_membership = {m['key'] for m in svc.membership_for_lead(mid_hold.id)}
+        assert 'skip-trace' not in hold_membership
 

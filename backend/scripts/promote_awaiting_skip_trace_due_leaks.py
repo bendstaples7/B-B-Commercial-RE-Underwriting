@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Promote awaiting_skip_trace leads that leak into Today's Action into Skip Trace.
+"""Heal skip_trace dated-due leaks into an undated skip-trace handoff.
 
-Selects leads in ``awaiting_skip_trace`` with an open dated task due today or
-earlier, then calls ``SkipTraceEnqueue.promote_awaiting_skip_trace_due_leaks``.
+Selects leads in ``skip_trace`` with ``needs_skip_trace=True`` and an open
+dated task due today or earlier (leaks into Today's Action), then calls
+``SkipTraceEnqueue.promote_awaiting_skip_trace_due_leaks``.
 
 Usage:
   python scripts/promote_awaiting_skip_trace_due_leaks.py --dry-run

@@ -55,6 +55,10 @@ class Property(db.Model):
     needs_skip_trace = db.Column(db.Boolean, nullable=True, default=False)
     skip_tracer = db.Column(db.String(100), nullable=True)
     date_skip_traced = db.Column(db.Date, nullable=True)
+    # Multi-source ladder (canonical attempts in skip_trace_attempts)
+    skip_trace_next_source_id = db.Column(db.String(64), nullable=True)
+    skip_trace_exhausted_at = db.Column(db.DateTime, nullable=True)
+    skip_trace_cycle = db.Column(db.Integer, nullable=False, default=1, server_default='1')
 
     # CRM integration
     date_added_to_hubspot = db.Column(db.Date, nullable=True)
@@ -124,7 +128,7 @@ class Property(db.Model):
         'suppressed',
         'do_not_contact',
         name='lead_status_enum'
-    ), nullable=False, default='awaiting_skip_trace', server_default='awaiting_skip_trace', index=True)
+    ), nullable=False, default='skip_trace', server_default='skip_trace', index=True)
 
     # Action Engine output (unified recommended-action vocabulary)
     recommended_action = db.Column(db.Enum(

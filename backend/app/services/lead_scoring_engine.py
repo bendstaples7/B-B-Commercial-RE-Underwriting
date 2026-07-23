@@ -278,7 +278,7 @@ def _maybe_promote_skip_trace_to_mailing(lead: Lead) -> str | None:
     """
     if _is_commercial_lead(lead):
         return None
-    if lead.lead_status not in ('skip_trace', 'awaiting_skip_trace'):
+    if lead.lead_status != 'skip_trace':
         return None
     if rubric.is_recently_sold(lead):
         return None
@@ -559,7 +559,7 @@ class LeadScoringEngine:
                 'most_recent_sale': getattr(lead, 'most_recent_sale', None),
             }
 
-        if lead.lead_status in ('skip_trace', 'awaiting_skip_trace'):
+        if lead.lead_status == 'skip_trace':
             # Residential leads with a mailing address fall through to score/mail
             # rules; commercial and address-less skip-trace still need contact work.
             if _is_commercial_lead(lead) or not _has_mailing_address(lead):

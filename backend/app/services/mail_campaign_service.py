@@ -42,6 +42,7 @@ from app.services.hubspot_task_completion_service import sync_pending_hubspot_co
 logger = logging.getLogger(__name__)
 
 _STATUS_PRIORITY = {'Failed': 3, 'Corrected': 2, 'Verified': 1}
+_FEEDBACK_QUEUE_STATUSES = ('queued', 'sent', 'failed', 'invalid_address')
 
 
 def collapse_recipients_by_lead(
@@ -585,6 +586,14 @@ class MailCampaignService:
                     reason='owner_mailing_address_invalid',
                 )
                 invalid_lead_ids.append(lead.id)
+                from app.services.skip_trace_escalation_helpers import escalate_invalid_mail_safe
+                escalate_invalid_mail_safe(
+                    lead.id,
+                    actor=campaign.created_by,
+                    mail_queue_item_id=item.id,
+                    validation_error=validation_error,
+                    commit=False,
+                )
                 continue
             contacts.append(lead_to_owner_olc_contact(
                 lead, user_id=item.user_id, campaign_phone=seller_phone,
@@ -769,28 +778,34 @@ class MailCampaignService:
 
     @staticmethod
     def _stamp_address_feedback(lead: Lead, order_id: str, status: str, extra: dict | None = None) -> None:
+        from sqlalchemy.orm.attributes import flag_modified
+
         history = lead.mailer_history
         if not isinstance(history, list):
             history = [] if history is None else [history]
+        else:
+            history = list(history)
         stamped = False
-        for entry in history:
+        for idx, entry in enumerate(history):
             if not isinstance(entry, dict):
                 continue
             if str(entry.get('olc_order_id') or '') != str(order_id):
                 continue
-            entry['address_feedback'] = status
+            updated = dict(entry)
+            updated['address_feedback'] = status
             if extra:
-                entry.update(extra)
+                updated.update(extra)
+            history[idx] = updated
             stamped = True
             break
         if not stamped:
-            row = {
+            history.append({
                 'olc_order_id': order_id,
                 'address_feedback': status,
                 **(extra or {}),
-            }
-            history.append(row)
-        lead.mailer_history = list(history)
+            })
+        lead.mailer_history = history
+        flag_modified(lead, 'mailer_history')
 
     def _apply_corrected(
         self,
@@ -819,6 +834,7 @@ class MailCampaignService:
             or (lead.mailing_zip or '') != zip_code
         )
         if not changed:
+            # Fields already match (e.g. prior partial apply) — stamp only, no new timeline
             self._stamp_address_feedback(lead, campaign.olc_order_id, 'Corrected')
             return False
         lead.mailing_address = street
@@ -862,6 +878,43 @@ class MailCampaignService:
         lead.returned_addresses = f'{existing}\n{line}'.strip() if existing else line
         return True
 
+    def _queue_items_by_lead_for_feedback(
+        self,
+        campaign: MailCampaign,
+        lead_ids: list[int],
+    ) -> dict[int, MailQueueItem]:
+        """Resolve queue rows for OLC feedback by lead_id.
+
+        Prefer an item still attached to this campaign; otherwise only an
+        unattached (campaign_id IS NULL) requeue row — never another campaign's item.
+        """
+        if not lead_ids:
+            return {}
+        items_by_lead: dict[int, MailQueueItem] = {}
+        for item in MailQueueItem.query.filter(
+            MailQueueItem.campaign_id == campaign.id,
+            MailQueueItem.lead_id.in_(lead_ids),
+            MailQueueItem.status.in_(_FEEDBACK_QUEUE_STATUSES),
+        ).all():
+            existing = items_by_lead.get(item.lead_id)
+            if existing is None or item.id > existing.id:
+                items_by_lead[item.lead_id] = item
+
+        missing = [lid for lid in lead_ids if lid not in items_by_lead]
+        if not missing:
+            return items_by_lead
+        # Only fall back to unattached requeue rows — never mutate another
+        # campaign's queue item when syncing an older OLC order.
+        for item in MailQueueItem.query.filter(
+            MailQueueItem.lead_id.in_(missing),
+            MailQueueItem.campaign_id.is_(None),
+            MailQueueItem.status.in_(_FEEDBACK_QUEUE_STATUSES),
+        ).all():
+            existing = items_by_lead.get(item.lead_id)
+            if existing is None or item.id > existing.id:
+                items_by_lead[item.lead_id] = item
+        return items_by_lead
+
     def _apply_failed(
         self,
         lead: Lead,
@@ -872,14 +925,38 @@ class MailCampaignService:
         if self._history_has_address_feedback(lead, campaign.olc_order_id, 'Failed'):
             return False
         reason = (recip.get('addressFailureReason') or 'Address failed USPS validation')[:500]
+
+        # Partial prior apply (queue flipped / returned stamped, history miss) — stamp only
+        if item is not None and item.status in ('failed', 'invalid_address') and item.validation_error:
+            self._stamp_address_feedback(
+                lead,
+                campaign.olc_order_id,
+                'Failed',
+                {'address_failure_reason': reason},
+            )
+            return False
+
         street, city, state, zip_code = owner_mailing_address(lead)
         line = format_mailing_line(street, city, state, zip_code)
         changed = False
-        if item is not None and item.status == 'sent':
-            item.status = 'failed'
-            item.validation_error = reason
-            item.updated_at = datetime.utcnow()
-            changed = True
+        if item is not None:
+            if item.status == 'sent':
+                item.status = 'failed'
+                item.validation_error = reason
+                item.updated_at = datetime.utcnow()
+                changed = True
+            elif item.status == 'queued':
+                # Post-cancel requeue: drop out of Ready-to-Mail into invalids UX
+                item.status = 'invalid_address'
+                item.validation_error = reason
+                item.updated_at = datetime.utcnow()
+                changed = True
+                if lead.up_next_to_mail:
+                    lead.up_next_to_mail = False
+            elif item.status in ('failed', 'invalid_address') and not item.validation_error:
+                item.validation_error = reason
+                item.updated_at = datetime.utcnow()
+                changed = True
         if line:
             changed = self._append_returned_line(lead, line) or changed
         self._stamp_address_feedback(
@@ -907,9 +984,24 @@ class MailCampaignService:
             source='system',
             commit=False,
         )
+        from app.services.skip_trace_escalation_helpers import escalate_invalid_mail_safe
+        escalate_invalid_mail_safe(
+            lead.id,
+            actor=campaign.created_by,
+            mail_queue_item_id=item.id if item is not None else None,
+            olc_order_id=str(campaign.olc_order_id) if campaign.olc_order_id else None,
+            validation_error=reason,
+            commit=False,
+        )
         return True
 
-    def _sync_order_address_statuses(self, campaign: MailCampaign, client) -> dict[str, int]:
+    def _sync_order_address_statuses(
+        self,
+        campaign: MailCampaign,
+        client,
+        *,
+        refresh_scoring: bool = True,
+    ) -> dict[str, int]:
         summary = {'corrected': 0, 'failed': 0, 'verified': 0, 'unchanged': 0}
         recipients: list[dict[str, Any]] = []
         for row in client.iter_order_contacts(campaign.olc_order_id):
@@ -918,10 +1010,9 @@ class MailCampaignService:
                 recipients.append(recip)
         by_lead = collapse_recipients_by_lead(recipients)
 
-        items_by_lead = {
-            item.lead_id: item
-            for item in MailQueueItem.query.filter_by(campaign_id=campaign.id).all()
-        }
+        items_by_lead = self._queue_items_by_lead_for_feedback(
+            campaign, list(by_lead.keys()),
+        )
         touch_ids: list[int] = []
         for lead_id, recip in by_lead.items():
             status = (recip.get('addressStatus') or '').strip()
@@ -947,7 +1038,9 @@ class MailCampaignService:
             else:
                 summary['unchanged'] += 1
 
-        if touch_ids:
+        # Defer scoring refresh until after the caller commits so dry-runs can roll back
+        campaign._address_feedback_touch_ids = touch_ids  # type: ignore[attr-defined]
+        if refresh_scoring and touch_ids:
             refresh_leads_after_mail_task_changes(touch_ids)
         return summary
 
@@ -968,13 +1061,19 @@ class MailCampaignService:
         }
         campaign.analytics_synced_at = datetime.now(timezone.utc)
 
-        mailed = (campaign.delivery_stats or {}).get('Mailed', 0)
-        delivered = (campaign.delivery_stats or {}).get('Delivered', 0)
-        if mailed or delivered:
-            campaign.status = 'mailed'
+        # Do not resurrect cancelled campaigns from delivery stats
+        if campaign.status != 'cancelled':
+            mailed = (campaign.delivery_stats or {}).get('Mailed', 0)
+            delivered = (campaign.delivery_stats or {}).get('Delivered', 0)
+            if mailed or delivered:
+                campaign.status = 'mailed'
 
+        touch_ids: list[int] = []
         try:
-            address_summary = self._sync_order_address_statuses(campaign, client)
+            address_summary = self._sync_order_address_statuses(
+                campaign, client, refresh_scoring=False,
+            )
+            touch_ids = list(getattr(campaign, '_address_feedback_touch_ids', None) or [])
         except Exception:
             logger.exception(
                 'OLC address-status sync failed for campaign %s order %s',
@@ -984,6 +1083,8 @@ class MailCampaignService:
 
         campaign._address_feedback_summary = address_summary  # type: ignore[attr-defined]
         db.session.commit()
+        if touch_ids:
+            refresh_leads_after_mail_task_changes(touch_ids)
         return campaign
 
     def list_campaigns(self, user_id: str, page: int = 1, per_page: int = 25) -> tuple[list[MailCampaign], int]:

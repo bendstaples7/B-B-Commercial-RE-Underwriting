@@ -9,7 +9,8 @@ from app.models.lead_timeline_entry import LeadTimelineEntry
 # HubSpot pipeline display label → platform lead_status
 HS_STAGE_TO_LEAD_STATUS: dict[str, str] = {
     'Skip Trace': 'skip_trace',
-    'Awaiting Skip Trace': 'awaiting_skip_trace',
+    # Legacy HubSpot stage — platform unified on skip_trace only.
+    'Awaiting Skip Trace': 'skip_trace',
     'Mailing, no contact made': 'mailing_no_contact_made',
     'Mailing, contact made, no interest': 'mailing_contacted_no_interest',
     'Mailing, contact made, interested': 'mailing_contacted_interested',
@@ -21,8 +22,18 @@ HS_STAGE_TO_LEAD_STATUS: dict[str, str] = {
     'Deal Lost': 'deal_lost',
 }
 
+# Platform → HubSpot (one canonical label per status)
 LEAD_STATUS_TO_HS_STAGE: dict[str, str] = {
-    lead_status: stage_label for stage_label, lead_status in HS_STAGE_TO_LEAD_STATUS.items()
+    'skip_trace': 'Skip Trace',
+    'mailing_no_contact_made': 'Mailing, no contact made',
+    'mailing_contacted_no_interest': 'Mailing, contact made, no interest',
+    'mailing_contacted_interested': 'Mailing, contact made, interested',
+    'negotiating_remote': 'Negotiating Remote',
+    'in_person_appointment': 'In Person Appointment',
+    'offer_delivered': 'Offer Delivered',
+    'deprioritize': 'Deprioritize',
+    'deal_won': 'Deal Won',
+    'deal_lost': 'Deal Lost',
 }
 
 

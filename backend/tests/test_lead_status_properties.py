@@ -19,7 +19,6 @@ from app.services.hubspot_timeline_import_service import HubSpotTimelineImportSe
 
 ALL_LEAD_STATUSES = [
     'skip_trace',
-    'awaiting_skip_trace',
     'mailing_no_contact_made',
     'mailing_contacted_no_interest',
     'mailing_contacted_interested',

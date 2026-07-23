@@ -12,14 +12,18 @@ When a change needs browser / UI verification, do **not** hand the user
 
 1. Confirm which branch has the changes and that migrations (if any) are applied.
 2. Ensure local servers are running and serving that code:
-   - Backend: `backend` → `python run.py` on port **5000** (restart if Python changed and reloader is off).
+   - Backend: `backend` → `python run.py` on port **5000**. Reloader is on by
+     default; if `/api/health` reports `source_stale`, restart yourself (never
+     show or leave a “Backend restart required” banner — see
+     `auto-restart-stale-backend`).
    - Frontend: `frontend` → `npm run dev` on port **3000**.
    - Celery (+ Redis) when the flow needs background jobs (quick-add GIS/HubSpot, imports, enrichment) — use `python dev.py` or start the Celery worker separately.
 3. Hit health / the app URL yourself (`http://localhost:3000`, `http://localhost:5000/api/health`) and fix startup failures before asking the user to look.
+   Confirm `source_stale` is false (or that a restart is already in flight).
 4. Then tell them the exact URL/path and what to check.
 
 ## Hard rules
 
 - Never end a UI-ready message with only "you can start the servers" or paste commands for the user to run.
-- If a server is already up but on stale code, restart it so the change is visible.
+- If a server is already up but on stale code, restart it so the change is visible — do not tell the user a yellow “restart required” bar is expected.
 - If Celery is required for the thing they're testing and workers are down, start workers (or say clearly that async steps won't finish until Celery is up — after you have already tried to start it).

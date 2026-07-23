@@ -595,7 +595,7 @@ class TestRecentSaleMailReconciliation:
             activated = db.session.get(Lead, lead.id)
             assert scheduled['scheduled'] is True
             assert result['activated_lead_ids'] == [lead.id]
-            assert activated.lead_status == 'awaiting_skip_trace'
+            assert activated.lead_status == 'skip_trace'
             assert activated.needs_skip_trace is True
             activated_task = db.session.get(LeadTask, scheduled['task_id'])
             assert activated_task.workflow_key == 'awaiting_skip_trace_handoff'
@@ -631,7 +631,7 @@ class TestRecentSaleMailReconciliation:
             task = db.session.get(LeadTask, scheduled['task_id'])
             assert again['scheduled'] is False
             assert again['changed'] is False
-            assert lead.lead_status == 'awaiting_skip_trace'
+            assert lead.lead_status == 'skip_trace'
             assert lead.needs_skip_trace is True
             assert task.due_date is None
             assert task.workflow_key == 'awaiting_skip_trace_handoff'
@@ -670,7 +670,7 @@ class TestRecentSaleMailReconciliation:
             healed = db.session.get(LeadTask, stuck.id)
             lead = db.session.get(Lead, lead.id)
             assert stuck.id in result['healed_task_ids']
-            assert lead.lead_status == 'awaiting_skip_trace'
+            assert lead.lead_status == 'skip_trace'
             assert lead.needs_skip_trace is True
             assert healed.due_date is None
             assert healed.title == 'Awaiting skip trace'
@@ -707,13 +707,13 @@ class TestRecentSaleMailReconciliation:
             healed = db.session.get(LeadTask, stuck.id)
             lead = db.session.get(Lead, lead.id)
             assert stuck.id in result['healed_task_ids']
-            assert lead.lead_status == 'awaiting_skip_trace'
+            assert lead.lead_status == 'skip_trace'
             assert lead.needs_skip_trace is True
             assert healed.due_date is None
             assert healed.title == 'Awaiting skip trace'
 
     def test_heals_post_hold_stale_contacts_without_hold_task(self, app):
-        """Mailing lead past 730d with stale contacts gets awaiting handoff."""
+        """Mailing lead past 730d with stale contacts gets skip_trace handoff."""
         from app import db
         from app.services.skip_trace_enqueue import SkipTraceEnqueue
 
@@ -734,7 +734,7 @@ class TestRecentSaleMailReconciliation:
 
             lead = db.session.get(Lead, lead.id)
             assert lead.id in result.get('stale_contact_healed_lead_ids', [])
-            assert lead.lead_status == 'awaiting_skip_trace'
+            assert lead.lead_status == 'skip_trace'
             assert lead.needs_skip_trace is True
             handoff = LeadTask.query.filter_by(
                 lead_id=lead.id,
@@ -883,7 +883,7 @@ class TestRecentSaleMailReconciliation:
 
             assert result['processed_lead_ids'] == [matured.id, recent.id]
             assert result['activated_lead_ids'] == [matured.id]
-            assert db.session.get(Lead, matured.id).lead_status == 'awaiting_skip_trace'
+            assert db.session.get(Lead, matured.id).lead_status == 'skip_trace'
             assert db.session.get(LeadTask, recent_task.id).due_date == (
                 recent.acquisition_date + timedelta(days=730)
             )
@@ -899,9 +899,9 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
             lead = _make_lead(
                 app,
                 '7 Manual Skip Trace Leak St',
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
                 recommended_action='add_contact_info',
-                needs_skip_trace=False,
+                needs_skip_trace=True,
                 has_phone=False,
                 has_email=False,
             )
@@ -919,7 +919,7 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
             before_ids = [
                 r['id'] for r in QueueService().get_todays_action(per_page=10000)[0]
             ]
-            assert lead.id not in before_ids  # excluded by status filter
+            assert lead.id in before_ids  # dated chore on skip_trace leaks into TA
 
             result = SkipTraceEnqueue().promote_awaiting_skip_trace_due_leaks(
                 actor='test',
@@ -946,7 +946,7 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
             assert lead.id not in after_ids
 
     def test_reconcile_promotes_leaks_without_moving_fresh_activations(self, app):
-        """Hourly reconcile promotes dated awaiting leaks; hold activation stays awaiting."""
+        """Hourly reconcile promotes dated skip_trace leaks; hold activation stays skip_trace."""
         from app import db
         from app.services.skip_trace_enqueue import SkipTraceEnqueue
 
@@ -954,9 +954,9 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
             leak = _make_lead(
                 app,
                 '8 Leak Via Reconcile St',
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
                 recommended_action='add_contact_info',
-                needs_skip_trace=False,
+                needs_skip_trace=True,
             )
             chore = LeadTask(
                 lead_id=leak.id,
@@ -971,7 +971,7 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
 
             matured = _make_lead(
                 app,
-                '9 Hold Activation Stays Awaiting St',
+                '9 Hold Activation Stays Skip Trace St',
                 acquisition_date=date.today() - timedelta(days=800),
             )
             SkipTraceEnqueue().schedule_recent_sale(
@@ -996,7 +996,7 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
             assert leak.id in result['promoted_awaiting_skip_trace_leak_ids']
             assert db.session.get(Lead, leak.id).lead_status == 'skip_trace'
             assert matured.id in result['activated_lead_ids']
-            assert db.session.get(Lead, matured.id).lead_status == 'awaiting_skip_trace'
+            assert db.session.get(Lead, matured.id).lead_status == 'skip_trace'
             assert matured.id not in result['promoted_awaiting_skip_trace_leak_ids']
 
     def test_dry_run_lists_candidates_without_mutating(self, app):
@@ -1007,8 +1007,8 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
             lead = _make_lead(
                 app,
                 '10 Dry Run Leak St',
-                lead_status='awaiting_skip_trace',
-                needs_skip_trace=False,
+                lead_status='skip_trace',
+                needs_skip_trace=True,
             )
             db.session.add(LeadTask(
                 lead_id=lead.id,
@@ -1027,7 +1027,7 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
             lead = db.session.get(Lead, lead.id)
             assert lead.id in result['candidate_lead_ids']
             assert result['promoted_lead_count'] == 0
-            assert lead.lead_status == 'awaiting_skip_trace'
+            assert lead.lead_status == 'skip_trace'
 
     def test_promote_ignores_recent_sale_hold_tasks(self, app):
         """Recent-sale hold activation owns those tasks, not leak promotion."""
@@ -1038,7 +1038,7 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
             lead = _make_lead(
                 app,
                 '10b Recent Sale Hold Only St',
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
                 needs_skip_trace=False,
             )
             db.session.add(LeadTask(
@@ -1060,7 +1060,7 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
             lead = db.session.get(Lead, lead.id)
             assert lead.id not in result['candidate_lead_ids']
             assert lead.id not in result['promoted_lead_ids']
-            assert lead.lead_status == 'awaiting_skip_trace'
+            assert lead.lead_status == 'skip_trace'
 
     def test_promote_completes_all_dated_due_chores(self, app):
         """Multi-chore leaks must not re-enter Today's Action after promote."""
@@ -1071,9 +1071,9 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
             lead = _make_lead(
                 app,
                 '11 Multi Chore Leak St',
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
                 recommended_action='add_contact_info',
-                needs_skip_trace=False,
+                needs_skip_trace=True,
             )
             chore_a = LeadTask(
                 lead_id=lead.id,
@@ -1125,9 +1125,9 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
             lead = _make_lead(
                 app,
                 '11b Multi Chore Move Result St',
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
                 recommended_action='add_contact_info',
-                needs_skip_trace=False,
+                needs_skip_trace=True,
             )
             chore_a = LeadTask(
                 lead_id=lead.id,
@@ -1155,6 +1155,46 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
 
             assert result['completed_task_ids'] == [chore_a.id, chore_b.id]
             assert result['completed_task_id'] == chore_b.id
+
+    def test_move_already_done_preserves_future_recent_sale_hold(self, app):
+        """Mid-hold must not convert the dated hold into a handoff."""
+        from app import db
+        from app.services.skip_trace_enqueue import SkipTraceEnqueue
+
+        with app.app_context():
+            lead = _make_lead(
+                app,
+                '11c Mid Hold Preserve St',
+                lead_status='skip_trace',
+                recommended_action='add_contact_info',
+                needs_skip_trace=False,
+            )
+            hold = LeadTask(
+                lead_id=lead.id,
+                task_type='skip_trace_owner',
+                title='Recent-sale hold',
+                status='open',
+                due_date=date.today() + timedelta(days=21),
+                workflow_key='recent_sale_hold',
+                created_by='test',
+            )
+            db.session.add(hold)
+            db.session.commit()
+
+            result = SkipTraceEnqueue().move_to_skip_trace(
+                lead.id,
+                actor='test',
+            )
+
+            db.session.refresh(hold)
+            db.session.refresh(lead)
+            assert hold.status == 'open'
+            assert hold.workflow_key == 'recent_sale_hold'
+            assert hold.due_date == date.today() + timedelta(days=21)
+            assert lead.needs_skip_trace is False
+            assert result['already_done'] is True
+            assert result['healed'] is False
+            assert result['skip_trace_task_id'] == hold.id
 
     def test_reconcile_promotes_hold_activation_with_leftover_dated_chore(self, app):
         """Activation processed_ids must not block promote of leftover dated chores."""
@@ -1212,9 +1252,9 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
             promoted = _make_lead(
                 app,
                 '12b Promoted Recent Leak St',
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
                 recommended_action='add_contact_info',
-                needs_skip_trace=False,
+                needs_skip_trace=True,
                 acquisition_date=date.today() - timedelta(days=20),
             )
             other_recent = _make_lead(
@@ -1256,16 +1296,16 @@ class TestPromoteAwaitingSkipTraceDueLeaks:
             failing = _make_lead(
                 app,
                 '12d Failed Promotion St',
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
                 recommended_action='add_contact_info',
-                needs_skip_trace=False,
+                needs_skip_trace=True,
             )
             succeeding = _make_lead(
                 app,
                 '12e Succeeding Promotion St',
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
                 recommended_action='add_contact_info',
-                needs_skip_trace=False,
+                needs_skip_trace=True,
             )
             for lead in (failing, succeeding):
                 db.session.add(LeadTask(

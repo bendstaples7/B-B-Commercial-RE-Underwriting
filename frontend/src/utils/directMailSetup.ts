@@ -1,4 +1,5 @@
 import type { MailCreativePreset, OpenLetterConfig } from '@/services/openLetterApi'
+import { formatOlcProductLabel, type OlcProduct } from '@/utils/olcProductHelpers'
 
 export interface DirectMailSetupStep {
   id: string
@@ -54,6 +55,55 @@ export function isSenderCreativeReady(config: OpenLetterConfig | undefined): boo
   return Boolean(preset?.first_name?.trim() && preset?.phone?.trim())
 }
 
+/**
+ * Catalog-facing lines for Ready to Mail / Setup — what we actually send
+ * (productId + templateId), not internal template fontFamily.
+ */
+export function getOlcCatalogSendLines(
+  config: OpenLetterConfig | undefined,
+  products: OlcProduct[] = [],
+): {
+  productLine: string | null
+  templateLine: string | null
+  senderLine: string | null
+} {
+  const productId = config?.default_product_id
+  const product = products.find((p) => Number(p.id) === Number(productId))
+  let productLine: string | null = null
+  if (product) {
+    productLine = formatOlcProductLabel(product)
+  } else if (productId != null) {
+    const preset = getActiveCreativePreset(config)
+    const envelope = preset?.envelope_color?.trim()
+    productLine = envelope
+      ? `Product #${productId} · ${envelope}`
+      : `Product #${productId}`
+  }
+
+  const preset = getActiveCreativePreset(config)
+  const templateName = (
+    config?.default_template_name
+    || preset?.olc_template_name
+    || ''
+  ).trim()
+  const templateId = config?.default_template_id ?? preset?.olc_template_id
+  let templateLine: string | null = null
+  if (templateName && templateId != null) {
+    templateLine = `${templateName} (#${templateId})`
+  } else if (templateName) {
+    templateLine = templateName
+  } else if (templateId != null) {
+    templateLine = `Template #${templateId}`
+  }
+
+  const sender = (preset?.label || preset?.sender_display_name || '').trim()
+  return {
+    productLine,
+    templateLine,
+    senderLine: sender || null,
+  }
+}
+
 export function getDirectMailSetupSteps(config: OpenLetterConfig | undefined): DirectMailSetupStep[] {
   const configured = config?.configured === true
   const hasProduct = config?.default_product_id != null
@@ -61,6 +111,11 @@ export function getDirectMailSetupSteps(config: OpenLetterConfig | undefined): D
   const hasReturnAddress = hasStreetReturnAddress(config)
   const hasSender = isSenderCreativeReady(config)
   const styleConfirmed = isTemplateStyleConfirmed(config)
+  const templateLabel = (
+    config?.default_template_name
+    || getActiveCreativePreset(config)?.olc_template_name
+    || ''
+  ).trim()
 
   return [
     {
@@ -84,10 +139,12 @@ export function getDirectMailSetupSteps(config: OpenLetterConfig | undefined): D
     {
       id: 'template_style',
       label: styleConfirmed
-        ? `Font/ink confirmed from template (${config?.template_style?.font_name
-          || getActiveCreativePreset(config)?.font_name
-          || 'set'})`
-        : 'Confirm font/ink from Open Letter template',
+        ? (
+          templateLabel
+            ? `Connect template design readable (${templateLabel})`
+            : 'Connect template design readable'
+        )
+        : 'Confirm letter template is readable in Connect',
       done: styleConfirmed,
       required: true,
     },

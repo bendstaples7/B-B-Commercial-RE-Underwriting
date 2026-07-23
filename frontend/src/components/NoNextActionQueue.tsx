@@ -325,7 +325,7 @@ export function NoNextActionQueue() {
             : selectedIds.length
         }
         allStatuses={ALL_LEAD_STATUSES}
-        defaultStatus={queueWideSourceStatus === 'awaiting_skip_trace' ? 'skip_trace' : null}
+        defaultStatus={null}
         onClose={() => {
           setStatusDialogOpen(false)
           setQueueWideSourceStatus(null)

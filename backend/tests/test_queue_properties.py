@@ -23,8 +23,8 @@ def is_in_todays_action(lead_status, recommended_action, open_task_due_today):
     """Today's Action: lead_status in active pipeline statuses AND
     an open task has due_date <= today (recommended_action alone is not enough).
 
-    ``awaiting_skip_trace`` is excluded — skip-trace staging is not salesperson
-    Today's Action work.
+    Undated skip-trace handoffs stay out via null due_date; dated due chores
+    on skip_trace can appear until promote heals them.
     """
     _TODAYS_ACTION_STATUSES = {
         'mailing_no_contact_made', 'mailing_contacted_no_interest',
@@ -40,7 +40,7 @@ def is_in_previously_warm(lead_status, has_hubspot_activity, recent_platform_con
     and lead is in an active pipeline status.
     """
     _PREVIOUSLY_WARM_STATUSES = {
-        'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+        'skip_trace', 'mailing_no_contact_made',
         'mailing_contacted_no_interest', 'mailing_contacted_interested',
         'negotiating_remote', 'in_person_appointment', 'offer_delivered',
     }
@@ -74,7 +74,7 @@ def is_in_no_next_action(lead_status, recommended_action, has_open_tasks):
     AND no open tasks.
     """
     _NNA_STATUSES = {
-        'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+        'skip_trace', 'mailing_no_contact_made',
         'mailing_contacted_no_interest', 'mailing_contacted_interested',
         'negotiating_remote', 'in_person_appointment', 'offer_delivered',
     }
@@ -140,7 +140,7 @@ def is_in_any_active_work_queue(
 # ---------------------------------------------------------------------------
 
 all_lead_statuses = st.sampled_from([
-    'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+    'skip_trace', 'mailing_no_contact_made',
     'mailing_contacted_no_interest', 'mailing_contacted_interested',
     'negotiating_remote', 'in_person_appointment', 'offer_delivered',
     'deprioritize', 'deal_won', 'deal_lost', 'suppressed', 'do_not_contact',
@@ -344,7 +344,7 @@ def test_property_10_queue_membership_pure_function_of_lead_state(
         'mailing_no_contact_made', 'mailing_contacted_no_interest',
         'mailing_contacted_interested', 'negotiating_remote',
         'in_person_appointment', 'offer_delivered',
-        'skip_trace', 'awaiting_skip_trace',
+        'skip_trace',
     }
     if in_todays_action:
         assert lead_status in _TODAYS_ACTION_STATUSES, (
@@ -357,7 +357,7 @@ def test_property_10_queue_membership_pure_function_of_lead_state(
 
     # Previously Warm requires active pipeline status AND hubspot activity
     _PREVIOUSLY_WARM_STATUSES = {
-        'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+        'skip_trace', 'mailing_no_contact_made',
         'mailing_contacted_no_interest', 'mailing_contacted_interested',
         'negotiating_remote', 'in_person_appointment', 'offer_delivered',
     }
@@ -374,7 +374,7 @@ def test_property_10_queue_membership_pure_function_of_lead_state(
 
     # No Next Action requires active pipeline status
     _NNA_STATUSES = {
-        'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+        'skip_trace', 'mailing_no_contact_made',
         'mailing_contacted_no_interest', 'mailing_contacted_interested',
         'negotiating_remote', 'in_person_appointment', 'offer_delivered',
     }
@@ -568,7 +568,7 @@ def test_property_4_warm_signal_sets_is_warm(signals_batch, initial_is_warm):
 
 # All valid lead statuses and recommended_action values for Property 1
 _NNA_LEAD_STATUSES = [
-    'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+    'skip_trace', 'mailing_no_contact_made',
     'mailing_contacted_no_interest', 'mailing_contacted_interested',
     'negotiating_remote', 'in_person_appointment', 'offer_delivered',
     'deprioritize', 'deal_won', 'deal_lost', 'suppressed', 'do_not_contact',
@@ -604,7 +604,7 @@ _task_variant_st = st.sampled_from(_TASK_VARIANTS)
 # no specific recommended action and no open tasks.
 _NNA_ALLOWED_ACTIONS = {None, 'create_task', 'ready_for_outreach', 'add_contact_info'}
 _NNA_ALLOWED_STATUSES = {
-    'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+    'skip_trace', 'mailing_no_contact_made',
     'mailing_contacted_no_interest', 'mailing_contacted_interested',
     'negotiating_remote', 'in_person_appointment', 'offer_delivered',
 }
@@ -762,7 +762,7 @@ from app.services.queue_service import QueueService
 
 # Strategies for lead field values
 _lead_statuses = st.sampled_from([
-    'skip_trace', 'awaiting_skip_trace', 'mailing_no_contact_made',
+    'skip_trace', 'mailing_no_contact_made',
     'mailing_contacted_no_interest', 'mailing_contacted_interested',
     'negotiating_remote', 'in_person_appointment', 'offer_delivered',
     'deprioritize', 'deal_won', 'deal_lost', 'suppressed', 'do_not_contact',
@@ -914,7 +914,7 @@ def test_property_3_previously_warm_equals_is_warm(app, lead_dicts):
             for i, ld in enumerate(lead_dicts):
                 lead = Lead(
                     property_street=f'{i} Property 3 Test St',
-                    lead_status='awaiting_skip_trace',
+                    lead_status='skip_trace',
                     is_warm=ld['is_warm'],
                     lead_score=50.0,
                     has_phone=False,

@@ -97,10 +97,35 @@ def _warn_celery_not_running():
 
 
 def _assert_flask_port_free(port: int = 5000) -> None:
-    """Refuse to start when another process already owns the Flask port."""
+    """Refuse to start when another process already owns the Flask port.
+
+    Werkzeug's reloader (and our source_stale spawn-restart) can briefly leave
+    the previous listener alive. Ignore the parent PID when we are the reloader
+    child, and retry a few times so a normal reload / auto-restart does not
+    false-fail.
+    """
+    import time
+
     from port_guard import assert_port_free
 
-    assert_port_free(port)
+    ignore: set[int] = set()
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        try:
+            ignore.add(os.getppid())
+        except (AttributeError, OSError):
+            pass
+
+    last_exc: BaseException | None = None
+    for attempt in range(8):
+        try:
+            assert_port_free(port, ignore_pids=ignore)
+            return
+        except SystemExit as exc:
+            last_exc = exc
+            # Previous process still releasing the socket — wait and retry.
+            time.sleep(0.25 * (attempt + 1))
+    if last_exc is not None:
+        raise last_exc
 
 
 if __name__ == '__main__':
@@ -123,4 +148,15 @@ if __name__ == '__main__':
     _warn_celery_not_running()
     with app.app_context():
         db.create_all()
-    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
+    # Reloader keeps sources current after edits. Absolute argv above avoids the
+    # chdir/reloader path bug that previously forced this off.
+    # Set FLASK_SKIP_RELOADER=1 to disable (e.g. debugger attach).
+    use_reloader = os.environ.get('FLASK_SKIP_RELOADER', '').strip().lower() not in (
+        '1', 'true', 'yes',
+    )
+    app.run(
+        debug=True,
+        host='0.0.0.0',
+        port=5000,
+        use_reloader=use_reloader,
+    )

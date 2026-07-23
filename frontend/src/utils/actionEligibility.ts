@@ -6,7 +6,6 @@ import type { LeadStatus } from '@/types'
 import { formatDateOnly } from '@/utils/helpers'
 
 export const REASON_ALREADY_SKIP_TRACE = 'already_skip_trace'
-export const REASON_ALREADY_AWAITING_SKIP_TRACE = 'already_awaiting_skip_trace'
 export const REASON_TERMINAL_STATUS = 'terminal_status'
 export const REASON_DNC_BLOCKS_OUTREACH = 'dnc_blocks_outreach'
 export const REASON_MAIL_RECENTLY_SOLD = 'mail_recently_sold'
@@ -48,8 +47,8 @@ function blocked(
 }
 
 export function evaluateMoveToSkipTrace(leadStatus: LeadStatus): ActionEligibilityResult {
-  // Only the Skip Trace work column is already-done. Awaiting Skip Trace
-  // (e.g. after a recent-sale hold) still needs Move to Skip Trace to enqueue.
+  // Skip Trace stage is already-done. Hold vs active work uses needs_skip_trace
+  // + hold/handoff tasks, not a second status.
   if (leadStatus === 'skip_trace') {
     return blocked(REASON_ALREADY_SKIP_TRACE, 'Already in Skip Trace', true)
   }

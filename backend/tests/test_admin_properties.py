@@ -183,7 +183,7 @@ def test_user_summary_count_accuracy(lead_count, list_count, job_count, app):
             lead = Lead(
                 owner_user_id=user.user_id,
                 property_street=f'Test St {uuid.uuid4().hex[:8]}',
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
                 lead_score=50,
             )
             db.session.add(lead)
@@ -257,7 +257,7 @@ def test_cross_user_lead_visibility(user_count, leads_per_user, app):
                 lead = Lead(
                     owner_user_id=user.user_id,
                     property_street=f'Test St {uuid.uuid4().hex[:8]}',
-                    lead_status='awaiting_skip_trace',
+                    lead_status='skip_trace',
                     lead_score=50,
                 )
                 db.session.add(lead)
@@ -386,13 +386,13 @@ def test_lead_filter_correctness(owner_user_id, app):
             db.session.add(Lead(
                 owner_user_id=other_user_a.user_id,
                 property_street=f'Other A St {uuid.uuid4().hex[:8]}',
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
                 lead_score=50,
             ))
             db.session.add(Lead(
                 owner_user_id=other_user_b.user_id,
                 property_street=f'Other B St {uuid.uuid4().hex[:8]}',
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
                 lead_score=50,
             ))
 
@@ -415,7 +415,7 @@ def test_lead_filter_correctness(owner_user_id, app):
                 db.session.add(Lead(
                     owner_user_id=owner_user_id_str,
                     property_street=f'Target St {uuid.uuid4().hex[:8]}',
-                    lead_status='awaiting_skip_trace',
+                    lead_status='skip_trace',
                     lead_score=75,
                 ))
             target_lead_count = 2
@@ -529,7 +529,7 @@ def test_pagination_envelope_correctness(page, page_size, app):
             lead = Lead(
                 owner_user_id=owner.user_id,
                 property_street=f'Pagination St {uuid.uuid4().hex}',
-                lead_status='awaiting_skip_trace',
+                lead_status='skip_trace',
                 lead_score=0,
             )
             db.session.add(lead)

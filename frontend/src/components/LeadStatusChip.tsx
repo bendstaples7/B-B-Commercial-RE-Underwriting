@@ -13,7 +13,6 @@ import type { LeadStatus } from '@/types'
 
 export const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
   skip_trace: 'Skip Trace',
-  awaiting_skip_trace: 'Awaiting Skip Trace',
   mailing_no_contact_made: 'Mailing, No Contact Made',
   mailing_contacted_no_interest: 'Mailing, Contact Made, No Interest',
   mailing_contacted_interested: 'Mailing, Contact Made, Interested',
@@ -45,6 +44,7 @@ export function getLeadStatusColor(status: string): string {
     case 'mailing_contacted_no_interest':return '#e65100'  // orange
     case 'mailing_no_contact_made':      return '#0277bd'  // light blue
     case 'skip_trace':
+    // Legacy enum value may still appear on historical rows.
     case 'awaiting_skip_trace':          return '#37474f'  // dark grey
     default:                             return '#37474f'
   }

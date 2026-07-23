@@ -50,7 +50,7 @@ function outcomeDetail(outcome: Outcome): string | null {
       const queueRemoval = outcome.removed_queue_item_count
         ? ' Removed from the existing mail queue.'
         : ''
-      return `Recent sale detected ${saleDate}.${queueRemoval} Held in Skip Trace; moves to Awaiting Skip Trace on ${eligibleDate}. Direct mail remains deferred until then.`
+      return `Recent sale detected ${saleDate}.${queueRemoval} Held in Skip Trace until ${eligibleDate}; then undated skip-trace handoff becomes active. Direct mail remains deferred until then.`
     }
     return `Recent sale detected ${saleDate}.`
   }

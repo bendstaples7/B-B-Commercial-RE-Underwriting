@@ -25,6 +25,7 @@ export interface RuntimeHealthResponse {
   status: string
   build_id?: string
   source_stale?: boolean
+  restart_scheduled?: boolean
   started_at?: string
   pid?: number
 }
@@ -337,6 +338,18 @@ export interface Property {
   needs_skip_trace: boolean | null
   skip_tracer: string | null
   date_skip_traced: string | null
+  skip_trace_next_source_id?: string | null
+  skip_trace_exhausted_at?: string | null
+  skip_trace_attempts?: Array<{
+    id: number
+    cycle: number
+    source_id: string
+    source_label: string
+    outcome: string
+    trigger: string
+    started_at: string | null
+    completed_at: string | null
+  }>
   date_added_to_hubspot: string | null
   // Additional property details
   units: number | null
@@ -425,6 +438,18 @@ export interface PropertySummary {
   needs_skip_trace: boolean | null
   skip_tracer: string | null
   date_skip_traced: string | null
+  skip_trace_next_source_id?: string | null
+  skip_trace_exhausted_at?: string | null
+  skip_trace_attempts?: Array<{
+    id: number
+    cycle: number
+    source_id: string
+    source_label: string
+    outcome: string
+    trigger: string
+    started_at: string | null
+    completed_at: string | null
+  }>
   date_added_to_hubspot: string | null
   up_next_to_mail: boolean | null
   mailer_history: Record<string, any> | any[] | string | null
@@ -1882,7 +1907,6 @@ export interface ContactUpdatePayload {
 
 export type LeadStatus =
   | 'skip_trace'
-  | 'awaiting_skip_trace'
   | 'mailing_no_contact_made'
   | 'mailing_contacted_no_interest'
   | 'mailing_contacted_interested'
@@ -2013,6 +2037,9 @@ export interface QueueRow {
   is_warm: boolean;
   last_mailed_at?: string | null;
   last_sale_at?: string | null;
+  skip_tracer?: string | null;
+  skip_trace_next_source_id?: string | null;
+  skip_trace_exhausted_at?: string | null;
 }
 
 export interface QueuePage {
@@ -2037,6 +2064,8 @@ export interface QueueCounts {
   follow_up_overdue: number;
   no_next_action: number;
   needs_review: number;
+  skip_trace: number;
+  skip_trace_exhausted: number;
   do_not_contact: number;
   missing_property_match: number;
   ready_to_mail: number;

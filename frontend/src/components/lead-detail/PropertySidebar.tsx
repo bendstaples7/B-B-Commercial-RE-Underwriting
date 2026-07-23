@@ -297,6 +297,13 @@ export function PropertySidebar({
     needs_skip_trace?: boolean
     skip_tracer?: string | null
     date_skip_traced?: string | null
+    skip_trace_next_source_id?: string | null
+    skip_trace_exhausted_at?: string | null
+    skip_trace_attempts?: Array<{
+      id: number
+      source_label: string
+      outcome: string
+    }>
     mailer_history?: string | Record<string, unknown> | null
     up_next_to_mail?: boolean
     mail_queue_status?: string | null
@@ -964,7 +971,8 @@ export function PropertySidebar({
         </SidebarSection>
       )}
 
-      {(data.needs_skip_trace != null || data.skip_tracer || data.date_skip_traced) && (
+      {(data.needs_skip_trace != null || data.skip_tracer || data.date_skip_traced
+        || data.skip_trace_next_source_id || data.skip_trace_exhausted_at) && (
         <SidebarSection title="Skip Trace">
           <SidebarRow
             label="Needed (phone/email)"
@@ -979,7 +987,29 @@ export function PropertySidebar({
             Based on phone/email at ingest — not owner mailing address.
           </Typography>
           <SidebarRow label="Tracer" value={data.skip_tracer} />
+          <SidebarRow label="Next source" value={data.skip_trace_next_source_id} />
           <SidebarRow label="Date" value={data.date_skip_traced} />
+          {data.skip_trace_exhausted_at && (
+            <Chip
+              label="Sources exhausted"
+              size="small"
+              color="warning"
+              sx={{ mt: 0.5 }}
+              data-testid="skip-trace-exhausted-chip"
+            />
+          )}
+          {Array.isArray(data.skip_trace_attempts) && data.skip_trace_attempts.length > 0 && (
+            <Box sx={{ mt: 1 }} data-testid="skip-trace-attempts">
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                Attempts
+              </Typography>
+              {data.skip_trace_attempts.map((a) => (
+                <Typography key={a.id} variant="caption" sx={{ display: 'block' }}>
+                  {a.source_label}: {a.outcome}
+                </Typography>
+              ))}
+            </Box>
+          )}
         </SidebarSection>
       )}
 

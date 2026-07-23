@@ -381,7 +381,7 @@ class TestBulkUpdateStatus:
                 '/api/leads/bulk/update-status',
                 data=json.dumps({
                     'lead_ids': [lead.id for lead in leads],
-                    'status': 'awaiting_skip_trace',
+                    'status': 'skip_trace',
                 }),
                 content_type='application/json',
                 headers=_AUTH_HEADERS,
@@ -396,14 +396,14 @@ class TestBulkUpdateStatus:
                 '/api/leads/bulk/update-status',
                 data=json.dumps({
                     'lead_ids': lead_ids,
-                    'status': 'awaiting_skip_trace',
+                    'status': 'skip_trace',
                 }),
                 content_type='application/json',
                 headers=_AUTH_HEADERS,
             )
             for lead in leads:
                 db.session.refresh(lead)
-                assert lead.lead_status == 'awaiting_skip_trace'
+                assert lead.lead_status == 'skip_trace'
 
     def test_bulk_update_status_partial_failure_counts(self, client, app):
         with app.app_context():
@@ -412,7 +412,7 @@ class TestBulkUpdateStatus:
                 '/api/leads/bulk/update-status',
                 data=json.dumps({
                     'lead_ids': [lead.id, 99991, 99992],
-                    'status': 'awaiting_skip_trace',
+                    'status': 'skip_trace',
                 }),
                 content_type='application/json',
                 headers=_AUTH_HEADERS,
@@ -430,7 +430,7 @@ class TestBulkUpdateStatus:
                 '/api/leads/bulk/update-status',
                 data=json.dumps({
                     'lead_ids': [own_lead.id, other_lead.id],
-                    'status': 'awaiting_skip_trace',
+                    'status': 'skip_trace',
                 }),
                 content_type='application/json',
                 headers=_AUTH_HEADERS,
@@ -440,13 +440,13 @@ class TestBulkUpdateStatus:
             assert data['failures'] == 1
             assert other_lead.id in data['failed_ids']
             db.session.refresh(own_lead)
-            assert own_lead.lead_status == 'awaiting_skip_trace'
+            assert own_lead.lead_status == 'skip_trace'
 
     def test_bulk_update_status_missing_lead_ids_returns_400(self, client, app):
         with app.app_context():
             response = client.post(
                 '/api/leads/bulk/update-status',
-                data=json.dumps({'status': 'awaiting_skip_trace'}),
+                data=json.dumps({'status': 'skip_trace'}),
                 content_type='application/json',
                 headers=_AUTH_HEADERS,
             )

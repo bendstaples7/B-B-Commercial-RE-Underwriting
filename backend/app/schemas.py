@@ -1676,7 +1676,6 @@ class LeadTimelinePageSchema(Schema):
 VALID_LEAD_STATUSES = [
     # Pipeline stages — mirror HubSpot pipeline labels
     'skip_trace',
-    'awaiting_skip_trace',
     'mailing_no_contact_made',
     'mailing_contacted_no_interest',
     'mailing_contacted_interested',
@@ -1694,6 +1693,7 @@ VALID_LEAD_STATUSES = [
 # Human-readable labels for each status value
 LEAD_STATUS_LABELS = {
     'skip_trace': 'Skip Trace',
+    # Legacy enum value — unused after unify; keep label for historical timeline rows.
     'awaiting_skip_trace': 'Awaiting Skip Trace',
     'mailing_no_contact_made': 'Mailing, No Contact Made',
     'mailing_contacted_no_interest': 'Mailing, Contact Made, No Interest',

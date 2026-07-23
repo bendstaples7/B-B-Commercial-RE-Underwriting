@@ -159,7 +159,7 @@ def _seed_cap_leads(app_ctx):
             owner_last_name=f'Lead{i}',
             property_street=f'{100 + i} Cap Test Ave',
             owner_user_id=_TEST_USER_ID,
-            lead_status='awaiting_skip_trace',
+            lead_status='skip_trace',
         )
         db.session.add(lead)
         leads.append(lead)
@@ -239,7 +239,7 @@ def _seed_match_lead(app_ctx):
         owner_last_name=_MATCH_SEED_LAST,
         property_street=_MATCH_SEED_STREET,
         owner_user_id=_MATCH_SEED_USER,
-        lead_status='awaiting_skip_trace',
+        lead_status='skip_trace',
     )
     db.session.add(lead)
     db.session.commit()
@@ -437,7 +437,7 @@ def client_with_multi_user_leads(app, client):
             owner_last_name='UserA',
             property_street='100 Scope Ave',
             owner_user_id=_USER_A,
-            lead_status='awaiting_skip_trace',
+            lead_status='skip_trace',
         )
         # user-b's lead
         lead_b = Lead(
@@ -445,7 +445,7 @@ def client_with_multi_user_leads(app, client):
             owner_last_name='UserB',
             property_street='200 Scope Ave',
             owner_user_id=_USER_B,
-            lead_status='awaiting_skip_trace',
+            lead_status='skip_trace',
         )
         # null-owner lead
         lead_null = Lead(
@@ -453,7 +453,7 @@ def client_with_multi_user_leads(app, client):
             owner_last_name='NullOwner',
             property_street='300 Scope Ave',
             owner_user_id=None,
-            lead_status='awaiting_skip_trace',
+            lead_status='skip_trace',
         )
         db.session.add_all([lead_a, lead_b, lead_null])
         db.session.commit()
@@ -606,7 +606,7 @@ def _seed_and_query_label(client, app, first, last, street):
             owner_last_name=last or None,
             property_street=searchable_street,
             owner_user_id=_TEST_USER_ID,
-            lead_status='awaiting_skip_trace',
+            lead_status='skip_trace',
         )
         db.session.add(lead)
         db.session.commit()
@@ -667,7 +667,7 @@ def test_label_no_hybrid_when_primary_first_only(client, app):
             owner_last_name='Carlson',   # legacy name from original import
             property_street=searchable_street,
             owner_user_id=_TEST_USER_ID,
-            lead_status='awaiting_skip_trace',
+            lead_status='skip_trace',
         )
         _db.session.add(lead)
         _db.session.flush()
@@ -856,7 +856,7 @@ def _seed_phone_lead(app, phone_1='(555) 867-5309', phone_2=None, street_suffix=
             phone_1=phone_1,
             phone_2=phone_2,
             owner_user_id=_TEST_USER_ID,
-            lead_status='awaiting_skip_trace',
+            lead_status='skip_trace',
         )
         db.session.add(lead)
         db.session.commit()
@@ -873,7 +873,7 @@ def _seed_email_lead(app, email='owner@example.com'):
             property_street=f'200 Email Test St {_PHONE_SEARCH_TERM}',
             email_1=email,
             owner_user_id=_TEST_USER_ID,
-            lead_status='awaiting_skip_trace',
+            lead_status='skip_trace',
         )
         db.session.add(lead)
         db.session.commit()
@@ -1039,7 +1039,7 @@ def test_1915_schiller_address_tokens(client, app):
             property_street='1915 W Schiller Ave',
             property_city='Chicago',
             owner_user_id=_TEST_USER_ID,
-            lead_status='awaiting_skip_trace',
+            lead_status='skip_trace',
         )
         db.session.add(lead)
         db.session.commit()
@@ -1065,7 +1065,7 @@ def test_fuzzy_last_name_typo(client, app):
             owner_last_name='Jutkins',
             property_street='200 Main St',
             owner_user_id=_TEST_USER_ID,
-            lead_status='awaiting_skip_trace',
+            lead_status='skip_trace',
         )
         db.session.add(lead)
         db.session.commit()
@@ -1130,7 +1130,7 @@ def test_search_returns_relevance_score(client, app):
             owner_last_name='Lead',
             property_street='ScoreTest Ave',
             owner_user_id=_TEST_USER_ID,
-            lead_status='awaiting_skip_trace',
+            lead_status='skip_trace',
         )
         db.session.add(lead)
         db.session.commit()
