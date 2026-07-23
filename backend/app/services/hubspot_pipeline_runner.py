@@ -68,6 +68,13 @@ def get_pipeline_affected_leads() -> list[int]:
 
 def run_post_import_pipeline_sync(force_full_rescore: bool = False) -> None:
     """Run the full post-import pipeline synchronously in the current process."""
+    from app.services.hubspot_writeback_service import hubspot_pull_enabled
+    if not hubspot_pull_enabled():
+        logger.info(
+            "Post-import pipeline skipped — HUBSPOT_PULL_ENABLED is false"
+        )
+        return
+
     from app.tasks.hubspot_tasks import (
         run_convert_hubspot_activities,
         run_enrich_leads_from_hubspot,
@@ -251,6 +258,13 @@ def run_pipeline_after_imports(
 ) -> None:
     """Run the post-import pipeline inside *app*'s context (blocking)."""
     with app.app_context():
+        if mode == 'full':
+            from app.services.hubspot_writeback_service import hubspot_pull_enabled
+            if not hubspot_pull_enabled():
+                logger.info(
+                    "Pipeline after imports skipped — HUBSPOT_PULL_ENABLED is false"
+                )
+                return
         if not try_acquire_pipeline_lock():
             logger.info("Pipeline already running — skipping duplicate invocation")
             return
@@ -379,6 +393,14 @@ def _release_recovery_spawn_lock() -> None:
 def maybe_start_startup_pipeline_recovery(app, dangling_match_count: int) -> None:
     """Start startup recovery pipeline in a detached subprocess (single-flight via lock)."""
     if dangling_match_count <= 0:
+        return
+    from app.services.hubspot_writeback_service import hubspot_pull_enabled
+    if not hubspot_pull_enabled():
+        logger.info(
+            "Startup recovery skipped — HUBSPOT_PULL_ENABLED is false "
+            "(%d dangling match(es))",
+            dangling_match_count,
+        )
         return
     if os.environ.get(_PIPELINE_SUBPROCESS_ENV):
         logger.info(

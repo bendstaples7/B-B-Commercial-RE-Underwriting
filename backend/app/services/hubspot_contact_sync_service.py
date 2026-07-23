@@ -27,7 +27,19 @@ class HubSpotContactSyncService:
         return self._client
 
     def refresh_contact_from_api(self, hubspot_id: str) -> Optional[HubSpotContact]:
-        """Fetch live contact from HubSpot and upsert hubspot_contacts."""
+        """Fetch live contact from HubSpot and upsert hubspot_contacts.
+
+        No-ops (returns cached row) when ``HUBSPOT_PULL_ENABLED`` is false.
+        """
+        from app.services.hubspot_writeback_service import hubspot_pull_enabled
+        if not hubspot_pull_enabled():
+            logger.debug(
+                'refresh_contact_from_api skipped — HUBSPOT_PULL_ENABLED is false '
+                '(hubspot_id=%s)',
+                hubspot_id,
+            )
+            return HubSpotContact.query.filter_by(hubspot_id=hubspot_id).first()
+
         from app.tasks.hubspot_tasks import _upsert_hubspot_record
 
         client = self._get_client()

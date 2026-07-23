@@ -13,6 +13,11 @@ from app import create_app, db
 from tests.e2e_setup import seed_test_data
 from tests.mock_apis import MockAPIFactory
 
+# Force after app/dotenv import — local .env may set these false for prod-like
+# local runs. Kill-switch tests monkeypatch them off per case.
+os.environ['HUBSPOT_PULL_ENABLED'] = 'true'
+os.environ['HUBSPOT_WRITE_BACK_ENABLED'] = 'true'
+
 # ---------------------------------------------------------------------------
 # Hypothesis global settings — suppress deadline for all tests.
 # The default 200ms deadline causes flaky failures on slow CI runners where
@@ -58,6 +63,10 @@ def app():
     # causing Alembic to run against the empty in-memory SQLite DB and fail.
     os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
     os.environ['FLASK_ENV'] = 'testing'
+    # celery_worker import (below) reloads backend/.env with override=True and
+    # would reset HubSpot kill-switches to local/prod defaults (false).
+    os.environ['HUBSPOT_PULL_ENABLED'] = 'true'
+    os.environ['HUBSPOT_WRITE_BACK_ENABLED'] = 'true'
 
     app = create_app('testing')
     app.config['TESTING'] = True
@@ -67,6 +76,9 @@ def app():
     # Also patch run_comparable_search_task.delay so tests never attempt to
     # connect to a Redis broker — the Celery task is a no-op in tests.
     import celery_worker as _celery_worker
+    # Re-assert after celery_worker.load_project_env() override.
+    os.environ['HUBSPOT_PULL_ENABLED'] = 'true'
+    os.environ['HUBSPOT_WRITE_BACK_ENABLED'] = 'true'
     with patch(
         'app.services.property_data_service.PropertyDataService.fetch_property_facts',
         return_value=_MOCK_PROPERTY_FACTS,

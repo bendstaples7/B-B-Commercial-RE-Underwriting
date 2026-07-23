@@ -65,7 +65,19 @@ class HubSpotDealSyncService:
         return self._stage_label_map
 
     def refresh_deal_from_api(self, hubspot_id: str) -> Optional[HubSpotDeal]:
-        """Fetch live deal from HubSpot and upsert hubspot_deals."""
+        """Fetch live deal from HubSpot and upsert hubspot_deals.
+
+        No-ops (returns cached row) when ``HUBSPOT_PULL_ENABLED`` is false.
+        """
+        from app.services.hubspot_writeback_service import hubspot_pull_enabled
+        if not hubspot_pull_enabled():
+            logger.debug(
+                'refresh_deal_from_api skipped — HUBSPOT_PULL_ENABLED is false '
+                '(hubspot_id=%s)',
+                hubspot_id,
+            )
+            return HubSpotDeal.query.filter_by(hubspot_id=hubspot_id).first()
+
         from app.tasks.hubspot_tasks import _upsert_hubspot_record
 
         client = self._get_client()

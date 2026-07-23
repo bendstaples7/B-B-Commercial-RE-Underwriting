@@ -36,6 +36,7 @@ from app.services.mail_task_lifecycle_service import (
     recent_sale_mail_eligible_date,
     resolve_mail_queue_status,
 )
+from app.services.helpers.mailer_history import mailer_history_summary
 from app.services.open_letter_contact_mapper import is_owner_mailable_lead
 from app.services.scoring_rubric import (
     contacts_likely_prior_owner,
@@ -196,6 +197,37 @@ def _serialize_timeline_entry(entry: LeadTimelineEntry) -> dict:
     data = LeadTimelineEntrySchema().dump(entry)
     data['actor'] = _resolve_actor(entry.actor)
     return data
+
+
+def _mail_attributed_timeline_entries(lead_id: int, *, limit: int = 50) -> list[dict]:
+    """All timeline rows with metadata.attributed_to_mail (not limited to page 1)."""
+    candidates = (
+        LeadTimelineEntry.query.filter(
+            LeadTimelineEntry.lead_id == lead_id,
+            LeadTimelineEntry.is_deleted.is_(False),
+        )
+        .order_by(LeadTimelineEntry.occurred_at.desc())
+        .limit(500)
+        .all()
+    )
+    attributed = [
+        e for e in candidates
+        if bool((e.event_metadata or {}).get('attributed_to_mail'))
+    ][:limit]
+    actor_cache = _resolve_actors_batch([e.actor for e in attributed if e.actor])
+    return [
+        {
+            'id': e.id,
+            'event_type': e.event_type,
+            'occurred_at': e.occurred_at.isoformat() if e.occurred_at else None,
+            'created_at': e.created_at.isoformat() if e.created_at else None,
+            'source': e.source,
+            'actor': _resolve_actor(e.actor, actor_cache),
+            'summary': e.summary,
+            'metadata': e.event_metadata,
+        }
+        for e in attributed
+    ]
 
 
 def _resolve_actors_batch(user_ids: list[str]) -> dict[str, str]:
@@ -871,6 +903,8 @@ def get_command_center(lead_id: int):
         'up_next_to_mail': lead.up_next_to_mail,
         'mail_queue_status': resolve_mail_queue_status(lead),
         'mailer_history': lead.mailer_history,
+        'mailer_history_summary': mailer_history_summary(lead.mailer_history),
+        'mail_attributed_responses': _mail_attributed_timeline_entries(lead_id),
         'data_source': lead.data_source,
         'created_at': lead.created_at.isoformat() if lead.created_at else None,
         # Outreach signals
@@ -1697,6 +1731,13 @@ def sync_lead_from_hubspot(lead_id: int):
     """
     from app.controllers.property_controller import _current_user_is_admin
     from app.services.hubspot_deal_sync_service import HubSpotDealSyncService
+    from app.services.hubspot_writeback_service import hubspot_pull_enabled
+
+    if not hubspot_pull_enabled():
+        return jsonify({
+            'error': 'hubspot_pull_disabled',
+            'message': 'HubSpot inbound sync is disabled (HUBSPOT_PULL_ENABLED=false).',
+        }), 503
 
     lead = Lead.query.get(lead_id)
     if lead is None:

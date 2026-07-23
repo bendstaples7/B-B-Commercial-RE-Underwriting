@@ -211,6 +211,45 @@ class HubSpotWebhookService:
 
         return logs
 
+    def handle_batch_skipped_disabled(self, events: list[dict]) -> list:
+        """Persist webhook events as ``skipped_disabled`` without Celery dispatch.
+
+        Used when ``HUBSPOT_PULL_ENABLED`` is false so HubSpot still gets a 200
+        ack and events remain auditable if pull is re-enabled later.
+        """
+        logs = []
+        now = datetime.utcnow()
+
+        for event in events:
+            if not isinstance(event, dict):
+                event = {'raw': event}
+            subscription_type = event.get('subscriptionType', '') or ''
+            object_type = subscription_type.split('.')[0] if subscription_type else 'unknown'
+            object_id = str(event.get('objectId', '') or '')
+            event_type = subscription_type or 'unknown'
+
+            log = HubSpotWebhookLog(
+                hubspot_object_type=object_type or 'unknown',
+                hubspot_object_id=object_id or 'unknown',
+                event_type=event_type,
+                subscription_type=subscription_type or None,
+                raw_payload=event,
+                status='skipped_disabled',
+                error_message='hubspot_pull_disabled',
+                processed_at=now,
+            )
+            db.session.add(log)
+            logs.append(log)
+
+        try:
+            db.session.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Failed to commit skipped_disabled webhook log batch: %s", exc)
+            db.session.rollback()
+            raise
+
+        return logs
+
     # ------------------------------------------------------------------ #
     # Log summary                                                          #
     # ------------------------------------------------------------------ #

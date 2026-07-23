@@ -716,6 +716,11 @@ def run_hubspot_matching(run_id: int = None) -> None:
 
     Requirements: 9.4
     """
+    from app.services.hubspot_writeback_service import hubspot_pull_enabled
+    if not hubspot_pull_enabled():
+        logger.info("run_hubspot_matching skipped — HUBSPOT_PULL_ENABLED is false")
+        return
+
     from dotenv import load_dotenv
     load_dotenv()
     from app import create_app
@@ -917,6 +922,13 @@ def run_enrich_leads_from_hubspot(run_id: int = None) -> dict:
 
     Requirements: multi-source lead enrichment
     """
+    from app.services.hubspot_writeback_service import hubspot_pull_enabled
+    if not hubspot_pull_enabled():
+        logger.info(
+            "run_enrich_leads_from_hubspot skipped — HUBSPOT_PULL_ENABLED is false"
+        )
+        return {'skipped': True, 'reason': 'hubspot_pull_disabled'}
+
     from dotenv import load_dotenv
     load_dotenv()
     from app import create_app
@@ -1276,6 +1288,13 @@ def run_convert_hubspot_activities(run_id: int = None) -> None:
 
     Requirements: 9.4
     """
+    from app.services.hubspot_writeback_service import hubspot_pull_enabled
+    if not hubspot_pull_enabled():
+        logger.info(
+            "run_convert_hubspot_activities skipped — HUBSPOT_PULL_ENABLED is false"
+        )
+        return
+
     from dotenv import load_dotenv
     load_dotenv()
     from app import create_app

@@ -25,7 +25,17 @@ DEFAULT_DEAL_STAGE_LABEL = 'Skip Trace'
 
 
 def hubspot_write_back_enabled() -> bool:
+    """True when platform→HubSpot writes are allowed (quick-add deals, stage push, tasks)."""
     return os.getenv('HUBSPOT_WRITE_BACK_ENABLED', 'false').lower() in ('1', 'true', 'yes')
+
+
+def hubspot_pull_enabled() -> bool:
+    """True when HubSpot→platform inbound sync is allowed.
+
+    Default is false — the platform is the source of truth for pipeline status.
+    Set HUBSPOT_PULL_ENABLED=true only when actively using HubSpot as CRM.
+    """
+    return os.getenv('HUBSPOT_PULL_ENABLED', 'false').lower() in ('1', 'true', 'yes')
 
 
 class HubSpotWriteBackService:
@@ -273,9 +283,15 @@ class HubSpotWriteBackService:
     def push_deal_stage_for_lead(self, lead_id: int, lead_status: str | None = None) -> dict[str, Any]:
         """Push a platform lead_status to the linked HubSpot deal stage.
 
-        Runs for confirmed deal matches regardless of the quick-add writeback flag,
-        since the deal already exists in HubSpot.
+        Gated by ``HUBSPOT_WRITE_BACK_ENABLED`` (same as quick-add deal create).
         """
+        if not hubspot_write_back_enabled():
+            return {
+                'synced': False,
+                'action': 'skipped',
+                'reason': 'write_back_disabled',
+            }
+
         lead = db.session.get(Lead, lead_id)
         if lead is None:
             return {'synced': False, 'action': 'skipped', 'reason': 'lead_not_found'}

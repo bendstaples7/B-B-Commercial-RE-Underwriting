@@ -10,6 +10,7 @@ import {
   Divider,
   IconButton,
   Paper,
+  Stack,
   Tab,
   Table,
   TableBody,
@@ -49,6 +50,7 @@ import { formatCookCountyPin } from '@/utils/cookCountyPin'
 import { contactDisplayName } from '@/utils/propertyContacts'
 import { formatImportNote } from './leadDetailFormatters'
 import { ccSubsectionTitleSx } from '@/components/lead-detail/commandCenterChrome'
+import { resolveMailerHistorySummary } from '@/utils/mailerHistory'
 import { PriorOwnerStaleBanner } from '@/components/lead-detail/PriorOwnerStaleCallout'
 
 const DEFAULT_TAB_INDEX = 0
@@ -694,38 +696,154 @@ export function LeadDetailTabPanel({
 
       {activeTab === 3 && (
         <Box sx={{ p: 2 }}>
-          {(leadData.marketing_lists ?? []).length === 0 ? (
-            <Typography variant="body2" color="text.secondary">
-              This property is not a member of any marketing lists.
-            </Typography>
-          ) : (
-            <TableContainer component={Paper} variant="outlined">
-              <Table size="small" aria-label="Marketing list memberships">
-                <TableHead>
-                  <TableRow>
-                    <TableCell sx={{ fontWeight: 'bold' }}>List</TableCell>
-                    <TableCell sx={{ fontWeight: 'bold' }}>Outreach Status</TableCell>
-                    <TableCell sx={{ fontWeight: 'bold' }}>Added</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {(leadData.marketing_lists ?? []).map((m) => (
-                    <TableRow key={m.marketing_list_id}>
-                      <TableCell>{m.marketing_list_name || `List #${m.marketing_list_id}`}</TableCell>
-                      <TableCell>
-                        <Chip
-                          label={outreachStatusLabel(m.outreach_status)}
-                          size="small"
-                          color={getOutreachStatusColor(m.outreach_status)}
-                        />
-                      </TableCell>
-                      <TableCell>{formatDateTime(m.added_at)}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          )}
+          {(() => {
+            const mailSummary = resolveMailerHistorySummary(
+              commandCenterData.mailer_history_summary,
+              leadData.mailer_history,
+            )
+            const queued = commandCenterData.mail_queue_status === 'queued'
+            return (
+              <>
+                <Typography variant="subtitle2" sx={{ ...ccSubsectionTitleSx, mb: 1 }}>
+                  Mail history
+                </Typography>
+                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1.5 }}>
+                  <Chip size="small" label={`${mailSummary.count} mailer${mailSummary.count === 1 ? '' : 's'}`} />
+                  {mailSummary.last_sent_at && (
+                    <Chip size="small" variant="outlined" label={`Last: ${mailSummary.last_sent_at}`} />
+                  )}
+                  {queued && <Chip size="small" color="primary" label="In mail queue" />}
+                  {Boolean(leadData.up_next_to_mail) && !queued && (
+                    <Chip size="small" label="Up Next to Mail (legacy)" />
+                  )}
+                  {leadData.returned_addresses && (
+                    <Chip size="small" color="warning" label="Has returned address(es)" />
+                  )}
+                </Stack>
+                {mailSummary.rows.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                    No mailers recorded for this lead yet.
+                  </Typography>
+                ) : (
+                  <TableContainer component={Paper} variant="outlined" sx={{ mb: 3 }}>
+                    <Table size="small" aria-label="Mail history">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 'bold' }}>When</TableCell>
+                          <TableCell sx={{ fontWeight: 'bold' }}>Mailer</TableCell>
+                          <TableCell sx={{ fontWeight: 'bold' }}>Source</TableCell>
+                          <TableCell sx={{ fontWeight: 'bold' }}>Notes</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {mailSummary.rows.map((row) => (
+                          <TableRow key={row.id}>
+                            <TableCell>{row.sent_at || '—'}</TableCell>
+                            <TableCell>
+                              {row.label}
+                              {row.campaign_id != null ? ` (#${row.campaign_id})` : ''}
+                            </TableCell>
+                            <TableCell>{row.source === 'olc' ? 'Open Letter' : 'Imported'}</TableCell>
+                            <TableCell>
+                              {[
+                                row.address_feedback ? `Feedback: ${row.address_feedback}` : null,
+                                row.cancelled ? 'Cancelled' : null,
+                              ]
+                                .filter(Boolean)
+                                .join(' · ') || '—'}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )}
+
+                {leadData.returned_addresses && (
+                  <Alert severity="warning" sx={{ mb: 2 }}>
+                    Returned addresses: {leadData.returned_addresses}
+                  </Alert>
+                )}
+
+                <Typography variant="subtitle2" sx={{ ...ccSubsectionTitleSx, mb: 1, mt: 1 }}>
+                  Responses attributed to mail
+                </Typography>
+                {(() => {
+                  const attributed = commandCenterData.mail_attributed_responses ?? []
+                  if (attributed.length === 0) {
+                    return (
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                        No attributed responses.
+                      </Typography>
+                    )
+                  }
+                  return (
+                    <TableContainer component={Paper} variant="outlined" sx={{ mb: 3 }}>
+                      <Table size="small" aria-label="Mail-attributed responses">
+                        <TableHead>
+                          <TableRow>
+                            <TableCell sx={{ fontWeight: 'bold' }}>When</TableCell>
+                            <TableCell sx={{ fontWeight: 'bold' }}>Event</TableCell>
+                            <TableCell sx={{ fontWeight: 'bold' }}>Campaign</TableCell>
+                            <TableCell sx={{ fontWeight: 'bold' }}>Summary</TableCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {attributed.map((e) => {
+                            const meta = (e.metadata || {}) as Record<string, unknown>
+                            return (
+                              <TableRow key={e.id}>
+                                <TableCell>{formatDateTime(e.occurred_at || e.created_at)}</TableCell>
+                                <TableCell>{e.event_type}</TableCell>
+                                <TableCell>{meta.mail_campaign_id != null ? String(meta.mail_campaign_id) : '—'}</TableCell>
+                                <TableCell>{e.summary || '—'}</TableCell>
+                              </TableRow>
+                            )
+                          })}
+                        </TableBody>
+                      </Table>
+                    </TableContainer>
+                  )
+                })()}
+
+                <Typography variant="subtitle2" sx={{ ...ccSubsectionTitleSx, mb: 1 }}>
+                  Marketing lists
+                </Typography>
+                {(leadData.marketing_lists ?? []).length === 0 ? (
+                  <Typography variant="body2" color="text.secondary">
+                    This property is not a member of any marketing lists.
+                  </Typography>
+                ) : (
+                  <TableContainer component={Paper} variant="outlined">
+                    <Table size="small" aria-label="Marketing list memberships">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 'bold' }}>List</TableCell>
+                          <TableCell sx={{ fontWeight: 'bold' }}>Outreach Status</TableCell>
+                          <TableCell sx={{ fontWeight: 'bold' }}>Added</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {(leadData.marketing_lists ?? []).map((m) => (
+                          <TableRow key={m.marketing_list_id}>
+                            <TableCell>{m.marketing_list_name || `List #${m.marketing_list_id}`}</TableCell>
+                            <TableCell>
+                              <Chip
+                                label={outreachStatusLabel(m.outreach_status)}
+                                size="small"
+                                color={getOutreachStatusColor(m.outreach_status)}
+                              />
+                            </TableCell>
+                            <TableCell>{formatDateTime(m.added_at)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )}
+              </>
+            )
+          })()}
         </Box>
       )}
 

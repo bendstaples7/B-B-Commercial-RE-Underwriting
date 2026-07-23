@@ -14,7 +14,7 @@ class HubSpotWebhookLog(db.Model):
     raw_payload = db.Column(db.JSON, nullable=False)  # full event object
     status = db.Column(db.Enum(
         'pending', 'processing', 'processed', 'failed',
-        'deduplicated', 'loop_suppressed',
+        'deduplicated', 'loop_suppressed', 'skipped_disabled',
         name='webhook_log_status_enum'
     ), nullable=False, default='pending')
     error_message = db.Column(db.Text, nullable=True)

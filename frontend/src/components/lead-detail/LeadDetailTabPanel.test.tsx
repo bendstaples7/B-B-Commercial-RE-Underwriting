@@ -146,3 +146,55 @@ describe('LeadDetailTabPanel prior-owner Info', () => {
     expect(screen.getByTestId('info-owner-contact')).not.toHaveTextContent('Other Addresses')
   })
 })
+
+describe('LeadDetailTabPanel Marketing mail history', () => {
+  it('shows normalized legacy mailer history on Marketing tab', () => {
+    render(
+      <MemoryRouter initialEntries={['/leads/1?tab=marketing']}>
+        <LeadDetailTabPanel
+          leadId={1}
+          leadData={{
+            id: 1,
+            owner_first_name: 'Taylor',
+            owner_last_name: 'G',
+            property_street: '1023 W WELLINGTON AVE',
+            mailing_address: '5N290 Fox Bluff Dr',
+            mailing_city: 'Saint Charles',
+            mailing_state: 'IL',
+            mailing_zip: '60175',
+            contacts: [],
+            enrichment_records: [],
+            marketing_lists: [],
+            analysis_session: null,
+            mailer_history: 'Boyfriend, OLM, Blue,  6/21/2024',
+          } as unknown as PropertyDetail}
+          commandCenterData={{
+            id: 1,
+            owner_first_name: 'Taylor',
+            owner_last_name: 'G',
+            property_street: '1023 W WELLINGTON AVE',
+            lead_score: 50,
+            lead_status: 'skip_trace',
+            contacts: [],
+            recommended_action: {
+              value: 'nurture',
+              recommended_contact_method: 'phone',
+              label: 'Nurture',
+              explanation: null,
+              signals: {},
+            },
+            open_tasks: [],
+            timeline: { entries: [], total: 0, page: 1, per_page: 25 },
+          } as unknown as CommandCenterPayload}
+          scoreLoading={false}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('Mail history')).toBeInTheDocument()
+    expect(screen.getByText('1 mailer')).toBeInTheDocument()
+    expect(screen.getByText('Boyfriend, OLM, Blue')).toBeInTheDocument()
+    expect(screen.getByText('6/21/2024')).toBeInTheDocument()
+    expect(screen.getByText(/not a member of any marketing lists/i)).toBeInTheDocument()
+  })
+})

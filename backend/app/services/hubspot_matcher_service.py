@@ -208,8 +208,17 @@ class HubSpotMatcherService:
         ``deal_description`` only. ``deal_source`` is always fill-if-blank so
         Google Sheet ``source`` and HubSpot ``deal_source`` stay equal peers.
 
-        ``hubspot_deal_stage`` is always synced from the linked deal.
+        ``hubspot_deal_stage`` is always synced from the linked deal when pull
+        is enabled. No-ops when ``HUBSPOT_PULL_ENABLED`` is false.
         """
+        from app.services.hubspot_writeback_service import hubspot_pull_enabled
+        if not hubspot_pull_enabled():
+            logger.debug(
+                "enrich_lead_from_deal skipped — HUBSPOT_PULL_ENABLED is false (lead_id=%s)",
+                getattr(lead, 'id', None),
+            )
+            return []
+
         props = (deal.raw_payload or {}).get("properties", {})
         updated_fields = []
 
@@ -361,7 +370,16 @@ class HubSpotMatcherService:
         Updates has_phone / has_email flags if new data was written.
 
         Returns a list of field names that were updated.
+        No-ops when ``HUBSPOT_PULL_ENABLED`` is false.
         """
+        from app.services.hubspot_writeback_service import hubspot_pull_enabled
+        if not hubspot_pull_enabled():
+            logger.debug(
+                "enrich_lead_from_contact skipped — HUBSPOT_PULL_ENABLED is false (lead_id=%s)",
+                getattr(lead, 'id', None),
+            )
+            return []
+
         props = (contact.raw_payload or {}).get("properties", {})
         updated_fields: list[str] = []
 
