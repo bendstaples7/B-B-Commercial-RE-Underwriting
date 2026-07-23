@@ -2244,6 +2244,34 @@ export interface CommandCenterPayload {
   open_tasks: LeadTask[];
   up_next_to_mail?: boolean | null;
   mail_queue_status?: 'queued' | 'sent_recently' | null;
+  /** Canonical mailer history from backend normalizer (prefer over raw mailer_history). */
+  mailer_history_summary?: {
+    count: number;
+    last_sent_at: string | null;
+    rows: Array<{
+      id: string;
+      sent_at: string | null;
+      label: string;
+      creative: string | null;
+      template_name: string | null;
+      campaign_id: number | null;
+      olc_order_id: string | null;
+      address_feedback: string | null;
+      cancelled: boolean;
+      source: 'olc' | 'imported';
+    }>;
+  } | null;
+  /** Timeline events with metadata.attributed_to_mail (full lead, not page 1 only). */
+  mail_attributed_responses?: Array<{
+    id: number;
+    event_type: string;
+    occurred_at?: string | null;
+    created_at?: string | null;
+    source?: string;
+    actor?: string;
+    summary?: string | null;
+    metadata?: Record<string, unknown> | null;
+  }>;
   is_mailable?: boolean;
   mail_eligible?: boolean;
   mail_ineligible_reason?: 'recently_sold' | 'invalid_owner_address' | null;

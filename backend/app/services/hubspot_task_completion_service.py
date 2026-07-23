@@ -245,6 +245,9 @@ def mark_hubspot_task_completed_local(
 
 def sync_hubspot_task_to_hubspot(hubspot_task_id: str) -> bool:
     """Best-effort HubSpot API sync after local completion is committed."""
+    from app.services.hubspot_writeback_service import hubspot_write_back_enabled
+    if not hubspot_write_back_enabled():
+        return False
     try:
         from app.models.hubspot_config import HubSpotConfig
         from app.services.hubspot_client_service import HubSpotClientService
@@ -291,6 +294,9 @@ def sync_hubspot_task_properties(
     if not hubspot_task_id:
         return False
     if title is None and due_date is None and not clear_due_date:
+        return False
+    from app.services.hubspot_writeback_service import hubspot_write_back_enabled
+    if not hubspot_write_back_enabled():
         return False
     try:
         from app.models.hubspot_config import HubSpotConfig

@@ -232,6 +232,13 @@ def trigger_import():
 
     Returns 202 Accepted with ``{run_ids: [...], status: "running"}``.
     """
+    from app.services.hubspot_writeback_service import hubspot_pull_enabled
+    if not hubspot_pull_enabled():
+        return jsonify({
+            'error': 'hubspot_pull_disabled',
+            'message': 'HubSpot inbound sync is disabled (HUBSPOT_PULL_ENABLED=false).',
+        }), 503
+
     data = request.json or {}
     object_types = data.get('object_types')  # None → service uses defaults
 
@@ -254,6 +261,13 @@ def run_pipeline_now():
     """
     from flask import current_app  # noqa: PLC0415
     from app.services.hubspot_pipeline_runner import dispatch_post_import_pipeline  # noqa: PLC0415
+    from app.services.hubspot_writeback_service import hubspot_pull_enabled
+
+    if not hubspot_pull_enabled():
+        return jsonify({
+            'error': 'hubspot_pull_disabled',
+            'message': 'HubSpot inbound sync is disabled (HUBSPOT_PULL_ENABLED=false).',
+        }), 503
 
     app = current_app._get_current_object()
     mode = dispatch_post_import_pipeline(app, run_ids=None)

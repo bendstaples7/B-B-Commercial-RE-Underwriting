@@ -41,6 +41,7 @@ import {
   ownerDisplayEntries,
 } from '@/utils/propertyContacts'
 import { formatImportNote } from './leadDetailFormatters'
+import { resolveMailerHistorySummary } from '@/utils/mailerHistory'
 import { hasNonBlankPhones, PhoneList } from '@/components/PhoneRow'
 import { ccCardSx } from '@/components/lead-detail/commandCenterChrome'
 import { PriorOwnerStaleOverlay } from '@/components/lead-detail/PriorOwnerStaleCallout'
@@ -304,7 +305,12 @@ export function PropertySidebar({
       source_label: string
       outcome: string
     }>
-    mailer_history?: string | Record<string, unknown> | null
+    mailer_history?: string | Record<string, unknown> | unknown[] | null
+    mailer_history_summary?: {
+      count: number
+      last_sent_at: string | null
+      rows: Array<{ id: string; sent_at: string | null; label: string }>
+    } | null
     up_next_to_mail?: boolean
     mail_queue_status?: string | null
     marketing_memberships?: Array<{
@@ -1016,28 +1022,57 @@ export function PropertySidebar({
 
       {(data.mailer_history != null || data.up_next_to_mail || data.mail_queue_status === 'queued') && (
         <SidebarSection title="Mailer History">
-          {data.mail_queue_status === 'queued' && (
-            <Chip label="In mail queue" size="small" color="primary" sx={{ mb: 0.5 }} />
-          )}
-          {Boolean(data.up_next_to_mail) && data.mail_queue_status !== 'queued' && (
-            <Chip
-              label="Up Next to Mail (legacy)"
-              size="small"
-              color="default"
-              sx={{ mb: 0.5 }}
-              title="Legacy flag — prefer mail_ready + mail queue membership"
-            />
-          )}
-          {data.mailer_history != null && (
-            <Typography
-              variant="caption"
-              sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', display: 'block' }}
-            >
-              {typeof data.mailer_history === 'string'
-                ? data.mailer_history
-                : JSON.stringify(data.mailer_history, null, 2)}
-            </Typography>
-          )}
+          {(() => {
+            const summary = resolveMailerHistorySummary(
+              data.mailer_history_summary,
+              data.mailer_history,
+            )
+            return (
+              <>
+                {data.mail_queue_status === 'queued' && (
+                  <Chip label="In mail queue" size="small" color="primary" sx={{ mb: 0.5, mr: 0.5 }} />
+                )}
+                {Boolean(data.up_next_to_mail) && data.mail_queue_status !== 'queued' && (
+                  <Chip
+                    label="Up Next to Mail (legacy)"
+                    size="small"
+                    color="default"
+                    sx={{ mb: 0.5, mr: 0.5 }}
+                    title="Legacy flag — prefer mail_ready + mail queue membership"
+                  />
+                )}
+                <Typography variant="caption" display="block" sx={{ mb: 0.5 }}>
+                  {summary.count} mailer{summary.count === 1 ? '' : 's'}
+                  {summary.last_sent_at ? ` · Last ${summary.last_sent_at}` : ''}
+                </Typography>
+                {summary.rows.slice(0, 3).map((row) => (
+                  <Typography
+                    key={row.id}
+                    variant="caption"
+                    color="text.secondary"
+                    display="block"
+                    sx={{ mb: 0.25 }}
+                  >
+                    {row.sent_at ? `${row.sent_at}: ` : ''}
+                    {row.label}
+                  </Typography>
+                ))}
+                {summary.rows.length > 3 && (
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    +{summary.rows.length - 3} more
+                  </Typography>
+                )}
+                <Link
+                  component={RouterLink}
+                  to={`?tab=marketing`}
+                  variant="caption"
+                  sx={{ display: 'inline-block', mt: 0.5 }}
+                >
+                  See Marketing tab
+                </Link>
+              </>
+            )
+          })()}
         </SidebarSection>
       )}
 

@@ -84,6 +84,19 @@ def receive_webhook():
     if not isinstance(events, list):
         events = [events]
 
+    from app.services.hubspot_writeback_service import hubspot_pull_enabled
+    if not hubspot_pull_enabled():
+        logger.info(
+            "HubSpot webhook accepted but not processed — HUBSPOT_PULL_ENABLED is false"
+        )
+        # Persist for audit; do not dispatch Celery.
+        svc.handle_batch_skipped_disabled(events)
+        return jsonify({
+            'status': 'disabled',
+            'reason': 'hubspot_pull_disabled',
+            'count': len(events),
+        }), 200
+
     # 5. Persist logs and dispatch Celery tasks.
     #    handle_batch() returns within milliseconds — actual processing is async.
     svc.handle_batch(events)

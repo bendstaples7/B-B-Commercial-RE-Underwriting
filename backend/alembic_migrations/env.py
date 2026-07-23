@@ -66,6 +66,8 @@ _KNOWN_REVISIONS = frozenset({
     'skp_trc_20260723',
     'unif_st_20260723',
     'heal_st_20260723',
+    # HubSpot webhook log status when inbound pull is disabled
+    'wh_skip_20260723',
     's0t1u2v3w4x5', 't0u1v2w3x4y5', 'u1v2w3x4y5z6',
     'v1w2x3y4z5a6', 'w2x3y4z5a6b7', 'x3y4z5a6b7c8',
     'y4z5a6b7c8d9', 'z5a6b7c8d9e0',

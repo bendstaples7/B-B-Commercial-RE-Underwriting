@@ -291,6 +291,11 @@ def _maybe_promote_skip_trace_to_mailing(lead: Lead) -> str | None:
     return previous
 
 
+def promote_skip_trace_to_mailing_if_eligible(lead: Lead) -> str | None:
+    """Public wrapper for residential skip_trace → mailing_no_contact_made promotion."""
+    return _maybe_promote_skip_trace_to_mailing(lead)
+
+
 def _timeline_signals(signals: dict) -> dict:
     safe = dict(signals)
     safe.pop('property_street', None)

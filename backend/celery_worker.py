@@ -1277,9 +1277,20 @@ def fetch_sale_comps_ai_task(self, deal_id: int, user_id: str) -> dict:
 # HubSpot CRM Migration Tasks
 # ---------------------------------------------------------------------------
 
+def _hubspot_pull_or_skip():
+    """Return skip payload when HubSpot inbound pull is disabled, else None."""
+    from app.services.hubspot_writeback_service import hubspot_pull_enabled
+    if hubspot_pull_enabled():
+        return None
+    return {'skipped': True, 'reason': 'hubspot_pull_disabled'}
+
+
 @celery.task(name='hubspot.import_deals', bind=True, max_retries=3)
 def import_hubspot_deals(self, run_id: int) -> None:
     """Paginate and UPSERT all HubSpot deals. Retries on rate-limit/service errors."""
+    skipped = _hubspot_pull_or_skip()
+    if skipped is not None:
+        return skipped
     from app.tasks.hubspot_tasks import run_import_hubspot_deals
     run_import_hubspot_deals(run_id, self_task=self)
 
@@ -1287,6 +1298,9 @@ def import_hubspot_deals(self, run_id: int) -> None:
 @celery.task(name='hubspot.import_contacts', bind=True, max_retries=3)
 def import_hubspot_contacts(self, run_id: int) -> None:
     """Paginate and UPSERT all HubSpot contacts. Retries on rate-limit/service errors."""
+    skipped = _hubspot_pull_or_skip()
+    if skipped is not None:
+        return skipped
     from app.tasks.hubspot_tasks import run_import_hubspot_contacts
     run_import_hubspot_contacts(run_id, self_task=self)
 
@@ -1294,6 +1308,9 @@ def import_hubspot_contacts(self, run_id: int) -> None:
 @celery.task(name='hubspot.import_companies', bind=True, max_retries=3)
 def import_hubspot_companies(self, run_id: int) -> None:
     """Paginate and UPSERT all HubSpot companies. Retries on rate-limit/service errors."""
+    skipped = _hubspot_pull_or_skip()
+    if skipped is not None:
+        return skipped
     from app.tasks.hubspot_tasks import run_import_hubspot_companies
     run_import_hubspot_companies(run_id, self_task=self)
 
@@ -1301,6 +1318,9 @@ def import_hubspot_companies(self, run_id: int) -> None:
 @celery.task(name='hubspot.import_engagements', bind=True, max_retries=3)
 def import_hubspot_engagements(self, run_id: int) -> None:
     """Paginate and UPSERT all HubSpot engagements. Retries on rate-limit/service errors."""
+    skipped = _hubspot_pull_or_skip()
+    if skipped is not None:
+        return skipped
     from app.tasks.hubspot_tasks import run_import_hubspot_engagements
     run_import_hubspot_engagements(run_id, self_task=self)
 
@@ -1308,6 +1328,9 @@ def import_hubspot_engagements(self, run_id: int) -> None:
 @celery.task(name='hubspot.run_matching')
 def run_hubspot_matching(run_id: int = None) -> None:
     """Match all unmatched HubSpot records to internal Lead/Organization records."""
+    skipped = _hubspot_pull_or_skip()
+    if skipped is not None:
+        return skipped
     from app.tasks.hubspot_tasks import run_hubspot_matching as _run
     _run(run_id)
 
@@ -1320,6 +1343,9 @@ def enrich_leads_from_hubspot(run_id: int = None) -> dict:
     Driving for Dollars, DuPage GIS, etc.) as long as they have a confirmed
     HubSpot match.  Safe to run repeatedly — only fills null fields.
     """
+    skipped = _hubspot_pull_or_skip()
+    if skipped is not None:
+        return skipped
     from app.tasks.hubspot_tasks import run_enrich_leads_from_hubspot as _run
     return _run(run_id)
 
@@ -1327,6 +1353,9 @@ def enrich_leads_from_hubspot(run_id: int = None) -> dict:
 @celery.task(name='hubspot.refresh_confirmed_deals')
 def refresh_confirmed_hubspot_deals(limit: int = 200) -> dict:
     """Re-fetch confirmed deals from HubSpot and sync linked lead stages."""
+    from app.services.hubspot_writeback_service import hubspot_pull_enabled
+    if not hubspot_pull_enabled():
+        return {'skipped': True, 'reason': 'hubspot_pull_disabled'}
     from app.tasks.hubspot_tasks import run_refresh_confirmed_hubspot_deals as _run
     return _run(limit=limit)
 
@@ -1334,6 +1363,9 @@ def refresh_confirmed_hubspot_deals(limit: int = 200) -> dict:
 @celery.task(name='hubspot.convert_activities')
 def convert_hubspot_activities(run_id: int = None) -> None:
     """Convert all unconverted HubSpot engagements to Interactions/Tasks."""
+    skipped = _hubspot_pull_or_skip()
+    if skipped is not None:
+        return skipped
     from app.tasks.hubspot_tasks import run_convert_hubspot_activities
     run_convert_hubspot_activities(run_id)
 
@@ -1341,6 +1373,9 @@ def convert_hubspot_activities(run_id: int = None) -> None:
 @celery.task(name='hubspot.extract_signals')
 def extract_hubspot_signals(run_id: int = None) -> None:
     """Extract signals from HubSpot-imported Interactions and apply suppression flags."""
+    from app.services.hubspot_writeback_service import hubspot_pull_enabled
+    if not hubspot_pull_enabled():
+        return None
     from app.tasks.hubspot_tasks import run_extract_hubspot_signals
     run_extract_hubspot_signals(run_id)
 
@@ -1480,6 +1515,9 @@ def nightly_association_sync():
     Runs after the nightly rescore so any new associations in HubSpot are
     reflected in the platform within 24 hours at most.
     """
+    from app.services.hubspot_writeback_service import hubspot_pull_enabled
+    if not hubspot_pull_enabled():
+        return {'skipped': True, 'reason': 'hubspot_pull_disabled'}
     from app.tasks.hubspot_tasks import run_nightly_association_sync
     return run_nightly_association_sync()
 
@@ -1551,6 +1589,11 @@ def scheduled_engagement_sync() -> None:
     """Scheduled task: import new HubSpot engagements and run the full pipeline."""
     import logging
     logger = logging.getLogger(__name__)
+    from app.services.hubspot_writeback_service import hubspot_pull_enabled
+    if not hubspot_pull_enabled():
+        logger.info("Scheduled engagement sync skipped — HUBSPOT_PULL_ENABLED is false")
+        return
+
     logger.info("Starting scheduled engagement sync")
 
     from dotenv import load_dotenv
