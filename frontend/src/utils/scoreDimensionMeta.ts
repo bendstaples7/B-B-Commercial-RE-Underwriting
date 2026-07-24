@@ -44,44 +44,44 @@ const COMMERCIAL_MAX: Record<string, number> = {
 
 const DIMENSION_COPY: Record<string, Omit<ScoreDimensionMeta, 'maxPoints'>> = {
   property_type_fit: {
-    label: 'Property Type Fit',
+    label: 'Matches buy box',
     description:
       'How well the property type matches your buy box. Multi-family / 2–4 units score highest; single-family scores moderately. Inferred from unit count when type is missing.',
     dataSource: 'Lead property type, or units count when type is blank',
   },
   neighborhood_fit: {
-    label: 'Neighborhood Fit',
+    label: 'Located property',
     description:
       'Whether the property has a known city or ZIP. A target-neighborhood list is planned; for now any located property earns partial credit.',
     dataSource: 'Property city and ZIP on the lead record',
   },
   unit_count_fit: {
-    label: 'Unit Count Fit',
+    label: 'Ideal unit count',
     description:
       'Rewards 2–4 unit buildings (ideal small multifamily). 5+ units and single-family earn lower but non-zero points.',
     dataSource: 'Units field on the lead / property record',
   },
   absentee_owner: {
-    label: 'Absentee Owner',
+    label: 'Absentee owner',
     description:
       'Owner mailing address differs from the property address — often indicates an out-of-area owner more likely to sell.',
     dataSource:
       'Owner mailing address vs. property street (or lead source type = absentee owner)',
   },
   owner_mailing_quality: {
-    label: 'Owner Mailing Quality',
+    label: 'Mailing address ready',
     description:
       'Completeness of the owner mailing address. Full street + city + state + ZIP scores highest; partial addresses score less.',
     dataSource: 'Owner mailing address fields on the lead record',
   },
   years_owned: {
-    label: 'Years Owned',
+    label: 'Long ownership',
     description:
       'Longer hold periods score higher (10+ years = max). Uses acquisition date when set, otherwise parses the last sale date on the lead.',
     dataSource: 'Acquisition date, or last sale date (most_recent_sale) on the lead',
   },
   structured_motivation: {
-    label: 'Structured Motivation',
+    label: 'Seller motivation',
     description:
       'Product motivation score from MotivationSignal rows (tax/violation distress, source type, notes keywords, manual priority), capped. This is lead.motivation_score — not HubSpot engagement.',
     dataSource: 'motivation_signals table (synced from enrichment JSON and ingestion fields)',
@@ -93,37 +93,37 @@ const DIMENSION_COPY: Record<string, Omit<ScoreDimensionMeta, 'maxPoints'>> = {
     dataSource: 'Lead notes field keywords (probate, vacant, tired landlord, etc.)',
   },
   hubspot_engagement: {
-    label: 'HubSpot Engagement',
+    label: 'CRM engagement',
     description:
       'CRM signal adjustments (warm conversation, appointment, offer sent, not interested, etc.) applied to lead_score only. Not a second motivation_score.',
     dataSource: 'HubSpot SIGNAL_ADJUSTMENTS on extracted CRM signals',
   },
   timeline_engagement: {
-    label: 'Timeline Engagement',
+    label: 'Logged outreach',
     description:
       'Recent manual call/email/note activity modifiers on lead_score.',
     dataSource: 'Lead timeline entries (manual source, lookback window)',
   },
   pipeline_stage_bonus: {
-    label: 'Pipeline Stage Bonus',
+    label: 'Pipeline progress',
     description:
       'Bonus or penalty from lead_status pipeline stage on lead_score.',
     dataSource: 'lead.lead_status',
   },
   existing_notes_motivation: {
-    label: 'Motivation in Notes',
+    label: 'Motivation in notes',
     description:
       'Legacy rubric dimension; current unified scoring folds notes keywords into Structured Motivation (see notes_keywords attribution).',
     dataSource: 'Lead notes field (manual, HubSpot, or import)',
   },
   manual_priority: {
-    label: 'Manual Priority',
+    label: 'Manual priority',
     description:
       'User-assigned priority boost when you have flagged this lead as especially important.',
     dataSource: 'Manual priority field (when set on the lead)',
   },
   source_type_distress: {
-    label: 'Source / Distress Signal',
+    label: 'Distress signal',
     description:
       'Extra points when the lead came from a distress-oriented source (foreclosure, tax distress, long-owned) or has tax distress data attached.',
     dataSource: 'Lead source type and tax distress enrichment data',
@@ -151,6 +151,36 @@ const DIMENSION_COPY: Record<string, Omit<ScoreDimensionMeta, 'maxPoints'>> = {
     description:
       'Larger commercial buildings (2,000+ sq ft) score higher when square footage is known.',
     dataSource: 'Building square footage on the property record',
+  },
+  // Unified scoring dimensions (unified_v1_*) — plain labels for chips + breakdown
+  property_heuristics: {
+    label: 'Strong property details',
+    description:
+      'Bonus when key property fields look solid for your buy box — type, beds/baths, living area, lot, and year built.',
+    dataSource: 'Property type, bedrooms, bathrooms, square footage, lot size, year built',
+  },
+  property_equity: {
+    label: 'High equity',
+    description:
+      'Estimated owner equity looks strong based on property age, size, and related property fields (not a full appraisal).',
+    dataSource: 'Property characteristics used to estimate equity',
+  },
+  contactability: {
+    label: 'Owner researched',
+    description:
+      'Points for skip-trace completion and socials on file. Phone/email presence is scored separately under data quality.',
+    dataSource: 'Skip-trace date and socials on the lead',
+  },
+  ownership_duration: {
+    label: 'Long ownership',
+    description:
+      'Longer ownership periods score higher — owners who have held the property longer are often better prospects.',
+    dataSource: 'Acquisition date or last sale date on the lead',
+  },
+  engagement: {
+    label: 'Recent activity',
+    description: 'Points from recent engagement signals on the lead.',
+    dataSource: 'Engagement fields and related timeline activity',
   },
 }
 

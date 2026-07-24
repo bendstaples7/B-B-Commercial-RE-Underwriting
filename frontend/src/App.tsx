@@ -20,7 +20,6 @@ import {
   ListItemText,
   IconButton,
   Divider,
-  Collapse,
   CircularProgress,
   Tooltip,
   Chip,
@@ -47,9 +46,11 @@ import {
 } from '@mui/material'
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import DownloadIcon from '@mui/icons-material/Download'
 import MenuIcon from '@mui/icons-material/Menu'
+import BarChartIcon from '@mui/icons-material/BarChart'
 import HomeIcon from '@mui/icons-material/Home'
 import PeopleIcon from '@mui/icons-material/People'
 import CloudUploadIcon from '@mui/icons-material/CloudUpload'
@@ -68,13 +69,12 @@ import TodayIcon from '@mui/icons-material/Today'
 import ViewKanbanIcon from '@mui/icons-material/ViewKanban'
 import SettingsIcon from '@mui/icons-material/Settings'
 import AddLocationAltIcon from '@mui/icons-material/AddLocationAlt'
-import ExpandLess from '@mui/icons-material/ExpandLess'
-import ExpandMore from '@mui/icons-material/ExpandMore'
 import StorageIcon from '@mui/icons-material/Storage'
+import WorkHistoryIcon from '@mui/icons-material/WorkHistory'
+import AccountTreeIcon from '@mui/icons-material/AccountTree'
 import ListAltIcon from '@mui/icons-material/ListAlt'
 import LocalPostOfficeIcon from '@mui/icons-material/LocalPostOffice'
 import TravelExploreIcon from '@mui/icons-material/TravelExplore'
-import SpaceDashboardIcon from '@mui/icons-material/SpaceDashboard'
 import { usePipelineStatus } from './context/PipelineStatusContext'
 import Avatar from '@mui/material/Avatar'
 import { WorkflowStep, PropertyFacts, PropertyType, ConstructionType, InteriorCondition } from './types'
@@ -119,10 +119,42 @@ import BackgroundJobsPage from './pages/BackgroundJobsPage'
 import DataSourcesPanel from '@/components/DataSourcesPanel'
 import type { QueueCounts } from './types'
 
-// Minimum width that fits the longest nav label ("Missing Property Match")
-// at its indent + icon + badge, plus room for a thin vertical scrollbar so
-// queue-count chips are not clipped (overflowX:hidden + overflowY:auto).
-const DRAWER_WIDTH = 312
+// Dual-rail nav: narrow icon rail + light secondary panel for section children.
+const ICON_RAIL_WIDTH = 60
+const SECONDARY_NAV_WIDTH = 248
+const DRAWER_WIDTH = ICON_RAIL_WIDTH + SECONDARY_NAV_WIDTH
+const SECONDARY_NAV_EXPANDED_KEY = 'bb.nav.secondaryExpanded'
+/** Smooth dual-rail collapse — keep in sync on drawer, secondary, and main. */
+const NAV_RAIL_TRANSITION_MS = 320
+const NAV_RAIL_EASING = 'cubic-bezier(0.4, 0, 0.2, 1)'
+
+function readSecondaryNavExpanded(): boolean {
+  try {
+    const raw = localStorage.getItem(SECONDARY_NAV_EXPANDED_KEY)
+    if (raw === null) return true
+    return raw !== '0' && raw !== 'false'
+  } catch {
+    return true
+  }
+}
+
+function writeSecondaryNavExpanded(expanded: boolean) {
+  try {
+    localStorage.setItem(SECONDARY_NAV_EXPANDED_KEY, expanded ? '1' : '0')
+  } catch {
+    // ignore quota / private mode
+  }
+}
+const ADMIN_SECTION_KEY = '__admin__'
+/** App home — Activity Goals dashboard. */
+const HOME_PATH = '/dashboard'
+
+const ICON_RAIL_BG = '#EEF2F6'
+const SECONDARY_NAV_BG = '#EEF2F6'
+const NAV_ICON_IDLE = '#64748B'
+const NAV_ICON_SELECTED = '#334155'
+const NAV_ICON_PILL = 'rgba(51, 65, 85, 0.10)'
+const NAV_ICON_PILL_HOVER = 'rgba(51, 65, 85, 0.14)'
 
 // ---------------------------------------------------------------------------
 // Google Maps context — provides isLoaded state to child components
@@ -197,7 +229,21 @@ type NavGroup = NavItemGroup | NavSubgroupGroup
 /** Nav structure: top-level sections, each with grouped child items. */
 const NAV_SECTIONS = [
   {
-    label: 'Work Queue Kanban',
+    label: 'Home',
+    path: '/dashboard',
+    icon: <HomeIcon />,
+    headerNavigates: true,
+    groups: [
+      {
+        label: null,
+        items: [
+          { label: 'Activity Goals', path: '/dashboard', icon: <HomeIcon />, badgeKey: null },
+        ],
+      },
+    ],
+  },
+  {
+    label: 'Work Queue',
     path: '/kanban',
     icon: <ViewKanbanIcon />,
     headerNavigates: true,
@@ -209,23 +255,9 @@ const NAV_SECTIONS = [
     ],
   },
   {
-    label: 'Dashboard',
-    path: '/dashboard',
-    icon: <SpaceDashboardIcon />,
-    headerNavigates: true,
-    groups: [
-      {
-        label: null,
-        items: [
-          { label: 'Activity Goals', path: '/dashboard', icon: <SpaceDashboardIcon />, badgeKey: null },
-        ],
-      },
-    ],
-  },
-  {
     label: 'Analysis',
     path: '/analysis',
-    icon: <HomeIcon />,
+    icon: <BarChartIcon />,
     headerNavigates: false,
     groups: [
       {
@@ -272,6 +304,79 @@ const NAV_SECTIONS = [
     ],
   },
 ]
+
+const ADMIN_NAV_ITEMS: NavQueueItem[] = [
+  { label: 'Users', path: '/admin', icon: <PeopleIcon />, badgeKey: null },
+  { label: 'Background Jobs', path: '/admin/background-jobs', icon: <WorkHistoryIcon />, badgeKey: null },
+  { label: 'Pipeline Stages', path: '/admin/pipeline-stages', icon: <AccountTreeIcon />, badgeKey: null },
+]
+
+function pathMatchesPrefix(pathname: string, prefix: string): boolean {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`)
+}
+
+/** Canonical lead detail (`/leads/123`) — not `/leads/data-sources`. */
+function isLeadDetailPath(pathname: string): boolean {
+  return /^\/leads\/\d+(\/|$)/.test(pathname)
+}
+
+function pathBelongsToSection(pathname: string, section: (typeof NAV_SECTIONS)[number]): boolean {
+  if (pathMatchesPrefix(pathname, section.path)) return true
+  for (const group of section.groups) {
+    if ('subgroups' in group && group.subgroups) {
+      for (const subgroup of group.subgroups) {
+        for (const item of subgroup.items) {
+          if (pathMatchesPrefix(pathname, item.path)) return true
+        }
+      }
+    } else if ('items' in group && group.items) {
+      for (const item of group.items) {
+        if (pathMatchesPrefix(pathname, item.path)) return true
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * Whether the current URL is already "in" this section — including queue leaves
+ * under Work Queue and lead-detail triage context (not Home).
+ */
+function sectionIsActiveContext(
+  pathname: string,
+  section: (typeof NAV_SECTIONS)[number],
+): boolean {
+  if (pathBelongsToSection(pathname, section)) return true
+  // Lead detail is Work Queue triage context — keep WQ selected; don't bounce to /kanban.
+  if (section.path === '/kanban' && isLeadDetailPath(pathname)) return true
+  return false
+}
+
+function resolveSectionPathFromLocation(pathname: string): string {
+  if (pathname.startsWith('/admin')) return ADMIN_SECTION_KEY
+  for (const section of NAV_SECTIONS) {
+    if (pathBelongsToSection(pathname, section)) return section.path
+  }
+  // Lead detail: keep Work Queue selected (not Home /dashboard).
+  if (isLeadDetailPath(pathname)) return '/kanban'
+  return '/dashboard'
+}
+
+const navItemActiveSx = {
+  bgcolor: 'transparent',
+  borderRadius: 1,
+  '&.Mui-selected': {
+    bgcolor: 'transparent',
+  },
+  '&.Mui-selected:hover': {
+    bgcolor: 'rgba(51, 65, 85, 0.05)',
+  },
+  '&:hover': {
+    bgcolor: 'rgba(51, 65, 85, 0.05)',
+  },
+}
+
+const NAV_ROW_HEIGHT = 44
 
 // ---------------------------------------------------------------------------
 // Page wrapper components that handle route params / navigation
@@ -1341,10 +1446,18 @@ function App() {
   const isMobile = useMediaQuery(theme.breakpoints.down('md'))
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [avatarOpen, setAvatarOpen] = useState(false)
+  const [secondaryNavExpanded, setSecondaryNavExpanded] = useState(readSecondaryNavExpanded)
   const pipelineStatus = usePipelineStatus()
   const { user, isLoading: authLoading, logout } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
+
+  const drawerWidth = secondaryNavExpanded ? DRAWER_WIDTH : ICON_RAIL_WIDTH
+
+  const setSecondaryExpanded = (expanded: boolean) => {
+    setSecondaryNavExpanded(expanded)
+    writeSecondaryNavExpanded(expanded)
+  }
 
   // useLoadScript manages the script tag lifecycle and exposes isLoaded so
   // child components (PropertyFactsForm) know when the Places API is ready.
@@ -1373,341 +1486,556 @@ function App() {
     refetchOnWindowFocus: true,
   })
 
-  // Track which top-level sections are expanded; default all open
-  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
-    '/kanban': true,
-    '/dashboard': true,
-    '/analysis': true,
-    '/properties': true,
-    '/marketing/direct-mail': true,
-  })
-  const [adminNavOpen, setAdminNavOpen] = useState(
-    () => typeof window !== 'undefined' && window.location.pathname.startsWith('/admin'),
+  // Active icon-rail section — synced from the URL, user can switch via rail clicks.
+  const [selectedSectionPath, setSelectedSectionPath] = useState(() =>
+    resolveSectionPathFromLocation(location.pathname),
+  )
+  // Accordion open state is independent so the user can collapse the current section.
+  const [openAccordionPath, setOpenAccordionPath] = useState<string | null>(() =>
+    resolveSectionPathFromLocation(location.pathname),
   )
 
   // Admin pages are short; keep the document at the top so the main panel is
   // never left scrolled out of view after sidebar interactions.
   useEffect(() => {
+    const sectionPath = resolveSectionPathFromLocation(location.pathname)
+    setSelectedSectionPath(sectionPath)
+    setOpenAccordionPath(sectionPath)
     const onAdminRoute = location.pathname.startsWith('/admin')
-    setAdminNavOpen(onAdminRoute)
     if (!onAdminRoute) return
     window.scrollTo(0, 0)
     document.documentElement.scrollTop = 0
     document.body.scrollTop = 0
   }, [location.pathname])
 
-  const toggleSection = (path: string) => {
-    setExpandedSections((prev) => ({ ...prev, [path]: !prev[path] }))
+  const closeMobileDrawer = () => {
+    if (isMobile) setDrawerOpen(false)
+  }
+
+  const handleSectionIconClick = (section: (typeof NAV_SECTIONS)[number]) => {
+    setSelectedSectionPath(section.path)
+    setOpenAccordionPath(section.path)
+    // Collapsed rail hides destinations — expand so Work Queue (etc.) leaves are reachable.
+    if (!secondaryNavExpanded) setSecondaryExpanded(true)
+    if (section.headerNavigates && !sectionIsActiveContext(location.pathname, section)) {
+      navigate(section.path)
+    }
+    closeMobileDrawer()
+  }
+
+  const handleAdminIconClick = () => {
+    setSelectedSectionPath(ADMIN_SECTION_KEY)
+    setOpenAccordionPath(ADMIN_SECTION_KEY)
+    if (!secondaryNavExpanded) setSecondaryExpanded(true)
+    if (!location.pathname.startsWith('/admin')) {
+      navigate('/admin')
+    }
+    closeMobileDrawer()
+  }
+
+  const handleAccordionChange = (sectionPath: string, nextExpanded: boolean) => {
+    if (nextExpanded) {
+      if (sectionPath === ADMIN_SECTION_KEY) {
+        handleAdminIconClick()
+        return
+      }
+      const section = NAV_SECTIONS.find((s) => s.path === sectionPath)
+      if (section) handleSectionIconClick(section)
+      return
+    }
+    setOpenAccordionPath(null)
+  }
+  const renderNavLeafItem = (item: NavQueueItem) => {
+    const isActive = location.pathname === item.path
+    const badgeCount = item.badgeKey ? (queueCounts?.[item.badgeKey] ?? 0) : 0
+    return (
+      <ListItemButton
+        key={item.path}
+        component={Link}
+        to={item.path}
+        onClick={closeMobileDrawer}
+        selected={isActive}
+        sx={{
+          flex: '0 0 auto',
+          width: 'calc(100% - 16px)',
+          alignSelf: 'stretch',
+          mx: 1,
+          pl: 1.5,
+          pr: 1.5,
+          py: 0.75,
+          gap: 0.5,
+          ...(isActive
+            ? navItemActiveSx
+            : {
+                borderRadius: 1,
+                '&:hover': { bgcolor: 'rgba(51, 65, 85, 0.05)' },
+              }),
+        }}
+        aria-label={`Navigate to ${item.label}`}
+      >
+        <ListItemIcon sx={{ minWidth: 32, color: isActive ? NAV_ICON_SELECTED : 'text.secondary' }}>
+          {item.icon}
+        </ListItemIcon>
+        <ListItemText
+          primary={item.label}
+          sx={{ minWidth: 0, flex: '1 1 auto' }}
+          primaryTypographyProps={{
+            variant: 'body2',
+            fontWeight: isActive ? 600 : 400,
+            color: isActive ? NAV_ICON_SELECTED : 'text.primary',
+            noWrap: true,
+            textOverflow: 'ellipsis',
+            overflow: 'hidden',
+          }}
+        />
+        {badgeCount > 0 && (
+          <Chip
+            label={badgeCount}
+            size="small"
+            sx={{
+              ml: 0.5,
+              height: 18,
+              fontSize: '0.65rem',
+              minWidth: 24,
+              flexShrink: 0,
+              bgcolor: isActive ? 'rgba(51, 65, 85, 0.12)' : 'rgba(51, 65, 85, 0.08)',
+              color: NAV_ICON_SELECTED,
+            }}
+          />
+        )}
+      </ListItemButton>
+    )
+  }
+
+  const renderSecondaryNavItems = (groups: NavGroup[]) => (
+    <>
+      {groups.map((group, groupIdx) => (
+        <Box key={groupIdx}>
+          {'subgroups' in group && group.subgroups ? (
+            <>
+              {group.label && (
+                <Box sx={{ px: 2, pt: 1, pb: 0.25 }}>
+                  <Typography
+                    variant="overline"
+                    sx={{ fontSize: '0.7rem', letterSpacing: 1, color: 'text.secondary', lineHeight: 1 }}
+                  >
+                    {group.label}
+                  </Typography>
+                </Box>
+              )}
+              {group.subgroups.map((subgroup, subIdx) => (
+                <Box key={subIdx}>
+                  <Box sx={{ px: 2, pt: 0.75, pb: 0.25 }}>
+                    <Typography
+                      variant="overline"
+                      sx={{ fontSize: '0.6rem', letterSpacing: 1, color: 'text.disabled', lineHeight: 1 }}
+                    >
+                      {subgroup.label}
+                    </Typography>
+                    {'description' in subgroup && subgroup.description && (
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ display: 'block', lineHeight: 1.3, mt: 0.25 }}
+                      >
+                        {subgroup.description}
+                      </Typography>
+                    )}
+                  </Box>
+                  <List disablePadding>
+                    {subgroup.items.map((item) => renderNavLeafItem(item))}
+                  </List>
+                </Box>
+              ))}
+            </>
+          ) : group.items ? (
+            <>
+              {group.label && (
+                <Box sx={{ px: 2, pt: 1, pb: 0.25 }}>
+                  <Typography
+                    variant="overline"
+                    sx={{ fontSize: '0.65rem', letterSpacing: 1, color: 'text.disabled', lineHeight: 1 }}
+                  >
+                    {group.label}
+                  </Typography>
+                  {'description' in group && group.description && (
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ display: 'block', lineHeight: 1.3, mt: 0.25 }}
+                    >
+                      {group.description}
+                    </Typography>
+                  )}
+                </Box>
+              )}
+              <List disablePadding>
+                {group.items.map((item) => renderNavLeafItem(item))}
+              </List>
+            </>
+          ) : null}
+          {groupIdx < groups.length - 1 && <Divider sx={{ mx: 2, my: 0.5 }} />}
+        </Box>
+      ))}
+    </>
+  )
+
+  const railIconButtonSx = (selected: boolean) => ({
+    width: NAV_ROW_HEIGHT,
+    height: NAV_ROW_HEIGHT,
+    borderRadius: 1.5,
+    color: selected ? NAV_ICON_SELECTED : NAV_ICON_IDLE,
+    bgcolor: selected ? NAV_ICON_PILL : 'transparent',
+    flexShrink: 0,
+    '&:hover': {
+      bgcolor: selected ? NAV_ICON_PILL_HOVER : 'rgba(51, 65, 85, 0.06)',
+      color: NAV_ICON_SELECTED,
+    },
+  })
+
+  const accordionSx = {
+    bgcolor: 'transparent',
+    boxShadow: 'none',
+    width: '100%',
+    '&:before': { display: 'none' },
+    '&.Mui-expanded': { m: 0 },
+  } as const
+
+  const accordionSummarySx = {
+    minHeight: NAV_ROW_HEIGHT,
+    height: NAV_ROW_HEIGHT,
+    px: 1.25,
+    py: 0,
+    bgcolor: 'transparent',
+    '&:hover': { bgcolor: 'rgba(51, 65, 85, 0.04)' },
+    '&.Mui-expanded': {
+      minHeight: NAV_ROW_HEIGHT,
+      bgcolor: 'transparent',
+    },
+    '& .MuiAccordionSummary-content': {
+      my: 0,
+      alignItems: 'center',
+    },
+    '& .MuiAccordionSummary-content.Mui-expanded': {
+      my: 0,
+    },
   }
 
   const drawerContent = (
     <Box
-      sx={{ width: '100%', minWidth: 0, boxSizing: 'border-box' }}
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        width: '100%',
+        minWidth: 0,
+        flex: 1,
+        minHeight: 0,
+        height: '100%',
+        boxSizing: 'border-box',
+        overflow: 'hidden',
+        bgcolor: ICON_RAIL_BG,
+      }}
       role="navigation"
       aria-label="Main navigation"
     >
-      <Box sx={{ p: 2 }}>
-        <Typography variant="h6" component="span" noWrap>
-          RE Analysis
-        </Typography>
+      {/* Header row: collapse toggle | brand — shared height so icons align with labels */}
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: 'row',
+          flexShrink: 0,
+          minHeight: NAV_ROW_HEIGHT,
+          borderBottom: '1px solid',
+          borderColor: 'divider',
+        }}
+      >
+        <Box
+          component="nav"
+          aria-label="Section icons"
+          data-testid="nav-icon-rail"
+          sx={{
+            width: ICON_RAIL_WIDTH,
+            minWidth: ICON_RAIL_WIDTH,
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            bgcolor: ICON_RAIL_BG,
+            borderRight: secondaryNavExpanded ? '1px solid' : 'none',
+            borderColor: 'divider',
+          }}
+        >
+          <Tooltip
+            title={secondaryNavExpanded ? 'Minimize menu' : 'Expand menu'}
+            placement="right"
+            arrow
+          >
+            <IconButton
+              onClick={() => setSecondaryExpanded(!secondaryNavExpanded)}
+              aria-label={secondaryNavExpanded ? 'Minimize navigation menu' : 'Expand navigation menu'}
+              aria-expanded={secondaryNavExpanded}
+              data-testid={secondaryNavExpanded ? 'collapse-secondary-nav' : 'expand-secondary-nav'}
+              sx={railIconButtonSx(false)}
+            >
+              <ChevronLeftIcon
+                sx={{
+                  fontSize: 22,
+                  transition: `transform ${NAV_RAIL_TRANSITION_MS}ms ${NAV_RAIL_EASING}`,
+                  transform: secondaryNavExpanded ? 'rotate(0deg)' : 'rotate(180deg)',
+                }}
+              />
+            </IconButton>
+          </Tooltip>
+        </Box>
+        <Box
+          component="nav"
+          aria-label="Section destinations"
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            width: secondaryNavExpanded ? SECONDARY_NAV_WIDTH : 0,
+            overflow: 'hidden',
+            display: 'flex',
+            alignItems: 'center',
+            px: 1.5,
+            bgcolor: SECONDARY_NAV_BG,
+            opacity: secondaryNavExpanded ? 1 : 0,
+            pointerEvents: secondaryNavExpanded ? 'auto' : 'none',
+            transition: theme.transitions.create(['width', 'opacity'], {
+              easing: NAV_RAIL_EASING,
+              duration: NAV_RAIL_TRANSITION_MS,
+            }),
+          }}
+        >
+          <Typography
+            variant="subtitle2"
+            noWrap
+            sx={{ fontWeight: 700, fontSize: '0.95rem', color: 'text.primary' }}
+          >
+            RE Analysis
+          </Typography>
+        </Box>
       </Box>
-      <Divider />
-      <List disablePadding>
-        {NAV_SECTIONS.map((section) => (
-          <Box key={section.path}>
-            {/* Section header — navigable sections split label/chevron; others toggle only */}
-            {section.headerNavigates ? (
-              <Box
-                sx={{ display: 'flex', alignItems: 'center', py: 1.5, cursor: 'pointer' }}
-              >
-                <ListItemButton
-                  component={Link}
-                  to={section.path}
-                  onClick={() => isMobile && setDrawerOpen(false)}
-                  sx={{ py: 0, flexGrow: 1, '&:hover': { bgcolor: 'transparent' } }}
-                  disableRipple={false}
-                  aria-label={`Navigate to ${section.label}`}
-                >
-                  <ListItemIcon sx={{ minWidth: 40 }}>{section.icon}</ListItemIcon>
-                  <ListItemText
-                    primary={section.label}
-                    primaryTypographyProps={{ fontWeight: 600 }}
-                  />
-                </ListItemButton>
-                <IconButton
-                  size="small"
-                  onClick={(e) => { e.stopPropagation(); toggleSection(section.path); }}
-                  aria-label={expandedSections[section.path] ? 'Collapse section' : 'Expand section'}
-                  sx={{ mr: 1 }}
-                >
-                  {expandedSections[section.path] ? <ExpandLess /> : <ExpandMore />}
-                </IconButton>
-              </Box>
-            ) : (
-              <ListItemButton
-                onClick={() => toggleSection(section.path)}
-                sx={{ py: 1.5 }}
-              >
-                <ListItemIcon sx={{ minWidth: 40 }}>{section.icon}</ListItemIcon>
-                <ListItemText
-                  primary={section.label}
-                  primaryTypographyProps={{ fontWeight: 600 }}
-                />
-                {expandedSections[section.path] ? <ExpandLess /> : <ExpandMore />}
-              </ListItemButton>
-            )}
 
-            <Collapse in={expandedSections[section.path]} timeout="auto" unmountOnExit>
-              {section.groups.map((group: NavGroup, groupIdx) => (
-                <Box key={groupIdx}>
-                  {'subgroups' in group && group.subgroups ? (
-                    <>
-                      {group.label && (
-                        <Box sx={{ px: 2, pt: 1, pb: 0.25 }}>
-                          <Typography
-                            variant="overline"
-                            sx={{ fontSize: '0.7rem', letterSpacing: 1, color: 'text.secondary', lineHeight: 1 }}
-                          >
-                            {group.label}
-                          </Typography>
-                        </Box>
-                      )}
-                      {group.subgroups.map((subgroup, subIdx) => (
-                        <Box key={subIdx} sx={{ pl: 1 }}>
-                          <Box sx={{ px: 2, pt: 0.75, pb: 0.25 }}>
-                            <Typography
-                              variant="overline"
-                              sx={{ fontSize: '0.6rem', letterSpacing: 1, color: 'text.disabled', lineHeight: 1 }}
-                            >
-                              {subgroup.label}
-                            </Typography>
-                            {'description' in subgroup && subgroup.description && (
-                              <Typography
-                                variant="caption"
-                                color="text.secondary"
-                                sx={{ display: 'block', lineHeight: 1.3, mt: 0.25 }}
-                              >
-                                {subgroup.description}
-                              </Typography>
-                            )}
-                          </Box>
-                          <List disablePadding>
-                            {subgroup.items.map((item) => {
-                              const isActive = location.pathname === item.path
-                              const badgeCount = item.badgeKey ? (queueCounts?.[item.badgeKey] ?? 0) : 0
-                              return (
-                                <ListItemButton
-                                  key={item.path}
-                                  component={Link}
-                                  to={item.path}
-                                  onClick={() => isMobile && setDrawerOpen(false)}
-                                  selected={isActive}
-                                  sx={{
-                                    pl: 3.5,
-                                    pr: 2,
-                                    py: 0.75,
-                                    borderLeft: isActive ? '3px solid' : '3px solid transparent',
-                                    borderColor: isActive ? 'primary.main' : 'transparent',
-                                    gap: 0.5,
-                                  }}
-                                  aria-label={`Navigate to ${item.label}`}
-                                >
-                                  <ListItemIcon sx={{ minWidth: 32, color: isActive ? 'primary.main' : 'text.secondary' }}>
-                                    {item.icon}
-                                  </ListItemIcon>
-                                  <ListItemText
-                                    primary={item.label}
-                                    sx={{ minWidth: 0, flex: '1 1 auto' }}
-                                    primaryTypographyProps={{
-                                      variant: 'body2',
-                                      fontWeight: isActive ? 600 : 400,
-                                      noWrap: true,
-                                      textOverflow: 'ellipsis',
-                                      overflow: 'hidden',
-                                    }}
-                                  />
-                                  {badgeCount > 0 && (
-                                    <Chip
-                                      label={badgeCount}
-                                      size="small"
-                                      color={isActive ? 'default' : 'primary'}
-                                      sx={{
-                                        ml: 0.5,
-                                        height: 18,
-                                        fontSize: '0.65rem',
-                                        minWidth: 24,
-                                        flexShrink: 0,
-                                      }}
-                                    />
-                                  )}
-                                </ListItemButton>
-                              )
-                            })}
-                          </List>
-                        </Box>
-                      ))}
-                    </>
-                  ) : group.items ? (
-                    <>
-                  {/* Optional group label */}
-                  {group.label && (
-                    <Box sx={{ px: 2, pt: 1, pb: 0.25 }}>
-                      <Typography
-                        variant="overline"
-                        sx={{ fontSize: '0.65rem', letterSpacing: 1, color: 'text.disabled', lineHeight: 1 }}
-                      >
-                        {group.label}
-                      </Typography>
-                      {'description' in group && group.description && (
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ display: 'block', lineHeight: 1.3, mt: 0.25 }}
-                        >
-                          {group.description}
-                        </Typography>
-                      )}
-                    </Box>
-                  )}
-                  <List disablePadding>
-                    {group.items.map((item) => {
-                      const isActive = location.pathname === item.path
-                      const badgeCount = item.badgeKey ? (queueCounts?.[item.badgeKey] ?? 0) : 0
-                      return (
-                        <ListItemButton
-                          key={item.path}
-                          component={Link}
-                          to={item.path}
-                          onClick={() => isMobile && setDrawerOpen(false)}
-                          selected={isActive}
-                          sx={{
-                            pl: 4,
-                            pr: 2,
-                            py: 0.75,
-                            borderLeft: isActive ? '3px solid' : '3px solid transparent',
-                            borderColor: isActive ? 'primary.main' : 'transparent',
-                            gap: 0.5,
-                          }}
-                          aria-label={`Navigate to ${item.label}`}
-                        >
-                          <ListItemIcon sx={{ minWidth: 32, color: isActive ? 'primary.main' : 'text.secondary' }}>
-                            {item.icon}
-                          </ListItemIcon>
-                          <ListItemText
-                            primary={item.label}
-                            sx={{ minWidth: 0, flex: '1 1 auto' }}
-                            primaryTypographyProps={{
-                              variant: 'body2',
-                              fontWeight: isActive ? 600 : 400,
-                              noWrap: true,
-                              textOverflow: 'ellipsis',
-                              overflow: 'hidden',
-                            }}
-                          />
-                          {badgeCount > 0 && (
-                            <Chip
-                              label={badgeCount}
-                              size="small"
-                              color={isActive ? 'default' : 'primary'}
-                              sx={{
-                                ml: 0.5,
-                                height: 18,
-                                fontSize: '0.65rem',
-                                minWidth: 24,
-                                flexShrink: 0,
-                              }}
-                            />
-                          )}
-                        </ListItemButton>
-                      )
-                    })}
-                  </List>
-                    </>
-                  ) : null}
-                  {groupIdx < section.groups.length - 1 && (
-                    <Divider sx={{ mx: 2, my: 0.5 }} />
-                  )}
-                </Box>
-              ))}
-            </Collapse>
-            <Divider />
-          </Box>
-        ))}
-      </List>
-      {user?.is_admin && (
-        <List disablePadding data-testid="admin-nav-section">
-          <ListItemButton
-            onClick={() => setAdminNavOpen((open) => !open)}
-            selected={location.pathname.startsWith('/admin')}
-            sx={{
-              py: 1.5,
-              borderLeft: location.pathname.startsWith('/admin') ? '3px solid' : '3px solid transparent',
-              borderColor: location.pathname.startsWith('/admin') ? 'primary.main' : 'transparent',
-            }}
-            aria-label="Toggle Admin navigation"
-            aria-expanded={adminNavOpen}
-          >
-            <ListItemIcon sx={{ minWidth: 40, color: location.pathname.startsWith('/admin') ? 'primary.main' : 'text.secondary' }}>
-              <AdminPanelSettingsIcon />
-            </ListItemIcon>
-            <ListItemText
-              primary="Admin"
-              primaryTypographyProps={{ fontWeight: 600 }}
-            />
-            {adminNavOpen ? <ExpandLess /> : <ExpandMore />}
-          </ListItemButton>
-          <Collapse
-            in={adminNavOpen}
-            timeout="auto"
-            unmountOnExit
-            onEntered={(node) => {
-              // Scroll only the drawer paper — never the document (that hides main content).
-              const paper = node.closest('.MuiDrawer-paper')
-              if (!(paper instanceof HTMLElement)) return
-              const overflow =
-                node.getBoundingClientRect().bottom - paper.getBoundingClientRect().bottom
-              if (overflow > 0) {
-                paper.scrollTop += overflow + 8
-              }
-            }}
-          >
-            <List disablePadding>
-              {[
-                { label: 'Users', path: '/admin' },
-                { label: 'Background Jobs', path: '/admin/background-jobs' },
-                { label: 'Pipeline Stages', path: '/admin/pipeline-stages' },
-              ].map((item) => {
-                const isActive = location.pathname === item.path
-                return (
-                  <ListItemButton
-                    key={item.path}
-                    component={Link}
-                    to={item.path}
-                    onClick={() => isMobile && setDrawerOpen(false)}
-                    selected={isActive}
-                    sx={{
-                      pl: 3.5,
-                      pr: 1.5,
-                      py: 0.75,
-                      borderLeft: isActive ? '3px solid' : '3px solid transparent',
-                      borderColor: isActive ? 'primary.main' : 'transparent',
-                    }}
-                    aria-label={`Navigate to ${item.label}`}
+      {/* Scrollable body: each section is one icon+label row so they stay aligned */}
+      <Box
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          scrollbarWidth: 'thin',
+        }}
+        data-testid="secondary-nav-sections"
+      >
+        {NAV_SECTIONS.map((section) => {
+          const isSelected = selectedSectionPath === section.path
+          // Only expand panels when the secondary column is visible — otherwise open
+          // sub-items (e.g. Home → Activity Goals) inflate row height and leave a gap
+          // between icons in the collapsed rail.
+          const isExpanded = secondaryNavExpanded && openAccordionPath === section.path
+          return (
+            <Box
+              key={section.path}
+              sx={{ display: 'flex', flexDirection: 'row', flexShrink: 0, alignItems: 'flex-start' }}
+            >
+              <Box
+                sx={{
+                  width: ICON_RAIL_WIDTH,
+                  minWidth: ICON_RAIL_WIDTH,
+                  flexShrink: 0,
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  justifyContent: 'center',
+                  bgcolor: ICON_RAIL_BG,
+                  borderRight: secondaryNavExpanded ? '1px solid' : 'none',
+                  borderColor: 'divider',
+                  alignSelf: 'stretch',
+                }}
+              >
+                <Tooltip title={section.label} placement="right" arrow>
+                  <IconButton
+                    onClick={() => handleSectionIconClick(section)}
+                    aria-label={`${section.label} section`}
+                    aria-current={isSelected ? 'page' : undefined}
+                    data-testid={
+                      section.path === HOME_PATH
+                        ? 'home-nav-icon'
+                        : `nav-section-icon${section.path.replace(/\//g, '-')}`
+                    }
+                    sx={railIconButtonSx(isSelected)}
                   >
-                    <ListItemText
-                      primary={item.label}
-                      primaryTypographyProps={{
-                        variant: 'body2',
-                        fontWeight: isActive ? 600 : 400,
+                    {section.icon}
+                  </IconButton>
+                </Tooltip>
+              </Box>
+              <Box
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  width: secondaryNavExpanded ? SECONDARY_NAV_WIDTH : 0,
+                  overflow: 'hidden',
+                  bgcolor: SECONDARY_NAV_BG,
+                  opacity: secondaryNavExpanded ? 1 : 0,
+                  pointerEvents: secondaryNavExpanded ? 'auto' : 'none',
+                  transition: theme.transitions.create(['width', 'opacity'], {
+                    easing: NAV_RAIL_EASING,
+                    duration: NAV_RAIL_TRANSITION_MS,
+                  }),
+                }}
+              >
+                <Accordion
+                  disableGutters
+                  elevation={0}
+                  expanded={isExpanded}
+                  TransitionProps={{ unmountOnExit: true }}
+                  onChange={(_, next) => handleAccordionChange(section.path, next)}
+                  data-testid={`nav-section-accordion-${section.path.replace(/\//g, '-') || 'root'}`}
+                  sx={accordionSx}
+                >
+                  <AccordionSummary
+                    expandIcon={<ExpandMoreIcon sx={{ fontSize: 20, color: 'text.secondary' }} />}
+                    aria-controls={`nav-section-panel-${section.path}`}
+                    id={`nav-section-header-${section.path}`}
+                    sx={accordionSummarySx}
+                  >
+                    <Typography
+                      variant="subtitle2"
+                      sx={{
+                        fontWeight: isSelected || isExpanded ? 700 : 600,
+                        color: isSelected ? NAV_ICON_SELECTED : 'text.primary',
+                        lineHeight: 1.3,
                       }}
-                    />
-                  </ListItemButton>
-                )
-              })}
-            </List>
-          </Collapse>
-        </List>
-      )}
+                    >
+                      {section.label}
+                    </Typography>
+                  </AccordionSummary>
+                  <AccordionDetails sx={{ p: 0, pb: 0.75 }}>
+                    {renderSecondaryNavItems(section.groups)}
+                  </AccordionDetails>
+                </Accordion>
+              </Box>
+            </Box>
+          )
+        })}
+
+        {/* Fill remaining height so the rail is one continuous surface (no white void). */}
+        <Box
+          aria-hidden
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'row',
+            bgcolor: ICON_RAIL_BG,
+          }}
+        >
+          <Box
+            sx={{
+              width: ICON_RAIL_WIDTH,
+              minWidth: ICON_RAIL_WIDTH,
+              flexShrink: 0,
+              bgcolor: ICON_RAIL_BG,
+              borderRight: secondaryNavExpanded ? '1px solid' : 'none',
+              borderColor: 'divider',
+            }}
+          />
+          <Box
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              width: secondaryNavExpanded ? SECONDARY_NAV_WIDTH : 0,
+              bgcolor: SECONDARY_NAV_BG,
+              opacity: secondaryNavExpanded ? 1 : 0,
+              transition: theme.transitions.create(['width', 'opacity'], {
+                easing: NAV_RAIL_EASING,
+                duration: NAV_RAIL_TRANSITION_MS,
+              }),
+            }}
+          />
+        </Box>
+
+        {user?.is_admin ? (
+          <Box sx={{ display: 'flex', flexDirection: 'row', flexShrink: 0, alignItems: 'flex-start' }}>
+            <Box
+              sx={{
+                width: ICON_RAIL_WIDTH,
+                minWidth: ICON_RAIL_WIDTH,
+                flexShrink: 0,
+                display: 'flex',
+                alignItems: 'flex-start',
+                justifyContent: 'center',
+                bgcolor: ICON_RAIL_BG,
+                borderRight: secondaryNavExpanded ? '1px solid' : 'none',
+                borderColor: 'divider',
+                alignSelf: 'stretch',
+              }}
+            >
+              <Tooltip title="Admin" placement="right" arrow>
+                <IconButton
+                  onClick={handleAdminIconClick}
+                  aria-label="Admin"
+                  aria-current={selectedSectionPath === ADMIN_SECTION_KEY ? 'page' : undefined}
+                  data-testid="admin-nav-icon"
+                  sx={railIconButtonSx(selectedSectionPath === ADMIN_SECTION_KEY)}
+                >
+                  <AdminPanelSettingsIcon />
+                </IconButton>
+              </Tooltip>
+            </Box>
+            <Box
+              sx={{
+                flex: 1,
+                minWidth: 0,
+                width: secondaryNavExpanded ? SECONDARY_NAV_WIDTH : 0,
+                overflow: 'hidden',
+                bgcolor: SECONDARY_NAV_BG,
+                opacity: secondaryNavExpanded ? 1 : 0,
+                pointerEvents: secondaryNavExpanded ? 'auto' : 'none',
+                transition: theme.transitions.create(['width', 'opacity'], {
+                  easing: NAV_RAIL_EASING,
+                  duration: NAV_RAIL_TRANSITION_MS,
+                }),
+              }}
+            >
+              <Accordion
+                disableGutters
+                elevation={0}
+                expanded={secondaryNavExpanded && openAccordionPath === ADMIN_SECTION_KEY}
+                TransitionProps={{ unmountOnExit: true }}
+                onChange={(_, next) => handleAccordionChange(ADMIN_SECTION_KEY, next)}
+                data-testid="nav-section-accordion-admin"
+                sx={accordionSx}
+              >
+                <AccordionSummary
+                  expandIcon={<ExpandMoreIcon sx={{ fontSize: 20, color: 'text.secondary' }} />}
+                  sx={accordionSummarySx}
+                >
+                  <Typography
+                    variant="subtitle2"
+                    sx={{
+                      fontWeight: selectedSectionPath === ADMIN_SECTION_KEY ? 700 : 600,
+                      color:
+                        selectedSectionPath === ADMIN_SECTION_KEY
+                          ? NAV_ICON_SELECTED
+                          : 'text.primary',
+                    }}
+                  >
+                    Admin
+                  </Typography>
+                </AccordionSummary>
+                <AccordionDetails sx={{ p: 0, pb: 0.75 }} data-testid="admin-nav-section">
+                  <List disablePadding>
+                    {ADMIN_NAV_ITEMS.map((item) => renderNavLeafItem(item))}
+                  </List>
+                </AccordionDetails>
+              </Accordion>
+            </Box>
+          </Box>
+        ) : null}
+      </Box>
     </Box>
   )
 
@@ -1737,27 +2065,63 @@ function App() {
       {/* App Bar */}
       <AppBar
         position="fixed"
+        elevation={0}
         sx={{
           zIndex: theme.zIndex.drawer + 1,
+          bgcolor: 'background.paper',
+          color: 'text.primary',
+          borderBottom: '1px solid',
+          borderColor: 'divider',
         }}
       >
-        <Toolbar>
+        <Toolbar
+          sx={{
+            px: { xs: 1.5, sm: 2.5 },
+            minHeight: { xs: 56, sm: 64 },
+            gap: { xs: 1, sm: 2 },
+          }}
+        >
           {isMobile && (
             <IconButton
               color="inherit"
               edge="start"
               onClick={toggleDrawer}
-              sx={{ mr: 2 }}
+              sx={{ mr: 0.5 }}
               aria-label="Open navigation menu"
             >
               <MenuIcon />
             </IconButton>
           )}
-          <Typography variant="h6" component="h1" noWrap sx={{ flexGrow: 0, mr: 2 }}>
+          <Typography
+            variant="h6"
+            component={Link}
+            to={HOME_PATH}
+            noWrap
+            data-testid="app-home-title"
+            aria-label="Real Estate Analysis Platform — go to home"
+            sx={{
+              flexShrink: 0,
+              fontSize: { xs: '1rem', sm: '1.15rem' },
+              fontWeight: 700,
+              display: { xs: 'none', sm: 'block' },
+              color: 'inherit',
+              textDecoration: 'none',
+              '&:hover': { opacity: 0.85 },
+            }}
+          >
             Real Estate Analysis Platform
           </Typography>
-          <GlobalSearchBar />
-          <Box sx={{ flexGrow: 1 }} />
+          <Box
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              maxWidth: { xs: '100%', md: 560 },
+              mx: { xs: 0, sm: 1 },
+            }}
+          >
+            <GlobalSearchBar />
+          </Box>
+          <Box sx={{ flexGrow: { xs: 0, md: 1 }, minWidth: 0 }} />
           {pipelineStatus?.pipeline_running && (
             <Tooltip
               title={
@@ -1808,11 +2172,13 @@ function App() {
             sx={{
               width: 40,
               height: 40,
-              border: '2px solid rgba(255,255,255,0.7)',
+              border: '2px solid',
+              borderColor: 'divider',
+              bgcolor: 'action.hover',
               cursor: 'pointer',
               transition: 'transform 0.2s',
-              '&:hover': { transform: 'scale(1.1)' },
-              '&:focus-visible': { outline: '3px solid rgba(255,255,255,0.8)', outlineOffset: '2px' },
+              '&:hover': { transform: 'scale(1.05)' },
+              '&:focus-visible': { outline: '3px solid', outlineColor: 'primary.main', outlineOffset: '2px' },
             }}
             aria-label="Open user menu"
             aria-haspopup="true"
@@ -1874,7 +2240,21 @@ function App() {
           onClose={toggleDrawer}
           ModalProps={{ keepMounted: true }}
           sx={{
-            '& .MuiDrawer-paper': { width: DRAWER_WIDTH, overflowX: 'hidden' },
+            '& .MuiDrawer-paper': {
+              width: drawerWidth,
+              display: 'flex',
+              flexDirection: 'column',
+              height: '100%',
+              maxHeight: '100%',
+              overflow: 'hidden',
+              overflowX: 'hidden',
+              bgcolor: ICON_RAIL_BG,
+              backgroundImage: 'none',
+              transition: theme.transitions.create('width', {
+                easing: NAV_RAIL_EASING,
+                duration: NAV_RAIL_TRANSITION_MS,
+              }),
+            },
           }}
         >
           {drawerContent}
@@ -1883,33 +2263,33 @@ function App() {
         <Drawer
           variant="permanent"
           sx={{
-            width: DRAWER_WIDTH,
-            minWidth: DRAWER_WIDTH,
+            width: drawerWidth,
+            minWidth: drawerWidth,
             flexShrink: 0,
+            transition: theme.transitions.create(['width', 'min-width'], {
+              easing: NAV_RAIL_EASING,
+              duration: NAV_RAIL_TRANSITION_MS,
+            }),
             '& .MuiDrawer-paper': {
-              width: DRAWER_WIDTH,
-              minWidth: DRAWER_WIDTH,
+              width: drawerWidth,
+              minWidth: drawerWidth,
               boxSizing: 'border-box',
-              // Stay in document flow; scroll the rail itself so expanding Admin
-              // at the bottom does not push short admin pages off-screen.
-              // Do NOT use scrollbarGutter:stable — it permanently steals width
-              // and clips queue-count chips (regression of #131).
-              // Thin overlay-style scrollbar + 312px paper keeps chips visible.
               position: 'relative',
+              display: 'flex',
+              flexDirection: 'column',
               height: '100vh',
               maxHeight: '100vh',
-              overflowX: 'hidden',
-              overflowY: 'auto',
-              scrollbarWidth: 'thin',
-              '&::-webkit-scrollbar': { width: 8 },
-              '&::-webkit-scrollbar-thumb': {
-                backgroundColor: 'rgba(0,0,0,0.25)',
-                borderRadius: 4,
-              },
+              overflow: 'hidden',
+              bgcolor: ICON_RAIL_BG,
+              backgroundImage: 'none',
+              transition: theme.transitions.create(['width', 'min-width'], {
+                easing: NAV_RAIL_EASING,
+                duration: NAV_RAIL_TRANSITION_MS,
+              }),
             },
           }}
         >
-          <Toolbar /> {/* Spacer for AppBar */}
+          <Toolbar sx={{ flexShrink: 0 }} /> {/* Spacer for AppBar */}
           {drawerContent}
         </Drawer>
       )}
@@ -1923,9 +2303,17 @@ function App() {
           minWidth: 0,
           maxWidth: '100%',
           overflowX: 'hidden',
-          p: { xs: 1, sm: 3 },
+          // Tighter under AppBar so first content (e.g. Work queues) sits higher.
+          // Horizontal padding lives here only — page shells should not add another px layer.
+          pt: { xs: 0.5, sm: 1.5 },
+          px: { xs: 1, sm: 3 },
+          pb: { xs: 1, sm: 3 },
           mt: '64px', // AppBar height
-          width: { xs: '100%', md: `calc(100% - ${DRAWER_WIDTH}px)` },
+          width: { xs: '100%', md: `calc(100% - ${drawerWidth}px)` },
+          transition: theme.transitions.create('width', {
+            easing: NAV_RAIL_EASING,
+            duration: NAV_RAIL_TRANSITION_MS,
+          }),
         }}
       >
         <BackendRuntimeGuard />

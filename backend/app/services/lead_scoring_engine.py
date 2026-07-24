@@ -24,6 +24,7 @@ from app.models.lead_timeline_entry import LeadTimelineEntry
 from app.models.lead_crm_flags_view import LeadCRMFlagsView
 from app.services import scoring_rubric as rubric
 from app.services.open_letter_contact_mapper import (
+    current_owner_mailing_was_returned,
     is_owner_mailable_lead,
     persist_embedded_address_fields,
 )
@@ -565,6 +566,31 @@ class LeadScoringEngine:
             }
 
         if lead.lead_status == 'skip_trace':
+            # Returned / USPS-failed owner mailing is not "no contact" — prefer phone/email.
+            if current_owner_mailing_was_returned(lead):
+                has_phone_r, has_email_r, _has_match_r = _resolve_crm_flags(lead)
+                returned_signals = {
+                    'lead_status': lead.lead_status,
+                    'requires_skip_trace': True,
+                    'owner_mailing_returned': True,
+                }
+                if has_phone_r:
+                    return (
+                        'call_ready',
+                        'owner_mailing_returned',
+                        {**returned_signals, 'has_phone': True, 'has_email': has_email_r},
+                    )
+                if has_email_r:
+                    return (
+                        'ready_for_outreach',
+                        'owner_mailing_returned',
+                        {**returned_signals, 'has_phone': False, 'has_email': True},
+                    )
+                return (
+                    'add_contact_info',
+                    'owner_mailing_returned',
+                    {**returned_signals, 'has_phone': False, 'has_email': False},
+                )
             # Residential leads with a mailing address fall through to score/mail
             # rules; commercial and address-less skip-trace still need contact work.
             if _is_commercial_lead(lead) or not _has_mailing_address(lead):

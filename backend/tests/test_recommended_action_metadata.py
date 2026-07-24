@@ -4,8 +4,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.services.recommended_action_metadata import (
+    OWNER_MAILING_RETURNED_NO_CONTACT_EXPLANATION,
+    OWNER_MAILING_RETURNED_WITH_CONTACT_EXPLANATION,
     RECENT_SALE_OUTDATED_CONTACT_EXPLANATION,
     get_recommended_action_display,
+    get_winning_rule_label,
 )
 
 
@@ -71,3 +74,25 @@ def test_enrich_data_recently_sold_uses_confirm_new_owner_label():
 def test_enrich_data_without_recently_sold_keeps_generic_label():
     display = get_recommended_action_display('enrich_data')
     assert display['label'] == 'Enrich Data'
+
+
+def test_owner_mailing_returned_with_phone_explains_usps_not_missing_contact():
+    display = get_recommended_action_display(
+        'call_ready',
+        contact_method='phone',
+        winning_rule='owner_mailing_returned',
+    )
+    assert display['explanation'] == OWNER_MAILING_RETURNED_WITH_CONTACT_EXPLANATION
+    assert 'No reachable contact method' not in (display['explanation'] or '')
+    assert get_winning_rule_label('owner_mailing_returned')
+    assert 'USPS' in get_winning_rule_label('owner_mailing_returned')
+
+
+def test_owner_mailing_returned_without_digital_avoids_generic_no_contact_copy():
+    display = get_recommended_action_display(
+        'add_contact_info',
+        winning_rule='owner_mailing_returned',
+    )
+    assert display['explanation'] == OWNER_MAILING_RETURNED_NO_CONTACT_EXPLANATION
+    assert 'No reachable contact method' not in (display['explanation'] or '')
+

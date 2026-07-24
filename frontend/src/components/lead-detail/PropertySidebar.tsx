@@ -33,6 +33,7 @@ import {
   isSaleDateVerifiedWithinDays,
 } from '@/utils/saleDateFreshness'
 import { formatCookCountyPin } from '@/utils/cookCountyPin'
+import { looksLikePhoneNumber } from '@/utils/phone'
 import { commandCenterService, leadTaskService } from '@/services/api'
 import { propertyMatchService } from '@/services/propertyMatchApi'
 import {
@@ -270,12 +271,24 @@ export interface PropertySidebarProps {
   variant?: 'sidebar' | 'inline'
   /** Jump to Info tab sale-history table. */
   onViewSaleHistory?: () => void
+  /** Hide Contact Info when Key Contact card is shown. */
+  hideContactSection?: boolean
+  /** Collapse non-contact sections into a secondary accordion. */
+  collapseSecondary?: boolean
+  /**
+   * When variant=sidebar, whether the Paper sticks while scrolling.
+   * Default false — Key Contact card owns sticky on the Command Center right rail.
+   */
+  sticky?: boolean
 }
 
 export function PropertySidebar({
   commandCenterData,
   variant = 'sidebar',
   onViewSaleHistory,
+  hideContactSection = false,
+  collapseSecondary = false,
+  sticky = false,
 }: PropertySidebarProps) {
   const queryClient = useQueryClient()
   const [saleVerifyPending, setSaleVerifyPending] = useState(false)
@@ -348,7 +361,7 @@ export function PropertySidebar({
     commandCenterData.organizations,
   )
 
-  const phones: LeadPhone[] = useContacts
+  const rawPhones: LeadPhone[] = useContacts
     ? contacts.flatMap((c) => c.phones ?? [])
     : data.phones?.length
       ? data.phones
@@ -364,7 +377,7 @@ export function PropertySidebar({
           .filter(Boolean)
           .map((value) => ({ value: value as string, confidence_score: 50 }))
 
-  const emails: string[] = useContacts
+  const rawEmails: string[] = useContacts
     ? contacts.flatMap((c) => (c.emails ?? []).map((e) => e.value).filter(Boolean))
     : data.emails?.length
       ? data.emails
@@ -375,6 +388,24 @@ export function PropertySidebar({
           commandCenterData.email_4,
           commandCenterData.email_5,
         ].filter(Boolean) as string[]
+
+  // Misfiled phone numbers in email slots (e.g. lead 634 email_1) render as phones.
+  const phones: LeadPhone[] = [...rawPhones]
+  const emails: string[] = []
+  const seenPhoneKeys = new Set(
+    rawPhones.map((p) => (p.value || '').replace(/\D/g, '')).filter(Boolean),
+  )
+  for (const e of rawEmails) {
+    if (looksLikePhoneNumber(e)) {
+      const key = e.replace(/\D/g, '')
+      if (key && !seenPhoneKeys.has(key)) {
+        seenPhoneKeys.add(key)
+        phones.push({ value: e, confidence_score: 50 })
+      }
+      continue
+    }
+    emails.push(e)
+  }
 
   const marketingMemberships = data.marketing_memberships
 
@@ -644,6 +675,7 @@ export function PropertySidebar({
   )
   const sections = (
     <SidebarStackedContext.Provider value={stacked}>
+      {!hideContactSection && (
       <SidebarSection title="Contact Info">
         {contactsLikelyPriorOwner ? (
           <PriorOwnerStaleOverlay
@@ -667,6 +699,40 @@ export function PropertySidebar({
           </Typography>
         )}
       </SidebarSection>
+      )}
+      <Box
+        component={collapseSecondary ? Accordion : 'div'}
+        {...(collapseSecondary
+          ? {
+              defaultExpanded: false,
+              disableGutters: true,
+              elevation: 0,
+              'data-testid': 'sidebar-secondary-accordion',
+              sx: {
+                bgcolor: 'transparent',
+                boxShadow: 'none',
+                '&:before': { display: 'none' },
+              },
+            }
+          : {})}
+      >
+        {collapseSecondary ? (
+          <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ px: 0, minHeight: 40 }}>
+            <Typography variant="subtitle2" fontWeight={700}>
+              More property details
+            </Typography>
+          </AccordionSummary>
+        ) : null}
+        <Box
+          {...(collapseSecondary
+            ? {
+                component: AccordionDetails,
+                sx: { px: 0, pt: 0 },
+              }
+            : {
+                component: 'div',
+              })}
+        >
 
       {commandCenterData.ownership_type && (
         <SidebarSection title="Owner">
@@ -1192,6 +1258,8 @@ export function PropertySidebar({
           </>
         )}
       </SidebarSection>
+        </Box>
+      </Box>
     </SidebarStackedContext.Provider>
   )
 
@@ -1207,6 +1275,7 @@ export function PropertySidebar({
 
   if (variant === 'inline') {
     const ownerSummary = ownerEntries[0]?.name
+    const sectionTitle = hideContactSection ? 'More property details' : 'Property & contacts'
     return (
       <>
         <Accordion
@@ -1215,8 +1284,7 @@ export function PropertySidebar({
           data-testid="property-sidebar-mobile"
           sx={{
             ...ccCardSx,
-            mb: 2,
-            display: { xs: 'block', lg: 'none' },
+            mb: 0,
             '&:before': { display: 'none' },
           }}
         >
@@ -1226,7 +1294,7 @@ export function PropertySidebar({
             id="property-contacts-header"
           >
             <Box sx={{ minWidth: 0 }}>
-              <Typography fontWeight={600}>Property & contacts</Typography>
+              <Typography fontWeight={600}>{sectionTitle}</Typography>
               {ownerSummary ? (
                 <Typography variant="caption" color="text.secondary" noWrap display="block">
                   {ownerSummary}
@@ -1248,12 +1316,15 @@ export function PropertySidebar({
         sx={{
           ...ccCardSx,
           mb: 0,
-          position: 'sticky',
-          top: 80,
-          display: { xs: 'none', sm: 'none', md: 'none', lg: 'block' },
-          minWidth: 340,
-          maxWidth: 400,
+          width: '100%',
+          maxWidth: '100%',
           flexShrink: 0,
+          ...(sticky
+            ? {
+                position: 'sticky',
+                top: 80,
+              }
+            : {}),
         }}
       >
         {sections}

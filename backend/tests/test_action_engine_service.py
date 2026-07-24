@@ -168,6 +168,53 @@ def test_priority_2_5_fires_before_follow_up_overdue():
     assert result == 'add_contact_info'
 
 
+def test_skip_trace_returned_mailing_with_phone_returns_call_ready():
+    """USPS/returned owner mailing + phone → call_ready, not false 'no contact'."""
+    lead = make_lead(lead_status='skip_trace', has_phone=True, has_email=True)
+    lead.mailing_address = '9719 LAVELL AVE'
+    lead.mailing_city = 'SKOKIE'
+    lead.mailing_state = 'IL'
+    lead.mailing_zip = '60076'
+    lead.returned_addresses = '9719 LAVELL AVE, SKOKIE, IL 60076'
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
+        action, rule, signals = LeadScoringEngine.evaluate_recommended_action(
+            lead, 50.0, 60.0, 'C',
+        )
+    assert action == 'call_ready'
+    assert rule == 'owner_mailing_returned'
+    assert signals.get('owner_mailing_returned') is True
+
+
+def test_skip_trace_returned_mailing_email_only_returns_ready_for_outreach():
+    lead = make_lead(lead_status='skip_trace', has_phone=False, has_email=True)
+    lead.mailing_address = '9719 LAVELL AVE'
+    lead.mailing_city = 'SKOKIE'
+    lead.mailing_state = 'IL'
+    lead.mailing_zip = '60076'
+    lead.returned_addresses = '9719 LAVELL AVE, SKOKIE, IL 60076'
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
+        action, rule, _signals = LeadScoringEngine.evaluate_recommended_action(
+            lead, 50.0, 60.0, 'C',
+        )
+    assert action == 'ready_for_outreach'
+    assert rule == 'owner_mailing_returned'
+
+
+def test_skip_trace_returned_mailing_no_digital_keeps_add_contact_with_returned_rule():
+    lead = make_lead(lead_status='skip_trace', has_phone=False, has_email=False)
+    lead.mailing_address = '9719 LAVELL AVE'
+    lead.mailing_city = 'SKOKIE'
+    lead.mailing_state = 'IL'
+    lead.mailing_zip = '60076'
+    lead.returned_addresses = '9719 LAVELL AVE, SKOKIE, IL 60076'
+    with patch('app.services.lead_scoring_engine._count_open_tasks', return_value=0):
+        action, rule, _signals = LeadScoringEngine.evaluate_recommended_action(
+            lead, 50.0, 60.0, 'C',
+        )
+    assert action == 'add_contact_info'
+    assert rule == 'owner_mailing_returned'
+
+
 # ---------------------------------------------------------------------------
 # Priority 3: no phone AND no email → add_contact_info
 # ---------------------------------------------------------------------------

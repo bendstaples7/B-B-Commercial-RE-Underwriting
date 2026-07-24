@@ -31,8 +31,8 @@ describe('ScoreBreakdownDialog', () => {
     )
 
     expect(screen.getByTestId('score-breakdown-dialog')).toBeInTheDocument()
-    expect(screen.getByText('Unit Count Fit')).toBeInTheDocument()
-    expect(screen.getByText('Absentee Owner')).toBeInTheDocument()
+    expect(screen.getByText('Ideal unit count')).toBeInTheDocument()
+    expect(screen.getByText('Absentee owner')).toBeInTheDocument()
 
     await user.click(screen.getByTestId('score-breakdown-done'))
     expect(onClose).toHaveBeenCalled()

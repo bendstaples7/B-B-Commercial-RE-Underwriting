@@ -891,4 +891,42 @@ describe('LeadTimeline', () => {
       }
     })
   })
+
+  describe('Activity Feed variant', () => {
+    it('uses feed chrome and plain Show More Activity copy', () => {
+      const entries = Array.from({ length: 8 }, (_, i) => makeEntry(i + 1))
+
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={entries}
+          initialTotal={8}
+          variant="feed"
+          onLoadMore={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('lead-timeline')).toHaveAttribute('data-variant', 'feed')
+      expect(screen.getByTestId('timeline-show-older-btn')).toHaveTextContent('Show More Activity')
+      expect(screen.getByTestId('timeline-show-older-btn')).not.toHaveTextContent('more)')
+    })
+
+    it('load-more button uses Show More Activity without remaining count', async () => {
+      const onLoadMore = vi.fn().mockResolvedValue({ entries: [makeEntry(3)], total: 4 })
+      render(
+        <LeadTimeline
+          leadId={1}
+          initialEntries={[makeEntry(1), makeEntry(2)]}
+          initialTotal={4}
+          variant="feed"
+          onLoadMore={onLoadMore}
+        />,
+      )
+
+      expect(screen.getByTestId('load-more-btn')).toHaveTextContent('Show More Activity')
+      expect(screen.getByTestId('load-more-btn')).not.toHaveTextContent('remaining')
+      await userEvent.click(screen.getByTestId('load-more-btn'))
+      await waitFor(() => expect(onLoadMore).toHaveBeenCalledWith(2))
+    })
+  })
 })

@@ -94,6 +94,7 @@ function makeCommandCenterPayload(
     property_street: '456 Oak Ave',
     property_city: 'Naperville',
     property_state: 'IL',
+    property_zip: '60540',
     lead_score: 82,
     lead_status: 'mailing_no_contact_made',
     has_property_match: false,
@@ -302,11 +303,23 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     expect(tabs[5]).toHaveTextContent('Contacts')
   })
 
-  it('renders the property sidebar', async () => {
+  it('renders the property sidebar (mobile accordion below lg)', async () => {
     renderComponent()
     await waitFor(() => {
-      expect(screen.getByTestId('property-sidebar')).toBeInTheDocument()
+      expect(screen.getByTestId('property-sidebar-mobile')).toBeInTheDocument()
     })
+    expect(screen.queryByTestId('property-sidebar')).not.toBeInTheDocument()
+  })
+
+  it('renders Key Contact, Action Center tiles, and Deep Dive Details', async () => {
+    renderComponent()
+    await waitFor(() => {
+      expect(screen.getByTestId('key-contact-card')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('action-center-tiles')).toBeInTheDocument()
+    expect(screen.getByTestId('deep-dive-details')).toBeInTheDocument()
+    expect(screen.getByTestId('property-kpi-card')).toBeInTheDocument()
+    expect(screen.getByTestId('lead-briefing-ai-badge')).toBeInTheDocument()
   })
 
   it('renders work-queue membership chips without alert banners', async () => {
@@ -333,13 +346,79 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     expect(screen.queryByTestId('work-queue-banner-follow-up-overdue')).not.toBeInTheDocument()
   })
 
-  it('shows the primary owner under the property address in the sticky header', async () => {
+  it('shows a tight Property Overview header with address, owner link, status, quick stats, and score panel', async () => {
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        units: 3,
+        property_type: 'triplex',
+        assessed_value: 520000,
+        most_recent_sale_price: 310000,
+        most_recent_sale_display: '1993-04-15',
+        county_assessor_pin: '14211234560000',
+        lead_score: 87,
+      }),
+    )
     renderComponent()
     await waitFor(() => {
-      expect(screen.getByTestId('sticky-header-address')).toBeInTheDocument()
+      expect(screen.getByTestId('property-overview-address')).toBeInTheDocument()
     })
-    expect(screen.getByTestId('sticky-header-address')).toHaveTextContent('456 Oak Ave')
-    expect(screen.getByTestId('sticky-header-owner')).toHaveTextContent('Jane Doe')
+    expect(screen.getByTestId('property-overview-address')).toHaveTextContent('456 Oak Ave, Naperville, IL 60540')
+    expect(screen.getByTestId('property-overview-owner-link')).toHaveTextContent('Jane Doe')
+    expect(screen.getByTestId('property-overview-pin')).toHaveTextContent(/Parcel ID \/ PIN/)
+    expect(screen.getByTestId('property-overview-badges')).toBeInTheDocument()
+    expect(screen.queryByTestId('property-overview-units-chip')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('property-type-chip')).not.toBeInTheDocument()
+    expect(screen.getByTestId('property-overview-quick-stats')).toBeInTheDocument()
+    expect(screen.getByTestId('quick-stat-est-value')).toHaveTextContent('$520,000')
+    expect(screen.queryByTestId('quick-stat-est-rent')).not.toBeInTheDocument()
+    expect(screen.getByTestId('quick-stat-last-sale')).toHaveTextContent('$310,000')
+    expect(screen.getByTestId('quick-stat-last-sale')).toHaveTextContent(/1993|04/)
+    expect(screen.getByTestId('quick-stat-units-details')).toHaveTextContent(/3 Units/)
+    expect(screen.getByTestId('header-lead-score')).toBeInTheDocument()
+    expect(screen.getByTestId('header-lead-score')).toHaveTextContent('87')
+  })
+
+  it('focuses Key Contact from the owner link', async () => {
+    const user = userEvent.setup()
+    const scrollIntoView = vi.fn()
+    const originalScroll = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = scrollIntoView as typeof Element.prototype.scrollIntoView
+    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus')
+    try {
+      vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+        makeCommandCenterPayload({ units: 2 }),
+      )
+      renderComponent()
+      await waitFor(() => {
+        expect(screen.getByTestId('property-overview-owner-link')).toBeInTheDocument()
+      })
+      await waitFor(() => {
+        expect(screen.getByTestId('key-contact-card')).toBeInTheDocument()
+      })
+      await user.click(screen.getByTestId('property-overview-owner-link'))
+      expect(scrollIntoView).toHaveBeenCalled()
+      expect(focusSpy).toHaveBeenCalled()
+    } finally {
+      Element.prototype.scrollIntoView = originalScroll
+      focusSpy.mockRestore()
+    }
+  })
+
+  it('omits PIN when missing and keeps units only in quick stats', async () => {
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        county_assessor_pin: null,
+        units: null,
+        property_type: 'duplex',
+      }),
+    )
+    renderComponent()
+    await waitFor(() => {
+      expect(screen.getByTestId('property-overview-address')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('property-overview-pin')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('property-overview-units-chip')).not.toBeInTheDocument()
+    expect(screen.getByTestId('quick-stat-units-details')).toHaveTextContent(/Duplex/)
   })
 
   it('renders the activity panel', async () => {
@@ -471,10 +550,10 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
     try {
       renderComponent()
       await waitFor(() => {
-        expect(screen.getByTestId('ra-universal-btn-log_note')).toBeInTheDocument()
+        expect(screen.getByTestId('action-center-tile-log_note')).toBeInTheDocument()
       })
 
-      await user.click(screen.getByTestId('ra-universal-btn-log_note'))
+      await user.click(screen.getByTestId('action-center-tile-log_note'))
 
       expect(screen.getByTestId('log-activity-modal-note')).toBeInTheDocument()
       expect(scrollIntoViewMock).not.toHaveBeenCalled()
@@ -525,7 +604,7 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
     try {
       renderComponent()
       await user.click(
-        await screen.findByTestId('ra-universal-btn-move_to_skip_trace'),
+        await screen.findByTestId('action-center-tile-move_to_skip_trace'),
       )
 
       expect(commandCenterService.moveToSkipTrace).toHaveBeenCalledWith(1, 17)
@@ -583,7 +662,7 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
 
     renderComponent()
     await user.click(
-      await screen.findByTestId('ra-universal-btn-move_to_skip_trace'),
+      await screen.findByTestId('action-center-tile-move_to_skip_trace'),
     )
 
     expect(commandCenterService.moveToSkipTrace).toHaveBeenCalledWith(1, undefined)
@@ -625,7 +704,7 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
 
     renderComponent()
     await user.click(
-      await screen.findByTestId('ra-universal-btn-move_to_skip_trace'),
+      await screen.findByTestId('action-center-tile-move_to_skip_trace'),
     )
 
     expect(commandCenterService.moveToSkipTrace).toHaveBeenCalledWith(1, 188)
@@ -661,7 +740,7 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
 
     renderComponent()
     await user.click(
-      await screen.findByTestId('ra-universal-btn-move_to_skip_trace'),
+      await screen.findByTestId('action-center-tile-move_to_skip_trace'),
     )
 
     expect(
@@ -688,12 +767,12 @@ describe('UnifiedLeadCommandCenter — activity logging modals', () => {
     renderComponent()
 
     await waitFor(() => {
-      expect(screen.getByTestId('ra-universal-btn-log_note')).toBeInTheDocument()
+      expect(screen.getByTestId('action-center-tile-log_note')).toBeInTheDocument()
     })
 
     expect(screen.queryByTestId('activity-log-actions')).not.toBeInTheDocument()
 
-    await user.click(screen.getByTestId('ra-universal-btn-log_note'))
+    await user.click(screen.getByTestId('action-center-tile-log_note'))
     await user.type(screen.getByTestId('note-body-input'), 'Followed up with owner')
     await user.click(screen.getByTestId('note-save-btn'))
 
@@ -761,173 +840,99 @@ describe('UnifiedLeadCommandCenter — back button', () => {
 })
 
 // ---------------------------------------------------------------------------
-// 4. Sidebar hidden below lg breakpoint
+// 4. Contact / secondary surfaces (card redesign)
 // ---------------------------------------------------------------------------
 
-describe('UnifiedLeadCommandCenter — sidebar responsive visibility', () => {
-  it('applies display sx prop that hides the sidebar below the lg breakpoint', async () => {
+describe('UnifiedLeadCommandCenter — contact and secondary surfaces', () => {
+  it('shows Key Contact as the single outreach surface (no RA/task inline contact)', async () => {
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        recommended_action: {
+          value: 'call_ready',
+          recommended_contact_method: 'phone',
+          label: 'Call Now',
+          explanation: 'Ready for phone outreach.',
+          signals: {},
+        },
+        phones: [{ value: '(630) 202-3839', confidence_score: 80 }],
+        open_tasks: [
+          {
+            id: 99,
+            lead_id: 1,
+            task_type: 'custom',
+            title: 'Follow up with Gilberto Olivares',
+            status: 'open',
+            due_date: '2026-06-30',
+            created_at: '2026-01-01T00:00:00Z',
+            completed_at: null,
+            created_by: 'HubSpot',
+            source: 'hubspot',
+          },
+        ],
+      }),
+    )
+
     renderComponent()
 
     await waitFor(() => {
-      expect(screen.getByTestId('property-sidebar')).toBeInTheDocument()
+      expect(screen.getByTestId('key-contact-card')).toBeInTheDocument()
     })
 
-    const sidebar = screen.getByTestId('property-sidebar')
-
-    // The sidebar must carry the MUI sx responsive display rule.
-    // We inspect the inline style OR the class to verify the MUI sx prop was applied.
-    // The UnifiedLeadCommandCenter design spec (Req 11.5) mandates:
-    //   sx={{ display: { xs: 'none', sm: 'none', md: 'none', lg: 'block' } }}
-    // MUI v5 compiles sx display breakpoints into class names — check the element
-    // carries the MUI Paper component with the data-testid and confirm the element
-    // itself is not null (visual test with jsdom cannot fire media queries, so we
-    // verify the sx structure via the data attribute + DOM presence, and separately
-    // assert the component source uses the expected sx pattern).
-
-    // The element must be in the document (jsdom does not apply media queries,
-    // so "display:none" from a media query will not hide the DOM element).
-    expect(sidebar).toBeInTheDocument()
-
-    // Verify the sx structure is applied by checking the MUI-generated className
-    // contains a class that corresponds to display:none at xs/sm/md breakpoints.
-    // MUI v5 with Emotion generates class names at runtime; we cannot predict the
-    // hash.  Instead we verify indirectly: the component renders the sidebar as a
-    // MUI Paper element, which means MUI processed the sx prop.  The definitive
-    // test is that the component source contains the correct sx definition —
-    // confirmed by code review.  Here we assert the sidebar is a Paper element
-    // (it has the "MuiPaper-root" class) confirming MUI rendered it with sx.
-    expect(sidebar.className).toMatch(/MuiPaper/)
+    expect(screen.getByTestId('key-contact-phone')).toHaveTextContent('(630) 202-3839')
+    expect(screen.queryByTestId('outreach-contact-inline')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('outreach-contact-callout')).not.toBeInTheDocument()
+    expect(screen.getByTestId('recommended-action-panel')).not.toHaveTextContent('(630) 202-3839')
+    expect(screen.getByTestId('task-item-99')).not.toHaveTextContent('(630) 202-3839')
   })
 
-  it('PropertySidebar element has a className indicating MUI processed the display sx prop', async () => {
+  it('shows Key Contact empty phone when channel missing (no task missing hint)', async () => {
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        recommended_action: {
+          value: 'call_ready',
+          recommended_contact_method: 'phone',
+          label: 'Call Now',
+          explanation: 'Ready for phone outreach.',
+          signals: {},
+        },
+        phones: [],
+        open_tasks: [
+          {
+            id: 100,
+            lead_id: 1,
+            task_type: 'custom',
+            title: 'Follow up',
+            status: 'open',
+            due_date: '2026-06-30',
+            created_at: '2026-01-01T00:00:00Z',
+            completed_at: null,
+            created_by: 'HubSpot',
+            source: 'hubspot',
+          },
+        ],
+      }),
+    )
+
     renderComponent()
 
     await waitFor(() => {
-      expect(screen.getByTestId('property-sidebar')).toBeInTheDocument()
+      expect(screen.getByTestId('key-contact-card')).toBeInTheDocument()
     })
 
-    const sidebar = screen.getByTestId('property-sidebar')
-
-    // MUI Paper adds "MuiPaper-root" when rendered; sx is compiled into CSS classes.
-    // We also check that multiple CSS classes are attached (i.e. the sx object
-    // produced additional classes beyond just the base Paper classes), which
-    // confirms the display breakpoint styles were compiled.
-    const classes = sidebar.className.split(' ').filter(Boolean)
-    expect(classes.length).toBeGreaterThan(1)
+    expect(screen.getByTestId('key-contact-phone-empty')).toBeInTheDocument()
+    expect(screen.queryByTestId('outreach-contact-missing')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('outreach-contact-inline')).not.toBeInTheDocument()
+    expect(screen.getByTestId('task-item-100')).not.toHaveTextContent('No phone number on file')
   })
 
-  describe('outreach contact placement', () => {
-    it('shows contact only on primary task when open tasks exist (no bordered callout)', async () => {
-      vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
-        makeCommandCenterPayload({
-          recommended_action: {
-            value: 'call_ready',
-            recommended_contact_method: 'phone',
-            label: 'Call Now',
-            explanation: 'Ready for phone outreach.',
-            signals: {},
-          },
-          phones: [{ value: '(630) 202-3839', confidence_score: 80 }],
-          open_tasks: [
-            {
-              id: 99,
-              lead_id: 1,
-              task_type: 'custom',
-              title: 'Follow up with Gilberto Olivares',
-              status: 'open',
-              due_date: '2026-06-30',
-              created_at: '2026-01-01T00:00:00Z',
-              completed_at: null,
-              created_by: 'HubSpot',
-              source: 'hubspot',
-            },
-          ],
-        })
-      )
+  it('keeps secondary property details reachable in the mobile accordion', async () => {
+    renderComponent()
 
-      renderComponent()
-
-      await waitFor(() => {
-        expect(screen.getByTestId('tasks-panel')).toBeInTheDocument()
-      })
-
-      expect(screen.getAllByTestId('outreach-contact-inline')).toHaveLength(1)
-      expect(screen.queryByTestId('outreach-contact-callout')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('tasks-outreach-contact')).not.toBeInTheDocument()
-      expect(screen.getByTestId('recommended-action-panel')).not.toHaveTextContent('(630) 202-3839')
-      expect(screen.getByTestId('task-item-99')).toHaveTextContent('(630) 202-3839')
+    await waitFor(() => {
+      expect(screen.getByTestId('property-sidebar-mobile')).toBeInTheDocument()
     })
 
-    it('shows contact inline in recommended action when no open tasks', async () => {
-      vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
-        makeCommandCenterPayload({
-          recommended_action: {
-            value: 'call_ready',
-            recommended_contact_method: 'phone',
-            label: 'Call Now',
-            explanation: 'Ready for phone outreach.',
-            signals: {},
-          },
-          phones: [{ value: '(630) 202-3839', confidence_score: 80 }],
-          open_tasks: [],
-        })
-      )
-
-      renderComponent()
-
-      await waitFor(() => {
-        expect(screen.getByTestId('recommended-action-panel')).toBeInTheDocument()
-      })
-
-      expect(screen.getAllByTestId('outreach-contact-inline')).toHaveLength(1)
-      expect(screen.queryByTestId('outreach-contact-callout')).not.toBeInTheDocument()
-      expect(screen.getByTestId('recommended-action-panel')).toHaveTextContent('(630) 202-3839')
-    })
-
-    it('shows missing-contact hint on primary task when channel set but no contact', async () => {
-      vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
-        makeCommandCenterPayload({
-          recommended_action: {
-            value: 'call_ready',
-            recommended_contact_method: 'phone',
-            label: 'Call Now',
-            explanation: 'Ready for phone outreach.',
-            signals: {},
-          },
-          phones: [],
-          open_tasks: [
-            {
-              id: 100,
-              lead_id: 1,
-              task_type: 'custom',
-              title: 'Follow up',
-              status: 'open',
-              due_date: '2026-06-30',
-              created_at: '2026-01-01T00:00:00Z',
-              completed_at: null,
-              created_by: 'HubSpot',
-              source: 'hubspot',
-            },
-          ],
-        })
-      )
-
-      renderComponent()
-
-      await waitFor(() => {
-        expect(screen.getByTestId('tasks-panel')).toBeInTheDocument()
-      })
-
-      expect(screen.getAllByTestId('outreach-contact-missing')).toHaveLength(1)
-      expect(screen.queryByTestId('outreach-contact-inline')).not.toBeInTheDocument()
-      expect(screen.queryByTestId('outreach-contact-callout')).not.toBeInTheDocument()
-      expect(screen.getByTestId('recommended-action-panel')).not.toHaveTextContent(
-        'No phone number on file',
-      )
-      expect(screen.getByTestId('task-item-100')).toHaveTextContent(
-        'No phone number on file',
-      )
-    })
+    expect(screen.getByTestId('property-sidebar-mobile')).toHaveTextContent('More property details')
   })
 })
 
@@ -1059,7 +1064,7 @@ describe('UnifiedLeadCommandCenter — queue advance', () => {
     )
 
     await user.click(
-      await screen.findByTestId('ra-universal-btn-move_to_skip_trace'),
+      await screen.findByTestId('action-center-tile-move_to_skip_trace'),
     )
 
     await waitFor(() => {
@@ -1124,7 +1129,7 @@ describe('UnifiedLeadCommandCenter — queue advance', () => {
 
     mockNavigate.mockClear()
     await user.click(
-      await screen.findByTestId('ra-universal-btn-move_to_skip_trace'),
+      await screen.findByTestId('action-center-tile-move_to_skip_trace'),
     )
 
     expect(
@@ -1186,10 +1191,10 @@ describe('UnifiedLeadCommandCenter — mail stage toast + continue banner', () =
     )
 
     await waitFor(() => {
-      expect(screen.getByTestId('ra-universal-btn-add_to_mail_batch')).toBeInTheDocument()
+      expect(screen.getByTestId('action-center-tile-add_to_mail_batch')).toBeInTheDocument()
     })
 
-    await userEvent.click(screen.getByTestId('ra-universal-btn-add_to_mail_batch'))
+    await userEvent.click(screen.getByTestId('action-center-tile-add_to_mail_batch'))
 
     await waitFor(() => {
       expect(openLetterService.enqueue).toHaveBeenCalled()
