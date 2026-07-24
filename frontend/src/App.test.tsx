@@ -1,20 +1,14 @@
 /**
  * App.test.tsx — frontend sidebar interaction tests
  *
- * Validates Requirement 10.1: the Properties section header has two separate
- * click targets:
- *  - The label ListItemButton → is a Link to '/properties' (does NOT toggle section)
- *  - The chevron IconButton   → toggles expand/collapse (does NOT navigate)
+ * Validates dual-rail navigation behavior:
+ *  - Icon + label rows stay paired (Home, Work Queue, Analysis, …)
+ *  - Accordion sections can expand and collapse
+ *  - Analysis selects via icon only (headerNavigates false → no navigate())
  *
  * Tests use React Testing Library + userEvent and mock heavy dependencies
  * (auth, API services, Google Maps, routing) so the component renders quickly
  * in jsdom without network requests.
- *
- * Navigation via the Properties label is tested by verifying the anchor element's
- * href attribute (React Router Link renders an <a> tag). The `useNavigate` mock
- * is used to confirm the chevron does NOT trigger programmatic navigation.
- *
- * **Validates: Requirements 10.1**
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
@@ -24,27 +18,16 @@ import { ThemeProvider, createTheme } from '@mui/material/styles'
 import { MemoryRouter } from 'react-router-dom'
 import App from './App'
 
-// ---------------------------------------------------------------------------
-// Capture the navigate mock so tests can assert against it
-// ---------------------------------------------------------------------------
 const mockNavigate = vi.fn()
 
-// Mock react-router-dom — keep everything real except useNavigate, which we
-// capture. MemoryRouter supplies the actual routing context so Link renders
-// correctly and href attributes are populated.
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>()
   return {
     ...actual,
     useNavigate: () => mockNavigate,
-    // Link must still work so ListItemButton component={Link} renders properly
     Link: actual.Link,
   }
 })
-
-// ---------------------------------------------------------------------------
-// Mock heavy/external dependencies (same pattern as App.smoke.test.tsx)
-// ---------------------------------------------------------------------------
 
 vi.mock('@react-google-maps/api', () => ({
   useLoadScript: () => ({ isLoaded: false }),
@@ -122,10 +105,6 @@ vi.mock('@/context/NotificationContext', () => ({
   globalNotify: { showError: vi.fn(), showSuccess: vi.fn() },
 }))
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 const theme = createTheme()
 
 function renderApp(initialPath = '/') {
@@ -144,146 +123,250 @@ function renderApp(initialPath = '/') {
   )
 }
 
-// ---------------------------------------------------------------------------
-// Tests — Requirement 10.1
-// ---------------------------------------------------------------------------
+async function getMainNav() {
+  await waitFor(() => {
+    expect(screen.getByRole('navigation', { name: 'Main navigation' })).toBeInTheDocument()
+  }, { timeout: 3000 })
+  return screen.getByRole('navigation', { name: 'Main navigation' })
+}
 
-describe('App sidebar — Properties section navigation vs. toggle', () => {
+describe('App sidebar — dual-rail Properties section', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.clear()
   })
 
-  it('the Properties label is a link to /properties and does NOT toggle the section on click', async () => {
+  it('shows all top-level labels with only Properties leaves expanded', async () => {
+    renderApp('/properties')
+    const nav = await getMainNav()
+
+    expect(within(nav).getByText('Home')).toBeInTheDocument()
+    expect(within(nav).getByText('Work Queue')).toBeInTheDocument()
+    expect(within(nav).getByText('Analysis')).toBeInTheDocument()
+    expect(within(nav).getByText('Properties')).toBeInTheDocument()
+    expect(within(nav).getByText('Marketing')).toBeInTheDocument()
+    expect(within(nav).queryByRole('link', { name: 'Navigate to Properties' })).not.toBeInTheDocument()
+    expect(within(nav).getByRole('link', { name: 'Navigate to Quick Add' })).toBeInTheDocument()
+    expect(within(nav).queryByRole('link', { name: 'Navigate to Multifamily Deals' })).not.toBeInTheDocument()
+  })
+
+  it('expands another top-level section from the accordion list', async () => {
     const user = userEvent.setup()
-    renderApp()
+    renderApp('/properties')
+    const nav = await getMainNav()
 
-    // Wait for the nav to render
     await waitFor(() => {
-      expect(screen.getByRole('navigation', { name: 'Main navigation' })).toBeInTheDocument()
-    }, { timeout: 3000 })
-
-    // The label ListItemButton renders as an <a> tag (component={Link} to="/properties")
-    // with aria-label="Navigate to Properties"
-    const propertiesLabel = screen.getByRole('link', { name: 'Navigate to Properties' })
-    expect(propertiesLabel).toBeInTheDocument()
-
-    // Verify the href points to /properties — this confirms it's a navigation link,
-    // not a button that calls toggleSection. React Router Link renders with href.
-    expect(propertiesLabel).toHaveAttribute('href', '/properties')
-
-    const propertiesSection = propertiesLabel.closest('div')?.parentElement
-    expect(propertiesSection).toBeTruthy()
-
-    // Record the Properties chevron state BEFORE clicking the label
-    const chevronBefore = within(propertiesSection!).getByRole('button', {
-      name: /collapse section|expand section/i,
+      expect(within(nav).getByRole('link', { name: 'Navigate to Quick Add' })).toBeInTheDocument()
     })
-    const initialAriaLabel = chevronBefore.getAttribute('aria-label')
 
-    // Click the Properties label (Link navigates via router history, not mockNavigate)
-    await user.click(propertiesLabel)
+    await user.click(within(nav).getByText('Analysis'))
 
-    // The chevron aria-label should NOT have changed — clicking the label does not
-    // call toggleSection (the section expand/collapse state is unaffected)
-    const chevronAfter = within(propertiesSection!).getByRole('button', {
-      name: /collapse section|expand section/i,
+    await waitFor(() => {
+      expect(within(nav).getByRole('link', { name: 'Navigate to Multifamily Deals' })).toBeInTheDocument()
     })
-    expect(chevronAfter.getAttribute('aria-label')).toBe(initialAriaLabel)
-
-    // mockNavigate should NOT have been called — navigation is handled by Link
+    expect(within(nav).queryByRole('link', { name: 'Navigate to Quick Add' })).not.toBeInTheDocument()
     expect(mockNavigate).not.toHaveBeenCalled()
   })
 
-  it('clicking the Properties chevron toggles the section and does NOT call navigate', async () => {
+  it('can collapse the active Work Queue section', async () => {
     const user = userEvent.setup()
-    renderApp()
+    renderApp('/kanban')
+    const nav = await getMainNav()
 
     await waitFor(() => {
-      expect(screen.getByRole('navigation', { name: 'Main navigation' })).toBeInTheDocument()
-    }, { timeout: 3000 })
-
-    const propertiesLabel = screen.getByRole('link', { name: 'Navigate to Properties' })
-    const propertiesSection = propertiesLabel.closest('div')?.parentElement
-    expect(propertiesSection).toBeTruthy()
-
-    // The Properties section starts expanded, so chevron initially says "Collapse section"
-    const chevron = within(propertiesSection!).getByRole('button', { name: 'Collapse section' })
-    expect(chevron).toBeInTheDocument()
-
-    // Click the chevron
-    await user.click(chevron)
-
-    // navigate should NOT have been called
-    expect(mockNavigate).not.toHaveBeenCalled()
-
-    // After clicking, the chevron label should flip to "Expand section"
-    await waitFor(() => {
-      expect(within(propertiesSection!).getByRole('button', { name: 'Expand section' })).toBeInTheDocument()
+      expect(within(nav).getByRole('link', { name: "Navigate to Today's Action" })).toBeInTheDocument()
     })
 
-    // Click the chevron again — section expands back
-    const chevronAgain = within(propertiesSection!).getByRole('button', { name: 'Expand section' })
-    await user.click(chevronAgain)
-
-    expect(mockNavigate).not.toHaveBeenCalled()
+    await user.click(within(nav).getByText('Work Queue'))
 
     await waitFor(() => {
-      expect(within(propertiesSection!).getByRole('button', { name: 'Collapse section' })).toBeInTheDocument()
+      expect(within(nav).queryByRole('link', { name: "Navigate to Today's Action" })).not.toBeInTheDocument()
     })
+  })
+
+  it('selects Properties from the icon rail and navigates', async () => {
+    const user = userEvent.setup()
+    renderApp('/dashboard')
+    const nav = await getMainNav()
+
+    await user.click(within(nav).getByTestId('nav-section-icon-properties'))
+
+    await waitFor(() => {
+      expect(within(nav).getByRole('link', { name: 'Navigate to Quick Add' })).toBeInTheDocument()
+    })
+    expect(mockNavigate).toHaveBeenCalledWith('/properties')
   })
 })
 
-// ---------------------------------------------------------------------------
-// Tests — Requirement 10.3
-// ---------------------------------------------------------------------------
-
-describe('App sidebar — Analysis section toggles only (does not navigate)', () => {
+describe('App sidebar — dual-rail Analysis section', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.clear()
   })
 
-  // Validates: Requirement 10.3
-  it('the Analysis section header is a single ListItemButton that toggles expand/collapse and does NOT call navigate', async () => {
+  it('selects Analysis from the icon rail without navigate()', async () => {
     const user = userEvent.setup()
-    renderApp()
+    renderApp('/dashboard')
+    const nav = await getMainNav()
 
-    // Wait for the nav to render
+    expect(within(nav).queryByRole('link', { name: 'Navigate to Multifamily Deals' })).not.toBeInTheDocument()
+
+    await user.click(within(nav).getByTestId('nav-section-icon-analysis'))
+
+    expect(mockNavigate).not.toHaveBeenCalled()
+    expect(within(nav).queryByRole('link', { name: 'Navigate to Analysis' })).not.toBeInTheDocument()
+    expect(within(nav).getByText('Analysis')).toBeInTheDocument()
+    expect(within(nav).getByRole('link', { name: 'Navigate to Multifamily Deals' })).toBeInTheDocument()
+  })
+})
+
+describe('App sidebar — dual-rail Home section', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+  })
+
+  it('shows Home label and Activity Goals leaf on the goals dashboard', async () => {
+    renderApp('/dashboard')
+    const nav = await getMainNav()
+
+    expect(within(nav).getByText('Home')).toBeInTheDocument()
+    expect(within(nav).queryByRole('link', { name: 'Navigate to Home' })).not.toBeInTheDocument()
+    const activityGoals = within(nav).getByRole('link', { name: 'Navigate to Activity Goals' })
+    expect(activityGoals).toHaveAttribute('href', '/dashboard')
+  })
+
+  it('navigates home from the Home icon when leaving another section', async () => {
+    const user = userEvent.setup()
+    renderApp('/properties')
+    const nav = await getMainNav()
+
+    const home = within(nav).getByTestId('home-nav-icon')
+    const workQueue = within(nav).getByTestId('nav-section-icon-kanban')
+    expect(
+      home.compareDocumentPosition(workQueue) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+
+    await user.click(home)
+    expect(mockNavigate).toHaveBeenCalledWith('/dashboard')
+  })
+
+  it('links the AppBar title to the goals dashboard home', async () => {
+    renderApp('/properties')
+
     await waitFor(() => {
-      expect(screen.getByRole('navigation', { name: 'Main navigation' })).toBeInTheDocument()
+      expect(screen.getByTestId('app-home-title')).toBeInTheDocument()
     }, { timeout: 3000 })
 
-    // The Analysis section header is a single ListItemButton (not split into label + chevron).
-    // Its accessible name comes from the "Analysis" text content — no separate aria-label.
-    // It renders as a div[role="button"] containing the text.
-    const analysisHeader = screen.getByRole('button', { name: /^analysis$/i })
-    expect(analysisHeader).toBeInTheDocument()
+    const title = screen.getByTestId('app-home-title')
+    expect(title).toHaveAttribute('href', '/dashboard')
+    expect(title).toHaveTextContent('Real Estate Analysis Platform')
+  })
+})
 
-    // Confirm it is NOT a link — the Analysis header should NOT have an href attribute
-    // (unlike the Properties label which renders as an <a> tag via component={Link})
-    expect(analysisHeader).not.toHaveAttribute('href')
+describe('App sidebar — Work Queue / lead context', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+  })
 
-    // Analysis starts expanded (default: true). Record initial child item visibility.
-    // One of the Analysis child items is "Multifamily Deals" — it should be visible now.
-    expect(screen.getByRole('link', { name: 'Navigate to Multifamily Deals' })).toBeInTheDocument()
+  it('does not navigate to /kanban when expanding Work Queue on a queue page', async () => {
+    const user = userEvent.setup()
+    renderApp('/queues/todays-action')
+    const nav = await getMainNav()
 
-    // Click the Analysis header — this should toggle (collapse) the section
-    await user.click(analysisHeader)
-
-    // mockNavigate must NOT have been called — the Analysis header only toggles, never navigates
-    expect(mockNavigate).not.toHaveBeenCalled()
-
-    // After collapsing, the child items should disappear from the DOM
     await waitFor(() => {
-      expect(screen.queryByRole('link', { name: 'Navigate to Multifamily Deals' })).not.toBeInTheDocument()
+      expect(within(nav).getByRole('link', { name: "Navigate to Today's Action" })).toBeInTheDocument()
     })
 
-    // Click again — section expands back
-    await user.click(analysisHeader)
-    expect(mockNavigate).not.toHaveBeenCalled()
-
-    // Child items reappear
+    await user.click(within(nav).getByText('Work Queue'))
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: 'Navigate to Multifamily Deals' })).toBeInTheDocument()
+      expect(
+        within(nav).queryByRole('link', { name: "Navigate to Today's Action" }),
+      ).not.toBeInTheDocument()
+    })
+    mockNavigate.mockClear()
+
+    await user.click(within(nav).getByText('Work Queue'))
+    await waitFor(() => {
+      expect(within(nav).getByRole('link', { name: "Navigate to Today's Action" })).toBeInTheDocument()
+    })
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it('selects Work Queue (not Home) on lead detail', async () => {
+    renderApp('/leads/123')
+    const nav = await getMainNav()
+
+    await waitFor(() => {
+      expect(within(nav).getByRole('link', { name: "Navigate to Today's Action" })).toBeInTheDocument()
+    })
+    expect(within(nav).getByTestId('nav-section-icon-kanban')).toHaveAttribute('aria-current', 'page')
+    expect(within(nav).getByTestId('home-nav-icon')).not.toHaveAttribute('aria-current')
+  })
+
+  it('does not navigate away from lead detail when clicking Work Queue icon', async () => {
+    const user = userEvent.setup()
+    renderApp('/leads/456')
+    const nav = await getMainNav()
+
+    await waitFor(() => {
+      expect(within(nav).getByTestId('nav-section-icon-kanban')).toHaveAttribute('aria-current', 'page')
+    })
+    mockNavigate.mockClear()
+    await user.click(within(nav).getByTestId('nav-section-icon-kanban'))
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+})
+
+describe('App sidebar — dual-rail secondary collapse', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+  })
+
+  it('minimizes the secondary panel and expands it again', async () => {
+    const user = userEvent.setup()
+    renderApp('/dashboard')
+    const nav = await getMainNav()
+
+    const toggle = within(nav).getByTestId('collapse-secondary-nav')
+    const workQueue = within(nav).getByTestId('nav-section-icon-kanban')
+    expect(
+      toggle.compareDocumentPosition(workQueue) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+
+    await user.click(toggle)
+
+    expect(within(nav).getByTestId('expand-secondary-nav')).toBeInTheDocument()
+    expect(localStorage.getItem('bb.nav.secondaryExpanded')).toBe('0')
+    // Collapsed rail must not keep Home's submenu mounted (that created the icon gap).
+    expect(within(nav).queryByRole('link', { name: 'Navigate to Activity Goals' })).not.toBeInTheDocument()
+    expect(within(nav).getByText('Home')).toBeInTheDocument()
+
+    await user.click(within(nav).getByTestId('expand-secondary-nav'))
+
+    expect(localStorage.getItem('bb.nav.secondaryExpanded')).toBe('1')
+    expect(within(nav).getByTestId('collapse-secondary-nav')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(within(nav).getByRole('link', { name: 'Navigate to Activity Goals' })).toBeInTheDocument()
+    })
+  })
+
+  it('re-expands the secondary panel when a section icon is clicked while collapsed', async () => {
+    const user = userEvent.setup()
+    localStorage.setItem('bb.nav.secondaryExpanded', '0')
+    renderApp('/dashboard')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('expand-secondary-nav')).toBeInTheDocument()
+    }, { timeout: 3000 })
+
+    const nav = screen.getByRole('navigation', { name: 'Main navigation' })
+    await user.click(within(nav).getByTestId('nav-section-icon-properties'))
+
+    await waitFor(() => {
+      expect(within(nav).getByRole('link', { name: 'Navigate to Quick Add' })).toBeInTheDocument()
     })
   })
 })

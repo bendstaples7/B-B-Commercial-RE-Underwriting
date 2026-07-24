@@ -19,8 +19,9 @@ Use `outreachContactPlacement()` from `frontend/src/utils/outreachContactPlaceme
 
 | Surface | When |
 |---------|------|
-| `primary_task` | Open task exists — inline on first sorted task row via `OutreachContactInline` |
-| `recommended_action` | No open tasks — inline under RA label via `OutreachContactInline` |
+| `key_contact_card` | Key Contact card mounted (lg+ right rail **or** below-lg main stack) — single CC contact surface |
+| `primary_task` | Open task exists **and** Key Contact card not visible — inline on first sorted task row via `OutreachContactInline` |
+| `recommended_action` | No open tasks **and** Key Contact card not visible — inline under RA label via `OutreachContactInline` |
 | Queue table | Compact subline only — `OutreachContactCallout compact` |
 
 ## Do not

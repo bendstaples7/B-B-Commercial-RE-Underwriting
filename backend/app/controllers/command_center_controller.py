@@ -860,6 +860,7 @@ def get_command_center(lead_id: int):
         'units_allowed': lead.units_allowed,
         'zoning': lead.zoning,
         'tax_bill_2021': lead.tax_bill_2021,
+        'assessed_value': lead.assessed_value,
         'most_recent_sale': lead.most_recent_sale,
         'most_recent_sale_display': display_most_recent_sale(lead),
         'most_recent_sale_price': getattr(lead, 'most_recent_sale_price', None),

@@ -76,13 +76,13 @@ function expectedStickyHeaderAddress(payload: {
   property_zip?: string | null
 }): string {
   const street = cleanAddressPart(payload.property_street)
-  const cityStateZip = [payload.property_city, payload.property_state, payload.property_zip]
-    .map(cleanAddressPart)
-    .filter(Boolean)
-    .join(', ')
-
-  if (street && cityStateZip) return `${street}, ${cityStateZip}`
-  return street || cityStateZip || `Lead #${payload.id}`
+  const city = cleanAddressPart(payload.property_city)
+  const state = cleanAddressPart(payload.property_state)
+  const zip = cleanAddressPart(payload.property_zip)
+  const stateZip = [state, zip].filter(Boolean).join(' ')
+  const locality = [city, stateZip].filter(Boolean).join(', ')
+  if (street && locality) return `${street}, ${locality}`
+  return street || locality || `Lead #${payload.id}`
 }
 
 function minimalPropertyDetail(id: number): PropertyDetail {
@@ -157,7 +157,7 @@ function minimalPropertyDetail(id: number): PropertyDetail {
 async function waitForCommandCenterLoaded(container: HTMLElement) {
   await waitFor(
     () => {
-      expect(container.querySelector('[data-testid="sticky-header"]')).not.toBeNull()
+      expect(container.querySelector('[data-testid="property-overview-header"]')).not.toBeNull()
     },
     { timeout: 5000 },
   )
@@ -725,19 +725,19 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         // commandCenterData is loaded (StickyHeader is rendered post-load).
         await waitFor(
           () => {
-            const header = container.querySelector('[data-testid="sticky-header"]')
+            const header = container.querySelector('[data-testid="property-overview-header"]')
             expect(header).not.toBeNull()
           },
           { timeout: 3000 }
         )
 
         // Get the sticky header element specifically to scope header-only assertions
-        const headerEl = container.querySelector('[data-testid="sticky-header"]')!
+        const headerEl = container.querySelector('[data-testid="property-overview-header"]')!
 
         // 1. Property address is the sticky header focus; primary owner may appear under it
         const expectedAddress = expectedStickyHeaderAddress(payload)
 
-        const addressBlock = headerEl.querySelector('[data-testid="sticky-header-address"]')
+        const addressBlock = headerEl.querySelector('[data-testid="property-overview-address"]')
         expect(addressBlock).not.toBeNull()
         expect(addressBlock!.textContent).toContain(expectedAddress)
 
@@ -746,7 +746,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           payload.owner_first_name,
           payload.owner_last_name,
         )
-        const ownerEl = headerEl.querySelector('[data-testid="sticky-header-owner"]')
+        const ownerEl = headerEl.querySelector('[data-testid="property-overview-owner-link"]')
         if (expectedOwner) {
           expect(ownerEl).not.toBeNull()
           expect(ownerEl!.textContent).toContain(expectedOwner)
@@ -757,11 +757,17 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
         expect(headerEl.textContent).not.toContain('Company:')
         expect(headerEl.textContent).not.toContain('Also listed:')
 
-        // 2. Lead score — header button shows "N / 100"
+        // 2. Lead score — compact gauge panel shows the numeric score (not "N / 100")
         const scoreEl = headerEl.querySelector('[data-testid="header-lead-score"]')
         expect(scoreEl).not.toBeNull()
-        expect(scoreEl!.textContent).toContain(String(payload.lead_score))
-        expect(scoreEl!.textContent).toContain('/ 100')
+        const scoreValue = scoreEl!.querySelector('[data-testid="header-lead-score-value"]')
+        expect(scoreValue).not.toBeNull()
+        if (payload.lead_score == null || !Number.isFinite(Number(payload.lead_score))) {
+          expect(scoreValue!.textContent).toBe('—')
+          expect(scoreEl!.textContent).toContain('Unscored')
+        } else {
+          expect(scoreValue!.textContent).toBe(String(Math.round(Number(payload.lead_score))))
+        }
 
         // 3. Lead status — LeadStatusChip in the header renders a chip
         //   - Known statuses → LEAD_STATUS_LABELS map
@@ -1295,7 +1301,7 @@ describe('UnifiedLeadCommandCenter — Property Tests', () => {
           expect(activityPanel).not.toBeNull()
 
           // Open the log note modal via RA quick action, then click the mocked LogNoteForm button
-          const openNoteBtn = container.querySelector('[data-testid="ra-universal-btn-log_note"]')
+          const openNoteBtn = container.querySelector('[data-testid="action-center-tile-log_note"]')
           expect(openNoteBtn).not.toBeNull()
           fireEvent.click(openNoteBtn!)
 

@@ -7,6 +7,7 @@ import {
   Alert,
   Box,
   Button,
+  Chip,
   CircularProgress,
   List,
   ListItem,
@@ -121,7 +122,7 @@ export function LeadBriefingPanel({ leadId, initialBriefing = null }: LeadBriefi
   const modeLabel = briefing?.mode === 'revise' ? 'Updated' : 'Generated'
 
   return (
-    <Paper sx={{ ...ccCardSx, mb: 2 }} data-testid="lead-briefing-panel">
+    <Paper sx={{ ...ccCardSx, mb: 0 }} data-testid="lead-briefing-panel">
       <Stack
         direction="row"
         alignItems="center"
@@ -130,9 +131,17 @@ export function LeadBriefingPanel({ leadId, initialBriefing = null }: LeadBriefi
         sx={{ mb: briefing || error ? 1 : 0 }}
       >
         <Box>
-          <Typography sx={{ ...ccSectionTitleSx, mb: 0.25 }}>
-            Quick briefing
-          </Typography>
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.25 }}>
+            <Typography sx={{ ...ccSectionTitleSx, mb: 0 }} component="h2">
+              Quick briefing
+            </Typography>
+            <Chip
+              size="small"
+              label="AI generated"
+              data-testid="lead-briefing-ai-badge"
+              sx={{ height: 22, fontSize: '0.7rem', fontWeight: 600 }}
+            />
+          </Stack>
           <Typography sx={ccMetaSx}>
             {stamp
               ? `${modeLabel} ${stamp}`

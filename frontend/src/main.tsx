@@ -34,6 +34,9 @@ const queryClient = new QueryClient({
   },
 })
 
+// Holistic SaaS theme nudge (command-center redesign): soft gray canvas, muted
+// secondary, and slightly larger radius app-wide. Command Center card/tile chrome
+// stays in `commandCenterChrome.ts` — do not push CC-only spacing into createTheme.
 const theme = createTheme({
   palette: {
     mode: 'light',
@@ -41,8 +44,24 @@ const theme = createTheme({
       main: '#1976d2',
     },
     secondary: {
-      main: '#dc004e',
+      main: '#5c6b7a',
     },
+    background: {
+      default: '#F5F7FA',
+      paper: '#FFFFFF',
+    },
+    grey: {
+      50: '#F8FAFC',
+      100: '#F1F5F9',
+      200: '#E2E8F0',
+    },
+    text: {
+      primary: '#0F172A',
+      secondary: '#64748B',
+    },
+  },
+  shape: {
+    borderRadius: 10,
   },
   breakpoints: {
     values: {
@@ -54,6 +73,20 @@ const theme = createTheme({
     },
   },
   typography: {
+    fontSize: 14,
+    body1: {
+      fontSize: '0.95rem',
+      lineHeight: 1.5,
+    },
+    body2: {
+      fontSize: '0.875rem',
+      lineHeight: 1.45,
+    },
+    button: {
+      fontSize: '0.875rem',
+      fontWeight: 600,
+      textTransform: 'none',
+    },
     h3: {
       fontSize: '2rem',
       '@media (min-width:600px)': {
@@ -71,18 +104,55 @@ const theme = createTheme({
     },
   },
   components: {
+    MuiCssBaseline: {
+      styleOverrides: {
+        body: {
+          backgroundColor: '#F5F7FA',
+        },
+      },
+    },
     MuiContainer: {
       defaultProps: {
         maxWidth: 'lg',
       },
     },
+    MuiPaper: {
+      defaultProps: {
+        elevation: 0,
+      },
+      styleOverrides: {
+        root: {
+          backgroundImage: 'none',
+        },
+        rounded: {
+          borderRadius: 12,
+        },
+      },
+    },
     MuiButton: {
       styleOverrides: {
         root: {
+          borderRadius: 8,
           '&:focus-visible': {
             outline: '3px solid #1976d2',
             outlineOffset: '2px',
           },
+        },
+      },
+    },
+    MuiChip: {
+      styleOverrides: {
+        root: {
+          borderRadius: 8,
+        },
+      },
+    },
+    MuiTab: {
+      styleOverrides: {
+        root: {
+          textTransform: 'none',
+          fontWeight: 600,
+          minHeight: 44,
         },
       },
     },

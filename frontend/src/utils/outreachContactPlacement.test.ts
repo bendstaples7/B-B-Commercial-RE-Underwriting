@@ -41,7 +41,16 @@ describe('outreachContactPlacement', () => {
     expect(outreachContactPlacement([], null, 'mail_ready')).toBe('recommended_action')
   })
 
-  it('returns none when recommended action is missing', () => {
-    expect(outreachContactPlacement([], phoneContact, null)).toBe('none')
+  it('returns key_contact_card when Key Contact card is visible', () => {
+    expect(
+      outreachContactPlacement([makeTask(1)], phoneContact, 'call_ready', {
+        keyContactCardVisible: true,
+      }),
+    ).toBe('key_contact_card')
+    expect(
+      outreachContactPlacement([], phoneContact, 'mail_ready', {
+        keyContactCardVisible: true,
+      }),
+    ).toBe('key_contact_card')
   })
 })

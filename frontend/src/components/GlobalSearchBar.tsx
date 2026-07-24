@@ -222,9 +222,9 @@ const GlobalSearchBar = () => {
               color: 'inherit',
               '& .MuiInputBase-input': {
                 padding: '4px 4px',
-                width: isMobile ? '100%' : '200px',
+                width: isMobile ? '100%' : '300px',
                 transition: 'width 200ms ease',
-                '&:focus': { width: isMobile ? '100%' : '260px' },
+                '&:focus': { width: isMobile ? '100%' : '340px' },
               },
             }}
             onKeyDown={handleKeyDown}

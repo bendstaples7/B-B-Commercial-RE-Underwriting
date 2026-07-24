@@ -32,6 +32,17 @@ export function humanize(snake: string): string {
     .join(' ')
 }
 
+/** Title-case property type for display (triplex → Triplex, multi_family → Multi Family). */
+export function formatPropertyTypeLabel(raw: string | null | undefined): string {
+  if (!raw) return ''
+  return raw
+    .trim()
+    .split(/[\s_]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ')
+}
+
 export function outreachStatusLabel(status: string): string {
   return humanize(status)
 }
@@ -66,4 +77,12 @@ export function getOutreachStatusColor(
     default:
       return 'default'
   }
+}
+
+/** Currency display with whole-dollar rounding (shared by Quick Stats + At a glance). */
+export function formatMoneyValue(value: number | string | null | undefined): string | null {
+  if (value == null || value === '') return null
+  const n = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(n)) return null
+  return `$${Math.round(n).toLocaleString()}`
 }

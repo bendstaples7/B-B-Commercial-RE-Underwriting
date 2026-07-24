@@ -1,6 +1,6 @@
 /**
  * Activity Goals Dashboard — CRM home showing outreach counts vs weekly/monthly goals,
- * with WoW/MoM trends and charts.
+ * with WoW/MoM trends and charts. Desktop layout fits the viewport without scrolling.
  */
 import { useMemo, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -10,7 +10,6 @@ import {
   Button,
   Chip,
   CircularProgress,
-  Grid,
   LinearProgress,
   Paper,
   Stack,
@@ -49,6 +48,16 @@ import {
   type ActivityTrend,
 } from '@/services/dashboardApi'
 import { formatShortCalendarDay, formatUtcDateRange } from '@/utils/helpers'
+
+const cardSx = {
+  p: 1.25,
+  height: '100%',
+  border: 1,
+  borderColor: 'divider',
+  borderRadius: 1,
+  boxShadow: 'none',
+  bgcolor: 'background.paper',
+} as const
 
 function periodToType(period: ActivityPeriod): ActivityPeriodType {
   return period === 'week' ? 'weekly' : 'monthly'
@@ -108,28 +117,37 @@ function MetricCard({
   const chip = formatTrendChip(trend, trendLabel)
 
   return (
-    <Paper elevation={1} sx={{ p: 2.5, height: '100%' }}>
-      <Stack spacing={1.5}>
-        <Typography variant="subtitle2" color="text.secondary">
+    <Paper elevation={0} sx={cardSx}>
+      <Stack spacing={0.75}>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          fontWeight={600}
+          sx={{ textTransform: 'uppercase', letterSpacing: 0.04, lineHeight: 1.2 }}
+        >
           {METRIC_LABELS[metric]}
         </Typography>
-        <Typography variant="h3" fontWeight={700} lineHeight={1.1}>
+        <Typography variant="h5" fontWeight={700} lineHeight={1.1}>
           {count}
         </Typography>
         <Chip
           size="small"
-          icon={<chip.Icon />}
+          icon={<chip.Icon sx={{ fontSize: '14px !important' }} />}
           label={chip.text}
           color={chip.color === 'default' ? 'default' : chip.color}
-          variant={chip.color === 'default' ? 'outlined' : 'filled'}
-          sx={{ alignSelf: 'flex-start' }}
+          variant="outlined"
+          sx={{
+            alignSelf: 'flex-start',
+            height: 22,
+            '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' },
+          }}
         />
 
         {editing ? (
           <TextField
             size="small"
             type="number"
-            label={`${METRIC_LABELS[metric]} goal`}
+            label="Goal"
             value={draft}
             onChange={(e) => onDraftChange(e.target.value)}
             inputProps={{ min: 0, step: 1, 'aria-label': `${METRIC_LABELS[metric]} goal` }}
@@ -139,31 +157,31 @@ function MetricCard({
         ) : hasPositiveGoal ? (
           <>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <Typography variant="body2" color="text.secondary">
-                Goal: {goal}
+              <Typography variant="caption" color="text.secondary">
+                Goal {goal}
               </Typography>
-              <Typography variant="body2" fontWeight={600}>
+              <Typography variant="caption" fontWeight={700}>
                 {pct}%
               </Typography>
             </Box>
             <LinearProgress
               variant="determinate"
               value={barPct}
-              sx={{ height: 8, borderRadius: 1 }}
+              sx={{ height: 5, borderRadius: 1 }}
               aria-label={`${METRIC_LABELS[metric]} progress`}
             />
           </>
         ) : goalSet ? (
-          <Typography variant="body2" color="text.secondary">
-            Goal: {goal}
+          <Typography variant="caption" color="text.secondary">
+            Goal {goal}
           </Typography>
         ) : (
           <Button
             size="small"
-            startIcon={<EditIcon />}
+            startIcon={<EditIcon sx={{ fontSize: 14 }} />}
             onClick={onStartEdit}
             disabled={goalsDisabled}
-            sx={{ alignSelf: 'flex-start' }}
+            sx={{ alignSelf: 'flex-start', minHeight: 0, py: 0.25, px: 0.5, fontSize: '0.75rem' }}
           >
             Set goal
           </Button>
@@ -186,21 +204,32 @@ function ComparisonChart({ data, trendLabel }: { data: ActivityDashboardResponse
   )
 
   return (
-    <Paper elevation={1} sx={{ p: 2.5, height: 340 }}>
-      <Typography variant="h6" gutterBottom>
+    <Paper
+      elevation={0}
+      sx={{
+        ...cardSx,
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+        height: '100%',
+      }}
+    >
+      <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 0.5, flexShrink: 0 }}>
         This period vs previous ({trendLabel})
       </Typography>
-      <ResponsiveContainer width="100%" height="85%">
-        <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
-          <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-          <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-          <Tooltip />
-          <Legend />
-          <Bar dataKey="Current" fill={theme.palette.primary.main} radius={[4, 4, 0, 0]} />
-          <Bar dataKey="Previous" fill={theme.palette.grey[400]} radius={[4, 4, 0, 0]} />
-        </BarChart>
-      </ResponsiveContainer>
+      <Box sx={{ flex: 1, minHeight: 0, width: '100%' }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={chartData} margin={{ top: 4, right: 4, left: -12, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
+            <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+            <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={32} />
+            <Tooltip />
+            <Legend wrapperStyle={{ fontSize: 12 }} />
+            <Bar dataKey="Current" fill={theme.palette.primary.main} radius={[3, 3, 0, 0]} />
+            <Bar dataKey="Previous" fill={theme.palette.grey[400]} radius={[3, 3, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </Box>
     </Paper>
   )
 }
@@ -230,39 +259,58 @@ function DailyTrendChart({ data }: { data: ActivityDashboardResponse }) {
   }, [data.series.daily, data.series.previous_daily, chartPeriod])
 
   return (
-    <Paper elevation={1} sx={{ p: 2.5, height: 340 }}>
-      <Typography variant="h6" gutterBottom>
-        Daily activity (all metrics)
-      </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-        Solid = current period · Dashed = previous period
-      </Typography>
-      <ResponsiveContainer width="100%" height="78%">
-        <LineChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
-          <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
-          <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-          <Tooltip />
-          <Legend />
-          <Line
-            type="monotone"
-            dataKey="Current"
-            stroke={theme.palette.primary.main}
-            strokeWidth={2}
-            dot={{ r: 3 }}
-            connectNulls={false}
-          />
-          <Line
-            type="monotone"
-            dataKey="Previous"
-            stroke={theme.palette.grey[500]}
-            strokeWidth={2}
-            strokeDasharray="5 5"
-            dot={false}
-            connectNulls={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+    <Paper
+      elevation={0}
+      sx={{
+        ...cardSx,
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+        height: '100%',
+      }}
+    >
+      <Stack
+        direction="row"
+        alignItems="baseline"
+        justifyContent="space-between"
+        spacing={1}
+        sx={{ mb: 0.5, flexShrink: 0 }}
+      >
+        <Typography variant="subtitle2" fontWeight={700}>
+          Daily activity
+        </Typography>
+        <Typography variant="caption" color="text.secondary" noWrap>
+          Solid = current · Dashed = previous
+        </Typography>
+      </Stack>
+      <Box sx={{ flex: 1, minHeight: 0, width: '100%' }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chartData} margin={{ top: 4, right: 4, left: -12, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
+            <XAxis dataKey="label" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+            <YAxis allowDecimals={false} tick={{ fontSize: 11 }} width={32} />
+            <Tooltip />
+            <Legend wrapperStyle={{ fontSize: 12 }} />
+            <Line
+              type="monotone"
+              dataKey="Current"
+              stroke={theme.palette.primary.main}
+              strokeWidth={2}
+              dot={{ r: 2 }}
+              connectNulls={false}
+            />
+            <Line
+              type="monotone"
+              dataKey="Previous"
+              stroke={theme.palette.grey[500]}
+              strokeWidth={2}
+              strokeDasharray="5 5"
+              dot={false}
+              connectNulls={false}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </Box>
     </Paper>
   )
 }
@@ -355,27 +403,43 @@ export function ActivityDashboardPage() {
   }
 
   return (
-    <Box sx={{ p: { xs: 2, md: 3 }, maxWidth: 1200, mx: 'auto' }}>
+    <Box
+      data-testid="activity-dashboard"
+      sx={{
+        // Cancel App main padding so the page can fill the viewport on desktop.
+        mx: { sm: -3 },
+        mt: { sm: -3 },
+        mb: { sm: -3 },
+        height: { md: 'calc(100vh - 64px)' },
+        maxHeight: { md: 'calc(100vh - 64px)' },
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: { xs: 'auto', md: 'hidden' },
+        p: { xs: 1.5, md: 2 },
+        gap: { xs: 1.5, md: 1.25 },
+        boxSizing: 'border-box',
+      }}
+    >
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
-        spacing={2}
+        spacing={1}
         alignItems={{ sm: 'center' }}
         justifyContent="space-between"
-        sx={{ mb: 3 }}
+        sx={{ flexShrink: 0 }}
       >
-        <Box>
-          <Typography variant="h4" fontWeight={700} gutterBottom>
-            Activity Dashboard
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="h6" fontWeight={700} lineHeight={1.25}>
+            Activity Goals
           </Typography>
-          <Typography variant="body2" color="text.secondary">
-            Your completed outreach
+          <Typography variant="caption" color="text.secondary" noWrap component="div">
+            Completed outreach
             {data ? ` · ${formatUtcDateRange(data.range.start, data.range.end)}` : ''}
             {data ? ` · vs ${formatUtcDateRange(data.previous_range.start, data.previous_range.end)}` : ''}
             {isFetching && !isLoading ? ' · updating…' : ''}
           </Typography>
         </Box>
 
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           <ToggleButtonGroup
             exclusive
             size="small"
@@ -383,8 +447,12 @@ export function ActivityDashboardPage() {
             onChange={handlePeriodChange}
             aria-label="Period"
           >
-            <ToggleButton value="week">This week</ToggleButton>
-            <ToggleButton value="month">This month</ToggleButton>
+            <ToggleButton value="week" sx={{ px: 1.25, py: 0.5 }}>
+              Week
+            </ToggleButton>
+            <ToggleButton value="month" sx={{ px: 1.25, py: 0.5 }}>
+              Month
+            </ToggleButton>
           </ToggleButtonGroup>
 
           {editing ? (
@@ -396,7 +464,7 @@ export function ActivityDashboardPage() {
                 onClick={saveGoals}
                 disabled={goalsDisabled || saveMutation.isPending}
               >
-                Save goals
+                Save
               </Button>
               <Button
                 size="small"
@@ -421,62 +489,85 @@ export function ActivityDashboardPage() {
       </Stack>
 
       {isLoading && !data && (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', flex: 1 }}>
           <CircularProgress aria-label="Loading activity dashboard" />
         </Box>
       )}
 
       {isError && (
-        <Alert severity="error" sx={{ mb: 2 }}>
+        <Alert severity="error" sx={{ flexShrink: 0 }}>
           {(error as Error)?.message ?? 'Failed to load activity dashboard.'}
         </Alert>
       )}
 
       {goalError && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
+        <Alert severity="warning" sx={{ flexShrink: 0 }}>
           {goalError}
         </Alert>
       )}
 
       {saveMutation.isError && (
-        <Alert severity="error" sx={{ mb: 2 }}>
+        <Alert severity="error" sx={{ flexShrink: 0 }}>
           {(saveMutation.error as Error)?.message ?? 'Failed to save goals.'}
         </Alert>
       )}
 
       {data && (
-        <Stack spacing={3}>
-          <Grid container spacing={2}>
+        <Box
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: { xs: 1.5, md: 1.25 },
+          }}
+        >
+          <Box
+            sx={{
+              flexShrink: 0,
+              display: 'grid',
+              gap: 1,
+              gridTemplateColumns: {
+                xs: '1fr',
+                sm: 'repeat(2, minmax(0, 1fr))',
+                md: 'repeat(5, minmax(0, 1fr))',
+              },
+            }}
+          >
             {METRIC_KEYS.map((metric) => (
-              <Grid item xs={12} sm={6} md={4} key={metric}>
-                <MetricCard
-                  metric={metric}
-                  count={data.counts[metric]}
-                  goal={data.goals[metric]}
-                  progress={data.progress[metric]}
-                  trend={data.trends[metric]}
-                  trendLabel={data.trend_label}
-                  editing={editing}
-                  draft={drafts[metric]}
-                  goalsDisabled={goalsDisabled}
-                  onDraftChange={(value) =>
-                    setDrafts((prev) => ({ ...prev, [metric]: value }))
-                  }
-                  onStartEdit={startEditing}
-                />
-              </Grid>
+              <MetricCard
+                key={metric}
+                metric={metric}
+                count={data.counts[metric]}
+                goal={data.goals[metric]}
+                progress={data.progress[metric]}
+                trend={data.trends[metric]}
+                trendLabel={data.trend_label}
+                editing={editing}
+                draft={drafts[metric]}
+                goalsDisabled={goalsDisabled}
+                onDraftChange={(value) =>
+                  setDrafts((prev) => ({ ...prev, [metric]: value }))
+                }
+                onStartEdit={startEditing}
+              />
             ))}
-          </Grid>
+          </Box>
 
-          <Grid container spacing={2}>
-            <Grid item xs={12} md={6}>
-              <ComparisonChart data={data} trendLabel={data.trend_label} />
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <DailyTrendChart data={data} />
-            </Grid>
-          </Grid>
-        </Stack>
+          <Box
+            sx={{
+              flex: 1,
+              minHeight: { xs: 420, md: 0 },
+              display: 'grid',
+              gap: 1.25,
+              gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' },
+              gridTemplateRows: { xs: 'minmax(200px, 1fr) minmax(200px, 1fr)', md: 'minmax(0, 1fr)' },
+            }}
+          >
+            <ComparisonChart data={data} trendLabel={data.trend_label} />
+            <DailyTrendChart data={data} />
+          </Box>
+        </Box>
       )}
     </Box>
   )

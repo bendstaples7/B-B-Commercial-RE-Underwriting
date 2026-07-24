@@ -80,6 +80,13 @@ describe('GlobalSearchBar', () => {
     expect(screen.getByTestId('search-input')).toBeInTheDocument()
   })
 
+  it('keeps the full search placeholder wording', () => {
+    render(<GlobalSearchBar />, { wrapper: TestWrapper })
+    expect(
+      screen.getByPlaceholderText('Search name, address, phone, email…'),
+    ).toBeInTheDocument()
+  })
+
   it('navigates to /search on Enter with a valid query', () => {
     const { container } = render(<GlobalSearchBar />, { wrapper: TestWrapper })
     const input = getSearchInput(container)

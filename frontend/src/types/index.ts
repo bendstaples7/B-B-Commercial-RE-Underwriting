@@ -302,6 +302,9 @@ export interface Property {
   square_footage: number | null
   lot_size: number | null
   year_built: number | null
+  /** Optional map coords when present on property/detail payloads. */
+  latitude?: number | null
+  longitude?: number | null
   owner_first_name: string | null
   owner_last_name: string | null
   ownership_type: string | null
@@ -2277,7 +2280,12 @@ export interface CommandCenterPayload {
   mail_ineligible_reason?: 'recently_sold' | 'invalid_owner_address' | null;
   mail_eligible_date?: string | null;
   most_recent_sale_display?: string | null;
+  /** Raw most-recent sale date when display string is absent. */
+  most_recent_sale?: string | null;
   most_recent_sale_price?: number | null;
+  /** Assessor assessed value (not analysis ARV). */
+  assessed_value?: number | null;
+  tax_bill_2021?: number | null;
   /** Newest-first Cook County parcel sales for this PIN (cache or live fallback). */
   sale_history?: Array<{
     sale_date?: string | null;

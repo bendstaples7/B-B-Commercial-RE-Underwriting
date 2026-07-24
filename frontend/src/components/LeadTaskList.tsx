@@ -36,7 +36,7 @@ import type { LeadTask, LeadTaskType, CRMRecommendedAction, OutreachContact } fr
 import { leadTaskService, callLogService } from '@/services/api'
 import { OutreachContactInline, OutreachContactMissingHint } from '@/components/OutreachContactCallout'
 import { FollowUpHorizonControls } from '@/components/FollowUpHorizonControls'
-import { ccSubsectionTitleSx } from '@/components/lead-detail/commandCenterChrome'
+import { ccSectionTitleSx } from '@/components/lead-detail/commandCenterChrome'
 import {
   type FollowUpPreset,
   formatFollowUpPresetLabel,
@@ -530,8 +530,8 @@ export const LeadTaskList = forwardRef<LeadTaskListHandle, LeadTaskListProps>(fu
     <Box data-testid="lead-task-list">
       {/* Section header */}
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
-        <Typography sx={ccSubsectionTitleSx}>
-          Open tasks
+        <Typography sx={ccSectionTitleSx} component="h2">
+          Open Tasks
           {openTasks.length > 0 && (
             <Chip
               label={openTasks.length}

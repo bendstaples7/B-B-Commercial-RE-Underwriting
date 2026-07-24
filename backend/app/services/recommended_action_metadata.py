@@ -16,6 +16,18 @@ RECENT_SALE_OUTDATED_CONTACT_EXPLANATION = (
     'trace confirms who to reach now.'
 )
 
+OWNER_MAILING_RETURNED_WITH_CONTACT_EXPLANATION = (
+    'Owner mailing failed USPS validation or was returned, so mail campaigns are '
+    'blocked until the address is corrected. Phone or email is still on file — '
+    'use that for outreach while you update the mailing address.'
+)
+
+OWNER_MAILING_RETURNED_NO_CONTACT_EXPLANATION = (
+    'Owner mailing failed USPS validation or was returned. Add a corrected '
+    'mailing address or another reachable phone/email before outreach — this is '
+    'not a missing-contact blank lead.'
+)
+
 RECOMMENDED_ACTION_METADATA = {
     'enrich_data': {
         'label': 'Enrich Data',
@@ -138,6 +150,9 @@ WINNING_RULE_LABELS = {
     'condo_needs_review': 'Condo / building ownership needs review',
     'condo_partial_ambiguous': 'Partial condo status is ambiguous',
     'skip_trace_status': 'Lead is in skip-trace status without enough contact info',
+    'owner_mailing_returned': (
+        'Owner mailing failed USPS / was returned — update address before mail'
+    ),
     'no_contact_info': 'No phone, email, or mailable address on file',
     'mailable_no_digital_contact': 'Mailable but no phone or email',
     'no_property_match_with_address': 'Has an address but no confirmed property match',
@@ -235,10 +250,24 @@ def get_recommended_action_display(
         base_label = sold_meta['label']
         base_explanation = sold_meta['explanation']
 
+    if winning_rule == 'owner_mailing_returned':
+        has_digital = (
+            action in ('call_ready', 'ready_for_outreach')
+            or contact_method in ('phone', 'email')
+        )
+        base_explanation = (
+            OWNER_MAILING_RETURNED_WITH_CONTACT_EXPLANATION
+            if has_digital
+            else OWNER_MAILING_RETURNED_NO_CONTACT_EXPLANATION
+        )
+
     channel_label = outreach_action_label(action, contact_method)
     label = channel_label or base_label
 
-    explanation = outreach_action_explanation(action, contact_method, base_explanation)
+    if winning_rule == 'owner_mailing_returned':
+        explanation = base_explanation
+    else:
+        explanation = outreach_action_explanation(action, contact_method, base_explanation)
     explanation = _with_recent_sale_contact_rationale(
         explanation,
         lead=lead,
