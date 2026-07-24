@@ -51,6 +51,26 @@ def test_cron_missing_entries_detects_gaps():
     missing = hc.cron_missing_entries(crontab)
     assert "weekly pg-basebackup.sh" in missing
     assert "daily-summary.sh" in missing
+    assert "celery-liveness-check.sh" not in missing
+
+
+def test_cron_missing_liveness_warn_only():
+    assert hc.cron_missing_liveness("0 2 * * * /home/deploy/backup.sh") is True
+    assert (
+        hc.cron_missing_liveness("*/5 * * * * /home/deploy/celery-liveness-check.sh")
+        is False
+    )
+
+
+def test_cron_missing_entries_ok_when_core_present():
+    crontab = "\n".join(
+        [
+            "0 2 * * * /home/deploy/backup.sh",
+            "0 1 * * 0 /home/deploy/pg-basebackup.sh",
+            "30 0 * * * /home/deploy/daily-summary.sh",
+        ]
+    )
+    assert hc.cron_missing_entries(crontab) == []
 
 
 def test_estimate_remote_steady_state_under_free_tier():
@@ -85,7 +105,12 @@ def test_run_checks_skips_remote_when_not_configured(tmp_path: Path, monkeypatch
     monkeypatch.setattr(
         hc,
         "read_crontab",
-        lambda: "/home/deploy/backup.sh\n/home/deploy/pg-basebackup.sh\n/home/deploy/daily-summary.sh",
+        lambda: (
+            "/home/deploy/backup.sh\n"
+            "/home/deploy/pg-basebackup.sh\n"
+            "/home/deploy/daily-summary.sh\n"
+            "/home/deploy/celery-liveness-check.sh"
+        ),
     )
     errors = hc.run_checks(conf)
     assert errors == []

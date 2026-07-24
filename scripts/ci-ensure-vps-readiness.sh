@@ -4,6 +4,15 @@
 # Run on the GitHub Actions runner: copy readiness scripts, check VPS, optionally
 # auto-migrate as root when VPS_ROOT_SSH_KEY is set.
 #
+# Exit codes from run-vps-readiness-check.sh:
+#   0 — ready
+#   1 — hard failure (missing files, sudo, redis down, etc.)
+#   2 — celery/beat ensure failed after restart attempt
+#
+# Set SOFT_ASYNC_ENSURE_FAILURE=1 (CI smoke only) to treat exit 2 as a warning
+# so Deploy is not skipped; Deploy itself re-ensures without this flag.
+# Redis / other hard failures always exit 1 and still fail CI.
+#
 # Usage:
 #   VPS_USER=deploy VPS_HOST=... SSH_KEY_PATH=~/.ssh/id_deploy \
 #     TARGET_SHA=<optional> VPS_ROOT_SSH_KEY=<optional> \
@@ -32,9 +41,24 @@ run_readiness() {
 READINESS_LOG=$(mktemp)
 trap 'rm -f "${READINESS_LOG}"' EXIT
 
-if run_readiness 2>&1 | tee "${READINESS_LOG}"; then
+set +e
+run_readiness > "${READINESS_LOG}" 2>&1
+READINESS_CODE=$?
+set -e
+cat "${READINESS_LOG}"
+
+if [[ "${READINESS_CODE}" -eq 0 ]]; then
     echo "VPS readiness check passed."
     exit 0
+fi
+
+if [[ "${READINESS_CODE}" -eq 2 ]]; then
+    if [[ "${SOFT_ASYNC_ENSURE_FAILURE:-}" == "1" ]]; then
+        echo "::warning::VPS async stack ensure failed (exit 2). CI success/Deploy not blocked; Deploy will re-ensure celery/redis."
+        exit 0
+    fi
+    echo "ERROR: VPS async stack ensure failed (celery/redis unhealthy after restart attempt)."
+    exit 1
 fi
 
 if [[ -z "${VPS_ROOT_SSH_KEY:-}" ]]; then

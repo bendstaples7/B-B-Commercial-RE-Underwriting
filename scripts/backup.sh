@@ -49,28 +49,14 @@ fi
 # shellcheck source=/home/deploy/backup.conf
 source "$CONF_FILE"
 
-# ── Shared alert function ─────────────────────────────────────────────────────
-# Defined after sourcing backup.conf so LOG_FILE, ALERT_METHOD, etc. are available.
-# Credential values must never be passed as subject or body by callers.
-send_alert() {
-    local subject="$1"
-    local body="$2"
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT: $subject" >> "$LOG_FILE"
-
-    if [[ "$ALERT_METHOD" == "email" || "$ALERT_METHOD" == "both" ]]; then
-        echo "$body" | msmtp --account="$MSMTP_ACCOUNT" "$ALERT_EMAIL" \
-            --subject="[Backup Alert] $subject" 2>>"$LOG_FILE" \
-            || echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT DELIVERY FAILED (email): $?" >> "$LOG_FILE"
-    fi
-
-    if [[ "$ALERT_METHOD" == "webhook" || "$ALERT_METHOD" == "both" ]]; then
-        curl -s -X POST "$WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -d "{\"text\": \"[Backup Alert] $subject\n$body\"}" \
-            --max-time 10 2>>"$LOG_FILE" \
-            || echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT DELIVERY FAILED (webhook): $?" >> "$LOG_FILE"
-    fi
-}
+# Shared alert helper (email/webhook with JSON-safe payload).
+ALERT_SUBJECT_PREFIX="[Backup Alert]"
+OPS_ALERT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ops-alert.sh"
+if [[ ! -f "$OPS_ALERT_LIB" ]]; then
+    OPS_ALERT_LIB="/home/deploy/ops-alert.sh"
+fi
+# shellcheck source=ops-alert.sh
+source "$OPS_ALERT_LIB"
 
 # ── Step 2: Validate required config variables ────────────────────────────────
 # Abort without writing credential values to the log if any are missing.

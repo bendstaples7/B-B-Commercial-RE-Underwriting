@@ -31,6 +31,9 @@ jobs:
     # automatic workflow_run trigger is skipped (e.g. when deploy.yml itself was
     # changed in the merged PR). Only repository collaborators with write access
     # can trigger workflow_dispatch via the GitHub Actions UI.
+    # App CI green (CI success) triggers Deploy. VPS async-stack readiness is
+    # soft on the CI smoke job so a stopped celery worker cannot skip deploys;
+    # this workflow always re-ensures the async stack before shipping.
     if: >
       (github.event_name == 'workflow_dispatch') ||
       (github.event.workflow_run.conclusion == 'success' &&
@@ -188,6 +191,8 @@ jobs:
           scp -i ~/.ssh/id_deploy scripts/pg-basebackup.sh $VPS_USER@$VPS_HOST:/home/deploy/pg-basebackup.sh
           scp -i ~/.ssh/id_deploy scripts/daily-summary.sh $VPS_USER@$VPS_HOST:/home/deploy/daily-summary.sh
           scp -i ~/.ssh/id_deploy scripts/install-backup-cron.sh $VPS_USER@$VPS_HOST:/home/deploy/install-backup-cron.sh
+          scp -i ~/.ssh/id_deploy scripts/celery-liveness-check.sh $VPS_USER@$VPS_HOST:/home/deploy/celery-liveness-check.sh
+          scp -i ~/.ssh/id_deploy scripts/ops-alert.sh $VPS_USER@$VPS_HOST:/home/deploy/ops-alert.sh
           scp -i ~/.ssh/id_deploy scripts/verify-backup-health.sh $VPS_USER@$VPS_HOST:/home/deploy/verify-backup-health.sh
           scp -i ~/.ssh/id_deploy scripts/backup_health_check.py $VPS_USER@$VPS_HOST:/home/deploy/backup_health_check.py
           scp -i ~/.ssh/id_deploy scripts/setup-b2-rclone.py $VPS_USER@$VPS_HOST:/home/deploy/setup-b2-rclone.py
@@ -198,7 +203,7 @@ jobs:
           scp -i ~/.ssh/id_deploy backup_lib.py $VPS_USER@$VPS_HOST:/home/deploy/backup_lib.py
           # Set correct permissions on backup scripts
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
-            "chmod 750 /home/deploy/backup.sh /home/deploy/backup_remote_transfer.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh /home/deploy/install-backup-cron.sh /home/deploy/verify-backup-health.sh /home/deploy/restore-drill.sh && chmod 755 /home/deploy/wal-archive.sh && chmod 644 /home/deploy/backup_lib.py /home/deploy/backup_health_check.py /home/deploy/setup-b2-rclone.py /home/deploy/setup-cloudflare-rclone.py /home/deploy/configure_backup_remotes.py /home/deploy/inject-remote-backup.py"
+            "chmod 750 /home/deploy/backup.sh /home/deploy/backup_remote_transfer.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh /home/deploy/install-backup-cron.sh /home/deploy/celery-liveness-check.sh /home/deploy/ops-alert.sh /home/deploy/verify-backup-health.sh /home/deploy/restore-drill.sh && chmod 755 /home/deploy/wal-archive.sh && chmod 644 /home/deploy/backup_lib.py /home/deploy/backup_health_check.py /home/deploy/setup-b2-rclone.py /home/deploy/setup-cloudflare-rclone.py /home/deploy/configure_backup_remotes.py /home/deploy/inject-remote-backup.py"
           # Create a stub backup.conf if none exists so backup.sh can run without blocking the deploy.
           # The stub has empty remote/alert credentials — backup will skip remote transfer and alerting
           # but will still run pg_dump and write a local manifest entry.

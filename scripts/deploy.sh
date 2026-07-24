@@ -64,18 +64,29 @@ rollback() {
 trap rollback ERR
 
 # Celery is stopped before the memory guard to free worker RSS on the 2GB VPS.
-# EXIT trap restores Celery if deploy exits before step 7 restart (memory preflight failure).
+# Durable marker + EXIT trap restore Celery if deploy exits before step 7
+# (memory preflight failure, cancelled SSH). Liveness/ensure honor the marker mtime.
 CELERY_STOPPED_FOR_DEPLOY=0
 DEPLOY_ASYNC_STACK_RESTARTED=0
+CELERY_DEPLOY_MARKER="${CELERY_DEPLOY_MARKER:-/home/deploy/.celery_stopped_for_deploy}"
+
+_mark_celery_stopped_for_deploy() {
+    CELERY_STOPPED_FOR_DEPLOY=1
+    date -u +"%Y-%m-%dT%H:%M:%SZ" > "$CELERY_DEPLOY_MARKER" 2>/dev/null || true
+}
+
+_clear_celery_deploy_marker() {
+    rm -f "$CELERY_DEPLOY_MARKER" 2>/dev/null || true
+}
 
 stop_celery_for_deploy() {
     if systemctl cat celery-beat.service &>/dev/null 2>&1; then
         sudo -n systemctl stop celery-beat || { echo "FAILED: celery-beat stop"; exit 1; }
-        CELERY_STOPPED_FOR_DEPLOY=1
+        _mark_celery_stopped_for_deploy
     fi
     if systemctl cat celery.service &>/dev/null 2>&1; then
         sudo -n systemctl stop celery || { echo "FAILED: celery stop"; exit 1; }
-        CELERY_STOPPED_FOR_DEPLOY=1
+        _mark_celery_stopped_for_deploy
     fi
     if [ "$CELERY_STOPPED_FOR_DEPLOY" -eq 1 ]; then
         sleep 5
@@ -84,25 +95,39 @@ stop_celery_for_deploy() {
 }
 
 restore_celery_if_stopped_for_prep() {
-    if [ "$CELERY_STOPPED_FOR_DEPLOY" -eq 1 ] && [ "$DEPLOY_ASYNC_STACK_RESTARTED" -eq 0 ]; then
-        local restore_ok=1
-        if systemctl cat celery.service &>/dev/null 2>&1; then
-            if ! sudo -n systemctl restart celery; then
-                echo "WARNING: celery restart failed during early deploy exit cleanup"
-                restore_ok=0
-            fi
+    # Prefer durable marker so a SIGKILL'd shell still leaves a signal for liveness;
+    # in-process flags cover the normal EXIT/TERM path.
+    local need_restore=0
+    if [ "$DEPLOY_ASYNC_STACK_RESTARTED" -eq 1 ]; then
+        _clear_celery_deploy_marker
+        return 0
+    fi
+    if [ "$CELERY_STOPPED_FOR_DEPLOY" -eq 1 ] || [ -f "$CELERY_DEPLOY_MARKER" ]; then
+        need_restore=1
+    fi
+    if [ "$need_restore" -eq 0 ]; then
+        return 0
+    fi
+
+    local restore_ok=1
+    if systemctl cat celery.service &>/dev/null 2>&1; then
+        if ! sudo -n systemctl restart celery; then
+            echo "WARNING: celery restart failed during early deploy exit cleanup"
+            restore_ok=0
         fi
-        if systemctl cat celery-beat.service &>/dev/null 2>&1; then
-            if ! sudo -n systemctl restart celery-beat; then
-                echo "WARNING: celery-beat restart failed during early deploy exit cleanup"
-                restore_ok=0
-            fi
+    fi
+    if systemctl cat celery-beat.service &>/dev/null 2>&1; then
+        if ! sudo -n systemctl restart celery-beat; then
+            echo "WARNING: celery-beat restart failed during early deploy exit cleanup"
+            restore_ok=0
         fi
-        if [ "$restore_ok" -eq 1 ]; then
-            echo "    celery: restored after early deploy exit"
-        else
-            echo "WARNING: celery restore incomplete after early deploy exit — manual intervention may be required"
-        fi
+    fi
+    if [ "$restore_ok" -eq 1 ]; then
+        _clear_celery_deploy_marker
+        CELERY_STOPPED_FOR_DEPLOY=0
+        echo "    celery: restored after early deploy exit"
+    else
+        echo "WARNING: celery restore incomplete after early deploy exit — marker left for liveness cron"
     fi
 }
 
@@ -121,6 +146,7 @@ dump_memory_diagnostics() {
 cleanup_deploy_exit() {
     restore_celery_if_stopped_for_prep
 }
+# EXIT covers normal exit, explicit exit, and default signal termination (TERM/HUP/INT).
 trap cleanup_deploy_exit EXIT
 
 # ── Pre-deploy VPS health checks ─────────────────────────────────────────────
@@ -394,6 +420,7 @@ fi
 verify_async_stack_services || exit 1
 echo "    async stack verified"
 DEPLOY_ASYNC_STACK_RESTARTED=1
+_clear_celery_deploy_marker
 
 echo "==> (8) Post-deploy HubSpot sync dispatch (non-blocking)"
 export DEPLOY_CHANGED_PATHS_FILE="${DEPLOY_CHANGED_PATHS_FILE:-/home/deploy/changed_paths.txt}"

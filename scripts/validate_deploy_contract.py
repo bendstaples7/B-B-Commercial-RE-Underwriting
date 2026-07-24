@@ -32,6 +32,8 @@ SHELL_SCRIPTS = [
     REPO_ROOT / "scripts" / "deploy-async-stack-checks.sh",
     REPO_ROOT / "scripts" / "run-vps-readiness-check.sh",
     REPO_ROOT / "scripts" / "ci-ensure-vps-readiness.sh",
+    REPO_ROOT / "scripts" / "celery-liveness-check.sh",
+    REPO_ROOT / "scripts" / "ops-alert.sh",
     REPO_ROOT / "scripts" / "vps-setup" / "migrate-async-stack.sh",
     REPO_ROOT / "scripts" / "vps-setup" / "bootstrap-async-stack.sh",
     REPO_ROOT / "scripts" / "vps-setup" / "11-sudoers-deploy.sh",
@@ -112,15 +114,130 @@ def main() -> int:
         if not _script_references_command(checks_text, cmd):
             errors.append(f"deploy-async-stack-checks.sh does not reference: {cmd}")
 
-    # 5. run-vps-readiness-check sources shared module
+    # 5. run-vps-readiness-check sources shared module and self-heals celery
     readiness = _read(REPO_ROOT / "scripts" / "run-vps-readiness-check.sh")
     if "source" not in readiness or "deploy-async-stack-checks.sh" not in readiness:
         errors.append("run-vps-readiness-check.sh must source deploy-async-stack-checks.sh")
+    if "ensure_async_stack_services" not in readiness:
+        errors.append(
+            "run-vps-readiness-check.sh must call ensure_async_stack_services "
+            "(restart inactive celery before failing the gate)"
+        )
+    if "exit 2" not in readiness:
+        errors.append(
+            "run-vps-readiness-check.sh must exit 2 when celery/beat ensure fails "
+            "(soft for CI smoke, hard for Deploy)"
+        )
+    if "ensure_rc" not in readiness or "exit 1" not in readiness:
+        errors.append(
+            "run-vps-readiness-check.sh must exit 1 on redis ensure failure (return 3)"
+        )
+    if "return 3" not in checks_text:
+        errors.append(
+            "ensure_async_stack_services must return 3 when redis-server is inactive"
+        )
+    if "ensure_async_stack_services" not in checks_text:
+        errors.append(
+            "deploy-async-stack-checks.sh must define ensure_async_stack_services"
+        )
+    if "celery_deploy_marker_is_fresh" not in checks_text:
+        errors.append(
+            "deploy-async-stack-checks.sh must define celery_deploy_marker_is_fresh"
+        )
+    if "celery_deploy_marker_is_fresh" not in checks_text or \
+            "skip restart" not in checks_text:
+        errors.append(
+            "ensure_async_stack_services must skip celery restart while "
+            "deploy stop marker is fresh"
+        )
+    unit_text = _read(REPO_ROOT / "scripts" / "vps-setup" / "09b-celery-service.sh")
+    if "Restart=always" not in unit_text:
+        errors.append(
+            "09b-celery-service.sh must set Restart=always on celery units"
+        )
+    if "StartLimitBurst=5" not in unit_text:
+        errors.append(
+            "09b-celery-service.sh must set StartLimitBurst to avoid restart thrash"
+        )
 
-    # 6. deploy.sh uses sudo -n (no bare sudo for systemctl)
+    # 6. deploy.sh uses sudo -n (no bare sudo for systemctl) and always restores celery
     deploy_text = _read(REPO_ROOT / "scripts" / "deploy.sh")
     if re.search(r'(?<!-n )\bsudo systemctl\b', deploy_text):
         errors.append("deploy.sh contains 'sudo systemctl' without -n — use sudo -n")
+    if "trap cleanup_deploy_exit EXIT" not in deploy_text:
+        errors.append("deploy.sh must trap cleanup_deploy_exit on EXIT")
+    if "CELERY_DEPLOY_MARKER" not in deploy_text:
+        errors.append(
+            "deploy.sh must write CELERY_DEPLOY_MARKER so liveness can detect "
+            "interrupted deploys that left celery stopped"
+        )
+    # EXIT trap is enough; avoid redundant signal traps that obscure exit codes.
+    if re.search(r"trap 'cleanup_deploy_exit; exit \d+' TERM", deploy_text):
+        errors.append(
+            "deploy.sh should restore celery via EXIT only (remove TERM/INT/HUP traps)"
+        )
+
+    # 6b. Celery liveness cron + shared ops-alert + installer
+    liveness = REPO_ROOT / "scripts" / "celery-liveness-check.sh"
+    if not liveness.exists():
+        errors.append("Missing expected script: scripts/celery-liveness-check.sh")
+    else:
+        liveness_text = _read(liveness)
+        if "ensure_async_stack_services" not in liveness_text:
+            errors.append(
+                "celery-liveness-check.sh must call ensure_async_stack_services"
+            )
+        if "celery_deploy_marker_is_fresh" not in liveness_text:
+            errors.append(
+                "celery-liveness-check.sh must honor deploy marker via "
+                "celery_deploy_marker_is_fresh"
+            )
+        if "ops-alert.sh" not in liveness_text:
+            errors.append("celery-liveness-check.sh must source ops-alert.sh")
+    ops_alert = REPO_ROOT / "scripts" / "ops-alert.sh"
+    if not ops_alert.exists():
+        errors.append("Missing expected script: scripts/ops-alert.sh")
+    else:
+        ops_text = _read(ops_alert)
+        if "json.dumps" not in ops_text:
+            errors.append("ops-alert.sh must JSON-encode webhook payloads")
+        if "--subject" in ops_text and re.search(r"msmtp[^\n]*--subject", ops_text):
+            errors.append(
+                "ops-alert.sh must not pass unsupported msmtp --subject; "
+                "use an RFC Subject header on stdin"
+            )
+        if "Subject:" not in ops_text:
+            errors.append("ops-alert.sh must send email with a Subject: header on stdin")
+        if "--fail" not in ops_text:
+            errors.append(
+                "ops-alert.sh webhook curl must use --fail so HTTP errors are logged"
+            )
+    install_cron = _read(REPO_ROOT / "scripts" / "install-backup-cron.sh")
+    if "celery-liveness-check.sh" not in install_cron:
+        errors.append(
+            "install-backup-cron.sh must install celery-liveness-check.sh cron"
+        )
+
+    # 6c. CI smoke soft-fails only async ensure (exit 2), not hard infra failures
+    ci_yml = _read(REPO_ROOT / ".github" / "workflows" / "ci.yml")
+    if "SOFT_ASYNC_ENSURE_FAILURE" not in ci_yml:
+        errors.append(
+            "ci.yml vps-smoke must set SOFT_ASYNC_ENSURE_FAILURE=1 "
+            "(async ensure exit 2 must not block Deploy)"
+        )
+    ci_ensure = _read(REPO_ROOT / "scripts" / "ci-ensure-vps-readiness.sh")
+    if "SOFT_ASYNC_ENSURE_FAILURE" not in ci_ensure or "READINESS_CODE" not in ci_ensure:
+        errors.append(
+            "ci-ensure-vps-readiness.sh must soft-handle readiness exit 2 when "
+            "SOFT_ASYNC_ENSURE_FAILURE=1"
+        )
+    deploy_yml = _read(REPO_ROOT / ".github" / "workflows" / "deploy.yml")
+    if "celery-liveness-check.sh" not in deploy_yml:
+        errors.append(
+            "deploy.yml must copy celery-liveness-check.sh to the VPS"
+        )
+    if "ops-alert.sh" not in deploy_yml:
+        errors.append("deploy.yml must copy ops-alert.sh to the VPS")
 
     # 7. post_deploy_sync dispatches async (must not block SSH on sync runner)
     post_deploy_path = REPO_ROOT / "backend" / "scripts" / "post_deploy_sync.py"

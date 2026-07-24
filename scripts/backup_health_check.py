@@ -56,6 +56,11 @@ def cron_missing_entries(crontab_text: str) -> list[str]:
     return missing
 
 
+def cron_missing_liveness(crontab_text: str) -> bool:
+    """True when celery liveness cron is absent (warn-only during rollout)."""
+    return "/home/deploy/celery-liveness-check.sh" not in crontab_text
+
+
 def parse_manifest_timestamp(ts: str) -> datetime:
     if ts.endswith("Z"):
         ts = ts[:-1] + "+00:00"
@@ -143,9 +148,18 @@ def run_checks(conf_path: Path = Path("/home/deploy/backup.conf")) -> list[str]:
     backup_dir = Path(conf.get("BACKUP_DIR", "/home/deploy/backups"))
     manifest_path = backup_dir / "backup_manifest.log"
 
-    missing_cron = cron_missing_entries(read_crontab())
+    crontab_text = read_crontab()
+    missing_cron = cron_missing_entries(crontab_text)
     if missing_cron:
         errors.append(f"missing cron entries: {', '.join(missing_cron)}")
+    # Rollout: liveness cron is installed by updated install-backup-cron.sh;
+    # warn until present so main CI smoke is not blocked before first Deploy.
+    if cron_missing_liveness(crontab_text):
+        print(
+            "WARNING: missing cron entry: celery-liveness-check.sh "
+            "(will be installed on next deploy prepare)",
+            file=sys.stderr,
+        )
 
     last = last_valid_manifest_entry(manifest_path)
     if last is None:

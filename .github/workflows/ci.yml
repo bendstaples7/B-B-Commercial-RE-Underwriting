@@ -301,16 +301,20 @@ jobs:
             exit 1
           }
 
+      # Soft only for async-stack ensure (exit 2). Hard failures (SSH, sudo, missing
+      # files) still fail this job. Deploy re-ensures without SOFT_ASYNC_ENSURE_FAILURE.
       - name: Run VPS readiness check
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_ROOT_SSH_KEY: ${{ secrets.VPS_ROOT_SSH_KEY }}
           SSH_KEY_PATH: ~/.ssh/id_deploy
+          SOFT_ASYNC_ENSURE_FAILURE: "1"
         run: |
           chmod +x scripts/ci-ensure-vps-readiness.sh scripts/run-vps-readiness-check.sh
           VPS_USER="$VPS_USER" VPS_HOST="$VPS_HOST" SSH_KEY_PATH="$SSH_KEY_PATH" \
             VPS_ROOT_SSH_KEY="$VPS_ROOT_SSH_KEY" \
+            SOFT_ASYNC_ENSURE_FAILURE=1 \
             bash scripts/ci-ensure-vps-readiness.sh
 
   backend:

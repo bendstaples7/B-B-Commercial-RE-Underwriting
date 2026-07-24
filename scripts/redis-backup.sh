@@ -12,6 +12,15 @@ set -euo pipefail
 # shellcheck source=/home/deploy/backup.conf
 source /home/deploy/backup.conf
 
+# ── Shared alert helper ───────────────────────────────────────────────────────
+ALERT_SUBJECT_PREFIX="[Backup Alert]"
+OPS_ALERT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ops-alert.sh"
+if [[ ! -f "$OPS_ALERT_LIB" ]]; then
+    OPS_ALERT_LIB="/home/deploy/ops-alert.sh"
+fi
+# shellcheck source=ops-alert.sh
+source "$OPS_ALERT_LIB"
+
 # ── Redis command prefix ──────────────────────────────────────────────────────
 # On a Linux VPS with native Redis, CMD_PREFIX is empty.
 # On Windows/WSL, set CMD_PREFIX="wsl -d Ubuntu --" in backup.conf or here.
@@ -20,28 +29,6 @@ CMD_PREFIX="${REDIS_CMD_PREFIX:-}"
 if [[ -n "$CMD_PREFIX" ]] && ! command -v wsl &>/dev/null; then
     CMD_PREFIX=""
 fi
-
-# ── Shared alert function ─────────────────────────────────────────────────────
-send_alert() {
-    local subject="$1"
-    local body="$2"
-    # Never log credential values — body must be pre-sanitized by caller
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT: $subject" >> "$LOG_FILE"
-
-    if [[ "$ALERT_METHOD" == "email" || "$ALERT_METHOD" == "both" ]]; then
-        echo "$body" | msmtp --account="$MSMTP_ACCOUNT" "$ALERT_EMAIL" \
-            --subject="[Backup Alert] $subject" 2>>"$LOG_FILE" \
-            || echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT DELIVERY FAILED (email): $?" >> "$LOG_FILE"
-    fi
-
-    if [[ "$ALERT_METHOD" == "webhook" || "$ALERT_METHOD" == "both" ]]; then
-        curl -s -X POST "$WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -d "{\"text\": \"[Backup Alert] $subject\n$body\"}" \
-            --max-time 10 2>>"$LOG_FILE" \
-            || echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] ALERT DELIVERY FAILED (webhook): $?" >> "$LOG_FILE"
-    fi
-}
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 REDIS_BGSAVE_TIMEOUT="${REDIS_BGSAVE_TIMEOUT:-300}"
