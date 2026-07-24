@@ -125,8 +125,16 @@ def main() -> int:
         )
     if "exit 2" not in readiness:
         errors.append(
-            "run-vps-readiness-check.sh must exit 2 when async ensure fails "
+            "run-vps-readiness-check.sh must exit 2 when celery/beat ensure fails "
             "(soft for CI smoke, hard for Deploy)"
+        )
+    if "ensure_rc" not in readiness or "exit 1" not in readiness:
+        errors.append(
+            "run-vps-readiness-check.sh must exit 1 on redis ensure failure (return 3)"
+        )
+    if "return 3" not in checks_text:
+        errors.append(
+            "ensure_async_stack_services must return 3 when redis-server is inactive"
         )
     if "ensure_async_stack_services" not in checks_text:
         errors.append(
@@ -193,6 +201,17 @@ def main() -> int:
         ops_text = _read(ops_alert)
         if "json.dumps" not in ops_text:
             errors.append("ops-alert.sh must JSON-encode webhook payloads")
+        if "--subject" in ops_text and re.search(r"msmtp[^\n]*--subject", ops_text):
+            errors.append(
+                "ops-alert.sh must not pass unsupported msmtp --subject; "
+                "use an RFC Subject header on stdin"
+            )
+        if "Subject:" not in ops_text:
+            errors.append("ops-alert.sh must send email with a Subject: header on stdin")
+        if "--fail" not in ops_text:
+            errors.append(
+                "ops-alert.sh webhook curl must use --fail so HTTP errors are logged"
+            )
     install_cron = _read(REPO_ROOT / "scripts" / "install-backup-cron.sh")
     if "celery-liveness-check.sh" not in install_cron:
         errors.append(

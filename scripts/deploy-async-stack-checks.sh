@@ -106,9 +106,16 @@ _ensure_unit_active() {
 # Self-heal inactive celery/beat before failing CI readiness / pre-deploy gates.
 # Uses passwordless restart already granted to the deploy user — no root key needed.
 # Skips celery/beat restarts while deploy memory-prep marker is fresh.
+#
+# Return codes:
+#   0 — healthy (or celery intentionally stopped for deploy)
+#   1 — celery/beat ensure failed (soft for CI smoke → readiness exit 2)
+#   3 — redis-server not active (hard infra → readiness exit 1)
 ensure_async_stack_services() {
-    sudo -n systemctl is-active --quiet redis-server \
-        || { echo "FAILED: redis-server not active"; return 1; }
+    if ! sudo -n systemctl is-active --quiet redis-server; then
+        echo "FAILED: redis-server not active"
+        return 3
+    fi
 
     if celery_deploy_marker_is_fresh; then
         echo "    celery: deploy stop marker fresh — skip restart (memory prep in progress)"

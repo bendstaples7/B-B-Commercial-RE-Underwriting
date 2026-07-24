@@ -60,9 +60,26 @@ def test_readiness_exits_2_on_ensure_failure():
         encoding="utf-8"
     )
     assert "exit 2" in readiness
+    assert "ensure_rc" in readiness
+    assert re.search(r"ensure_rc.*-eq 3", readiness) or 'ensure_rc}" -eq 3' in readiness
     ci_ensure = (REPO_ROOT / "scripts" / "ci-ensure-vps-readiness.sh").read_text(
         encoding="utf-8"
     )
     assert "SOFT_ASYNC_ENSURE_FAILURE" in ci_ensure
-    assert 'READINESS_CODE" -eq 2' in ci_ensure or "READINESS_CODE} -eq 2" in ci_ensure or \
-        re.search(r"READINESS_CODE.*-eq 2", ci_ensure)
+    assert re.search(r"READINESS_CODE.*-eq 2", ci_ensure)
+
+
+def test_ensure_redis_failure_returns_3():
+    checks = (REPO_ROOT / "scripts" / "deploy-async-stack-checks.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "return 3" in checks
+    assert "redis-server not active" in checks
+
+
+def test_ops_alert_msmtp_rfc_and_curl_fail():
+    ops = (REPO_ROOT / "scripts" / "ops-alert.sh").read_text(encoding="utf-8")
+    assert "Subject:" in ops
+    assert not re.search(r"msmtp[^\n]*--subject", ops)
+    assert "--fail" in ops
+    assert "json.dumps" in ops

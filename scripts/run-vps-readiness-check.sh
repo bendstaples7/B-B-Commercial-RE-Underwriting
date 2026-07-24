@@ -55,12 +55,20 @@ if ! systemctl list-unit-files celery.service &>/dev/null 2>&1; then
 else
     echo "    async stack unit files: present"
     # Restart inactive celery/beat if needed (common after interrupted deploys).
-    # Exit 2 = soft for CI smoke (Deploy re-ensures); hard infra failures stay exit 1.
-    if ! ensure_async_stack_services; then
-        echo "WARNING: async stack ensure failed (redis/celery not healthy after restart attempt)"
+    # ensure return 1 → exit 2 (soft for CI smoke); return 3 (redis) → exit 1 (hard).
+    set +e
+    ensure_async_stack_services
+    ensure_rc=$?
+    set -e
+    if [[ "${ensure_rc}" -eq 0 ]]; then
+        echo "    redis/celery services: active"
+    elif [[ "${ensure_rc}" -eq 3 ]]; then
+        echo "ERROR: redis-server not active (hard infra failure)"
+        exit 1
+    else
+        echo "WARNING: celery/beat ensure failed after restart attempt"
         exit 2
     fi
-    echo "    redis/celery services: active"
 fi
 
 echo "VPS readiness check passed."

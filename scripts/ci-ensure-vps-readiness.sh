@@ -6,11 +6,12 @@
 #
 # Exit codes from run-vps-readiness-check.sh:
 #   0 — ready
-#   1 — hard failure (missing files, sudo, etc.)
-#   2 — async stack ensure failed (celery/redis still unhealthy)
+#   1 — hard failure (missing files, sudo, redis down, etc.)
+#   2 — celery/beat ensure failed after restart attempt
 #
 # Set SOFT_ASYNC_ENSURE_FAILURE=1 (CI smoke only) to treat exit 2 as a warning
 # so Deploy is not skipped; Deploy itself re-ensures without this flag.
+# Redis / other hard failures always exit 1 and still fail CI.
 #
 # Usage:
 #   VPS_USER=deploy VPS_HOST=... SSH_KEY_PATH=~/.ssh/id_deploy \
