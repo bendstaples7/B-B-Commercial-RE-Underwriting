@@ -78,3 +78,11 @@ export function getOutreachStatusColor(
       return 'default'
   }
 }
+
+/** Currency display with whole-dollar rounding (shared by Quick Stats + At a glance). */
+export function formatMoneyValue(value: number | string | null | undefined): string | null {
+  if (value == null || value === '') return null
+  const n = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(n)) return null
+  return `$${Math.round(n).toLocaleString()}`
+}

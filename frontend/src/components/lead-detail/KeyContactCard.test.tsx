@@ -65,7 +65,7 @@ describe('formatKeyContactMailing', () => {
           mailing_zip: '60201',
         }),
       ),
-    ).toBe('100 Main St\nEvanston, IL, 60201')
+    ).toBe('100 Main St\nEvanston, IL 60201')
     expect(formatKeyContactMailing(basePayload())).toBeNull()
   })
 })
@@ -108,7 +108,7 @@ describe('KeyContactCard', () => {
       }),
     )
     expect(screen.getByTestId('key-contact-mailing')).toHaveTextContent('12709 Holbrook Dr')
-    expect(screen.getByTestId('key-contact-mailing')).toHaveTextContent('Orland Park, IL, 60467')
+    expect(screen.getByTestId('key-contact-mailing')).toHaveTextContent('Orland Park, IL 60467')
   })
 
   it('shows empty mailing copy when owner mailing is missing', () => {

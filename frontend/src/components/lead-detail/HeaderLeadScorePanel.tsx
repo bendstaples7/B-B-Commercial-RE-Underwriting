@@ -159,7 +159,9 @@ export function HeaderLeadScorePanel({
       data-testid="header-lead-score"
       aria-label={
         clickable
-          ? 'View lead score breakdown'
+          ? hasScore
+            ? `Lead score ${rounded}, ${priority}. View lead score breakdown`
+            : 'Lead score not available. View lead score breakdown'
           : hasScore
             ? `Lead score ${rounded}`
             : 'Lead score not available'

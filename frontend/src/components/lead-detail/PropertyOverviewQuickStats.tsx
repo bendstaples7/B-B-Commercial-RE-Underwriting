@@ -5,16 +5,11 @@ import React from 'react'
 import { Box, Tooltip, Typography } from '@mui/material'
 import type { CommandCenterPayload } from '@/types'
 import { ccKpiLabelSx, ccKpiValueSx } from '@/components/lead-detail/commandCenterChrome'
-import { formatPropertyTypeLabel } from '@/utils/formatters'
+import { formatMoneyValue, formatPropertyTypeLabel } from '@/utils/formatters'
 
 const EM_DASH = '—'
 
-export function formatMoneyValue(value: number | string | null | undefined): string | null {
-  if (value == null || value === '') return null
-  const n = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(n)) return null
-  return `$${Math.round(n).toLocaleString()}`
-}
+export { formatMoneyValue } from '@/utils/formatters'
 
 /** Normalize sale display strings to a readable date (prefer MM/DD/YYYY). */
 export function formatSaleDatePart(saleDisplay: string | null | undefined): string | null {
@@ -154,7 +149,7 @@ export function PropertyOverviewQuickStats({ commandCenterData }: PropertyOvervi
                 lineHeight: 1.25,
                 whiteSpace: cell.allowWrap ? 'pre-line' : 'nowrap',
               }}
-              title={cell.value.replace(/\n/g, ' · ')}
+              title={cell.tooltip ? undefined : cell.value.replace(/\n/g, ' · ')}
             >
               {cell.value}
             </Typography>

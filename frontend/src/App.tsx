@@ -74,6 +74,7 @@ import WorkHistoryIcon from '@mui/icons-material/WorkHistory'
 import AccountTreeIcon from '@mui/icons-material/AccountTree'
 import ListAltIcon from '@mui/icons-material/ListAlt'
 import LocalPostOfficeIcon from '@mui/icons-material/LocalPostOffice'
+import type { Theme } from '@mui/material/styles'
 import TravelExploreIcon from '@mui/icons-material/TravelExplore'
 import { usePipelineStatus } from './context/PipelineStatusContext'
 import Avatar from '@mui/material/Avatar'
@@ -377,6 +378,23 @@ const navItemActiveSx = {
 }
 
 const NAV_ROW_HEIGHT = 44
+
+function secondaryColumnSx(expanded: boolean, theme: Theme) {
+  return {
+    flex: 1,
+    minWidth: 0,
+    width: expanded ? SECONDARY_NAV_WIDTH : 0,
+    overflow: 'hidden',
+    bgcolor: SECONDARY_NAV_BG,
+    opacity: expanded ? 1 : 0,
+    visibility: expanded ? ('visible' as const) : ('hidden' as const),
+    pointerEvents: expanded ? ('auto' as const) : ('none' as const),
+    transition: theme.transitions.create(['width', 'opacity', 'visibility'], {
+      easing: NAV_RAIL_EASING,
+      duration: NAV_RAIL_TRANSITION_MS,
+    }),
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Page wrapper components that handle route params / navigation
@@ -1871,21 +1889,7 @@ function App() {
                   </IconButton>
                 </Tooltip>
               </Box>
-              <Box
-                sx={{
-                  flex: 1,
-                  minWidth: 0,
-                  width: secondaryNavExpanded ? SECONDARY_NAV_WIDTH : 0,
-                  overflow: 'hidden',
-                  bgcolor: SECONDARY_NAV_BG,
-                  opacity: secondaryNavExpanded ? 1 : 0,
-                  pointerEvents: secondaryNavExpanded ? 'auto' : 'none',
-                  transition: theme.transitions.create(['width', 'opacity'], {
-                    easing: NAV_RAIL_EASING,
-                    duration: NAV_RAIL_TRANSITION_MS,
-                  }),
-                }}
-              >
+              <Box sx={secondaryColumnSx(secondaryNavExpanded, theme)}>
                 <Accordion
                   disableGutters
                   elevation={0}
@@ -1985,21 +1989,7 @@ function App() {
                 </IconButton>
               </Tooltip>
             </Box>
-            <Box
-              sx={{
-                flex: 1,
-                minWidth: 0,
-                width: secondaryNavExpanded ? SECONDARY_NAV_WIDTH : 0,
-                overflow: 'hidden',
-                bgcolor: SECONDARY_NAV_BG,
-                opacity: secondaryNavExpanded ? 1 : 0,
-                pointerEvents: secondaryNavExpanded ? 'auto' : 'none',
-                transition: theme.transitions.create(['width', 'opacity'], {
-                  easing: NAV_RAIL_EASING,
-                  duration: NAV_RAIL_TRANSITION_MS,
-                }),
-              }}
-            >
+            <Box sx={secondaryColumnSx(secondaryNavExpanded, theme)}>
               <Accordion
                 disableGutters
                 elevation={0}
@@ -2308,7 +2298,7 @@ function App() {
           pt: { xs: 0.5, sm: 1.5 },
           px: { xs: 1, sm: 3 },
           pb: { xs: 1, sm: 3 },
-          mt: '64px', // AppBar height
+          mt: { xs: '56px', sm: '64px' }, // matches Toolbar minHeight
           width: { xs: '100%', md: `calc(100% - ${drawerWidth}px)` },
           transition: theme.transitions.create('width', {
             easing: NAV_RAIL_EASING,

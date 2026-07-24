@@ -796,7 +796,7 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
       <Box
         ref={panelRef}
         component={embedded ? Paper : 'div'}
-        elevation={0}
+        {...(embedded ? { elevation: 0 } : {})}
         sx={embedded ? { ...ccCardSx, mb: 0 } : { mb: 2 }}
         data-testid="activity-panel"
       >
@@ -921,7 +921,7 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const tasksPanelRef = useRef<TasksPanelHandle>(null)
   const statusSelectorRef = useRef<HTMLDivElement | null>(null)
   const theme = useTheme()
-  const isLgUp = useMediaQuery(theme.breakpoints.up('lg'))
+  const isLgUp = useMediaQuery(theme.breakpoints.up('lg'), { noSsr: true })
   const showLead = !!commandCenterData && !commandCenterError
   const [activityModal, setActivityModal] = useState<ActivityLogType | null>(null)
   const [highlightEntryId, setHighlightEntryId] = useState<number | null>(null)

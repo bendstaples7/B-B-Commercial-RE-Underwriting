@@ -750,6 +750,9 @@ export function LeadTimeline({
     return (
       <Box data-testid="lead-timeline" data-variant="feed">
         <Box
+          role="region"
+          aria-label="Activity feed"
+          tabIndex={0}
           sx={{
             maxHeight: 360,
             overflowY: 'auto',

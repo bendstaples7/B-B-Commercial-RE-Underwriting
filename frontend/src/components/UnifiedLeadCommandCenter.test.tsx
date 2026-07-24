@@ -383,7 +383,6 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     const scrollIntoView = vi.fn()
     const originalScroll = Element.prototype.scrollIntoView
     Element.prototype.scrollIntoView = scrollIntoView as typeof Element.prototype.scrollIntoView
-    const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus')
     try {
       vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
         makeCommandCenterPayload({ units: 2 }),
@@ -397,10 +396,9 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
       })
       await user.click(screen.getByTestId('property-overview-owner-link'))
       expect(scrollIntoView).toHaveBeenCalled()
-      expect(focusSpy).toHaveBeenCalled()
+      expect(screen.getByTestId('key-contact-card')).toHaveFocus()
     } finally {
       Element.prototype.scrollIntoView = originalScroll
-      focusSpy.mockRestore()
     }
   })
 

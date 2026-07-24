@@ -8,6 +8,7 @@ import {
   ccMetaSx,
   ccSectionTitleSx,
 } from '@/components/lead-detail/commandCenterChrome'
+import { formatMoneyValue } from '@/utils/formatters'
 import { resolveMailerHistorySummary } from '@/utils/mailerHistory'
 
 export interface PropertyKpiCardProps {
@@ -27,13 +28,6 @@ type GridCell =
   | { kind: 'metric'; row: AtAGlanceRow }
   | { kind: 'see-more' }
   | { kind: 'empty' }
-
-function money(value: number | string | null | undefined): string | null {
-  if (value == null || value === '') return null
-  const n = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(n)) return null
-  return `$${n.toLocaleString()}`
-}
 
 function bedsBaths(
   bedrooms: number | null | undefined,
@@ -66,7 +60,7 @@ export function buildAtAGlanceRows(
   commandCenterData: CommandCenterPayload,
   propertyDetail?: PropertyDetail | null,
 ): AtAGlanceRow[] {
-  const tax = money(
+  const tax = formatMoneyValue(
     propertyDetail?.tax_bill_2021 ?? commandCenterData.tax_bill_2021 ?? null,
   )
 

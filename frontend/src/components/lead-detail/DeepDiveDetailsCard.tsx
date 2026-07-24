@@ -68,7 +68,7 @@ export function DeepDiveDetailsCard({ children }: { children: ReactNode }) {
         </Typography>
       </AccordionSummary>
       <AccordionDetails sx={{ px: 0, pt: 0, pb: 0 }}>
-        <Box sx={{ pt: 0.5 }}>{children}</Box>
+        <Box id="deep-dive-content" sx={{ pt: 0.5 }}>{children}</Box>
       </AccordionDetails>
     </Accordion>
   )

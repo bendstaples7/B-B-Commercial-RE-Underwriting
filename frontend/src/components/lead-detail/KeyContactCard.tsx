@@ -24,10 +24,11 @@ export type KeyContactChannel =
 /** Owner mailing only (no property-address fallback) — used for mail / skip-trace confidence. */
 export function formatKeyContactMailing(data: CommandCenterPayload): string | null {
   const street = data.mailing_address?.trim() || ''
-  const cityLine = [data.mailing_city, data.mailing_state, data.mailing_zip]
-    .map((part) => part?.trim() || '')
+  const city = data.mailing_city?.trim() || ''
+  const stateZip = [data.mailing_state?.trim(), data.mailing_zip?.trim()]
     .filter(Boolean)
-    .join(', ')
+    .join(' ')
+  const cityLine = [city, stateZip].filter(Boolean).join(', ')
   if (!street && !cityLine) return null
   return [street, cityLine].filter(Boolean).join('\n')
 }
@@ -60,9 +61,11 @@ function collectEmailSlotValues(data: CommandCenterPayload): string[] {
 }
 
 function primaryPhoneValue(data: CommandCenterPayload): string | null {
-  if (data.phones?.[0]?.value?.trim()) {
-    const v = data.phones[0].value.trim()
-    if (looksLikePhoneNumber(v)) return v
+  if (data.phones?.length) {
+    for (const p of data.phones) {
+      const v = p?.value?.trim()
+      if (v && looksLikePhoneNumber(v)) return v
+    }
   }
   for (let slot = 1; slot <= 7; slot += 1) {
     const raw = data[`phone_${slot}` as keyof CommandCenterPayload]

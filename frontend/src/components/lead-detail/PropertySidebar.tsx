@@ -598,6 +598,8 @@ export function PropertySidebar({
   }
 
   const stacked = variant === 'inline'
+  /** Inline variant is already one accordion — don't nest another "More property details". */
+  const secondaryAsAccordion = collapseSecondary && variant !== 'inline'
   const contactInfoBody = (
     <>
       {ownerEntries.map((entry, idx) => (
@@ -701,8 +703,8 @@ export function PropertySidebar({
       </SidebarSection>
       )}
       <Box
-        component={collapseSecondary ? Accordion : 'div'}
-        {...(collapseSecondary
+        component={secondaryAsAccordion ? Accordion : 'div'}
+        {...(secondaryAsAccordion
           ? {
               defaultExpanded: false,
               disableGutters: true,
@@ -716,7 +718,7 @@ export function PropertySidebar({
             }
           : {})}
       >
-        {collapseSecondary ? (
+        {secondaryAsAccordion ? (
           <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ px: 0, minHeight: 40 }}>
             <Typography variant="subtitle2" fontWeight={700}>
               More property details
@@ -724,7 +726,7 @@ export function PropertySidebar({
           </AccordionSummary>
         ) : null}
         <Box
-          {...(collapseSecondary
+          {...(secondaryAsAccordion
             ? {
                 component: AccordionDetails,
                 sx: { px: 0, pt: 0 },
