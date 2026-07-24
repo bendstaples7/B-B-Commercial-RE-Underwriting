@@ -39,6 +39,7 @@ import {
   evaluateMoveToSkipTrace,
   unavailableReasonForQuickAction,
 } from '@/utils/actionEligibility'
+import { ccActionTileSx, ccSectionTitleSx } from '@/components/lead-detail/commandCenterChrome'
 
 // ---------------------------------------------------------------------------
 // Action button definitions per RA type
@@ -191,6 +192,8 @@ export interface RecommendedActionPanelProps {
   showOutreachContact?: boolean
   /** Drop outer border when nested inside a shared action card. */
   embedded?: boolean
+  /** Show Action Center icon tiles for standardized universal Quick actions. */
+  showActionCenterTiles?: boolean
   /** Illinois LLC / org research status for visibility + refresh. */
   entityResearch?: EntityResearchSummary | null
   onRefreshEntityResearch?: () => Promise<void>
@@ -222,6 +225,7 @@ export function RecommendedActionPanel({
   mailEligibleDate = null,
   showOutreachContact = false,
   embedded = false,
+  showActionCenterTiles = false,
   entityResearch = null,
   onRefreshEntityResearch,
   onAction,
@@ -399,7 +403,121 @@ export function RecommendedActionPanel({
     )
   }
 
-  const renderUniversalActions = (raButtons: ActionButton[] = []) => (
+  const renderActionCenterTiles = () => {
+    if (!showActionCenterTiles) return null
+
+    const renderUniversalTile = (btn: ActionButton) => {
+      if (btn.action === 'add_to_mail_batch' && isInMailBatch) {
+        return (
+          <Box
+            key="in-mail-batch"
+            sx={{ display: 'contents' }}
+          >
+            <Button
+              disabled
+              data-testid="action-center-tile-in-mail-batch"
+              aria-label="In mail batch"
+              sx={ccActionTileSx}
+            >
+              {ACTION_ICONS.add_to_mail_batch}
+              In mail batch
+            </Button>
+            <Button
+              component={Link}
+              to="/queues/ready-to-mail"
+              data-testid="action-center-tile-view-mail-batch"
+              aria-label="View batch"
+              sx={ccActionTileSx}
+            >
+              {ACTION_ICONS.add_to_mail_batch}
+              View batch
+            </Button>
+          </Box>
+        )
+      }
+
+      if (
+        btn.action === 'move_to_skip_trace'
+        && evaluateMoveToSkipTrace(leadStatus).alreadyDone
+      ) {
+        const skipEval = evaluateMoveToSkipTrace(leadStatus)
+        const reason = skipEval.message ?? 'Already in the Skip Trace work queue'
+        return (
+          <Tooltip key="already-skip-trace" title={reason}>
+            <span style={{ display: 'inline-flex', flex: '1 1 0', minWidth: '42%' }}>
+              <Button
+                disabled
+                title={reason}
+                data-testid="action-center-tile-already-skip-trace"
+                aria-label={`Move to Skip Trace unavailable: ${reason}`}
+                sx={{ ...ccActionTileSx, width: '100%' }}
+              >
+                {ACTION_ICONS.move_to_skip_trace}
+                In Skip Trace
+              </Button>
+            </span>
+          </Tooltip>
+        )
+      }
+
+      const unavailableReason = unavailableReasonFor(btn)
+      const isDisabled = unavailableReason != null || pendingAction !== null
+      const isLoading = pendingAction === btn.action
+      const title = unavailableReason ?? btn.title
+
+      const tileBtn = (
+        <Button
+          key={btn.action}
+          onClick={() => { void handleAction(btn.action) }}
+          disabled={isDisabled}
+          data-testid={`action-center-tile-${btn.action}`}
+          aria-label={btn.label}
+          title={isDisabled ? undefined : title}
+          sx={ccActionTileSx}
+        >
+          {isLoading ? <CircularProgress size={22} color="inherit" /> : (ACTION_ICONS[btn.action] ?? null)}
+          {isLoading ? 'Working…' : btn.label}
+        </Button>
+      )
+
+      return isDisabled && unavailableReason ? (
+        <Tooltip key={btn.action} title={unavailableReason}>
+          <span
+            tabIndex={0}
+            role="button"
+            aria-disabled="true"
+            aria-label={`${btn.label} unavailable: ${unavailableReason}`}
+            style={{ display: 'inline-flex', flex: '1 1 0', minWidth: '42%' }}
+          >
+            {tileBtn}
+          </span>
+        </Tooltip>
+      ) : tileBtn
+    }
+
+    return (
+      <Box sx={{ mb: 1.25 }} data-testid="action-center-tiles">
+        <Typography sx={{ ...ccSectionTitleSx, mb: 1 }} component="h3">
+          Action Center
+        </Typography>
+        <Box
+          sx={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 1,
+          }}
+        >
+          {universalActions.map((btn) => renderUniversalTile(btn))}
+        </Box>
+      </Box>
+    )
+  }
+
+  const renderUniversalActions = (raButtons: ActionButton[] = []) => {
+    // Tiles replace the Quick actions row when Action Center chrome is on.
+    if (showActionCenterTiles) return null
+
+    return (
     <Box sx={{ mb: raButtons.length > 0 ? 2 : 0, mt: 2, maxWidth: '100%' }}>
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
         Quick actions
@@ -426,7 +544,8 @@ export function RecommendedActionPanel({
         })}
       </Stack>
     </Box>
-  )
+    )
+  }
 
   const renderEntityResearch = () => {
     if (!entityResearch) return null
@@ -494,6 +613,7 @@ export function RecommendedActionPanel({
             data-testid="dnc-badge"
           />
         )}
+        {renderActionCenterTiles()}
         {openTasks.length > 0 ? (
           <Typography variant="body2" color="text.secondary" data-testid="ra-next-task-title">
             {openTasks[0].title}
@@ -551,8 +671,36 @@ export function RecommendedActionPanel({
         />
       )}
 
-      {/* RA label — hidden for nurture (no system suggestion, just quick actions) */}
-      {!hideRaLabel && (
+      {renderActionCenterTiles()}
+
+      {/* Action Center: one line = label + explanation (no second sentence row). */}
+      {showActionCenterTiles ? (
+        <Typography
+          sx={{
+            fontSize: '0.8rem',
+            fontWeight: 600,
+            letterSpacing: 0.01,
+            color: 'text.secondary',
+            mb: 1,
+            mt: 0,
+            lineHeight: 1.35,
+          }}
+          data-testid="ra-label"
+        >
+          <Box component="span" data-testid="ra-recommended-heading" sx={{ fontWeight: 700 }}>
+            Recommended next action:{' '}
+          </Box>
+          {displayLabel}
+          {explanation ? (
+            <Box component="span" data-testid="ra-explanation" sx={{ fontWeight: 500 }}>
+              {' — '}
+              {explanation}
+            </Box>
+          ) : null}
+        </Typography>
+      ) : null}
+
+      {!showActionCenterTiles && !hideRaLabel && (
         <Typography
           sx={{
             fontSize: '0.8rem',
@@ -575,11 +723,16 @@ export function RecommendedActionPanel({
         <OutreachContactMissingHint channel={contactMethod as OutreachContact['channel']} />
       )}
 
-      {explanation && (
+      {!showActionCenterTiles && explanation && (
         <Typography
           variant="body2"
           color="text.secondary"
-          sx={{ mb: winningRuleLabel ? 1 : 2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+          sx={{
+            mb: winningRuleLabel ? 1 : 2,
+            mt: 0,
+            overflowWrap: 'anywhere',
+            wordBreak: 'break-word',
+          }}
           data-testid="ra-explanation"
         >
           {explanation}

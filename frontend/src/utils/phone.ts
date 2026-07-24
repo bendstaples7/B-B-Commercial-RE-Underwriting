@@ -14,6 +14,20 @@ export function formatPhoneNumber(phone: string): string {
   return phone
 }
 
+/**
+ * True when a string is phone-shaped (not an email), e.g. misfiled into email_*.
+ * Rejects values that contain `@` even if they also have digits.
+ */
+export function looksLikePhoneNumber(value: string | null | undefined): boolean {
+  if (value == null) return false
+  const raw = String(value).trim()
+  if (!raw || raw.includes('@')) return false
+  const digits = raw.replace(/\D/g, '')
+  if (digits.length === 10) return true
+  if (digits.length === 11 && digits.startsWith('1')) return true
+  return false
+}
+
 /** Build a tel: href from a display or raw phone string. */
 export function phoneTelHref(phone: string): string {
   const digits = phone.replace(/\D/g, '')

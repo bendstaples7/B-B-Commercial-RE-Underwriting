@@ -3,6 +3,9 @@
  *
  * Acts as a drop target for dragged DealCards.
  * Supports pagination with a "Load all X more" button at the bottom.
+ *
+ * Header shows one count chip only: total when fully loaded, or "N of total" when
+ * the column is still paginated (bottom button covers loading the rest).
  */
 import { useDroppable } from '@dnd-kit/core'
 import {
@@ -10,8 +13,8 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { Box, Paper, Typography, Chip, Button } from '@mui/material'
-import { DealCard } from './DealCard'
 import type { LeadKanbanColumn } from '@/types'
+import { DealCard } from './DealCard'
 
 // ---------------------------------------------------------------------------
 // Props
@@ -37,6 +40,9 @@ export function KanbanColumn({ column, onDealClick, onLoadMore, totalCount }: Ka
   const visibleCount = column.leads.length
   const remaining = totalCount - visibleCount
   const hasMore = remaining > 0
+  const countLabel = hasMore
+    ? `${visibleCount.toLocaleString()} of ${totalCount.toLocaleString()}`
+    : totalCount.toLocaleString()
 
   return (
     <Paper
@@ -50,7 +56,7 @@ export function KanbanColumn({ column, onDealClick, onLoadMore, totalCount }: Ka
         flexDirection: 'column',
         backgroundColor: isOver ? 'action.hover' : 'background.paper',
         borderColor: isOver ? 'primary.main' : 'divider',
-        borderStyle: isOver ? 'solid' : 'solid',
+        borderStyle: 'solid',
         borderWidth: isOver ? 2 : 1,
         transition: 'background-color 0.2s, border-color 0.2s',
         maxHeight: 'calc(100vh - 200px)',
@@ -66,31 +72,29 @@ export function KanbanColumn({ column, onDealClick, onLoadMore, totalCount }: Ka
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
+          gap: 1,
           backgroundColor: 'grey.50',
         }}
       >
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Typography variant="body1" sx={{ lineHeight: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+          <Typography variant="body1" sx={{ lineHeight: 1 }} aria-hidden>
             {column.icon}
           </Typography>
-          <Typography variant="subtitle2" fontWeight={600}>
-            {column.label} ({totalCount.toLocaleString()})
+          <Typography variant="subtitle2" fontWeight={600} noWrap>
+            {column.label}
           </Typography>
         </Box>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-          <Chip
-            label={visibleCount}
-            size="small"
-            color={totalCount > 0 ? 'primary' : 'default'}
-            variant="outlined"
-            sx={{ fontWeight: 600, minWidth: 28 }}
-          />
-          {visibleCount < totalCount && (
-            <Typography variant="caption" color="text.secondary">
-              showing {visibleCount}
-            </Typography>
-          )}
-        </Box>
+        <Chip
+          label={countLabel}
+          size="small"
+          variant="outlined"
+          aria-label={
+            hasMore
+              ? `${visibleCount} of ${totalCount} leads loaded in ${column.label}`
+              : `${totalCount} leads in ${column.label}`
+          }
+          sx={{ fontWeight: 600, flexShrink: 0 }}
+        />
       </Box>
 
       {/* Lead Cards */}

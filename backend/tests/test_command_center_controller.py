@@ -163,6 +163,16 @@ class TestGetCommandCenter:
             assert 'contacts' in data
             assert isinstance(data['contacts'], list)
             assert data['id'] == lead.id
+            assert 'assessed_value' in data
+
+    def test_assessed_value_serialized_when_present(self, client, app):
+        """assessed_value is included on the command center payload when set on the lead."""
+        with app.app_context():
+            lead = _make_lead(app, '2c Assessed St', assessed_value=520000.0)
+            response = client.get(f'/api/leads/{lead.id}/command-center', headers=_AUTH_HEADERS)
+            data = json.loads(response.data)
+            assert response.status_code == 200
+            assert data['assessed_value'] == 520000.0
 
     def test_contacts_ordered_primary_first(self, client, app):
         """contacts[] is primary-first with nested phones/emails; flat fields remain."""

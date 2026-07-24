@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatPhoneNumber, phoneCopyText, phoneTelHref } from './phone'
+import { formatPhoneNumber, looksLikePhoneNumber, phoneCopyText, phoneTelHref } from './phone'
 
 describe('formatPhoneNumber', () => {
   it('formats 10-digit US numbers', () => {
@@ -14,6 +14,21 @@ describe('formatPhoneNumber', () => {
 
   it('returns original when unrecognized', () => {
     expect(formatPhoneNumber('12345')).toBe('12345')
+  })
+})
+
+describe('looksLikePhoneNumber', () => {
+  it('detects formatted and raw US phones', () => {
+    expect(looksLikePhoneNumber('(708) 222-6620')).toBe(true)
+    expect(looksLikePhoneNumber('7082226620')).toBe(true)
+    expect(looksLikePhoneNumber('+1 708-222-6620')).toBe(true)
+  })
+
+  it('rejects emails and short digit strings', () => {
+    expect(looksLikePhoneNumber('ssuperman0018@yahoo.com')).toBe(false)
+    expect(looksLikePhoneNumber('12345')).toBe(false)
+    expect(looksLikePhoneNumber('')).toBe(false)
+    expect(looksLikePhoneNumber(null)).toBe(false)
   })
 })
 

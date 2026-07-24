@@ -514,6 +514,8 @@ export interface LeadTimelineProps {
   initialTotal: number
   onLoadMore?: (page: number) => Promise<{ entries: LeadTimelineEntry[]; total: number }>
   highlightEntryId?: number | null
+  /** Compact scrollable feed (right rail) vs accordion timeline. */
+  variant?: 'accordion' | 'feed'
 }
 
 function mergeTimelineEntries(
@@ -552,6 +554,7 @@ export function LeadTimeline({
   initialTotal,
   onLoadMore,
   highlightEntryId = null,
+  variant = 'accordion',
 }: LeadTimelineProps) {
   const initialScopedRef = useRef<ReturnType<typeof scopeRowsToLeadWithTotal<LeadTimelineEntry>> | null>(null)
   if (initialScopedRef.current === null) {
@@ -662,6 +665,104 @@ export function LeadTimeline({
     setShowAllLoaded(true)
   }
 
+  const feedList = (
+    <>
+      {entries.length === 0 && (
+        <Typography
+          variant="body2"
+          color="text.secondary"
+          data-testid="timeline-empty"
+        >
+          No timeline entries yet.
+        </Typography>
+      )}
+
+      {entries.length > 0 && (
+        <List dense disablePadding data-testid="timeline-list">
+          {visibleEntries.map((entry, index) => (
+            <Box key={entry.id}>
+              {index > 0 && <Divider component="li" />}
+              <TimelineEntryRow
+                entry={entry}
+                highlighted={highlightEntryId != null && entry.id === highlightEntryId}
+              />
+            </Box>
+          ))}
+        </List>
+      )}
+
+      {inPreview && (
+        <Box sx={{ mt: 1, textAlign: 'center' }}>
+          <Button
+            size="small"
+            onClick={handleShowOlder}
+            data-testid="timeline-show-older-btn"
+          >
+            {variant === 'feed' ? 'Show More Activity' : `Show older activity (${olderRemaining} more)`}
+          </Button>
+        </Box>
+      )}
+
+      {!inPreview && hasMore && onLoadMore && (
+        <Box sx={{ mt: 1, textAlign: 'center' }} data-testid="load-more-container">
+          <Button
+            size="small"
+            variant="outlined"
+            onClick={handleLoadMore}
+            disabled={loading}
+            startIcon={loading ? <CircularProgress size={14} color="inherit" /> : undefined}
+            data-testid="load-more-btn"
+          >
+            {loading
+              ? 'Loading…'
+              : variant === 'feed'
+                ? 'Show More Activity'
+                : `Load more (${total - entries.length} remaining)`}
+          </Button>
+        </Box>
+      )}
+
+      {entries.length > 0 && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ mt: 1, display: 'block' }}
+          data-testid="timeline-showing"
+        >
+          Showing {visibleEntries.length} of {total}
+        </Typography>
+      )}
+
+      {error && (
+        <Typography
+          variant="caption"
+          color="error"
+          sx={{ mt: 1, display: 'block' }}
+          data-testid="load-more-error"
+        >
+          {error}
+        </Typography>
+      )}
+    </>
+  )
+
+  if (variant === 'feed') {
+    return (
+      <Box data-testid="lead-timeline" data-variant="feed">
+        <Box
+          sx={{
+            maxHeight: 360,
+            overflowY: 'auto',
+            pr: 0.5,
+          }}
+          data-testid="activity-feed-scroll"
+        >
+          {feedList}
+        </Box>
+      </Box>
+    )
+  }
+
   return (
     <Box data-testid="lead-timeline">
       <Accordion
@@ -696,78 +797,7 @@ export function LeadTimeline({
           </Typography>
         </AccordionSummary>
         <AccordionDetails sx={{ px: 1.5, pt: 0, pb: 1.5 }}>
-          {entries.length === 0 && (
-            <Typography
-              variant="body2"
-              color="text.secondary"
-              data-testid="timeline-empty"
-            >
-              No timeline entries yet.
-            </Typography>
-          )}
-
-          {entries.length > 0 && (
-            <List dense disablePadding data-testid="timeline-list">
-              {visibleEntries.map((entry, index) => (
-                <Box key={entry.id}>
-                  {index > 0 && <Divider component="li" />}
-                  <TimelineEntryRow
-                    entry={entry}
-                    highlighted={highlightEntryId != null && entry.id === highlightEntryId}
-                  />
-                </Box>
-              ))}
-            </List>
-          )}
-
-          {inPreview && (
-            <Box sx={{ mt: 1, textAlign: 'center' }}>
-              <Button
-                size="small"
-                onClick={handleShowOlder}
-                data-testid="timeline-show-older-btn"
-              >
-                Show older activity ({olderRemaining} more)
-              </Button>
-            </Box>
-          )}
-
-          {!inPreview && hasMore && onLoadMore && (
-            <Box sx={{ mt: 1, textAlign: 'center' }} data-testid="load-more-container">
-              <Button
-                size="small"
-                variant="outlined"
-                onClick={handleLoadMore}
-                disabled={loading}
-                startIcon={loading ? <CircularProgress size={14} color="inherit" /> : undefined}
-                data-testid="load-more-btn"
-              >
-                {loading ? 'Loading…' : `Load more (${total - entries.length} remaining)`}
-              </Button>
-            </Box>
-          )}
-
-          {entries.length > 0 && (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ mt: 1, display: 'block' }}
-              data-testid="timeline-showing"
-            >
-              Showing {visibleEntries.length} of {total}
-            </Typography>
-          )}
-
-          {error && (
-            <Typography
-              variant="caption"
-              color="error"
-              sx={{ mt: 1, display: 'block' }}
-              data-testid="load-more-error"
-            >
-              {error}
-            </Typography>
-          )}
+          {feedList}
         </AccordionDetails>
       </Accordion>
     </Box>

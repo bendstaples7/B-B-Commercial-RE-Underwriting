@@ -1035,6 +1035,126 @@ describe('RecommendedActionPanel', () => {
       await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1))
     })
   })
+
+  describe('Action Center tiles', () => {
+    it('renders the five universal Quick action tiles and no Move / More actions row', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('call_ready', 'Call Now')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          onAction={vi.fn()}
+          showActionCenterTiles
+          onCreateTask={vi.fn()}
+        />,
+      )
+
+      expect(screen.getByTestId('action-center-tiles')).toBeInTheDocument()
+      expect(screen.getByTestId('action-center-tile-log_call')).toBeInTheDocument()
+      expect(screen.getByTestId('action-center-tile-log_note')).toBeInTheDocument()
+      expect(screen.getByTestId('action-center-tile-log_email')).toBeInTheDocument()
+      expect(screen.getByTestId('action-center-tile-add_to_mail_batch')).toBeInTheDocument()
+      expect(screen.getByTestId('action-center-tile-move_to_skip_trace')).toBeInTheDocument()
+      expect(screen.queryByTestId('action-center-tile-move_status')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('action-center-tile-create_task')).not.toBeInTheDocument()
+      expect(screen.queryByText('More actions')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('ra-universal-actions')).not.toBeInTheDocument()
+      expect(screen.getByTestId('ra-recommended-heading')).toHaveTextContent(
+        'Recommended next action:',
+      )
+      expect(screen.getByTestId('ra-label')).toHaveTextContent(
+        'Recommended next action: Call Now — Test explanation for this recommended action.',
+      )
+      expect(screen.getByTestId('ra-explanation')).toHaveTextContent(
+        'Test explanation for this recommended action.',
+      )
+    })
+
+    it('puts nurture label and explanation on one line under Action Center tiles', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('nurture', 'Nurture', 'Keep nurturing this lead.')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          onAction={vi.fn()}
+          showActionCenterTiles
+        />,
+      )
+      expect(screen.getByTestId('ra-label')).toHaveTextContent(
+        'Recommended next action: Nurture — Keep nurturing this lead.',
+      )
+    })
+
+    it('grays out Move to Skip Trace tile when already in skip_trace', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('call_ready', 'Call Now')}
+          leadStatus="skip_trace"
+          openTasks={[]}
+          onAction={vi.fn()}
+          showActionCenterTiles
+        />,
+      )
+
+      expect(screen.getByTestId('action-center-tile-already-skip-trace')).toBeDisabled()
+      expect(
+        screen.getByLabelText(/Move to Skip Trace unavailable:/i),
+      ).toBeInTheDocument()
+    })
+
+    it('shows In mail batch tile state when already queued', () => {
+      render(
+        <MemoryRouter>
+          <RecommendedActionPanel
+            recommendedAction={makeRA('mail_ready', 'Ready to Mail')}
+            leadStatus="mailing_no_contact_made"
+            openTasks={[]}
+            onAction={vi.fn()}
+            showActionCenterTiles
+            mailQueueStatus="queued"
+            isMailable
+            mailEligible
+          />
+        </MemoryRouter>,
+      )
+
+      expect(screen.getByTestId('action-center-tile-in-mail-batch')).toBeDisabled()
+      expect(screen.getByTestId('action-center-tile-view-mail-batch')).toBeInTheDocument()
+      expect(screen.queryByTestId('action-center-tile-add_to_mail_batch')).not.toBeInTheDocument()
+    })
+
+    it('Create Task remains reachable via Next Steps CTA, not as a universal tile', () => {
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('create_task', 'Create a Task')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          onAction={vi.fn()}
+          showActionCenterTiles
+          onCreateTask={vi.fn()}
+        />,
+      )
+
+      expect(screen.queryByTestId('action-center-tile-create_task')).not.toBeInTheDocument()
+      expect(screen.getByTestId('create-task-cta-button')).toBeInTheDocument()
+    })
+
+    it('Log Call tile invokes onAction(log_call)', async () => {
+      const onAction = vi.fn().mockResolvedValue(undefined)
+      render(
+        <RecommendedActionPanel
+          recommendedAction={makeRA('call_ready', 'Call Now')}
+          leadStatus="mailing_no_contact_made"
+          openTasks={[]}
+          onAction={onAction}
+          showActionCenterTiles
+        />,
+      )
+
+      await user.click(screen.getByTestId('action-center-tile-log_call'))
+      await waitFor(() => expect(onAction).toHaveBeenCalledWith('log_call'))
+    })
+  })
 })
 
 

@@ -21,13 +21,13 @@ import {
   Typography,
   Paper,
   Snackbar,
-  Tooltip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogContentText,
   DialogTitle,
   Chip,
+  Link as MuiLink,
   useMediaQuery,
   useTheme,
 } from '@mui/material'
@@ -35,7 +35,6 @@ import { Link as RouterLink, useNavigate, useSearchParams, useLocation } from 'r
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
-import BarChartIcon from '@mui/icons-material/BarChart'
 import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted'
 import { commandCenterService, leadTaskService, leadScoreService, queueService } from '@/services/api'
 import { entityResolutionApi } from '@/services/entityResolutionApi'
@@ -55,7 +54,6 @@ import {
 import { ALL_LEAD_STATUSES } from '@/constants/leadStatuses'
 import { scoringActionLabel } from '@/constants/scoringRecommendedActions'
 import type { CommandCenterPayload, PropertyDetail, LeadTask, LeadTimelineEntry, PropertyScoreResponse, PropertyScoreRecord, OutreachContact, QueueNavigation, LeadStatus, CRMRecommendedAction } from '@/types'
-import { LeadScoreBadge } from '@/components/LeadScoreBadge'
 import type { ScoreTier } from '@/components/LeadScoreBadge'
 import { LeadStatusSelector } from '@/components/LeadStatusSelector'
 import { LeadTaskList, type LeadTaskListHandle } from '@/components/LeadTaskList'
@@ -71,14 +69,24 @@ import { PropertySidebar } from '@/components/lead-detail/PropertySidebar'
 import { BuildingOwnershipSection } from '@/components/BuildingOwnershipSection'
 import {
   ccCardSx,
+  ccHeroAddressSx,
+  ccHeroSecondarySx,
+  ccPageBgSx,
   ccSectionTitleSx,
+  ccStackGap,
 } from '@/components/lead-detail/commandCenterChrome'
+import { KeyContactCard } from '@/components/lead-detail/KeyContactCard'
+import { PropertyKpiCard } from '@/components/lead-detail/PropertyKpiCard'
+import { PropertyOverviewQuickStats } from '@/components/lead-detail/PropertyOverviewQuickStats'
+import { HeaderLeadScorePanel } from '@/components/lead-detail/HeaderLeadScorePanel'
+import { DeepDiveDetailsCard } from '@/components/lead-detail/DeepDiveDetailsCard'
 import { SuppressLeadDialog } from '@/components/SuppressLeadDialog'
 import {
   enqueueResultSeverity,
   formatEnqueueSummary,
 } from '@/utils/formatEnqueueSummary'
 import { formatDateOnly } from '@/utils/helpers'
+import { formatCookCountyPin } from '@/utils/cookCountyPin'
 
 export { ALL_LEAD_STATUSES } from '@/constants/leadStatuses'
 export { tabParamToIndex } from '@/components/lead-detail/LeadDetailTabPanel'
@@ -89,17 +97,12 @@ export interface UnifiedLeadCommandCenterProps {
 
 // ── Score tier derivation (fallback when no LeadScoreRecord exists yet) ────────
 
-const TIER_RANGE_LABELS: Record<ScoreTier, string> = {
-  A: '75–100 (strong fit)',
-  B: '60–74 (good fit)',
-  C: '40–59 (marginal)',
-  D: '0–39 (low priority)',
-}
-
-function scoreToTier(score: number): ScoreTier {
-  if (score >= 75) return 'A'
-  if (score >= 60) return 'B'
-  if (score >= 40) return 'C'
+function scoreToTier(score: number | null | undefined): ScoreTier | null {
+  if (score == null || !Number.isFinite(Number(score))) return null
+  const n = Number(score)
+  if (n >= 75) return 'A'
+  if (n >= 60) return 'B'
+  if (n >= 40) return 'C'
   return 'D'
 }
 
@@ -107,10 +110,10 @@ function cleanAddressPart(value?: string | null): string {
   return (value || '').trim().replace(/^,+|,+$/g, '').trim()
 }
 
-// ── StickyHeader ──────────────────────────────────────────────────────────────
+// ── PropertyOverviewHeader ────────────────────────────────────────────────────
 // Requirements: 5.1, 10.1, 10.2
 
-interface StickyHeaderProps {
+interface PropertyOverviewHeaderProps {
   leadId: number
   commandCenterData: CommandCenterPayload
   scoreRecord?: PropertyScoreRecord | null
@@ -128,36 +131,38 @@ interface StickyHeaderProps {
 
 function formatPropertyAddress(data: CommandCenterPayload): string {
   const street = cleanAddressPart(data.property_street)
-  const cityStateZip = [data.property_city, data.property_state, data.property_zip]
-    .map(cleanAddressPart)
-    .filter(Boolean)
-    .join(', ')
-  if (street && cityStateZip) return `${street}, ${cityStateZip}`
-  return street || cityStateZip || `Lead #${data.id}`
+  const city = cleanAddressPart(data.property_city)
+  const state = cleanAddressPart(data.property_state)
+  const zip = cleanAddressPart(data.property_zip)
+  const stateZip = [state, zip].filter(Boolean).join(' ')
+  const locality = [city, stateZip].filter(Boolean).join(', ')
+  if (street && locality) return `${street}, ${locality}`
+  return street || locality || `Lead #${data.id}`
 }
 
-function StickyHeader({
+function PropertyOverviewHeader({
   leadId,
   commandCenterData,
   scoreRecord,
   onStatusChanged,
   onViewFullBreakdown,
   fromQueue,
-}: StickyHeaderProps) {
+  statusSelectorRef,
+}: PropertyOverviewHeaderProps & { statusSelectorRef?: React.RefObject<HTMLDivElement | null> }) {
   const [scoreDialogOpen, setScoreDialogOpen] = useState(false)
   const navigate = useNavigate()
 
-  const propertyAddress = formatPropertyAddress(commandCenterData)
+  const fullAddress = formatPropertyAddress(commandCenterData)
   const primaryOwner = primaryOwnerDisplayName(
     commandCenterData.contacts,
     commandCenterData.owner_first_name,
     commandCenterData.owner_last_name,
     commandCenterData.organizations,
   )
+  const pinFormatted = formatCookCountyPin(commandCenterData.county_assessor_pin || '') || null
 
-  const scoreTier = scoreRecord?.score_tier ?? scoreToTier(commandCenterData.lead_score)
   const displayScore = scoreRecord?.total_score ?? commandCenterData.lead_score
-  const tierTooltip = `Tier ${scoreTier}: ${TIER_RANGE_LABELS[scoreTier]} — letter grade from total score (0–100)`
+  const scoreTier = scoreRecord?.score_tier ?? scoreToTier(displayScore)
 
   const handleBack = () => {
     if (fromQueue) {
@@ -167,26 +172,64 @@ function StickyHeader({
     navigate(-1)
   }
 
+  const handleOwnerClick = () => {
+    const el = document.querySelector('[data-testid="key-contact-card"]') as HTMLElement | null
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1')
+    el.focus({ preventScroll: true })
+  }
+
+  const metadataParts: React.ReactNode[] = []
+  if (primaryOwner) {
+    metadataParts.push(
+      <Box key="owner" component="span" sx={{ display: 'inline' }}>
+        Owner:{' '}
+        <MuiLink
+          component="button"
+          type="button"
+          variant="inherit"
+          underline="hover"
+          onClick={handleOwnerClick}
+          data-testid="property-overview-owner-link"
+          sx={{
+            font: 'inherit',
+            color: 'primary.main',
+            cursor: 'pointer',
+            verticalAlign: 'baseline',
+          }}
+        >
+          {primaryOwner}
+        </MuiLink>
+      </Box>,
+    )
+  }
+  if (pinFormatted) {
+    metadataParts.push(
+      <Box key="pin" component="span" data-testid="property-overview-pin">
+        Parcel ID / PIN: {pinFormatted}
+      </Box>,
+    )
+  }
+
   return (
     <>
-      <Box
+      <Paper
         component="header"
-        data-testid="sticky-header"
+        data-testid="property-overview-header"
+        elevation={0}
         sx={{
-          bgcolor: 'background.paper',
-          borderBottom: 1,
-          borderColor: 'divider',
+          ...ccCardSx,
+          p: { xs: 1.25, sm: 1.5 },
+          mb: 0,
         }}
       >
         <Box
           sx={{
             display: 'flex',
             flexWrap: 'wrap',
-            alignItems: 'flex-start',
-            gap: { xs: 1, sm: 0 },
-            px: { xs: 1, sm: 2 },
-            py: 1,
-            minHeight: { xs: 'auto', sm: 48 },
+            alignItems: 'center',
+            gap: { xs: 1.25, md: 1.5 },
           }}
         >
           <IconButton
@@ -194,87 +237,91 @@ function StickyHeader({
             onClick={handleBack}
             edge="start"
             aria-label={fromQueue ? `Back to ${fromQueue.label}` : 'Go back'}
-            sx={{ mr: 0.5, mt: { xs: 0.25, sm: 0 } }}
+            size="small"
           >
             <ArrowBackIcon />
           </IconButton>
 
-          <Box sx={{ flexGrow: 1, minWidth: 0, flexBasis: { xs: 'calc(100% - 48px)', sm: 'auto' }, overflow: 'hidden' }} data-testid="sticky-header-address">
-            <Typography
-              variant="subtitle1"
-              fontWeight={700}
-              sx={{
-                lineHeight: 1.3,
-                overflowWrap: 'anywhere',
-                wordBreak: 'break-word',
-                whiteSpace: { xs: 'normal', sm: 'nowrap' },
-              }}
-              title={propertyAddress}
-            >
-              {propertyAddress}
-            </Typography>
-            {primaryOwner ? (
-              <Typography
-                variant="body2"
-                color="text.secondary"
-                sx={{
-                  lineHeight: 1.2,
-                  overflowWrap: 'anywhere',
-                  wordBreak: 'break-word',
-                  whiteSpace: { xs: 'normal', sm: 'nowrap' },
-                }}
-                title={primaryOwner}
-                data-testid="sticky-header-owner"
-              >
-                {primaryOwner}
-              </Typography>
-            ) : null}
-          </Box>
-
           <Box
             sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1,
-              flexWrap: 'wrap',
-              width: { xs: '100%', sm: 'auto' },
-              pl: { xs: 5, sm: 0 },
-              justifyContent: { xs: 'flex-start', sm: 'flex-end' },
+              // Grow enough to show the full address (wrap ok); do not clamp/ellipsis.
+              flex: { xs: '1 1 calc(100% - 48px)', md: '1 1 320px' },
+              minWidth: { xs: 0, md: 260 },
+              maxWidth: { xs: '100%', md: '40%' },
             }}
           >
-            <Tooltip title={scoreRecord ? `${tierTooltip} — click for breakdown` : tierTooltip}>
-              <span>
-                <Button
-                  size="small"
-                  variant="outlined"
-                  onClick={() => scoreRecord && setScoreDialogOpen(true)}
-                  disabled={!scoreRecord}
-                  data-testid="header-lead-score"
-                  aria-label="View lead score breakdown"
-                  startIcon={<BarChartIcon sx={{ fontSize: 18 }} />}
-                  sx={{
-                    textTransform: 'none',
-                    fontWeight: 600,
-                    flexShrink: 0,
-                  }}
-                >
-                  {Math.round(displayScore)} / 100
-                  <Box component="span" sx={{ ml: 0.75 }}>
-                    <LeadScoreBadge tier={scoreTier} size="small" />
-                  </Box>
-                </Button>
-              </span>
-            </Tooltip>
+            <Box
+              sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.5 }}
+              data-testid="property-overview-address"
+            >
+              <Typography
+                sx={{
+                  ...ccHeroAddressSx,
+                  flex: 1,
+                  minWidth: 0,
+                }}
+              >
+                {fullAddress}
+              </Typography>
+            </Box>
 
-            <LeadStatusSelector
-              leadId={leadId}
-              status={commandCenterData.lead_status}
-              allStatuses={ALL_LEAD_STATUSES}
-              onStatusChanged={onStatusChanged}
-            />
+            {metadataParts.length > 0 ? (
+              <Typography
+                sx={{
+                  ...ccHeroSecondarySx,
+                  mt: 0.25,
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'baseline',
+                  columnGap: 1,
+                  rowGap: 0.25,
+                }}
+                component="div"
+              >
+                {metadataParts.map((part, idx) => (
+                  <React.Fragment key={idx}>
+                    {idx > 0 ? (
+                      <Box component="span" aria-hidden sx={{ color: 'text.disabled' }}>
+                        ·
+                      </Box>
+                    ) : null}
+                    {part}
+                  </React.Fragment>
+                ))}
+              </Typography>
+            ) : null}
+
+            <Box
+              data-testid="property-overview-badges"
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                flexWrap: 'wrap',
+                mt: 0.75,
+              }}
+            >
+              <Box ref={statusSelectorRef} data-testid="property-overview-status">
+                <LeadStatusSelector
+                  leadId={leadId}
+                  status={commandCenterData.lead_status}
+                  allStatuses={ALL_LEAD_STATUSES}
+                  onStatusChanged={onStatusChanged}
+                />
+              </Box>
+            </Box>
           </Box>
+
+          <PropertyOverviewQuickStats commandCenterData={commandCenterData} />
+
+          <HeaderLeadScorePanel
+            score={displayScore}
+            tier={scoreTier}
+            scoreRecord={scoreRecord}
+            onOpenBreakdown={() => setScoreDialogOpen(true)}
+          />
         </Box>
-      </Box>
+      </Paper>
 
       {scoreRecord && (
         <ScoreBreakdownDialog
@@ -405,9 +452,7 @@ function WorkQueueMembershipStrip({ commandCenterData }: WorkQueueMembershipStri
   return (
     <Box
       sx={{
-        px: { xs: 1, sm: 2 },
-        pt: 1,
-        display: { xs: 'none', sm: 'flex' },
+        display: 'flex',
         flexWrap: 'wrap',
         alignItems: 'center',
         gap: 1,
@@ -646,6 +691,8 @@ interface ActivityPanelProps {
   initialEntries: LeadTimelineEntry[]
   initialTotal: number
   highlightEntryId: number | null
+  variant?: 'accordion' | 'feed'
+  embedded?: boolean
 }
 
 export interface ActivityPanelHandle {
@@ -671,7 +718,7 @@ function normalizeTimelineEntriesForLead(
 
 const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
   function ActivityPanel(
-    { leadId, initialEntries, initialTotal, highlightEntryId },
+    { leadId, initialEntries, initialTotal, highlightEntryId, variant = 'accordion', embedded = false },
     ref,
   ) {
     const panelRef = useRef<HTMLDivElement>(null)
@@ -746,7 +793,13 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
     }
 
     return (
-      <Box ref={panelRef} sx={{ mb: 2 }} data-testid="activity-panel">
+      <Box
+        ref={panelRef}
+        component={embedded ? Paper : 'div'}
+        elevation={0}
+        sx={embedded ? { ...ccCardSx, mb: 0 } : { mb: 2 }}
+        data-testid="activity-panel"
+      >
         <Typography sx={ccSectionTitleSx}>
           Activity
         </Typography>
@@ -756,6 +809,7 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
           initialTotal={timelineTotal}
           onLoadMore={handleLoadMore}
           highlightEntryId={highlightEntryId}
+          variant={variant}
         />
       </Box>
     )
@@ -865,6 +919,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const tabParam = searchParams.get('tab')
   const activityRef = useRef<ActivityPanelHandle>(null)
   const tasksPanelRef = useRef<TasksPanelHandle>(null)
+  const statusSelectorRef = useRef<HTMLDivElement | null>(null)
+  const theme = useTheme()
+  const isLgUp = useMediaQuery(theme.breakpoints.up('lg'))
   const showLead = !!commandCenterData && !commandCenterError
   const [activityModal, setActivityModal] = useState<ActivityLogType | null>(null)
   const [highlightEntryId, setHighlightEntryId] = useState<number | null>(null)
@@ -1350,27 +1407,37 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   const outreachContact = resolveOutreachContactFromCommandCenter(commandCenterData!)
   const recommendedActionValue = commandCenterData!.recommended_action?.value ?? null
   const contactMethod = commandCenterData!.recommended_action?.recommended_contact_method ?? null
-  const placement = outreachContactPlacement(openTasks, outreachContact, recommendedActionValue)
+  const placement = outreachContactPlacement(openTasks, outreachContact, recommendedActionValue, {
+    // Key Contact card mounts on both lg+ rail and below-lg main stack.
+    keyContactCardVisible: true,
+  })
   const missingOutreachChannel =
-    placement !== 'none' && contactMethod && !outreachContact
+    placement !== 'none' && placement !== 'key_contact_card' && contactMethod && !outreachContact
       ? (contactMethod as OutreachContact['channel'])
       : null
   const recommendedActionWithContact = {
     ...commandCenterData!.recommended_action,
     outreach_contact: outreachContact,
   }
+  const primaryOwnerName = primaryOwnerDisplayName(
+    commandCenterData!.contacts,
+    commandCenterData!.owner_first_name,
+    commandCenterData!.owner_last_name,
+    commandCenterData!.organizations,
+  )
 
   return (
     <Box
       data-testid="unified-lead-command-center"
       sx={{
+        ...ccPageBgSx,
         maxWidth: '100%',
         minWidth: 0,
         boxSizing: 'border-box',
+        pb: 3,
       }}
     >
-      {/* Queue work bar + sticky lead header — no overflow clipping on sticky ancestors */}
-      <Box sx={{ position: 'sticky', top: 0, zIndex: 100, bgcolor: 'background.default', maxWidth: '100%' }}>
+      <Box sx={{ position: 'sticky', top: 0, zIndex: 100, bgcolor: 'grey.50', maxWidth: '100%' }}>
         {fromQueue && (
           <QueueWorkHeader
             fromQueue={fromQueue}
@@ -1437,54 +1504,62 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
               : 'Staged. You’re caught up.'}
           </Alert>
         )}
-        <StickyHeader
-          leadId={leadId}
-          commandCenterData={commandCenterData!}
-          scoreRecord={scoreData?.latest}
-          onStatusChanged={handleStatusChanged}
-          onViewFullBreakdown={handleViewScoreBreakdown}
-          fromQueue={fromQueue}
-        />
+
+        <Box
+          sx={{ pt: 1, display: 'flex', flexDirection: 'column', gap: 0.75 }}
+          data-testid="cc-header-stack"
+        >
+          <WorkQueueMembershipStrip commandCenterData={commandCenterData!} />
+
+          <PropertyOverviewHeader
+            leadId={leadId}
+            commandCenterData={commandCenterData!}
+            scoreRecord={scoreData?.latest}
+            onStatusChanged={handleStatusChanged}
+            onViewFullBreakdown={handleViewScoreBreakdown}
+            fromQueue={fromQueue}
+            statusSelectorRef={statusSelectorRef}
+          />
+        </Box>
       </Box>
 
-      <WorkQueueMembershipStrip commandCenterData={commandCenterData!} />
+      <Box sx={{ pt: ccStackGap, display: 'flex', flexDirection: 'column', gap: ccStackGap }}>
+        <Box sx={{ display: 'flex', gap: ccStackGap, alignItems: 'flex-start', maxWidth: '100%', minWidth: 0 }}>
+          <Box
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              maxWidth: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: ccStackGap,
+              overflow: 'hidden',
+            }}
+          >
+            <Paper sx={ccCardSx} data-testid="lead-action-section">
+              <RecommendedActionPanel
+                recommendedAction={recommendedActionWithContact}
+                leadStatus={commandCenterData!.lead_status}
+                openTasks={openTasks}
+                mailQueueStatus={commandCenterData!.mail_queue_status ?? null}
+                isMailable={commandCenterData!.is_mailable ?? false}
+                mailEligible={commandCenterData!.mail_eligible}
+                mailIneligibleReason={commandCenterData!.mail_ineligible_reason}
+                mailEligibleDate={commandCenterData!.mail_eligible_date}
+                showOutreachContact={placement === 'recommended_action'}
+                embedded
+                showActionCenterTiles
+                entityResearch={commandCenterData!.entity_research ?? null}
+                onRefreshEntityResearch={async () => {
+                  await entityResolutionApi.resolve(leadId, { action: 'resolve', async: false })
+                  await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+                }}
+                onAction={handleRaAction}
+                onCreateTask={handleCreateTask}
+              />
+            </Paper>
 
-      {/* Two-column flex layout: activity column (left) + property sidebar (right, hidden below lg) */}
-      <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', p: { xs: 0, sm: 2 }, maxWidth: '100%', minWidth: 0 }}>
-        {/* Activity column — order: RecommendedActionPanel → TasksPanel → ActivityPanel → TabPanel */}
-        <Box sx={{ flex: 1, minWidth: 0, maxWidth: '100%', px: { xs: 0.5, sm: 0 }, overflow: 'hidden' }}>
-          {/* One card: recommended action + quick actions + open tasks */}
-          <Paper sx={ccCardSx} data-testid="lead-action-section">
-            <Typography sx={{ ...ccSectionTitleSx, mb: 1.5 }}>
-              Next steps
-            </Typography>
-            <RecommendedActionPanel
-              recommendedAction={recommendedActionWithContact}
-              leadStatus={commandCenterData!.lead_status}
-              openTasks={openTasks}
-              mailQueueStatus={commandCenterData!.mail_queue_status ?? null}
-              isMailable={commandCenterData!.is_mailable ?? false}
-              mailEligible={commandCenterData!.mail_eligible}
-              mailIneligibleReason={commandCenterData!.mail_ineligible_reason}
-              mailEligibleDate={commandCenterData!.mail_eligible_date}
-              showOutreachContact={placement === 'recommended_action'}
-              embedded
-              entityResearch={commandCenterData!.entity_research ?? null}
-              onRefreshEntityResearch={async () => {
-                await entityResolutionApi.resolve(leadId, { action: 'resolve', async: false })
-                await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
-              }}
-              onAction={handleRaAction}
-              onCreateTask={handleCreateTask}
-            />
-            <Box
-              sx={{
-                borderTop: 1,
-                borderColor: 'divider',
-                mt: 2,
-                pt: 2,
-              }}
-            >
+            <Paper sx={ccCardSx} data-testid="open-tasks-card">
               <TasksPanel
                 ref={tasksPanelRef}
                 leadId={leadId}
@@ -1498,55 +1573,107 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 onTasksChanged={() => queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })}
                 onAfterTaskCompleted={fromQueue ? () => { void advanceAfterTaskComplete(queueNavigation?.next_id) } : undefined}
               />
-            </Box>
-          </Paper>
+            </Paper>
 
-          <PropertySidebar
-            variant="inline"
-            commandCenterData={commandCenterData!}
-            onViewSaleHistory={handleViewSaleHistory}
-          />
+            {!isLgUp && (
+              <>
+                <KeyContactCard
+                  name={primaryOwnerName}
+                  commandCenterData={commandCenterData!}
+                />
+                <PropertyKpiCard
+                  commandCenterData={commandCenterData!}
+                  propertyDetail={leadData}
+                />
+                <PropertySidebar
+                  variant="inline"
+                  commandCenterData={commandCenterData!}
+                  onViewSaleHistory={handleViewSaleHistory}
+                  hideContactSection
+                  collapseSecondary
+                />
+              </>
+            )}
 
-          <BuildingOwnershipSection
-            leadId={leadId}
-            commandCenterData={commandCenterData!}
-          />
-
-          <LeadBriefingPanel
-            leadId={leadId}
-            initialBriefing={commandCenterData!.quick_briefing ?? null}
-          />
-
-          {/* ActivityPanel — third in ActivityColumn (Req 8.1–8.3) */}
-          <ActivityPanel
-            ref={activityRef}
-            leadId={leadId}
-            initialEntries={commandCenterData!.timeline.entries}
-            initialTotal={commandCenterData!.timeline.total}
-            highlightEntryId={highlightEntryId}
-          />
-
-          {/* TabPanel — fourth in ActivityColumn (Req 9.1–9.6) */}
-          {leadData ? (
-            <LeadDetailTabPanel
+            <BuildingOwnershipSection
               leadId={leadId}
-              leadData={leadData}
               commandCenterData={commandCenterData!}
-              scoreData={scoreData}
-              scoreLoading={scoreLoading}
             />
-          ) : leadLoading ? (
-            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-              <CircularProgress size={28} aria-label="Loading property details" />
-            </Box>
-          ) : null}
-        </Box>
 
-        {/* Property sidebar — sticky, hidden below lg breakpoint (Req 11.1–11.5) */}
-        <PropertySidebar
-          commandCenterData={commandCenterData!}
-          onViewSaleHistory={handleViewSaleHistory}
-        />
+            <LeadBriefingPanel
+                leadId={leadId}
+                initialBriefing={commandCenterData!.quick_briefing ?? null}
+              />
+
+            {!isLgUp && (
+              <ActivityPanel
+                ref={activityRef}
+                leadId={leadId}
+                initialEntries={commandCenterData!.timeline.entries}
+                initialTotal={commandCenterData!.timeline.total}
+                highlightEntryId={highlightEntryId}
+                variant="feed"
+                embedded
+              />
+            )}
+
+            <DeepDiveDetailsCard>
+              {leadData ? (
+                <LeadDetailTabPanel
+                  leadId={leadId}
+                  leadData={leadData}
+                  commandCenterData={commandCenterData!}
+                  scoreData={scoreData}
+                  scoreLoading={scoreLoading}
+                />
+              ) : leadLoading ? (
+                <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+                  <CircularProgress size={28} aria-label="Loading property details" />
+                </Box>
+              ) : null}
+            </DeepDiveDetailsCard>
+          </Box>
+
+          <Box
+            sx={{
+              width: 320,
+              flexShrink: 0,
+              display: { xs: 'none', lg: 'flex' },
+              flexDirection: 'column',
+              gap: ccStackGap,
+            }}
+          >
+            {isLgUp && (
+              <>
+                <KeyContactCard
+                  name={primaryOwnerName}
+                  commandCenterData={commandCenterData!}
+                  sticky
+                />
+                <PropertyKpiCard
+                  commandCenterData={commandCenterData!}
+                  propertyDetail={leadData}
+                />
+                <ActivityPanel
+                  ref={activityRef}
+                  leadId={leadId}
+                  initialEntries={commandCenterData!.timeline.entries}
+                  initialTotal={commandCenterData!.timeline.total}
+                  highlightEntryId={highlightEntryId}
+                  variant="feed"
+                  embedded
+                />
+                <PropertySidebar
+                  commandCenterData={commandCenterData!}
+                  onViewSaleHistory={handleViewSaleHistory}
+                  hideContactSection
+                  collapseSecondary
+                  sticky={false}
+                />
+              </>
+            )}
+          </Box>
+        </Box>
       </Box>
 
       <LogActivityModal
