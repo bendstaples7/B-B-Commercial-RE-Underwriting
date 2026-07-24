@@ -54,7 +54,12 @@ if ! systemctl list-unit-files celery.service &>/dev/null 2>&1; then
     echo "NOTE: Async stack not yet provisioned. Deploy step 7 will run bootstrap."
 else
     echo "    async stack unit files: present"
-    verify_async_stack_services || exit 1
+    # Restart inactive celery/beat if needed (common after interrupted deploys).
+    # Exit 2 = soft for CI smoke (Deploy re-ensures); hard infra failures stay exit 1.
+    if ! ensure_async_stack_services; then
+        echo "WARNING: async stack ensure failed (redis/celery not healthy after restart attempt)"
+        exit 2
+    fi
     echo "    redis/celery services: active"
 fi
 

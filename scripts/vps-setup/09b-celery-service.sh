@@ -38,6 +38,8 @@ cat > /etc/systemd/system/celery.service <<'EOF'
 [Unit]
 Description=Celery worker — B&B Real Estate Analyzer
 After=network.target postgresql.service redis-server.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 User=deploy
@@ -48,8 +50,12 @@ Environment=FLASK_ENV=production
 Environment=CELERY_WORKER_RUNNING=1
 ExecStart=/home/deploy/.local/bin/celery -A celery_worker.celery worker \
     --loglevel=info --concurrency=1 --pool=prefork
-Restart=on-failure
+# Always restart after unexpected exits (crash, OOM, SIGHUP). systemctl stop
+# during deploy still leaves the unit inactive until an explicit start/restart.
+Restart=always
 RestartSec=10s
+KillSignal=SIGTERM
+TimeoutStopSec=120
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=celery
@@ -63,6 +69,8 @@ cat > /etc/systemd/system/celery-beat.service <<'EOF'
 [Unit]
 Description=Celery Beat — B&B Real Estate Analyzer
 After=network.target redis-server.service celery.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 User=deploy
@@ -74,8 +82,10 @@ Environment=CELERY_WORKER_RUNNING=1
 ExecStart=/home/deploy/.local/bin/celery -A celery_worker.celery beat \
     --loglevel=info --pidfile=/home/deploy/celerybeat.pid \
     --schedule=/home/deploy/celerybeat-schedule
-Restart=on-failure
+Restart=always
 RestartSec=10s
+KillSignal=SIGTERM
+TimeoutStopSec=60
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=celery-beat
