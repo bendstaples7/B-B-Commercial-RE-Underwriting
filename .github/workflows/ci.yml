@@ -101,6 +101,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
+    # Artifact upload for Deploy (workflow default is contents: read only).
+    permissions:
+      contents: read
+      actions: write
 
     steps:
       - uses: actions/checkout@v4
