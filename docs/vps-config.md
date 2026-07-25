@@ -120,6 +120,18 @@ The file doesn't exist or has wrong permissions. The deploy workflow creates a s
 ### `backup.sh --check` fails
 Run `tail -20 /home/deploy/logs/backup.log` on the VPS to see the specific error.
 
+**CI / Deploy policy**
+
+| Gate | Behavior |
+|------|----------|
+| **App CI** (`.github/workflows/ci.yml`) | App lint/typecheck/build/tests, migration smoke tests, and deploy-contract validation. Does **not** run VPS backup checks such as `backup.sh --check`. |
+| **Deploy** | Still hard-fails on **pre-deploy** `backup.sh --check` (and `--pre-deploy` backup). Post-deploy `backup.sh --check` is **advisory** (`::warning::` only) — backup breakage alone does not roll back a healthy ship. |
+| **Ops health** (`.github/workflows/ops-health.yml`) | Schedule + after Deploy + manual. Runs `backup.sh --check`, `verify-backup-health.sh`, soft readiness. Failures open/update a GitHub issue labeled `ops-health` (optional Slack via `SLACK_WEBHOOK_URL`). **Never** triggers or blocks Deploy. |
+
+Branch protection should require **`App CI success`** only (not Ops health).
+
+After App CI → Deploy is green on `main`, stranded merges (e.g. Command Center #136 when only VPS backup smoke failed) ship without re-merging the feature PR.
+
 ### `verify-backup-health.sh` reports missing cron
 Run `bash /home/deploy/install-backup-cron.sh` or redeploy from `main` after merging the backup redundancy PR.
 

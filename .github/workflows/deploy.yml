@@ -7,7 +7,7 @@ permissions:
 
 on:
   workflow_run:
-    workflows: ["CI"]
+    workflows: ["App CI"]
     types: [completed]
   # Allow manual triggering from the GitHub Actions UI
   # Use this when the deploy workflow needs to be triggered manually,
@@ -31,9 +31,9 @@ jobs:
     # automatic workflow_run trigger is skipped (e.g. when deploy.yml itself was
     # changed in the merged PR). Only repository collaborators with write access
     # can trigger workflow_dispatch via the GitHub Actions UI.
-    # App CI green (CI success) triggers Deploy. VPS async-stack readiness is
-    # soft on the CI smoke job so a stopped celery worker cannot skip deploys;
-    # this workflow always re-ensures the async stack before shipping.
+    # App CI green (App CI success) triggers Deploy. Ops health (backup/verify)
+    # is a separate workflow and never sets this gate. This workflow always
+    # re-ensures the async stack before shipping.
     if: >
       (github.event_name == 'workflow_dispatch') ||
       (github.event.workflow_run.conclusion == 'success' &&
@@ -180,6 +180,7 @@ jobs:
         run: |
           # Copy deploy script and shared checks
           scp -i ~/.ssh/id_deploy scripts/deploy.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy.sh
+          scp -i ~/.ssh/id_deploy scripts/post-deploy-rollback.sh $VPS_USER@$VPS_HOST:/home/deploy/post-deploy-rollback.sh
           scp -i ~/.ssh/id_deploy scripts/deploy-async-stack-checks.sh $VPS_USER@$VPS_HOST:/home/deploy/deploy-async-stack-checks.sh
           scp -i ~/.ssh/id_deploy scripts/run-vps-readiness-check.sh $VPS_USER@$VPS_HOST:/home/deploy/run-vps-readiness-check.sh
           # Copy backup scripts and library (idempotent — safe to overwrite on every deploy)
@@ -203,7 +204,7 @@ jobs:
           scp -i ~/.ssh/id_deploy backup_lib.py $VPS_USER@$VPS_HOST:/home/deploy/backup_lib.py
           # Set correct permissions on backup scripts
           ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST \
-            "chmod 750 /home/deploy/backup.sh /home/deploy/backup_remote_transfer.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh /home/deploy/install-backup-cron.sh /home/deploy/celery-liveness-check.sh /home/deploy/ops-alert.sh /home/deploy/verify-backup-health.sh /home/deploy/restore-drill.sh && chmod 755 /home/deploy/wal-archive.sh && chmod 644 /home/deploy/backup_lib.py /home/deploy/backup_health_check.py /home/deploy/setup-b2-rclone.py /home/deploy/setup-cloudflare-rclone.py /home/deploy/configure_backup_remotes.py /home/deploy/inject-remote-backup.py"
+            "chmod 750 /home/deploy/backup.sh /home/deploy/backup_remote_transfer.sh /home/deploy/restore.sh /home/deploy/redis-backup.sh /home/deploy/pg-basebackup.sh /home/deploy/daily-summary.sh /home/deploy/install-backup-cron.sh /home/deploy/celery-liveness-check.sh /home/deploy/ops-alert.sh /home/deploy/verify-backup-health.sh /home/deploy/restore-drill.sh /home/deploy/post-deploy-rollback.sh && chmod 755 /home/deploy/wal-archive.sh && chmod 644 /home/deploy/backup_lib.py /home/deploy/backup_health_check.py /home/deploy/setup-b2-rclone.py /home/deploy/setup-cloudflare-rclone.py /home/deploy/configure_backup_remotes.py /home/deploy/inject-remote-backup.py"
           # Create a stub backup.conf if none exists so backup.sh can run without blocking the deploy.
           # The stub has empty remote/alert credentials — backup will skip remote transfer and alerting
           # but will still run pg_dump and write a local manifest entry.
@@ -328,6 +329,8 @@ jobs:
 
       # ── Step 6: Post-deploy health check + SHA verification ──────────────
       - name: Post-deploy health check
+        id: post_health
+        continue-on-error: true
         if: steps.deploy_run.outcome == 'success' || steps.retry_deploy.outcome == 'success'
         env:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
@@ -383,6 +386,39 @@ jobs:
             exit 1
           fi
 
+      - name: Rollback on post-deploy health/SHA failure
+        if: steps.post_health.outcome == 'failure'
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "Post-deploy health/SHA failed — rolling back to previous SHA on VPS..."
+          scp -i ~/.ssh/id_deploy scripts/post-deploy-rollback.sh \
+            "$VPS_USER@$VPS_HOST:/home/deploy/post-deploy-rollback.sh"
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+            "chmod +x /home/deploy/post-deploy-rollback.sh && bash /home/deploy/post-deploy-rollback.sh"
+          echo "::error::Deploy rolled back after post-deploy health/SHA failure."
+          exit 1
+
+      # Advisory only — broken backups must not strand a healthy ship (see Ops health).
+      - name: Post-deploy backup check (advisory)
+        if: steps.post_health.outcome == 'success'
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set +e
+          OUT=$(ssh -i ~/.ssh/id_deploy -o ConnectTimeout=10 \
+            "$VPS_USER@$VPS_HOST" "/home/deploy/backup.sh --check" 2>&1)
+          RC=$?
+          set -e
+          echo "$OUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "::warning::backup.sh --check failed after deploy (advisory). Ops health will alert; see docs/vps-config.md. Deploy is not rolled back for backup-only failures."
+            exit 0
+          fi
+          echo "Post-deploy backup check passed."
+
       # ── Step 7: Post-deploy ownership smoke test ──────────────────────────
       # Catches the class of regression where scoping logic works for new data
       # but silently breaks for legacy data (owner_user_id=NULL). Logs in as a
@@ -393,7 +429,7 @@ jobs:
       # Set SMOKE_TEST_SENTINEL_LEAD_ID to the database ID of a known unowned
       # lead (any lead imported before the ownership model) to enable check (a).
       - name: Post-deploy ownership smoke test
-        if: steps.deploy_run.outcome == 'success' || steps.retry_deploy.outcome == 'success'
+        if: steps.post_health.outcome == 'success'
         env:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
           SMOKE_TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
@@ -471,7 +507,7 @@ jobs:
       # query path causes every search to 500 (e.g. duplicate ELSE in CASE).
       # Skipped if smoke test credentials are not configured.
       - name: Post-deploy search smoke test
-        if: steps.deploy_run.outcome == 'success' || steps.retry_deploy.outcome == 'success'
+        if: steps.post_health.outcome == 'success'
         env:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
           SMOKE_TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}

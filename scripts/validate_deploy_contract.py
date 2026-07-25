@@ -218,13 +218,20 @@ def main() -> int:
             "install-backup-cron.sh must install celery-liveness-check.sh cron"
         )
 
-    # 6c. CI smoke soft-fails only async ensure (exit 2), not hard infra failures
-    ci_yml = _read(REPO_ROOT / ".github" / "workflows" / "ci.yml")
-    if "SOFT_ASYNC_ENSURE_FAILURE" not in ci_yml:
+    # 6c. Ops health soft-fails only async ensure (exit 2), not hard infra failures
+    ops_health_yml = _read(REPO_ROOT / ".github" / "workflows" / "ops-health.yml")
+    if "SOFT_ASYNC_ENSURE_FAILURE" not in ops_health_yml:
         errors.append(
-            "ci.yml vps-smoke must set SOFT_ASYNC_ENSURE_FAILURE=1 "
-            "(async ensure exit 2 must not block Deploy)"
+            "ops-health.yml must set SOFT_ASYNC_ENSURE_FAILURE=1 "
+            "(async ensure exit 2 must not fail ops hard for celery alone)"
         )
+    ci_yml = _read(REPO_ROOT / ".github" / "workflows" / "ci.yml")
+    if "vps-smoke-test" in ci_yml:
+        errors.append(
+            "ci.yml (App CI) must not include vps-smoke-test — ops checks belong in ops-health.yml"
+        )
+    if not ci_yml.lstrip().startswith("name: App CI"):
+        errors.append('ci.yml workflow name must be "App CI" (Deploy listens by name)')
     ci_ensure = _read(REPO_ROOT / "scripts" / "ci-ensure-vps-readiness.sh")
     if "SOFT_ASYNC_ENSURE_FAILURE" not in ci_ensure or "READINESS_CODE" not in ci_ensure:
         errors.append(
@@ -232,6 +239,15 @@ def main() -> int:
             "SOFT_ASYNC_ENSURE_FAILURE=1"
         )
     deploy_yml = _read(REPO_ROOT / ".github" / "workflows" / "deploy.yml")
+    if 'workflows: ["App CI"]' not in deploy_yml:
+        errors.append(
+            'deploy.yml must listen to workflow_run workflows: ["App CI"] '
+            "(ops-health must never gate Deploy)"
+        )
+    if "post-deploy-rollback.sh" not in deploy_yml:
+        errors.append(
+            "deploy.yml must invoke post-deploy-rollback.sh on post-deploy health failure"
+        )
     if "celery-liveness-check.sh" not in deploy_yml:
         errors.append(
             "deploy.yml must copy celery-liveness-check.sh to the VPS"

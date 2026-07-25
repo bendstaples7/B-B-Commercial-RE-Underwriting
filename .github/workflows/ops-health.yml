@@ -1,0 +1,192 @@
+# Ops health — backup / verify / soft readiness. Never triggers Deploy.
+# Failures open/update a GitHub issue and optionally POST to Slack.
+name: Ops health
+
+permissions:
+  contents: read
+  issues: write
+
+on:
+  schedule:
+    # Every 6 hours
+    - cron: "0 */6 * * *"
+  workflow_run:
+    workflows: ["Deploy"]
+    types: [completed]
+  workflow_dispatch:
+
+jobs:
+  ops-health:
+    name: VPS backup and readiness
+    runs-on: ubuntu-latest
+    # Run after Deploy finishes (any conclusion), on schedule, or manually.
+    # Skip when Deploy was cancelled mid-flight without a useful VPS state.
+    if: >
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion != 'cancelled'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up SSH key
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+      - name: Add VPS to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_HOST_KEY }}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Run backup.sh --check on VPS
+        id: backup_check
+        continue-on-error: true
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          OUT=$(ssh -i ~/.ssh/id_deploy \
+            -o ConnectTimeout=10 \
+            "$VPS_USER@$VPS_HOST" \
+            "/home/deploy/backup.sh --check" 2>&1) || {
+            echo "$OUT"
+            echo "::error::backup.sh --check failed on VPS. See docs/vps-config.md"
+            echo "backup_failed=1" >> "$GITHUB_OUTPUT"
+            exit 1
+          }
+          echo "$OUT"
+          echo "backup_failed=0" >> "$GITHUB_OUTPUT"
+
+      - name: Run backup health verification on VPS
+        id: verify_backup
+        continue-on-error: true
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          OUT=$(ssh -i ~/.ssh/id_deploy \
+            -o ConnectTimeout=10 \
+            "$VPS_USER@$VPS_HOST" \
+            "/home/deploy/verify-backup-health.sh" 2>&1) || {
+            echo "$OUT"
+            echo "::error::verify-backup-health.sh failed on VPS. See docs/vps-config.md"
+            echo "verify_failed=1" >> "$GITHUB_OUTPUT"
+            exit 1
+          }
+          echo "$OUT"
+          echo "verify_failed=0" >> "$GITHUB_OUTPUT"
+
+      # Soft only for async-stack ensure (exit 2). Hard failures (SSH, sudo, missing
+      # files) still fail this step. Deploy re-ensures without SOFT_ASYNC_ENSURE_FAILURE.
+      - name: Run VPS readiness check
+        id: readiness
+        continue-on-error: true
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_ROOT_SSH_KEY: ${{ secrets.VPS_ROOT_SSH_KEY }}
+          SSH_KEY_PATH: ~/.ssh/id_deploy
+          SOFT_ASYNC_ENSURE_FAILURE: "1"
+        run: |
+          chmod +x scripts/ci-ensure-vps-readiness.sh scripts/run-vps-readiness-check.sh
+          VPS_USER="$VPS_USER" VPS_HOST="$VPS_HOST" SSH_KEY_PATH="$SSH_KEY_PATH" \
+            VPS_ROOT_SSH_KEY="$VPS_ROOT_SSH_KEY" \
+            SOFT_ASYNC_ENSURE_FAILURE=1 \
+            bash scripts/ci-ensure-vps-readiness.sh
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## Ops health"
+            echo ""
+            echo "| Check | Result |"
+            echo "|-------|--------|"
+            echo "| backup.sh --check | ${{ steps.backup_check.outcome }} |"
+            echo "| verify-backup-health | ${{ steps.verify_backup.outcome }} |"
+            echo "| VPS readiness (soft async) | ${{ steps.readiness.outcome }} |"
+            echo ""
+            echo "This workflow never blocks App CI or Deploy."
+            echo "Remediation: [docs/vps-config.md](docs/vps-config.md) — \`backup.sh --check\` fails."
+            echo ""
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or update ops-health GitHub issue
+        if: >
+          always() &&
+          (steps.backup_check.outcome == 'failure' ||
+           steps.verify_backup.outcome == 'failure' ||
+           steps.readiness.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_TITLE: "Ops health: backup/verify failing on VPS"
+        run: |
+          set -euo pipefail
+          BODY=$(cat <<EOF
+          ## Ops health failure
+
+          Automated Ops health checks failed.
+
+          | Check | Result |
+          |-------|--------|
+          | backup.sh --check | ${{ steps.backup_check.outcome }} |
+          | verify-backup-health | ${{ steps.verify_backup.outcome }} |
+          | VPS readiness (soft async) | ${{ steps.readiness.outcome }} |
+
+          **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          ### Remediation
+          1. SSH to the VPS and run \`tail -50 /home/deploy/logs/backup.log\`
+          2. See docs/vps-config.md — \`backup.sh --check\` fails
+          3. Fix \`backup.conf\` / cron / credentials; re-run **Ops health** via workflow_dispatch
+
+          App CI and Deploy are **not** blocked by this issue.
+          EOF
+          )
+
+          EXISTING=$(gh issue list --label ops-health --state open --search "in:title Ops health: backup/verify failing on VPS" --json number,title --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+            echo "Updated issue #$EXISTING"
+          else
+            gh label create ops-health --description "VPS backup/ops health alerts" --color B60205 2>/dev/null || true
+            gh issue create --title "$ISSUE_TITLE" --label ops-health --body "$BODY"
+          fi
+
+      - name: Optional Slack webhook
+        if: >
+          always() &&
+          (steps.backup_check.outcome == 'failure' ||
+           steps.verify_backup.outcome == 'failure' ||
+           steps.readiness.outcome == 'failure')
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TEXT: "Ops health failed on ${{ github.repository }} — backup/verify. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          set -euo pipefail
+          if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
+            echo "SLACK_WEBHOOK_URL not set — skipping Slack notify."
+            exit 0
+          fi
+          curl -sS --fail -X POST -H 'Content-type: application/json' \
+            --data "$(python3 -c "import json,os; print(json.dumps({'text': os.environ['TEXT']}))")" \
+            "$SLACK_WEBHOOK_URL"
+
+      - name: Fail job when ops checks failed
+        if: >
+          always() &&
+          (steps.backup_check.outcome == 'failure' ||
+           steps.verify_backup.outcome == 'failure' ||
+           steps.readiness.outcome == 'failure')
+        run: |
+          echo "::error::Ops health checks failed (advisory — does not block Deploy)."
+          exit 1

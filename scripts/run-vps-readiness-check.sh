@@ -2,7 +2,7 @@
 # =============================================================================
 # run-vps-readiness-check.sh
 # VPS readiness gate — run on the VPS as the deploy user (non-interactive).
-# Used by deploy.yml, ci.yml vps-readiness, and vps-smoke-test jobs.
+# Used by deploy.yml, ci.yml vps-readiness, and ops-health.yml jobs.
 #
 # Usage: bash /home/deploy/run-vps-readiness-check.sh
 # =============================================================================

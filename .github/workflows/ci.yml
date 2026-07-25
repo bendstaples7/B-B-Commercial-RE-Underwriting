@@ -1,4 +1,7 @@
-name: CI
+name: App CI
+
+permissions:
+  contents: read
 
 on:
   pull_request:
@@ -98,6 +101,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
+    # Artifact upload for Deploy (workflow default is contents: read only).
+    permissions:
+      contents: read
+      actions: write
 
     steps:
       - uses: actions/checkout@v4
@@ -248,74 +255,6 @@ jobs:
             echo "Or merge after VPS_ROOT_SSH_KEY auto-migrate is configured for deploy workflow."
             exit 1
           }
-
-  vps-smoke-test:
-    name: VPS smoke test — backup and readiness
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    permissions:
-      contents: read
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up SSH key
-        env:
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-        run: |
-          mkdir -p ~/.ssh
-          echo "$VPS_SSH_KEY" > ~/.ssh/id_deploy
-          chmod 600 ~/.ssh/id_deploy
-
-      - name: Add VPS to known hosts
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.VPS_HOST_KEY }}" >> ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-
-      - name: Run backup.sh --check on VPS
-        env:
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: |
-          ssh -i ~/.ssh/id_deploy \
-            -o ConnectTimeout=10 \
-            $VPS_USER@$VPS_HOST \
-            "/home/deploy/backup.sh --check" \
-          || {
-            echo "ERROR: backup.sh --check failed on VPS."
-            exit 1
-          }
-
-      - name: Run backup health verification on VPS
-        env:
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: |
-          ssh -i ~/.ssh/id_deploy \
-            -o ConnectTimeout=10 \
-            $VPS_USER@$VPS_HOST \
-            "/home/deploy/verify-backup-health.sh" \
-          || {
-            echo "ERROR: verify-backup-health.sh failed on VPS."
-            exit 1
-          }
-
-      # Soft only for async-stack ensure (exit 2). Hard failures (SSH, sudo, missing
-      # files) still fail this job. Deploy re-ensures without SOFT_ASYNC_ENSURE_FAILURE.
-      - name: Run VPS readiness check
-        env:
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_ROOT_SSH_KEY: ${{ secrets.VPS_ROOT_SSH_KEY }}
-          SSH_KEY_PATH: ~/.ssh/id_deploy
-          SOFT_ASYNC_ENSURE_FAILURE: "1"
-        run: |
-          chmod +x scripts/ci-ensure-vps-readiness.sh scripts/run-vps-readiness-check.sh
-          VPS_USER="$VPS_USER" VPS_HOST="$VPS_HOST" SSH_KEY_PATH="$SSH_KEY_PATH" \
-            VPS_ROOT_SSH_KEY="$VPS_ROOT_SSH_KEY" \
-            SOFT_ASYNC_ENSURE_FAILURE=1 \
-            bash scripts/ci-ensure-vps-readiness.sh
 
   backend:
     name: Backend — pytest
@@ -557,9 +496,10 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/migration_test_db
 
   ci-success:
-    name: CI success
-    # Single required check for branch protection. Skipped path-filtered
-    # jobs are allowed; any failure or cancellation fails this gate.
+    name: App CI success
+    # Single required check for branch protection. App jobs only — Ops health
+    # (backup/verify) lives in ops-health.yml and never blocks Deploy.
+    # Skipped path-filtered jobs are allowed; any failure or cancellation fails.
     if: always()
     needs:
       - changes
@@ -570,7 +510,6 @@ jobs:
       - deploy-contract
       - duplication-check
       - vps-readiness
-      - vps-smoke-test
     runs-on: ubuntu-latest
     steps:
       - name: Aggregate required job results
@@ -585,7 +524,6 @@ jobs:
           echo "  deploy-contract=${{ needs.deploy-contract.result }}"
           echo "  duplication-check=${{ needs.duplication-check.result }}"
           echo "  vps-readiness=${{ needs.vps-readiness.result }}"
-          echo "  vps-smoke-test=${{ needs.vps-smoke-test.result }}"
 
           fail=0
           for result in \
@@ -596,8 +534,7 @@ jobs:
             "${{ needs.validate-workflows.result }}" \
             "${{ needs.deploy-contract.result }}" \
             "${{ needs.duplication-check.result }}" \
-            "${{ needs.vps-readiness.result }}" \
-            "${{ needs.vps-smoke-test.result }}"
+            "${{ needs.vps-readiness.result }}"
           do
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               echo "Unsuccessful job result: $result"
@@ -605,7 +542,7 @@ jobs:
             fi
           done
           if [ "$fail" -ne 0 ]; then
-            echo "::error::One or more CI jobs failed or were cancelled."
+            echo "::error::One or more App CI jobs failed or were cancelled."
             exit 1
           fi
-          echo "All required CI jobs succeeded or were skipped."
+          echo "All required App CI jobs succeeded or were skipped."

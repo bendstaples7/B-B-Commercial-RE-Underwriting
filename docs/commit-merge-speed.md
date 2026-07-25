@@ -3,7 +3,7 @@
 Local commits and CI no longer both run the full suite. The intended flow:
 
 1. **Local pre-commit** (`.githooks/pre-commit`) — fast always-on guards + staged-path mapped tests. No `npm run build`.
-2. **CI** (`.github/workflows/ci.yml`) — authoritative full checks, path-filtered per tree, aggregated by the **CI success** job.
+2. **App CI** (`.github/workflows/ci.yml`) — authoritative app checks, path-filtered per tree, aggregated by the **App CI success** job. Ops/backup checks live in **Ops health** and do not gate merges or Deploy.
 3. **Human merge** — after `gh pr create`, the agent provides the PR URL and **stops**. The user reviews and merges. Agents must never run `gh pr merge` or enable auto-merge.
 
 ## Install hooks
@@ -25,7 +25,9 @@ Sets `core.hooksPath=.githooks` for this clone.
 
 ## Branch protection
 
-Require the single check named **CI success** (not the individual path-filtered jobs). Skipped jobs are treated as OK by the aggregator.
+Require the single check named **App CI success** (not the individual path-filtered jobs, and not Ops health). Skipped jobs are treated as OK by the aggregator.
+
+If branch protection still lists the old name **CI success**, update it to **App CI success** so the required check matches the current workflow aggregate.
 
 `strict_required_status_checks_policy` is **off** so PRs do not need a rebase onto latest `main` before every merge (that would fight the speedup).
 
