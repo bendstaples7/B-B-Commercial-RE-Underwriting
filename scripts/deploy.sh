@@ -22,6 +22,8 @@ cd "$APP_DIR"
 
 # ── Capture current SHA for rollback ─────────────────────────────────────────
 PREVIOUS_SHA=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+# Durable marker for post-deploy-rollback.sh (health/SHA failure after ship).
+echo "$PREVIOUS_SHA" > /home/deploy/PREVIOUS_DEPLOY_SHA 2>/dev/null || true
 
 # ── Rollback function — called automatically on any failure ──────────────────
 rollback() {

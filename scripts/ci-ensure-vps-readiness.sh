@@ -54,7 +54,7 @@ fi
 
 if [[ "${READINESS_CODE}" -eq 2 ]]; then
     if [[ "${SOFT_ASYNC_ENSURE_FAILURE:-}" == "1" ]]; then
-        echo "::warning::VPS async stack ensure failed (exit 2). CI success/Deploy not blocked; Deploy will re-ensure celery/redis."
+        echo "::warning::VPS async stack ensure failed (exit 2). App CI/Deploy not blocked; Deploy will re-ensure celery/redis."
         exit 0
     fi
     echo "ERROR: VPS async stack ensure failed (celery/redis unhealthy after restart attempt)."

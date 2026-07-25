@@ -196,6 +196,7 @@ restrict to the VPS IP in `sshd_config` if possible.
 | `B2_BUCKET_NAME` | Deploy (optional) | `${{ secrets.B2_BUCKET_NAME }}` |
 | `VPS_SUBDOMAIN` | Post-deploy health check | `${{ secrets.VPS_SUBDOMAIN }}` |
 | `VPS_ROOT_SSH_KEY` | Optional auto-migrate | `${{ secrets.VPS_ROOT_SSH_KEY }}` |
+| `SLACK_WEBHOOK_URL` | Ops health (optional) | `${{ secrets.SLACK_WEBHOOK_URL }}` — if unset, Ops health skips Slack |
 
 All secrets are passed via `${{ secrets.SECRET_NAME }}` syntax — no secret values
 are hardcoded anywhere in the workflow YAML.
