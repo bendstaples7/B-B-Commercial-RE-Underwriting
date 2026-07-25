@@ -27,7 +27,7 @@ Sets `core.hooksPath=.githooks` for this clone.
 
 Require the single check named **App CI success** (not the individual path-filtered jobs, and not Ops health). Skipped jobs are treated as OK by the aggregator.
 
-If branch protection still lists the old name **CI success**, update it to **App CI success** after this workflow rename lands on `main`.
+If branch protection still lists the old name **CI success**, update it to **App CI success** so the required check matches the current workflow aggregate.
 
 `strict_required_status_checks_policy` is **off** so PRs do not need a rebase onto latest `main` before every merge (that would fight the speedup).
 

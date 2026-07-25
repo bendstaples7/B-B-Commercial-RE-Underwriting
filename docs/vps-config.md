@@ -124,7 +124,7 @@ Run `tail -20 /home/deploy/logs/backup.log` on the VPS to see the specific error
 
 | Gate | Behavior |
 |------|----------|
-| **App CI** (`.github/workflows/ci.yml`) | App tests only. Does **not** run `backup.sh --check`. |
+| **App CI** (`.github/workflows/ci.yml`) | App lint/typecheck/build/tests, migration smoke tests, and deploy-contract validation. Does **not** run VPS backup checks such as `backup.sh --check`. |
 | **Deploy** | Still hard-fails on **pre-deploy** `backup.sh --check` (and `--pre-deploy` backup). Post-deploy `backup.sh --check` is **advisory** (`::warning::` only) — backup breakage alone does not roll back a healthy ship. |
 | **Ops health** (`.github/workflows/ops-health.yml`) | Schedule + after Deploy + manual. Runs `backup.sh --check`, `verify-backup-health.sh`, soft readiness. Failures open/update a GitHub issue labeled `ops-health` (optional Slack via `SLACK_WEBHOOK_URL`). **Never** triggers or blocks Deploy. |
 

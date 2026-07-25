@@ -47,11 +47,11 @@ echo "$PREVIOUS_SHA" > "$APP_DIR/DEPLOY_SHA" 2>/dev/null || { echo "ROLLBACK WAR
 pip install --user -r backend/requirements.txt -q 2>/dev/null || { echo "ROLLBACK WARNING: pip install failed"; ROLLBACK_FAILED=1; }
 
 if [ -d "/home/deploy/frontend-dist-backup" ]; then
-    rm -rf frontend/dist
-    cp -r /home/deploy/frontend-dist-backup frontend/dist 2>/dev/null || {
+    if ! rm -rf frontend/dist || \
+       ! cp -r /home/deploy/frontend-dist-backup frontend/dist 2>/dev/null; then
         echo "ROLLBACK WARNING: frontend dist restore failed"
         ROLLBACK_FAILED=1
-    }
+    fi
 else
     echo "ROLLBACK WARNING: no frontend-dist-backup found — frontend may mismatch backend"
     ROLLBACK_FAILED=1
@@ -60,6 +60,27 @@ fi
 sudo -n systemctl reload gunicorn 2>/dev/null || { echo "ROLLBACK WARNING: gunicorn reload failed"; ROLLBACK_FAILED=1; }
 sudo -n systemctl restart celery 2>/dev/null || true
 sudo -n systemctl restart celery-beat 2>/dev/null || true
+
+if [ "$ROLLBACK_FAILED" -eq 0 ]; then
+    GUNICORN_READY=0
+    for i in $(seq 1 18); do
+        HC_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            --connect-timeout 3 \
+            --max-time 5 \
+            http://localhost:5000/api/health 2>/dev/null || echo "000")
+        echo "localhost health check attempt $i: HTTP $HC_STATUS"
+        if [ "$HC_STATUS" = "200" ]; then
+            echo "Gunicorn is healthy on localhost."
+            GUNICORN_READY=1
+            break
+        fi
+        sleep 2
+    done
+    if [ "$GUNICORN_READY" = "0" ]; then
+        echo "ROLLBACK WARNING: Gunicorn did not become healthy on localhost after ~126s"
+        ROLLBACK_FAILED=1
+    fi
+fi
 
 if [ "$ROLLBACK_FAILED" -eq 0 ]; then
     echo "Post-deploy rollback to $PREVIOUS_SHA complete."

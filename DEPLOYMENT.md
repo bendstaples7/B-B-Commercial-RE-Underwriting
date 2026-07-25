@@ -69,10 +69,10 @@ sudo bash /home/deploy/app/scripts/vps-setup/11-sudoers-deploy.sh
 |-------|------|----------------|
 | `deploy-contract` | Every PR | `deploy.sh` / sudoers drift, shell syntax errors |
 | `vps-readiness` | PRs touching deploy infra | VPS not migrated before merge |
-| **App CI success** | PR / push to `main` | App tests green — this alone triggers Deploy |
-| **Ops health** | Schedule + after Deploy | Backup/verify/readiness; alerts via GitHub issue; never blocks Deploy |
+| **App CI success** | PR validation / push to `main` | App checks green. Only successful runs on `main` trigger Deploy |
+| **Ops health** | Schedule + after Deploy + manual dispatch | Backup/verify/readiness; alerts via GitHub issue; never blocks Deploy |
 | `Ensure VPS readiness` | Deploy workflow | Blocks deploy; auto-migrates if `VPS_ROOT_SSH_KEY` set |
-| Post-deploy `/api/health` | After successful ship | Hard fail → `post-deploy-rollback.sh` to previous SHA |
+| Post-deploy `/api/health` + `/api/version` | After successful ship | Health failure or unexpected deployed SHA → `post-deploy-rollback.sh` to previous SHA |
 
 ---
 
