@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
+
+from sqlalchemy import func
 
 from app import db
 from app.exceptions import ExternalServiceError
+from app.models.mail_campaign import MailCampaign
 from app.models.open_letter_config import OpenLetterConfig
 from app.models.user import User
 from app.services.open_letter_client_service import OpenLetterClientService
@@ -139,7 +142,6 @@ class OpenLetterConfigService:
         return_address: dict | None = None,
         creative_presets: list | None = None,
         active_creative_preset_id: str | None = None,
-        estimated_cost_per_piece: Decimal | float | None = None,
     ) -> OpenLetterConfig:
         if api_token and self.uses_env_token(user_id):
             raise ValueError(
@@ -193,8 +195,6 @@ class OpenLetterConfigService:
                 config.active_creative_preset_id = config.creative_presets[0]['id']
         else:
             config.active_creative_preset_id = None
-        if estimated_cost_per_piece is not None:
-            config.estimated_cost_per_piece = max(Decimal('0'), Decimal(str(estimated_cost_per_piece)))
 
         # Auto-confirm font/ink from the selected Connect template (not user-selected).
         style = self.resolve_template_style(user_id, config.default_template_id)
@@ -207,6 +207,120 @@ class OpenLetterConfigService:
         config.updated_at = datetime.utcnow()
         db.session.commit()
         return config
+
+    def _positive_cost_per_piece(self, value) -> Decimal | None:
+        """Return a positive Decimal cost, or None if missing/zero/negative."""
+        if value is None:
+            return None
+        try:
+            amount = Decimal(str(value))
+        except Exception:
+            return None
+        if amount <= 0:
+            return None
+        return amount
+
+    def _campaign_sent_at(self, campaign: MailCampaign) -> datetime | None:
+        return campaign.submitted_at or campaign.created_at
+
+    def _latest_campaign_with_cost(
+        self,
+        user_id: str,
+        *,
+        product_id: int | None = None,
+        require_product_match: bool = False,
+    ) -> MailCampaign | None:
+        """Most recent billed campaign with a positive cost_per_piece."""
+        sent_at = func.coalesce(MailCampaign.submitted_at, MailCampaign.created_at)
+        q = (
+            MailCampaign.query
+            .filter(
+                MailCampaign.created_by == user_id,
+                MailCampaign.cost_per_piece.isnot(None),
+                MailCampaign.cost_per_piece > 0,
+                MailCampaign.status.in_(('submitted', 'processing', 'mailed')),
+            )
+        )
+        if product_id is not None:
+            matched = (
+                q.filter(MailCampaign.product_id == product_id)
+                .order_by(sent_at.desc())
+                .first()
+            )
+            if matched is not None:
+                return matched
+            if require_product_match:
+                return None
+        return q.order_by(sent_at.desc()).first()
+
+    def resolve_estimated_cost(
+        self,
+        user_id: str,
+        *,
+        persist: bool = False,
+    ) -> tuple[Decimal | None, datetime | None]:
+        """Effective $/piece and the send date of the campaign it came from.
+
+        Prefers a campaign matching the default product. Falls back to any
+        billed campaign for display only (never persisted for a mismatched
+        product). GET/read paths should keep ``persist=False``; seeding writes
+        only when config is unset and the campaign matches the default product
+        (or there is no default product).
+        """
+        config = self.get_config(user_id)
+        product_id = config.default_product_id if config is not None else None
+
+        matched = self._latest_campaign_with_cost(
+            user_id,
+            product_id=product_id,
+            require_product_match=product_id is not None,
+        )
+        if matched is not None:
+            seeded = self._positive_cost_per_piece(matched.cost_per_piece)
+            if seeded is not None:
+                config_unset = (
+                    config is not None
+                    and self._positive_cost_per_piece(config.estimated_cost_per_piece) is None
+                )
+                if persist and config_unset:
+                    config.estimated_cost_per_piece = seeded
+                    config.updated_at = datetime.utcnow()
+                    db.session.commit()
+                    logger.info(
+                        'Seeded estimated_cost_per_piece=%.4f from campaign %s for user_id=%s',
+                        seeded,
+                        matched.id,
+                        user_id,
+                    )
+                return seeded, self._campaign_sent_at(matched)
+
+        # Display-only fallback: other product's last cost (do not persist).
+        if product_id is not None:
+            fallback = self._latest_campaign_with_cost(
+                user_id,
+                product_id=None,
+                require_product_match=False,
+            )
+            if fallback is not None:
+                seeded = self._positive_cost_per_piece(fallback.cost_per_piece)
+                if seeded is not None:
+                    return seeded, self._campaign_sent_at(fallback)
+
+        if config is not None:
+            current = self._positive_cost_per_piece(config.estimated_cost_per_piece)
+            if current is not None:
+                return current, None
+        return None, None
+
+    def resolve_estimated_cost_per_piece(
+        self,
+        user_id: str,
+        *,
+        persist: bool = False,
+    ) -> Decimal | None:
+        """Effective $/piece only (see ``resolve_estimated_cost``)."""
+        cost, _source = self.resolve_estimated_cost(user_id, persist=persist)
+        return cost
 
     def require_config(self, user_id: str) -> OpenLetterConfig:
         config = self.ensure_config_from_env(user_id) or self.get_config(user_id)
@@ -224,21 +338,38 @@ class OpenLetterConfigService:
         return OpenLetterClientService(config, api_token=env_token)
 
     def get_readonly_settings(self, user_id: str) -> dict:
-        """Return mail batch settings without bootstrapping or writing to the DB."""
+        """Return mail batch settings without writing to the DB."""
         config = self.get_config(user_id)
+        cost, source_sent_at = self.resolve_estimated_cost(user_id, persist=False)
+        cost_float = float(cost) if cost is not None else None
+        if source_sent_at is None:
+            source_iso = None
+        elif source_sent_at.tzinfo is None:
+            source_iso = (
+                source_sent_at.replace(tzinfo=timezone.utc)
+                .isoformat()
+                .replace('+00:00', 'Z')
+            )
+        else:
+            source_iso = (
+                source_sent_at.astimezone(timezone.utc)
+                .isoformat()
+                .replace('+00:00', 'Z')
+            )
+        base = {
+            'estimated_cost_per_piece': cost_float,
+            'estimated_cost_source_sent_at': source_iso,
+        }
         if config:
             return {
                 'batch_minimum': config.batch_minimum,
                 'allow_send_below_minimum': config.allow_send_below_minimum,
-                'estimated_cost_per_piece': (
-                    float(config.estimated_cost_per_piece)
-                    if config.estimated_cost_per_piece is not None else None
-                ),
+                **base,
             }
         return {
             'batch_minimum': _env_int(ENV_BATCH_MINIMUM, 50) or 50,
             'allow_send_below_minimum': _env_bool(ENV_ALLOW_BELOW_MINIMUM, False),
-            'estimated_cost_per_piece': None,
+            **base,
         }
 
     def resolve_template_style(self, user_id: str, template_id: int | str | None) -> dict | None:
@@ -331,6 +462,7 @@ class OpenLetterConfigService:
                 # GET is read-only — use /templates/:id/style to confirm fonts.
                 'template_style': None,
                 'estimated_cost_per_piece': settings['estimated_cost_per_piece'],
+                'estimated_cost_source_sent_at': settings['estimated_cost_source_sent_at'],
                 'updated_at': None,
             }
 
@@ -350,6 +482,8 @@ class OpenLetterConfigService:
                 'confirmed_from': 'preset',
             }
 
+        settings = self.get_readonly_settings(user_id)
+
         return {
             'configured': True,
             'token_source': source,
@@ -367,9 +501,7 @@ class OpenLetterConfigService:
                 presets[0]['id'] if presets else None
             ),
             'template_style': style,
-            'estimated_cost_per_piece': (
-                float(config.estimated_cost_per_piece)
-                if config.estimated_cost_per_piece is not None else None
-            ),
+            'estimated_cost_per_piece': settings['estimated_cost_per_piece'],
+            'estimated_cost_source_sent_at': settings['estimated_cost_source_sent_at'],
             'updated_at': config.updated_at.isoformat() if config.updated_at else None,
         }

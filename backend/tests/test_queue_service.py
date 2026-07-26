@@ -931,6 +931,106 @@ def test_mail_candidates_count_matches_list(app):
         assert eligible.id in [r['id'] for r in rows]
 
 
+def test_mail_candidates_paginate_after_returned_mail_filter(app):
+    """A filtered candidate does not leave a short or shifted page."""
+    with app.app_context():
+        first = _make_mail_ready_lead(
+            app, '24 First Eligible St', lead_score=100,
+        )
+        _make_mail_ready_lead(
+            app,
+            '25 Returned Property St',
+            lead_score=90,
+            mailing_address='502 Owner St',
+            returned_addresses='502 Owner St',
+        )
+        second = _make_mail_ready_lead(
+            app, '26 Second Eligible St', lead_score=80,
+        )
+        nonmatching_history = _make_mail_ready_lead(
+            app,
+            '27 Current Address St',
+            lead_score=70,
+            returned_addresses='999 Old Address St',
+        )
+
+        svc = QueueService(owner_user_id='test-owner')
+        page_one, total = svc.get_mail_candidates('test-owner', page=1, per_page=1)
+        page_two, second_total = svc.get_mail_candidates('test-owner', page=2, per_page=1)
+        all_ids = svc.get_mail_candidate_ids('test-owner')
+
+        assert total == second_total == 3
+        assert [row['id'] for row in page_one] == [first.id]
+        assert [row['id'] for row in page_two] == [second.id]
+        assert all_ids == [first.id, second.id, nonmatching_history.id]
+
+
+def test_mail_candidate_eligibility_uses_slim_batched_rows(app):
+    """Eligibility scans projected rows, not every candidate as a full Lead ORM."""
+    from app.models import Lead
+    from app.services import queue_service as queue_service_module
+
+    with app.app_context():
+        for index in range(5):
+            _make_mail_ready_lead(
+                app,
+                f'{30 + index} Batch Candidate St',
+                lead_score=100 - index,
+            )
+
+        svc = QueueService(owner_user_id='test-owner')
+        svc.MAIL_ELIGIBILITY_BATCH_SIZE = 2
+        original_filter = queue_service_module._filter_mail_eligible_leads
+        scanned_batches = []
+
+        def capture_rows(rows, **kwargs):
+            scanned_batches.append(list(rows))
+            return original_filter(rows, **kwargs)
+
+        with patch.object(
+            queue_service_module,
+            '_filter_mail_eligible_leads',
+            side_effect=capture_rows,
+        ):
+            assert svc.count_mail_candidates('test-owner') == 5
+
+        assert [len(batch) for batch in scanned_batches] == [2, 2, 1]
+        assert all(
+            not isinstance(row, Lead)
+            for batch in scanned_batches
+            for row in batch
+        )
+
+
+def test_postgres_mail_filter_keeps_python_recent_sale_belt(app):
+    """Postgres post-filter trusts address SQL but still checks recent-sale in Python."""
+    with app.app_context():
+        lead = _make_mail_ready_lead(app, '35 SQL Prefiltered St')
+        with (
+            patch(
+                'app.services.queue_service.cold_mail_block_reasons_for_leads',
+                return_value={},
+            ),
+            patch(
+                'app.services.queue_service.current_owner_mailing_was_returned',
+                return_value=False,
+            ),
+            patch(
+                'app.services.queue_service.is_recently_sold',
+                return_value=False,
+            ) as recent_sale,
+            patch(
+                'app.services.queue_service.is_owner_mailable_lead',
+                side_effect=AssertionError('address-completeness SQL should be trusted'),
+            ),
+        ):
+            assert _filter_mail_eligible_leads(
+                [lead],
+                sql_prefiltered=True,
+            ) == [lead]
+            recent_sale.assert_called()
+
+
 def test_get_counts_reflects_actual_leads(app):
     """get_counts badge counts match the actual number of qualifying leads."""
     with app.app_context():

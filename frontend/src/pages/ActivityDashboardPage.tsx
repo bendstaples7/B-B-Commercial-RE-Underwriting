@@ -8,8 +8,8 @@ import {
   Alert,
   Box,
   Button,
-  Chip,
   CircularProgress,
+  Divider,
   LinearProgress,
   Paper,
   Stack,
@@ -50,8 +50,12 @@ import {
 import { formatShortCalendarDay, formatUtcDateRange } from '@/utils/helpers'
 
 const cardSx = {
-  p: 1.25,
+  px: 1.25,
+  py: 1,
   height: '100%',
+  minWidth: 0,
+  overflow: 'hidden',
+  boxSizing: 'border-box',
   border: 1,
   borderColor: 'divider',
   borderRadius: 1,
@@ -63,22 +67,27 @@ function periodToType(period: ActivityPeriod): ActivityPeriodType {
   return period === 'week' ? 'weekly' : 'monthly'
 }
 
-function formatTrendChip(trend: ActivityTrend, label: string): {
-  text: string
-  color: 'success' | 'error' | 'default'
+function formatTrendDisplay(trend: ActivityTrend, label: string): {
+  trendLabel: string
+  pctLine: string
+  color: 'success.main' | 'error.main' | 'text.secondary'
   Icon: typeof TrendingUpIcon
 } {
   if (trend.delta === 0) {
-    return { text: `${label} flat`, color: 'default', Icon: TrendingFlatIcon }
+    return {
+      trendLabel: label,
+      pctLine: '0%',
+      color: 'text.secondary',
+      Icon: TrendingFlatIcon,
+    }
   }
   const sign = trend.delta > 0 ? '+' : ''
-  const pct =
-    trend.pct_change == null
-      ? ''
-      : ` (${sign}${trend.pct_change}%)`
+  const pctLine =
+    trend.pct_change == null ? '—' : `${sign}${trend.pct_change}%`
   return {
-    text: `${label} ${sign}${trend.delta}${pct}`,
-    color: trend.delta > 0 ? 'success' : 'error',
+    trendLabel: label,
+    pctLine,
+    color: trend.delta > 0 ? 'success.main' : 'error.main',
     Icon: trend.delta > 0 ? TrendingUpIcon : TrendingDownIcon,
   }
 }
@@ -114,34 +123,122 @@ function MetricCard({
   const hasPositiveGoal = goal != null && goal > 0
   const pct = progress ?? 0
   const barPct = Math.min(Math.max(pct, 0), 100)
-  const chip = formatTrendChip(trend, trendLabel)
+  const trendDisplay = formatTrendDisplay(trend, trendLabel)
 
   return (
     <Paper elevation={0} sx={cardSx}>
-      <Stack spacing={0.75}>
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          fontWeight={600}
-          sx={{ textTransform: 'uppercase', letterSpacing: 0.04, lineHeight: 1.2 }}
-        >
-          {METRIC_LABELS[metric]}
-        </Typography>
-        <Typography variant="h5" fontWeight={700} lineHeight={1.1}>
-          {count}
-        </Typography>
-        <Chip
-          size="small"
-          icon={<chip.Icon sx={{ fontSize: '14px !important' }} />}
-          label={chip.text}
-          color={chip.color === 'default' ? 'default' : chip.color}
-          variant="outlined"
+      <Stack spacing={0.75} sx={{ minWidth: 0 }}>
+        <Box
           sx={{
-            alignSelf: 'flex-start',
-            height: 22,
-            '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' },
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 0.75,
+            minWidth: 0,
           }}
-        />
+        >
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            fontWeight={600}
+            noWrap
+            title={METRIC_LABELS[metric]}
+            sx={{
+              textTransform: 'uppercase',
+              letterSpacing: 0.04,
+              lineHeight: 1.2,
+              minWidth: 0,
+              flex: '1 1 auto',
+            }}
+          >
+            {METRIC_LABELS[metric]}
+          </Typography>
+          {!editing && !goalSet && (
+            <Button
+              size="small"
+              onClick={onStartEdit}
+              disabled={goalsDisabled}
+              sx={{
+                minHeight: 0,
+                py: 0.25,
+                px: 0.75,
+                fontSize: '0.7rem',
+                flex: '0 0 auto',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Set goal
+            </Button>
+          )}
+        </Box>
+
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'stretch',
+            justifyContent: 'center',
+            minHeight: 40,
+          }}
+          data-testid={`metric-stat-row-${metric}`}
+        >
+          <Box
+            sx={{
+              flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              px: 0.5,
+            }}
+          >
+            <Typography variant="h5" fontWeight={700} lineHeight={1} textAlign="center">
+              {count}
+            </Typography>
+          </Box>
+          <Divider orientation="vertical" flexItem />
+          <Box
+            sx={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 0.15,
+              px: 0.5,
+              color: trendDisplay.color,
+            }}
+          >
+            <trendDisplay.Icon sx={{ fontSize: 16 }} />
+            <Typography
+              variant="caption"
+              fontWeight={600}
+              color="inherit"
+              lineHeight={1.1}
+              textAlign="center"
+            >
+              {trendDisplay.trendLabel}
+            </Typography>
+          </Box>
+          <Divider orientation="vertical" flexItem />
+          <Box
+            sx={{
+              flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              px: 0.5,
+            }}
+          >
+            <Typography
+              variant="body2"
+              fontWeight={700}
+              color={trendDisplay.color}
+              lineHeight={1}
+              textAlign="center"
+            >
+              {trendDisplay.pctLine}
+            </Typography>
+          </Box>
+        </Box>
 
         {editing ? (
           <TextField
@@ -167,7 +264,7 @@ function MetricCard({
             <LinearProgress
               variant="determinate"
               value={barPct}
-              sx={{ height: 5, borderRadius: 1 }}
+              sx={{ height: 4, borderRadius: 1 }}
               aria-label={`${METRIC_LABELS[metric]} progress`}
             />
           </>
@@ -175,17 +272,7 @@ function MetricCard({
           <Typography variant="caption" color="text.secondary">
             Goal {goal}
           </Typography>
-        ) : (
-          <Button
-            size="small"
-            startIcon={<EditIcon sx={{ fontSize: 14 }} />}
-            onClick={onStartEdit}
-            disabled={goalsDisabled}
-            sx={{ alignSelf: 'flex-start', minHeight: 0, py: 0.25, px: 0.5, fontSize: '0.75rem' }}
-          >
-            Set goal
-          </Button>
-        )}
+        ) : null}
       </Stack>
     </Paper>
   )
@@ -526,11 +613,14 @@ export function ActivityDashboardPage() {
             sx={{
               flexShrink: 0,
               display: 'grid',
-              gap: 1,
+              gap: { xs: 1.5, md: 2 },
+              width: '100%',
+              maxWidth: { md: 1120 },
+              mx: { md: 'auto' },
               gridTemplateColumns: {
                 xs: '1fr',
                 sm: 'repeat(2, minmax(0, 1fr))',
-                md: 'repeat(5, minmax(0, 1fr))',
+                md: 'repeat(5, minmax(196px, 1fr))',
               },
             }}
           >

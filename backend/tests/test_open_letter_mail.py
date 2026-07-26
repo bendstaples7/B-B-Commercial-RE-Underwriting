@@ -449,3 +449,209 @@ class TestMailQueueSummary:
             summary = MailQueueService().get_summary(BEN_USER_ID)
             assert summary['queued_count'] == 1
             assert summary['can_send'] is False
+
+
+class TestResolveEstimatedCostPerPiece:
+    def test_prefers_campaign_cost_and_source_date(self, app, fernet_key, monkeypatch):
+        from app import db
+        from app.models.mail_campaign import MailCampaign
+        from app.services.open_letter_client_service import OpenLetterClientService
+        from decimal import Decimal
+        from datetime import datetime
+
+        with app.app_context():
+            monkeypatch.setenv('HUBSPOT_ENCRYPTION_KEY', fernet_key)
+            config = OpenLetterConfig(
+                user_id=BEN_USER_ID,
+                encrypted_api_token=OpenLetterClientService.encrypt_token('test-token'),
+                estimated_cost_per_piece=Decimal('1.50'),
+                default_product_id=5,
+            )
+            db.session.add(config)
+            sent_at = datetime(2026, 7, 12, 15, 30, 0)
+            db.session.add(MailCampaign(
+                created_by=BEN_USER_ID,
+                lead_count=10,
+                cost=Decimal('9.90'),
+                cost_per_piece=Decimal('0.99'),
+                product_id=5,
+                status='mailed',
+                submitted_at=sent_at,
+            ))
+            db.session.commit()
+
+            cost, source = OpenLetterConfigService().resolve_estimated_cost(BEN_USER_ID)
+            assert cost == Decimal('0.99')
+            assert source == sent_at
+            summary = MailQueueService().get_summary(BEN_USER_ID)
+            assert summary['estimated_cost_per_piece'] == 0.99
+            assert summary['estimated_cost_source_sent_at'] == '2026-07-12T15:30:00Z'
+            # GET/summary must not overwrite a stored positive config value.
+            refreshed = OpenLetterConfig.query.filter_by(user_id=BEN_USER_ID).one()
+            assert refreshed.estimated_cost_per_piece == Decimal('1.50')
+
+    def test_get_summary_does_not_persist_seed(self, app, fernet_key, monkeypatch):
+        from app import db
+        from app.models.mail_campaign import MailCampaign
+        from app.services.open_letter_client_service import OpenLetterClientService
+        from decimal import Decimal
+
+        with app.app_context():
+            monkeypatch.setenv('HUBSPOT_ENCRYPTION_KEY', fernet_key)
+            config = OpenLetterConfig(
+                user_id=BEN_USER_ID,
+                encrypted_api_token=OpenLetterClientService.encrypt_token('test-token'),
+                estimated_cost_per_piece=None,
+                default_product_id=7,
+            )
+            db.session.add(config)
+            db.session.add(MailCampaign(
+                created_by=BEN_USER_ID,
+                lead_count=4,
+                cost=Decimal('5.00'),
+                cost_per_piece=Decimal('1.25'),
+                product_id=7,
+                status='submitted',
+            ))
+            db.session.commit()
+
+            summary = MailQueueService().get_summary(BEN_USER_ID)
+            assert summary['estimated_cost_per_piece'] == 1.25
+            refreshed = OpenLetterConfig.query.filter_by(user_id=BEN_USER_ID).one()
+            assert refreshed.estimated_cost_per_piece is None
+
+    def test_persist_true_seeds_only_when_config_unset(self, app, fernet_key, monkeypatch):
+        from app import db
+        from app.models.mail_campaign import MailCampaign
+        from app.services.open_letter_client_service import OpenLetterClientService
+        from decimal import Decimal
+
+        with app.app_context():
+            monkeypatch.setenv('HUBSPOT_ENCRYPTION_KEY', fernet_key)
+            config = OpenLetterConfig(
+                user_id=BEN_USER_ID,
+                encrypted_api_token=OpenLetterClientService.encrypt_token('test-token'),
+                estimated_cost_per_piece=None,
+                default_product_id=7,
+            )
+            db.session.add(config)
+            db.session.add(MailCampaign(
+                created_by=BEN_USER_ID,
+                lead_count=4,
+                cost=Decimal('5.00'),
+                cost_per_piece=Decimal('1.25'),
+                product_id=7,
+                status='submitted',
+            ))
+            db.session.commit()
+
+            OpenLetterConfigService().resolve_estimated_cost(BEN_USER_ID, persist=True)
+            refreshed = OpenLetterConfig.query.filter_by(user_id=BEN_USER_ID).one()
+            assert refreshed.estimated_cost_per_piece == Decimal('1.25')
+
+    def test_does_not_persist_mismatched_product_fallback(self, app, fernet_key, monkeypatch):
+        from app import db
+        from app.models.mail_campaign import MailCampaign
+        from app.services.open_letter_client_service import OpenLetterClientService
+        from decimal import Decimal
+
+        with app.app_context():
+            monkeypatch.setenv('HUBSPOT_ENCRYPTION_KEY', fernet_key)
+            config = OpenLetterConfig(
+                user_id=BEN_USER_ID,
+                encrypted_api_token=OpenLetterClientService.encrypt_token('test-token'),
+                estimated_cost_per_piece=None,
+                default_product_id=99,
+            )
+            db.session.add(config)
+            db.session.add(MailCampaign(
+                created_by=BEN_USER_ID,
+                lead_count=4,
+                cost=Decimal('5.00'),
+                cost_per_piece=Decimal('1.25'),
+                product_id=7,
+                status='submitted',
+            ))
+            db.session.commit()
+
+            cost, _source = OpenLetterConfigService().resolve_estimated_cost(
+                BEN_USER_ID, persist=True,
+            )
+            assert cost == Decimal('1.25')
+            refreshed = OpenLetterConfig.query.filter_by(user_id=BEN_USER_ID).one()
+            assert refreshed.estimated_cost_per_piece is None
+
+    def test_seeds_from_campaign_when_config_null(self, app, fernet_key, monkeypatch):
+        from app import db
+        from app.models.mail_campaign import MailCampaign
+        from app.services.open_letter_client_service import OpenLetterClientService
+        from decimal import Decimal
+
+        with app.app_context():
+            monkeypatch.setenv('HUBSPOT_ENCRYPTION_KEY', fernet_key)
+            config = OpenLetterConfig(
+                user_id=BEN_USER_ID,
+                encrypted_api_token=OpenLetterClientService.encrypt_token('test-token'),
+                estimated_cost_per_piece=None,
+                default_product_id=7,
+            )
+            db.session.add(config)
+            db.session.add(MailCampaign(
+                created_by=BEN_USER_ID,
+                lead_count=4,
+                cost=Decimal('5.00'),
+                cost_per_piece=Decimal('1.25'),
+                product_id=7,
+                status='submitted',
+            ))
+            db.session.commit()
+
+            summary = MailQueueService().get_summary(BEN_USER_ID)
+            assert summary['estimated_cost_per_piece'] == 1.25
+            assert summary['estimated_total'] is None or summary['queued_count'] == 0
+
+    def test_treats_zero_as_unset_and_seeds(self, app, fernet_key, monkeypatch):
+        from app import db
+        from app.models.mail_campaign import MailCampaign
+        from app.services.open_letter_client_service import OpenLetterClientService
+        from decimal import Decimal
+
+        with app.app_context():
+            monkeypatch.setenv('HUBSPOT_ENCRYPTION_KEY', fernet_key)
+            config = OpenLetterConfig(
+                user_id=BEN_USER_ID,
+                encrypted_api_token=OpenLetterClientService.encrypt_token('test-token'),
+                estimated_cost_per_piece=Decimal('0'),
+            )
+            db.session.add(config)
+            db.session.add(MailCampaign(
+                created_by=BEN_USER_ID,
+                lead_count=2,
+                cost=Decimal('2.74'),
+                cost_per_piece=Decimal('1.37'),
+                status='mailed',
+            ))
+            db.session.commit()
+
+            resolved = OpenLetterConfigService().resolve_estimated_cost_per_piece(BEN_USER_ID)
+            assert resolved == Decimal('1.37')
+
+    def test_no_history_returns_none(self, app, fernet_key, monkeypatch):
+        from app import db
+        from app.services.open_letter_client_service import OpenLetterClientService
+
+        with app.app_context():
+            monkeypatch.setenv('HUBSPOT_ENCRYPTION_KEY', fernet_key)
+            config = OpenLetterConfig(
+                user_id=BEN_USER_ID,
+                encrypted_api_token=OpenLetterClientService.encrypt_token('test-token'),
+                estimated_cost_per_piece=None,
+            )
+            db.session.add(config)
+            db.session.commit()
+
+            resolved = OpenLetterConfigService().resolve_estimated_cost_per_piece(BEN_USER_ID)
+            assert resolved is None
+            summary = MailQueueService().get_summary(BEN_USER_ID)
+            assert summary['estimated_cost_per_piece'] is None
+            assert summary['estimated_total'] is None

@@ -1,6 +1,5 @@
 import React from 'react'
-import { Box, Link, Typography } from '@mui/material'
-import { Link as RouterLink } from 'react-router-dom'
+import { Box, Typography } from '@mui/material'
 import { OpenLetterSetupPanel } from '@/components/OpenLetterSetupPanel'
 
 export const MarketingHub: React.FC = () => {
@@ -15,11 +14,7 @@ export const MarketingHub: React.FC = () => {
         sx={{ mb: 2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}
       >
         Connect Open Letter Connect and choose your default product and template.
-        To stage leads and send batches, go to{' '}
-        <Link component={RouterLink} to="/queues/ready-to-mail">
-          Work Queues → Ready to Mail
-        </Link>
-        .
+        Finish the checklist below before staging leads and sending a batch.
       </Typography>
 
       <OpenLetterSetupPanel />

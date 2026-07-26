@@ -9,6 +9,7 @@
 import { createContext, useContext, ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { hubSpotService } from '@/services/api'
+import { useAuth } from '@/context/AuthContext'
 
 interface PipelineStatus {
   pipeline_running: boolean
@@ -33,9 +34,11 @@ interface PipelineStatusProviderProps {
 }
 
 export function PipelineStatusProvider({ children }: PipelineStatusProviderProps) {
+  const { user } = useAuth()
   const { data } = useQuery({
     queryKey: ['hubspot', 'pipeline', 'status', 'global'],
     queryFn: () => hubSpotService.getPipelineStatus(),
+    enabled: Boolean(user),
     refetchInterval: (query) => {
       const data = query.state.data as PipelineStatus | undefined
       return data?.pipeline_running ? 8000 : false

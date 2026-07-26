@@ -7,6 +7,7 @@ import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import { NotificationProvider, globalNotify } from './context/NotificationContext'
 import { PipelineStatusProvider } from './context/PipelineStatusContext'
+import { ShellStatusProvider } from './context/ShellStatusContext'
 import { AuthProvider } from './context/AuthContext'
 import { QuickAddFabHost } from '@/components/QuickAddFab'
 
@@ -195,8 +196,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <AuthProvider>
             <NotificationProvider>
               <PipelineStatusProvider>
-                <App />
-                <QuickAddFabHost />
+                <ShellStatusProvider>
+                  <App />
+                  <QuickAddFabHost />
+                </ShellStatusProvider>
               </PipelineStatusProvider>
             </NotificationProvider>
           </AuthProvider>

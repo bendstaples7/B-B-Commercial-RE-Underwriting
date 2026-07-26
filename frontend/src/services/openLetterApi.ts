@@ -44,6 +44,7 @@ export interface OpenLetterConfig {
     confirmed_from?: string
   } | null
   estimated_cost_per_piece?: number | null
+  estimated_cost_source_sent_at?: string | null
   updated_at?: string | null
 }
 
@@ -71,6 +72,8 @@ export interface MailQueueSummary {
   allow_send_below_minimum: boolean
   can_send: boolean
   estimated_cost_per_piece?: number | null
+  /** ISO timestamp of the campaign whose cost backs the estimate. */
+  estimated_cost_source_sent_at?: string | null
   estimated_total?: number | null
   items: MailQueueItem[]
   page?: number

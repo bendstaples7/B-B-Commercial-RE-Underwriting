@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react'
 import {
-  Alert,
   Box,
   Button,
   Dialog,
@@ -13,12 +12,12 @@ import {
   InputLabel,
   MenuItem,
   Select,
-  Snackbar,
   TextField,
   Typography,
 } from '@mui/material'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { contactService } from '@/services/api'
+import { AppSnackbar } from '@/components/AppSnackbar'
 import type {
   ContactCreatePayload,
   ContactRole,
@@ -483,21 +482,12 @@ export const ContactFormModal: React.FC<ContactFormModalProps> = ({
         </DialogActions>
       </Dialog>
 
-      {/* API error snackbar */}
-      <Snackbar
+      <AppSnackbar
         open={snackbar.open}
-        autoHideDuration={5000}
         onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert
-          onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
-          severity="error"
-          sx={{ width: '100%' }}
-        >
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
+        message={snackbar.message}
+        severity="error"
+      />
     </>
   )
 }

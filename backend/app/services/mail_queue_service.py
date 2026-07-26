@@ -84,11 +84,13 @@ class MailQueueService:
     def get_summary(self, user_id: str | None = None) -> dict:
         if not user_id:
             batch_minimum, allow_below, cost_per_piece = 50, False, None
+            source_sent_at = None
         else:
             settings = self._config_service.get_readonly_settings(user_id)
             batch_minimum = settings['batch_minimum']
             allow_below = settings['allow_send_below_minimum']
             cost_per_piece = settings['estimated_cost_per_piece']
+            source_sent_at = settings['estimated_cost_source_sent_at']
         queued_count = self._queued_query(user_id).count()
         can_send = bool(
             user_id
@@ -102,6 +104,7 @@ class MailQueueService:
             'allow_send_below_minimum': allow_below,
             'can_send': can_send,
             'estimated_cost_per_piece': cost_per_piece,
+            'estimated_cost_source_sent_at': source_sent_at,
             'estimated_total': (
                 round(queued_count * cost_per_piece, 2)
                 if cost_per_piece is not None else None

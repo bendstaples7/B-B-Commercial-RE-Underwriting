@@ -3,7 +3,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Box, Button, Snackbar, Typography } from '@mui/material'
+import { Alert, Box, Button, Typography } from '@mui/material'
 import { useSearchParams } from 'react-router-dom'
 import {
   queueService,
@@ -16,6 +16,7 @@ import { PropertyMatchRejectDialog } from './PropertyMatchRejectDialog'
 import { PropertyAddressEditDialog } from './PropertyAddressEditDialog'
 import { SuppressLeadDialog } from './SuppressLeadDialog'
 import { QueueLoadingState } from './QueueLoadingState'
+import { AppSnackbar } from './AppSnackbar'
 import { computeTotalPages } from '@/utils/pagination'
 import { queueListRefetchDefaults } from '@/utils/queueQueryDefaults'
 
@@ -231,11 +232,12 @@ export function MissingPropertyMatchQueue() {
         onConfirm={handleSuppressConfirm}
       />
 
-      <Snackbar
+      <AppSnackbar
         open={snackbar !== null}
-        autoHideDuration={4000}
         onClose={() => setSnackbar(null)}
         message={snackbar}
+        severity="info"
+        plain
       />
     </Box>
   )

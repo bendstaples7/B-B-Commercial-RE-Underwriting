@@ -16,7 +16,6 @@ import {
   IconButton,
   List,
   ListItem,
-  Snackbar,
   TextField,
   Typography,
 } from '@mui/material'
@@ -28,6 +27,7 @@ import CloseIcon from '@mui/icons-material/Close'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { contactService, organizationService } from '@/services/api'
 import { entityResolutionApi } from '@/services/entityResolutionApi'
+import { AppSnackbar } from '@/components/AppSnackbar'
 import { formatDate } from '@/utils/formatters'
 import {
   contactDisplayName,
@@ -991,19 +991,12 @@ export const ContactsSection: React.FC<ContactsSectionProps> = ({
         contact={editingContact}
       />
 
-      <Snackbar
+      <AppSnackbar
         open={snackbar.open}
-        autoHideDuration={4000}
         onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert
-          severity={snackbar.severity}
-          onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
-        >
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
+        message={snackbar.message}
+        severity={snackbar.severity}
+      />
     </Box>
   )
 }

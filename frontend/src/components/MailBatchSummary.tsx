@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo, useState } from 'react'
 import {
   Alert,
+  Box,
   Button,
   Dialog,
   DialogActions,
@@ -9,6 +10,7 @@ import {
   DialogTitle,
   LinearProgress,
   Paper,
+  Skeleton,
   Typography,
 } from '@mui/material'
 import SendIcon from '@mui/icons-material/Send'
@@ -21,6 +23,7 @@ import {
   getOlcCatalogSendLines,
   isDirectMailReadyToSend,
 } from '@/utils/directMailSetup'
+import { formatLastMailedDate } from '@/utils/formatLastMailedDate'
 import type { OlcProduct } from '@/utils/olcProductHelpers'
 
 export interface MailBatchSummaryProps {
@@ -82,16 +85,35 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
   return (
     <>
       <Paper sx={{ p: 2, mb: 2 }} data-testid="mail-batch-summary">
-        <Typography variant="h6" gutterBottom>
-          {title}
-        </Typography>
-        {isLoading ? (
-          <LinearProgress sx={{ mb: 2 }} />
+        <Box
+          sx={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'baseline',
+            gap: 2,
+            mb: 1.5,
+          }}
+        >
+          <Typography variant="h6">{title}</Typography>
+          <Box textAlign="right">
+            <Typography
+              variant="subtitle1"
+              component="p"
+              fontWeight={700}
+              lineHeight={1.2}
+              data-testid="mail-batch-staged-count"
+            >
+              {queuedCount} of {batchMinimum}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              leads staged
+            </Typography>
+          </Box>
+        </Box>
+        {isLoading && !queueData ? (
+          <Skeleton variant="rounded" height={112} data-testid="mail-batch-skeleton" />
         ) : (
           <>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-              {queuedCount} of {batchMinimum} leads staged for the next batch
-            </Typography>
             {(catalog.productLine || catalog.templateLine) && (
               <Typography variant="body2" sx={{ mb: 0.5 }} data-testid="mail-batch-olc-catalog">
                 Open Letter product:{' '}
@@ -110,30 +132,101 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
               </Typography>
             )}
             <LinearProgress variant="determinate" value={progress} sx={{ mb: 2, height: 8, borderRadius: 1 }} />
-            {queueData?.estimated_total != null && (
-              <Typography variant="body2" sx={{ mb: 1 }}>
-                Estimated total: ~${queueData.estimated_total.toFixed(2)}
-                {queueData.estimated_cost_per_piece != null && (
-                  <> ({queueData.estimated_cost_per_piece.toFixed(2)}/piece)</>
-                )}
-              </Typography>
-            )}
-            <Button
-              variant="contained"
-              startIcon={<SendIcon />}
-              disabled={!canSend || !readyToSend || sendMutation.isPending}
-              onClick={() => setSendDialogOpen(true)}
-              data-testid="send-batch-button"
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 2,
+                flexWrap: 'wrap',
+              }}
             >
-              Send Batch
-            </Button>
+              <Button
+                variant="contained"
+                startIcon={<SendIcon />}
+                disabled={!canSend || !readyToSend || sendMutation.isPending}
+                onClick={() => setSendDialogOpen(true)}
+                data-testid="send-batch-button"
+              >
+                Send Batch
+              </Button>
+              {queueData?.estimated_cost_per_piece != null
+                && queueData.estimated_cost_per_piece > 0 ? (
+                <Box sx={{ ml: 'auto', textAlign: 'right', maxWidth: 420 }}>
+                  <Typography variant="body2" data-testid="mail-batch-estimated-total">
+                    Estimated total: ~${(queueData.estimated_total ?? 0).toFixed(2)}
+                    {' '}(${queueData.estimated_cost_per_piece.toFixed(2)}/piece)
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    {queueData.estimated_cost_source_sent_at
+                      ? `Based on mailer cost from the batch sent on ${formatLastMailedDate(queueData.estimated_cost_source_sent_at)}.`
+                      : 'Based on your last recorded mailer cost per piece.'}
+                  </Typography>
+                </Box>
+              ) : (
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  textAlign="right"
+                  sx={{ ml: 'auto' }}
+                  data-testid="mail-batch-estimate-pending"
+                >
+                  Estimated total will appear after your first mail batch is sent.
+                </Typography>
+              )}
+            </Box>
             {!readyToSend && (
-              <Alert severity="warning" sx={{ mt: 2 }}>
-                Finish Open Letter setup (product, template, creative sender name/phone, and return
-                street) in{' '}
-                <RouterLink to="/marketing/direct-mail">Setup</RouterLink>
-                {' '}before sending.
-              </Alert>
+              <Box
+                component={RouterLink}
+                to="/marketing/direct-mail"
+                aria-label="Open Direct Mail Setup"
+                sx={{
+                  mt: 2,
+                  display: 'block',
+                  textDecoration: 'none',
+                  color: 'inherit',
+                }}
+                data-testid="mail-batch-setup-required"
+              >
+                <Alert
+                  severity="warning"
+                  sx={{
+                    cursor: 'pointer',
+                    alignItems: 'center',
+                    py: 0.75,
+                    transition: 'background-color 0.15s ease, box-shadow 0.15s ease',
+                    '&:hover': {
+                      bgcolor: 'warning.light',
+                      boxShadow: (theme) => `inset 0 0 0 1px ${theme.palette.warning.dark}`,
+                    },
+                    '& .MuiAlert-icon': {
+                      py: 0,
+                      marginRight: 1.25,
+                      alignItems: 'center',
+                    },
+                    '& .MuiAlert-message': {
+                      py: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                    },
+                  }}
+                >
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: 'warning.dark',
+                      fontWeight: 600,
+                      textDecoration: 'underline',
+                      textUnderlineOffset: 3,
+                      textDecorationThickness: '1.5px',
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    Finish Open Letter setup before sending (product, template, sender name/phone,
+                    and return street) →
+                  </Typography>
+                </Alert>
+              </Box>
             )}
             {!olcConfig?.configured && (
               <Alert severity="warning" sx={{ mt: 2 }}>
@@ -163,7 +256,9 @@ export const MailBatchSummary: React.FC<MailBatchSummaryProps> = ({
                 : ''}
             {catalog.templateLine ? ` (template ${catalog.templateLine})` : ''}
             .
-            {queueData?.estimated_total != null && (
+            {queueData?.estimated_total != null
+              && queueData.estimated_cost_per_piece != null
+              && queueData.estimated_cost_per_piece > 0 && (
               <> Estimated charge: ~${queueData.estimated_total.toFixed(2)} on your OLC payment method.</>
             )}
           </DialogContentText>

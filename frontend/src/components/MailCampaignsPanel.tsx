@@ -165,7 +165,8 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
   const [cancelWarning, setCancelWarning] = useState<string | null>(null)
   const { data, isLoading, error, isFetching } = useQuery({
     queryKey: ['mail-campaigns'],
-    queryFn: () => openLetterService.listCampaigns(),
+    queryFn: () => openLetterService.listCampaigns(1, 100),
+    refetchInterval: 60_000,
   })
 
   const cancelMutation = useMutation({

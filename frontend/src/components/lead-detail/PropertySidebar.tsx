@@ -11,7 +11,6 @@ import {
   IconButton,
   Link,
   Paper,
-  Snackbar,
   Tooltip,
   Typography,
 } from '@mui/material'
@@ -21,6 +20,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import { useQueryClient } from '@tanstack/react-query'
+import { AppSnackbar } from '@/components/AppSnackbar'
 import type {
   CommandCenterPayload,
   LeadPhone,
@@ -1266,11 +1266,12 @@ export function PropertySidebar({
   )
 
   const snackbar = (
-    <Snackbar
+    <AppSnackbar
       open={Boolean(sidebarSnack)}
-      autoHideDuration={4000}
       onClose={() => setSidebarSnack(null)}
       message={sidebarSnack ?? ''}
+      severity="info"
+      plain
       data-testid="sidebar-snackbar"
     />
   )

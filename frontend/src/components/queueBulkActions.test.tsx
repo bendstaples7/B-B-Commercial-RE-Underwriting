@@ -7,6 +7,8 @@ import openLetterService from '@/services/openLetterApi'
 import { bulkActionService, commandCenterService } from '@/services/api'
 import {
   enqueueLeadsAsBulkResult,
+  bumpMailQueueAfterEnqueue,
+  stripMailCandidatesFromCache,
   resolveBulkActions,
   createAddToMailBatchBulkAction,
   createSuppressBulkAction,
@@ -48,6 +50,20 @@ describe('queueBulkActions', () => {
   })
 
   it('enqueueLeadsAsBulkResult maps counts and invalidates mail + queue keys', async () => {
+    queryClient.setQueryData(['mail-queue'], {
+      queued_count: 1,
+      batch_minimum: 3,
+      allow_send_below_minimum: false,
+      can_send: false,
+      estimated_cost_per_piece: 1.255,
+      estimated_cost_source_sent_at: '2026-07-12T15:00:00Z',
+      estimated_total: 1.26,
+      items: [],
+    })
+    queryClient.setQueryData(['queue-mail-candidates', 1], {
+      rows: [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }],
+      total: 4,
+    })
     vi.mocked(openLetterService.enqueue).mockResolvedValue({
       added: 2,
       skipped: 1,
@@ -81,12 +97,66 @@ describe('queueBulkActions', () => {
     expect(result.message).toContain('Added 2')
     expect(onAfterAction).toHaveBeenCalled()
     expect(onEnqueueResult).toHaveBeenCalled()
+    expect(queryClient.getQueryData(['mail-queue'])).toMatchObject({
+      queued_count: 3,
+      can_send: true,
+      estimated_total: 3.77,
+      estimated_cost_per_piece: 1.255,
+      estimated_cost_source_sent_at: '2026-07-12T15:00:00Z',
+    })
+    expect(queryClient.getQueryData(['queue-mail-candidates', 1])).toEqual({
+      rows: [{ id: 3 }, { id: 4 }],
+      total: 2,
+    })
     expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['mail-queue'] })
     expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
       queryKey: ['queue-mail-candidates'],
     })
     expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
       queryKey: ['queue-todays-action'],
+    })
+  })
+
+  it('stripMailCandidatesFromCache updates every cached candidate page', () => {
+    queryClient.setQueryData(['queue-mail-candidates', 1], {
+      rows: [{ id: 1 }, { id: 2 }],
+      total: 3,
+    })
+    queryClient.setQueryData(['queue-mail-candidates', 2], {
+      rows: [{ id: 3 }],
+      total: 3,
+    })
+
+    stripMailCandidatesFromCache(queryClient, [2, 3])
+
+    expect(queryClient.getQueryData(['queue-mail-candidates', 1])).toEqual({
+      rows: [{ id: 1 }],
+      total: 1,
+    })
+    expect(queryClient.getQueryData(['queue-mail-candidates', 2])).toEqual({
+      rows: [],
+      total: 1,
+    })
+  })
+
+  it('bumpMailQueueAfterEnqueue preserves cached items and below-minimum override', () => {
+    queryClient.setQueryData(['mail-queue'], {
+      queued_count: 2,
+      batch_minimum: 50,
+      allow_send_below_minimum: true,
+      can_send: false,
+      estimated_cost_per_piece: 1.25,
+      estimated_total: 2.5,
+      items: [{ id: 4, lead_id: 8 }],
+    })
+
+    bumpMailQueueAfterEnqueue(queryClient, { added: 2 })
+
+    expect(queryClient.getQueryData(['mail-queue'])).toMatchObject({
+      queued_count: 4,
+      can_send: true,
+      estimated_total: 5,
+      items: [{ id: 4, lead_id: 8 }],
     })
   })
 

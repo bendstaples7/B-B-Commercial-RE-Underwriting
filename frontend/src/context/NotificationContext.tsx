@@ -1,23 +1,15 @@
 /**
- * Global notification context.
+ * Global notification context — bottom-center Fade toasts (same as Ready to Mail).
  *
- * Provides a fixed inline banner at the top of the viewport that any
- * component or the global MutationCache.onError handler can push messages to.
- *
- * Unlike a Snackbar, this banner:
- *   - Stays visible until the user dismisses it (no auto-hide)
- *   - Is spatially anchored to the top of the page, not floating over content
- *   - Is impossible to miss regardless of where the user is looking
- *
- * Usage:
- *   const { showError, showWarning, showSuccess } = useNotification()
- *   showError('Something went wrong')
+ * MutationCache.onError and any component can push messages via useNotification()
+ * or globalNotify. Toasts auto-dismiss (3s default, 5s errors) with Fade.
  */
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react'
-import { Alert, Box, Collapse, IconButton } from '@mui/material'
-import CloseIcon from '@mui/icons-material/Close'
+import { AppSnackbar } from '@/components/AppSnackbar'
+import type { AlertColor } from '@mui/material'
 
-type Severity = 'error' | 'warning' | 'success' | 'info'
+
+type Severity = AlertColor
 
 interface BannerState {
   open: boolean
@@ -66,41 +58,21 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
   // Wire the singleton so MutationCache.onError (outside React) can call it
   globalNotify.showError = showError
   globalNotify.showWarning = showWarning
+  globalNotify.showSuccess = showSuccess
+  globalNotify.showInfo = showInfo
 
   const handleClose = () => setState((s) => ({ ...s, open: false }))
 
   return (
     <NotificationContext.Provider value={{ showError, showWarning, showSuccess, showInfo }}>
-      {/* Fixed inline banner — sits below the AppBar, above all page content */}
-      <Collapse in={state.open}>
-        <Box
-          sx={{
-            position: 'sticky',
-            top: 64, // AppBar height
-            zIndex: 1200,
-            width: '100%',
-          }}
-        >
-          <Alert
-            severity={state.severity}
-            variant="filled"
-            sx={{ borderRadius: 0 }}
-            action={
-              <IconButton
-                size="small"
-                color="inherit"
-                onClick={handleClose}
-                aria-label="Dismiss notification"
-              >
-                <CloseIcon fontSize="small" />
-              </IconButton>
-            }
-          >
-            {state.message}
-          </Alert>
-        </Box>
-      </Collapse>
       {children}
+      <AppSnackbar
+        open={state.open}
+        onClose={handleClose}
+        message={state.message}
+        severity={state.severity}
+        data-testid="global-notification-snackbar"
+      />
     </NotificationContext.Provider>
   )
 }
@@ -113,4 +85,6 @@ export function NotificationProvider({ children }: NotificationProviderProps) {
 export const globalNotify = {
   showError: (_message: string) => {},
   showWarning: (_message: string) => {},
+  showSuccess: (_message: string) => {},
+  showInfo: (_message: string) => {},
 }
