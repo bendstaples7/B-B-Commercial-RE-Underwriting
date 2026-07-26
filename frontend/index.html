@@ -14,6 +14,60 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Boot watchdog: survives module-eval failures (e.g. createContext on
+         undefined React) that React ErrorBoundaries cannot catch. -->
+    <noscript>
+      <p style="font-family: system-ui, sans-serif; padding: 1.5rem; max-width: 36rem;">
+        JavaScript is required to run this app.
+      </p>
+    </noscript>
+    <script>
+      (function () {
+        // Long enough for cold/slow first paint; still fails closed on real hangs.
+        var BOOT_MS = 15000;
+        var shown = false;
+        var root = document.getElementById('root');
+
+        function dismissBootFailure() {
+          var el = document.getElementById('spa-boot-failure');
+          if (el && el.parentNode) el.parentNode.removeChild(el);
+          shown = false;
+        }
+
+        function showBootFailure() {
+          if (shown) return;
+          if (!root || root.childElementCount > 0) return;
+          shown = true;
+          var el = document.createElement('div');
+          el.id = 'spa-boot-failure';
+          el.setAttribute('role', 'alert');
+          el.setAttribute('data-testid', 'spa-boot-failure');
+          el.style.cssText =
+            'font-family:system-ui,sans-serif;padding:1.5rem;max-width:36rem;margin:2rem auto;color:#0f172a;';
+          el.innerHTML =
+            '<p style="font-size:1.125rem;font-weight:600;margin:0 0 0.5rem;">App failed to load</p>' +
+            '<p style="margin:0;color:#475569;">Try a hard refresh (Ctrl+Shift+R). If this keeps happening, the deploy may have a broken JavaScript bundle.</p>';
+          document.body.appendChild(el);
+        }
+
+        // If React mounts after a false-positive banner, remove it.
+        if (root && typeof MutationObserver !== 'undefined') {
+          new MutationObserver(function () {
+            if (root.childElementCount > 0) dismissBootFailure();
+          }).observe(root, { childList: true });
+        }
+
+        // Only treat script/resource errors as early failures; the timer is last resort.
+        window.addEventListener('error', function (ev) {
+          var isModule =
+            ev &&
+            (ev.filename || (ev.target && ev.target.tagName === 'SCRIPT'));
+          if (!isModule) return;
+          setTimeout(showBootFailure, 0);
+        });
+        setTimeout(showBootFailure, BOOT_MS);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

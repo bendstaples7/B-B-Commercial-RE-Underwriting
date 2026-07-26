@@ -46,6 +46,7 @@
     "fast-check": "^4.7.0",
     "jsdom": "^29.1.1",
     "openapi-typescript": "^7.4.4",
+    "playwright": "^1.49.1",
     "vite": "^5.0.8",
     "vitest": "^1.0.4"
   },
@@ -53,6 +54,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "spa-boot-check": "node ../scripts/spa-boot-check.mjs --dir dist --path /login",
+    "assert-dist-assets": "python ../scripts/assert_frontend_dist_assets.py",
     "test": "vitest --run",
     "test:watch": "vitest",
     "generate-types": "openapi-typescript http://localhost:5000/api/openapi.json -o src/types/generated.ts",

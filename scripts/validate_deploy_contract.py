@@ -179,6 +179,39 @@ def main() -> int:
             "09-gunicorn-service.sh must set OOMScoreAdjust=-500 "
             "(prefer API over Celery under host OOM)"
         )
+    nginx_text = _read(REPO_ROOT / "scripts" / "vps-setup" / "11-nginx-config.sh")
+    if 'location /assets/' not in nginx_text or "immutable" not in nginx_text:
+        errors.append(
+            "11-nginx-config.sh must long-cache hashed /assets/ (immutable)"
+        )
+    # Require Cache-Control no-cache near the SPA location / block (not comments alone).
+    if not re.search(
+        r"location\s+/\s*\{[\s\S]{0,400}?Cache-Control[^\n]*no-cache",
+        nginx_text,
+    ):
+        errors.append(
+            "11-nginx-config.sh must set Cache-Control no-cache on location / (SPA index.html)"
+        )
+    spa_boot = REPO_ROOT / "scripts" / "spa-boot-check.mjs"
+    if not spa_boot.exists():
+        errors.append("Missing expected script: scripts/spa-boot-check.mjs")
+    asset_assert = REPO_ROOT / "scripts" / "assert_frontend_dist_assets.py"
+    if not asset_assert.exists():
+        errors.append("Missing expected script: scripts/assert_frontend_dist_assets.py")
+    index_html = _read(REPO_ROOT / "frontend" / "index.html")
+    if "spa-boot-failure" not in index_html:
+        errors.append(
+            "frontend/index.html must include static spa-boot-failure watchdog"
+        )
+    vite_cfg = _read(REPO_ROOT / "frontend" / "vite.config.ts")
+    if re.search(
+        r"manualChunks[\s\S]*return\s+['\"]react['\"]",
+        vite_cfg,
+    ):
+        errors.append(
+            "vite.config.ts must not split a separate 'react' manualChunk "
+            "(causes createContext on undefined React)"
+        )
 
     # 6. deploy.sh uses sudo -n (no bare sudo for systemctl) and always restores celery
     deploy_text = _read(REPO_ROOT / "scripts" / "deploy.sh")
