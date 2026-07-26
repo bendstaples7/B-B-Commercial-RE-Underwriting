@@ -1,32 +1,272 @@
-# Ops health — backup / verify / soft readiness. Never triggers Deploy.
-# Failures open/update a GitHub issue and optionally POST to Slack.
+# Ops health — backup / verify / soft readiness + hourly SSH/HTTP canary.
+# Never triggers Deploy. Failures open/update a GitHub issue and optionally POST to Slack.
 name: Ops health
 
 permissions:
   contents: read
   issues: write
+  actions: read
 
 on:
   schedule:
-    # Every 6 hours
+    # Full backup/verify every 6 hours
     - cron: "0 */6 * * *"
+    # Lightweight SSH/HTTP canary every hour
+    - cron: "0 * * * *"
   workflow_run:
     workflows: ["Deploy"]
     types: [completed]
   workflow_dispatch:
 
 jobs:
+  # ── Reachability canary (hourly + after Deploy + manual; not on 6h cron) ─
+  ops-canary:
+    name: VPS SSH/HTTP canary
+    runs-on: ubuntu-latest
+    # Hourly cron only (avoid double-run with 6h schedule at :00). Also after
+    # Deploy and on manual dispatch. Skip cancelled Deploy follow-ups.
+    if: >
+      (
+        github.event_name == 'schedule' &&
+        github.event.schedule == '0 * * * *'
+      ) || (
+        github.event_name == 'workflow_dispatch'
+      ) || (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion != 'cancelled'
+      )
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up SSH key
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+      - name: Add VPS to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_HOST_KEY }}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: SSH canary
+        id: ssh_canary
+        continue-on-error: true
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          SSH_KEY_PATH: /home/runner/.ssh/id_deploy
+          SSH_CONNECT_TIMEOUT: "30"
+          SSH_MAX_WAIT_SECONDS: "60"
+          SSH_INITIAL_BACKOFF: "5"
+        run: |
+          chmod +x scripts/ci-ssh-verify.sh
+          bash scripts/ci-ssh-verify.sh
+
+      - name: HTTP canary
+        id: http_canary
+        continue-on-error: true
+        env:
+          VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+          HTTP_MAX_WAIT_SECONDS: "90"
+          HTTP_SLEEP_SECONDS: "5"
+        run: |
+          chmod +x scripts/ci-http-health-wait.sh
+          HEALTH_URL="https://${VPS_SUBDOMAIN}.duckdns.org/api/health" \
+            bash scripts/ci-http-health-wait.sh
+
+      - name: Write canary summary
+        if: always()
+        run: |
+          {
+            echo "## Ops canary"
+            echo ""
+            echo "| Check | Result |"
+            echo "|-------|--------|"
+            echo "| SSH canary | ${{ steps.ssh_canary.outcome }} |"
+            echo "| HTTP canary | ${{ steps.http_canary.outcome }} |"
+            echo ""
+            echo "Does **not** block App CI or Deploy."
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Count consecutive canary failures and alert
+        id: canary_alert
+        if: always() && (steps.ssh_canary.outcome == 'failure' || steps.http_canary.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SSH_OUTCOME: ${{ steps.ssh_canary.outcome }}
+          HTTP_OUTCOME: ${{ steps.http_canary.outcome }}
+          VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+        run: |
+          set -euo pipefail
+          # Count consecutive prior workflow runs whose "VPS SSH/HTTP canary" job failed.
+          # Current run counts as 1; walk older completed runs until a success.
+          CONSEC=1
+          STREAK_UNKNOWN=0
+          if ! RUN_IDS=$(gh run list \
+            --workflow "Ops health" \
+            --status completed \
+            --limit 20 \
+            --json databaseId,conclusion \
+            --jq '.[].databaseId'); then
+            echo "::warning::Could not list prior Ops health runs — alerting on this failure without streak context."
+            STREAK_UNKNOWN=1
+            RUN_IDS=""
+          fi
+          mapfile -t PRIOR_IDS <<< "$RUN_IDS"
+          for RID in "${PRIOR_IDS[@]}"; do
+            [ -n "$RID" ] || continue
+            if [ "$RID" = "${{ github.run_id }}" ]; then
+              continue
+            fi
+            JOB_JSON=$(gh api "repos/${{ github.repository }}/actions/runs/${RID}/jobs" --paginate --slurp 2>/dev/null || echo '[]')
+            CANARY_CONCL=$(echo "$JOB_JSON" | python3 -c "
+          import json,sys
+          data=json.load(sys.stdin)
+          pages = data if isinstance(data, list) else [data]
+          for page in pages:
+            for j in page.get('jobs', []):
+              if j.get('name') == 'VPS SSH/HTTP canary':
+                print(j.get('conclusion') or '')
+                raise SystemExit(0)
+          " 2>/dev/null || true)
+            if [ -z "$CANARY_CONCL" ]; then
+              continue
+            fi
+            if [ "$CANARY_CONCL" = "failure" ]; then
+              CONSEC=$((CONSEC + 1))
+            elif [ "$CANARY_CONCL" = "success" ]; then
+              break
+            else
+              # skipped/cancelled — ignore and keep walking
+              continue
+            fi
+          done
+          if [ "$STREAK_UNKNOWN" = "1" ]; then
+            CONSEC=2
+          fi
+          echo "Consecutive canary job failures (including this run once it fails): ${CONSEC}"
+          echo "consec=${CONSEC}" >> "$GITHUB_OUTPUT"
+
+          if [ "$CONSEC" -lt 2 ]; then
+            echo "Single canary miss — no GitHub issue yet (need >=2 consecutive)."
+            echo "alert=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "alert=1" >> "$GITHUB_OUTPUT"
+          if [ "$SSH_OUTCOME" = "failure" ]; then
+            ISSUE_TITLE="Ops health: VPS SSH unreachable"
+          else
+            ISSUE_TITLE="Ops health: VPS public /api/health down"
+          fi
+          BODY=$(cat <<EOF
+          ## Ops reachability canary failure
+
+          Automated SSH/HTTP canary failed **${CONSEC}** consecutive times.
+
+          | Check | Result |
+          |-------|--------|
+          | SSH canary | ${SSH_OUTCOME} |
+          | HTTP canary | ${HTTP_OUTCOME} |
+
+          **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          ### Remediation
+          1. Confirm VPS is up and \`sshd\` is listening on port 22
+          2. Confirm public \`/api/health\` at https://${VPS_SUBDOMAIN}.duckdns.org/api/health
+          3. See docs/vps-config.md — Deploy SSH / reachability
+          4. Re-run **Ops health** via workflow_dispatch after recovery
+
+          App CI and Deploy are **not** blocked by this issue. Deploy soft-waits ~10m on HTTP then hard-waits ~15m on SSH.
+          EOF
+          )
+
+          EXISTING=$(gh issue list --label ops-health --state open \
+            --search "in:title Ops health: VPS" \
+            --json number,title --jq '[.[] | select(.title | test("SSH unreachable|public /api/health down"))] | .[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+            echo "Updated issue #$EXISTING"
+          else
+            gh label create ops-health --description "VPS backup/ops health alerts" --color B60205 2>/dev/null || true
+            gh issue create --title "$ISSUE_TITLE" --label ops-health --body "$BODY"
+          fi
+
+      - name: Optional Slack webhook (canary)
+        if: always() && steps.canary_alert.outputs.alert == '1'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          TEXT: "Ops canary: VPS unreachable (${{ steps.canary_alert.outputs.consec }} consecutive) on ${{ github.repository }}. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        run: |
+          set -euo pipefail
+          if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
+            echo "SLACK_WEBHOOK_URL not set — skipping Slack notify."
+            exit 0
+          fi
+          curl -sS --fail -X POST -H 'Content-type: application/json' \
+            --data "$(python3 -c "import json,os; print(json.dumps({'text': os.environ['TEXT']}))")" \
+            "$SLACK_WEBHOOK_URL"
+
+      - name: Comment recovery on open reachability issue
+        if: always() && steps.ssh_canary.outcome == 'success' && steps.http_canary.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          EXISTING=$(gh issue list --label ops-health --state open \
+            --search "in:title Ops health: VPS" \
+            --json number,title --jq '[.[] | select(.title | test("SSH unreachable|public /api/health down"))] | .[0].number // empty')
+          if [ -z "$EXISTING" ]; then
+            echo "No open reachability issue."
+            exit 0
+          fi
+          BODY=$(cat <<EOF
+          ## Reachability recovered
+
+          SSH and public \`/api/health\` canaries succeeded.
+
+          **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Closing this issue automatically after a successful canary.
+          EOF
+          )
+          gh issue comment "$EXISTING" --body "$BODY"
+          gh issue close "$EXISTING" --reason completed
+          echo "Commented recovery and closed issue #$EXISTING"
+
+      - name: Fail job when canary checks failed
+        if: always() && (steps.ssh_canary.outcome == 'failure' || steps.http_canary.outcome == 'failure')
+        run: |
+          echo "::error::Ops canary failed (advisory — does not block Deploy)."
+          exit 1
+
+  # ── Full backup / verify (6h schedule, after Deploy, manual) ───────────────
   ops-health:
     name: VPS backup and readiness
     runs-on: ubuntu-latest
-    # Run after Deploy finishes (any conclusion), on schedule, or manually.
-    # Skip when Deploy was cancelled mid-flight without a useful VPS state.
+    # Run after Deploy finishes (any conclusion), on 6h schedule, or manually.
+    # Skip hourly-only schedule (canary job covers that) and cancelled Deploy follow-ups.
     if: >
-      github.event_name != 'workflow_run' ||
-      github.event.workflow_run.conclusion != 'cancelled'
+      (
+        github.event_name == 'workflow_dispatch'
+      ) || (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion != 'cancelled'
+      ) || (
+        github.event_name == 'schedule' &&
+        github.event.schedule == '0 */6 * * *'
+      )
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           persist-credentials: false
 
@@ -52,7 +292,7 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
           set -euo pipefail
-          OUT=$(ssh -i ~/.ssh/id_deploy \
+          OUT=$(ssh -i /home/runner/.ssh/id_deploy \
             -o ConnectTimeout=10 \
             "$VPS_USER@$VPS_HOST" \
             "/home/deploy/backup.sh --check" 2>&1) || {
@@ -72,7 +312,7 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
         run: |
           set -euo pipefail
-          OUT=$(ssh -i ~/.ssh/id_deploy \
+          OUT=$(ssh -i /home/runner/.ssh/id_deploy \
             -o ConnectTimeout=10 \
             "$VPS_USER@$VPS_HOST" \
             "/home/deploy/verify-backup-health.sh" 2>&1) || {
@@ -93,7 +333,7 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_ROOT_SSH_KEY: ${{ secrets.VPS_ROOT_SSH_KEY }}
-          SSH_KEY_PATH: ~/.ssh/id_deploy
+          SSH_KEY_PATH: /home/runner/.ssh/id_deploy
           SOFT_ASYNC_ENSURE_FAILURE: "1"
         run: |
           chmod +x scripts/ci-ensure-vps-readiness.sh scripts/run-vps-readiness-check.sh

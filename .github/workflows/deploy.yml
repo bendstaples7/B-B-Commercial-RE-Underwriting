@@ -3,7 +3,7 @@ name: Deploy
 
 permissions:
   contents: read
-  actions: read
+  actions: write
 
 on:
   workflow_run:
@@ -18,6 +18,11 @@ on:
         description: 'SHA to deploy (leave blank to deploy HEAD of main)'
         required: false
         default: ''
+      skip_http_preflight:
+        description: 'Skip public /api/health wait (emergency redeploy when site is down but SSH works)'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   deploy:
@@ -88,19 +93,7 @@ jobs:
           echo "${{ secrets.VPS_HOST_KEY }}" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      # ── Step 4: Verify SSH connectivity before deploying ──────────────────
-      - name: Verify SSH connectivity
-        env:
-          VPS_USER: ${{ secrets.VPS_USER }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-        run: |
-          ssh -i ~/.ssh/id_deploy \
-            -o ConnectTimeout=10 \
-            $VPS_USER@$VPS_HOST \
-            "echo 'SSH connection verified'" \
-          || { echo "ERROR: Cannot connect to VPS at $VPS_HOST as $VPS_USER"; exit 1; }
-
-      # ── Step 4b: Checkout repo (needed for readiness scripts + deploy) ───
+      # ── Step 4: Checkout early (scripts for HTTP/SSH preflight + deploy) ─
       - name: Checkout repo
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
@@ -111,6 +104,59 @@ jobs:
       - name: Resolve target SHA
         id: resolve_sha
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # ── Step 4b: Public /api/health wait (soft — does not block SSH deploy) ─
+      # Soft so a broken public site can still be fixed via SSH. Use
+      # skip_http_preflight on manual Dispatch to skip the wait entirely.
+      - name: Wait for public /api/health
+        id: http_preflight
+        continue-on-error: true
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_http_preflight != true }}
+        env:
+          VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+          HTTP_MAX_WAIT_SECONDS: "600"
+        run: |
+          chmod +x scripts/ci-http-health-wait.sh
+          HEALTH_URL="https://${VPS_SUBDOMAIN}.duckdns.org/api/health" \
+            bash scripts/ci-http-health-wait.sh
+
+      - name: Warn if public health soft-failed
+        if: steps.http_preflight.outcome == 'failure'
+        run: |
+          echo "::warning::Public /api/health did not return 200 within the wait budget. Continuing — SSH is the hard deploy gate. Use skip_http_preflight on manual Dispatch to skip this wait."
+
+      # ── Step 4c: Long SSH verify (hard gate — transient banner/timeout) ───
+      - name: Wait for SSH connectivity
+        id: ssh_preflight
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          SSH_KEY_PATH: /home/runner/.ssh/id_deploy
+          SSH_CONNECT_TIMEOUT: "30"
+          SSH_MAX_WAIT_SECONDS: "900"
+        run: |
+          chmod +x scripts/ci-ssh-verify.sh
+          bash scripts/ci-ssh-verify.sh
+
+      - name: Preflight summary
+        if: always() && (steps.http_preflight.outcome != 'skipped' || steps.ssh_preflight.outcome != 'skipped')
+        run: |
+          {
+            echo "## Deploy reachability preflight"
+            echo ""
+            echo "| Check | Result | Elapsed | Gate |"
+            echo "|-------|--------|---------|------|"
+            echo "| public /api/health | ${{ steps.http_preflight.outcome }} | ${{ steps.http_preflight.outputs.http_elapsed || 'n/a' }}s | soft |"
+            echo "| SSH verify | ${{ steps.ssh_preflight.outcome }} | ${{ steps.ssh_preflight.outputs.ssh_elapsed || 'n/a' }}s | hard |"
+            echo ""
+            if [ "${{ steps.http_preflight.outcome }}" = "success" ] && [ "${{ steps.ssh_preflight.outcome }}" = "failure" ]; then
+              echo "**Site is up; SSH/firewall/sshd path broken.**"
+            elif [ "${{ steps.http_preflight.outcome }}" = "failure" ] && [ "${{ steps.ssh_preflight.outcome }}" = "success" ]; then
+              echo "**Public /api/health soft-failed; SSH OK — deploy proceeds (emergency-capable).**"
+            elif [ "${{ steps.ssh_preflight.outcome }}" = "failure" ]; then
+              echo "**SSH unreachable after wait budget; deploy cannot proceed.**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Compute changed paths for post-deploy sync
         env:
@@ -136,7 +182,7 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_ROOT_SSH_KEY: ${{ secrets.VPS_ROOT_SSH_KEY }}
-          SSH_KEY_PATH: ~/.ssh/id_deploy
+          SSH_KEY_PATH: /home/runner/.ssh/id_deploy
         run: |
           chmod +x scripts/ci-ensure-vps-readiness.sh scripts/run-vps-readiness-check.sh
           VPS_USER="$VPS_USER" VPS_HOST="$VPS_HOST" SSH_KEY_PATH="$SSH_KEY_PATH" \
@@ -301,9 +347,41 @@ jobs:
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
         run: |
+          set +e
+          echo "http_preflight=${{ steps.http_preflight.outcome }}"
+          echo "ssh_preflight=${{ steps.ssh_preflight.outcome }}"
+
+          # Probe SSH before choosing diagnostic path (HTTP soft-fail must not skip Alembic).
+          ssh -i /home/runner/.ssh/id_deploy \
+            -o ConnectTimeout=15 \
+            -o BatchMode=yes \
+            "$VPS_USER@$VPS_HOST" "true" >/dev/null 2>&1
+          SSH_PROBE=$?
+
+          if [ "$SSH_PROBE" -ne 0 ] || [ "${{ steps.ssh_preflight.outcome }}" = "failure" ]; then
+            echo "=== Deploy failed — network/connectivity diagnostics ==="
+            echo "Re-run Deploy after the VPS recovers (Actions → Deploy → Run workflow),"
+            echo "or wait for the one automatic re-dispatch after a workflow_run SSH preflight miss."
+            echo "Requires actions: write for GITHUB_TOKEN (or org policy allowing workflow_dispatch via token)."
+            echo "--- Verbose SSH (truncated) ---"
+            ssh -vvv -i /home/runner/.ssh/id_deploy \
+              -o ConnectTimeout=15 \
+              -o BatchMode=yes \
+              "$VPS_USER@$VPS_HOST" "true" 2>&1 | tail -80 || true
+            if command -v nc >/dev/null 2>&1; then
+              echo "--- TCP :22 ---"
+              nc -z -w 5 "$VPS_HOST" 22 && echo open || echo closed
+            fi
+            echo "--- Public health snapshot ---"
+            curl -sS -o /dev/null -w "HTTP %{http_code}\n" --connect-timeout 5 --max-time 12 \
+              "https://${VPS_SUBDOMAIN}.duckdns.org/api/health" || true
+            exit 0
+          fi
+
           echo "=== Deploy failed — collecting VPS migration diagnostics ==="
-          ssh -i ~/.ssh/id_deploy $VPS_USER@$VPS_HOST bash -s <<'REMOTE'
+          ssh -i /home/runner/.ssh/id_deploy -o ConnectTimeout=15 $VPS_USER@$VPS_HOST bash -s <<'REMOTE'
           set +e
           cd /home/deploy/app/backend || cd /home/deploy/app/backend 2>/dev/null
           if [ -f .env ]; then
@@ -546,3 +624,29 @@ jobs:
             exit 1
           fi
           echo "Search smoke test passed."
+
+      # ── One auto re-dispatch after App-CI-triggered SSH preflight exhaustion ─
+      # Only workflow_run triggers this; the follow-up is workflow_dispatch so it
+      # cannot loop. Manual Dispatch never auto-requeues.
+      - name: Auto re-dispatch Deploy once after SSH preflight failure
+        if: >
+          failure() &&
+          github.event_name == 'workflow_run' &&
+          steps.ssh_preflight.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_SHA: ${{ steps.resolve_sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TARGET_SHA:-}" ]; then
+            echo "::error::No target SHA resolved — cannot auto re-dispatch Deploy."
+            exit 1
+          fi
+          echo "SSH preflight exhausted — re-dispatching Deploy once for ${TARGET_SHA}"
+          if ! gh workflow run deploy.yml \
+            --ref main \
+            -f "target_sha=${TARGET_SHA}"; then
+            echo "::error::Auto re-dispatch failed (gh workflow run deploy.yml). Check that GITHUB_TOKEN has actions: write and org policy allows workflow_dispatch from GITHUB_TOKEN. Re-run Deploy manually from the Actions UI."
+            exit 1
+          fi
+          echo "Auto re-dispatch requested. Watch Actions → Deploy for the follow-up run."

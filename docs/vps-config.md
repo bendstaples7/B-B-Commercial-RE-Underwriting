@@ -131,12 +131,37 @@ Run `tail -20 /home/deploy/logs/backup.log` on the VPS to see the specific error
 | Gate | Behavior |
 |------|----------|
 | **App CI** (`.github/workflows/ci.yml`) | App lint/typecheck/build/tests, migration smoke tests, and deploy-contract validation. Does **not** run VPS backup checks such as `backup.sh --check`. |
-| **Deploy** | Still hard-fails on **pre-deploy** `backup.sh --check` (and `--pre-deploy` backup). Post-deploy `backup.sh --check` is **advisory** (`::warning::` only) — backup breakage alone does not roll back a healthy ship. |
-| **Ops health** (`.github/workflows/ops-health.yml`) | Schedule + after Deploy + manual. Runs `backup.sh --check`, `verify-backup-health.sh`, soft readiness. Failures open/update a GitHub issue labeled `ops-health` (optional Slack via `SLACK_WEBHOOK_URL`). **Never** triggers or blocks Deploy. |
+| **Deploy** | Still hard-fails on **pre-deploy** `backup.sh --check` (and `--pre-deploy` backup). Post-deploy `backup.sh --check` is **advisory** (`::warning::` only) — backup breakage alone does not roll back a healthy ship. Before deploy work, waits for public `/api/health` (~10 min, **soft**) then SSH (~15 min, **hard**); see **Deploy SSH / reachability** below. |
+| **Ops health** (`.github/workflows/ops-health.yml`) | **Hourly** SSH + HTTP canary (not on the 6h cron — avoids double-counting); **every 6 hours** (+ after Deploy + manual) full `backup.sh --check`, `verify-backup-health.sh`, soft readiness. Failures open/update a GitHub issue labeled `ops-health` (optional Slack via `SLACK_WEBHOOK_URL`). **Never** triggers or blocks Deploy. |
 
 Branch protection should require **`App CI success`** only (not Ops health).
 
 After App CI → Deploy is green on `main`, stranded merges (e.g. Command Center #136 when only VPS backup smoke failed) ship without re-merging the feature PR.
+
+### Deploy SSH / reachability
+
+**Symptom:** Deploy fails at preflight with `Connection timed out during banner exchange`, port 22 timeout, or public `/api/health` never returning 200. Secrets and SSH key setup often already succeeded; `deploy.sh` never ran.
+
+**Cause:** Transient VPS/network/firewall blip (or a longer outage). A short single-shot SSH check used to strand green App CI merges on `main`.
+
+**What Deploy does now**
+
+1. Checkout the target SHA (scripts needed for waits).
+2. Wait for public `https://<VPS_SUBDOMAIN>.duckdns.org/api/health` (~10 minutes) via `scripts/ci-http-health-wait.sh` — **soft** (`continue-on-error`). A down site does not block an SSH deploy (so you can ship a fix). Manual Dispatch can set **`skip_http_preflight`** to skip this wait entirely.
+3. Wait for SSH (~15 minutes) via `scripts/ci-ssh-verify.sh` — **hard** gate (retries with backoff; classifies timeout / banner / permission / refused). Auth (`permission`) fails fast; `connection refused` fails after 2 attempts.
+4. On SSH unreachable: network/connectivity diagnostics (skip Alembic). If SSH still works after a later deploy failure, Alembic/migration diagnostics still run.
+5. After an **App CI → Deploy** (`workflow_run`) **SSH** preflight exhaustion, Deploy **auto re-dispatches once** as `workflow_dispatch` for the same SHA (`gh workflow run deploy.yml`). Requires workflow `permissions.actions: write` and org policy allowing `GITHUB_TOKEN` to start `workflow_dispatch`. Manual Dispatch never auto-requeues (no loop).
+
+**If both attempts fail:** Actions → **Deploy** → **Run workflow** (optionally set `target_sha`; use `skip_http_preflight` if the site is down). Confirm the VPS answers on 22 from your machine first.
+
+**Ops hourly canary**
+
+- Job **VPS SSH/HTTP canary** runs every hour (`0 * * * *`), after non-cancelled Deploy runs, and on manual dispatch — **not** on the overlapping 6h schedule.
+- Short budgets (~60s SSH, ~90s HTTP). Does not block App CI or Deploy.
+- After **≥ 2 consecutive** canary job failures, opens/updates an issue titled `Ops health: VPS SSH unreachable` or `Ops health: VPS public /api/health down` (label `ops-health`; optional Slack).
+- When both canaries succeed again, comments **Reachability recovered** and closes that open issue.
+
+Shared helpers: `scripts/ci-ssh-verify.sh`, `scripts/ci-http-health-wait.sh`.
 
 ### `verify-backup-health.sh` reports missing cron
 Run `bash /home/deploy/install-backup-cron.sh` or redeploy from `main` after merging the backup redundancy PR.
