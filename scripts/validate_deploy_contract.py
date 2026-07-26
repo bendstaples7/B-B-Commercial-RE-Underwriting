@@ -241,9 +241,19 @@ def main() -> int:
         errors.append("Missing expected script: scripts/vps-setup/apply-memory-guard-units.sh")
     else:
         apply_text = _read(apply_script)
-        if "MemoryMax=900M" not in apply_text and "09b-celery-service.sh" not in apply_text:
+        if "MemoryMax=900M" not in apply_text:
             errors.append(
-                "apply-memory-guard-units.sh must enforce MemoryMax (via 09b or inline)"
+                "apply-memory-guard-units.sh must inline MemoryMax=900M "
+                "(must not shell out to checkout 09b)"
+            )
+        if "MemoryHigh=700M" not in apply_text:
+            errors.append(
+                "apply-memory-guard-units.sh must inline MemoryHigh=700M"
+            )
+        if re.search(r"(?:bash|source)\s+[^\n]*09b-celery-service\.sh", apply_text):
+            errors.append(
+                "apply-memory-guard-units.sh must not execute checkout "
+                "09b-celery-service.sh as root (inline unit rewrite only)"
             )
     ops_alert = REPO_ROOT / "scripts" / "ops-alert.sh"
     if not ops_alert.exists():

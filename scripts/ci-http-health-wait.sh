@@ -45,12 +45,14 @@ while true; do
   echo "Attempt ${ATTEMPT}: HTTP ${STATUS}"
 
   if [ "$STATUS" = "200" ]; then
-    # Require status=healthy. Memory pressure is WARN-only (does not 503);
-    # true unavailability returns HTTP 503 (degraded).
+    # Require top-level status=healthy only (nested check status fields must not pass).
+    # Memory pressure is WARN-only (does not 503); true unavailability returns HTTP 503.
     BODY=$(curl -sS --connect-timeout "${HTTP_CONNECT_TIMEOUT}" \
       --max-time "${HTTP_MAX_TIME}" \
       "${HEALTH_URL}" 2>/dev/null || echo "")
-    if echo "$BODY" | grep -q '"status"[[:space:]]*:[[:space:]]*"healthy"'; then
+    if printf '%s' "$BODY" | python3 -c \
+      'import json,sys; d=json.load(sys.stdin); raise SystemExit(0 if d.get("status")=="healthy" else 1)' \
+      2>/dev/null; then
       ELAPSED=$(( $(date +%s) - START_TS ))
       echo "Public /api/health OK after ${ELAPSED}s."
       if [ -n "${GITHUB_OUTPUT:-}" ]; then

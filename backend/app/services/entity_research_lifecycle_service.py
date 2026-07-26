@@ -179,6 +179,7 @@ def reconcile_pending_entity_research(
             "queued_count": 0,
             "retired_task_count": 0,
             "processed_lead_ids": [],
+            "results": [],
             "limit": 0,
         }
 

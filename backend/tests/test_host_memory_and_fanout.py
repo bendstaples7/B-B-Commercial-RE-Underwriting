@@ -27,6 +27,9 @@ def test_reconcile_respects_zero_limit(app):
         assert outcome['processed_lead_count'] == 0
         assert outcome['queued_count'] == 0
         assert outcome['limit'] == 0
+        assert outcome['results'] == []
+        assert outcome['processed_lead_ids'] == []
+        assert outcome['retired_task_count'] == 0
 
 
 def test_reconcile_effective_limit_matches_batch_constant():
