@@ -10,6 +10,11 @@
 #   - 03b-install-redis.sh (redis-server active)
 #   - 09-gunicorn-service.sh (backend .env exists)
 #   - pip install --user -r backend/requirements.txt as deploy user
+#
+# Memory guards (2GB VPS / shared host):
+#   - max-tasks-per-child / max-memory-per-child recycle the prefork child
+#   - MemoryHigh / MemoryMax cgroup-kill Celery before host thrash
+#   - OOMScoreAdjust prefers killing Celery over Gunicorn
 # =============================================================================
 
 set -euo pipefail
@@ -48,8 +53,17 @@ WorkingDirectory=/home/deploy/app/backend
 EnvironmentFile=/home/deploy/app/backend/.env
 Environment=FLASK_ENV=production
 Environment=CELERY_WORKER_RUNNING=1
+# Recycle the prefork child before RSS can exhaust a small VPS.
+# max-memory-per-child is KiB (400000 ≈ 390 MiB).
 ExecStart=/home/deploy/.local/bin/celery -A celery_worker.celery worker \
-    --loglevel=info --concurrency=1 --pool=prefork
+    --loglevel=info --concurrency=1 --pool=prefork \
+    --max-tasks-per-child=50 \
+    --max-memory-per-child=400000
+# Prefer killing this worker over Gunicorn/Postgres under host OOM.
+OOMScoreAdjust=500
+MemoryAccounting=yes
+MemoryHigh=700M
+MemoryMax=900M
 # Always restart after unexpected exits (crash, OOM, SIGHUP). systemctl stop
 # during deploy still leaves the unit inactive until an explicit start/restart.
 Restart=always
@@ -82,6 +96,7 @@ Environment=CELERY_WORKER_RUNNING=1
 ExecStart=/home/deploy/.local/bin/celery -A celery_worker.celery beat \
     --loglevel=info --pidfile=/home/deploy/celerybeat.pid \
     --schedule=/home/deploy/celerybeat-schedule
+OOMScoreAdjust=200
 Restart=always
 RestartSec=10s
 KillSignal=SIGTERM
@@ -113,4 +128,4 @@ for svc in celery celery-beat; do
     fi
 done
 
-info "09b complete — Celery worker and beat are running"
+info "09b complete — Celery worker and beat are running (memory guards enabled)"

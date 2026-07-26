@@ -243,15 +243,41 @@ def health_check():
         degraded = True
 
     # ------------------------------------------------------------------
-    # Check 4: Queue counts
+    # Check 4: Queue counts (timed — starvation shows as slow, not just FAIL)
     # ------------------------------------------------------------------
     try:
+        import time as _time
+
         from app.services.queue_service import QueueService
+
+        _qc_budget = float(os.environ.get('HEALTH_QUEUE_COUNTS_MAX_SECONDS', '5'))
+        _qc_started = _time.monotonic()
         counts = QueueService().get_counts()
-        checks['queue_counts'] = f'ok ({counts})'
+        _qc_elapsed = _time.monotonic() - _qc_started
+        if _qc_elapsed > _qc_budget:
+            checks['queue_counts'] = (
+                f'FAIL: get_counts took {_qc_elapsed:.2f}s '
+                f'(budget {_qc_budget:.1f}s) — host may be memory-starved'
+            )
+            degraded = True
+        else:
+            checks['queue_counts'] = f'ok ({counts}; {_qc_elapsed:.2f}s)'
     except Exception as e:
         checks['queue_counts'] = f'FAIL: {e}'
         degraded = True
+
+    # ------------------------------------------------------------------
+    # Check 4b: Host memory / Celery RSS (WARN only — do not 503)
+    # Soft-restart + MemoryMax handle remediation; flapping Deploy/ops
+    # canaries on a 2GB box would hide real outages.
+    # ------------------------------------------------------------------
+    try:
+        from app.services.helpers.host_memory import evaluate_host_memory_health
+
+        mem_health = evaluate_host_memory_health()
+        checks['host_memory'] = mem_health['detail']
+    except Exception as e:
+        checks['host_memory'] = f'WARN: memory probe failed ({e})'
 
     # ------------------------------------------------------------------
     # Check 5: Lead visibility — optional env-gated user lead check

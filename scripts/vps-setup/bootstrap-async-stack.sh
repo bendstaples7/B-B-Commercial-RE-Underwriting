@@ -14,6 +14,8 @@ VPS_SETUP="${APP_DIR}/scripts/vps-setup"
 bash "${VPS_SETUP}/03b-install-redis.sh"
 bash "${VPS_SETUP}/09b-celery-service.sh"
 bash "${VPS_SETUP}/11-sudoers-deploy.sh"
+# Re-apply memory guards after sudoers install so gunicorn/postgres drop-ins exist.
+bash "${VPS_SETUP}/apply-memory-guard-units.sh"
 
 echo ""
 echo "Async stack bootstrap complete."

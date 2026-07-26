@@ -71,11 +71,17 @@ check_sudo_rule "redis is-active" /bin/systemctl is-active --quiet redis-server
 check_sudo_rule "celery is-active" /bin/systemctl is-active --quiet celery
 check_sudo_rule "celery-beat is-active" /bin/systemctl is-active --quiet celery-beat
 check_sudo_rule "bootstrap-async-stack" /usr/local/sbin/bootstrap-async-stack
+check_sudo_rule "apply-memory-guard-units" /usr/local/sbin/apply-memory-guard-units
 
 echo ""
 info "Verifying deploy user can run bootstrap idempotently..."
 sudo -u "${DEPLOY_USER}" sudo -n /usr/local/sbin/bootstrap-async-stack \
     || die "deploy user cannot run bootstrap-async-stack without a password"
+
+echo ""
+info "Verifying deploy user can apply memory guards..."
+sudo -u "${DEPLOY_USER}" sudo -n /usr/local/sbin/apply-memory-guard-units \
+    || die "deploy user cannot run apply-memory-guard-units without a password"
 
 echo ""
 echo "============================================================"

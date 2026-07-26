@@ -120,6 +120,8 @@ ExecStart=/home/deploy/.local/bin/gunicorn \
     --error-logfile - \
     "app:create_app('production')"
 ExecReload=/bin/kill -s HUP $MAINPID
+# Prefer keeping the API alive when the host OOMs (Celery uses a higher score).
+OOMScoreAdjust=-500
 Restart=on-failure
 RestartSec=5s
 StandardOutput=journal
@@ -167,6 +169,7 @@ check_directive "--bind 127.0.0.1:5000"                "--bind 127.0.0.1:5000 (R
 check_directive "ExecReload=/bin/kill -s HUP \$MAINPID" "ExecReload SIGHUP (Req 8.1)"
 check_directive "Restart=on-failure"                   "Restart=on-failure (Req 3.3)"
 check_directive "RestartSec=5s"                        "RestartSec=5s (Req 3.3)"
+check_directive "OOMScoreAdjust=-500"                  "OOMScoreAdjust=-500 (prefer API over Celery)"
 check_directive "StandardOutput=journal"               "StandardOutput=journal (Req 10.3)"
 check_directive "StandardError=journal"                "StandardError=journal (Req 10.3)"
 check_directive "WantedBy=multi-user.target"           "WantedBy=multi-user.target (Req 3.6)"

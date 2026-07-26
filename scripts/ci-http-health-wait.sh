@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # ci-http-health-wait.sh
-# Poll public /api/health until HTTP 200 or HTTP_MAX_WAIT_SECONDS is exhausted.
+# Poll public /api/health until HTTP 200 + status=healthy or budget exhausted.
 #
 # Required env:
 #   HEALTH_URL   e.g. https://bbanalyzer.duckdns.org/api/health
@@ -45,13 +45,22 @@ while true; do
   echo "Attempt ${ATTEMPT}: HTTP ${STATUS}"
 
   if [ "$STATUS" = "200" ]; then
-    ELAPSED=$(( $(date +%s) - START_TS ))
-    echo "Public /api/health OK after ${ELAPSED}s."
-    if [ -n "${GITHUB_OUTPUT:-}" ]; then
-      echo "http_ok=1" >> "$GITHUB_OUTPUT"
-      echo "http_elapsed=${ELAPSED}" >> "$GITHUB_OUTPUT"
+    # Require status=healthy. Memory pressure is WARN-only (does not 503);
+    # true unavailability returns HTTP 503 (degraded).
+    BODY=$(curl -sS --connect-timeout "${HTTP_CONNECT_TIMEOUT}" \
+      --max-time "${HTTP_MAX_TIME}" \
+      "${HEALTH_URL}" 2>/dev/null || echo "")
+    if echo "$BODY" | grep -q '"status"[[:space:]]*:[[:space:]]*"healthy"'; then
+      ELAPSED=$(( $(date +%s) - START_TS ))
+      echo "Public /api/health OK after ${ELAPSED}s."
+      if [ -n "${GITHUB_OUTPUT:-}" ]; then
+        echo "http_ok=1" >> "$GITHUB_OUTPUT"
+        echo "http_elapsed=${ELAPSED}" >> "$GITHUB_OUTPUT"
+      fi
+      exit 0
     fi
-    exit 0
+    echo "Attempt ${ATTEMPT}: HTTP 200 but status!=healthy — continuing"
+    LAST_STATUS="200-degraded"
   fi
 
   NOW=$(date +%s)

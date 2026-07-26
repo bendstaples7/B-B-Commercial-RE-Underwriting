@@ -25,6 +25,7 @@ REQUIRED_SUDO_COMMANDS = [
     "/bin/systemctl is-active --quiet celery",
     "/bin/systemctl is-active --quiet celery-beat",
     "/usr/local/sbin/bootstrap-async-stack",
+    "/usr/local/sbin/apply-memory-guard-units",
 ]
 
 SHELL_SCRIPTS = [
@@ -36,6 +37,7 @@ SHELL_SCRIPTS = [
     REPO_ROOT / "scripts" / "ops-alert.sh",
     REPO_ROOT / "scripts" / "vps-setup" / "migrate-async-stack.sh",
     REPO_ROOT / "scripts" / "vps-setup" / "bootstrap-async-stack.sh",
+    REPO_ROOT / "scripts" / "vps-setup" / "apply-memory-guard-units.sh",
     REPO_ROOT / "scripts" / "vps-setup" / "11-sudoers-deploy.sh",
 ]
 
@@ -159,6 +161,24 @@ def main() -> int:
         errors.append(
             "09b-celery-service.sh must set StartLimitBurst to avoid restart thrash"
         )
+    for needle, label in (
+        ("--max-tasks-per-child=50", "max-tasks-per-child"),
+        ("--max-memory-per-child=400000", "max-memory-per-child"),
+        ("MemoryMax=900M", "MemoryMax"),
+        ("MemoryHigh=700M", "MemoryHigh"),
+        ("OOMScoreAdjust=500", "OOMScoreAdjust on celery worker"),
+    ):
+        if needle not in unit_text:
+            errors.append(
+                f"09b-celery-service.sh must include {label} ({needle}) "
+                "to prevent Celery OOM thrash"
+            )
+    gunicorn_unit = _read(REPO_ROOT / "scripts" / "vps-setup" / "09-gunicorn-service.sh")
+    if "OOMScoreAdjust=-500" not in gunicorn_unit:
+        errors.append(
+            "09-gunicorn-service.sh must set OOMScoreAdjust=-500 "
+            "(prefer API over Celery under host OOM)"
+        )
 
     # 6. deploy.sh uses sudo -n (no bare sudo for systemctl) and always restores celery
     deploy_text = _read(REPO_ROOT / "scripts" / "deploy.sh")
@@ -194,6 +214,37 @@ def main() -> int:
             )
         if "ops-alert.sh" not in liveness_text:
             errors.append("celery-liveness-check.sh must source ops-alert.sh")
+        if "maybe_soft_restart_for_memory" not in liveness_text:
+            errors.append(
+                "celery-liveness-check.sh must soft-restart Celery on RSS / "
+                "MemAvailable pressure (maybe_soft_restart_for_memory)"
+            )
+        if "CELERY_SOFT_RSS_MIB" not in liveness_text:
+            errors.append(
+                "celery-liveness-check.sh must define CELERY_SOFT_RSS_MIB threshold"
+            )
+        if "HOST_MIN_AVAILABLE_MIB" not in liveness_text:
+            errors.append(
+                "celery-liveness-check.sh must define HOST_MIN_AVAILABLE_MIB threshold"
+            )
+        if "maybe_soft_alert" not in liveness_text or "SOFT_ALERT_STATE" not in liveness_text:
+            errors.append(
+                "celery-liveness-check.sh must use a separate soft-restart alert "
+                "cooldown (maybe_soft_alert / SOFT_ALERT_STATE) from hard-down alerts"
+            )
+    if "apply-memory-guard-units" not in deploy_text:
+        errors.append(
+            "deploy.sh must call apply-memory-guard-units so MemoryMax cannot drift"
+        )
+    apply_script = REPO_ROOT / "scripts" / "vps-setup" / "apply-memory-guard-units.sh"
+    if not apply_script.exists():
+        errors.append("Missing expected script: scripts/vps-setup/apply-memory-guard-units.sh")
+    else:
+        apply_text = _read(apply_script)
+        if "MemoryMax=900M" not in apply_text and "09b-celery-service.sh" not in apply_text:
+            errors.append(
+                "apply-memory-guard-units.sh must enforce MemoryMax (via 09b or inline)"
+            )
     ops_alert = REPO_ROOT / "scripts" / "ops-alert.sh"
     if not ops_alert.exists():
         errors.append("Missing expected script: scripts/ops-alert.sh")
