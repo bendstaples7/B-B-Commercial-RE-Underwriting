@@ -7,6 +7,7 @@
 import PostAddIcon from '@mui/icons-material/PostAdd'
 import type { QueryClient } from '@tanstack/react-query'
 import openLetterService from '@/services/openLetterApi'
+import type { EnqueueResult, MailQueueSummary } from '@/services/openLetterApi'
 import { bulkActionService, commandCenterService } from '@/services/api'
 import {
   formatEnqueueSummary,
@@ -40,6 +41,57 @@ export function invalidateMailQueries(queryClient: QueryClient) {
   }
 }
 
+export function stripMailCandidatesFromCache(
+  queryClient: QueryClient,
+  removedIds: number[],
+) {
+  if (removedIds.length === 0) return
+  const removed = new Set(removedIds)
+  queryClient.setQueriesData<{ rows?: Array<{ id: number }>; total?: number }>(
+    { queryKey: ['queue-mail-candidates'] },
+    (current) => {
+      if (!current?.rows) return current
+      const rows = current.rows.filter((row) => !removed.has(row.id))
+      return {
+        ...current,
+        rows,
+        ...(typeof current.total === 'number'
+          ? { total: Math.max(0, current.total - removed.size) }
+          : {}),
+      }
+    },
+  )
+}
+
+export function bumpMailQueueAfterEnqueue(
+  queryClient: QueryClient,
+  result: Pick<EnqueueResult, 'added'>,
+) {
+  if (result.added === 0) return
+  queryClient.setQueryData<MailQueueSummary>(['mail-queue'], (current) => {
+    if (!current) return current
+    const queuedCount = current.queued_count + result.added
+    const estimatedTotal = current.estimated_cost_per_piece == null
+      ? current.estimated_total
+      : Math.round(queuedCount * current.estimated_cost_per_piece * 100 + 1e-9) / 100
+    return {
+      ...current,
+      queued_count: queuedCount,
+      can_send:
+        queuedCount >= current.batch_minimum || current.allow_send_below_minimum,
+      estimated_total: estimatedTotal,
+    }
+  })
+}
+
+export function addedLeadIds(result: EnqueueResult, requestedIds: number[]): number[] {
+  const fromResults = (result.results ?? [])
+    .filter((row) => row.status === 'queued')
+    .map((row) => row.lead_id)
+  if (fromResults.length > 0) return fromResults
+  return result.added === requestedIds.length ? requestedIds : []
+}
+
 function invalidateQueueQueries(
   queryClient: QueryClient,
   queryKey: string,
@@ -64,6 +116,8 @@ export async function enqueueLeadsAsBulkResult(
 ): Promise<BulkActionResult> {
   try {
     const result = await openLetterService.enqueue(leadIds, ctx.queryKey)
+    stripMailCandidatesFromCache(ctx.queryClient, addedLeadIds(result, leadIds))
+    bumpMailQueueAfterEnqueue(ctx.queryClient, result)
     invalidateMailQueries(ctx.queryClient)
     invalidateQueueQueries(ctx.queryClient, ctx.queryKey, ctx.extraQueryKeys)
     ctx.onEnqueueResult?.(result)

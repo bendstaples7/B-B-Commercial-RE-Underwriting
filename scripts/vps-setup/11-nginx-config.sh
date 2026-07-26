@@ -170,6 +170,20 @@ server {
     proxy_connect_timeout  10s;
     proxy_send_timeout    120s;
 
+    # Compress text assets (JS/CSS/JSON/SVG) for first-visit transfer.
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_types
+        text/plain
+        text/css
+        text/javascript
+        application/javascript
+        application/json
+        application/xml
+        image/svg+xml;
+
     # API — proxy to Gunicorn (Requirement 4.4)
     location /api/ {
         proxy_pass         http://127.0.0.1:5000;

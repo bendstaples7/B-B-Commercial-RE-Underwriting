@@ -34,7 +34,6 @@ def save_config():
         default_template_name=data.get('default_template_name'),
         batch_minimum=data.get('batch_minimum'),
         allow_send_below_minimum=data.get('allow_send_below_minimum'),
-        estimated_cost_per_piece=data.get('estimated_cost_per_piece'),
     )
     if 'return_address' in data:
         ra = data.get('return_address')

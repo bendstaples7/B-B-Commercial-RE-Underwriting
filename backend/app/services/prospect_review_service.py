@@ -11,7 +11,12 @@ from app.services.cook_county_prospect_config import (
     chicago_data_api_configured,
     min_motivation_score_for_queue,
 )
-from app.services.prospect_area_filter_service import apply_area_filter_to_candidates
+from app.services.prospect_area_filter_service import (
+    apply_area_filter_to_candidates,
+    get_area_filter,
+    point_in_polygon,
+    polygon_ring,
+)
 from app.services.cook_county_enrichment_service import schedule_cook_county_enrichment_after_commit
 from app.services.deduplication_engine import DeduplicationEngine
 from app.services.lead_ingestion_service import LeadIngestionService
@@ -63,9 +68,30 @@ def _fetch_eligible_candidates(
 
 
 def count_pending_candidates(owner_user_id: str, *, is_admin: bool = False) -> int:
-    rows = _fetch_eligible_candidates(owner_user_id, status='pending', is_admin=is_admin)
-    filtered, stats = apply_area_filter_to_candidates(rows, owner_user_id)
-    return stats.total_filtered
+    query = _queue_eligible_query(
+        _candidate_base_query(owner_user_id, is_admin=is_admin).filter_by(status='pending')
+    )
+    area_filter = get_area_filter(owner_user_id)
+    if area_filter is None or not area_filter.enabled:
+        return query.count()
+
+    ring = polygon_ring(area_filter.geometry)
+    if ring is None:
+        return query.count()
+
+    coordinates = query.with_entities(
+        ProspectCandidate.latitude,
+        ProspectCandidate.longitude,
+    ).yield_per(1000)
+    return sum(
+        1
+        for latitude, longitude in coordinates
+        if (
+            latitude is not None
+            and longitude is not None
+            and point_in_polygon(float(latitude), float(longitude), ring)
+        )
+    )
 
 
 def get_prospect_feed_status() -> dict:

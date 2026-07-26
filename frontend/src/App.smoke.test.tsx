@@ -111,10 +111,20 @@ vi.mock('@/context/PipelineStatusContext', () => ({
   usePipelineStatus: () => null,
 }))
 
+vi.mock('@/context/ShellStatusContext', () => ({
+  ShellStatusProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  useShellStatus: () => ({ statusLabel: null, setStatusLabel: vi.fn() }),
+}))
+
 // NotificationContext — avoid real setup
 vi.mock('@/context/NotificationContext', () => ({
   NotificationProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  globalNotify: { showError: vi.fn(), showSuccess: vi.fn() },
+  globalNotify: {
+    showError: vi.fn(),
+    showSuccess: vi.fn(),
+    showWarning: vi.fn(),
+    showInfo: vi.fn(),
+  },
 }))
 
 // ---------------------------------------------------------------------------

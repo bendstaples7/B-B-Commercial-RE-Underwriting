@@ -20,7 +20,6 @@ import {
   IconButton,
   Typography,
   Paper,
-  Snackbar,
   Dialog,
   DialogActions,
   DialogContent,
@@ -81,6 +80,7 @@ import { PropertyOverviewQuickStats } from '@/components/lead-detail/PropertyOve
 import { HeaderLeadScorePanel } from '@/components/lead-detail/HeaderLeadScorePanel'
 import { DeepDiveDetailsCard } from '@/components/lead-detail/DeepDiveDetailsCard'
 import { SuppressLeadDialog } from '@/components/SuppressLeadDialog'
+import { AppSnackbar } from '@/components/AppSnackbar'
 import {
   enqueueResultSeverity,
   formatEnqueueSummary,
@@ -1743,36 +1743,29 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         </DialogActions>
       </Dialog>
 
-      <Snackbar
+      <AppSnackbar
         open={activitySnackbar.open}
-        autoHideDuration={4000}
         onClose={() => setActivitySnackbar((s) => ({ ...s, open: false }))}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        message={activitySnackbar.message}
+        severity={activitySnackbar.severity ?? 'success'}
         data-testid="activity-success-snackbar"
-      >
-        <Alert
-          severity={activitySnackbar.severity ?? 'success'}
-          onClose={() => setActivitySnackbar((s) => ({ ...s, open: false }))}
-          data-testid="activity-success-alert"
-          action={
-            activitySnackbar.linkTo ? (
-              <Button
-                color="inherit"
-                size="small"
-                variant="outlined"
-                component={RouterLink}
-                to={activitySnackbar.linkTo}
-                data-testid="activity-success-link"
-                sx={{ bgcolor: 'background.paper' }}
-              >
-                {activitySnackbar.linkLabel ?? 'View'}
-              </Button>
-            ) : undefined
-          }
-        >
-          {activitySnackbar.message}
-        </Alert>
-      </Snackbar>
+        alertTestId="activity-success-alert"
+        action={
+          activitySnackbar.linkTo ? (
+            <Button
+              color="inherit"
+              size="small"
+              variant="outlined"
+              component={RouterLink}
+              to={activitySnackbar.linkTo}
+              data-testid="activity-success-link"
+              sx={{ bgcolor: 'background.paper' }}
+            >
+              {activitySnackbar.linkLabel ?? 'View'}
+            </Button>
+          ) : undefined
+        }
+      />
     </Box>
   )
 }

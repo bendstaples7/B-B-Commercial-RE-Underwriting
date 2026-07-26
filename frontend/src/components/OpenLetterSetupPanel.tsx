@@ -31,13 +31,16 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link as RouterLink } from 'react-router-dom'
 import openLetterService, { type MailCreativePreset } from '@/services/openLetterApi'
+import { AppSnackbar } from '@/components/AppSnackbar'
 import {
   extractOlcListRows,
   getDirectMailSetupSteps,
   isDirectMailReadyToSend,
 } from '@/utils/directMailSetup'
 import { formatPhoneNumber } from '@/utils/phone'
+import { formatLastMailedDate } from '@/utils/formatLastMailedDate'
 import {
   describeOlcProduct,
   findOlcProductForEnvelope,
@@ -90,9 +93,11 @@ type OlcTemplate = {
 function ProductSelectionSummary({
   product,
   knownCostPerPiece,
+  costSourceSentAt,
 }: {
   product: OlcProduct | undefined
   knownCostPerPiece?: number | null
+  costSourceSentAt?: string | null
 }) {
   if (!product) return null
   const info = describeOlcProduct(product)
@@ -103,16 +108,19 @@ function ProductSelectionSummary({
         {info.deliverySpeed ? ` · ${info.deliverySpeed}` : ''}
       </Typography>
       <Typography variant="body2">{info.postageNote}</Typography>
-      {knownCostPerPiece != null && (
+      {knownCostPerPiece != null && knownCostPerPiece > 0 && (
         <Typography variant="body2" sx={{ mt: 1 }}>
-          Your last sent batch averaged <strong>${knownCostPerPiece.toFixed(2)}/piece</strong> on
-          this account (actual OLC charge).
+          Estimated Ready to Mail totals use <strong>${knownCostPerPiece.toFixed(2)}/piece</strong>
+          {costSourceSentAt
+            ? `, based on mailer cost from the batch sent on ${formatLastMailedDate(costSourceSentAt)}.`
+            : ', based on your last recorded mailer cost per piece.'}
         </Typography>
       )}
-      {knownCostPerPiece == null && (
+      {(knownCostPerPiece == null || knownCostPerPiece <= 0) && (
         <Typography variant="body2" sx={{ mt: 1 }} color="text.secondary">
-          OLC does not expose per-product prices before you send. After your first batch, actual
-          cost per piece will appear here and on the Queue tab.
+          Open Letter Connect does not publish catalog prices before you send. Estimated totals on
+          Ready to Mail will appear after your first batch is placed, using that actual cost per
+          piece.
         </Typography>
       )}
     </Alert>
@@ -130,7 +138,10 @@ export const OpenLetterSetupPanel: React.FC = () => {
   const [returnAddress, setReturnAddress] = useState(EMPTY_RETURN_ADDRESS)
   const [presets, setPresets] = useState<MailCreativePreset[]>([])
   const [activePresetId, setActivePresetId] = useState<string>('')
-  const [saveMessage, setSaveMessage] = useState<string | null>(null)
+  const [saveToast, setSaveToast] = useState<{
+    message: string
+    severity: 'success' | 'error'
+  } | null>(null)
 
   const {
     data: config,
@@ -265,11 +276,11 @@ export const OpenLetterSetupPanel: React.FC = () => {
       }),
     onSuccess: () => {
       setApiTokenInput('')
-      setSaveMessage('Mail settings saved.')
+      setSaveToast({ message: 'Mail settings saved.', severity: 'success' })
       queryClient.invalidateQueries({ queryKey: ['open-letter-config'] })
       queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
     },
-    onError: (e: Error) => setSaveMessage(e.message),
+    onError: (e: Error) => setSaveToast({ message: e.message, severity: 'error' }),
   })
 
   const products = sortOlcProducts(extractOlcListRows(productsData) as OlcProduct[])
@@ -339,6 +350,17 @@ export const OpenLetterSetupPanel: React.FC = () => {
             </ListItem>
           ))}
         </List>
+        {readyToSend && (
+          <Button
+            component={RouterLink}
+            to="/queues/ready-to-mail"
+            variant="contained"
+            size="large"
+            sx={{ mt: 2, width: { xs: '100%', sm: 'auto' } }}
+          >
+            Go to Ready to Mail
+          </Button>
+        )}
       </Paper>
 
       {needsUserToken && (
@@ -512,6 +534,7 @@ export const OpenLetterSetupPanel: React.FC = () => {
             <ProductSelectionSummary
               product={selectedProduct}
               knownCostPerPiece={config?.estimated_cost_per_piece}
+              costSourceSentAt={config?.estimated_cost_source_sent_at}
             />
 
             <TextField
@@ -967,13 +990,14 @@ export const OpenLetterSetupPanel: React.FC = () => {
               Select a product and template above to enable save.
             </Typography>
           )}
-          {saveMessage && (
-            <Alert severity={saveMutation.isError ? 'error' : 'success'} sx={{ mt: 2 }}>
-              {saveMessage}
-            </Alert>
-          )}
         </>
       )}
+      <AppSnackbar
+        open={saveToast !== null}
+        onClose={() => setSaveToast(null)}
+        message={saveToast?.message ?? ''}
+        severity={saveToast?.severity ?? 'success'}
+      />
     </Box>
   )
 }

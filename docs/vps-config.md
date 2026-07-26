@@ -6,6 +6,12 @@
 
 ---
 
+## Nginx
+
+Site config is rendered by `scripts/vps-setup/11-nginx-config.sh`. It enables **gzip** for JS/CSS/JSON/SVG (`gzip_types` + `gzip_min_length 1024`). Applying template changes requires re-running that setup script (or equivalent) and `nginx -t && systemctl reload nginx` on the VPS — deploy alone does not rewrite the live nginx site file unless your deploy path includes that step.
+
+---
+
 ## PostgreSQL
 
 | Setting | Value |

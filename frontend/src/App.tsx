@@ -1,4 +1,4 @@
-import { useState, useEffect, Component } from 'react'
+import { useState, useEffect, Component, lazy, Suspense } from 'react'
 import { Routes, Route, Link, Navigate, useNavigate, useParams, useLocation, useSearchParams } from 'react-router-dom'
 import { useAuth } from './context/AuthContext'
 import { BackendRuntimeGuard } from './components/BackendRuntimeGuard'
@@ -77,48 +77,110 @@ import LocalPostOfficeIcon from '@mui/icons-material/LocalPostOffice'
 import type { Theme } from '@mui/material/styles'
 import TravelExploreIcon from '@mui/icons-material/TravelExplore'
 import { usePipelineStatus } from './context/PipelineStatusContext'
+import { useShellStatus } from './context/ShellStatusContext'
 import Avatar from '@mui/material/Avatar'
 import { WorkflowStep, PropertyFacts, PropertyType, ConstructionType, InteriorCondition } from './types'
 import { analysisService, queueService } from './services/api'
 import { PropertyFactsForm } from './components/PropertyFactsForm'
-import { PropertyListPage } from './components/PropertyListPage'
 import { ImportWizard } from './components/ImportWizard'
 import { ImportHistoryTable } from './components/ImportHistoryTable'
-import { MarketingHub } from './components/MarketingHub'
-import { OAuthCallback } from './components/OAuthCallback'
-import { DealListPage } from './pages/multifamily/DealListPage'
-import { DealDetailPage } from './pages/multifamily/DealDetailPage'
-import { LenderProfilesPage } from './pages/multifamily/LenderProfilesPage'
-import { AnalysisLandingPage } from './pages/AnalysisLandingPage'
 import { GeminiNarrativePanel } from './components/GeminiNarrativePanel'
-import OMIntakePage from '@/pages/multifamily/OMIntakePage'
-import { HubSpotImportArea } from './components/HubSpotImportArea'
-import { ReviewQueue } from './components/ReviewQueue'
-import { TodaysActionQueue } from './components/TodaysActionQueue'
-import { PreviouslyWarmQueue } from './components/PreviouslyWarmQueue'
-import { FollowUpOverdueQueue } from './components/FollowUpOverdueQueue'
-import { NoNextActionQueue } from './components/NoNextActionQueue'
-import { NeedsReviewQueue } from './components/NeedsReviewQueue'
-import { SkipTraceQueue } from './components/SkipTraceQueue'
-import { SkipTraceExhaustedQueue } from './components/SkipTraceExhaustedQueue'
-import { DoNotContactQueue } from './components/DoNotContactQueue'
-import { MissingPropertyMatchQueue } from './components/MissingPropertyMatchQueue'
-import { ReadyToMailQueue } from './components/ReadyToMailQueue'
-import { ProspectReviewQueue } from './components/ProspectReviewQueue'
-import { MarketingListManager } from './components/MarketingListManager'
-import { UnifiedLeadCommandCenter } from '@/components/UnifiedLeadCommandCenter'
-import { AdminPanel } from './components/AdminPanel'
-import AdminUserDetail from './components/AdminUserDetail'
-import { ScoringWeightsEditor } from './components/ScoringWeightsEditor'
 import GlobalSearchBar from '@/components/GlobalSearchBar'
-import SearchResultsPage from '@/pages/SearchResultsPage'
-import { DealKanbanPage } from './pages/DealKanbanPage'
-import { ActivityDashboardPage } from './pages/ActivityDashboardPage'
-import { QuickAddPage } from './pages/QuickAddPage'
-import { PipelineConfigAdminPage } from './pages/PipelineConfigAdminPage'
-import BackgroundJobsPage from './pages/BackgroundJobsPage'
-import DataSourcesPanel from '@/components/DataSourcesPanel'
 import type { QueueCounts } from './types'
+
+const PropertyListPage = lazy(() =>
+  import('./components/PropertyListPage').then((m) => ({ default: m.PropertyListPage })),
+)
+const MarketingHub = lazy(() =>
+  import('./components/MarketingHub').then((m) => ({ default: m.MarketingHub })),
+)
+const OAuthCallback = lazy(() =>
+  import('./components/OAuthCallback').then((m) => ({ default: m.OAuthCallback })),
+)
+const DealListPage = lazy(() =>
+  import('./pages/multifamily/DealListPage').then((m) => ({ default: m.DealListPage })),
+)
+const DealDetailPage = lazy(() =>
+  import('./pages/multifamily/DealDetailPage').then((m) => ({ default: m.DealDetailPage })),
+)
+const LenderProfilesPage = lazy(() =>
+  import('./pages/multifamily/LenderProfilesPage').then((m) => ({ default: m.LenderProfilesPage })),
+)
+const AnalysisLandingPage = lazy(() =>
+  import('./pages/AnalysisLandingPage').then((m) => ({ default: m.AnalysisLandingPage })),
+)
+const OMIntakePage = lazy(() => import('@/pages/multifamily/OMIntakePage'))
+const HubSpotImportArea = lazy(() =>
+  import('./components/HubSpotImportArea').then((m) => ({ default: m.HubSpotImportArea })),
+)
+const ReviewQueue = lazy(() =>
+  import('./components/ReviewQueue').then((m) => ({ default: m.ReviewQueue })),
+)
+const TodaysActionQueue = lazy(() =>
+  import('./components/TodaysActionQueue').then((m) => ({ default: m.TodaysActionQueue })),
+)
+const PreviouslyWarmQueue = lazy(() =>
+  import('./components/PreviouslyWarmQueue').then((m) => ({ default: m.PreviouslyWarmQueue })),
+)
+const FollowUpOverdueQueue = lazy(() =>
+  import('./components/FollowUpOverdueQueue').then((m) => ({ default: m.FollowUpOverdueQueue })),
+)
+const NoNextActionQueue = lazy(() =>
+  import('./components/NoNextActionQueue').then((m) => ({ default: m.NoNextActionQueue })),
+)
+const NeedsReviewQueue = lazy(() =>
+  import('./components/NeedsReviewQueue').then((m) => ({ default: m.NeedsReviewQueue })),
+)
+const SkipTraceQueue = lazy(() =>
+  import('./components/SkipTraceQueue').then((m) => ({ default: m.SkipTraceQueue })),
+)
+const SkipTraceExhaustedQueue = lazy(() =>
+  import('./components/SkipTraceExhaustedQueue').then((m) => ({ default: m.SkipTraceExhaustedQueue })),
+)
+const DoNotContactQueue = lazy(() =>
+  import('./components/DoNotContactQueue').then((m) => ({ default: m.DoNotContactQueue })),
+)
+const MissingPropertyMatchQueue = lazy(() =>
+  import('./components/MissingPropertyMatchQueue').then((m) => ({
+    default: m.MissingPropertyMatchQueue,
+  })),
+)
+const ReadyToMailQueue = lazy(() =>
+  import('./components/ReadyToMailQueue').then((m) => ({ default: m.ReadyToMailQueue })),
+)
+const ProspectReviewQueue = lazy(() =>
+  import('./components/ProspectReviewQueue').then((m) => ({ default: m.ProspectReviewQueue })),
+)
+const MarketingListManager = lazy(() =>
+  import('./components/MarketingListManager').then((m) => ({ default: m.MarketingListManager })),
+)
+const UnifiedLeadCommandCenter = lazy(() =>
+  import('@/components/UnifiedLeadCommandCenter').then((m) => ({
+    default: m.UnifiedLeadCommandCenter,
+  })),
+)
+const AdminPanel = lazy(() =>
+  import('./components/AdminPanel').then((m) => ({ default: m.AdminPanel })),
+)
+const AdminUserDetail = lazy(() => import('./components/AdminUserDetail'))
+const ScoringWeightsEditor = lazy(() =>
+  import('./components/ScoringWeightsEditor').then((m) => ({ default: m.ScoringWeightsEditor })),
+)
+const SearchResultsPage = lazy(() => import('@/pages/SearchResultsPage'))
+const DealKanbanPage = lazy(() =>
+  import('./pages/DealKanbanPage').then((m) => ({ default: m.DealKanbanPage })),
+)
+const ActivityDashboardPage = lazy(() =>
+  import('./pages/ActivityDashboardPage').then((m) => ({ default: m.ActivityDashboardPage })),
+)
+const QuickAddPage = lazy(() =>
+  import('./pages/QuickAddPage').then((m) => ({ default: m.QuickAddPage })),
+)
+const PipelineConfigAdminPage = lazy(() =>
+  import('./pages/PipelineConfigAdminPage').then((m) => ({ default: m.PipelineConfigAdminPage })),
+)
+const BackgroundJobsPage = lazy(() => import('./pages/BackgroundJobsPage'))
+const DataSourcesPanel = lazy(() => import('@/components/DataSourcesPanel'))
 
 // Dual-rail nav: narrow icon rail + light secondary panel for section children.
 const ICON_RAIL_WIDTH = 60
@@ -165,6 +227,53 @@ import { GoogleMapsLoadedContext } from '@/context/GoogleMapsContext'
 // @react-google-maps/api reloads the script if this array changes identity.
 // Declare it outside the component so it's stable across renders.
 const GOOGLE_MAPS_LIBRARIES: ['places'] = ['places']
+
+function pathNeedsGoogleMaps(pathname: string): boolean {
+  return (
+    pathname.startsWith('/leads/')
+    || pathname.startsWith('/analysis')
+    || pathname.startsWith('/quick-add')
+    || pathname.includes('/om-intake')
+  )
+}
+
+function GoogleMapsScriptLoader({ children }: { children: React.ReactNode }) {
+  const googleMapsApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
+  const { isLoaded } = useLoadScript({
+    googleMapsApiKey: googleMapsApiKey ?? '',
+    libraries: GOOGLE_MAPS_LIBRARIES,
+  })
+  return (
+    <GoogleMapsLoadedContext.Provider value={isLoaded}>
+      {children}
+    </GoogleMapsLoadedContext.Provider>
+  )
+}
+
+function GoogleMapsScriptProvider({
+  enabled,
+  children,
+}: {
+  enabled: boolean
+  children: React.ReactNode
+}) {
+  if (!enabled) {
+    return (
+      <GoogleMapsLoadedContext.Provider value={false}>
+        {children}
+      </GoogleMapsLoadedContext.Provider>
+    )
+  }
+  return <GoogleMapsScriptLoader>{children}</GoogleMapsScriptLoader>
+}
+
+function RouteLazyFallback() {
+  return (
+    <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }} data-testid="route-lazy-fallback">
+      <CircularProgress />
+    </Box>
+  )
+}
 
 /** Work queue sub-groups under the top-level Work Queue Kanban nav section. */
 type NavQueueItem = {
@@ -1466,6 +1575,7 @@ function App() {
   const [avatarOpen, setAvatarOpen] = useState(false)
   const [secondaryNavExpanded, setSecondaryNavExpanded] = useState(readSecondaryNavExpanded)
   const pipelineStatus = usePipelineStatus()
+  const { statusLabel: shellStatusLabel } = useShellStatus()
   const { user, isLoading: authLoading, logout } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
@@ -1477,17 +1587,18 @@ function App() {
     writeSecondaryNavExpanded(expanded)
   }
 
-  // useLoadScript manages the script tag lifecycle and exposes isLoaded so
-  // child components (PropertyFactsForm) know when the Places API is ready.
-  const googleMapsApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
-  if (!googleMapsApiKey) {
+  // Google Maps Loads only when authenticated on routes that need Places autocomplete.
+  const mapsPathNeedsScript = pathNeedsGoogleMaps(location.pathname)
+  const [mapsLoadedForSession, setMapsLoadedForSession] = useState(false)
+  useEffect(() => {
+    if (user && mapsPathNeedsScript) {
+      setMapsLoadedForSession(true)
+    }
+  }, [user, mapsPathNeedsScript])
+  const mapsEnabled = Boolean(user) && (mapsLoadedForSession || mapsPathNeedsScript)
+  if (!import.meta.env.VITE_GOOGLE_MAPS_API_KEY && mapsEnabled) {
     console.warn('VITE_GOOGLE_MAPS_API_KEY is not set — address autocomplete will not work.')
   }
-
-  const { isLoaded: mapsLoaded } = useLoadScript({
-    googleMapsApiKey: googleMapsApiKey ?? '',
-    libraries: GOOGLE_MAPS_LIBRARIES,
-  })
 
   const toggleDrawer = () => setDrawerOpen((prev) => !prev)
 
@@ -2038,19 +2149,19 @@ function App() {
   const useLoginShell = isLoginPage || isSetPasswordPage || authLoading || !user
   if (useLoginShell) {
     return (
-      <GoogleMapsLoadedContext.Provider value={mapsLoaded}>
+      <GoogleMapsScriptProvider enabled={false}>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/set-password" element={<SetPasswordPage />} />
           <Route path="/quick-add" element={<LoginPage />} />
           <Route path="/*" element={<LoginPage />} />
         </Routes>
-      </GoogleMapsLoadedContext.Provider>
+      </GoogleMapsScriptProvider>
     )
   }
 
   return (
-    <GoogleMapsLoadedContext.Provider value={mapsLoaded}>
+    <GoogleMapsScriptProvider enabled={mapsEnabled}>
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
       {/* App Bar */}
       <AppBar
@@ -2112,7 +2223,7 @@ function App() {
             <GlobalSearchBar />
           </Box>
           <Box sx={{ flexGrow: { xs: 0, md: 1 }, minWidth: 0 }} />
-          {pipelineStatus?.pipeline_running && (
+          {pipelineStatus?.pipeline_running ? (
             <Tooltip
               title={
                 user?.is_admin
@@ -2146,7 +2257,24 @@ function App() {
                 </Typography>
               </Box>
             </Tooltip>
-          )}
+          ) : shellStatusLabel ? (
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                mr: 1,
+                color: 'inherit',
+              }}
+              aria-live="polite"
+              aria-label={shellStatusLabel}
+            >
+              <CircularProgress size={18} color="inherit" sx={{ opacity: 0.8 }} />
+              <Typography variant="caption" sx={{ opacity: 0.8, display: { xs: 'none', sm: 'block' } }}>
+                {shellStatusLabel}
+              </Typography>
+            </Box>
+          ) : null}
           <Avatar
             src={user?.is_admin ? '/images/avatar.png' : undefined}
             alt={user?.display_name ?? 'User'}
@@ -2173,9 +2301,7 @@ function App() {
             aria-label="Open user menu"
             aria-haspopup="true"
           >
-            {!user?.is_admin && user?.display_name
-              ? user.display_name.charAt(0).toUpperCase()
-              : null}
+            {user?.display_name ? user.display_name.charAt(0).toUpperCase() : '?'}
           </Avatar>
           <Menu
             open={avatarOpen}
@@ -2307,6 +2433,7 @@ function App() {
         }}
       >
         <BackendRuntimeGuard />
+        <Suspense fallback={<RouteLazyFallback />}>
         <Routes>
           {/* Public route — no AuthGuard */}
           <Route path="/login" element={<LoginPage />} />
@@ -2314,6 +2441,7 @@ function App() {
           {/* All protected routes wrapped in AuthGuard */}
           <Route path="/*" element={
             <AuthGuard>
+              <Suspense fallback={<RouteLazyFallback />}>
               <Routes>
           {/* Default landing page — activity goals dashboard */}
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
@@ -2384,12 +2512,14 @@ function App() {
           <Route path="/leads/views/do-not-contact" element={<Navigate to="/queues/do-not-contact" replace />} />
           <Route path="/leads/views/missing-property-match" element={<Navigate to="/queues/missing-property-match" replace />} />
               </Routes>
+              </Suspense>
             </AuthGuard>
           } />
         </Routes>
+        </Suspense>
       </Box>
     </Box>
-    </GoogleMapsLoadedContext.Provider>
+    </GoogleMapsScriptProvider>
   )
 }
 

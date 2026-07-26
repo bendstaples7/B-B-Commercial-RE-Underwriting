@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
 import { ReadyToMailQueue } from './ReadyToMailQueue'
+import { ShellStatusProvider } from '@/context/ShellStatusContext'
 import { queueService } from '@/services/api'
 import openLetterService from '@/services/openLetterApi'
 import type { LeadStatus, QueuePage } from '@/types'
@@ -69,6 +70,7 @@ const queueSummary = {
   allow_send_below_minimum: false,
   can_send: false,
   estimated_cost_per_piece: 1.25,
+  estimated_cost_source_sent_at: '2026-07-12T15:00:00Z',
   estimated_total: 2.5,
   items: [
     {
@@ -95,9 +97,11 @@ function renderPage() {
   })
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <ReadyToMailQueue />
-      </MemoryRouter>
+      <ShellStatusProvider>
+        <MemoryRouter>
+          <ReadyToMailQueue />
+        </MemoryRouter>
+      </ShellStatusProvider>
     </QueryClientProvider>,
   )
 }
@@ -132,14 +136,42 @@ beforeEach(() => {
 })
 
 describe('ReadyToMailQueue', () => {
+  it('paints the queue shell before staged data settles with one primary title', async () => {
+    let resolveQueue: (value: typeof queueSummary) => void = () => undefined
+    vi.mocked(openLetterService.getAllQueued).mockReturnValue(
+      new Promise((resolve) => {
+        resolveQueue = resolve
+      }),
+    )
+
+    renderPage()
+
+    expect(screen.getByTestId('ready-to-mail-queue')).toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { name: 'Ready to Mail', level: 1 })).toHaveLength(1)
+    expect(screen.getByTestId('mail-batch-skeleton')).toBeInTheDocument()
+    expect(screen.getByTestId('mail-staged-skeleton')).toBeInTheDocument()
+    expect(screen.getByText('Recommended for mail')).toBeInTheDocument()
+
+    resolveQueue(queueSummary)
+    await waitFor(() => {
+      expect(screen.getByTestId('mail-queue-staged-accordion')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('mail-staged-skeleton')).not.toBeInTheDocument()
+    expect(screen.getByText(/Estimated total: ~\$2\.50/)).toBeInTheDocument()
+    expect(screen.getByText(/Based on mailer cost from the batch sent on/i)).toBeInTheDocument()
+    expect(screen.queryByText(/Estimated total: ~\$0/)).not.toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { name: 'Ready to Mail', level: 1 })).toHaveLength(1)
+  })
+
   it('renders batch summary and staged accordion when queue loads', async () => {
     vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
 
     renderPage()
 
     await waitFor(() => {
-      expect(screen.getByTestId('ready-to-mail-queue')).toBeInTheDocument()
+      expect(screen.getByTestId('mail-queue-staged-accordion')).toBeInTheDocument()
     })
+    expect(screen.getByTestId('ready-to-mail-queue')).toBeInTheDocument()
     expect(screen.getByTestId('mail-batch-summary')).toBeInTheDocument()
     expect(screen.getByTestId('mail-queue-staged-accordion')).toBeInTheDocument()
     expect(screen.queryByTestId('mail-queue-staged-table')).not.toBeInTheDocument()
@@ -267,5 +299,96 @@ describe('ReadyToMailQueue', () => {
     await waitFor(() => {
       expect(screen.getByTestId('add-to-minimum-button')).toHaveTextContent('Add 20 to reach minimum')
     })
+  })
+
+  it('adds the displayed candidate page through the shared enqueue path', async () => {
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
+    vi.mocked(openLetterService.enqueue).mockResolvedValue({
+      ...queueSummary,
+      added: 1,
+      skipped: 0,
+      invalid: 0,
+      results: [{ lead_id: 20, status: 'queued' }],
+    })
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('add-page-candidates-button')).toHaveTextContent(
+        'Add 1 from this page',
+      )
+    })
+    await userEvent.click(screen.getByTestId('add-page-candidates-button'))
+
+    await waitFor(() => {
+      expect(openLetterService.enqueue).toHaveBeenCalledWith(
+        [20],
+        'queue-mail-candidates',
+      )
+    })
+  })
+
+  it('shows estimated total with source batch date when cost per piece is set', async () => {
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mail-batch-estimated-total')).toHaveTextContent(
+        /Estimated total: ~\$2\.50/,
+      )
+    })
+    expect(
+      screen.getByText(/Based on mailer cost from the batch sent on/i),
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId('mail-batch-estimate-pending')).not.toBeInTheDocument()
+  })
+
+  it('treats zero cost as unset and explains estimates come after first send', async () => {
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue({
+      ...queueSummary,
+      estimated_cost_per_piece: 0,
+      estimated_total: 0,
+    })
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mail-batch-estimate-pending')).toBeInTheDocument()
+    })
+    expect(
+      screen.getByText(/Estimated total will appear after your first mail batch is sent/i),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Estimated total: ~\$0/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Set estimated \$\/piece/i)).not.toBeInTheDocument()
+  })
+
+  it('centers enqueue snackbar and auto-hides after timeout', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
+    vi.mocked(openLetterService.enqueue).mockResolvedValue({
+      ...queueSummary,
+      added: 1,
+      skipped: 0,
+      invalid: 0,
+      results: [{ lead_id: 20, status: 'queued' }],
+    })
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('add-page-candidates-button')).toBeInTheDocument()
+    })
+    await userEvent.click(screen.getByTestId('add-page-candidates-button'))
+
+    const snackbar = await screen.findByTestId('enqueue-feedback-snackbar')
+    expect(snackbar).toBeInTheDocument()
+    expect(snackbar.className).toMatch(/MuiSnackbar-anchorOriginBottomCenter/)
+
+    await vi.advanceTimersByTimeAsync(3100)
+    await waitFor(() => {
+      expect(screen.queryByTestId('enqueue-feedback-snackbar')).not.toBeInTheDocument()
+    })
+    vi.useRealTimers()
   })
 })

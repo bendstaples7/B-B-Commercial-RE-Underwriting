@@ -13,6 +13,7 @@ import { render, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
 import { ThemeProvider, createTheme } from '@mui/material/styles'
+import { ShellStatusProvider } from '@/context/ShellStatusContext'
 
 // ---------------------------------------------------------------------------
 // Mock the Google Maps loader so tests don't need a real API key
@@ -119,9 +120,11 @@ function renderAnalysisStep(sessionOverrides: Record<string, any>) {
   return render(
     <QueryClientProvider client={queryClient}>
       <ThemeProvider theme={theme}>
-        <MemoryRouter initialEntries={['/analysis/arv/test-session-id']}>
-          <App />
-        </MemoryRouter>
+        <ShellStatusProvider>
+          <MemoryRouter initialEntries={['/analysis/arv/test-session-id']}>
+            <App />
+          </MemoryRouter>
+        </ShellStatusProvider>
       </ThemeProvider>
     </QueryClientProvider>
   )

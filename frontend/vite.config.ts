@@ -24,6 +24,29 @@ export default defineConfig(({ mode }) => {
         '@': path.resolve(__dirname, './src'),
       },
     },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return
+            if (
+              id.includes('node_modules/react-dom')
+              || id.includes('node_modules/react/')
+              || id.includes('node_modules/react-router')
+              || id.includes('node_modules/scheduler')
+            ) {
+              return 'react'
+            }
+            if (id.includes('@mui')) return 'mui'
+            if (id.includes('ag-grid')) return 'ag-grid'
+            if (id.includes('recharts')) return 'recharts'
+            if (id.includes('@react-google-maps') || id.includes('google-maps')) return 'maps'
+            if (id.includes('@dnd-kit')) return 'dnd'
+            return 'vendor'
+          },
+        },
+      },
+    },
     server: {
       port: 3000,
       proxy: {

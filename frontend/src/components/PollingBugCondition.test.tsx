@@ -56,6 +56,22 @@ vi.mock('@/services/api', () => ({
   },
 }))
 
+vi.mock('@/context/AuthContext', () => ({
+  useAuth: () => ({
+    user: {
+      user_id: 'test-user',
+      email: 'test@example.com',
+      display_name: 'Test User',
+      is_admin: false,
+    },
+    token: 'mock-token',
+    login: vi.fn(),
+    loginWithToken: vi.fn(),
+    logout: vi.fn(),
+    isLoading: false,
+  }),
+}))
+
 vi.mock('@/components/WebhookSyncPanel', () => ({
   WebhookSyncPanel: () => <div data-testid="webhook-sync-panel" />,
 }))
