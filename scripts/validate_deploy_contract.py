@@ -46,27 +46,65 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _strip_comment_lines(text: str) -> str:
-    return "\n".join(
-        line for line in text.splitlines() if not line.lstrip().startswith("#")
+def _strip_hash_comments(text: str) -> str:
+    """Strip shell/Nginx comments while preserving quoted # characters."""
+    stripped_lines: list[str] = []
+    for line in text.splitlines():
+        in_single = False
+        in_double = False
+        escaped = False
+        keep: list[str] = []
+        for char in line:
+            if escaped:
+                keep.append(char)
+                escaped = False
+                continue
+            if char == "\\":
+                keep.append(char)
+                escaped = True
+                continue
+            if char == "'" and not in_double:
+                in_single = not in_single
+                keep.append(char)
+                continue
+            if char == '"' and not in_single:
+                in_double = not in_double
+                keep.append(char)
+                continue
+            if char == "#" and not in_single and not in_double:
+                break
+            keep.append(char)
+        stripped_lines.append("".join(keep))
+    return "\n".join(stripped_lines)
+
+
+def _extract_heredoc(text: str, marker: str) -> str:
+    match = re.search(
+        rf"<<\s*{re.escape(marker)}\n(?P<body>[\s\S]*?)\n{re.escape(marker)}\s*$",
+        text,
+        flags=re.MULTILINE,
     )
+    return match.group("body") if match else text
 
 
-def _extract_braced_block(text: str, pattern: str) -> str | None:
-    match = re.search(pattern, text)
+def _nginx_location_block(config_text: str, location: str) -> str | None:
+    match = re.search(
+        rf"\blocation\s+{re.escape(location)}\s*\{{",
+        config_text,
+    )
     if not match:
         return None
-    depth = 1
-    idx = match.end()
-    while idx < len(text):
-        char = text[idx]
+
+    start = match.end() - 1
+    depth = 0
+    for idx in range(start, len(config_text)):
+        char = config_text[idx]
         if char == "{":
             depth += 1
         elif char == "}":
             depth -= 1
             if depth == 0:
-                return text[match.end() : idx]
-        idx += 1
+                return config_text[start : idx + 1]
     return None
 
 
@@ -204,22 +242,17 @@ def main() -> int:
             "(prefer API over Celery under host OOM)"
         )
     nginx_text = _read(REPO_ROOT / "scripts" / "vps-setup" / "11-nginx-config.sh")
-    nginx_live_text = _strip_comment_lines(nginx_text)
-    assets_block = _extract_braced_block(
-        nginx_live_text,
-        r"location\s+/assets/\s*\{",
-    )
-    if not (
-        assets_block
-        and "Cache-Control" in assets_block
-        and "max-age=31536000" in assets_block
-        and "immutable" in assets_block
+    nginx_config = _strip_hash_comments(_extract_heredoc(nginx_text, "NGINX_CONF"))
+    assets_block = _nginx_location_block(nginx_config, "/assets/")
+    if not assets_block or not all(
+        token in assets_block
+        for token in ("Cache-Control", "max-age=31536000", "immutable")
     ):
         errors.append(
             "11-nginx-config.sh must long-cache hashed /assets/ "
             "(Cache-Control max-age=31536000, immutable)"
         )
-    spa_block = _extract_braced_block(nginx_live_text, r"location\s+/\s*\{")
+    spa_block = _nginx_location_block(nginx_config, "/")
     if not (spa_block and "Cache-Control" in spa_block and "no-cache" in spa_block):
         errors.append(
             "11-nginx-config.sh must set Cache-Control no-cache on location / (SPA index.html)"
@@ -237,15 +270,13 @@ def main() -> int:
         index_html = _read(index_html_path)
         if "spa-boot-failure" not in index_html:
             errors.append(
-                "frontend/index.html must include static spa-boot-failure watchdog"
+                "frontend/index.html must include spa-boot-failure watchdog"
             )
     vite_cfg_path = REPO_ROOT / "frontend" / "vite.config.ts"
-    vite_cfg = ""
     if not vite_cfg_path.exists():
         errors.append("Missing expected file: frontend/vite.config.ts")
     else:
         vite_cfg = _read(vite_cfg_path)
-    if vite_cfg:
         react_chunk = None
         for branch in re.finditer(
             r"if\s*\(\s*(?P<condition>[\s\S]{0,700}?)\s*\)\s*\{\s*"
