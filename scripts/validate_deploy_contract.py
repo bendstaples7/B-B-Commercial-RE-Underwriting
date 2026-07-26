@@ -204,12 +204,27 @@ def main() -> int:
             "frontend/index.html must include static spa-boot-failure watchdog"
         )
     vite_cfg = _read(REPO_ROOT / "frontend" / "vite.config.ts")
-    if re.search(
-        r"manualChunks[\s\S]*return\s+['\"]react['\"]",
+    react_chunk = None
+    for branch in re.finditer(
+        r"if\s*\(\s*(?P<condition>[\s\S]{0,700}?)\s*\)\s*\{\s*"
+        r"return\s+['\"](?P<chunk>[\w-]+)['\"]",
         vite_cfg,
     ):
+        condition = branch.group("condition")
+        if all(
+            token in condition
+            for token in (
+                "node_modules/react-dom",
+                "node_modules/react/",
+                "node_modules/react-router",
+                "node_modules/scheduler",
+            )
+        ):
+            react_chunk = branch.group("chunk")
+            break
+    if react_chunk != "vendor":
         errors.append(
-            "vite.config.ts must not split a separate 'react' manualChunk "
+            "vite.config.ts must route react/react-dom/scheduler/react-router into 'vendor' "
             "(causes createContext on undefined React)"
         )
 

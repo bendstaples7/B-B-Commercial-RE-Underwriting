@@ -65,6 +65,9 @@
           if (!isModule) return;
           setTimeout(showBootFailure, 0);
         });
+        window.addEventListener('unhandledrejection', function () {
+          setTimeout(showBootFailure, 0);
+        });
         setTimeout(showBootFailure, BOOT_MS);
       })();
     </script>
