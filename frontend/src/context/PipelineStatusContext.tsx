@@ -6,8 +6,8 @@
  *
  * The AppBar uses this to show a spinner when pipeline_running is true.
  */
-import { createContext, useContext, ReactNode } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { createContext, useContext, ReactNode, useEffect, useRef } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { hubSpotService } from '@/services/api'
 import { useAuth } from '@/context/AuthContext'
 
@@ -24,6 +24,7 @@ interface PipelineStatus {
 }
 
 const PipelineStatusContext = createContext<PipelineStatus | null>(null)
+const PIPELINE_STATUS_QUERY_KEY = ['hubspot', 'pipeline', 'status', 'global'] as const
 
 export function usePipelineStatus(): PipelineStatus | null {
   return useContext(PipelineStatusContext)
@@ -35,8 +36,23 @@ interface PipelineStatusProviderProps {
 
 export function PipelineStatusProvider({ children }: PipelineStatusProviderProps) {
   const { user } = useAuth()
+  const userKey = user?.user_id ?? user?.email ?? null
+  const queryClient = useQueryClient()
+  const previousUserKeyRef = useRef<string | null | undefined>(undefined)
+
+  useEffect(() => {
+    if (previousUserKeyRef.current === undefined) {
+      previousUserKeyRef.current = userKey
+      return
+    }
+    if (previousUserKeyRef.current !== userKey) {
+      queryClient.removeQueries({ queryKey: PIPELINE_STATUS_QUERY_KEY })
+      previousUserKeyRef.current = userKey
+    }
+  }, [queryClient, userKey])
+
   const { data } = useQuery({
-    queryKey: ['hubspot', 'pipeline', 'status', 'global'],
+    queryKey: [...PIPELINE_STATUS_QUERY_KEY, userKey],
     queryFn: () => hubSpotService.getPipelineStatus(),
     enabled: Boolean(user),
     refetchInterval: (query) => {

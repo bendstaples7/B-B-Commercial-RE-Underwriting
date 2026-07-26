@@ -67,6 +67,40 @@ export function formatShortCalendarDay(isoDate: string): string {
   return d.toLocaleDateString(undefined, { weekday: 'short', month: 'numeric', day: 'numeric' })
 }
 
+export interface TrendLike {
+  delta: number
+  pct_change: number | null
+}
+
+export type TrendDisplayIcon = 'up' | 'down' | 'flat'
+
+export interface TrendDisplay {
+  trendLabel: string
+  pctLine: string
+  color: 'success.main' | 'error.main' | 'text.secondary'
+  icon: TrendDisplayIcon
+}
+
+export function formatTrendDisplay(trend: TrendLike, label: string): TrendDisplay {
+  if (trend.delta === 0) {
+    return {
+      trendLabel: label,
+      pctLine: '0%',
+      color: 'text.secondary',
+      icon: 'flat',
+    }
+  }
+  const sign = trend.delta > 0 ? '+' : ''
+  const pctLine =
+    trend.pct_change == null ? '—' : `${sign}${trend.pct_change}%`
+  return {
+    trendLabel: label,
+    pctLine,
+    color: trend.delta > 0 ? 'success.main' : 'error.main',
+    icon: trend.delta > 0 ? 'up' : 'down',
+  }
+}
+
 export function formatPhoneConfidence(
   confidenceScore?: number | null,
   notes?: string | null,

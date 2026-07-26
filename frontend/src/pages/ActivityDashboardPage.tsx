@@ -47,7 +47,7 @@ import {
   type ActivityPeriodType,
   type ActivityTrend,
 } from '@/services/dashboardApi'
-import { formatShortCalendarDay, formatUtcDateRange } from '@/utils/helpers'
+import { formatShortCalendarDay, formatTrendDisplay, formatUtcDateRange } from '@/utils/helpers'
 
 const cardSx = {
   px: 1.25,
@@ -67,30 +67,11 @@ function periodToType(period: ActivityPeriod): ActivityPeriodType {
   return period === 'week' ? 'weekly' : 'monthly'
 }
 
-function formatTrendDisplay(trend: ActivityTrend, label: string): {
-  trendLabel: string
-  pctLine: string
-  color: 'success.main' | 'error.main' | 'text.secondary'
-  Icon: typeof TrendingUpIcon
-} {
-  if (trend.delta === 0) {
-    return {
-      trendLabel: label,
-      pctLine: '0%',
-      color: 'text.secondary',
-      Icon: TrendingFlatIcon,
-    }
-  }
-  const sign = trend.delta > 0 ? '+' : ''
-  const pctLine =
-    trend.pct_change == null ? '—' : `${sign}${trend.pct_change}%`
-  return {
-    trendLabel: label,
-    pctLine,
-    color: trend.delta > 0 ? 'success.main' : 'error.main',
-    Icon: trend.delta > 0 ? TrendingUpIcon : TrendingDownIcon,
-  }
-}
+const trendIcons = {
+  up: TrendingUpIcon,
+  down: TrendingDownIcon,
+  flat: TrendingFlatIcon,
+} as const
 
 interface MetricCardProps {
   metric: ActivityMetric
@@ -124,6 +105,7 @@ function MetricCard({
   const pct = progress ?? 0
   const barPct = Math.min(Math.max(pct, 0), 100)
   const trendDisplay = formatTrendDisplay(trend, trendLabel)
+  const TrendIcon = trendIcons[trendDisplay.icon]
 
   return (
     <Paper elevation={0} sx={cardSx}>
@@ -207,7 +189,7 @@ function MetricCard({
               color: trendDisplay.color,
             }}
           >
-            <trendDisplay.Icon sx={{ fontSize: 16 }} />
+            <TrendIcon sx={{ fontSize: 16 }} />
             <Typography
               variant="caption"
               fontWeight={600}

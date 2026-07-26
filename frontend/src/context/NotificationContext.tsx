@@ -2,7 +2,8 @@
  * Global notification context — bottom-center Fade toasts (same as Ready to Mail).
  *
  * MutationCache.onError and any component can push messages via useNotification()
- * or globalNotify. Toasts auto-dismiss (3s default, 5s errors) with Fade.
+ * or globalNotify. Success/info toasts auto-dismiss with Fade; error/warning
+ * toasts persist until the user dismisses them.
  */
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react'
 import { AppSnackbar } from '@/components/AppSnackbar'
