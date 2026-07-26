@@ -108,6 +108,19 @@ function isBootKiller(message) {
   return BOOT_KILLER_RE.test(String(message || ''))
 }
 
+function isVisibleElement(el) {
+  if (!el || el.hidden) return false
+  const style = window.getComputedStyle(el)
+  const rect = el.getBoundingClientRect()
+  return (
+    style.display !== 'none'
+    && style.visibility !== 'hidden'
+    && Number(style.opacity) !== 0
+    && rect.width > 0
+    && rect.height > 0
+  )
+}
+
 async function runBootCheck({ url, timeoutMs, strictPageErrors }) {
   const { chromium } = await loadPlaywright()
   const pageErrors = []
@@ -128,17 +141,27 @@ async function runBootCheck({ url, timeoutMs, strictPageErrors }) {
       () => {
         const root = document.getElementById('root')
         const fail = document.getElementById('spa-boot-failure')
-        return Boolean((root && root.childElementCount > 0) || fail)
+        const failVisible =
+          fail
+          && !fail.hidden
+          && window.getComputedStyle(fail).display !== 'none'
+          && window.getComputedStyle(fail).visibility !== 'hidden'
+          && Number(window.getComputedStyle(fail).opacity) !== 0
+          && fail.getBoundingClientRect().width > 0
+          && fail.getBoundingClientRect().height > 0
+        return Boolean((root && root.childElementCount > 0) || failVisible)
       },
       { timeout: timeoutMs },
     )
 
     const failing = []
-    const bootFailure = await page.$('#spa-boot-failure')
+    const bootFailureVisible = await page
+      .$eval('#spa-boot-failure', isVisibleElement)
+      .catch(() => false)
     const childCount = await page.$eval('#root', (el) => el.childElementCount).catch(() => 0)
 
     // Watchdog only counts as failure if #root never painted (banner may flash then dismiss).
-    if (bootFailure && childCount < 1) {
+    if (bootFailureVisible && childCount < 1) {
       failing.push('spa-boot-failure watchdog visible — #root never painted')
     }
 

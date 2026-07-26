@@ -490,10 +490,8 @@ jobs:
         working-directory: frontend
         run: |
           set -euo pipefail
-          echo "Installing playwright@1.49.1 (retries for transient registry errors)..."
-          npm install --no-save playwright@1.49.1 \
-            || npm install --no-save playwright@1.49.1 \
-            || npm install --no-save playwright@1.49.1
+          echo "Installing locked frontend dependencies (retries for transient registry errors)..."
+          npm ci || npm ci || npm ci
           echo "Installing Chromium + OS deps (retries for transient CDN/apt errors)..."
           npx playwright install --with-deps chromium \
             || { sleep 5; npx playwright install --with-deps chromium; } \

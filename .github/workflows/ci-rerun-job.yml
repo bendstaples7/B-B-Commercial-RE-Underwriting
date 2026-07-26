@@ -87,9 +87,6 @@ jobs:
       - run: python3 scripts/assert_frontend_dist_assets.py
       - name: SPA boot check
         run: |
-          npm install --no-save playwright@1.49.1 \
-            || npm install --no-save playwright@1.49.1 \
-            || npm install --no-save playwright@1.49.1
           npx playwright install --with-deps chromium \
             || { sleep 5; npx playwright install --with-deps chromium; } \
             || { sleep 10; npx playwright install --with-deps chromium; }

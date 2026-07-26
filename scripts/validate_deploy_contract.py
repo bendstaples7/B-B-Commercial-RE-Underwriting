@@ -46,6 +46,30 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _strip_comment_lines(text: str) -> str:
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
+def _extract_braced_block(text: str, pattern: str) -> str | None:
+    match = re.search(pattern, text)
+    if not match:
+        return None
+    depth = 1
+    idx = match.end()
+    while idx < len(text):
+        char = text[idx]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[match.end() : idx]
+        idx += 1
+    return None
+
+
 def _script_references_command(text: str, cmd: str) -> bool:
     """Match cmd as a whole token (celery-beat must not satisfy celery)."""
     return re.search(re.escape(cmd) + r"(?!\w)", text) is not None
@@ -180,15 +204,23 @@ def main() -> int:
             "(prefer API over Celery under host OOM)"
         )
     nginx_text = _read(REPO_ROOT / "scripts" / "vps-setup" / "11-nginx-config.sh")
-    if 'location /assets/' not in nginx_text or "immutable" not in nginx_text:
-        errors.append(
-            "11-nginx-config.sh must long-cache hashed /assets/ (immutable)"
-        )
-    # Require Cache-Control no-cache near the SPA location / block (not comments alone).
-    if not re.search(
-        r"location\s+/\s*\{[\s\S]{0,400}?Cache-Control[^\n]*no-cache",
-        nginx_text,
+    nginx_live_text = _strip_comment_lines(nginx_text)
+    assets_block = _extract_braced_block(
+        nginx_live_text,
+        r"location\s+/assets/\s*\{",
+    )
+    if not (
+        assets_block
+        and "Cache-Control" in assets_block
+        and "max-age=31536000" in assets_block
+        and "immutable" in assets_block
     ):
+        errors.append(
+            "11-nginx-config.sh must long-cache hashed /assets/ "
+            "(Cache-Control max-age=31536000, immutable)"
+        )
+    spa_block = _extract_braced_block(nginx_live_text, r"location\s+/\s*\{")
+    if not (spa_block and "Cache-Control" in spa_block and "no-cache" in spa_block):
         errors.append(
             "11-nginx-config.sh must set Cache-Control no-cache on location / (SPA index.html)"
         )
@@ -198,35 +230,45 @@ def main() -> int:
     asset_assert = REPO_ROOT / "scripts" / "assert_frontend_dist_assets.py"
     if not asset_assert.exists():
         errors.append("Missing expected script: scripts/assert_frontend_dist_assets.py")
-    index_html = _read(REPO_ROOT / "frontend" / "index.html")
-    if "spa-boot-failure" not in index_html:
-        errors.append(
-            "frontend/index.html must include static spa-boot-failure watchdog"
-        )
-    vite_cfg = _read(REPO_ROOT / "frontend" / "vite.config.ts")
-    react_chunk = None
-    for branch in re.finditer(
-        r"if\s*\(\s*(?P<condition>[\s\S]{0,700}?)\s*\)\s*\{\s*"
-        r"return\s+['\"](?P<chunk>[\w-]+)['\"]",
-        vite_cfg,
-    ):
-        condition = branch.group("condition")
-        if all(
-            token in condition
-            for token in (
-                "node_modules/react-dom",
-                "node_modules/react/",
-                "node_modules/react-router",
-                "node_modules/scheduler",
+    index_html_path = REPO_ROOT / "frontend" / "index.html"
+    if not index_html_path.exists():
+        errors.append("Missing expected file: frontend/index.html")
+    else:
+        index_html = _read(index_html_path)
+        if "spa-boot-failure" not in index_html:
+            errors.append(
+                "frontend/index.html must include static spa-boot-failure watchdog"
             )
+    vite_cfg_path = REPO_ROOT / "frontend" / "vite.config.ts"
+    vite_cfg = ""
+    if not vite_cfg_path.exists():
+        errors.append("Missing expected file: frontend/vite.config.ts")
+    else:
+        vite_cfg = _read(vite_cfg_path)
+    if vite_cfg:
+        react_chunk = None
+        for branch in re.finditer(
+            r"if\s*\(\s*(?P<condition>[\s\S]{0,700}?)\s*\)\s*\{\s*"
+            r"return\s+['\"](?P<chunk>[\w-]+)['\"]",
+            vite_cfg,
         ):
-            react_chunk = branch.group("chunk")
-            break
-    if react_chunk != "vendor":
-        errors.append(
-            "vite.config.ts must route react/react-dom/scheduler/react-router into 'vendor' "
-            "(causes createContext on undefined React)"
-        )
+            condition = branch.group("condition")
+            if all(
+                token in condition
+                for token in (
+                    "node_modules/react-dom",
+                    "node_modules/react/",
+                    "node_modules/react-router",
+                    "node_modules/scheduler",
+                )
+            ):
+                react_chunk = branch.group("chunk")
+                break
+        if react_chunk != "vendor":
+            errors.append(
+                "vite.config.ts must route react/react-dom/scheduler/react-router into 'vendor' "
+                "(causes createContext on undefined React)"
+            )
 
     # 6. deploy.sh uses sudo -n (no bare sudo for systemctl) and always restores celery
     deploy_text = _read(REPO_ROOT / "scripts" / "deploy.sh")
