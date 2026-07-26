@@ -26,7 +26,9 @@
         // Long enough for cold/slow first paint; still fails closed on real hangs.
         var BOOT_MS = 15000;
         var shown = false;
+        var booting = true;
         var root = document.getElementById('root');
+        var bootTimer = null;
 
         function dismissBootFailure() {
           var el = document.getElementById('spa-boot-failure');
@@ -34,9 +36,23 @@
           shown = false;
         }
 
+        function endBootPhase() {
+          if (!booting) return;
+          booting = false;
+          if (bootTimer != null) {
+            clearTimeout(bootTimer);
+            bootTimer = null;
+          }
+          window.removeEventListener('error', onBootError, true);
+          dismissBootFailure();
+        }
+
         function showBootFailure() {
-          if (shown) return;
-          if (!root || root.childElementCount > 0) return;
+          if (!booting || shown) return;
+          if (!root || root.childElementCount > 0) {
+            endBootPhase();
+            return;
+          }
           shown = true;
           var el = document.createElement('div');
           el.id = 'spa-boot-failure';
@@ -50,25 +66,28 @@
           document.body.appendChild(el);
         }
 
-        // If React mounts after a false-positive banner, remove it.
-        if (root && typeof MutationObserver !== 'undefined') {
-          new MutationObserver(function () {
-            if (root.childElementCount > 0) dismissBootFailure();
-          }).observe(root, { childList: true });
-        }
-
-        // Only treat script/resource errors as early failures; the timer is last resort.
-        window.addEventListener('error', function (ev) {
+        // Script/module load errors only during pre-mount (not runtime API noise).
+        // Intentionally no unhandledrejection listener — rejected fetches after
+        // startup must not look like SPA boot failure / trigger deploy rollback.
+        function onBootError(ev) {
+          if (!booting) return;
           var isModule =
             ev &&
             (ev.filename || (ev.target && ev.target.tagName === 'SCRIPT'));
           if (!isModule) return;
           setTimeout(showBootFailure, 0);
-        });
-        window.addEventListener('unhandledrejection', function () {
-          setTimeout(showBootFailure, 0);
-        });
-        setTimeout(showBootFailure, BOOT_MS);
+        }
+
+        // Tear down watchdog as soon as React mounts — never treat post-mount
+        // errors/rejections as SPA boot failures.
+        if (root && typeof MutationObserver !== 'undefined') {
+          new MutationObserver(function () {
+            if (root.childElementCount > 0) endBootPhase();
+          }).observe(root, { childList: true });
+        }
+
+        window.addEventListener('error', onBootError, true);
+        bootTimer = setTimeout(showBootFailure, BOOT_MS);
       })();
     </script>
     <script type="module" src="/src/main.tsx"></script>
