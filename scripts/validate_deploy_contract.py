@@ -46,6 +46,68 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _strip_hash_comments(text: str) -> str:
+    """Strip shell/Nginx comments while preserving quoted # characters."""
+    stripped_lines: list[str] = []
+    for line in text.splitlines():
+        in_single = False
+        in_double = False
+        escaped = False
+        keep: list[str] = []
+        for char in line:
+            if escaped:
+                keep.append(char)
+                escaped = False
+                continue
+            if char == "\\":
+                keep.append(char)
+                escaped = True
+                continue
+            if char == "'" and not in_double:
+                in_single = not in_single
+                keep.append(char)
+                continue
+            if char == '"' and not in_single:
+                in_double = not in_double
+                keep.append(char)
+                continue
+            if char == "#" and not in_single and not in_double:
+                break
+            keep.append(char)
+        stripped_lines.append("".join(keep))
+    return "\n".join(stripped_lines)
+
+
+def _extract_heredoc(text: str, marker: str) -> str:
+    match = re.search(
+        rf"<<\s*{re.escape(marker)}\n(?P<body>[\s\S]*?)\n{re.escape(marker)}\s*$",
+        text,
+        flags=re.MULTILINE,
+    )
+    return match.group("body") if match else text
+
+
+def _nginx_location_block(config_text: str, location: str) -> str | None:
+    match = re.search(
+        rf"\blocation\s+{re.escape(location)}\s*\{{",
+        config_text,
+    )
+    if not match:
+        return None
+
+    start = match.end() - 1
+    depth = 0
+    for idx in range(start, len(config_text)):
+        char = config_text[idx]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return config_text[start : idx + 1]
+    return None
+
+
 def _script_references_command(text: str, cmd: str) -> bool:
     """Match cmd as a whole token (celery-beat must not satisfy celery)."""
     return re.search(re.escape(cmd) + r"(?!\w)", text) is not None
@@ -179,6 +241,65 @@ def main() -> int:
             "09-gunicorn-service.sh must set OOMScoreAdjust=-500 "
             "(prefer API over Celery under host OOM)"
         )
+    nginx_text = _read(REPO_ROOT / "scripts" / "vps-setup" / "11-nginx-config.sh")
+    nginx_config = _strip_hash_comments(_extract_heredoc(nginx_text, "NGINX_CONF"))
+    assets_block = _nginx_location_block(nginx_config, "/assets/")
+    if not assets_block or not all(
+        token in assets_block
+        for token in ("Cache-Control", "max-age=31536000", "immutable")
+    ):
+        errors.append(
+            "11-nginx-config.sh must long-cache hashed /assets/ "
+            "(Cache-Control max-age=31536000, immutable)"
+        )
+    spa_block = _nginx_location_block(nginx_config, "/")
+    if not (spa_block and "Cache-Control" in spa_block and "no-cache" in spa_block):
+        errors.append(
+            "11-nginx-config.sh must set Cache-Control no-cache on location / (SPA index.html)"
+        )
+    spa_boot = REPO_ROOT / "scripts" / "spa-boot-check.mjs"
+    if not spa_boot.exists():
+        errors.append("Missing expected script: scripts/spa-boot-check.mjs")
+    asset_assert = REPO_ROOT / "scripts" / "assert_frontend_dist_assets.py"
+    if not asset_assert.exists():
+        errors.append("Missing expected script: scripts/assert_frontend_dist_assets.py")
+    index_html_path = REPO_ROOT / "frontend" / "index.html"
+    if not index_html_path.exists():
+        errors.append("Missing expected file: frontend/index.html")
+    else:
+        index_html = _read(index_html_path)
+        if "spa-boot-failure" not in index_html:
+            errors.append(
+                "frontend/index.html must include spa-boot-failure watchdog"
+            )
+    vite_cfg_path = REPO_ROOT / "frontend" / "vite.config.ts"
+    if not vite_cfg_path.exists():
+        errors.append("Missing expected file: frontend/vite.config.ts")
+    else:
+        vite_cfg = _read(vite_cfg_path)
+        react_chunk = None
+        for branch in re.finditer(
+            r"if\s*\(\s*(?P<condition>[\s\S]{0,700}?)\s*\)\s*\{\s*"
+            r"return\s+['\"](?P<chunk>[\w-]+)['\"]",
+            vite_cfg,
+        ):
+            condition = branch.group("condition")
+            if all(
+                token in condition
+                for token in (
+                    "node_modules/react-dom",
+                    "node_modules/react/",
+                    "node_modules/react-router",
+                    "node_modules/scheduler",
+                )
+            ):
+                react_chunk = branch.group("chunk")
+                break
+        if react_chunk != "vendor":
+            errors.append(
+                "vite.config.ts must route react/react-dom/scheduler/react-router into 'vendor' "
+                "(causes createContext on undefined React)"
+            )
 
     # 6. deploy.sh uses sudo -n (no bare sudo for systemctl) and always restores celery
     deploy_text = _read(REPO_ROOT / "scripts" / "deploy.sh")

@@ -28,6 +28,11 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         output: {
           manualChunks(id) {
+            // Do NOT put react/react-dom/scheduler/react-router in a separate
+            // chunk against a catch-all vendor: that produces
+            // "Cannot read properties of undefined (reading 'createContext')"
+            // when vendor evaluates before the React binding is initialized.
+            // Put React into vendor with other deps; only split large isolates.
             if (!id.includes('node_modules')) return
             if (
               id.includes('node_modules/react-dom')
@@ -35,7 +40,7 @@ export default defineConfig(({ mode }) => {
               || id.includes('node_modules/react-router')
               || id.includes('node_modules/scheduler')
             ) {
-              return 'react'
+              return 'vendor'
             }
             if (id.includes('@mui')) return 'mui'
             if (id.includes('ag-grid')) return 'ag-grid'

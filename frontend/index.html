@@ -14,6 +14,82 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Boot watchdog: survives module-eval failures (e.g. createContext on
+         undefined React) that React ErrorBoundaries cannot catch. -->
+    <noscript>
+      <p style="font-family: system-ui, sans-serif; padding: 1.5rem; max-width: 36rem;">
+        JavaScript is required to run this app.
+      </p>
+    </noscript>
+    <script>
+      (function () {
+        // Long enough for cold/slow first paint; still fails closed on real hangs.
+        var BOOT_MS = 15000;
+        var shown = false;
+        var booting = true;
+        var root = document.getElementById('root');
+        var bootTimer = null;
+
+        function dismissBootFailure() {
+          var el = document.getElementById('spa-boot-failure');
+          if (el && el.parentNode) el.parentNode.removeChild(el);
+          shown = false;
+        }
+
+        function endBootPhase() {
+          if (!booting) return;
+          booting = false;
+          if (bootTimer != null) {
+            clearTimeout(bootTimer);
+            bootTimer = null;
+          }
+          window.removeEventListener('error', onBootError, true);
+          dismissBootFailure();
+        }
+
+        function showBootFailure() {
+          if (!booting || shown) return;
+          if (!root || root.childElementCount > 0) {
+            endBootPhase();
+            return;
+          }
+          shown = true;
+          var el = document.createElement('div');
+          el.id = 'spa-boot-failure';
+          el.setAttribute('role', 'alert');
+          el.setAttribute('data-testid', 'spa-boot-failure');
+          el.style.cssText =
+            'font-family:system-ui,sans-serif;padding:1.5rem;max-width:36rem;margin:2rem auto;color:#0f172a;';
+          el.innerHTML =
+            '<p style="font-size:1.125rem;font-weight:600;margin:0 0 0.5rem;">App failed to load</p>' +
+            '<p style="margin:0;color:#475569;">Try a hard refresh (Ctrl+Shift+R). If this keeps happening, the deploy may have a broken JavaScript bundle.</p>';
+          document.body.appendChild(el);
+        }
+
+        // Script/module load errors only during pre-mount (not runtime API noise).
+        // Intentionally no unhandledrejection listener — rejected fetches after
+        // startup must not look like SPA boot failure / trigger deploy rollback.
+        function onBootError(ev) {
+          if (!booting) return;
+          var isModule =
+            ev &&
+            (ev.filename || (ev.target && ev.target.tagName === 'SCRIPT'));
+          if (!isModule) return;
+          setTimeout(showBootFailure, 0);
+        }
+
+        // Tear down watchdog as soon as React mounts — never treat post-mount
+        // errors/rejections as SPA boot failures.
+        if (root && typeof MutationObserver !== 'undefined') {
+          new MutationObserver(function () {
+            if (root.childElementCount > 0) endBootPhase();
+          }).observe(root, { childList: true });
+        }
+
+        window.addEventListener('error', onBootError, true);
+        bootTimer = setTimeout(showBootFailure, BOOT_MS);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

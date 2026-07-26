@@ -208,6 +208,9 @@ jobs:
           npm run build
           echo "Frontend built successfully ($(du -sh dist | cut -f1) total)"
 
+      - name: Assert frontend dist asset coupling
+        run: python3 scripts/assert_frontend_dist_assets.py
+
       - name: Prepare VPS for deploy
         id: deploy_prepare
         env:
@@ -478,9 +481,57 @@ jobs:
           echo "::error::Deploy rolled back after post-deploy health/SHA failure."
           exit 1
 
+      # Browser boot gate — health can be green while vendor/react chunks white-screen.
+      # Split Playwright install from the boot check so npm/CDN flakes fail the job
+      # WITHOUT rolling back a healthy deploy (rollback only on spa_boot failure).
+      - name: Install Playwright for SPA boot check
+        id: spa_boot_setup
+        if: steps.post_health.outcome == 'success'
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          echo "Installing locked frontend dependencies (retries for transient registry errors)..."
+          npm ci || npm ci || npm ci
+          echo "Installing Chromium + OS deps (retries for transient CDN/apt errors)..."
+          npx playwright install --with-deps chromium \
+            || { sleep 5; npx playwright install --with-deps chromium; } \
+            || { sleep 10; npx playwright install --with-deps chromium; }
+          node -e "require('playwright'); console.log('playwright module OK')"
+
+      - name: Post-deploy SPA boot check
+        id: spa_boot
+        if: success() && steps.post_health.outcome == 'success' && steps.spa_boot_setup.outcome == 'success'
+        env:
+          VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+        working-directory: frontend
+        run: |
+          BASE_URL="https://${VPS_SUBDOMAIN}.duckdns.org"
+          node ../scripts/spa-boot-check.mjs --url "${BASE_URL}/login"
+
+      - name: Rollback on post-deploy SPA boot failure
+        if: failure() && steps.spa_boot.outcome == 'failure'
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "Post-deploy SPA boot failed — rolling back to previous SHA on VPS..."
+          scp -i ~/.ssh/id_deploy scripts/post-deploy-rollback.sh \
+            "$VPS_USER@$VPS_HOST:/home/deploy/post-deploy-rollback.sh"
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+            "chmod +x /home/deploy/post-deploy-rollback.sh && bash /home/deploy/post-deploy-rollback.sh"
+          echo "::error::Deploy rolled back after SPA boot failure (white-screen / pageerror)."
+          exit 1
+
+      - name: Note SPA boot setup failure (no rollback)
+        if: failure() && steps.spa_boot_setup.outcome == 'failure'
+        run: |
+          echo "::error::Playwright setup failed after retries — Deploy did NOT roll back."
+          echo "Investigate npm/CDN/apt flake; re-run Deploy if the site is healthy."
+          exit 1
+
       # Advisory only — broken backups must not strand a healthy ship (see Ops health).
       - name: Post-deploy backup check (advisory)
-        if: steps.post_health.outcome == 'success'
+        if: success() && steps.post_health.outcome == 'success' && steps.spa_boot.outcome == 'success'
         env:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -507,7 +558,7 @@ jobs:
       # Set SMOKE_TEST_SENTINEL_LEAD_ID to the database ID of a known unowned
       # lead (any lead imported before the ownership model) to enable check (a).
       - name: Post-deploy ownership smoke test
-        if: steps.post_health.outcome == 'success'
+        if: success() && steps.post_health.outcome == 'success' && steps.spa_boot.outcome == 'success'
         env:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
           SMOKE_TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}
@@ -585,7 +636,7 @@ jobs:
       # query path causes every search to 500 (e.g. duplicate ELSE in CASE).
       # Skipped if smoke test credentials are not configured.
       - name: Post-deploy search smoke test
-        if: steps.post_health.outcome == 'success'
+        if: success() && steps.post_health.outcome == 'success' && steps.spa_boot.outcome == 'success'
         env:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
           SMOKE_TEST_EMAIL: ${{ secrets.SMOKE_TEST_EMAIL }}

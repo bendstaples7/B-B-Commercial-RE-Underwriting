@@ -151,6 +151,17 @@ jobs:
         run: npm run build
         working-directory: frontend
 
+      - name: Assert dist index.html asset hrefs exist
+        run: python3 scripts/assert_frontend_dist_assets.py
+
+      - name: SPA boot check (fail on pageerror / white root)
+        run: |
+          npx playwright install --with-deps chromium \
+            || { sleep 5; npx playwright install --with-deps chromium; } \
+            || { sleep 10; npx playwright install --with-deps chromium; }
+          node ../scripts/spa-boot-check.mjs --dir dist --path /login
+        working-directory: frontend
+
       - name: Upload frontend dist for deploy
         uses: actions/upload-artifact@v4
         with:

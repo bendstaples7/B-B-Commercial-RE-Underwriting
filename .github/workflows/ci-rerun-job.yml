@@ -84,6 +84,14 @@ jobs:
         working-directory: frontend
       - run: npm run build
         working-directory: frontend
+      - run: python3 scripts/assert_frontend_dist_assets.py
+      - name: SPA boot check
+        run: |
+          npx playwright install --with-deps chromium \
+            || { sleep 5; npx playwright install --with-deps chromium; } \
+            || { sleep 10; npx playwright install --with-deps chromium; }
+          node ../scripts/spa-boot-check.mjs --dir dist --path /login
+        working-directory: frontend
 
   backend-performance:
     if: inputs.job == 'backend-performance'
