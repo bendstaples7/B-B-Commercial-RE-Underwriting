@@ -107,26 +107,35 @@ jobs:
         run: |
           set -euo pipefail
           # Count consecutive prior workflow runs whose "VPS SSH/HTTP canary" job failed.
-          # Current run counts as 1; walk older completed runs until a success/skipped.
+          # Current run counts as 1; walk older completed runs until a success.
           CONSEC=1
-          mapfile -t PRIOR_IDS < <(gh run list \
+          STREAK_UNKNOWN=0
+          if ! RUN_IDS=$(gh run list \
             --workflow "Ops health" \
             --status completed \
             --limit 20 \
             --json databaseId,conclusion \
-            --jq '.[].databaseId')
+            --jq '.[].databaseId'); then
+            echo "::warning::Could not list prior Ops health runs — alerting on this failure without streak context."
+            STREAK_UNKNOWN=1
+            RUN_IDS=""
+          fi
+          mapfile -t PRIOR_IDS <<< "$RUN_IDS"
           for RID in "${PRIOR_IDS[@]}"; do
+            [ -n "$RID" ] || continue
             if [ "$RID" = "${{ github.run_id }}" ]; then
               continue
             fi
-            JOB_JSON=$(gh api "repos/${{ github.repository }}/actions/runs/${RID}/jobs" --paginate 2>/dev/null || echo '{"jobs":[]}')
+            JOB_JSON=$(gh api "repos/${{ github.repository }}/actions/runs/${RID}/jobs" --paginate --slurp 2>/dev/null || echo '[]')
             CANARY_CONCL=$(echo "$JOB_JSON" | python3 -c "
           import json,sys
           data=json.load(sys.stdin)
-          for j in data.get('jobs',[]):
-            if j.get('name')=='VPS SSH/HTTP canary':
-              print(j.get('conclusion') or '')
-              break
+          pages = data if isinstance(data, list) else [data]
+          for page in pages:
+            for j in page.get('jobs', []):
+              if j.get('name') == 'VPS SSH/HTTP canary':
+                print(j.get('conclusion') or '')
+                raise SystemExit(0)
           " 2>/dev/null || true)
             if [ -z "$CANARY_CONCL" ]; then
               continue
@@ -140,6 +149,9 @@ jobs:
               continue
             fi
           done
+          if [ "$STREAK_UNKNOWN" = "1" ]; then
+            CONSEC=2
+          fi
           echo "Consecutive canary job failures (including this run once it fails): ${CONSEC}"
           echo "consec=${CONSEC}" >> "$GITHUB_OUTPUT"
 
@@ -223,11 +235,12 @@ jobs:
 
           **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-          Safe to close this issue if the VPS remains healthy.
+          Closing this issue automatically after a successful canary.
           EOF
           )
           gh issue comment "$EXISTING" --body "$BODY"
-          echo "Commented recovery on issue #$EXISTING"
+          gh issue close "$EXISTING" --reason completed
+          echo "Commented recovery and closed issue #$EXISTING"
 
       - name: Fail job when canary checks failed
         if: always() && (steps.ssh_canary.outcome == 'failure' || steps.http_canary.outcome == 'failure')

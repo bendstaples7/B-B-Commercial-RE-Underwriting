@@ -156,10 +156,10 @@ After App CI → Deploy is green on `main`, stranded merges (e.g. Command Center
 
 **Ops hourly canary**
 
-- Job **VPS SSH/HTTP canary** runs every hour (`0 * * * *`), after Deploy, and on manual dispatch — **not** on the overlapping 6h schedule.
+- Job **VPS SSH/HTTP canary** runs every hour (`0 * * * *`), after non-cancelled Deploy runs, and on manual dispatch — **not** on the overlapping 6h schedule.
 - Short budgets (~60s SSH, ~90s HTTP). Does not block App CI or Deploy.
 - After **≥ 2 consecutive** canary job failures, opens/updates an issue titled `Ops health: VPS SSH unreachable` or `Ops health: VPS public /api/health down` (label `ops-health`; optional Slack).
-- When both canaries succeed again, comments **Reachability recovered** on that open issue.
+- When both canaries succeed again, comments **Reachability recovered** and closes that open issue.
 
 Shared helpers: `scripts/ci-ssh-verify.sh`, `scripts/ci-http-health-wait.sh`.
 

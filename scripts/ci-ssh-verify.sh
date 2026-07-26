@@ -11,8 +11,8 @@
 #   SSH_MAX_WAIT_SECONDS   (default: 900) — total wait budget
 #   SSH_INITIAL_BACKOFF    (default: 5) — seconds before first retry sleep
 #
-# Exit 0 on success. Exit 1 on budget exhaustion or fail-fast (permission;
-# refused after 2 attempts). Prints classified remediation.
+# Exit 0 on success. Exit 1 on budget exhaustion or fail-fast (permission,
+# hostkey; refused after 2 attempts). Prints classified remediation.
 # On success writes to GITHUB_OUTPUT when set: ssh_ok=1, ssh_elapsed=<seconds>
 # On failure: ssh_ok=0, ssh_class=<timeout|banner|permission|refused|unknown>
 # =============================================================================
@@ -32,6 +32,8 @@ classify_ssh_error() {
   lower=$(printf '%s' "$err" | tr '[:upper:]' '[:lower:]')
   if printf '%s' "$lower" | grep -qE 'permission denied|publickey|authentication'; then
     echo "permission"
+  elif printf '%s' "$lower" | grep -qE 'host key verification failed|remote host identification has changed'; then
+    echo "hostkey"
   elif printf '%s' "$lower" | grep -qE 'connection refused|connection reset'; then
     echo "refused"
   elif printf '%s' "$lower" | grep -qE 'banner exchange|kex_exchange|protocol mismatch'; then
@@ -57,6 +59,10 @@ print_remediation() {
     permission)
       echo "Likely: wrong VPS_SSH_KEY / authorized_keys mismatch, or wrong VPS_USER."
       echo "Check: Settings → Secrets (VPS_SSH_KEY, VPS_USER); ~/.ssh/authorized_keys on VPS."
+      ;;
+    hostkey)
+      echo "Likely: stale or missing VPS_HOST_KEY (known_hosts) vs the live host key."
+      echo "Check: Settings → Secrets → VPS_HOST_KEY; refresh from ssh-keyscan on the VPS."
       ;;
     refused)
       echo "Likely: sshd down or not listening on 22."
@@ -119,8 +125,8 @@ while true; do
   echo "Attempt ${ATTEMPT}: failed (class=${LAST_CLASS}) — ${ERR:-"(no stderr)"}"
 
   # Non-transient classes: do not burn the full wait budget
-  if [ "$LAST_CLASS" = "permission" ]; then
-    echo "Non-transient auth failure — failing fast."
+  if [ "$LAST_CLASS" = "permission" ] || [ "$LAST_CLASS" = "hostkey" ]; then
+    echo "Non-transient auth/host-key failure — failing fast."
     break
   fi
   if [ "$LAST_CLASS" = "refused" ] && [ "$ATTEMPT" -ge 2 ]; then
