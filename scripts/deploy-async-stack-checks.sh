@@ -44,6 +44,14 @@ assert_async_stack_sudo_ready() {
         || return 1
     _require_passwordless_sudo "celery-beat active check" /bin/systemctl is-active --quiet celery-beat \
         || return 1
+    # Soft-required: apply-memory-guard-units keeps MemoryMax after unit drift.
+    # Older VPSes may lack the sudoers entry until migrate-async-stack.sh runs;
+    # deploy.sh handles that fallback. Still require the binary path be known
+    # to this shared module for contract validation.
+    if sudo -n -l /usr/local/sbin/apply-memory-guard-units >/dev/null 2>&1; then
+        _require_passwordless_sudo "apply memory guards" /usr/local/sbin/apply-memory-guard-units \
+            || return 1
+    fi
 
     if ! systemctl list-unit-files celery.service &>/dev/null 2>&1; then
         _require_passwordless_sudo "async stack bootstrap" /usr/local/sbin/bootstrap-async-stack \

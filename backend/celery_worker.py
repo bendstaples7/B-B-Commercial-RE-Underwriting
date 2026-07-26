@@ -79,6 +79,11 @@ celery.conf.update(
     result_serializer='json',
     timezone='UTC',
     enable_utc=True,
+    # One reserved task per child — avoid prefetching a backlog into RAM on
+    # concurrency=1 hosts (entity_resolution / heal floods).
+    # Do NOT set task_acks_late globally: soft-restart / MemoryMax kills would
+    # redeliver in-flight HubSpot/mail work and risk duplicate side effects.
+    worker_prefetch_multiplier=1,
     # Option 2: Celery Beat schedule — run signal extraction nightly at 2am UTC
     # and rescore leads immediately after. This catches any interactions that
     # slipped through the inline extraction (Option 3) due to errors.
@@ -569,7 +574,11 @@ def cook_county_verify_sale_date_task(lead_id: int) -> dict:
         raise
 
 
-@celery.task(name='entity_resolution.resolve_lead')
+@celery.task(
+    name='entity_resolution.resolve_lead',
+    soft_time_limit=90,
+    time_limit=120,
+)
 def entity_resolution_resolve_lead_task(lead_id: int, actor: str = "entity_resolution") -> dict:
     """Resolve Illinois LLC primary contact for one lead."""
     import logging
@@ -648,7 +657,12 @@ def cook_county_backfill_enrichment_task(self):
         raise
 
 
-@celery.task(bind=True, name='cook_county.backfill_sale_dates')
+@celery.task(
+    bind=True,
+    name='cook_county.backfill_sale_dates',
+    soft_time_limit=900,
+    time_limit=1000,
+)
 def cook_county_backfill_sale_dates_task(self):
     """Hourly task: assessor-focused sale-date verification with Redis cursor."""
     import logging
@@ -701,7 +715,12 @@ def cook_county_backfill_sale_dates_task(self):
                 )
 
 
-@celery.task(bind=True, name='property_address.heal_incomplete')
+@celery.task(
+    bind=True,
+    name='property_address.heal_incomplete',
+    soft_time_limit=900,
+    time_limit=1000,
+)
 def property_address_heal_incomplete_task(self):
     """Hourly task: fill incomplete property city/state/ZIP with Redis cursor."""
     import logging
@@ -760,7 +779,12 @@ def property_address_heal_incomplete_task(self):
                 )
 
 
-@celery.task(bind=True, name='property_match.resolve_unambiguous_pins')
+@celery.task(
+    bind=True,
+    name='property_match.resolve_unambiguous_pins',
+    soft_time_limit=900,
+    time_limit=1000,
+)
 def property_match_resolve_unambiguous_pins_task(self):
     """Hourly task: persist only uniquely resolved Cook County address PINs."""
     import logging
@@ -1568,18 +1592,22 @@ def mark_tasks_overdue() -> int:
                 reconciliation['rescheduled_task_count'],
             )
         from app.services.entity_research_lifecycle_service import (
+            ENTITY_RESEARCH_BATCH_SIZE,
             reconcile_pending_entity_research,
         )
         entity_research = reconcile_pending_entity_research(
             actor='tasks.mark_overdue',
+            limit=ENTITY_RESEARCH_BATCH_SIZE,
         )
         if entity_research['processed_lead_count']:
             logger.info(
                 "mark_tasks_overdue: entity research reconcile "
-                "leads=%d queued=%d retired_tasks=%d",
+                "leads=%d queued=%d retired_tasks=%d limit=%d "
+                "(hourly cap; backlog continues next run)",
                 entity_research['processed_lead_count'],
                 entity_research['queued_count'],
                 entity_research['retired_task_count'],
+                ENTITY_RESEARCH_BATCH_SIZE,
             )
         return updated
 

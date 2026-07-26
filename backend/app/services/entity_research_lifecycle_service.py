@@ -28,7 +28,9 @@ from app.utils.call_completable_task import (
 
 logger = logging.getLogger(__name__)
 
-ENTITY_RESEARCH_BATCH_SIZE = 100
+# Cap per reconcile pass so hourly mark_overdue cannot flood the single
+# Celery prefork child (OOM on small VPS). Remaining work drains next hour.
+ENTITY_RESEARCH_BATCH_SIZE = 15
 
 
 def is_legacy_llc_search_task(task: LeadTask) -> bool:
@@ -177,6 +179,8 @@ def reconcile_pending_entity_research(
             "queued_count": 0,
             "retired_task_count": 0,
             "processed_lead_ids": [],
+            "results": [],
+            "limit": 0,
         }
 
     # Leads with open legacy LLC-search tasks (queue pollution).
@@ -239,10 +243,21 @@ def reconcile_pending_entity_research(
             queued += 1
         retired_total += len(outcome.get("retired_task_ids") or [])
 
+    if ordered_ids:
+        logger.info(
+            "reconcile_pending_entity_research: processed=%d queued=%d "
+            "retired_tasks=%d limit=%d (remaining backlog drains next hour)",
+            len(ordered_ids),
+            queued,
+            retired_total,
+            effective_limit,
+        )
+
     return {
         "processed_lead_count": len(ordered_ids),
         "queued_count": queued,
         "retired_task_count": retired_total,
         "processed_lead_ids": ordered_ids,
         "results": results,
+        "limit": effective_limit,
     }

@@ -6,6 +6,41 @@
 
 ---
 
+## Capacity / memory (Celery OOM)
+
+The app (Gunicorn + Celery + Postgres + Redis) shares one small VPS. A single
+Celery prefork child historically grew past **1.5 GiB RSS**, exhausted RAM and
+swap, and blanked the UI (browser API calls aborted with HTTP 499) while
+`/api/health` still looked fine.
+
+**Required headroom:** keep the production VPS at **≥ 4 GiB RAM** (upgrade the
+CX22 / relocate Celery to a separate worker host). On a ~2 GiB box, one leaked
+worker *is* the machine.
+
+**In-tree guards (apply via setup scripts):**
+
+| Guard | Where |
+|---|---|
+| `--max-tasks-per-child=50`, `--max-memory-per-child=400000` | `scripts/vps-setup/09b-celery-service.sh` |
+| `MemoryHigh=700M` / `MemoryMax=900M` | same Celery unit |
+| `OOMScoreAdjust=500` (Celery) / `-500` (Gunicorn) | `09b` + `09-gunicorn-service.sh` |
+| Soft restart on high RSS / low `MemAvailable` | `scripts/celery-liveness-check.sh` (cron; separate alert cooldown) |
+| Health reports memory pressure as **WARN** (not 503) | `GET /api/health` `host_memory` |
+| Deploy re-applies unit guards | `scripts/vps-setup/apply-memory-guard-units.sh` via sudo |
+
+Re-apply units after pulling these changes (or let Deploy call `apply-memory-guard-units`):
+
+```bash
+sudo bash /home/deploy/app/scripts/vps-setup/migrate-async-stack.sh
+# or:
+sudo bash /home/deploy/app/scripts/vps-setup/apply-memory-guard-units.sh
+```
+
+Longer-term: run heavy GIS/ER on a dedicated worker VM or a separate Redis
+queue so interactive API never shares a tight cgroup with batch jobs.
+
+---
+
 ## Nginx
 
 Site config is rendered by `scripts/vps-setup/11-nginx-config.sh`. It enables **gzip** for JS/CSS/JSON/SVG (`gzip_types` + `gzip_min_length 1024`). Applying template changes requires re-running that setup script (or equivalent) and `nginx -t && systemctl reload nginx` on the VPS — deploy alone does not rewrite the live nginx site file unless your deploy path includes that step.

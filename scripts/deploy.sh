@@ -419,6 +419,22 @@ if ! systemctl list-unit-files celery.service &>/dev/null 2>&1; then
             exit 1
         }
 fi
+
+echo "    Ensuring Celery/Gunicorn memory guards (MemoryMax / OOMScoreAdjust)"
+if sudo -n -l /usr/local/sbin/apply-memory-guard-units >/dev/null 2>&1; then
+    sudo -n /usr/local/sbin/apply-memory-guard-units \
+        || { echo "FAILED: apply-memory-guard-units"; exit 1; }
+else
+    MEM_MAX="$(systemctl show celery -p MemoryMax --value 2>/dev/null || echo infinity)"
+    if [[ "${MEM_MAX}" == "infinity" || -z "${MEM_MAX}" ]]; then
+        echo "FAILED: celery MemoryMax unset and apply-memory-guard-units sudo missing"
+        echo "Run on VPS as root: sudo bash ${APP_DIR}/scripts/vps-setup/migrate-async-stack.sh"
+        exit 1
+    fi
+    echo "    WARNING: apply-memory-guard-units not in sudoers — MemoryMax=${MEM_MAX} already set; continuing"
+    echo "    Re-run migrate-async-stack.sh as root to install the apply helper for future deploys"
+fi
+
 sudo -n systemctl restart celery || { echo "FAILED: celery restart"; exit 1; }
 echo "    celery restarted"
 if systemctl list-unit-files celery-beat.service &>/dev/null 2>&1; then

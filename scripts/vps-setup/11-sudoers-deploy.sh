@@ -45,9 +45,11 @@ DEPLOY_USER="deploy"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOOTSTRAP_SRC="${SCRIPT_DIR}/bootstrap-async-stack.sh"
 BOOTSTRAP_INSTALL="/usr/local/sbin/bootstrap-async-stack"
+APPLY_SRC="${SCRIPT_DIR}/apply-memory-guard-units.sh"
+APPLY_INSTALL="/usr/local/sbin/apply-memory-guard-units"
 # Exact rules required for zero-downtime deploys and async stack management.
 # is-active uses --quiet to match deploy.sh verification commands.
-SUDOERS_RULE="deploy ALL=(ALL) NOPASSWD: /bin/systemctl reload gunicorn, /bin/systemctl stop celery, /bin/systemctl stop celery-beat, /bin/systemctl restart celery, /bin/systemctl restart celery-beat, /bin/systemctl is-active --quiet redis-server, /bin/systemctl is-active --quiet celery, /bin/systemctl is-active --quiet celery-beat, /usr/local/sbin/bootstrap-async-stack"
+SUDOERS_RULE="deploy ALL=(ALL) NOPASSWD: /bin/systemctl reload gunicorn, /bin/systemctl stop celery, /bin/systemctl stop celery-beat, /bin/systemctl restart celery, /bin/systemctl restart celery-beat, /bin/systemctl is-active --quiet redis-server, /bin/systemctl is-active --quiet celery, /bin/systemctl is-active --quiet celery-beat, /usr/local/sbin/bootstrap-async-stack, /usr/local/sbin/apply-memory-guard-units"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # ── Verify running as root ────────────────────────────────────────────────────
@@ -108,6 +110,34 @@ fi
 
 install -m 755 -o root -g root "${BOOTSTRAP_SRC}" "${BOOTSTRAP_INSTALL}"
 info "  ✓ ${BOOTSTRAP_INSTALL} installed (root:root, 755)."
+
+if [[ ! -f "${APPLY_SRC}" ]]; then
+    die "Memory-guard apply source not found: ${APPLY_SRC}"
+fi
+# Same trust checks as bootstrap: only install a clean, non-world-writable
+# copy. The helper itself must not exec checkout-controlled scripts as root.
+APPLY_REL="scripts/vps-setup/apply-memory-guard-units.sh"
+if [[ -d "${APP_DIR}/.git" ]]; then
+    if ! (cd "${APP_DIR}" && git diff --quiet HEAD -- "${APPLY_REL}"); then
+        die "Refusing to install apply-memory-guard-units: ${APPLY_SRC} has local modifications relative to git HEAD"
+    fi
+fi
+APPLY_OWNER=$(stat -c '%U' "${APPLY_SRC}")
+APPLY_MODE=$(stat -c '%a' "${APPLY_SRC}")
+if [[ "${APPLY_OWNER}" == "${DEPLOY_USER}" ]] && [[ -f "${APPLY_INSTALL}" ]]; then
+    if ! cmp -s "${APPLY_SRC}" "${APPLY_INSTALL}"; then
+        die "Refusing to overwrite ${APPLY_INSTALL}: deploy-owned source differs from installed copy — update manually as root"
+    fi
+fi
+if (( 8#${APPLY_MODE} & 8#022 )); then
+    die "Refusing to install apply-memory-guard-units: ${APPLY_SRC} is group/world-writable (mode ${APPLY_MODE})"
+fi
+if grep -qE '(^|[^[:alnum:]_])(bash|source|\.)[[:space:]]+[^[:space:]]*09b-celery-service\.sh' "${APPLY_SRC}" \
+    || grep -qE '\$\{(APP_DIR|VPS_SETUP)\}/.*/09b-celery-service\.sh' "${APPLY_SRC}"; then
+    die "Refusing to install apply-memory-guard-units: must not execute checkout scripts (inline unit rewrite only)"
+fi
+install -m 755 -o root -g root "${APPLY_SRC}" "${APPLY_INSTALL}"
+info "  ✓ ${APPLY_INSTALL} installed (root:root, 755)."
 
 # =============================================================================
 # Step 1: Write /etc/sudoers.d/deploy
@@ -213,6 +243,13 @@ if echo "${SUDO_LIST}" | grep -qF "/usr/local/sbin/bootstrap-async-stack"; then
 else
     error "  Missing passwordless sudo for ${BOOTSTRAP_INSTALL}"
     die "Bootstrap sudo rule required by deploy.sh for first-time async stack provisioning."
+fi
+
+if echo "${SUDO_LIST}" | grep -qF "/usr/local/sbin/apply-memory-guard-units"; then
+    info "  ✓ Rule confirmed: deploy can run apply-memory-guard-units without a password."
+else
+    error "  Missing passwordless sudo for ${APPLY_INSTALL}"
+    die "apply-memory-guard-units sudo rule required so Deploy keeps Celery MemoryMax."
 fi
 
 if echo "${SUDO_LIST}" | grep -qF "/bin/systemctl is-active --quiet redis-server"; then
