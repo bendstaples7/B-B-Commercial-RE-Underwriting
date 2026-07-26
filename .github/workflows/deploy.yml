@@ -482,16 +482,32 @@ jobs:
           exit 1
 
       # Browser boot gate — health can be green while vendor/react chunks white-screen.
+      # Split Playwright install from the boot check so npm/CDN flakes fail the job
+      # WITHOUT rolling back a healthy deploy (rollback only on spa_boot failure).
+      - name: Install Playwright for SPA boot check
+        id: spa_boot_setup
+        if: steps.post_health.outcome == 'success'
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          echo "Installing playwright@1.49.1 (retries for transient registry errors)..."
+          npm install --no-save playwright@1.49.1 \
+            || npm install --no-save playwright@1.49.1 \
+            || npm install --no-save playwright@1.49.1
+          echo "Installing Chromium + OS deps (retries for transient CDN/apt errors)..."
+          npx playwright install --with-deps chromium \
+            || { sleep 5; npx playwright install --with-deps chromium; } \
+            || { sleep 10; npx playwright install --with-deps chromium; }
+          node -e "require('playwright'); console.log('playwright module OK')"
+
       - name: Post-deploy SPA boot check
         id: spa_boot
-        if: steps.post_health.outcome == 'success'
+        if: success() && steps.post_health.outcome == 'success' && steps.spa_boot_setup.outcome == 'success'
         env:
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
         working-directory: frontend
         run: |
           BASE_URL="https://${VPS_SUBDOMAIN}.duckdns.org"
-          npm install --no-save playwright@1.49.1
-          npx playwright install --with-deps chromium
           node ../scripts/spa-boot-check.mjs --url "${BASE_URL}/login"
 
       - name: Rollback on post-deploy SPA boot failure
@@ -506,6 +522,13 @@ jobs:
           ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
             "chmod +x /home/deploy/post-deploy-rollback.sh && bash /home/deploy/post-deploy-rollback.sh"
           echo "::error::Deploy rolled back after SPA boot failure (white-screen / pageerror)."
+          exit 1
+
+      - name: Note SPA boot setup failure (no rollback)
+        if: failure() && steps.spa_boot_setup.outcome == 'failure'
+        run: |
+          echo "::error::Playwright setup failed after retries — Deploy did NOT roll back."
+          echo "Investigate npm/CDN/apt flake; re-run Deploy if the site is healthy."
           exit 1
 
       # Advisory only — broken backups must not strand a healthy ship (see Ops health).

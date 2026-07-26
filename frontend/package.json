@@ -55,7 +55,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "spa-boot-check": "node ../scripts/spa-boot-check.mjs --dir dist --path /login",
-    "assert-dist-assets": "python ../scripts/assert_frontend_dist_assets.py",
+    "assert-dist-assets": "python3 ../scripts/assert_frontend_dist_assets.py",
     "test": "vitest --run",
     "test:watch": "vitest",
     "generate-types": "openapi-typescript http://localhost:5000/api/openapi.json -o src/types/generated.ts",

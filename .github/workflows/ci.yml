@@ -156,8 +156,12 @@ jobs:
 
       - name: SPA boot check (fail on pageerror / white root)
         run: |
-          npm install --no-save playwright@1.49.1
-          npx playwright install --with-deps chromium
+          npm install --no-save playwright@1.49.1 \
+            || npm install --no-save playwright@1.49.1 \
+            || npm install --no-save playwright@1.49.1
+          npx playwright install --with-deps chromium \
+            || { sleep 5; npx playwright install --with-deps chromium; } \
+            || { sleep 10; npx playwright install --with-deps chromium; }
           node ../scripts/spa-boot-check.mjs --dir dist --path /login
         working-directory: frontend
 
