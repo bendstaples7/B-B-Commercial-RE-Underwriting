@@ -133,7 +133,7 @@ class TestDealMatchConfidence:
             db.session.flush()
 
             svc = HubSpotMatcherService()
-            match = svc.match_deal(deal)
+            match = svc.match_deal(deal, stage_label_map={})
             db.session.flush()
 
             assert match.confidence == "HIGH", (
@@ -173,7 +173,7 @@ class TestDealMatchConfidence:
             db.session.flush()
 
             svc = HubSpotMatcherService()
-            match = svc.match_deal(deal)
+            match = svc.match_deal(deal, stage_label_map={})
             db.session.flush()
 
             assert match.confidence == "MEDIUM", (
@@ -205,7 +205,7 @@ class TestDealMatchConfidence:
             db.session.flush()
 
             svc = HubSpotMatcherService()
-            match = svc.match_deal(deal)
+            match = svc.match_deal(deal, stage_label_map={})
             db.session.flush()
 
             assert match.confidence == "UNMATCHED", (
@@ -235,12 +235,12 @@ class TestDealMatchConfidence:
             db.session.flush()
 
             svc = HubSpotMatcherService()
-            match1 = svc.match_deal(deal)
+            match1 = svc.match_deal(deal, stage_label_map={})
             db.session.flush()
             confidence1 = match1.confidence
 
             # Second call — _upsert_match updates the existing record.
-            match2 = svc.match_deal(deal)
+            match2 = svc.match_deal(deal, stage_label_map={})
             db.session.flush()
             confidence2 = match2.confidence
 
@@ -271,7 +271,7 @@ class TestDealMatchConfidence:
             db.session.flush()
 
             svc = HubSpotMatcherService()
-            match = svc.match_deal(deal)
+            match = svc.match_deal(deal, stage_label_map={})
             db.session.flush()
 
             assert match.confidence == "MEDIUM"

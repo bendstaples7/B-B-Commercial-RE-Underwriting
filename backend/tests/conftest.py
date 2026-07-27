@@ -82,6 +82,11 @@ def app():
     with patch(
         'app.services.property_data_service.PropertyDataService.fetch_property_facts',
         return_value=_MOCK_PROPERTY_FACTS,
+    ), patch(
+        # match_deal → complete_property_address can call Cook GIS for street-only
+        # placeholders; Hypothesis property tests would hang on real HTTP.
+        'app.services.property_address_service._gis_fill_from_street',
+        return_value=None,
     ), patch.object(
         _celery_worker.run_comparable_search_task,
         'delay',
