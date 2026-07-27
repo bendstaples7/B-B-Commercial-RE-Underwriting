@@ -130,7 +130,7 @@ See `backend/migrations/README.md` for details. The Alembic chain in
 ### Manual (emergency / after workflow file change)
 
 1. Go to **Actions → Deploy → Run workflow** in the GitHub UI
-2. Optionally enter a specific commit SHA to deploy (leave blank for `main` HEAD)
+2. Enter the exact **40-character** commit SHA to deploy (`target_sha` is required)
 3. Click **Run workflow**
 
 > Use the manual trigger when the deploy workflow itself was changed in the merged

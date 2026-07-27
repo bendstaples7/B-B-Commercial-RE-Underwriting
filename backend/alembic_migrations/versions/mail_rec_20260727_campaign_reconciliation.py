@@ -34,7 +34,9 @@ def upgrade():
         ADD COLUMN IF NOT EXISTS address_feedback_summary JSON
     """)
     # Backfill reconciliation from attached queue rows for existing campaigns.
-    # invalid_at_submit matches runtime drops: invalid_address + failed (e.g. lead missing).
+    # invalid_at_submit matches runtime local drops only:
+    # invalid_address + failed with validation_error = 'Lead not found'.
+    # Exclude transient OLC place_order failures (status=failed, other/empty reason).
     # Do not rewrite historical lead_count — that remains the campaign denominator.
     op.execute("""
         UPDATE mail_campaigns AS c
@@ -48,7 +50,8 @@ def upgrade():
                 COUNT(*)::int AS staged,
                 COUNT(*) FILTER (WHERE status = 'sent')::int AS sent,
                 COUNT(*) FILTER (
-                    WHERE status IN ('invalid_address', 'failed')
+                    WHERE status = 'invalid_address'
+                       OR (status = 'failed' AND validation_error = 'Lead not found')
                 )::int AS invalid_at_submit
             FROM mail_queue_items
             WHERE campaign_id IS NOT NULL

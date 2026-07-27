@@ -397,7 +397,7 @@ describe('ReadyToMailQueue', () => {
     vi.useRealTimers()
   })
 
-  it('shows submitting banner for pending campaigns only', async () => {
+    it('shows submitting banner for pending campaigns only', async () => {
     vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
     vi.mocked(openLetterService.listCampaigns).mockResolvedValue({
       campaigns: [{
@@ -420,6 +420,28 @@ describe('ReadyToMailQueue', () => {
       /Sending campaign #9 to Open Letter/i,
     )
     expect(screen.queryByTestId('mail-submitted-banner')).not.toBeInTheDocument()
+  })
+
+  it('omits campaign id when multiple campaigns are submitting', async () => {
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
+    vi.mocked(openLetterService.listCampaigns).mockResolvedValue({
+      campaigns: [
+        { id: 9, status: 'pending', lead_count: 1, response_count: 0, created_by: 'u1' },
+        { id: 10, status: 'processing', lead_count: 1, response_count: 0, created_by: 'u1' },
+      ],
+      total: 2,
+      creative_rollup: [],
+    })
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mail-submitting-banner')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('mail-submitting-banner')).toHaveTextContent(
+      /Sending 2 campaigns to Open Letter/i,
+    )
+    expect(screen.getByTestId('mail-submitting-banner')).not.toHaveTextContent(/#9/)
   })
 
   it('shows success banner for submitted campaigns, not submitting', async () => {

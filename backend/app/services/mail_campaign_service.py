@@ -114,6 +114,7 @@ class MailCampaignService:
     ) -> tuple[MailCampaign, dict[str, Any]] | None:
         """Pick a same-user creative snapshot closest in time (not merely newest)."""
         from datetime import timedelta
+        from sqlalchemy import and_, or_
 
         anchor = campaign.submitted_at or campaign.created_at
         if anchor is None:
@@ -121,6 +122,8 @@ class MailCampaignService:
         if anchor.tzinfo is None:
             anchor = anchor.replace(tzinfo=timezone.utc)
         window = timedelta(days=max(1, int(max_age_days)))
+        window_start = anchor - window
+        window_end = anchor + window
         candidates = (
             MailCampaign.query
             .filter(
@@ -128,6 +131,17 @@ class MailCampaignService:
                 MailCampaign.id != campaign.id,
                 MailCampaign.creative.isnot(None),
             )
+            .filter(or_(
+                and_(
+                    MailCampaign.submitted_at.isnot(None),
+                    MailCampaign.submitted_at.between(window_start, window_end),
+                ),
+                and_(
+                    MailCampaign.submitted_at.is_(None),
+                    MailCampaign.created_at.isnot(None),
+                    MailCampaign.created_at.between(window_start, window_end),
+                ),
+            ))
             .all()
         )
         best: tuple[float, MailCampaign, dict[str, Any]] | None = None
@@ -742,8 +756,18 @@ class MailCampaignService:
             lead_by_item[item.id] = lead
 
         invalid_at_submit = sum(drop_reasons.values())
-        campaign.invalid_at_submit_count = invalid_at_submit
-        campaign.submit_drop_summary = dict(drop_reasons) if drop_reasons else None
+        # Accumulate across redispatches: invalid_address rows stay off the queued
+        # query on later attempts, so overwriting would drop earlier local invalids.
+        campaign.invalid_at_submit_count = (
+            (campaign.invalid_at_submit_count or 0) + invalid_at_submit
+        )
+        if drop_reasons:
+            merged_summary = dict(campaign.submit_drop_summary or {})
+            for reason, count in drop_reasons.items():
+                merged_summary[reason] = merged_summary.get(reason, 0) + count
+            campaign.submit_drop_summary = merged_summary
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(campaign, 'submit_drop_summary')
 
         if not contacts:
             campaign.status = 'failed'
@@ -767,6 +791,10 @@ class MailCampaignService:
         if olc_return:
             payload['returnAddress'] = olc_return
             payload['returnAddressSettings'] = default_return_address_settings()
+
+        # Flush local drop tallies before the cancel re-read so refresh does not
+        # discard uncommitted invalid_at_submit / submit_drop_summary updates.
+        db.session.flush()
 
         # Re-check cancel under a fresh DB read before placing the OLC order.
         db.session.refresh(campaign)

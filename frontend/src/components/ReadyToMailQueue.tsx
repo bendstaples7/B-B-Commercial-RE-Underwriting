@@ -51,6 +51,7 @@ import {
   isMailCampaignSubmitting,
   isRecentMailCampaignSubmitted,
 } from '@/utils/mailCampaignStatusColor'
+import { formatMailSubmitReconciliationBanner } from '@/utils/formatMailSubmitReconciliation'
 
 export function ReadyToMailQueue() {
   const queryClient = useQueryClient()
@@ -270,8 +271,9 @@ export function ReadyToMailQueue() {
             </Button>
           ) : undefined}
         >
-          Sending {submittingCampaigns.length === 1 ? 'campaign' : `${submittingCampaigns.length} campaigns`}
-          {submittingCampaigns[0] ? ` #${submittingCampaigns[0].id}` : ''} to Open Letter…
+          Sending {submittingCampaigns.length === 1
+            ? `campaign #${submittingCampaigns[0].id}`
+            : `${submittingCampaigns.length} campaigns`} to Open Letter…
         </Alert>
       )}
 
@@ -298,19 +300,7 @@ export function ReadyToMailQueue() {
                 ? `, OLC ${submittedCampaigns[0].olc_order_id}`
                 : ''}
               )
-              {submittedCampaigns[0].staged_count != null
-                && submittedCampaigns[0].submitted_count != null
-                && submittedCampaigns[0].staged_count !== submittedCampaigns[0].submitted_count
-                ? ` · Staged ${submittedCampaigns[0].staged_count} → submitted ${submittedCampaigns[0].submitted_count}`
-                  + (submittedCampaigns[0].invalid_at_submit_count
-                    ? ` (${submittedCampaigns[0].invalid_at_submit_count} invalid locally)`
-                    : '')
-                  + (submittedCampaigns[0].submit_drop_summary
-                    ? ` · ${Object.entries(submittedCampaigns[0].submit_drop_summary)
-                      .map(([reason, n]) => `${n}× ${reason}`)
-                      .join(', ')}`
-                    : '')
-                : ''}
+              {formatMailSubmitReconciliationBanner(submittedCampaigns[0])}
               .
             </>
           ) : (

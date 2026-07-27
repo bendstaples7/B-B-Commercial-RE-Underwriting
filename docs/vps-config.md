@@ -187,7 +187,9 @@ After App CI → Deploy is green on `main`, stranded merges (e.g. Command Center
 4. On SSH unreachable: network/connectivity diagnostics (skip Alembic). If SSH still works after a later deploy failure, Alembic/migration diagnostics still run.
 5. After an **App CI → Deploy** (`workflow_run`) **SSH** preflight exhaustion, Deploy **auto re-dispatches once** as `workflow_dispatch` for the same SHA (`gh workflow run deploy.yml`). Requires workflow `permissions.actions: write` and org policy allowing `GITHUB_TOKEN` to start `workflow_dispatch`. Manual Dispatch never auto-requeues (no loop).
 
-**If both attempts fail:** Actions → **Deploy** → **Run workflow** (optionally set `target_sha`; use `skip_http_preflight` if the site is down). Confirm the VPS answers on 22 from your machine first.
+**If both attempts fail:** Actions → **Deploy** → **Run workflow** with the exact
+**40-character** merge commit as required `target_sha` (use `skip_http_preflight`
+if the site is down). Confirm the VPS answers on 22 from your machine first.
 
 **Ops hourly canary**
 

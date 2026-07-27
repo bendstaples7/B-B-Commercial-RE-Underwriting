@@ -21,6 +21,7 @@ import {
   mailCampaignStatusColor,
   mailCampaignStatusLabel,
 } from '@/utils/mailCampaignStatusColor'
+import { formatMailSubmitReconciliationTable } from '@/utils/formatMailSubmitReconciliation'
 import openLetterService, {
   type CreativeRollupRow,
   type MailCampaign,
@@ -71,6 +72,7 @@ function CampaignRow({
   const scanPieces =
     (campaign.scan_stats?.scanned ?? 0) + (campaign.scan_stats?.not_scanned ?? 0)
   const hasScanPieces = scanPieces > 0
+  const reconciliationCaption = formatMailSubmitReconciliationTable(campaign)
 
   return (
     <TableRow data-testid={`mail-campaign-row-${campaign.id}`}>
@@ -108,23 +110,11 @@ function CampaignRow({
       <TableCell>{campaign.template_name || campaign.template_id || '—'}</TableCell>
       <TableCell>
         {submittedCount}
-        {campaign.staged_count != null
-          && campaign.submitted_count != null
-          && campaign.staged_count !== campaign.submitted_count
-          ? (
-            <Typography variant="caption" display="block" color="text.secondary">
-              staged {campaign.staged_count}
-              {campaign.invalid_at_submit_count
-                ? ` · ${campaign.invalid_at_submit_count} invalid`
-                : ''}
-              {campaign.submit_drop_summary
-                ? ` · ${Object.entries(campaign.submit_drop_summary)
-                  .map(([reason, n]) => `${n}× ${reason}`)
-                  .join(', ')}`
-                : ''}
-            </Typography>
-          )
-          : null}
+        {reconciliationCaption ? (
+          <Typography variant="caption" display="block" color="text.secondary">
+            {reconciliationCaption}
+          </Typography>
+        ) : null}
         {hasScanPieces && scanPieces !== submittedCount ? (
           <Typography variant="caption" display="block" color="text.secondary">
             OLC tracked {scanPieces}

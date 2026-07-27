@@ -1,22 +1,32 @@
 # Unblock Deploy without asking
 
 When a merge to `main` is stuck because App CI cancelled/hung (especially
-Backend pytest) and Deploy is skipped, **do not ask** whether to re-run CI or
-`workflow_dispatch` Deploy.
+Backend pytest) and Deploy is skipped, **do not ask** whether to re-run CI.
 
 ## Do this automatically
 
 1. Cancel any still-hanging App CI runs if needed.
-2. Re-run App CI on `main` for the merge SHA (`gh run rerun … --failed` or
-   equivalent).
-3. Watch until **App CI success**; confirm Deploy auto-starts.
-4. If App CI cannot go green in a reasonable window (repeat hang/timeout) but
-   the merge must ship: **`workflow_dispatch` Deploy** for that SHA (allowed
-   emergency path in `deploy.yml` — not a merge). Prefer this when frontend
-   already passed and the block is pytest flake/hang only.
-5. Verify prod (`/api/version` matches target SHA; SPA HTML / health as needed).
+2. Re-run the **entire** App CI workflow on `main` for the merge SHA
+   (`gh run rerun <run-id>` — **not** `--failed`, which skips cancelled jobs).
+3. Watch until **App CI success**; confirm Deploy auto-starts from that green
+   `main` run.
+4. Verify prod (`/api/version` matches target SHA; SPA HTML / health as needed).
+
+## Escalate to a human (never agent-triggered Deploy)
+
+If App CI cannot go green in a reasonable window (repeat hang/timeout) but the
+merge must ship:
+
+- **Agents must not** run `gh workflow run Deploy`, `gh workflow run deploy.yml`,
+  or any equivalent production deploy trigger (see `no-direct-main-merge`).
+- Tell an authorized human to open Actions → **Deploy** → **Run workflow**,
+  pass the exact **40-character merge commit SHA** as `target_sha` (required),
+  and optionally set `skip_http_preflight` if the public site is down but SSH
+  works. Prefer this when frontend already passed and the block is pytest
+  flake/hang only.
 
 ## Never
 
-- Ask “want me to re-run CI / trigger Deploy?” for this class of incident.
+- Ask “want me to re-run CI?” for this class of incident — just re-run App CI.
+- Trigger production Deploy (or enable auto-merge / merge) from an agent.
 - Merge or enable auto-merge (see `no-direct-main-merge`).
