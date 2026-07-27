@@ -155,8 +155,63 @@ def owner_mailing_address(lead: Lead) -> tuple[str, str, str, str]:
     return _merge_parsed_fields(street, city, state, zip_code, street)
 
 
-def validate_owner_mailing_address(lead: Lead) -> str | None:
-    """Return an owner-mailing validation error, or None when complete."""
+def owner_mailing_dedupe_key(lead: Lead) -> str | None:
+    """Normalized street|city|state|zip5 key for batch address dedupe, or None."""
+    street, city, state, zip_code = owner_mailing_address(lead)
+    if not street or not city or not state or not zip_code:
+        return None
+    return '|'.join((
+        _normalize_address_part(street),
+        _normalize_address_part(city),
+        _normalize_address_part(state),
+        _normalize_zip(zip_code),
+    ))
+
+
+OLC_SUPPORT_WORKFLOW_KEY = 'olc_support_escalation'
+OLC_OMIT_TWICE_REASON = 'OLC omitted twice — contact Open Letter support'
+DUPLICATE_MAILING_REASON = 'Duplicate mailing address in batch'
+
+
+def open_olc_support_escalation_lead_ids(lead_ids: list[int] | set[int]) -> set[int]:
+    """Lead ids that currently have an open OLC support escalation task."""
+    from app.models.lead_task import LeadTask
+
+    ids = [int(x) for x in lead_ids if x is not None]
+    if not ids:
+        return set()
+    rows = (
+        LeadTask.query
+        .filter(
+            LeadTask.lead_id.in_(ids),
+            LeadTask.workflow_key == OLC_SUPPORT_WORKFLOW_KEY,
+            LeadTask.status == 'open',
+        )
+        .with_entities(LeadTask.lead_id)
+        .all()
+    )
+    return {int(lid) for (lid,) in rows}
+
+
+def lead_has_open_olc_support_escalation(lead_id: int) -> bool:
+    """True when an open OLC support escalation task exists for the lead."""
+    return lead_id in open_olc_support_escalation_lead_ids([lead_id])
+
+
+def validate_owner_mailing_address(
+    lead: Lead,
+    *,
+    support_blocked_lead_ids: set[int] | None = None,
+) -> str | None:
+    """Return an owner-mailing validation error, or None when complete.
+
+    Pass ``support_blocked_lead_ids`` from a batch pre-load to avoid N+1 task queries.
+    """
+    if support_blocked_lead_ids is not None:
+        if lead.id in support_blocked_lead_ids:
+            return OLC_OMIT_TWICE_REASON
+    elif lead_has_open_olc_support_escalation(lead.id):
+        return OLC_OMIT_TWICE_REASON
     if current_owner_mailing_was_returned(lead):
         return 'Current owner mailing address was previously returned'
     street, city, state, zip_code = owner_mailing_address(lead)

@@ -138,6 +138,7 @@ export interface MailCampaign {
   submitted_count?: number | null
   invalid_at_submit_count?: number | null
   submit_drop_summary?: Record<string, number> | null
+  olc_omitted_count?: number | null
   cost?: number | null
   cost_per_piece?: number | null
   product_id?: number | null
@@ -160,6 +161,28 @@ export interface MailCampaign {
     verified?: number
     unchanged?: number
   } | null
+}
+
+export type MailCampaignGapKind = 'invalid_local' | 'olc_omitted'
+
+export interface MailCampaignGapLead {
+  lead_id: number
+  owner_name?: string | null
+  property_street?: string | null
+  mailing_address?: string | null
+  lead_status?: string | null
+  reason?: string | null
+  disposition?: string | null
+  queue_status?: string | null
+  omit_count?: number | null
+  /** Where the lead is now (Ready to Mail, Skip Trace, support, etc.). */
+  resolution?: string | null
+}
+
+export interface MailCampaignGapLeadsResponse {
+  kind: string
+  leads: MailCampaignGapLead[]
+  total: number
 }
 
 export interface CreativeRollupRow {
@@ -259,6 +282,19 @@ export const openLetterService = {
 
   getCampaign: (id: number, refresh = false): Promise<MailCampaign> =>
     api.get(`/mail-queue/campaigns/${id}`, { params: refresh ? { refresh: 'true' } : {} }).then((r) => r.data),
+
+  getCampaignGapLeads: (
+    id: number,
+    kind: MailCampaignGapKind,
+    opts?: { signal?: AbortSignal },
+  ): Promise<MailCampaignGapLeadsResponse> =>
+    api
+      .get(`/mail-queue/campaigns/${id}/gap-leads`, {
+        params: { kind },
+        signal: opts?.signal,
+        timeout: 30_000,
+      })
+      .then((r) => r.data),
 
   redispatchCampaign: (id: number): Promise<MailCampaign> =>
     api.post(`/mail-queue/campaigns/${id}/redispatch`).then((r) => r.data),

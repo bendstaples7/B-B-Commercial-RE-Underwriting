@@ -26,6 +26,10 @@ class MailCampaign(db.Model):
     invalid_at_submit_count = db.Column(db.Integer, nullable=True)
     submit_drop_summary = db.Column(db.JSON, nullable=True)
     address_feedback_summary = db.Column(db.JSON, nullable=True)
+    # Lead ids present on the OLC order after analytics sync (gap drill-down).
+    olc_tracked_lead_ids = db.Column(db.JSON, nullable=True)
+    # Lead ids submitted locally but absent from OLC (persists after requeue).
+    olc_omitted_lead_ids = db.Column(db.JSON, nullable=True)
     cost = db.Column(db.Numeric(12, 4), nullable=True)
     cost_per_piece = db.Column(db.Numeric(10, 4), nullable=True)
     product_id = db.Column(db.Integer, nullable=True)

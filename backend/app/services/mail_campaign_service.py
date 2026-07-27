@@ -28,9 +28,15 @@ from app.services.mail_creative import (
 )
 from app.services.open_letter_config_service import OpenLetterConfigService
 from app.services.open_letter_contact_mapper import (
+    DUPLICATE_MAILING_REASON,
+    OLC_OMIT_TWICE_REASON,
+    OLC_SUPPORT_WORKFLOW_KEY,
     current_owner_mailing_was_returned,
+    lead_has_open_olc_support_escalation,
     lead_to_owner_olc_contact,
+    open_olc_support_escalation_lead_ids,
     owner_mailing_address,
+    owner_mailing_dedupe_key,
     persist_embedded_address_fields,
     validate_owner_mailing_address,
 )
@@ -725,22 +731,35 @@ class MailCampaignService:
         lead_by_item: dict[int, Lead] = {}
         invalid_lead_ids: list[int] = []
         drop_reasons: Counter[str] = Counter()
+        # Local invalids only (exclude address-dedupe requeues from invalid_at_submit).
+        local_invalid_count = 0
+        seen_mailing_keys: dict[str, int] = {}
+        # Process lowest queue-item id first so dedupe keeps a stable winner.
+        items = sorted(items, key=lambda it: it.id)
         staged_at_submit = len(items)
         if campaign.staged_count is None:
             campaign.staged_count = staged_at_submit
+        support_blocked = open_olc_support_escalation_lead_ids(
+            [it.lead_id for it in items],
+        )
         for item in items:
             lead = Lead.query.get(item.lead_id)
             if lead is None:
                 item.status = 'failed'
                 item.validation_error = 'Lead not found'
                 drop_reasons['Lead not found'] += 1
+                local_invalid_count += 1
                 continue
             persist_embedded_address_fields(lead)
-            validation_error = validate_owner_mailing_address(lead)
+            validation_error = validate_owner_mailing_address(
+                lead,
+                support_blocked_lead_ids=support_blocked,
+            )
             if validation_error:
                 item.status = 'invalid_address'
                 item.validation_error = validation_error
                 drop_reasons[validation_error] += 1
+                local_invalid_count += 1
                 cancel_pending_mail_follow_up_tasks(
                     lead.id,
                     actor=campaign.created_by,
@@ -756,16 +775,42 @@ class MailCampaignService:
                     commit=False,
                 )
                 continue
+            mailing_key = owner_mailing_dedupe_key(lead)
+            if mailing_key and mailing_key in seen_mailing_keys:
+                # Duplicate address in this batch — requeue for next send; no skip-trace.
+                drop_reasons[DUPLICATE_MAILING_REASON] += 1
+                item.status = 'queued'
+                item.campaign_id = None
+                item.validation_error = None
+                item.updated_at = datetime.utcnow()
+                self._timeline.append(
+                    lead_id=lead.id,
+                    event_type='note_added',
+                    actor=campaign.created_by,
+                    summary=(
+                        f'Duplicate mailing address in batch {campaign.id}; '
+                        'returned to mail queue'
+                    ),
+                    metadata={
+                        'campaign_id': campaign.id,
+                        'duplicate_of_queue_item_id': seen_mailing_keys[mailing_key],
+                        'reason': DUPLICATE_MAILING_REASON,
+                    },
+                    source='system',
+                    commit=False,
+                )
+                continue
+            if mailing_key:
+                seen_mailing_keys[mailing_key] = item.id
             contacts.append(lead_to_owner_olc_contact(
                 lead, user_id=item.user_id, campaign_phone=seller_phone,
             ))
             lead_by_item[item.id] = lead
 
-        invalid_at_submit = sum(drop_reasons.values())
         # Accumulate across redispatches: invalid_address rows stay off the queued
         # query on later attempts, so overwriting would drop earlier local invalids.
         campaign.invalid_at_submit_count = (
-            (campaign.invalid_at_submit_count or 0) + invalid_at_submit
+            (campaign.invalid_at_submit_count or 0) + local_invalid_count
         )
         if drop_reasons:
             merged_summary = dict(campaign.submit_drop_summary or {})
@@ -819,7 +864,7 @@ class MailCampaignService:
             campaign.submitted_count = None
             failed_lead_ids: list[int] = []
             for item in items:
-                if item.status == 'queued':
+                if item.status == 'queued' and item.campaign_id == campaign.id:
                     item.status = 'failed'
                     lead = lead_by_item.get(item.id)
                     if lead is not None:
@@ -872,7 +917,7 @@ class MailCampaignService:
         sent_lead_ids: list[int] = []
         hubspot_sync_ids: list[str] = []
         for item in items:
-            if item.status != 'queued':
+            if item.status != 'queued' or item.campaign_id != campaign.id:
                 continue
             item.status = 'sent'
             item.updated_at = datetime.utcnow()
@@ -1193,6 +1238,329 @@ class MailCampaignService:
         )
         return True
 
+    @staticmethod
+    def _history_has_silent_omit(lead: Lead, order_id: str) -> bool:
+        history = lead.mailer_history
+        if not isinstance(history, list):
+            return False
+        for entry in history:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get('olc_order_id') or '') != str(order_id):
+                continue
+            if entry.get('olc_silent_omit'):
+                return True
+        return False
+
+    @staticmethod
+    def _silent_omit_order_ids(lead: Lead) -> set[str]:
+        history = lead.mailer_history
+        if not isinstance(history, list):
+            return set()
+        out: set[str] = set()
+        for entry in history:
+            if not isinstance(entry, dict):
+                continue
+            if not entry.get('olc_silent_omit'):
+                continue
+            oid = str(entry.get('olc_order_id') or '').strip()
+            if oid:
+                out.add(oid)
+        return out
+
+    @staticmethod
+    def _stamp_silent_omit(
+        lead: Lead,
+        *,
+        order_id: str,
+        campaign_id: int,
+    ) -> None:
+        from sqlalchemy.orm.attributes import flag_modified
+
+        history = lead.mailer_history
+        if not isinstance(history, list):
+            history = [] if history is None else [history]
+        else:
+            history = list(history)
+        history.append({
+            'olc_order_id': str(order_id),
+            'campaign_id': campaign_id,
+            'olc_silent_omit': True,
+            'at': datetime.now(timezone.utc).isoformat(),
+        })
+        lead.mailer_history = history
+        flag_modified(lead, 'mailer_history')
+
+    def _ensure_olc_support_task(self, lead: Lead, *, actor: str, campaign: MailCampaign) -> None:
+        from app.models.lead_task import LeadTask
+
+        existing = (
+            LeadTask.query
+            .filter_by(
+                lead_id=lead.id,
+                workflow_key=OLC_SUPPORT_WORKFLOW_KEY,
+                status='open',
+            )
+            .first()
+        )
+        if existing is not None:
+            return
+        task = LeadTask(
+            lead_id=lead.id,
+            task_type='custom',
+            title='Contact Open Letter support — address omitted twice',
+            status='open',
+            workflow_key=OLC_SUPPORT_WORKFLOW_KEY,
+            created_by=actor or 'system',
+        )
+        db.session.add(task)
+        self._timeline.append(
+            lead_id=lead.id,
+            event_type='note_added',
+            actor=actor,
+            summary='OLC omitted this mailing address twice — escalate to Open Letter support',
+            metadata={
+                'campaign_id': campaign.id,
+                'olc_order_id': campaign.olc_order_id,
+                'workflow_key': OLC_SUPPORT_WORKFLOW_KEY,
+            },
+            source='system',
+            commit=False,
+        )
+
+    def _ensure_ready_to_mail_queue_item(
+        self,
+        lead: Lead,
+        campaign: MailCampaign,
+        item: MailQueueItem | None,
+    ) -> MailQueueItem:
+        """Return a queued, unattached queue row for the lead (create if needed)."""
+        if item is not None:
+            item.status = 'queued'
+            item.campaign_id = None
+            item.validation_error = None
+            item.updated_at = datetime.utcnow()
+            return item
+
+        existing = (
+            MailQueueItem.query
+            .filter_by(
+                lead_id=lead.id,
+                user_id=campaign.created_by,
+                status='queued',
+            )
+            .filter(MailQueueItem.campaign_id.is_(None))
+            .order_by(MailQueueItem.id.desc())
+            .first()
+        )
+        if existing is not None:
+            existing.validation_error = None
+            existing.updated_at = datetime.utcnow()
+            return existing
+
+        created = MailQueueItem(
+            lead_id=lead.id,
+            user_id=campaign.created_by,
+            status='queued',
+            campaign_id=None,
+        )
+        db.session.add(created)
+        return created
+
+    def _apply_silent_omit(
+        self,
+        lead: Lead,
+        item: MailQueueItem | None,
+        campaign: MailCampaign,
+    ) -> str:
+        """Handle a newly detected silent OLC omit. Returns disposition."""
+        order_id = str(campaign.olc_order_id or '')
+        if not order_id or self._history_has_silent_omit(lead, order_id):
+            prior = len(self._silent_omit_order_ids(lead))
+            if prior >= 2:
+                return 'support'
+            return 'requeued' if item is not None and item.status == 'queued' else 'known'
+
+        prior_orders = self._silent_omit_order_ids(lead)
+        is_second = len(prior_orders) >= 1
+        self._stamp_silent_omit(lead, order_id=order_id, campaign_id=campaign.id)
+
+        if is_second:
+            if item is not None:
+                item.status = 'failed'
+                item.validation_error = OLC_OMIT_TWICE_REASON
+                item.updated_at = datetime.utcnow()
+                # Keep campaign_id for audit trail on the failed row.
+            self._ensure_olc_support_task(
+                lead, actor=campaign.created_by, campaign=campaign,
+            )
+            return 'support'
+
+        # First omit — return to Ready-to-Mail for the next batch.
+        self._ensure_ready_to_mail_queue_item(lead, campaign, item)
+        self._timeline.append(
+            lead_id=lead.id,
+            event_type='note_added',
+            actor=campaign.created_by,
+            summary=(
+                f'OLC omitted from order {order_id}; returned to mail queue'
+            ),
+            metadata={
+                'campaign_id': campaign.id,
+                'olc_order_id': order_id,
+                'olc_silent_omit': True,
+            },
+            source='system',
+            commit=False,
+        )
+        return 'requeued'
+
+    @staticmethod
+    def _tracked_reliable_for_silent_omit_heal(
+        campaign: MailCampaign,
+        tracked_lead_ids: set[int],
+    ) -> bool:
+        """Refuse heal when the OLC contact walk looks incomplete."""
+        if not tracked_lead_ids:
+            logger.warning(
+                'Skipping silent-omit heal for campaign %s: empty tracked set',
+                campaign.id,
+            )
+            return False
+        expected = int(campaign.submitted_count or campaign.lead_count or 0)
+        if expected <= 20:
+            return True
+        minimum = max(1, int(expected * 0.8))
+        if len(tracked_lead_ids) < minimum:
+            logger.warning(
+                'Skipping silent-omit heal for campaign %s: tracked=%s expected>=%s '
+                '(submitted_count=%s)',
+                campaign.id,
+                len(tracked_lead_ids),
+                minimum,
+                expected,
+            )
+            return False
+        return True
+
+    def _detect_and_heal_silent_omits(
+        self,
+        campaign: MailCampaign,
+        tracked_lead_ids: set[int],
+    ) -> list[int]:
+        """Persist tracked/omitted ids and heal newly detected silent omits.
+
+        Returns lead ids touched (for scoring refresh).
+        """
+        from sqlalchemy.orm.attributes import flag_modified
+
+        tracked_list = sorted(tracked_lead_ids)
+        campaign.olc_tracked_lead_ids = tracked_list
+        flag_modified(campaign, 'olc_tracked_lead_ids')
+
+        # Candidates: items we believed submitted on this campaign.
+        candidates = MailQueueItem.query.filter(
+            MailQueueItem.campaign_id == campaign.id,
+            MailQueueItem.status.in_(('sent', 'failed')),
+        ).all()
+        # Also include leads already known omitted (may have been requeued).
+        known_omitted = {
+            int(x) for x in (campaign.olc_omitted_lead_ids or [])
+            if x is not None
+        }
+        candidate_lead_ids = {item.lead_id for item in candidates} | known_omitted
+        omitted_now = sorted(lid for lid in candidate_lead_ids if lid not in tracked_lead_ids)
+
+        # Drop ids that are on the order now — omitted list must shrink when healed.
+        campaign.olc_omitted_lead_ids = omitted_now
+        flag_modified(campaign, 'olc_omitted_lead_ids')
+
+        items_by_lead = self._queue_items_by_lead_for_feedback(campaign, omitted_now)
+        # For requeued omits, campaign_id may already be null — also look up unattached.
+        touch_ids: list[int] = []
+        for lead_id in omitted_now:
+            lead = Lead.query.get(lead_id)
+            if lead is None:
+                continue
+            item = items_by_lead.get(lead_id)
+            # Prefer sent item still on this campaign for first-omit requeue.
+            if item is None or item.status not in ('sent', 'failed', 'queued', 'invalid_address'):
+                item = (
+                    MailQueueItem.query
+                    .filter_by(lead_id=lead_id, campaign_id=campaign.id)
+                    .order_by(MailQueueItem.id.desc())
+                    .first()
+                )
+            disposition = self._apply_silent_omit(lead, item, campaign)
+            if disposition in ('requeued', 'support'):
+                touch_ids.append(lead_id)
+        return touch_ids
+
+    def heal_silent_omits(
+        self,
+        campaign_id: int,
+        tracked_lead_ids: set[int],
+        *,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """Public entry for admin/scripts: persist + heal silent OLC omits.
+
+        When ``dry_run`` is True, computes the omitted set without mutating and
+        rolls back the session.
+        """
+        campaign = MailCampaign.query.get(campaign_id)
+        if campaign is None:
+            raise MailQueueError(f'Campaign {campaign_id} not found', status_code=404)
+        if not campaign.olc_order_id:
+            raise MailQueueError(
+                f'Campaign {campaign_id} has no OLC order',
+                status_code=400,
+            )
+        tracked = {int(x) for x in tracked_lead_ids}
+        if not self._tracked_reliable_for_silent_omit_heal(campaign, tracked):
+            return {
+                'campaign_id': campaign.id,
+                'dry_run': dry_run,
+                'skipped': True,
+                'reason': 'tracked_set_unreliable',
+                'tracked': len(tracked),
+                'omitted': 0,
+                'touched': 0,
+            }
+
+        if dry_run:
+            candidates = MailQueueItem.query.filter(
+                MailQueueItem.campaign_id == campaign.id,
+                MailQueueItem.status.in_(('sent', 'failed')),
+            ).all()
+            known = {
+                int(x) for x in (campaign.olc_omitted_lead_ids or [])
+                if x is not None
+            }
+            omitted = sorted(({i.lead_id for i in candidates} | known) - tracked)
+            return {
+                'campaign_id': campaign.id,
+                'dry_run': True,
+                'skipped': False,
+                'tracked': len(tracked),
+                'omitted': len(omitted),
+                'omitted_lead_ids': omitted,
+                'touched': 0,
+            }
+
+        touched = self._detect_and_heal_silent_omits(campaign, tracked)
+        db.session.commit()
+        if touched:
+            refresh_leads_after_mail_task_changes(list(dict.fromkeys(touched)))
+        return {
+            'campaign_id': campaign.id,
+            'dry_run': False,
+            'skipped': False,
+            'tracked': len(tracked),
+            'omitted': len(campaign.olc_omitted_lead_ids or []),
+            'touched': len(touched),
+        }
+
     def _sync_order_address_statuses(
         self,
         campaign: MailCampaign,
@@ -1207,6 +1575,8 @@ class MailCampaignService:
             if recip:
                 recipients.append(recip)
         by_lead = collapse_recipients_by_lead(recipients)
+        # Expose tracked lead ids for silent-omit detection (same contact walk).
+        campaign._olc_tracked_lead_ids_computed = set(by_lead.keys())  # type: ignore[attr-defined]
 
         items_by_lead = self._queue_items_by_lead_for_feedback(
             campaign, list(by_lead.keys()),
@@ -1267,6 +1637,7 @@ class MailCampaignService:
                 campaign.status = 'mailed'
 
         touch_ids: list[int] = []
+        address_summary = {'corrected': 0, 'failed': 0, 'verified': 0, 'unchanged': 0}
         try:
             address_summary = self._sync_order_address_statuses(
                 campaign, client, refresh_scoring=False,
@@ -1279,13 +1650,28 @@ class MailCampaignService:
             )
             address_summary = {'corrected': 0, 'failed': 0, 'verified': 0, 'unchanged': 0}
 
+        tracked = getattr(campaign, '_olc_tracked_lead_ids_computed', None)
+        if (
+            isinstance(tracked, set)
+            and self._tracked_reliable_for_silent_omit_heal(campaign, tracked)
+        ):
+            try:
+                with db.session.begin_nested():
+                    healed = self._detect_and_heal_silent_omits(campaign, tracked)
+                touch_ids.extend(healed)
+            except Exception:
+                logger.exception(
+                    'OLC silent-omit heal failed for campaign %s order %s',
+                    campaign.id, campaign.olc_order_id,
+                )
+
         campaign._address_feedback_summary = address_summary  # type: ignore[attr-defined]
         campaign.address_feedback_summary = address_summary
         from sqlalchemy.orm.attributes import flag_modified
         flag_modified(campaign, 'address_feedback_summary')
         db.session.commit()
         if touch_ids:
-            refresh_leads_after_mail_task_changes(touch_ids)
+            refresh_leads_after_mail_task_changes(list(dict.fromkeys(touch_ids)))
         return campaign
 
     def sync_due_campaign_analytics(self, *, limit: int = 25) -> dict[str, int]:
@@ -1413,6 +1799,295 @@ class MailCampaignService:
             raise MailQueueError('Campaign not found', status_code=404)
         return campaign
 
+    def list_gap_leads(
+        self,
+        campaign_id: int,
+        user_id: str,
+        *,
+        kind: str,
+    ) -> list[dict[str, Any]]:
+        """Return lead rows for campaign gap drill-downs (invalid / OLC omitted)."""
+        campaign = self.get_campaign(campaign_id, user_id)
+        kind_norm = (kind or '').strip().lower()
+        if kind_norm not in ('invalid_local', 'olc_omitted'):
+            raise MailQueueError(
+                "kind must be 'invalid_local' or 'olc_omitted'",
+                status_code=400,
+            )
+
+        if kind_norm == 'invalid_local':
+            items = (
+                MailQueueItem.query
+                .filter_by(campaign_id=campaign.id, status='invalid_address')
+                .order_by(MailQueueItem.id.asc())
+                .all()
+            )
+            rows: list[dict[str, Any]] = []
+            for item in items:
+                lead = Lead.query.get(item.lead_id)
+                rows.append(self._serialize_gap_lead_row(
+                    lead,
+                    lead_id=item.lead_id,
+                    reason=item.validation_error or 'Invalid address',
+                    disposition='invalid_local',
+                    queue_status=item.status,
+                ))
+            return rows
+
+        omitted_ids = campaign.olc_omitted_lead_ids
+        # Never call sync_campaign_analytics here — that walks OLC contacts and can
+        # hang the dialog for minutes (or forever without a token). Prefer cache.
+        if not isinstance(omitted_ids, list):
+            omitted_ids = self._compute_omitted_lead_ids_from_cache(campaign)
+        if not isinstance(omitted_ids, list):
+            omitted_ids = []
+
+        lids: list[int] = []
+        for lead_id in omitted_ids:
+            try:
+                lids.append(int(lead_id))
+            except (TypeError, ValueError):
+                continue
+        if not lids:
+            return []
+
+        leads_by_id = {
+            lead.id: lead
+            for lead in Lead.query.filter(Lead.id.in_(lids)).all()
+        }
+        queue_items = (
+            MailQueueItem.query
+            .filter(MailQueueItem.lead_id.in_(lids))
+            .order_by(MailQueueItem.id.desc())
+            .all()
+        )
+        # Prefer unattached queued, then this campaign, then any latest row.
+        best_item: dict[int, MailQueueItem] = {}
+        for item in queue_items:
+            cur = best_item.get(item.lead_id)
+            if cur is None:
+                best_item[item.lead_id] = item
+                continue
+            cur_score = (
+                2 if cur.status == 'queued' and cur.campaign_id is None else
+                1 if cur.campaign_id == campaign.id else
+                0
+            )
+            new_score = (
+                2 if item.status == 'queued' and item.campaign_id is None else
+                1 if item.campaign_id == campaign.id else
+                0
+            )
+            if new_score > cur_score:
+                best_item[item.lead_id] = item
+
+        from app.models.lead_task import LeadTask
+
+        support_lead_ids = {
+            row.lead_id
+            for row in LeadTask.query.filter(
+                LeadTask.lead_id.in_(lids),
+                LeadTask.workflow_key == OLC_SUPPORT_WORKFLOW_KEY,
+                LeadTask.status == 'open',
+            ).all()
+        }
+        ready_lead_ids = {
+            item.lead_id
+            for item in queue_items
+            if item.status == 'queued' and item.campaign_id is None
+        }
+
+        rows = []
+        for lid in lids:
+            lead = leads_by_id.get(lid)
+            omit_count = len(self._silent_omit_order_ids(lead)) if lead else 0
+            item = best_item.get(lid)
+            if omit_count >= 2 or (
+                item is not None
+                and item.status == 'failed'
+                and (item.validation_error or '').startswith('OLC omitted twice')
+            ):
+                disposition = 'support'
+                reason = OLC_OMIT_TWICE_REASON
+            elif item is not None and item.status == 'queued' and item.campaign_id is None:
+                disposition = 'requeued'
+                reason = 'OLC omitted — returned to mail queue'
+            else:
+                disposition = 'omitted'
+                reason = 'Not on OLC order'
+            queue_status = item.status if item else None
+            resolution = self._gap_lead_resolution_cached(
+                lead,
+                disposition=disposition,
+                queue_status=queue_status,
+                has_support=lid in support_lead_ids,
+                is_ready=lid in ready_lead_ids,
+            )
+            rows.append(self._serialize_gap_lead_row(
+                lead,
+                lead_id=lid,
+                reason=reason,
+                disposition=disposition,
+                queue_status=queue_status,
+                omit_count=omit_count or 1,
+                resolution=resolution,
+            ))
+        return rows
+
+    @staticmethod
+    def _compute_omitted_lead_ids_from_cache(campaign: MailCampaign) -> list[int] | None:
+        """Derive omitted lead ids without calling OLC (DB cache / history only)."""
+        order_id = str(campaign.olc_order_id or '')
+        tracked_raw = campaign.olc_tracked_lead_ids
+        tracked: set[int] = set()
+        if isinstance(tracked_raw, list):
+            try:
+                tracked = {int(x) for x in tracked_raw if x is not None}
+            except (TypeError, ValueError):
+                tracked = set()
+
+        # Leads still attached as sent/failed on this campaign.
+        attached = {
+            item.lead_id
+            for item in MailQueueItem.query.filter(
+                MailQueueItem.campaign_id == campaign.id,
+                MailQueueItem.status.in_(('sent', 'failed')),
+            ).all()
+        }
+
+        # Recover requeued omits via mailer_history stamps for this order.
+        history_omitted: set[int] = set()
+        if order_id:
+            probe_ids = set(attached)
+            # Only probe unattached queued rows that also have a sent history entry
+            # for this campaign (cheap filter via mailer_history contains order id).
+            for item in MailQueueItem.query.filter(
+                MailQueueItem.status == 'queued',
+                MailQueueItem.campaign_id.is_(None),
+            ).limit(2000).all():
+                probe_ids.add(item.lead_id)
+            if probe_ids:
+                for lead in Lead.query.filter(Lead.id.in_(list(probe_ids))).all():
+                    hist = lead.mailer_history
+                    if not isinstance(hist, list):
+                        continue
+                    for entry in hist:
+                        if not isinstance(entry, dict):
+                            continue
+                        if str(entry.get('olc_order_id') or '') != order_id:
+                            continue
+                        if entry.get('olc_silent_omit'):
+                            history_omitted.add(lead.id)
+                            break
+
+        if tracked:
+            return sorted((attached | history_omitted) - tracked)
+        if history_omitted:
+            return sorted(history_omitted)
+        return []
+
+    @staticmethod
+    def _gap_lead_resolution_cached(
+        lead: Lead | None,
+        *,
+        disposition: str,
+        queue_status: str | None = None,
+        has_support: bool = False,
+        is_ready: bool = False,
+    ) -> str:
+        """Human label for where the lead is now (no per-row queries)."""
+        if disposition == 'support' or has_support:
+            return 'OLC support escalation'
+        if is_ready or disposition == 'requeued':
+            return 'Ready to Mail'
+        if lead is not None:
+            if getattr(lead, 'skip_trace_exhausted_at', None) is not None:
+                return 'Skip Trace exhausted'
+            if lead.lead_status == 'skip_trace' or bool(getattr(lead, 'needs_skip_trace', False)):
+                return 'Skip Trace'
+            status = (lead.lead_status or '').strip()
+            if status:
+                return status.replace('_', ' ').title()
+        if queue_status == 'invalid_address':
+            return 'Invalid on this batch'
+        if queue_status == 'failed':
+            return 'Failed on this batch'
+        if queue_status == 'sent':
+            return 'Still on this batch (sent)'
+        return '—'
+
+    @staticmethod
+    def _gap_lead_resolution(
+        lead: Lead | None,
+        *,
+        lead_id: int,
+        disposition: str,
+        queue_status: str | None = None,
+    ) -> str:
+        """Human label for where the lead is now (work queue / outcome)."""
+        has_support = (
+            disposition == 'support'
+            or (lead is not None and lead_has_open_olc_support_escalation(lead_id))
+        )
+        is_ready = disposition == 'requeued' or (
+            MailQueueItem.query
+            .filter_by(lead_id=lead_id, status='queued')
+            .filter(MailQueueItem.campaign_id.is_(None))
+            .first()
+            is not None
+        )
+        return MailCampaignService._gap_lead_resolution_cached(
+            lead,
+            disposition=disposition,
+            queue_status=queue_status,
+            has_support=has_support,
+            is_ready=is_ready,
+        )
+
+    @staticmethod
+    def _serialize_gap_lead_row(
+        lead: Lead | None,
+        *,
+        lead_id: int,
+        reason: str,
+        disposition: str,
+        queue_status: str | None = None,
+        omit_count: int | None = None,
+        resolution: str | None = None,
+    ) -> dict[str, Any]:
+        owner = ''
+        mailing = None
+        property_street = None
+        lead_status = None
+        if lead is not None:
+            parts = [lead.owner_first_name or '', lead.owner_last_name or '']
+            owner = ' '.join(p for p in parts if p).strip()
+            street, city, state, zip_code = owner_mailing_address(lead)
+            mailing = format_mailing_line(street, city, state, zip_code) or None
+            property_street = lead.property_street
+            lead_status = lead.lead_status
+        if resolution is None:
+            resolution = MailCampaignService._gap_lead_resolution(
+                lead,
+                lead_id=lead_id,
+                disposition=disposition,
+                queue_status=queue_status,
+            )
+        payload: dict[str, Any] = {
+            'lead_id': lead_id,
+            'owner_name': owner or None,
+            'property_street': property_street,
+            'mailing_address': mailing,
+            'lead_status': lead_status,
+            'reason': reason,
+            'disposition': disposition,
+            'queue_status': queue_status,
+            'resolution': resolution,
+        }
+        if omit_count is not None:
+            payload['omit_count'] = omit_count
+        return payload
+
     def get_recent_for_lead(self, lead_id: int, user_id: str, days: int = 90) -> list[MailCampaign]:
         from datetime import timedelta
 
@@ -1478,6 +2153,11 @@ class MailCampaignService:
             ),
             'invalid_at_submit_count': campaign.invalid_at_submit_count,
             'submit_drop_summary': campaign.submit_drop_summary,
+            'olc_omitted_count': (
+                len(campaign.olc_omitted_lead_ids)
+                if isinstance(campaign.olc_omitted_lead_ids, list)
+                else None
+            ),
             'cost': float(campaign.cost) if campaign.cost is not None else None,
             'cost_per_piece': float(campaign.cost_per_piece) if campaign.cost_per_piece is not None else None,
             'product_id': campaign.product_id,

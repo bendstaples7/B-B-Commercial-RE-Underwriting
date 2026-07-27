@@ -23,12 +23,14 @@ import {
   mailCampaignStatusColor,
   mailCampaignStatusLabel,
 } from '@/utils/mailCampaignStatusColor'
-import { formatMailSubmitReconciliationTable } from '@/utils/formatMailSubmitReconciliation'
+import { mailSubmitReconciliationParts } from '@/utils/formatMailSubmitReconciliation'
 import openLetterService, {
   type CreativeRollupRow,
   type MailCampaign,
+  type MailCampaignGapKind,
 } from '@/services/openLetterApi'
 import { Link as RouterLink } from 'react-router-dom'
+import { MailCampaignGapLeadsDialog } from '@/components/MailCampaignGapLeadsDialog'
 
 const headerCellSx = {
   fontWeight: 600,
@@ -66,6 +68,29 @@ const statusBodySx = {
   whiteSpace: 'nowrap' as const,
 }
 
+/** Submitted cell: count + captions share one left stack (button-links default to center). */
+const submittedCellSx = {
+  ...bodyCellSx,
+  textAlign: 'left' as const,
+  verticalAlign: 'top' as const,
+}
+
+const gapCaptionLinkSx = {
+  display: 'inline',
+  p: 0,
+  m: 0,
+  border: 0,
+  background: 'none',
+  verticalAlign: 'baseline',
+  textAlign: 'left' as const,
+  font: 'inherit',
+  cursor: 'pointer',
+  color: 'primary.main',
+  textDecoration: 'underline',
+  textUnderlineOffset: 2,
+  '&:hover': { textDecoration: 'underline' },
+} as const
+
 function formatPct(rate: number | null | undefined): string {
   if (rate == null) return '—'
   return `${(rate * 100).toFixed(1)}%`
@@ -91,11 +116,13 @@ function CampaignRow({
   onCancel,
   onRelease,
   cancelling,
+  onOpenGap,
 }: {
   campaign: MailCampaign
   onCancel: (id: number) => void
   onRelease: (id: number) => void
   cancelling: boolean
+  onOpenGap: (campaignId: number, kind: MailCampaignGapKind) => void
 }) {
   const delivered = campaign.delivery_stats?.Delivered
   const mailed = campaign.delivery_stats?.Mailed
@@ -110,7 +137,14 @@ function CampaignRow({
   const scanPieces =
     (campaign.scan_stats?.scanned ?? 0) + (campaign.scan_stats?.not_scanned ?? 0)
   const hasScanPieces = scanPieces > 0
-  const reconciliationCaption = formatMailSubmitReconciliationTable(campaign)
+  const omitCount = campaign.olc_omitted_count
+  const hasOmitCache = omitCount != null && omitCount > 0
+  // Prefer cached omit count; fall back to scan vs submitted mismatch before first heal sync.
+  const showOmitLink = hasOmitCache || (omitCount == null && hasScanPieces && scanPieces !== submittedCount)
+  const omitCaption = hasOmitCache
+    ? `${omitCount} not on OLC`
+    : `OLC tracked ${scanPieces}`
+  const reconParts = mailSubmitReconciliationParts(campaign)
 
   return (
     <TableRow data-testid={`mail-campaign-row-${campaign.id}`}>
@@ -139,18 +173,66 @@ function CampaignRow({
       <TableCell sx={wrapCellSx}>
         {campaign.template_name || campaign.template_id || '—'}
       </TableCell>
-      <TableCell sx={bodyCellSx}>
-        {submittedCount}
-        {reconciliationCaption ? (
-          <Typography variant="caption" display="block" color="text.secondary">
-            {reconciliationCaption}
+      <TableCell sx={submittedCellSx}>
+        <Box
+          sx={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'flex-start',
+            gap: 0.25,
+            width: '100%',
+          }}
+        >
+          <Typography
+            component="div"
+            sx={{ fontSize: 'inherit', fontWeight: 'inherit', lineHeight: 'inherit', textAlign: 'left' }}
+          >
+            {submittedCount}
           </Typography>
-        ) : null}
-        {hasScanPieces && scanPieces !== submittedCount ? (
-          <Typography variant="caption" display="block" color="text.secondary">
-            OLC tracked {scanPieces}
-          </Typography>
-        ) : null}
+          {reconParts ? (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              component="div"
+              sx={{ textAlign: 'left', width: '100%' }}
+            >
+              {reconParts.stagedLabel}
+              {reconParts.invalidLabel ? (
+                <>
+                  {' · '}
+                  <Box
+                    component="button"
+                    type="button"
+                    onClick={() => onOpenGap(campaign.id, 'invalid_local')}
+                    data-testid={`mail-campaign-invalid-link-${campaign.id}`}
+                    sx={gapCaptionLinkSx}
+                  >
+                    {reconParts.invalidLabel}
+                  </Box>
+                </>
+              ) : null}
+              {reconParts.dropSummary ? ` · ${reconParts.dropSummary}` : ''}
+            </Typography>
+          ) : null}
+          {showOmitLink ? (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              component="div"
+              sx={{ textAlign: 'left', width: '100%' }}
+            >
+              <Box
+                component="button"
+                type="button"
+                onClick={() => onOpenGap(campaign.id, 'olc_omitted')}
+                data-testid={`mail-campaign-olc-omit-link-${campaign.id}`}
+                sx={gapCaptionLinkSx}
+              >
+                {omitCaption}
+              </Box>
+            </Typography>
+          ) : null}
+        </Box>
       </TableCell>
       <TableCell sx={bodyCellSx}>
         {campaign.address_feedback ? (
@@ -274,6 +356,10 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
   const queryClient = useQueryClient()
   const [feedbackNote, setFeedbackNote] = useState<string | null>(null)
   const [cancelWarning, setCancelWarning] = useState<string | null>(null)
+  const [gapDialog, setGapDialog] = useState<{
+    campaignId: number
+    kind: MailCampaignGapKind
+  } | null>(null)
   const { data, isLoading, error, isFetching } = useQuery({
     queryKey: ['mail-campaigns'],
     queryFn: () => openLetterService.listCampaigns(1, 100),
@@ -481,7 +567,7 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
                 <TableCell sx={headerCellSx}>Email included</TableCell>
                 <TableCell sx={headerCellSx}>Website included</TableCell>
                 <TableCell sx={headerCellSx}>Template</TableCell>
-                <TableCell sx={headerCellSx}>Submitted</TableCell>
+                <TableCell sx={{ ...headerCellSx, textAlign: 'left' }}>Submitted</TableCell>
                 <TableCell sx={headerCellSx}>OLC feedback</TableCell>
                 <TableCell sx={headerCellSx}>Cost</TableCell>
                 <TableCell sx={statusHeaderSx}>Status</TableCell>
@@ -507,6 +593,7 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
                     onCancel={handleCancel}
                     onRelease={handleRelease}
                     cancelling={cancelMutation.isPending}
+                    onOpenGap={(campaignId, kind) => setGapDialog({ campaignId, kind })}
                   />
                 ))
               )}
@@ -514,6 +601,12 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
           </Table>
         </TableContainer>
       </Box>
+      <MailCampaignGapLeadsDialog
+        open={gapDialog != null}
+        onClose={() => setGapDialog(null)}
+        campaignId={gapDialog?.campaignId ?? null}
+        kind={gapDialog?.kind ?? null}
+      />
     </Box>
   )
 }

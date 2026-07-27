@@ -16,10 +16,17 @@ function formatDropSummary(
   return entries.map(([reason, n]) => `${n}× ${reason}`).join(', ')
 }
 
-/** Table caption under the Submitted cell (omit when staged === submitted). */
-export function formatMailSubmitReconciliationTable(
+export type MailSubmitReconciliationParts = {
+  stagedLabel: string
+  invalidCount: number
+  invalidLabel: string | null
+  dropSummary: string
+}
+
+/** Structured parts for clickable “N invalid” in the batches table. */
+export function mailSubmitReconciliationParts(
   campaign: MailSubmitReconciliationFields,
-): string | null {
+): MailSubmitReconciliationParts | null {
   if (
     campaign.staged_count == null
     || campaign.submitted_count == null
@@ -27,13 +34,25 @@ export function formatMailSubmitReconciliationTable(
   ) {
     return null
   }
-  const drops = formatDropSummary(campaign.submit_drop_summary)
+  const invalidCount = campaign.invalid_at_submit_count || 0
+  return {
+    stagedLabel: `staged ${campaign.staged_count}`,
+    invalidCount,
+    invalidLabel: invalidCount > 0 ? `${invalidCount} invalid` : null,
+    dropSummary: formatDropSummary(campaign.submit_drop_summary),
+  }
+}
+
+/** Table caption under the Submitted cell (omit when staged === submitted). */
+export function formatMailSubmitReconciliationTable(
+  campaign: MailSubmitReconciliationFields,
+): string | null {
+  const parts = mailSubmitReconciliationParts(campaign)
+  if (!parts) return null
   return (
-    `staged ${campaign.staged_count}`
-    + (campaign.invalid_at_submit_count
-      ? ` · ${campaign.invalid_at_submit_count} invalid`
-      : '')
-    + (drops ? ` · ${drops}` : '')
+    parts.stagedLabel
+    + (parts.invalidLabel ? ` · ${parts.invalidLabel}` : '')
+    + (parts.dropSummary ? ` · ${parts.dropSummary}` : '')
   )
 }
 

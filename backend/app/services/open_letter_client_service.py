@@ -331,17 +331,20 @@ class OpenLetterClientService:
         page_size: int = 100,
         max_pages: int = 200,
     ):
-        """Yield contact rows for an order, paginating until exhausted."""
-        page = 0
+        """Yield contact rows for an order, paginating until exhausted.
+
+        OLC contact list pages are **1-indexed** (page=1 is the first page).
+        """
+        page = 1
         seen = 0
         total = None
-        while page < max_pages:
+        while page <= max_pages:
             raw = self.list_order_contacts(order_id, page=page, page_size=page_size)
             data = raw.get('data') or {}
             rows = data.get('rows') or []
             if total is None:
                 try:
-                    total = int(data.get('count') or 0)
+                    total = int(data.get('total') or data.get('count') or 0)
                 except (TypeError, ValueError):
                     total = 0
             if not rows:
@@ -349,6 +352,12 @@ class OpenLetterClientService:
             for row in rows:
                 yield row
             seen += len(rows)
+            last_page = data.get('lastPage')
+            try:
+                if last_page is not None and page >= int(last_page):
+                    break
+            except (TypeError, ValueError):
+                pass
             if total and seen >= total:
                 break
             if len(rows) < page_size:
