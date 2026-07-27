@@ -1,0 +1,22 @@
+# Unblock Deploy without asking
+
+When a merge to `main` is stuck because App CI cancelled/hung (especially
+Backend pytest) and Deploy is skipped, **do not ask** whether to re-run CI or
+`workflow_dispatch` Deploy.
+
+## Do this automatically
+
+1. Cancel any still-hanging App CI runs if needed.
+2. Re-run App CI on `main` for the merge SHA (`gh run rerun … --failed` or
+   equivalent).
+3. Watch until **App CI success**; confirm Deploy auto-starts.
+4. If App CI cannot go green in a reasonable window (repeat hang/timeout) but
+   the merge must ship: **`workflow_dispatch` Deploy** for that SHA (allowed
+   emergency path in `deploy.yml` — not a merge). Prefer this when frontend
+   already passed and the block is pytest flake/hang only.
+5. Verify prod (`/api/version` matches target SHA; SPA HTML / health as needed).
+
+## Never
+
+- Ask “want me to re-run CI / trigger Deploy?” for this class of incident.
+- Merge or enable auto-merge (see `no-direct-main-merge`).

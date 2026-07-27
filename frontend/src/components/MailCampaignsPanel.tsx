@@ -17,11 +17,15 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { formatLastMailedDate } from '@/utils/formatLastMailedDate'
-import { mailCampaignStatusColor } from '@/utils/mailCampaignStatusColor'
+import {
+  mailCampaignStatusColor,
+  mailCampaignStatusLabel,
+} from '@/utils/mailCampaignStatusColor'
 import openLetterService, {
   type CreativeRollupRow,
   type MailCampaign,
 } from '@/services/openLetterApi'
+import { Link as RouterLink } from 'react-router-dom'
 
 function formatPct(rate: number | null | undefined): string {
   if (rate == null) return '—'
@@ -31,6 +35,16 @@ function formatPct(rate: number | null | undefined): string {
 function yn(value: boolean | null | undefined): string {
   if (value == null) return '—'
   return value ? 'Yes' : 'No'
+}
+
+function creativeSender(creative: MailCampaign['creative']): string {
+  if (!creative) return '—'
+  return (
+    creative.sender_display_name
+    || creative.label
+    || [creative.first_name, creative.last_name].filter(Boolean).join(' ')
+    || '—'
+  )
 }
 
 function CampaignRow({
@@ -53,11 +67,38 @@ function CampaignRow({
     campaign.status,
   )
   const canRelease = campaign.status === 'cancelled'
+  const submittedCount = campaign.submitted_count ?? campaign.lead_count
+  const scanPieces =
+    (campaign.scan_stats?.scanned ?? 0) + (campaign.scan_stats?.not_scanned ?? 0)
+  const hasScanPieces = scanPieces > 0
 
   return (
-    <TableRow>
+    <TableRow data-testid={`mail-campaign-row-${campaign.id}`}>
+      <TableCell
+        sx={{
+          position: 'sticky',
+          left: 0,
+          zIndex: 1,
+          bgcolor: 'background.paper',
+          borderRight: 1,
+          borderColor: 'divider',
+        }}
+      >
+        <Typography variant="body2" component="div">
+          #{campaign.id}
+        </Typography>
+        {campaign.olc_order_id ? (
+          <Typography variant="caption" color="text.secondary" component="div">
+            OLC {campaign.olc_order_id}
+          </Typography>
+        ) : (
+          <Typography variant="caption" color="text.secondary" component="div">
+            No OLC order yet
+          </Typography>
+        )}
+      </TableCell>
       <TableCell>{formatLastMailedDate(campaign.submitted_at || campaign.created_at)}</TableCell>
-      <TableCell>{creative?.sender_display_name || '—'}</TableCell>
+      <TableCell>{creativeSender(creative)}</TableCell>
       <TableCell>{creative?.envelope_color || '—'}</TableCell>
       <TableCell>
         {[creative?.font_name, creative?.font_color].filter(Boolean).join(' / ') || '—'}
@@ -65,12 +106,55 @@ function CampaignRow({
       <TableCell>{yn(creative?.include_email)}</TableCell>
       <TableCell>{yn(creative?.include_website)}</TableCell>
       <TableCell>{campaign.template_name || campaign.template_id || '—'}</TableCell>
-      <TableCell>{campaign.lead_count}</TableCell>
       <TableCell>
-        {campaign.cost != null ? `$${campaign.cost.toFixed(2)}` : '—'}
+        {submittedCount}
+        {campaign.staged_count != null
+          && campaign.submitted_count != null
+          && campaign.staged_count !== campaign.submitted_count
+          ? (
+            <Typography variant="caption" display="block" color="text.secondary">
+              staged {campaign.staged_count}
+              {campaign.invalid_at_submit_count
+                ? ` · ${campaign.invalid_at_submit_count} invalid`
+                : ''}
+              {campaign.submit_drop_summary
+                ? ` · ${Object.entries(campaign.submit_drop_summary)
+                  .map(([reason, n]) => `${n}× ${reason}`)
+                  .join(', ')}`
+                : ''}
+            </Typography>
+          )
+          : null}
+        {hasScanPieces && scanPieces !== submittedCount ? (
+          <Typography variant="caption" display="block" color="text.secondary">
+            OLC tracked {scanPieces}
+          </Typography>
+        ) : null}
       </TableCell>
       <TableCell>
-        <Chip label={campaign.status} size="small" color={mailCampaignStatusColor(campaign.status)} />
+        {campaign.address_feedback ? (
+          <Typography variant="caption" component="div" sx={{ whiteSpace: 'nowrap' }}>
+            C{campaign.address_feedback.corrected ?? 0}
+            {' / '}
+            F{campaign.address_feedback.failed ?? 0}
+            {' / '}
+            V{campaign.address_feedback.verified ?? 0}
+          </Typography>
+        ) : (
+          '—'
+        )}
+      </TableCell>
+      <TableCell>
+        {campaign.cost != null
+          ? `$${Number(campaign.cost).toFixed(2)}`
+          : '—'}
+      </TableCell>
+      <TableCell>
+        <Chip
+          label={mailCampaignStatusLabel(campaign.status)}
+          size="small"
+          color={mailCampaignStatusColor(campaign.status)}
+        />
       </TableCell>
       <TableCell>{formatPct(campaign.scan_rate)}</TableCell>
       <TableCell>{formatPct(deliveryRate)}</TableCell>
@@ -122,7 +206,7 @@ function CreativeCompareTable({ rows }: { rows: CreativeRollupRow[] }) {
               <TableCell>Email?</TableCell>
               <TableCell>Website?</TableCell>
               <TableCell>Campaigns</TableCell>
-              <TableCell>Pieces</TableCell>
+              <TableCell>Submitted</TableCell>
               <TableCell>Scan rate</TableCell>
               <TableCell>Response</TableCell>
             </TableRow>
@@ -264,7 +348,24 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
             flexDirection: { xs: 'column', sm: 'row' },
           }}
         >
-          <Typography variant="h6">Campaign History</Typography>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, width: { xs: '100%', sm: 'auto' } }}>
+            <Button
+              size="small"
+              component={RouterLink}
+              to="/queues/ready-to-mail"
+              sx={{ width: { xs: '100%', sm: 'auto' } }}
+            >
+              Ready to Mail
+            </Button>
+            <Button
+              size="small"
+              component={RouterLink}
+              to="/queues/skip-trace"
+              sx={{ width: { xs: '100%', sm: 'auto' } }}
+            >
+              Skip Trace
+            </Button>
+          </Box>
           <Button
             size="small"
             startIcon={<RefreshIcon />}
@@ -283,6 +384,7 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
             justifyContent: { xs: 'stretch', sm: 'flex-end' },
             mb: 1,
             flexWrap: 'wrap',
+            gap: 1,
           }}
         >
           <Button
@@ -308,9 +410,21 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
       )}
       <CreativeCompareTable rows={data?.creative_rollup ?? []} />
       <TableContainer component={Paper} sx={{ overflowX: 'auto', maxWidth: '100%' }}>
-        <Table size="small" sx={{ minWidth: 1060 }}>
+        <Table size="small" sx={{ minWidth: 1100 }} data-testid="mail-campaigns-table">
           <TableHead>
             <TableRow>
+              <TableCell
+                sx={{
+                  position: 'sticky',
+                  left: 0,
+                  zIndex: 2,
+                  bgcolor: 'background.paper',
+                  borderRight: 1,
+                  borderColor: 'divider',
+                }}
+              >
+                Campaign
+              </TableCell>
               <TableCell>Date</TableCell>
               <TableCell>Sender</TableCell>
               <TableCell>Envelope</TableCell>
@@ -318,7 +432,8 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
               <TableCell>Email?</TableCell>
               <TableCell>Website?</TableCell>
               <TableCell>Template</TableCell>
-              <TableCell>Pieces</TableCell>
+              <TableCell>Submitted</TableCell>
+              <TableCell>OLC feedback</TableCell>
               <TableCell>Cost</TableCell>
               <TableCell>Status</TableCell>
               <TableCell>Scan rate</TableCell>
@@ -330,7 +445,7 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
           <TableBody>
             {(data?.campaigns ?? []).length === 0 ? (
               <TableRow>
-                <TableCell colSpan={14} align="center">
+                <TableCell colSpan={16} align="center">
                   <Typography color="text.secondary" sx={{ py: 3 }}>
                     No campaigns yet. Send a batch from Ready to Mail.
                   </Typography>

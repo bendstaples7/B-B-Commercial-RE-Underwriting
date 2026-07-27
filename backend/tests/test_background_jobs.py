@@ -135,6 +135,29 @@ def test_background_jobs_snapshot_orders_tasks(app, monkeypatch):
     assert snap['busy'] is True
 
 
+def test_mail_campaign_in_flight_excludes_submitted(app):
+    from app import db
+    from app.models.mail_campaign import MailCampaign
+    from app.services import background_jobs_service as bjs
+
+    with app.app_context():
+        pending = MailCampaign(status='pending', lead_count=1, created_by='u1')
+        submitted = MailCampaign(
+            status='submitted', lead_count=5, created_by='u1', olc_order_id='99',
+        )
+        db.session.add_all([pending, submitted])
+        db.session.commit()
+
+        rows = bjs._mail_campaigns_in_flight(
+            [],
+            celery_inspect_ok=True,
+            queue_depth=0,
+        )
+
+    assert [r['id'] for r in rows] == [pending.id]
+    assert all(r['status'] != 'submitted' for r in rows)
+
+
 def test_mail_campaign_orphan_requires_complete_broker_peek(app):
     from app import db
     from app.models.mail_campaign import MailCampaign

@@ -47,6 +47,10 @@ import {
 } from './queueBulkActions'
 import { useQueueSelection } from '@/hooks/useQueueSelection'
 import { useAuth } from '@/context/AuthContext'
+import {
+  isMailCampaignSubmitting,
+  isRecentMailCampaignSubmitted,
+} from '@/utils/mailCampaignStatusColor'
 
 export function ReadyToMailQueue() {
   const queryClient = useQueryClient()
@@ -100,11 +104,22 @@ export function ReadyToMailQueue() {
   const { data: campaignsData } = useQuery({
     queryKey: ['mail-campaigns'],
     queryFn: () => openLetterService.listCampaigns(1, 100),
-    refetchInterval: 60_000,
+    refetchInterval: (query) => {
+      const list = query.state.data?.campaigns ?? []
+      const submitting = list.some((c) => isMailCampaignSubmitting(c.status))
+      return submitting ? 5_000 : 60_000
+    },
+    refetchIntervalInBackground: false,
   })
-  const inFlightCampaigns = (campaignsData?.campaigns ?? []).filter(
-    (c) => ['pending', 'submitted', 'processing'].includes(c.status),
-  )
+  const campaigns = campaignsData?.campaigns ?? []
+  const submittingCampaigns = campaigns.filter((c) => isMailCampaignSubmitting(c.status))
+  const submittedCampaigns = campaigns
+    .filter((c) => isRecentMailCampaignSubmitted(c))
+    .sort((a, b) => {
+      const ta = new Date(a.submitted_at || a.created_at || 0).getTime()
+      const tb = new Date(b.submitted_at || b.created_at || 0).getTime()
+      return tb - ta
+    })
 
   const showEnqueueFeedback = (result: EnqueueCounts) => {
     setSnackbarSeverity(enqueueResultSeverity(result))
@@ -239,7 +254,7 @@ export function ReadyToMailQueue() {
         Stage leads, send when you hit your minimum, and review recent sends.
       </Typography>
 
-      {inFlightCampaigns.length > 0 && (
+      {submittingCampaigns.length > 0 && (
         <Alert
           severity="info"
           sx={{ mb: 2 }}
@@ -255,9 +270,55 @@ export function ReadyToMailQueue() {
             </Button>
           ) : undefined}
         >
-          Submitting… {inFlightCampaigns.length} campaign
-          {inFlightCampaigns.length === 1 ? '' : 's'} waiting on the background worker
-          {inFlightCampaigns[0] ? ` (#${inFlightCampaigns[0].id})` : ''}.
+          Sending {submittingCampaigns.length === 1 ? 'campaign' : `${submittingCampaigns.length} campaigns`}
+          {submittingCampaigns[0] ? ` #${submittingCampaigns[0].id}` : ''} to Open Letter…
+        </Alert>
+      )}
+
+      {submittedCampaigns.length > 0 && (
+        <Alert
+          severity="success"
+          sx={{ mb: 2 }}
+          data-testid="mail-submitted-banner"
+          action={(
+            <Button
+              color="inherit"
+              size="small"
+              component={RouterLink}
+              to="/marketing/direct-mail/batches"
+            >
+              View batches
+            </Button>
+          )}
+        >
+          {submittedCampaigns.length === 1 ? (
+            <>
+              Submitted to Open Letter — order accepted (#{submittedCampaigns[0].id}
+              {submittedCampaigns[0].olc_order_id
+                ? `, OLC ${submittedCampaigns[0].olc_order_id}`
+                : ''}
+              )
+              {submittedCampaigns[0].staged_count != null
+                && submittedCampaigns[0].submitted_count != null
+                && submittedCampaigns[0].staged_count !== submittedCampaigns[0].submitted_count
+                ? ` · Staged ${submittedCampaigns[0].staged_count} → submitted ${submittedCampaigns[0].submitted_count}`
+                  + (submittedCampaigns[0].invalid_at_submit_count
+                    ? ` (${submittedCampaigns[0].invalid_at_submit_count} invalid locally)`
+                    : '')
+                  + (submittedCampaigns[0].submit_drop_summary
+                    ? ` · ${Object.entries(submittedCampaigns[0].submit_drop_summary)
+                      .map(([reason, n]) => `${n}× ${reason}`)
+                      .join(', ')}`
+                    : '')
+                : ''}
+              .
+            </>
+          ) : (
+            <>
+              {submittedCampaigns.length} campaigns submitted to Open Letter
+              (latest #{submittedCampaigns[0].id}).
+            </>
+          )}
         </Alert>
       )}
 
@@ -364,9 +425,28 @@ export function ReadyToMailQueue() {
 
       <Divider sx={{ my: 3 }} />
 
-      <Typography variant="h6" sx={{ mb: 2 }}>
-        Recent sends
-      </Typography>
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 1,
+          mb: 2,
+        }}
+      >
+        <Typography variant="h6" component="h2" sx={{ m: 0 }}>
+          Recent sends
+        </Typography>
+        <Button
+          size="small"
+          component={RouterLink}
+          to="/marketing/direct-mail/batches"
+          data-testid="view-all-mail-batches"
+        >
+          View all mail batches
+        </Button>
+      </Box>
       <MailCampaignsPanel embedded />
 
       <Dialog

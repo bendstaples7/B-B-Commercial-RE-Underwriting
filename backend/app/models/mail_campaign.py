@@ -20,6 +20,12 @@ class MailCampaign(db.Model):
         index=True,
     )
     lead_count = db.Column(db.Integer, nullable=False, default=0)
+    # Submit reconciliation — staged vs POSTed vs dropped at local validation
+    staged_count = db.Column(db.Integer, nullable=True)
+    submitted_count = db.Column(db.Integer, nullable=True)
+    invalid_at_submit_count = db.Column(db.Integer, nullable=True)
+    submit_drop_summary = db.Column(db.JSON, nullable=True)
+    address_feedback_summary = db.Column(db.JSON, nullable=True)
     cost = db.Column(db.Numeric(12, 4), nullable=True)
     cost_per_piece = db.Column(db.Numeric(10, 4), nullable=True)
     product_id = db.Column(db.Integer, nullable=True)

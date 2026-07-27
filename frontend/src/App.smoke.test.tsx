@@ -202,4 +202,16 @@ describe('App shell smoke test', () => {
       expect(screen.getByText('RE Analysis')).toBeInTheDocument()
     }, { timeout: 3000 })
   })
+
+  it('shows the couple avatar for non-admin authenticated users', async () => {
+    renderApp()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('appbar-user-avatar')).toBeInTheDocument()
+    }, { timeout: 3000 })
+    const avatar = screen.getByTestId('appbar-user-avatar')
+    const img = avatar.querySelector('img')
+    expect(img).toBeTruthy()
+    expect(img?.getAttribute('src')).toContain('/images/avatar.png')
+  })
 })

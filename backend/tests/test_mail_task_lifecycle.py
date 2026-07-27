@@ -1881,6 +1881,10 @@ class TestSubmitCampaignFollowUp:
             ).first()
             assert follow_up is not None
             assert 'Follow up after mailer' in follow_up.title
+            refreshed = MailCampaign.query.get(campaign.id)
+            assert refreshed.status == 'submitted'
+            assert refreshed.submitted_count == 1
+            assert refreshed.lead_count == 1
 
     def test_submit_campaign_failure_cancels_pending_follow_up(self, app, fernet_key, monkeypatch):
         from app import db
@@ -1929,4 +1933,7 @@ class TestSubmitCampaignFollowUp:
 
             assert MailQueueItem.query.get(item.id).status == 'failed'
             assert LeadTask.query.get(pending.id).status == 'cancelled'
+            failed_campaign = MailCampaign.query.get(campaign.id)
+            assert failed_campaign.status == 'failed'
+            assert failed_campaign.submitted_count is None
             refresh.assert_called_once_with([lead.id])

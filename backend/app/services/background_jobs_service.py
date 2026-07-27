@@ -116,7 +116,7 @@ def _mail_campaigns_in_flight(
 ) -> list[dict[str, Any]]:
     from app.models.mail_campaign import MailCampaign
 
-    in_flight = ('pending', 'submitted', 'processing')
+    in_flight = ('pending', 'processing')
     rows = (
         MailCampaign.query
         .filter(MailCampaign.status.in_(in_flight))
