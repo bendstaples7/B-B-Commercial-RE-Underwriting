@@ -434,6 +434,7 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
         >
           <Button
             size="small"
+            variant="outlined"
             startIcon={<RefreshIcon />}
             onClick={handleRefresh}
             disabled={isFetching}

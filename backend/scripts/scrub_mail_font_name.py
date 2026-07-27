@@ -10,7 +10,6 @@ Run from backend/:
 from __future__ import annotations
 
 import argparse
-import copy
 import json
 import logging
 import sys
@@ -32,7 +31,10 @@ BATCH_SIZE = 100
 
 
 def _strip_font_name(payload: Any) -> tuple[Any, bool]:
-    """Return (cleaned, changed) for a creative dict or preset list."""
+    """Return (cleaned, changed) for a creative dict or preset list.
+
+    Recurses into nested dict/list values so ``font_name`` at any depth is cleared.
+    """
     if isinstance(payload, list):
         changed = False
         out = []
@@ -43,11 +45,16 @@ def _strip_font_name(payload: Any) -> tuple[Any, bool]:
         return out, changed
     if not isinstance(payload, dict):
         return payload, False
-    out = copy.deepcopy(payload)
+    out: dict[str, Any] = {}
     changed = False
-    if 'font_name' in out and out.get('font_name') is not None:
-        out['font_name'] = None
-        changed = True
+    for key, value in payload.items():
+        if key == 'font_name' and value is not None:
+            out[key] = None
+            changed = True
+        else:
+            cleaned, nested_changed = _strip_font_name(value)
+            out[key] = cleaned
+            changed = changed or nested_changed
     return out, changed
 
 

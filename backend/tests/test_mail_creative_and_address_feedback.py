@@ -151,6 +151,17 @@ def test_scrub_font_name_helper_strips_nested():
     assert presets[0]['font_name'] is None
     assert 'font_name' not in presets[1] or presets[1].get('font_name') is None
 
+    deep, deep_changed = _strip_font_name({
+        'font_color': '#000',
+        'body': {'font_name': 'NestedHand', 'meta': {'font_name': 'Deep'}},
+        'items': [{'font_name': 'InList'}],
+    })
+    assert deep_changed is True
+    assert deep['body']['font_name'] is None
+    assert deep['body']['meta']['font_name'] is None
+    assert deep['items'][0]['font_name'] is None
+    assert deep['font_color'] == '#000'
+
 
 def test_submit_campaign_fails_when_template_has_no_ink(app):
     """Readable-without-ink must not bypass submit (HIGH review finding)."""
