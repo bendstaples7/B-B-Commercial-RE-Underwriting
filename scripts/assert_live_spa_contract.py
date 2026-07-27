@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -16,7 +17,9 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from spa_html_contract import check_spa_html_contract  # noqa: E402
 
 
-def fetch_html(url: str, timeout: float) -> str:
+def _fetch_once(url: str, timeout: float) -> str:
+    if not url.startswith(("http://", "https://")):
+        raise ValueError(f"refusing non-http(s) URL: {url!r}")
     req = urllib.request.Request(
         url,
         headers={
@@ -26,9 +29,28 @@ def fetch_html(url: str, timeout: float) -> str:
         },
         method="GET",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
         charset = resp.headers.get_content_charset() or "utf-8"
         return resp.read().decode(charset, errors="replace")
+
+
+def fetch_html(url: str, timeout: float, *, attempts: int = 3) -> str:
+    """Fetch HTML with short backoff so a single blip cannot trigger Deploy rollback."""
+    last_exc: BaseException | None = None
+    for attempt in range(max(1, attempts)):
+        try:
+            return _fetch_once(url, timeout)
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            last_exc = exc
+            if attempt < attempts - 1:
+                delay = 2 * (attempt + 1)
+                print(
+                    f"WARN: fetch {url} attempt {attempt + 1}/{attempts} failed "
+                    f"({exc}); retrying in {delay}s..."
+                )
+                time.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
 
 
 def main() -> int:
@@ -44,7 +66,7 @@ def main() -> int:
     url = args.url.rstrip("/") + "/"
     try:
         html = fetch_html(url, timeout=args.timeout)
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         print(f"ERROR: failed to fetch {url}: {exc}")
         return 1
 

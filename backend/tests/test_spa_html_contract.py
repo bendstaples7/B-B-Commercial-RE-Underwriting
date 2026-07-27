@@ -60,6 +60,15 @@ def test_separate_react_chunk_fails(spa):
     assert any("standalone" in e or "react-" in e for e in result.errors)
 
 
+def test_react_router_chunk_does_not_false_positive(spa):
+    html = GOOD_HTML.replace(
+        'href="/assets/mui-1.js"',
+        'href="/assets/react-router-AbCdEfGh.js"',
+    )
+    result = spa.check_spa_html_contract(html)
+    assert result.ok, result.errors
+
+
 def test_missing_vendor_fails(spa):
     html = GOOD_HTML.replace("/assets/vendor-xyz.js", "/assets/other-xyz.js")
     result = spa.check_spa_html_contract(html)

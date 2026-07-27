@@ -456,6 +456,18 @@ def main() -> int:
         errors.append(
             "deploy.yml must run scripts/assert_live_spa_contract.py after post-deploy health"
         )
+    else:
+        spa_call_idx = deploy_yml.find("assert_live_spa_contract.py")
+        post_health_idx = deploy_yml.find("Post-deploy health check")
+        if post_health_idx == -1 or spa_call_idx < post_health_idx:
+            errors.append(
+                "deploy.yml must run scripts/assert_live_spa_contract.py after the "
+                "post-deploy health check step"
+            )
+        if "SPA HTML contract failure" not in deploy_yml:
+            errors.append(
+                "deploy.yml must roll back on SPA HTML contract failure"
+            )
     if "post-deploy-rollback.sh" not in deploy_yml:
         errors.append(
             "deploy.yml must invoke post-deploy-rollback.sh on post-deploy health failure"
