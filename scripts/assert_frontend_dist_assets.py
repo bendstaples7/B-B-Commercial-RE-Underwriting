@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Assert every script/modulepreload href in dist/index.html exists on disk.
+"""Assert every script/modulepreload href in dist/index.html exists on disk,
+and that the built HTML satisfies the SPA chunk/boot contract.
 
-Fails CI/Deploy when HTML references a missing hashed asset (mismatched dist).
+Fails CI/Deploy when HTML references a missing hashed asset, or when Vite
+regresses to a standalone react-*.js chunk.
 """
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 
@@ -13,10 +14,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DIST = REPO_ROOT / "frontend" / "dist"
 INDEX = DIST / "index.html"
 
-HREF_RE = re.compile(
-    r"""<(?:script|link)\b[^>]*\b(?:src|href)=["']([^"']+)["']""",
-    re.IGNORECASE,
-)
+# Allow `python scripts/assert_frontend_dist_assets.py` without installing a package.
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from spa_html_contract import ASSET_HREF_RE, check_spa_html_contract  # noqa: E402
 
 
 def main() -> int:
@@ -25,14 +25,18 @@ def main() -> int:
         return 1
 
     html = INDEX.read_text(encoding="utf-8")
-    hrefs = HREF_RE.findall(html)
+    contract = check_spa_html_contract(html, require_boot_watchdog=True)
+    if not contract.ok:
+        print("ERROR: dist/index.html failed SPA HTML contract:")
+        for err in contract.errors:
+            print(f"  - {err}")
+        return 1
+
+    hrefs = ASSET_HREF_RE.findall(html)
     asset_hrefs = [
         h for h in hrefs
         if "/assets/" in h or h.startswith("assets/")
     ]
-    if not asset_hrefs:
-        print("ERROR: dist/index.html has no /assets/ script or modulepreload hrefs")
-        return 1
 
     missing: list[str] = []
     for href in asset_hrefs:
@@ -48,7 +52,10 @@ def main() -> int:
             print(f"  - {href}")
         return 1
 
-    print(f"OK: {len(asset_hrefs)} asset href(s) in index.html exist under frontend/dist")
+    print(
+        f"OK: SPA contract + {len(asset_hrefs)} asset href(s) "
+        "in index.html exist under frontend/dist"
+    )
     return 0
 
 

@@ -263,6 +263,22 @@ def main() -> int:
     asset_assert = REPO_ROOT / "scripts" / "assert_frontend_dist_assets.py"
     if not asset_assert.exists():
         errors.append("Missing expected script: scripts/assert_frontend_dist_assets.py")
+    else:
+        asset_assert_text = _read(asset_assert)
+        if "check_spa_html_contract" not in asset_assert_text:
+            errors.append(
+                "assert_frontend_dist_assets.py must call check_spa_html_contract "
+                "(React must not ship as standalone react-*.js)"
+            )
+    live_spa = REPO_ROOT / "scripts" / "assert_live_spa_contract.py"
+    if not live_spa.exists():
+        errors.append("Missing expected script: scripts/assert_live_spa_contract.py")
+    drift = REPO_ROOT / "scripts" / "check_main_prod_drift.py"
+    if not drift.exists():
+        errors.append("Missing expected script: scripts/check_main_prod_drift.py")
+    spa_contract_mod = REPO_ROOT / "scripts" / "spa_html_contract.py"
+    if not spa_contract_mod.exists():
+        errors.append("Missing expected script: scripts/spa_html_contract.py")
     index_html_path = REPO_ROOT / "frontend" / "index.html"
     if not index_html_path.exists():
         errors.append("Missing expected file: frontend/index.html")
@@ -407,6 +423,16 @@ def main() -> int:
             "ops-health.yml must set SOFT_ASYNC_ENSURE_FAILURE=1 "
             "(async ensure exit 2 must not fail ops hard for celery alone)"
         )
+    if "assert_live_spa_contract.py" not in ops_health_yml:
+        errors.append(
+            "ops-health.yml canary must run scripts/assert_live_spa_contract.py "
+            "(live HTML SPA contract)"
+        )
+    if "check_main_prod_drift.py" not in ops_health_yml:
+        errors.append(
+            "ops-health.yml canary must run scripts/check_main_prod_drift.py "
+            "(main↔prod SHA drift alarm)"
+        )
     ci_yml = _read(REPO_ROOT / ".github" / "workflows" / "ci.yml")
     if "vps-smoke-test" in ci_yml:
         errors.append(
@@ -426,6 +452,22 @@ def main() -> int:
             'deploy.yml must listen to workflow_run workflows: ["App CI"] '
             "(ops-health must never gate Deploy)"
         )
+    if "assert_live_spa_contract.py" not in deploy_yml:
+        errors.append(
+            "deploy.yml must run scripts/assert_live_spa_contract.py after post-deploy health"
+        )
+    else:
+        spa_call_idx = deploy_yml.find("assert_live_spa_contract.py")
+        post_health_idx = deploy_yml.find("Post-deploy health check")
+        if post_health_idx == -1 or spa_call_idx < post_health_idx:
+            errors.append(
+                "deploy.yml must run scripts/assert_live_spa_contract.py after the "
+                "post-deploy health check step"
+            )
+        if "SPA HTML contract failure" not in deploy_yml:
+            errors.append(
+                "deploy.yml must roll back on SPA HTML contract failure"
+            )
     if "post-deploy-rollback.sh" not in deploy_yml:
         errors.append(
             "deploy.yml must invoke post-deploy-rollback.sh on post-deploy health failure"

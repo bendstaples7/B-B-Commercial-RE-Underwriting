@@ -39,7 +39,9 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
-          persist-credentials: false
+          # Need credentials to `git fetch origin main` for SHA drift vs prod.
+          persist-credentials: true
+          fetch-depth: 0
 
       - name: Set up SSH key
         env:
@@ -81,6 +83,31 @@ jobs:
           HEALTH_URL="https://${VPS_SUBDOMAIN}.duckdns.org/api/health" \
             bash scripts/ci-http-health-wait.sh
 
+      # Live SPA HTML contract — health can be green while react/vendor chunks white-screen.
+      - name: Live SPA HTML contract
+        id: spa_html_canary
+        continue-on-error: true
+        if: steps.http_canary.outcome == 'success'
+        env:
+          VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+        run: |
+          python3 scripts/assert_live_spa_contract.py \
+            --url "https://${VPS_SUBDOMAIN}.duckdns.org/"
+
+      # main↔prod drift — merged fix sitting undeployed (hung App CI / skipped Deploy).
+      - name: Main vs prod SHA drift
+        id: drift_canary
+        continue-on-error: true
+        if: steps.http_canary.outcome == 'success'
+        env:
+          VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          python3 scripts/check_main_prod_drift.py \
+            --base-url "https://${VPS_SUBDOMAIN}.duckdns.org" \
+            --grace-minutes 45
+
       - name: Write canary summary
         if: always()
         run: |
@@ -91,6 +118,8 @@ jobs:
             echo "|-------|--------|"
             echo "| SSH canary | ${{ steps.ssh_canary.outcome }} |"
             echo "| HTTP canary | ${{ steps.http_canary.outcome }} |"
+            echo "| Live SPA HTML contract | ${{ steps.spa_html_canary.outcome }} |"
+            echo "| Main↔prod SHA drift | ${{ steps.drift_canary.outcome }} |"
             echo ""
             echo "Does **not** block App CI or Deploy."
             echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -98,11 +127,19 @@ jobs:
 
       - name: Count consecutive canary failures and alert
         id: canary_alert
-        if: always() && (steps.ssh_canary.outcome == 'failure' || steps.http_canary.outcome == 'failure')
+        if: >
+          always() && (
+            steps.ssh_canary.outcome == 'failure' ||
+            steps.http_canary.outcome == 'failure' ||
+            steps.spa_html_canary.outcome == 'failure' ||
+            steps.drift_canary.outcome == 'failure'
+          )
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SSH_OUTCOME: ${{ steps.ssh_canary.outcome }}
           HTTP_OUTCOME: ${{ steps.http_canary.outcome }}
+          SPA_OUTCOME: ${{ steps.spa_html_canary.outcome }}
+          DRIFT_OUTCOME: ${{ steps.drift_canary.outcome }}
           VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
         run: |
           set -euo pipefail
@@ -164,34 +201,42 @@ jobs:
           echo "alert=1" >> "$GITHUB_OUTPUT"
           if [ "$SSH_OUTCOME" = "failure" ]; then
             ISSUE_TITLE="Ops health: VPS SSH unreachable"
-          else
+          elif [ "$HTTP_OUTCOME" = "failure" ]; then
             ISSUE_TITLE="Ops health: VPS public /api/health down"
+          elif [ "$SPA_OUTCOME" = "failure" ]; then
+            ISSUE_TITLE="Ops health: live SPA HTML contract failed"
+          else
+            ISSUE_TITLE="Ops health: main↔prod SHA drift"
           fi
           BODY=$(cat <<EOF
-          ## Ops reachability canary failure
+          ## Ops reachability / SPA canary failure
 
-          Automated SSH/HTTP canary failed **${CONSEC}** consecutive times.
+          Automated canary failed **${CONSEC}** consecutive times.
 
           | Check | Result |
           |-------|--------|
           | SSH canary | ${SSH_OUTCOME} |
           | HTTP canary | ${HTTP_OUTCOME} |
+          | Live SPA HTML contract | ${SPA_OUTCOME} |
+          | Main↔prod SHA drift | ${DRIFT_OUTCOME} |
 
           **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
           ### Remediation
           1. Confirm VPS is up and \`sshd\` is listening on port 22
           2. Confirm public \`/api/health\` at https://${VPS_SUBDOMAIN}.duckdns.org/api/health
-          3. See docs/vps-config.md — Deploy SSH / reachability
-          4. Re-run **Ops health** via workflow_dispatch after recovery
+          3. Confirm live HTML has no standalone \`/assets/react-*.js\` and includes boot watchdog
+          4. If SHA drift: check App CI on main (hung pytest?) then Deploy; or \`workflow_dispatch\` Deploy
+          5. See docs/vps-config.md — Deploy SSH / reachability
+          6. Re-run **Ops health** via workflow_dispatch after recovery
 
           App CI and Deploy are **not** blocked by this issue. Deploy soft-waits ~10m on HTTP then hard-waits ~15m on SSH.
           EOF
           )
 
           EXISTING=$(gh issue list --label ops-health --state open \
-            --search "in:title Ops health: VPS" \
-            --json number,title --jq '[.[] | select(.title | test("SSH unreachable|public /api/health down"))] | .[0].number // empty')
+            --search "in:title Ops health:" \
+            --json number,title --jq '[.[] | select(.title | test("SSH unreachable|public /api/health down|live SPA HTML|main↔prod SHA drift"))] | .[0].number // empty')
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body "$BODY"
             echo "Updated issue #$EXISTING"
@@ -204,7 +249,7 @@ jobs:
         if: always() && steps.canary_alert.outputs.alert == '1'
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          TEXT: "Ops canary: VPS unreachable (${{ steps.canary_alert.outputs.consec }} consecutive) on ${{ github.repository }}. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TEXT: "Ops canary: VPS/SPA/drift alert (${{ steps.canary_alert.outputs.consec }} consecutive) on ${{ github.repository }}. Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         run: |
           set -euo pipefail
           if [ -z "${SLACK_WEBHOOK_URL:-}" ]; then
@@ -216,22 +261,27 @@ jobs:
             "$SLACK_WEBHOOK_URL"
 
       - name: Comment recovery on open reachability issue
-        if: always() && steps.ssh_canary.outcome == 'success' && steps.http_canary.outcome == 'success'
+        if: >
+          always() &&
+          steps.ssh_canary.outcome == 'success' &&
+          steps.http_canary.outcome == 'success' &&
+          (steps.spa_html_canary.outcome == 'success' || steps.spa_html_canary.outcome == 'skipped') &&
+          (steps.drift_canary.outcome == 'success' || steps.drift_canary.outcome == 'skipped')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           EXISTING=$(gh issue list --label ops-health --state open \
-            --search "in:title Ops health: VPS" \
-            --json number,title --jq '[.[] | select(.title | test("SSH unreachable|public /api/health down"))] | .[0].number // empty')
+            --search "in:title Ops health:" \
+            --json number,title --jq '[.[] | select(.title | test("SSH unreachable|public /api/health down|live SPA HTML|main↔prod SHA drift"))] | .[0].number // empty')
           if [ -z "$EXISTING" ]; then
-            echo "No open reachability issue."
+            echo "No open reachability/SPA/drift issue."
             exit 0
           fi
           BODY=$(cat <<EOF
-          ## Reachability recovered
+          ## Canary recovered
 
-          SSH and public \`/api/health\` canaries succeeded.
+          SSH, public \`/api/health\`, live SPA HTML contract, and main↔prod drift checks succeeded (or SPA/drift skipped because HTTP was down).
 
           **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
@@ -243,7 +293,13 @@ jobs:
           echo "Commented recovery and closed issue #$EXISTING"
 
       - name: Fail job when canary checks failed
-        if: always() && (steps.ssh_canary.outcome == 'failure' || steps.http_canary.outcome == 'failure')
+        if: >
+          always() && (
+            steps.ssh_canary.outcome == 'failure' ||
+            steps.http_canary.outcome == 'failure' ||
+            steps.spa_html_canary.outcome == 'failure' ||
+            steps.drift_canary.outcome == 'failure'
+          )
         run: |
           echo "::error::Ops canary failed (advisory — does not block Deploy)."
           exit 1

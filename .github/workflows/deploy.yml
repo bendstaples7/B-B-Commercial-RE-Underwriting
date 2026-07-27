@@ -481,12 +481,36 @@ jobs:
           echo "::error::Deploy rolled back after post-deploy health/SHA failure."
           exit 1
 
+      # Cheap HTML contract before Playwright — catch react/vendor chunk regressions fast.
+      - name: Post-deploy live SPA HTML contract
+        id: spa_html
+        if: steps.post_health.outcome == 'success'
+        env:
+          VPS_SUBDOMAIN: ${{ secrets.VPS_SUBDOMAIN }}
+        run: |
+          python3 scripts/assert_live_spa_contract.py \
+            --url "https://${VPS_SUBDOMAIN}.duckdns.org/"
+
+      - name: Rollback on post-deploy SPA HTML contract failure
+        if: failure() && steps.spa_html.outcome == 'failure'
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          echo "Post-deploy SPA HTML contract failed — rolling back to previous SHA on VPS..."
+          scp -i ~/.ssh/id_deploy scripts/post-deploy-rollback.sh \
+            "$VPS_USER@$VPS_HOST:/home/deploy/post-deploy-rollback.sh"
+          ssh -i ~/.ssh/id_deploy "$VPS_USER@$VPS_HOST" \
+            "chmod +x /home/deploy/post-deploy-rollback.sh && bash /home/deploy/post-deploy-rollback.sh"
+          echo "::error::Deploy rolled back after SPA HTML contract failure (standalone react chunk / missing watchdog)."
+          exit 1
+
       # Browser boot gate — health can be green while vendor/react chunks white-screen.
       # Split Playwright install from the boot check so npm/CDN flakes fail the job
       # WITHOUT rolling back a healthy deploy (rollback only on spa_boot failure).
       - name: Install Playwright for SPA boot check
         id: spa_boot_setup
-        if: steps.post_health.outcome == 'success'
+        if: success() && steps.post_health.outcome == 'success' && steps.spa_html.outcome == 'success'
         working-directory: frontend
         run: |
           set -euo pipefail
