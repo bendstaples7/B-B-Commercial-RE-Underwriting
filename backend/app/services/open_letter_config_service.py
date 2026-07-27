@@ -21,6 +21,7 @@ from app.services.mail_creative import (
     migrate_legacy_return_into_presets,
     normalize_presets,
     street_return_address,
+    template_ink_confirmed,
 )
 
 logger = logging.getLogger(__name__)
@@ -373,7 +374,7 @@ class OpenLetterConfigService:
         }
 
     def resolve_template_style(self, user_id: str, template_id: int | str | None) -> dict | None:
-        """Auto-confirm body font/ink from the Connect template design JSON."""
+        """Auto-confirm body ink from the Connect template design JSON (no typeface)."""
         if template_id is None or str(template_id).strip() == '':
             return None
         try:
@@ -383,12 +384,12 @@ class OpenLetterConfigService:
         except Exception as exc:  # noqa: BLE001
             logger.warning('Failed to resolve OLC template style for %s: %s', template_id, exc)
             return None
-        if not style.get('font_name'):
+        if not template_ink_confirmed(style):
             return None
         return {
-            'font_name': style.get('font_name'),
             'font_color': style.get('font_color'),
             'fill': style.get('fill'),
+            'readable': True,
             'template_id': int(template_id) if str(template_id).isdigit() else template_id,
             'confirmed_from': 'olc_template',
         }
@@ -402,7 +403,7 @@ class OpenLetterConfigService:
         template_name: str | None = None,
         active_id: str | None = None,
     ) -> list[dict]:
-        """Stamp font/ink from the template onto presets.
+        """Stamp ink from the template onto presets (no typeface).
 
         Does not overwrite each preset's ``olc_template_id`` unless ``active_id``
         is provided (then only that preset gets template id/name).
@@ -459,7 +460,7 @@ class OpenLetterConfigService:
                 'return_address': None,
                 'creative_presets': [],
                 'active_creative_preset_id': None,
-                # GET is read-only — use /templates/:id/style to confirm fonts.
+                # GET is read-only — use /templates/:id/style to confirm design.
                 'template_style': None,
                 'estimated_cost_per_piece': settings['estimated_cost_per_piece'],
                 'estimated_cost_source_sent_at': settings['estimated_cost_source_sent_at'],
@@ -474,10 +475,10 @@ class OpenLetterConfigService:
 
         active = get_active_preset(presets, active_id or config.active_creative_preset_id)
         style = None
-        if active and active.get('font_name'):
+        if active and active.get('font_color'):
             style = {
-                'font_name': active.get('font_name'),
                 'font_color': active.get('font_color'),
+                'readable': True,
                 'template_id': active.get('olc_template_id') or config.default_template_id,
                 'confirmed_from': 'preset',
             }

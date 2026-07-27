@@ -42,6 +42,25 @@ export function mailCampaignStatusLabel(status: string): string {
   }
 }
 
+/** Short labels for dense tables (chips). Full copy stays on banners via ``mailCampaignStatusLabel``. */
+export function mailCampaignStatusChipLabel(status: string): string {
+  switch (status) {
+    case 'pending':
+    case 'processing':
+      return 'Sending…'
+    case 'submitted':
+      return 'Submitted'
+    case 'mailed':
+      return 'Mailed'
+    case 'failed':
+      return 'Failed'
+    case 'cancelled':
+      return 'Cancelled'
+    default:
+      return status
+  }
+}
+
 export function mailCampaignStatusColor(
   status: string,
 ): 'default' | 'success' | 'error' | 'warning' | 'info' {

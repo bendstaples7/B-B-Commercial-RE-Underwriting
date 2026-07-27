@@ -23,6 +23,7 @@ from app.services.mail_creative import (
     migrate_legacy_return_into_presets,
     snapshot_creative,
     street_return_address,
+    template_ink_confirmed,
     validate_sender_ready,
 )
 from app.services.open_letter_config_service import OpenLetterConfigService
@@ -276,12 +277,17 @@ class MailCampaignService:
             except Exception as exc:  # noqa: BLE001
                 logger.warning('Could not auto-confirm template style for send: %s', exc)
                 style = None
-        if not style or not style.get('font_name'):
+        if not template_ink_confirmed(style):
             raise MailQueueError(
-                'Could not confirm letter font from the Open Letter template. '
+                'Could not confirm letter ink from the Open Letter template. '
                 'Check the template in Connect, then retry.',
             )
         preset = apply_template_style_to_preset(preset, style)
+        if not (preset or {}).get('font_color'):
+            raise MailQueueError(
+                'Could not confirm letter ink from the Open Letter template. '
+                'Check the template in Connect, then retry.',
+            )
 
         staged = len(queued)
         campaign = MailCampaign(
@@ -666,7 +672,7 @@ class MailCampaignService:
             db.session.commit()
             raise MailQueueError(sender_err)
 
-        if campaign.template_id and not (preset or {}).get('font_name'):
+        if campaign.template_id and not (preset or {}).get('font_color'):
             try:
                 style = extract_letter_body_style(
                     olc.fetch_template_design(campaign.template_id),
@@ -678,17 +684,17 @@ class MailCampaignService:
                     campaign.id, exc,
                 )
                 style = None
-            if not (preset or {}).get('font_name'):
+            if not (preset or {}).get('font_color'):
                 msg = (
-                    'Could not confirm letter font from the Open Letter template. '
+                    'Could not confirm letter ink from the Open Letter template. '
                     'Check the template in Connect, then retry.'
                 )
                 campaign.status = 'failed'
                 campaign.error_message = msg
                 db.session.commit()
                 raise MailQueueError(msg)
-        elif not (preset or {}).get('font_name'):
-            msg = 'Campaign template and confirmed font/ink are required before submit'
+        elif not (preset or {}).get('font_color'):
+            msg = 'Campaign template and confirmed ink are required before submit'
             campaign.status = 'failed'
             campaign.error_message = msg
             db.session.commit()
@@ -1354,7 +1360,6 @@ class MailCampaignService:
             key = (
                 dims['sender_display_name'],
                 dims['envelope_color'],
-                dims['font_name'],
                 dims['font_color'],
                 dims['include_email'],
                 dims['include_website'],
@@ -1386,7 +1391,6 @@ class MailCampaignService:
             rows.append({
                 'sender_display_name': bucket['sender_display_name'],
                 'envelope_color': bucket['envelope_color'],
-                'font_name': bucket['font_name'],
                 'font_color': bucket['font_color'],
                 'include_email': bucket['include_email'],
                 'include_website': bucket['include_website'],

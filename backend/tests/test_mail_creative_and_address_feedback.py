@@ -73,7 +73,7 @@ def test_extract_letter_body_style_prefers_merge_tag_body():
                 },
                 {
                     'type': 'text',
-                    'fontFamily': 'Waiting for the Sunrise',
+                    'fontFamily': 'ExampleBodyHand',
                     'fill': 'rgba(37,64,143,1)',
                     'text': 'Hi {{C.FIRST_NAME}},\nPlease call.',
                 },
@@ -87,8 +87,141 @@ def test_extract_letter_body_style_prefers_merge_tag_body():
         }],
     }
     style = extract_letter_body_style(design)
-    assert style['font_name'] == 'Waiting for the Sunrise'
+    assert style['readable'] is True
+    assert style['font_name'] is None
     assert style['font_color'] == '#25408F'
+
+
+def test_extract_letter_body_style_not_readable_without_ink():
+    from app.services.mail_creative import (
+        extract_letter_body_style,
+        template_ink_confirmed,
+    )
+
+    design = {
+        'pages': [{
+            'children': [{
+                'type': 'text',
+                'fontFamily': 'ExampleBodyHand',
+                'text': 'Hi {{C.FIRST_NAME}}',
+            }],
+        }],
+    }
+    style = extract_letter_body_style(design)
+    assert style['font_name'] is None
+    assert style['font_color'] is None
+    assert style['readable'] is False
+    assert template_ink_confirmed(style) is False
+    assert template_ink_confirmed({'readable': True}) is False
+    assert template_ink_confirmed({'font_color': '#000000'}) is True
+
+
+def test_creative_rollup_key_omits_font_name():
+    from app.services.mail_creative import creative_rollup_key
+
+    key = creative_rollup_key({
+        'sender_display_name': 'Bessy',
+        'envelope_color': 'blue',
+        'font_name': 'ShouldNotAppear',
+        'font_color': '#25408F',
+        'include_email': True,
+        'include_website': False,
+    })
+    assert 'font_name' not in key
+    assert key['font_color'] == '#25408F'
+    assert key['sender_display_name'] == 'Bessy'
+
+
+def test_scrub_font_name_helper_strips_nested():
+    from scripts.scrub_mail_font_name import _strip_font_name
+
+    cleaned, changed = _strip_font_name({
+        'font_name': 'ExampleBodyHand',
+        'font_color': '#000',
+    })
+    assert changed is True
+    assert cleaned['font_name'] is None
+    assert cleaned['font_color'] == '#000'
+
+    presets, p_changed = _strip_font_name([
+        {'font_name': 'X', 'id': '1'},
+        {'font_color': '#fff'},
+    ])
+    assert p_changed is True
+    assert presets[0]['font_name'] is None
+    assert 'font_name' not in presets[1] or presets[1].get('font_name') is None
+
+
+def test_submit_campaign_fails_when_template_has_no_ink(app):
+    """Readable-without-ink must not bypass submit (HIGH review finding)."""
+    with app.app_context():
+        from app import db
+        from app.exceptions import MailQueueError
+        from app.models import Lead, MailCampaign, MailQueueItem
+
+        lead = Lead(
+            property_street='1 Ink Gate St',
+            property_city='Chicago',
+            property_state='IL',
+            property_zip='60601',
+            owner_user_id='user-1',
+        )
+        db.session.add(lead)
+        db.session.flush()
+        campaign = MailCampaign(
+            status='pending',
+            lead_count=1,
+            product_id=27,
+            template_id=371,
+            creative={
+                'first_name': 'Bessy',
+                'last_name': 'Tam',
+                'phone': '(312) 555-0100',
+                'return_address': {
+                    'address1': '1343 W Irving',
+                    'city': 'Chicago',
+                    'state': 'IL',
+                    'zip': '60613',
+                },
+                # no font_color — must fail even if design has fontFamily
+            },
+            created_by='user-1',
+        )
+        db.session.add(campaign)
+        db.session.flush()
+        item = MailQueueItem(
+            lead_id=lead.id,
+            user_id='user-1',
+            status='queued',
+            campaign_id=campaign.id,
+        )
+        db.session.add(item)
+        db.session.commit()
+
+        mock_client = MagicMock()
+        mock_client.fetch_template_design.return_value = {
+            'pages': [{
+                'children': [{
+                    'type': 'text',
+                    'fontFamily': 'ExampleBodyHand',
+                    'text': 'Hi {{C.FIRST_NAME}} at {{C.PROPERTY_ADDRESS}}',
+                }],
+            }],
+        }
+        cfg_svc = MagicMock()
+        cfg_svc.require_config.return_value = MagicMock()
+        cfg_svc.get_client.return_value = mock_client
+
+        svc = MailCampaignService()
+        svc._config_service = cfg_svc
+
+        with pytest.raises(MailQueueError) as exc_info:
+            svc.submit_campaign(campaign.id)
+        assert 'ink' in str(exc_info.value).lower()
+        failed = MailCampaign.query.get(campaign.id)
+        assert failed.status == 'failed'
+        assert 'ink' in (failed.error_message or '').lower()
+        mock_client.place_order.assert_not_called()
 
 
 def test_fill_to_hex_rejects_invalid_hex_values():
@@ -104,7 +237,7 @@ def test_snapshot_creative_freezes_fields():
         'last_name': 'Tam',
         'phone': '1',
         'envelope_color': 'blue',
-        'font_name': 'Waiting for the Sunrise',
+        'font_name': 'ExampleBodyHand',
         'font_color': '#25408F',
         'include_email': False,
         'include_website': True,
@@ -113,7 +246,7 @@ def test_snapshot_creative_freezes_fields():
     snap = snapshot_creative(preset, template_id=371, template_name='Standard')
     assert snap['sender_display_name'] == 'Bessy Tam'
     assert snap['envelope_color'] == 'blue'
-    assert snap['font_name'] == 'Waiting for the Sunrise'
+    assert snap['font_name'] is None
     assert snap['font_color'] == '#25408F'
     assert snap['olc_template_id'] == 371
 

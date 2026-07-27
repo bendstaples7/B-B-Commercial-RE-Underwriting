@@ -29,7 +29,6 @@ function baseConfig(overrides: Partial<OpenLetterConfig> = {}): OpenLetterConfig
         first_name: 'Bessy',
         last_name: 'Tam',
         phone: '312-555-0100',
-        font_name: 'Waiting for the Sunrise',
         font_color: '#25408F',
         envelope_color: 'A6 Blue Mosaic',
         olc_template_id: 371,
@@ -38,8 +37,8 @@ function baseConfig(overrides: Partial<OpenLetterConfig> = {}): OpenLetterConfig
     ],
     active_creative_preset_id: 'p1',
     template_style: {
-      font_name: 'Waiting for the Sunrise',
       font_color: '#25408F',
+      readable: true,
       confirmed_from: 'olc_template',
     },
     ...overrides,
@@ -66,6 +65,14 @@ describe('directMailSetup creative readiness', () => {
       template_style: null,
       creative_presets: [{ id: 'x', label: 'x', first_name: 'Ben', phone: '1' }],
     }))).toBe(false)
+    expect(isTemplateStyleConfirmed(baseConfig({
+      template_style: { readable: true },
+      creative_presets: [{ id: 'x', label: 'x', first_name: 'Ben', phone: '1' }],
+    }))).toBe(false)
+    expect(isTemplateStyleConfirmed(baseConfig({
+      template_style: { font_color: '#25408F', readable: true },
+      creative_presets: [{ id: 'x', label: 'x', first_name: 'Ben', phone: '1' }],
+    }))).toBe(true)
     expect(isDirectMailReadyToSend(baseConfig())).toBe(true)
   })
 
@@ -83,7 +90,7 @@ describe('directMailSetup creative readiness', () => {
     expect(confirmed?.done).toBe(true)
     expect(confirmed?.label).toContain('Connect template design readable')
     expect(confirmed?.label).toContain('Standard')
-    expect(confirmed?.label).not.toContain('Waiting for the Sunrise')
+    expect(confirmed?.label).not.toMatch(/typeface|Sunrise|fontFamily/i)
   })
 
   it('resolves active creative preset', () => {
@@ -98,6 +105,6 @@ describe('directMailSetup creative readiness', () => {
     )
     expect(lines.templateLine).toBe('Standard (#371)')
     expect(lines.senderLine).toBe('Bessy Tam')
-    expect(lines.productLine).not.toContain('Waiting for the Sunrise')
+    expect(lines.productLine).not.toMatch(/Sunrise|typeface/i)
   })
 })

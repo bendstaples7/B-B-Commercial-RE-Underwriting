@@ -77,7 +77,6 @@ function newPreset(partial?: Partial<MailCreativePreset>): MailCreativePreset {
     include_email: partial?.include_email ?? false,
     include_website: partial?.include_website ?? false,
     envelope_color: partial?.envelope_color || '',
-    font_name: partial?.font_name || '',
     font_color: partial?.font_color || '',
     olc_template_id: partial?.olc_template_id ?? null,
     olc_template_name: partial?.olc_template_name || null,
@@ -194,13 +193,13 @@ export const OpenLetterSetupPanel: React.FC = () => {
   })
 
   useEffect(() => {
-    if (!liveTemplateStyle?.font_name || !activePresetId) return
+    if (!liveTemplateStyle?.font_color || !activePresetId) return
     setPresets((prev) =>
       prev.map((p) =>
         (p.id === activePresetId
           ? {
               ...p,
-              font_name: liveTemplateStyle.font_name || p.font_name,
+              font_name: null,
               font_color: liveTemplateStyle.font_color || p.font_color,
               olc_template_id: Number(templateId) || p.olc_template_id,
               olc_template_name: templateName || p.olc_template_name,
@@ -212,7 +211,7 @@ export const OpenLetterSetupPanel: React.FC = () => {
 
   const setupConfig = React.useMemo(() => {
     if (!config) return config
-    if (liveTemplateStyle?.font_name) {
+    if (liveTemplateStyle?.font_color) {
       return { ...config, template_style: liveTemplateStyle }
     }
     return config
@@ -822,13 +821,11 @@ export const OpenLetterSetupPanel: React.FC = () => {
                 </Grid>
                 <Grid item xs={12} sm={8}>
                   {(() => {
-                    const font = liveTemplateStyle?.font_name
-                      || activePreset.font_name
-                      || config?.template_style?.font_name
                     const ink = liveTemplateStyle?.font_color
                       || activePreset.font_color
                       || config?.template_style?.font_color
-                    if (font) {
+                    const readable = Boolean(ink)
+                    if (readable) {
                       const templateLabel = (
                         templateName
                         || activePreset.olc_template_name
@@ -839,12 +836,11 @@ export const OpenLetterSetupPanel: React.FC = () => {
                         <Alert severity="success" sx={{ py: 0.5 }} data-testid="olc-template-design-confirmed">
                           Connect template design is readable
                           {templateLabel ? <> for <strong>{templateLabel}</strong></> : null}
-                          . Typeface/ink live inside that template in Connect (not a separate SKU we
-                          send). Change handwriting style in Open Letter Connect, then refresh
-                          templates / save.
+                          . Handwriting and ink live inside that template in Connect (not a separate
+                          SKU we send). Change style in Open Letter Connect, then refresh templates
+                          / save.
                           <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 0.5 }}>
-                            Internal Connect typeface (for our records only): {font}
-                            {ink ? ` · ${ink}` : ''}
+                            Ink: {ink}
                           </Typography>
                         </Alert>
                       )
@@ -852,7 +848,7 @@ export const OpenLetterSetupPanel: React.FC = () => {
                     return (
                       <Alert severity="warning" sx={{ py: 0.5 }}>
                         Select a letter template above so we can confirm the Connect template design
-                        is readable. Font/ink are part of the template in Connect — we only send
+                        is readable. Ink is part of the template in Connect — we only send
                         productId + templateId.
                       </Alert>
                     )
