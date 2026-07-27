@@ -239,6 +239,19 @@ def test_failed_wins_over_corrected_when_collapsing():
     assert by_lead[7]['addressStatus'] == 'Failed'
 
 
+def test_collapse_accepts_meta_data_lead_id():
+    from app.services.mail_campaign_service import collapse_recipients_by_lead
+
+    by_lead = collapse_recipients_by_lead([
+        {
+            'addressStatus': 'Verified',
+            'meta_data': {'lead_id': 42},
+        },
+    ])
+    assert 42 in by_lead
+    assert by_lead[42]['addressStatus'] == 'Verified'
+
+
 def test_cancel_campaign_holds_queue_when_olc_fails(app):
     with app.app_context():
         from app import db
@@ -982,3 +995,118 @@ def test_sync_campaign_analytics_keeps_cancelled_status(app):
         assert updated.status == 'cancelled'
         assert updated.delivery_stats == {'Mailed': 10, 'Delivered': 2}
         assert updated._address_feedback_summary['verified'] == 0
+        assert updated.address_feedback_summary == {'corrected': 0, 'failed': 0, 'verified': 0, 'unchanged': 0}
+
+
+def test_serialize_campaign_includes_reconciliation_and_feedback(app):
+    with app.app_context():
+        from app import db
+        from app.models import MailCampaign
+        from app.services.mail_campaign_service import MailCampaignService
+
+        campaign = MailCampaign(
+            status='submitted',
+            lead_count=501,
+            staged_count=514,
+            submitted_count=501,
+            invalid_at_submit_count=13,
+            submit_drop_summary={'No owner mailing street address': 11},
+            address_feedback_summary={'corrected': 2, 'failed': 1, 'verified': 10, 'unchanged': 0},
+            created_by='user-1',
+            olc_order_id='2162245',
+        )
+        db.session.add(campaign)
+        db.session.commit()
+
+        payload = MailCampaignService.serialize_campaign(campaign)
+        assert payload['staged_count'] == 514
+        assert payload['submitted_count'] == 501
+        assert payload['invalid_at_submit_count'] == 13
+        assert payload['submit_drop_summary']['No owner mailing street address'] == 11
+        assert payload['address_feedback']['corrected'] == 2
+        assert payload['address_feedback']['failed'] == 1
+
+
+def test_schedule_post_submit_analytics_sync_sends_countdown(app, monkeypatch):
+    from app.services.mail_campaign_service import MailCampaignService
+
+    calls = []
+
+    class FakeCelery:
+        def send_task(self, name, args=None, countdown=None):
+            calls.append({'name': name, 'args': args, 'countdown': countdown})
+
+    import celery as celery_mod
+    monkeypatch.setattr(celery_mod, 'current_app', FakeCelery())
+
+    with app.app_context():
+        MailCampaignService._schedule_post_submit_analytics_sync(42)
+
+    assert calls == [{
+        'name': 'open_letter.sync_campaign_analytics',
+        'args': [42],
+        'countdown': 20 * 60,
+    }]
+
+
+def test_sync_due_campaign_analytics_fans_out(app, monkeypatch):
+    with app.app_context():
+        from datetime import datetime, timezone
+        from app import db
+        from app.models import MailCampaign
+        from app.services.mail_campaign_service import MailCampaignService
+
+        campaign = MailCampaign(
+            status='submitted',
+            lead_count=1,
+            created_by='user-1',
+            olc_order_id='99',
+            submitted_at=datetime.now(timezone.utc),
+        )
+        db.session.add(campaign)
+        db.session.commit()
+
+        called = []
+
+        def fake_sync(self, campaign_id):
+            called.append(campaign_id)
+            return MailCampaign.query.get(campaign_id)
+
+        monkeypatch.setattr(MailCampaignService, 'sync_campaign_analytics', fake_sync)
+        result = MailCampaignService().sync_due_campaign_analytics(limit=5)
+
+        assert campaign.id in called
+        assert result['synced'] == 1
+        assert result['failed'] == 0
+
+
+def test_sync_due_campaign_analytics_skips_old_mailed(app, monkeypatch):
+    with app.app_context():
+        from datetime import datetime, timedelta, timezone
+        from app import db
+        from app.models import MailCampaign
+        from app.services.mail_campaign_service import MailCampaignService
+
+        old = MailCampaign(
+            status='mailed',
+            lead_count=1,
+            created_by='user-1',
+            olc_order_id='88',
+            submitted_at=datetime.now(timezone.utc) - timedelta(days=60),
+            analytics_synced_at=None,
+        )
+        db.session.add(old)
+        db.session.commit()
+
+        called = []
+
+        def fake_sync(self, campaign_id):
+            called.append(campaign_id)
+            return MailCampaign.query.get(campaign_id)
+
+        monkeypatch.setattr(MailCampaignService, 'sync_campaign_analytics', fake_sync)
+        result = MailCampaignService().sync_due_campaign_analytics(limit=5)
+
+        assert called == []
+        assert result['synced'] == 0
+        assert result['attempted'] == 0

@@ -74,6 +74,7 @@ import WorkHistoryIcon from '@mui/icons-material/WorkHistory'
 import AccountTreeIcon from '@mui/icons-material/AccountTree'
 import ListAltIcon from '@mui/icons-material/ListAlt'
 import LocalPostOfficeIcon from '@mui/icons-material/LocalPostOffice'
+import Inventory2Icon from '@mui/icons-material/Inventory2'
 import type { Theme } from '@mui/material/styles'
 import TravelExploreIcon from '@mui/icons-material/TravelExplore'
 import { usePipelineStatus } from './context/PipelineStatusContext'
@@ -409,6 +410,7 @@ const NAV_SECTIONS = [
         label: null,
         items: [
           { label: 'Direct Mail', path: '/marketing/direct-mail', icon: <LocalPostOfficeIcon />, badgeKey: null },
+          { label: 'Mail Batches', path: '/marketing/direct-mail/batches', icon: <Inventory2Icon />, badgeKey: null },
         ],
       },
     ],
@@ -509,17 +511,24 @@ function secondaryColumnSx(expanded: boolean, theme: Theme) {
 // Page wrapper components that handle route params / navigation
 // ---------------------------------------------------------------------------
 
-/** Direct Mail — setup only; legacy tab URLs redirect to work queues. */
+/** Direct Mail — setup at /marketing/direct-mail; batches at /batches. */
 function DirectMailRoute() {
   const [searchParams] = useSearchParams()
   const tab = searchParams.get('tab')
-  if (tab === 'queue' || tab === 'campaigns') {
+  if (tab === 'queue') {
     return <Navigate to="/queues/ready-to-mail" replace />
+  }
+  if (tab === 'campaigns') {
+    return <Navigate to="/marketing/direct-mail/batches" replace />
   }
   if (tab === 'lists') {
     return <Navigate to="/properties/outreach-lists" replace />
   }
-  return <MarketingHub />
+  return <MarketingHub mode="setup" />
+}
+
+function MailBatchesRoute() {
+  return <MarketingHub mode="batches" />
 }
 
 function MarketingRedirect({ to }: { to: string }) {
@@ -2276,7 +2285,7 @@ function App() {
             </Box>
           ) : null}
           <Avatar
-            src={user?.is_admin ? '/images/avatar.png' : undefined}
+            src={user ? '/images/avatar.png' : undefined}
             alt={user?.display_name ?? 'User'}
             onClick={() => setAvatarOpen(true)}
             onKeyDown={(e) => {
@@ -2297,9 +2306,14 @@ function App() {
               transition: 'transform 0.2s',
               '&:hover': { transform: 'scale(1.05)' },
               '&:focus-visible': { outline: '3px solid', outlineColor: 'primary.main', outlineOffset: '2px' },
+              '& img': {
+                objectFit: 'cover',
+                objectPosition: 'center 18%',
+              },
             }}
             aria-label="Open user menu"
             aria-haspopup="true"
+            data-testid="appbar-user-avatar"
           >
             {user?.display_name ? user.display_name.charAt(0).toUpperCase() : '?'}
           </Avatar>
@@ -2481,6 +2495,7 @@ function App() {
           <Route path="/properties/outreach-lists" element={<MarketingListManager />} />
           <Route path="/marketing" element={<MarketingRedirect to="/marketing/direct-mail" />} />
           <Route path="/marketing/direct-mail" element={<DirectMailRoute />} />
+          <Route path="/marketing/direct-mail/batches" element={<MailBatchesRoute />} />
           <Route path="/marketing/open-letter" element={<MarketingRedirect to="/marketing/direct-mail" />} />
           <Route path="/import/open-letter" element={<MarketingRedirect to="/marketing/direct-mail" />} />
           {/* Multifamily routes (Req 14.1) */}

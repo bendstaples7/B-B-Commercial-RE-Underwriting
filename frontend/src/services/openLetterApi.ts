@@ -133,6 +133,10 @@ export interface MailCampaign {
   olc_order_id?: string | null
   status: string
   lead_count: number
+  staged_count?: number | null
+  submitted_count?: number | null
+  invalid_at_submit_count?: number | null
+  submit_drop_summary?: Record<string, number> | null
   cost?: number | null
   cost_per_piece?: number | null
   product_id?: number | null

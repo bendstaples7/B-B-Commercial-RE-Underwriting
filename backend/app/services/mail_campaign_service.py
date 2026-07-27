@@ -1,7 +1,9 @@
 """Mail campaign service — submit OLC orders and update leads."""
 from __future__ import annotations
 
+import copy
 import logging
+from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -45,6 +47,23 @@ _STATUS_PRIORITY = {'Failed': 3, 'Corrected': 2, 'Verified': 1}
 _FEEDBACK_QUEUE_STATUSES = ('queued', 'sent', 'failed', 'invalid_address')
 
 
+def _lead_id_from_olc_recipient(recip: dict[str, Any]) -> int | None:
+    """Extract lead_id from OLC recipient meta shapes (meta.data or meta_data)."""
+    meta = recip.get('meta') if isinstance(recip.get('meta'), dict) else {}
+    data = meta.get('data') if isinstance(meta.get('data'), dict) else {}
+    lead_raw = data.get('lead_id') if isinstance(data, dict) else None
+    if lead_raw is None:
+        meta_data = recip.get('meta_data') if isinstance(recip.get('meta_data'), dict) else {}
+        lead_raw = meta_data.get('lead_id')
+    if lead_raw is None and isinstance(meta, dict):
+        # Some payloads nest lead_id directly under meta
+        lead_raw = meta.get('lead_id')
+    try:
+        return int(lead_raw) if lead_raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def collapse_recipients_by_lead(
     recipients: list[dict[str, Any]],
 ) -> dict[int, dict[str, Any]]:
@@ -53,12 +72,8 @@ def collapse_recipients_by_lead(
     for recip in recipients:
         if not isinstance(recip, dict):
             continue
-        meta = recip.get('meta') if isinstance(recip.get('meta'), dict) else {}
-        data = meta.get('data') if isinstance(meta.get('data'), dict) else {}
-        lead_raw = data.get('lead_id')
-        try:
-            lead_id = int(lead_raw)
-        except (TypeError, ValueError):
+        lead_id = _lead_id_from_olc_recipient(recip)
+        if lead_id is None:
             continue
         status = (recip.get('addressStatus') or '').strip() or 'Unknown'
         prior = by_lead.get(lead_id)
@@ -90,6 +105,136 @@ class MailCampaignService:
         preset = get_active_preset(presets, active_id or config.active_creative_preset_id)
         street = street or street_return_address(config.return_address)
         return preset, street
+
+    def _nearest_sibling_creative(
+        self,
+        campaign: MailCampaign,
+        *,
+        max_age_days: int = 30,
+    ) -> tuple[MailCampaign, dict[str, Any]] | None:
+        """Pick a same-user creative snapshot closest in time (not merely newest)."""
+        from datetime import timedelta
+        from sqlalchemy import and_, or_
+
+        anchor = campaign.submitted_at or campaign.created_at
+        if anchor is None:
+            return None
+        if anchor.tzinfo is None:
+            anchor = anchor.replace(tzinfo=timezone.utc)
+        window = timedelta(days=max(1, int(max_age_days)))
+        window_start = anchor - window
+        window_end = anchor + window
+        candidates = (
+            MailCampaign.query
+            .filter(
+                MailCampaign.created_by == campaign.created_by,
+                MailCampaign.id != campaign.id,
+                MailCampaign.creative.isnot(None),
+            )
+            .filter(or_(
+                and_(
+                    MailCampaign.submitted_at.isnot(None),
+                    MailCampaign.submitted_at.between(window_start, window_end),
+                ),
+                and_(
+                    MailCampaign.submitted_at.is_(None),
+                    MailCampaign.created_at.isnot(None),
+                    MailCampaign.created_at.between(window_start, window_end),
+                ),
+            ))
+            .all()
+        )
+        best: tuple[float, MailCampaign, dict[str, Any]] | None = None
+        for sibling in candidates:
+            creative = sibling.creative
+            if not isinstance(creative, dict) or not creative:
+                continue
+            sibling_ts = sibling.submitted_at or sibling.created_at
+            if sibling_ts is None:
+                continue
+            if sibling_ts.tzinfo is None:
+                sibling_ts = sibling_ts.replace(tzinfo=timezone.utc)
+            delta = abs((sibling_ts - anchor).total_seconds())
+            if delta > window.total_seconds():
+                continue
+            if best is None or delta < best[0]:
+                best = (delta, sibling, creative)
+        if best is None:
+            return None
+        return best[1], best[2]
+
+    def backfill_campaign_creative(
+        self,
+        campaign: MailCampaign,
+        *,
+        commit: bool = True,
+        max_sibling_age_days: int = 30,
+    ) -> bool:
+        """One-shot fill for missing ``campaign.creative`` (admin/script only).
+
+        Prefer a same-user sibling within ``max_sibling_age_days`` of this campaign's
+        submit/create time (nearest, not newest). Otherwise snapshot current config
+        without persisting config migrations. Never call from list/get — those stay
+        read-only.
+        """
+        if isinstance(campaign.creative, dict) and campaign.creative:
+            return False
+
+        source: dict[str, Any] | None = None
+        nearest = self._nearest_sibling_creative(
+            campaign, max_age_days=max_sibling_age_days,
+        )
+        if nearest is not None:
+            sibling, creative = nearest
+            source = copy.deepcopy(creative)
+            source['backfilled_from_campaign_id'] = sibling.id
+        else:
+            try:
+                config = self._config_service.require_config(campaign.created_by)
+            except Exception:
+                logger.exception(
+                    'Cannot backfill creative for campaign %s — config unavailable',
+                    campaign.id,
+                )
+                return False
+            # Read-only resolve: do not mutate open_letter_config on this path.
+            presets, active_id, street = migrate_legacy_return_into_presets(
+                config.return_address,
+                getattr(config, 'creative_presets', None),
+                getattr(config, 'active_creative_preset_id', None),
+            )
+            preset = get_active_preset(
+                presets, active_id or getattr(config, 'active_creative_preset_id', None),
+            )
+            street = street or street_return_address(config.return_address)
+            source = snapshot_creative(
+                preset,
+                template_id=campaign.template_id or config.default_template_id,
+                template_name=campaign.template_name or config.default_template_name,
+                product_id=campaign.product_id or config.default_product_id,
+                envelope_type=(preset or {}).get('envelope_color'),
+            )
+            if source is not None and street is not None:
+                source['return_address'] = dict(street)
+            if source is not None:
+                source['backfilled_from'] = 'open_letter_config'
+
+        if not source:
+            return False
+
+        campaign.creative = source
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(campaign, 'creative')
+        if commit:
+            db.session.commit()
+        logger.info(
+            'Backfilled creative for campaign %s (keys=%s)',
+            campaign.id, sorted(source.keys()),
+        )
+        return True
+
+    # Back-compat alias for scripts/tests that still import the old name.
+    ensure_campaign_creative = backfill_campaign_creative
 
     def create_and_dispatch_send(self, user_id: str, *, force: bool = False) -> MailCampaign:
         config = self._config_service.require_config(user_id)
@@ -138,9 +283,13 @@ class MailCampaignService:
             )
         preset = apply_template_style_to_preset(preset, style)
 
+        staged = len(queued)
         campaign = MailCampaign(
             status='pending',
-            lead_count=len(queued),
+            lead_count=staged,
+            staged_count=staged,
+            submitted_count=None,
+            invalid_at_submit_count=None,
             product_id=config.default_product_id,
             template_id=template_id,
             template_name=template_name,
@@ -569,17 +718,23 @@ class MailCampaignService:
         contacts = []
         lead_by_item: dict[int, Lead] = {}
         invalid_lead_ids: list[int] = []
+        drop_reasons: Counter[str] = Counter()
+        staged_at_submit = len(items)
+        if campaign.staged_count is None:
+            campaign.staged_count = staged_at_submit
         for item in items:
             lead = Lead.query.get(item.lead_id)
             if lead is None:
                 item.status = 'failed'
                 item.validation_error = 'Lead not found'
+                drop_reasons['Lead not found'] += 1
                 continue
             persist_embedded_address_fields(lead)
             validation_error = validate_owner_mailing_address(lead)
             if validation_error:
                 item.status = 'invalid_address'
                 item.validation_error = validation_error
+                drop_reasons[validation_error] += 1
                 cancel_pending_mail_follow_up_tasks(
                     lead.id,
                     actor=campaign.created_by,
@@ -600,14 +755,31 @@ class MailCampaignService:
             ))
             lead_by_item[item.id] = lead
 
+        invalid_at_submit = sum(drop_reasons.values())
+        # Accumulate across redispatches: invalid_address rows stay off the queued
+        # query on later attempts, so overwriting would drop earlier local invalids.
+        campaign.invalid_at_submit_count = (
+            (campaign.invalid_at_submit_count or 0) + invalid_at_submit
+        )
+        if drop_reasons:
+            merged_summary = dict(campaign.submit_drop_summary or {})
+            for reason, count in drop_reasons.items():
+                merged_summary[reason] = merged_summary.get(reason, 0) + count
+            campaign.submit_drop_summary = merged_summary
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(campaign, 'submit_drop_summary')
+
         if not contacts:
             campaign.status = 'failed'
             campaign.error_message = 'No valid contacts to send'
+            campaign.submitted_count = 0
+            campaign.lead_count = 0
             db.session.commit()
             refresh_leads_after_mail_task_changes(invalid_lead_ids)
             return campaign
 
-        campaign.lead_count = len(contacts)
+        # Do not set submitted_count / final lead_count until place_order succeeds.
+        contact_count = len(contacts)
 
         payload: dict[str, Any] = {
             'contacts': contacts,
@@ -619,6 +791,10 @@ class MailCampaignService:
         if olc_return:
             payload['returnAddress'] = olc_return
             payload['returnAddressSettings'] = default_return_address_settings()
+
+        # Flush local drop tallies before the cancel re-read so refresh does not
+        # discard uncommitted invalid_at_submit / submit_drop_summary updates.
+        db.session.flush()
 
         # Re-check cancel under a fresh DB read before placing the OLC order.
         db.session.refresh(campaign)
@@ -634,6 +810,7 @@ class MailCampaignService:
             logger.exception('OLC place_order failed for campaign %s', campaign.id)
             campaign.status = 'failed'
             campaign.error_message = str(exc)[:2000]
+            campaign.submitted_count = None
             failed_lead_ids: list[int] = []
             for item in items:
                 if item.status == 'queued':
@@ -676,6 +853,8 @@ class MailCampaignService:
         campaign.olc_order_id = str(data.get('id') or '')
         campaign.status = 'submitted'
         campaign.submitted_at = datetime.now(timezone.utc)
+        campaign.lead_count = contact_count
+        campaign.submitted_count = contact_count
         cost = data.get('cost')
         if cost is not None:
             campaign.cost = Decimal(str(cost))
@@ -744,7 +923,28 @@ class MailCampaignService:
         db.session.commit()
         sync_pending_hubspot_completions(hubspot_sync_ids)
         refresh_leads_after_mail_task_changes(sent_lead_ids + invalid_lead_ids)
+        self._schedule_post_submit_analytics_sync(campaign.id)
         return campaign
+
+    @staticmethod
+    def _schedule_post_submit_analytics_sync(campaign_id: int) -> None:
+        """Enqueue a delayed OLC analytics/address sync after successful place_order."""
+        try:
+            from celery import current_app as celery_app  # noqa: PLC0415
+            celery_app.send_task(
+                'open_letter.sync_campaign_analytics',
+                args=[campaign_id],
+                countdown=20 * 60,
+            )
+            logger.info(
+                'Scheduled open_letter.sync_campaign_analytics for campaign_id=%s in 20m',
+                campaign_id,
+            )
+        except Exception:
+            logger.exception(
+                'Failed to schedule post-submit analytics sync for campaign %s',
+                campaign_id,
+            )
 
     @staticmethod
     def _recipient_from_contact_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -752,15 +952,7 @@ class MailCampaignService:
 
     @staticmethod
     def _lead_id_from_recipient(recip: dict[str, Any]) -> int | None:
-        meta = recip.get('meta') or {}
-        data = meta.get('data') if isinstance(meta, dict) else {}
-        if not isinstance(data, dict):
-            data = recip.get('meta_data') if isinstance(recip.get('meta_data'), dict) else {}
-        raw = data.get('lead_id') if isinstance(data, dict) else None
-        try:
-            return int(raw) if raw is not None else None
-        except (TypeError, ValueError):
-            return None
+        return _lead_id_from_olc_recipient(recip)
 
     @staticmethod
     def _history_has_address_feedback(lead: Lead, order_id: str, status: str) -> bool:
@@ -1082,10 +1274,59 @@ class MailCampaignService:
             address_summary = {'corrected': 0, 'failed': 0, 'verified': 0, 'unchanged': 0}
 
         campaign._address_feedback_summary = address_summary  # type: ignore[attr-defined]
+        campaign.address_feedback_summary = address_summary
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(campaign, 'address_feedback_summary')
         db.session.commit()
         if touch_ids:
             refresh_leads_after_mail_task_changes(touch_ids)
         return campaign
+
+    def sync_due_campaign_analytics(self, *, limit: int = 25) -> dict[str, int]:
+        """Fan-out sync for recent campaigns that need a fresh OLC pull (hourly beat)."""
+        from datetime import timedelta
+        from sqlalchemy import and_, or_
+
+        limit = max(1, min(int(limit or 25), 100))
+        now = datetime.now(timezone.utc)
+        recent_cutoff = now - timedelta(days=90)
+        terminal_cutoff = now - timedelta(days=14)
+        stale_before = now - timedelta(hours=12)
+        q = (
+            MailCampaign.query
+            .filter(MailCampaign.olc_order_id.isnot(None))
+            .filter(MailCampaign.olc_order_id != '')
+            .filter(MailCampaign.submitted_at.isnot(None))
+            .filter(MailCampaign.submitted_at >= recent_cutoff)
+            .filter(or_(
+                MailCampaign.status.in_(('submitted', 'processing')),
+                and_(
+                    MailCampaign.status.in_(('mailed', 'cancelled')),
+                    MailCampaign.submitted_at >= terminal_cutoff,
+                ),
+            ))
+            .filter(or_(
+                MailCampaign.analytics_synced_at.is_(None),
+                MailCampaign.analytics_synced_at < stale_before,
+            ))
+            .order_by(
+                MailCampaign.analytics_synced_at.asc().nullsfirst(),
+                MailCampaign.submitted_at.desc().nullslast(),
+            )
+            .limit(limit)
+        )
+        synced = 0
+        failed = 0
+        for campaign in q.all():
+            try:
+                self.sync_campaign_analytics(campaign.id)
+                synced += 1
+            except Exception:
+                logger.exception(
+                    'Scheduled analytics sync failed for campaign %s', campaign.id,
+                )
+                failed += 1
+        return {'synced': synced, 'failed': failed, 'attempted': synced + failed}
 
     def list_campaigns(self, user_id: str, page: int = 1, per_page: int = 25) -> tuple[list[MailCampaign], int]:
         page = max(1, page)
@@ -1225,6 +1466,14 @@ class MailCampaignService:
             'olc_order_id': campaign.olc_order_id,
             'status': campaign.status,
             'lead_count': campaign.lead_count,
+            'staged_count': campaign.staged_count,
+            'submitted_count': (
+                campaign.submitted_count
+                if campaign.submitted_count is not None
+                else campaign.lead_count
+            ),
+            'invalid_at_submit_count': campaign.invalid_at_submit_count,
+            'submit_drop_summary': campaign.submit_drop_summary,
             'cost': float(campaign.cost) if campaign.cost is not None else None,
             'cost_per_piece': float(campaign.cost_per_piece) if campaign.cost_per_piece is not None else None,
             'product_id': campaign.product_id,
@@ -1248,6 +1497,8 @@ class MailCampaignService:
             'created_at': campaign.created_at.isoformat() if campaign.created_at else None,
         }
         address_summary = getattr(campaign, '_address_feedback_summary', None)
+        if address_summary is None:
+            address_summary = campaign.address_feedback_summary
         if address_summary is not None:
             payload['address_feedback'] = address_summary
         cancel_meta = getattr(campaign, '_cancel_meta', None)

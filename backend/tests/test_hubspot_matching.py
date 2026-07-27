@@ -9,6 +9,7 @@ write Lead and HubSpotMatch rows to the database.  The ``app`` fixture from
 conftest.py provides an in-memory SQLite database with all tables created.
 """
 import pytest
+from unittest.mock import patch
 from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 
@@ -17,6 +18,16 @@ from app.models.lead import Lead
 from app.models.hubspot_deal import HubSpotDeal
 from app.models.hubspot_contact import HubSpotContact
 from app.services.hubspot_matcher_service import HubSpotMatcherService
+
+# match_deal → complete_property_address can call Cook GIS for street-only
+# placeholders. Hypothesis property tests must never hit real HTTP.
+@pytest.fixture(autouse=True)
+def _stub_gis_street_fill_for_matcher_tests():
+    with patch(
+        'app.services.property_address_service._gis_fill_from_street',
+        return_value=None,
+    ):
+        yield
 
 # ---------------------------------------------------------------------------
 # Shared strategies
@@ -133,7 +144,7 @@ class TestDealMatchConfidence:
             db.session.flush()
 
             svc = HubSpotMatcherService()
-            match = svc.match_deal(deal)
+            match = svc.match_deal(deal, stage_label_map={})
             db.session.flush()
 
             assert match.confidence == "HIGH", (
@@ -173,7 +184,7 @@ class TestDealMatchConfidence:
             db.session.flush()
 
             svc = HubSpotMatcherService()
-            match = svc.match_deal(deal)
+            match = svc.match_deal(deal, stage_label_map={})
             db.session.flush()
 
             assert match.confidence == "MEDIUM", (
@@ -205,7 +216,7 @@ class TestDealMatchConfidence:
             db.session.flush()
 
             svc = HubSpotMatcherService()
-            match = svc.match_deal(deal)
+            match = svc.match_deal(deal, stage_label_map={})
             db.session.flush()
 
             assert match.confidence == "UNMATCHED", (
@@ -235,12 +246,12 @@ class TestDealMatchConfidence:
             db.session.flush()
 
             svc = HubSpotMatcherService()
-            match1 = svc.match_deal(deal)
+            match1 = svc.match_deal(deal, stage_label_map={})
             db.session.flush()
             confidence1 = match1.confidence
 
             # Second call — _upsert_match updates the existing record.
-            match2 = svc.match_deal(deal)
+            match2 = svc.match_deal(deal, stage_label_map={})
             db.session.flush()
             confidence2 = match2.confidence
 
@@ -271,7 +282,7 @@ class TestDealMatchConfidence:
             db.session.flush()
 
             svc = HubSpotMatcherService()
-            match = svc.match_deal(deal)
+            match = svc.match_deal(deal, stage_label_map={})
             db.session.flush()
 
             assert match.confidence == "MEDIUM"

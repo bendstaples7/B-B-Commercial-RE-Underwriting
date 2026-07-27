@@ -1881,6 +1881,10 @@ class TestSubmitCampaignFollowUp:
             ).first()
             assert follow_up is not None
             assert 'Follow up after mailer' in follow_up.title
+            refreshed = MailCampaign.query.get(campaign.id)
+            assert refreshed.status == 'submitted'
+            assert refreshed.submitted_count == 1
+            assert refreshed.lead_count == 1
 
     def test_submit_campaign_failure_cancels_pending_follow_up(self, app, fernet_key, monkeypatch):
         from app import db
@@ -1929,4 +1933,82 @@ class TestSubmitCampaignFollowUp:
 
             assert MailQueueItem.query.get(item.id).status == 'failed'
             assert LeadTask.query.get(pending.id).status == 'cancelled'
+            failed_campaign = MailCampaign.query.get(campaign.id)
+            assert failed_campaign.status == 'failed'
+            assert failed_campaign.submitted_count is None
+            # OLC outage marks queue items failed but must not count as local invalid.
+            assert (failed_campaign.invalid_at_submit_count or 0) == 0
             refresh.assert_called_once_with([lead.id])
+
+    def test_submit_campaign_accumulates_invalid_drops_across_attempts(
+        self, app, fernet_key, monkeypatch,
+    ):
+        from app import db
+        from app.services.open_letter_client_service import OpenLetterClientService
+
+        monkeypatch.setenv('HUBSPOT_ENCRYPTION_KEY', fernet_key)
+
+        with app.app_context():
+            good = _make_lead(app, '10 Good St')
+            bad = _make_lead(
+                app,
+                '11 Bad St',
+                mailing_address=None,
+                mailing_city=None,
+                mailing_state=None,
+                mailing_zip=None,
+            )
+            token = OpenLetterClientService.encrypt_token('test-token')
+            config = OpenLetterConfig(
+                user_id=USER_ID,
+                encrypted_api_token=token,
+                batch_minimum=1,
+                default_product_id='prod-1',
+                default_template_id='tmpl-1',
+            )
+            campaign = MailCampaign(
+                status='pending',
+                lead_count=2,
+                staged_count=2,
+                product_id='prod-1',
+                template_id='tmpl-1',
+                creative=_campaign_creative(),
+                created_by=USER_ID,
+                invalid_at_submit_count=1,
+                submit_drop_summary={'No owner mailing street address': 1},
+            )
+            db.session.add_all([config, campaign])
+            db.session.flush()
+            db.session.add_all([
+                MailQueueItem(
+                    lead_id=good.id, user_id=USER_ID, status='queued', campaign_id=campaign.id,
+                ),
+                MailQueueItem(
+                    lead_id=bad.id, user_id=USER_ID, status='queued', campaign_id=campaign.id,
+                ),
+            ])
+            db.session.commit()
+
+            mock_client = MagicMock()
+            mock_client.place_order.return_value = {
+                'data': {'id': 'olc-9', 'cost': 1.0},
+            }
+            cfg_svc = MagicMock()
+            cfg_svc.require_config.return_value = config
+            cfg_svc.get_client.return_value = mock_client
+
+            svc = MailCampaignService()
+            svc._config_service = cfg_svc
+
+            with patch('app.services.mail_campaign_service.refresh_leads_after_mail_task_changes'):
+                with patch.object(
+                    MailCampaignService,
+                    '_schedule_post_submit_analytics_sync',
+                    staticmethod(lambda _cid: None),
+                ):
+                    result = svc.submit_campaign(campaign.id)
+
+            assert result.status == 'submitted'
+            assert result.submitted_count == 1
+            assert result.invalid_at_submit_count == 2
+            assert result.submit_drop_summary['No owner mailing street address'] == 2

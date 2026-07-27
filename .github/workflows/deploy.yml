@@ -15,9 +15,9 @@ on:
   workflow_dispatch:
     inputs:
       target_sha:
-        description: 'SHA to deploy (leave blank to deploy HEAD of main)'
-        required: false
-        default: ''
+        description: 'Exact 40-char commit SHA to deploy (required for manual Dispatch)'
+        required: true
+        type: string
       skip_http_preflight:
         description: 'Skip public /api/health wait (emergency redeploy when site is down but SSH works)'
         required: false
@@ -94,16 +94,38 @@ jobs:
           chmod 600 ~/.ssh/known_hosts
 
       # ── Step 4: Checkout early (scripts for HTTP/SSH preflight + deploy) ─
+      - name: Validate manual deploy target SHA
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          if [[ ! "$TARGET_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::workflow_dispatch requires an exact 40-character commit SHA in target_sha (got: '${TARGET_SHA}')"
+            exit 1
+          fi
+          echo "Manual deploy target_sha validated: $TARGET_SHA"
+
       - name: Checkout repo
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
-          ref: ${{ inputs.target_sha || github.event.workflow_run.head_sha || 'main' }}
+          # Manual Dispatch: only the validated exact SHA. Auto deploy: App CI head.
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_sha || github.event.workflow_run.head_sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Resolve target SHA
         id: resolve_sha
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            EXPECTED="$(echo '${{ inputs.target_sha }}' | tr 'A-F' 'a-f')"
+            ACTUAL="$(echo "$SHA" | tr 'A-F' 'a-f')"
+            if [ "$ACTUAL" != "$EXPECTED" ]; then
+              echo "::error::Checked-out SHA ($ACTUAL) does not match target_sha ($EXPECTED)"
+              exit 1
+            fi
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
       # ── Step 4b: Public /api/health wait (soft — does not block SSH deploy) ─
       # Soft so a broken public site can still be fixed via SSH. Use

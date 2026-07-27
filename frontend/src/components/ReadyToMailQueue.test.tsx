@@ -116,6 +116,11 @@ beforeEach(() => {
     default_product_id: 1,
     default_template_id: 371,
   })
+  vi.mocked(openLetterService.listCampaigns).mockResolvedValue({
+    campaigns: [],
+    total: 0,
+    creative_rollup: [],
+  })
   vi.mocked(queueService.getMailCandidates).mockResolvedValue(emptyCandidates)
   vi.mocked(openLetterService.enqueueCandidates).mockResolvedValue({
     ...queueSummary,
@@ -390,5 +395,107 @@ describe('ReadyToMailQueue', () => {
       expect(screen.queryByTestId('enqueue-feedback-snackbar')).not.toBeInTheDocument()
     })
     vi.useRealTimers()
+  })
+
+    it('shows submitting banner for pending campaigns only', async () => {
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
+    vi.mocked(openLetterService.listCampaigns).mockResolvedValue({
+      campaigns: [{
+        id: 9,
+        status: 'pending',
+        lead_count: 10,
+        response_count: 0,
+        created_by: 'u1',
+      }],
+      total: 1,
+      creative_rollup: [],
+    })
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mail-submitting-banner')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('mail-submitting-banner')).toHaveTextContent(
+      /Sending campaign #9 to Open Letter/i,
+    )
+    expect(screen.queryByTestId('mail-submitted-banner')).not.toBeInTheDocument()
+  })
+
+  it('omits campaign id when multiple campaigns are submitting', async () => {
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
+    vi.mocked(openLetterService.listCampaigns).mockResolvedValue({
+      campaigns: [
+        { id: 9, status: 'pending', lead_count: 1, response_count: 0, created_by: 'u1' },
+        { id: 10, status: 'processing', lead_count: 1, response_count: 0, created_by: 'u1' },
+      ],
+      total: 2,
+      creative_rollup: [],
+    })
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mail-submitting-banner')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('mail-submitting-banner')).toHaveTextContent(
+      /Sending 2 campaigns to Open Letter/i,
+    )
+    expect(screen.getByTestId('mail-submitting-banner')).not.toHaveTextContent(/#9/)
+  })
+
+  it('shows success banner for submitted campaigns, not submitting', async () => {
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
+    vi.mocked(openLetterService.listCampaigns).mockResolvedValue({
+      campaigns: [{
+        id: 2,
+        status: 'submitted',
+        lead_count: 501,
+        staged_count: 514,
+        submitted_count: 501,
+        invalid_at_submit_count: 13,
+        submit_drop_summary: { 'Incomplete city/state/ZIP': 2 },
+        olc_order_id: '2162245',
+        response_count: 0,
+        created_by: 'u1',
+        submitted_at: new Date().toISOString(),
+      }],
+      total: 1,
+      creative_rollup: [],
+    })
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('mail-submitted-banner')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('mail-submitting-banner')).not.toBeInTheDocument()
+    expect(screen.getByTestId('mail-submitted-banner')).toHaveTextContent(/Submitted to Open Letter/i)
+    expect(screen.getByTestId('mail-submitted-banner')).toHaveTextContent(/Staged 514 → submitted 501/)
+    expect(screen.getByTestId('mail-submitted-banner')).toHaveTextContent(/2× Incomplete city\/state\/ZIP/)
+    expect(screen.getByTestId('view-all-mail-batches')).toBeInTheDocument()
+  })
+
+  it('hides success banner for stale submitted campaigns', async () => {
+    vi.mocked(openLetterService.getAllQueued).mockResolvedValue(queueSummary)
+    vi.mocked(openLetterService.listCampaigns).mockResolvedValue({
+      campaigns: [{
+        id: 2,
+        status: 'submitted',
+        lead_count: 10,
+        response_count: 0,
+        created_by: 'u1',
+        submitted_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+      }],
+      total: 1,
+      creative_rollup: [],
+    })
+
+    renderPage()
+
+    await waitFor(() => {
+      expect(screen.getByTestId('view-all-mail-batches')).toBeInTheDocument()
+    })
+    expect(screen.queryByTestId('mail-submitted-banner')).not.toBeInTheDocument()
   })
 })

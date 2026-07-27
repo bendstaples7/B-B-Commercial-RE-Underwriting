@@ -186,6 +186,12 @@ celery.conf.update(
             'schedule': crontab(minute=45),
             'options': {'expires': 3300},
         },
+        # OLC address feedback + delivery analytics for submitted mail batches.
+        'open-letter-sync-campaign-analytics': {
+            'task': 'open_letter.sync_due_campaign_analytics',
+            'schedule': 3600,
+            'options': {'expires': 3300},
+        },
         # PIN resolve follows situs healing so newly complete Cook addresses are ready.
         'property-match-resolve-unambiguous-pins': {
             'task': 'property_match.resolve_unambiguous_pins',
@@ -1446,6 +1452,13 @@ def sync_open_letter_campaign_analytics(campaign_id: int) -> None:
     sync_mail_campaign_analytics(campaign_id)
 
 
+@celery.task(name='open_letter.sync_due_campaign_analytics')
+def sync_due_open_letter_campaign_analytics(limit: int = 25) -> dict:
+    """Hourly beat: sync OLC analytics/address feedback for recent orders."""
+    from app.tasks.open_letter_tasks import sync_due_mail_campaign_analytics
+    return sync_due_mail_campaign_analytics(limit=limit)
+
+
 # ---------------------------------------------------------------------------
 # HubSpot Webhook Processing Tasks
 # ---------------------------------------------------------------------------
@@ -1770,6 +1783,7 @@ REQUIRED_TASKS = {
     'hubspot.generate_backup',
     'open_letter.submit_campaign',
     'open_letter.sync_campaign_analytics',
+    'open_letter.sync_due_campaign_analytics',
     'hubspot.post_import_pipeline',
     'hubspot.rescore_only',
     'hubspot.scheduled_engagement_sync',

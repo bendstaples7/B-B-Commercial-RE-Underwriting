@@ -32,3 +32,13 @@ def sync_mail_campaign_analytics(campaign_id: int) -> None:
         except Exception:
             logger.exception('sync_mail_campaign_analytics failed for campaign_id=%s', campaign_id)
             raise
+
+
+def sync_due_mail_campaign_analytics(limit: int = 25) -> dict:
+    """Sync analytics for campaigns with OLC orders (beat entrypoint)."""
+    from app import create_app
+    from app.services.mail_campaign_service import MailCampaignService
+
+    app = create_app()
+    with app.app_context():
+        return MailCampaignService().sync_due_campaign_analytics(limit=limit)
