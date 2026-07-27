@@ -60,10 +60,36 @@ def test_separate_react_chunk_fails(spa):
     assert any("standalone" in e or "react-" in e for e in result.errors)
 
 
+def test_separate_react_dom_chunk_fails(spa):
+    html = BAD_REACT_SPLIT.replace(
+        'href="/assets/react-Dy14kWe3.js"',
+        'href="/assets/react-dom-Dy14kWe3.js"',
+    )
+    result = spa.check_spa_html_contract(html)
+    assert not result.ok
+    assert any("standalone" in e or "react-" in e for e in result.errors)
+
+
 def test_react_router_chunk_does_not_false_positive(spa):
     html = GOOD_HTML.replace(
         'href="/assets/mui-1.js"',
         'href="/assets/react-router-AbCdEfGh.js"',
+    )
+    result = spa.check_spa_html_contract(html)
+    assert result.ok, result.errors
+
+
+@pytest.mark.parametrize(
+    "chunk",
+    [
+        "/assets/react-select-AbCdEfGh.js",
+        "/assets/react-datepicker-AbCdEfGh.js",
+    ],
+)
+def test_react_package_chunks_do_not_false_positive(spa, chunk):
+    html = GOOD_HTML.replace(
+        'href="/assets/mui-1.js"',
+        f'href="{chunk}"',
     )
     result = spa.check_spa_html_contract(html)
     assert result.ok, result.errors

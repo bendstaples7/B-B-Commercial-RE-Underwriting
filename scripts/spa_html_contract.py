@@ -12,13 +12,10 @@ import re
 from dataclasses import dataclass
 
 # Standalone React / ReactDOM runtime chunks only (Vite name: react-<hash>.js).
-# Negative lookahead skips package chunks like react-router-*.js / react-select-*.js
-# so a future manualChunk name cannot false-positive and roll back a healthy Deploy.
+# The hash portion must not contain another dash, so package chunks such as
+# react-router-*.js or react-datepicker-*.js do not false-positive.
 SEPARATE_REACT_CHUNK_RE = re.compile(
-    r"""["'][^"']*/assets/react-(?!"""
-    r"""(?:router|select|query|redux|hook-form|i18next|helmet|markdown)"""
-    r"""(?:[-.]|$))"""
-    r"""(?:dom-)?[A-Za-z0-9_-]{6,}\.js["']""",
+    r"""["'][^"']*/assets/react-(?:dom-)?[A-Za-z0-9_]{6,}\.js["']""",
     re.IGNORECASE,
 )
 VENDOR_ASSET_RE = re.compile(
