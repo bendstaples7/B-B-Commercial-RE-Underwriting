@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   isMailCampaignSubmitting,
   isRecentMailCampaignSubmitted,
+  mailCampaignStatusChipLabel,
   mailCampaignStatusColor,
   mailCampaignStatusLabel,
 } from './mailCampaignStatusColor'
@@ -17,6 +18,7 @@ describe('mailCampaignStatus helpers', () => {
 
   it('labels submitted as accepted by Open Letter', () => {
     expect(mailCampaignStatusLabel('submitted')).toBe('Submitted to Open Letter')
+    expect(mailCampaignStatusChipLabel('submitted')).toBe('Submitted')
     expect(mailCampaignStatusLabel('pending')).toBe('Sending…')
     expect(mailCampaignStatusLabel('mailed')).toBe('Mailed')
   })

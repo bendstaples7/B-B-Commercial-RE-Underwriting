@@ -36,7 +36,6 @@ def _campaign_creative():
         'first_name': 'Test',
         'last_name': 'Sender',
         'phone': '3125550100',
-        'font_name': 'Waiting for the Sunrise',
         'font_color': '#25408F',
         'return_address': {
             'address1': '123 Main St',

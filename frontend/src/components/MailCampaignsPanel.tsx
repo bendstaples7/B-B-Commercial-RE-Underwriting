@@ -12,12 +12,14 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  Tooltip,
   Typography,
 } from '@mui/material'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { formatLastMailedDate } from '@/utils/formatLastMailedDate'
 import {
+  mailCampaignStatusChipLabel,
   mailCampaignStatusColor,
   mailCampaignStatusLabel,
 } from '@/utils/mailCampaignStatusColor'
@@ -27,6 +29,42 @@ import openLetterService, {
   type MailCampaign,
 } from '@/services/openLetterApi'
 import { Link as RouterLink } from 'react-router-dom'
+
+const headerCellSx = {
+  fontWeight: 600,
+  color: 'text.secondary',
+  fontSize: '0.75rem',
+  letterSpacing: 0.02,
+  py: 0.75,
+  px: 1,
+} as const
+
+const bodyCellSx = {
+  fontWeight: 400,
+  color: 'text.primary',
+  fontSize: '0.75rem',
+  py: 0.75,
+  px: 1,
+  lineHeight: 1.35,
+} as const
+
+const wrapCellSx = {
+  ...bodyCellSx,
+  overflowWrap: 'anywhere' as const,
+  wordBreak: 'break-word' as const,
+}
+
+const statusHeaderSx = {
+  ...headerCellSx,
+  width: '6.5rem',
+  whiteSpace: 'nowrap' as const,
+}
+
+const statusBodySx = {
+  ...bodyCellSx,
+  width: '6.5rem',
+  whiteSpace: 'nowrap' as const,
+}
 
 function formatPct(rate: number | null | undefined): string {
   if (rate == null) return '—'
@@ -76,17 +114,8 @@ function CampaignRow({
 
   return (
     <TableRow data-testid={`mail-campaign-row-${campaign.id}`}>
-      <TableCell
-        sx={{
-          position: 'sticky',
-          left: 0,
-          zIndex: 1,
-          bgcolor: 'background.paper',
-          borderRight: 1,
-          borderColor: 'divider',
-        }}
-      >
-        <Typography variant="body2" component="div">
+      <TableCell sx={bodyCellSx}>
+        <Typography variant="inherit" component="div" sx={{ fontSize: 'inherit' }}>
           #{campaign.id}
         </Typography>
         {campaign.olc_order_id ? (
@@ -99,16 +128,18 @@ function CampaignRow({
           </Typography>
         )}
       </TableCell>
-      <TableCell>{formatLastMailedDate(campaign.submitted_at || campaign.created_at)}</TableCell>
-      <TableCell>{creativeSender(creative)}</TableCell>
-      <TableCell>{creative?.envelope_color || '—'}</TableCell>
-      <TableCell>
-        {[creative?.font_name, creative?.font_color].filter(Boolean).join(' / ') || '—'}
+      <TableCell sx={bodyCellSx}>
+        {formatLastMailedDate(campaign.submitted_at || campaign.created_at)}
       </TableCell>
-      <TableCell>{yn(creative?.include_email)}</TableCell>
-      <TableCell>{yn(creative?.include_website)}</TableCell>
-      <TableCell>{campaign.template_name || campaign.template_id || '—'}</TableCell>
-      <TableCell>
+      <TableCell sx={wrapCellSx}>{creativeSender(creative)}</TableCell>
+      <TableCell sx={wrapCellSx}>{creative?.envelope_color || '—'}</TableCell>
+      <TableCell sx={bodyCellSx}>{creative?.font_color || '—'}</TableCell>
+      <TableCell sx={bodyCellSx}>{yn(creative?.include_email)}</TableCell>
+      <TableCell sx={bodyCellSx}>{yn(creative?.include_website)}</TableCell>
+      <TableCell sx={wrapCellSx}>
+        {campaign.template_name || campaign.template_id || '—'}
+      </TableCell>
+      <TableCell sx={bodyCellSx}>
         {submittedCount}
         {reconciliationCaption ? (
           <Typography variant="caption" display="block" color="text.secondary">
@@ -121,7 +152,7 @@ function CampaignRow({
           </Typography>
         ) : null}
       </TableCell>
-      <TableCell>
+      <TableCell sx={bodyCellSx}>
         {campaign.address_feedback ? (
           <Typography variant="caption" component="div" sx={{ whiteSpace: 'nowrap' }}>
             C{campaign.address_feedback.corrected ?? 0}
@@ -134,22 +165,29 @@ function CampaignRow({
           '—'
         )}
       </TableCell>
-      <TableCell>
+      <TableCell sx={bodyCellSx}>
         {campaign.cost != null
           ? `$${Number(campaign.cost).toFixed(2)}`
           : '—'}
       </TableCell>
-      <TableCell>
-        <Chip
-          label={mailCampaignStatusLabel(campaign.status)}
-          size="small"
-          color={mailCampaignStatusColor(campaign.status)}
-        />
+      <TableCell sx={statusBodySx}>
+        <Tooltip title={mailCampaignStatusLabel(campaign.status)} enterDelay={400}>
+          <Chip
+            label={mailCampaignStatusChipLabel(campaign.status)}
+            size="small"
+            color={mailCampaignStatusColor(campaign.status)}
+            sx={{
+              height: 22,
+              fontSize: '0.7rem',
+              fontWeight: 500,
+              '& .MuiChip-label': { px: 1 },
+            }}
+          />
+        </Tooltip>
       </TableCell>
-      <TableCell>{formatPct(campaign.scan_rate)}</TableCell>
-      <TableCell>{formatPct(deliveryRate)}</TableCell>
-      <TableCell>{formatPct(campaign.response_rate)}</TableCell>
-      <TableCell>
+      <TableCell sx={bodyCellSx}>{formatPct(deliveryRate)}</TableCell>
+      <TableCell sx={bodyCellSx}>{formatPct(campaign.response_rate)}</TableCell>
+      <TableCell sx={bodyCellSx}>
         {canCancel ? (
           <Button
             size="small"
@@ -182,23 +220,24 @@ function CreativeCompareTable({ rows }: { rows: CreativeRollupRow[] }) {
       <Typography variant="subtitle1" gutterBottom>
         Compare creatives
       </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-        Scan rate uses Open Letter QR scans as an open proxy. Response rate counts
-        calls attributed to that mail campaign.
-      </Typography>
-      <TableContainer component={Paper} sx={{ overflowX: 'auto', maxWidth: '100%' }}>
-        <Table size="small" sx={{ minWidth: 720 }}>
+      <TableContainer
+        component={Paper}
+        sx={{
+          maxWidth: '100%',
+          overflowX: 'auto',
+        }}
+      >
+        <Table size="small" sx={{ width: '100%', tableLayout: 'fixed' }}>
           <TableHead>
             <TableRow>
-              <TableCell>Sender</TableCell>
-              <TableCell>Envelope</TableCell>
-              <TableCell>Font</TableCell>
-              <TableCell>Email?</TableCell>
-              <TableCell>Website?</TableCell>
-              <TableCell>Campaigns</TableCell>
-              <TableCell>Submitted</TableCell>
-              <TableCell>Scan rate</TableCell>
-              <TableCell>Response</TableCell>
+              <TableCell sx={headerCellSx}>Sender</TableCell>
+              <TableCell sx={headerCellSx}>Envelope</TableCell>
+              <TableCell sx={headerCellSx}>Ink</TableCell>
+              <TableCell sx={headerCellSx}>Email included</TableCell>
+              <TableCell sx={headerCellSx}>Website included</TableCell>
+              <TableCell sx={headerCellSx}>Campaigns</TableCell>
+              <TableCell sx={headerCellSx}>Submitted</TableCell>
+              <TableCell sx={headerCellSx}>Response</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -207,23 +246,21 @@ function CreativeCompareTable({ rows }: { rows: CreativeRollupRow[] }) {
                 key={[
                   row.sender_display_name,
                   row.envelope_color,
-                  row.font_name,
                   row.font_color,
                   String(row.include_email),
                   String(row.include_website),
                 ].join('|')}
               >
-                <TableCell>{row.sender_display_name}</TableCell>
-                <TableCell>{row.envelope_color}</TableCell>
-                <TableCell>
-                  {[row.font_name, row.font_color].filter((v) => v && v !== '—').join(' / ') || '—'}
+                <TableCell sx={wrapCellSx}>{row.sender_display_name}</TableCell>
+                <TableCell sx={wrapCellSx}>{row.envelope_color}</TableCell>
+                <TableCell sx={bodyCellSx}>
+                  {row.font_color && row.font_color !== '—' ? row.font_color : '—'}
                 </TableCell>
-                <TableCell>{yn(row.include_email)}</TableCell>
-                <TableCell>{yn(row.include_website)}</TableCell>
-                <TableCell>{row.campaign_count}</TableCell>
-                <TableCell>{row.lead_count}</TableCell>
-                <TableCell>{formatPct(row.scan_rate)}</TableCell>
-                <TableCell>{formatPct(row.response_rate)}</TableCell>
+                <TableCell sx={bodyCellSx}>{yn(row.include_email)}</TableCell>
+                <TableCell sx={bodyCellSx}>{yn(row.include_website)}</TableCell>
+                <TableCell sx={bodyCellSx}>{row.campaign_count}</TableCell>
+                <TableCell sx={bodyCellSx}>{row.lead_count}</TableCell>
+                <TableCell sx={bodyCellSx}>{formatPct(row.response_rate)}</TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -338,9 +375,25 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
             flexDirection: { xs: 'column', sm: 'row' },
           }}
         >
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, width: { xs: '100%', sm: 'auto' } }}>
+          <Box
+            sx={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 1,
+              alignItems: 'center',
+              width: { xs: '100%', sm: 'auto' },
+            }}
+          >
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ fontWeight: 600, mr: { xs: 0, sm: 0.5 } }}
+            >
+              Go to queues
+            </Typography>
             <Button
               size="small"
+              variant="outlined"
               component={RouterLink}
               to="/queues/ready-to-mail"
               sx={{ width: { xs: '100%', sm: 'auto' } }}
@@ -349,6 +402,7 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
             </Button>
             <Button
               size="small"
+              variant="outlined"
               component={RouterLink}
               to="/queues/skip-trace"
               sx={{ width: { xs: '100%', sm: 'auto' } }}
@@ -358,6 +412,7 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
           </Box>
           <Button
             size="small"
+            variant="outlined"
             startIcon={<RefreshIcon />}
             onClick={handleRefresh}
             disabled={isFetching}
@@ -379,6 +434,7 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
         >
           <Button
             size="small"
+            variant="outlined"
             startIcon={<RefreshIcon />}
             onClick={handleRefresh}
             disabled={isFetching}
@@ -399,62 +455,65 @@ export const MailCampaignsPanel: React.FC<{ embedded?: boolean }> = ({ embedded 
         </Alert>
       )}
       <CreativeCompareTable rows={data?.creative_rollup ?? []} />
-      <TableContainer component={Paper} sx={{ overflowX: 'auto', maxWidth: '100%' }}>
-        <Table size="small" sx={{ minWidth: 1100 }} data-testid="mail-campaigns-table">
-          <TableHead>
-            <TableRow>
-              <TableCell
-                sx={{
-                  position: 'sticky',
-                  left: 0,
-                  zIndex: 2,
-                  bgcolor: 'background.paper',
-                  borderRight: 1,
-                  borderColor: 'divider',
-                }}
-              >
-                Campaign
-              </TableCell>
-              <TableCell>Date</TableCell>
-              <TableCell>Sender</TableCell>
-              <TableCell>Envelope</TableCell>
-              <TableCell>Font</TableCell>
-              <TableCell>Email?</TableCell>
-              <TableCell>Website?</TableCell>
-              <TableCell>Template</TableCell>
-              <TableCell>Submitted</TableCell>
-              <TableCell>OLC feedback</TableCell>
-              <TableCell>Cost</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell>Scan rate</TableCell>
-              <TableCell>Delivered</TableCell>
-              <TableCell>Response</TableCell>
-              <TableCell>Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {(data?.campaigns ?? []).length === 0 ? (
+      <Box>
+        <Typography variant="subtitle1" gutterBottom>
+          Mailer campaigns
+        </Typography>
+        <TableContainer
+          component={Paper}
+          sx={{
+            maxWidth: '100%',
+            overflowX: 'auto',
+          }}
+        >
+          <Table
+            size="small"
+            sx={{ width: '100%', tableLayout: 'fixed' }}
+            data-testid="mail-campaigns-table"
+          >
+            <TableHead>
               <TableRow>
-                <TableCell colSpan={16} align="center">
-                  <Typography color="text.secondary" sx={{ py: 3 }}>
-                    No campaigns yet. Send a batch from Ready to Mail.
-                  </Typography>
-                </TableCell>
+                <TableCell sx={headerCellSx}>Campaign</TableCell>
+                <TableCell sx={headerCellSx}>Date</TableCell>
+                <TableCell sx={headerCellSx}>Sender</TableCell>
+                <TableCell sx={headerCellSx}>Envelope</TableCell>
+                <TableCell sx={headerCellSx}>Ink</TableCell>
+                <TableCell sx={headerCellSx}>Email included</TableCell>
+                <TableCell sx={headerCellSx}>Website included</TableCell>
+                <TableCell sx={headerCellSx}>Template</TableCell>
+                <TableCell sx={headerCellSx}>Submitted</TableCell>
+                <TableCell sx={headerCellSx}>OLC feedback</TableCell>
+                <TableCell sx={headerCellSx}>Cost</TableCell>
+                <TableCell sx={statusHeaderSx}>Status</TableCell>
+                <TableCell sx={headerCellSx}>Delivered</TableCell>
+                <TableCell sx={headerCellSx}>Response</TableCell>
+                <TableCell sx={headerCellSx}>Actions</TableCell>
               </TableRow>
-            ) : (
-              data?.campaigns.map((c) => (
-                <CampaignRow
-                  key={c.id}
-                  campaign={c}
-                  onCancel={handleCancel}
-                  onRelease={handleRelease}
-                  cancelling={cancelMutation.isPending}
-                />
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+            </TableHead>
+            <TableBody>
+              {(data?.campaigns ?? []).length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={15} align="center" sx={bodyCellSx}>
+                    <Typography color="text.secondary" sx={{ py: 3, fontSize: '0.875rem' }}>
+                      No campaigns yet. Send a batch from Ready to Mail.
+                    </Typography>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                data?.campaigns.map((c) => (
+                  <CampaignRow
+                    key={c.id}
+                    campaign={c}
+                    onCancel={handleCancel}
+                    onRelease={handleRelease}
+                    cancelling={cancelMutation.isPending}
+                  />
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      </Box>
     </Box>
   )
 }

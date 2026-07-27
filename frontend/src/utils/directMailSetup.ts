@@ -43,11 +43,11 @@ export function getActiveCreativePreset(
   return presets[0]
 }
 
-/** Font/ink come from the OLC template — confirmed when template_style or preset is stamped. */
+/** Confirmed when ink is stamped on template_style or the active preset (no typeface). */
 export function isTemplateStyleConfirmed(config: OpenLetterConfig | undefined): boolean {
-  if (config?.template_style?.font_name?.trim()) return true
+  if (config?.template_style?.font_color?.trim()) return true
   const preset = getActiveCreativePreset(config)
-  return Boolean(preset?.font_name?.trim())
+  return Boolean(preset?.font_color?.trim())
 }
 
 export function isSenderCreativeReady(config: OpenLetterConfig | undefined): boolean {

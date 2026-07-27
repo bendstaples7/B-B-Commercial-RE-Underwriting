@@ -14,6 +14,7 @@ export interface MailCreativePreset {
   include_email?: boolean
   include_website?: boolean
   envelope_color?: string | null
+  /** @deprecated Typeface is not tracked — always null; prefer font_color (ink). */
   font_name?: string | null
   font_color?: string | null
   olc_template_id?: number | null
@@ -35,11 +36,11 @@ export interface OpenLetterConfig {
   return_address?: Record<string, unknown> | null
   creative_presets?: MailCreativePreset[]
   active_creative_preset_id?: string | null
-  /** Auto-confirmed from the selected OLC template design (not user-selected). */
+  /** Auto-confirmed from the selected OLC template design (ink only; no typeface). */
   template_style?: {
-    font_name?: string | null
     font_color?: string | null
     fill?: string | null
+    readable?: boolean
     template_id?: number | string | null
     confirmed_from?: string
   } | null
@@ -164,7 +165,6 @@ export interface MailCampaign {
 export interface CreativeRollupRow {
   sender_display_name: string
   envelope_color: string
-  font_name: string
   font_color: string
   include_email: boolean
   include_website: boolean
@@ -192,9 +192,9 @@ export const openLetterService = {
     api.get('/open-letter/templates', { params }).then((r) => r.data),
 
   getTemplateStyle: (templateId: number): Promise<{
-    font_name?: string | null
     font_color?: string | null
     fill?: string | null
+    readable?: boolean
     template_id?: number | string | null
     confirmed_from?: string
   }> =>

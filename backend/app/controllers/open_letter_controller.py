@@ -95,11 +95,11 @@ def list_templates():
 @require_auth
 @handle_errors
 def get_template_style(template_id: int):
-    """Auto-confirm body font/ink from the Connect template design (read-only)."""
+    """Auto-confirm body ink from the Connect template design (read-only; no typeface)."""
     style = _config_service.resolve_template_style(g.user_id, template_id)
     if style is None:
         return jsonify({
-            'error': 'Could not confirm font/ink from this template',
+            'error': 'Could not confirm ink from this template',
             'template_id': template_id,
         }), 404
     return jsonify(style), 200

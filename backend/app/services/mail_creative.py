@@ -68,14 +68,22 @@ def _iter_template_nodes(node: Any):
             yield from _iter_template_nodes(item)
 
 
-def extract_letter_body_style(design: dict[str, Any] | None) -> dict[str, str | None]:
-    """Pull body font + ink from an OLC template design JSON.
+def extract_letter_body_style(design: dict[str, Any] | None) -> dict[str, Any]:
+    """Pull body ink from an OLC template design JSON.
 
     Prefers the primary letter body text node (merge tags / longest copy),
-    not footer / trim-guide chrome.
+    not footer / trim-guide chrome. ``fontFamily`` is used only as an internal
+    scoring signal — typeface names are never returned for product storage/UI.
+    ``readable`` is true only when body ink (fill / font_color) resolves.
     """
+    empty = {
+        'font_name': None,
+        'font_color': None,
+        'fill': None,
+        'readable': False,
+    }
     if not isinstance(design, dict):
-        return {'font_name': None, 'font_color': None, 'fill': None}
+        return empty
 
     candidates: list[tuple[int, dict[str, Any]]] = []
     for node in _iter_template_nodes(design):
@@ -96,16 +104,32 @@ def extract_letter_body_style(design: dict[str, Any] | None) -> dict[str, str | 
         candidates.append((score, node))
 
     if not candidates:
-        return {'font_name': None, 'font_color': None, 'fill': None}
+        return empty
 
     candidates.sort(key=lambda item: item[0], reverse=True)
     body = candidates[0][1]
     fill = _clean(body.get('fill') or body.get('color'))
+    font_color = ink_label_from_fill(fill)
+    ink_ok = bool(font_color or fill)
     return {
-        'font_name': _clean(body.get('fontFamily') or body.get('font_family')),
-        'font_color': ink_label_from_fill(fill),
+        'font_name': None,
+        'font_color': font_color,
         'fill': fill,
+        # Confirmed only when body ink resolves — not merely "text node found".
+        'readable': ink_ok,
     }
+
+
+def template_ink_confirmed(style: dict[str, Any] | None) -> bool:
+    """True when Connect template body ink is present (font_color or fill)."""
+    if not isinstance(style, dict):
+        return False
+    return bool(_clean(style.get('font_color')) or _clean(style.get('fill')))
+
+
+def template_style_readable(style: dict[str, Any] | None) -> bool:
+    """Deprecated alias for ``template_ink_confirmed``."""
+    return template_ink_confirmed(style)
 
 
 def format_mailer_phone(phone: str | None) -> str | None:
@@ -168,7 +192,8 @@ def normalize_preset(raw: dict[str, Any] | None) -> dict[str, Any]:
         'include_email': include_email,
         'include_website': include_website,
         'envelope_color': _clean(data.get('envelope_color')),
-        'font_name': _clean(data.get('font_name')),
+        # Typeface is not a product concept — never persist Connect fontFamily.
+        'font_name': None,
         'font_color': _clean(data.get('font_color')),
         'olc_template_id': template_id,
         'olc_template_name': _clean(data.get('olc_template_name')),
@@ -212,16 +237,18 @@ def apply_template_style_to_preset(
     preset: dict[str, Any] | None,
     style: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Stamp auto-confirmed font/ink from the OLC template onto a preset."""
+    """Stamp auto-confirmed ink from the OLC template onto a preset (no typeface)."""
     if preset is None:
         return None
     out = dict(preset)
+    out['font_name'] = None
     if not style:
         return out
-    font = _clean(style.get('font_name'))
-    color = _clean(style.get('font_color'))
-    if font:
-        out['font_name'] = font
+    color = (
+        _clean(style.get('font_color'))
+        or ink_label_from_fill(style.get('fill'))
+        or _clean(style.get('fill'))
+    )
     if color:
         out['font_color'] = color
     return out
@@ -360,13 +387,16 @@ def format_mailing_line(street: str, city: str, state: str, zip_code: str) -> st
 
 
 def creative_rollup_key(creative: dict[str, Any] | None) -> dict[str, Any]:
-    """Dimensions used for campaign comparison tables."""
+    """Dimensions used for campaign comparison tables (no typeface).
+
+    API break vs older rollups that included ``font_name``: campaigns that only
+    differed by Connect typeface now share a bucket (intentional).
+    """
     c = creative or {}
     envelope = c.get('olc_envelope_type') or c.get('envelope_color') or '—'
     return {
         'sender_display_name': c.get('sender_display_name') or '—',
         'envelope_color': envelope,
-        'font_name': c.get('font_name') or '—',
         'font_color': c.get('font_color') or '—',
         'include_email': bool(c.get('include_email')),
         'include_website': bool(c.get('include_website')),
