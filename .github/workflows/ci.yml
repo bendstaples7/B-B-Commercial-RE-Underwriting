@@ -278,7 +278,8 @@ jobs:
 
     services:
       postgres:
-        image: postgres:15
+        # ECR public mirror of library/postgres — avoids Docker Hub pull timeouts on GHA.
+        image: public.ecr.aws/docker/library/postgres:15
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -337,7 +338,8 @@ jobs:
 
     services:
       postgres:
-        image: postgres:15
+        # ECR public mirror of library/postgres — avoids Docker Hub pull timeouts on GHA.
+        image: public.ecr.aws/docker/library/postgres:15
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
