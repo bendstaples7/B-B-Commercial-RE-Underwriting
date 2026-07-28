@@ -6,7 +6,8 @@
  * - primary_task: first open task is call/email outreach (even when Key Contact
  *   directory is mounted) — phone/email sit next to the work
  * - key_contact_card: Key Contact mounted and primary task is not call/email
- * - recommended_action: no open tasks — inline under RA (when no Key Contact)
+ * - recommended_action: primary task is not outreach-capable (call/email/mail)
+ *   AND Key Contact directory is not visible — inline under RA
  * - none: no contact to show
  */
 import type { LeadTask, OutreachContact } from '@/types'

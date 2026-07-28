@@ -179,6 +179,27 @@ def normalize_owner_mailing_on_lead(
     )
 
 
+def normalize_owner_mailing_safe(
+    lead: Lead,
+    *,
+    rewrite_street: bool = True,
+) -> list[str]:
+    """Best-effort ``normalize_owner_mailing_on_lead`` — never aborts the caller.
+
+    Ingestion / merge callers (dedup engine, sheets importer) must not fail an
+    entire create/merge because mailing normalization raised. Logs and
+    returns an empty list on failure instead of propagating.
+    """
+    try:
+        return normalize_owner_mailing_on_lead(lead, rewrite_street=rewrite_street)
+    except Exception:
+        logger.exception(
+            'normalize_owner_mailing_safe failed for lead_id=%s',
+            getattr(lead, 'id', None),
+        )
+        return []
+
+
 def owner_mailing_needs_normalize(lead: Lead) -> bool:
     """True when mailing text exists but structured fields / street need heal."""
     street = _clean(getattr(lead, 'mailing_address', None))
@@ -299,6 +320,7 @@ def _incomplete_or_tabular_mailing_clause():
         street != '',
         or_(
             street.contains('\t'),
+            street.contains('  '),
             city.is_(None),
             city == '',
             city.contains(','),  # e.g. "Chicago, IL 60647" dumped into city
@@ -478,7 +500,8 @@ def heal_incomplete_owner_mailings(
         db.session.rollback()
 
     try:
-        summary['candidates_remaining'] = count_owner_mailing_heal_candidates()
+        summary['candidates_remaining'] = count_owner_mailing_heal_candidates(use_cache=False)
     except Exception:
+        logger.exception('heal_incomplete_owner_mailings: candidates_remaining count failed')
         summary['candidates_remaining'] = None
     return summary

@@ -538,8 +538,8 @@ def clear_geocode_circuit() -> None:
         client = _redis_client()
         if client is not None:
             client.delete(GEOCODE_CIRCUIT_REDIS_KEY)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning('clear_geocode_circuit: Redis delete failed: %s', exc)
 
 
 def get_geocode_circuit_status() -> dict[str, Any]:
@@ -632,7 +632,11 @@ def complete_property_address_fields(
     zip_out = _clean(zip_code)
     pin_out = _clean(county_assessor_pin)
     sources: list[str] = []
-    do_geocode = try_gis if try_geocode is None else bool(try_geocode)
+    # External geocode is opt-in only — callers must pass try_geocode=True
+    # explicitly (e.g. batch heal). Never geocode on the interactive/import
+    # hot path by default, since Nominatim throttles to ~1 req/sec and a
+    # missed mock in a test can otherwise burn real network time.
+    do_geocode = False if try_geocode is None else bool(try_geocode)
 
     if street_out and not is_property_address_complete(
         street_out, city_out, state_out, zip_out,
@@ -716,8 +720,13 @@ def complete_property_address_fields(
         and street_out
         and not is_property_address_complete(street_out, city_out, state_out, zip_out)
     ):
+        # Never feed the Chicago/IL market-default placeholder into the geocode
+        # query — an assumed locality can steer Google/Nominatim to the wrong
+        # match. Let the geocoder infer city/state from the street alone.
+        geo_city = None if _is_market_default_city(city_out, sources) else city_out
+        geo_state = None if _is_market_default_state(state_out, sources) else state_out
         geo_fill = _geocode_fill_from_street(
-            street_out, city=city_out, state=state_out,
+            street_out, city=geo_city, state=geo_state,
         )
         if geo_fill:
             street_out, city_out, state_out, zip_out = _merge_gis_fill(
@@ -756,6 +765,7 @@ def complete_property_address(
     lead: Lead,
     *,
     try_gis: bool = True,
+    try_geocode: bool | None = None,
     actor: str = 'property_address_completer',
     commit: bool = False,
     write_timeline: bool = True,
@@ -764,7 +774,9 @@ def complete_property_address(
     """Fill missing property city/state/ZIP on *lead*; flag if still incomplete.
 
     Pass ``set_review_flag=False`` (with ``write_timeline=False``) for preview
-    paths that must not persist ``review_required``.
+    paths that must not persist ``review_required``. ``try_geocode`` defaults
+    to off (see ``complete_property_address_fields``) — pass ``True`` only for
+    batch heal paths that intend to spend Google/Nominatim budget.
     """
     was_complete = is_property_address_complete(lead=lead)
     before = {
@@ -781,6 +793,7 @@ def complete_property_address(
         lead.property_state,
         lead.property_zip,
         try_gis=try_gis,
+        try_geocode=try_geocode,
         county_assessor_pin=getattr(lead, 'county_assessor_pin', None),
     )
 
@@ -926,6 +939,7 @@ def ensure_lead_property_address_complete(
     *,
     actor: str,
     try_gis: bool = True,
+    try_geocode: bool | None = None,
     commit: bool = False,
     write_timeline: bool = True,
     set_review_flag: bool = True,
@@ -941,6 +955,7 @@ def ensure_lead_property_address_complete(
     return complete_property_address(
         lead,
         try_gis=try_gis,
+        try_geocode=try_geocode,
         actor=actor,
         commit=commit,
         write_timeline=write_timeline,
@@ -987,6 +1002,7 @@ def heal_incomplete_property_addresses(
     last_id: int | None = None,
     limit: int = HEAL_INCOMPLETE_BATCH_SIZE,
     try_gis: bool = True,
+    try_geocode: bool | None = None,
     actor: str = 'property_address_heal',
     persist_cursor: bool = True,
     commit: bool = True,
@@ -998,9 +1014,12 @@ def heal_incomplete_property_addresses(
     When ``dry_run`` is True, runs the pure field completer only (no DB writes).
     GIS is still contacted when ``try_gis`` is True — pass ``try_gis=False`` for
     offline previews. When ``lead_id`` is set, processes that lead only and does
-    not touch the cursor.
+    not touch the cursor. ``try_geocode`` defaults to ``try_gis`` (batch heal is
+    the intended geocode spender) — pass ``try_geocode=False`` to keep a heal
+    run GIS-only, or ``True``/``False`` explicitly to override.
     """
     reset_geocode_run_budget()
+    effective_try_geocode = try_gis if try_geocode is None else try_geocode
     batch_limit = max(int(limit), 0)
     cursor = 0 if lead_id is not None else (
         _heal_incomplete_cursor() if last_id is None else max(0, int(last_id))
@@ -1061,6 +1080,7 @@ def heal_incomplete_property_addresses(
                     lead.property_state,
                     lead.property_zip,
                     try_gis=try_gis,
+                    try_geocode=effective_try_geocode,
                     county_assessor_pin=getattr(lead, 'county_assessor_pin', None),
                 )
                 summary['previews'].append({
@@ -1092,6 +1112,7 @@ def heal_incomplete_property_addresses(
                 result = complete_property_address(
                     lead,
                     try_gis=try_gis,
+                    try_geocode=effective_try_geocode,
                     actor=actor,
                     commit=False,
                 )

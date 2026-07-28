@@ -1079,6 +1079,13 @@ class MailCampaignService:
             street, city, state, zip_code,
         )
         if not (n_street and n_city and n_state and n_zip):
+            logger.warning(
+                'OLC Corrected address dropped for lead_id=%s campaign=%s: '
+                'normalize_mailing_parts blanked a part (street=%r city=%r '
+                'state=%r zip=%r) from raw (street=%r city=%r state=%r zip=%r)',
+                lead.id, campaign.id, n_street, n_city, n_state, n_zip,
+                street, city, state, zip_code,
+            )
             return False
         changed = (
             (lead.mailing_address or '') != n_street

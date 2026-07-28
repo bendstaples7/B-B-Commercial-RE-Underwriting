@@ -297,11 +297,12 @@ class PropertyDataService:
         """Parse a Google Geocode result into situs fields, or None if low confidence."""
         types = set(result.get('types') or [])
         loc_type = ((result.get('geometry') or {}).get('location_type') or '').upper()
+        # A bare 'route' type or GEOMETRIC_CENTER location can be a street
+        # centroid with no house number — too imprecise for situs. Require an
+        # exact rooftop-level match type/location instead.
         confident = (
-            bool(types & {
-                'street_address', 'premise', 'subpremise', 'route',
-            })
-            or loc_type in {'ROOFTOP', 'RANGE_INTERPOLATED', 'GEOMETRIC_CENTER'}
+            bool(types & {'street_address', 'premise', 'subpremise'})
+            or loc_type in {'ROOFTOP', 'RANGE_INTERPOLATED'}
         )
         if not confident:
             return None
@@ -317,6 +318,9 @@ class PropertyDataService:
             return None
 
         number = (by_type.get('street_number') or {}).get('long_name', '')
+        if not number:
+            # No house number — a street/route-level hit, not a situs match.
+            return None
         route = (by_type.get('route') or {}).get('long_name', '')
         street = ' '.join(p for p in (number, route) if p).strip()
         city = (

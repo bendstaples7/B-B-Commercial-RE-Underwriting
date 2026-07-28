@@ -268,8 +268,8 @@ class DeduplicationEngine:
             incoming.get(f)
             for f in ('mailing_address', 'mailing_city', 'mailing_state', 'mailing_zip')
         ):
-            from app.services.mailing_address_service import normalize_owner_mailing_on_lead
-            normalize_owner_mailing_on_lead(existing, rewrite_street=True)
+            from app.services.mailing_address_service import normalize_owner_mailing_safe
+            normalize_owner_mailing_safe(existing, rewrite_street=True)
 
         conflict_detail = {'field_conflicts': conflicts} if conflicts else None
         outcome: Literal["updated", "conflict"] = 'conflict' if conflicts else 'updated'
@@ -338,8 +338,8 @@ class DeduplicationEngine:
                 record.get(f)
                 for f in ('mailing_address', 'mailing_city', 'mailing_state', 'mailing_zip')
             ):
-                from app.services.mailing_address_service import normalize_owner_mailing_on_lead
-                normalize_owner_mailing_on_lead(new_lead, rewrite_street=True)
+                from app.services.mailing_address_service import normalize_owner_mailing_safe
+                normalize_owner_mailing_safe(new_lead, rewrite_street=True)
 
             return DeduplicationResult(
                 outcome='created',

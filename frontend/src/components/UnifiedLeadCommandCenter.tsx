@@ -1072,16 +1072,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     flash?: QueueFlashSnackbar,
   ) => {
     if (!fromQueue) return
-    // undefined = nav not ready — stay put (never re-fetch neighbour after removal).
-    if (snapshottedNextId === undefined) {
-      if (flash) {
-        setActivitySnackbar({ open: true, ...flash })
-      }
-      return
-    }
     const queueListKey = `queue-${fromQueue.key}`
     // Refresh list/counts before leaving so Back lands on fresh data; clear
-    // cache so remount shows QueueLoadingState instead of stale rows.
+    // cache so remount shows QueueLoadingState instead of stale rows. Run this
+    // even when nav isn't ready yet (nextId undefined) so the queue list is
+    // never left stale just because we're staying put this time.
     await queryClient.invalidateQueries({
       queryKey: [queueListKey],
       refetchType: 'all',
@@ -1094,6 +1089,14 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       })
     }
     queryClient.removeQueries({ queryKey: [queueListKey] })
+
+    // undefined = nav not ready — stay put (never re-fetch neighbour after removal).
+    if (snapshottedNextId === undefined) {
+      if (flash) {
+        setActivitySnackbar({ open: true, ...flash })
+      }
+      return
+    }
 
     try {
       if (snapshottedNextId != null) {

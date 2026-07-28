@@ -500,7 +500,9 @@ class TestCompletePropertyAddressFields:
             return_value=0,
         ), patch(
             'app.services.property_address_service._nominatim_structured_address',
-        ) as mock_nom:
+        ) as mock_nom, patch(
+            'app.services.property_address_service._persist_geocode_circuit',
+        ):
             mock_nom.return_value = {
                 'property_street': '1233 W Foster Ave',
                 'property_city': 'Chicago',

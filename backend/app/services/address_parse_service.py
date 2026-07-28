@@ -163,8 +163,8 @@ def _parse_city_state_zip(raw: str) -> tuple[str, str, str] | None:
     zip_raw = parts[-1]
     zip_match = _ZIP_RE.match(zip_raw)
     if not zip_match:
-        # Allow ZIP+4 already stripped of hyphen via split
-        zip_match = re.match(r'^(\d{5})(?:-\d{4})?$', zip_raw)
+        # Allow a 9-digit ZIP+4 already stripped of its hyphen (e.g. "606223009").
+        zip_match = re.match(r'^(\d{5})\d{4}$', zip_raw)
     if not zip_match:
         return None
 

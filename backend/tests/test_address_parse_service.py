@@ -104,6 +104,24 @@ class TestParseEmbeddedUsAddress:
         assert result == ('123 Main St', 'Chicago', 'IL', '60601')
 
 
+class TestParseCityStateZipLine:
+    def test_dehyphenated_zip_plus_four(self):
+        # ZIP+4 sometimes arrives with the hyphen stripped (e.g. spreadsheet
+        # exports) — must still resolve to the 5-digit ZIP, not be rejected.
+        from app.services.address_parse_service import parse_city_state_zip_line
+
+        assert parse_city_state_zip_line('Chicago IL 606223009') == (
+            'Chicago', 'IL', '60622',
+        )
+
+    def test_hyphenated_zip_plus_four_still_works(self):
+        from app.services.address_parse_service import parse_city_state_zip_line
+
+        assert parse_city_state_zip_line('Chicago, IL 60622-3009') == (
+            'Chicago', 'IL', '60622',
+        )
+
+
 class TestZipLookup:
     def test_chicagoland_fallback_and_package(self):
         assert city_state_from_zip('60618') == ('Chicago', 'IL')

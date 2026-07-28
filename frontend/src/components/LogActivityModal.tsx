@@ -51,17 +51,28 @@ interface PanelOffset {
   y: number
 }
 
-function clampOffset(offset: PanelOffset, paper: HTMLElement | null): PanelOffset {
-  if (!paper || typeof window === 'undefined') return offset
+function clampOffset(
+  next: PanelOffset,
+  currentOffset: PanelOffset,
+  paper: HTMLElement | null,
+): PanelOffset {
+  if (!paper || typeof window === 'undefined') return next
   const rect = paper.getBoundingClientRect()
   const pad = 8
-  const minX = pad - rect.left + offset.x
-  const maxX = window.innerWidth - pad - rect.right + offset.x
-  const minY = pad - rect.top + offset.y
-  const maxY = window.innerHeight - pad - rect.bottom + offset.y
+  // `rect` reflects `currentOffset` already applied via the paper's transform —
+  // recover the un-offset base position so the *tentative* `next` offset is
+  // clamped against the viewport, not against wherever the panel already sits.
+  const baseLeft = rect.left - currentOffset.x
+  const baseRight = rect.right - currentOffset.x
+  const baseTop = rect.top - currentOffset.y
+  const baseBottom = rect.bottom - currentOffset.y
+  const minX = pad - baseLeft
+  const maxX = window.innerWidth - pad - baseRight
+  const minY = pad - baseTop
+  const maxY = window.innerHeight - pad - baseBottom
   return {
-    x: Math.min(Math.max(offset.x, minX), maxX),
-    y: Math.min(Math.max(offset.y, minY), maxY),
+    x: Math.min(Math.max(next.x, minX), maxX),
+    y: Math.min(Math.max(next.y, minY), maxY),
   }
 }
 
@@ -122,7 +133,7 @@ export function LogActivityModal({
       x: start.ox + (e.clientX - start.x),
       y: start.oy + (e.clientY - start.y),
     }
-    setOffset(clampOffset(next, paperRef.current))
+    setOffset((current) => clampOffset(next, current, paperRef.current))
   }, [])
 
   const endDrag = useCallback(() => {

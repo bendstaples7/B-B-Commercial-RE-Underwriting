@@ -1253,7 +1253,7 @@ def apply_parsed_owner_mailing_route(lead_id: int):
         try:
             from app.services.lead_refresh import refresh_lead_scoring
             refresh_lead_scoring(lead_id)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — rescoring is best-effort after apply
             logger.warning(
                 'Re-score after apply-parsed mailing failed for lead %s: %s',
                 lead_id,

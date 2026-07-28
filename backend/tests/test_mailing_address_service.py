@@ -46,6 +46,13 @@ class TestNormalizeMailingParts:
             '3105 W Palmer Blvd', 'Chicago, IL 60647', None, None,
         ) == ('3105 W Palmer Blvd', 'Chicago', 'IL', '60647')
 
+    def test_multi_space_separated_short_zip(self):
+        # Fixed-width / pasted dumps sometimes use runs of spaces instead of
+        # tabs to separate columns — must normalize the same as tab-separated.
+        assert normalize_mailing_parts(
+            '167 Lakeview Ter   Sandy Hook   CT   6482',
+        ) == ('167 Lakeview Ter', 'Sandy Hook', 'CT', '06482')
+
 
 class TestApplyOwnerMailing:
     def test_fill_empty_from_tab_dump(self):
