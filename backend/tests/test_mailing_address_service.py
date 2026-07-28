@@ -53,6 +53,13 @@ class TestNormalizeMailingParts:
             '167 Lakeview Ter   Sandy Hook   CT   6482',
         ) == ('167 Lakeview Ter', 'Sandy Hook', 'CT', '06482')
 
+    def test_structured_preserves_zip_plus_four(self):
+        # OLC Corrected / USPS feedback often includes ZIP+4; parse must not
+        # collapse it to ZIP5 when locality is already structured.
+        assert normalize_mailing_parts(
+            '2041 W Cuyler Ave', 'Chicago', 'IL', '60618-3005',
+        ) == ('2041 W Cuyler Ave', 'Chicago', 'IL', '60618-3005')
+
 
 class TestApplyOwnerMailing:
     def test_fill_empty_from_tab_dump(self):

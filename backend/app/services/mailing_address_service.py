@@ -41,6 +41,29 @@ def _clean(value: Any) -> str:
     return str(value).strip()
 
 
+def _merge_mailing_zip(incoming: str, parsed: str | None) -> str:
+    """Keep ZIP+4 / already-padded ZIPs; only take parse when padding a short ZIP.
+
+    ``parse_embedded_us_address`` collapses ZIP+4 to ZIP5. OLC Corrected and
+    USPS feedback often include ``60618-3005`` — do not throw that away.
+    """
+    z = _clean(incoming)
+    p = _clean(parsed) if parsed else ''
+    if not z:
+        return p
+    if not p:
+        return z
+    z_digits = re.sub(r'\D', '', z)
+    p_digits = re.sub(r'\D', '', p)
+    # Short import ZIP (3–4 digits) → prefer padded 5-digit from parse.
+    if len(z_digits) < 5 and len(p_digits) >= 5:
+        return p
+    # Same ZIP5 with incoming ZIP+4 (or longer digit form) → keep incoming.
+    if z_digits[:5] == p_digits[:5] and len(z_digits) > len(p_digits):
+        return z
+    return z or p
+
+
 def normalize_mailing_parts(
     street: str | None,
     city: str | None = None,
@@ -68,11 +91,12 @@ def normalize_mailing_parts(
             # Prefer original street when synthetic re-parse would steal city words
             # into the street (e.g. multi-word cities). Keep structured street.
             p_street, p_city, p_state, p_zip = parsed_zip
+            merged_zip = _merge_mailing_zip(z, p_zip)
             if p_street and (
                 street_looks_tabular(s) or p_street == s or s.startswith(p_street)
             ):
-                return p_street or s, p_city or c, p_state or st, p_zip or z
-            return s, c, st, p_zip or z
+                return p_street or s, p_city or c, p_state or st, merged_zip
+            return s, c, st, merged_zip
         return s, c, st, z
 
     if not s and (c or st or z):
@@ -96,7 +120,7 @@ def normalize_mailing_parts(
         use_street or s,
         c or p_city,
         st or p_state,
-        z or p_zip,
+        _merge_mailing_zip(z, p_zip) if z else (p_zip or z),
     )
 
 
