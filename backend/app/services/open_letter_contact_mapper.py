@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from flask import has_app_context
+
 from app.models.lead import Lead
 from app.services.address_parse_service import parse_embedded_us_address
 
@@ -175,6 +177,9 @@ DUPLICATE_MAILING_REASON = 'Duplicate mailing address in batch'
 
 def open_olc_support_escalation_lead_ids(lead_ids: list[int] | set[int]) -> set[int]:
     """Lead ids that currently have an open OLC support escalation task."""
+    if not has_app_context():
+        return set()
+
     from app.models.lead_task import LeadTask
 
     ids = [int(x) for x in lead_ids if x is not None]

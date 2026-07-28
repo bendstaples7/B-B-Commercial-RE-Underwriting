@@ -998,8 +998,11 @@ class MailCampaignService:
             )
 
     @staticmethod
-    def _recipient_from_contact_row(row: dict[str, Any]) -> dict[str, Any]:
-        return row.get('recipient') or row.get('contact') or row
+    def _recipient_from_contact_row(row: Any) -> dict[str, Any]:
+        if not isinstance(row, dict):
+            return {}
+        recip = row.get('recipient') or row.get('contact') or row
+        return recip if isinstance(recip, dict) else {}
 
     @staticmethod
     def _lead_id_from_recipient(recip: dict[str, Any]) -> int | None:
@@ -1571,7 +1574,7 @@ class MailCampaignService:
         summary = {'corrected': 0, 'failed': 0, 'verified': 0, 'unchanged': 0}
         recipients: list[dict[str, Any]] = []
         for row in client.iter_order_contacts(campaign.olc_order_id):
-            recip = self._recipient_from_contact_row(row if isinstance(row, dict) else {})
+            recip = self._recipient_from_contact_row(row)
             if recip:
                 recipients.append(recip)
         by_lead = collapse_recipients_by_lead(recipients)
@@ -1959,12 +1962,13 @@ class MailCampaignService:
         history_omitted: set[int] = set()
         if order_id:
             probe_ids = set(attached)
-            # Only probe unattached queued rows that also have a sent history entry
-            # for this campaign (cheap filter via mailer_history contains order id).
+            # Only probe this campaign owner's unattached queued rows; the
+            # mailer_history match below keeps recovery tied to this order.
             for item in MailQueueItem.query.filter(
                 MailQueueItem.status == 'queued',
                 MailQueueItem.campaign_id.is_(None),
-            ).limit(2000).all():
+                MailQueueItem.user_id == campaign.created_by,
+            ).all():
                 probe_ids.add(item.lead_id)
             if probe_ids:
                 for lead in Lead.query.filter(Lead.id.in_(list(probe_ids))).all():

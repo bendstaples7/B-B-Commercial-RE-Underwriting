@@ -42,4 +42,31 @@ describe('formatGapLeadsTsv', () => {
     expect(text.split('\n')[0]).toContain('Omit count')
     expect(text.split('\n')[1]).toContain('\t1')
   })
+
+  it('neutralizes spreadsheet formulas in exported cells', () => {
+    const text = formatGapLeadsTsv(
+      [
+        {
+          lead_id: 7,
+          owner_name: '=IMPORTXML("https://example.com")',
+          property_street: '+1 Main',
+          mailing_address: '\n-2 Mail',
+          reason: '@external',
+          resolution: 'Ready to Mail',
+        },
+      ],
+      'invalid_local',
+    )
+
+    expect(text.split('\n')[1]).toBe(
+      [
+        '7',
+        `'=IMPORTXML("https://example.com")`,
+        "'+1 Main",
+        "'-2 Mail",
+        "'@external",
+        'Ready to Mail',
+      ].join('\t'),
+    )
+  })
 })

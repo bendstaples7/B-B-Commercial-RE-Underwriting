@@ -34,14 +34,14 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         client = OpenLetterConfigService().get_client(campaign.created_by)
+        svc = MailCampaignService()
         recipients = []
         for row in client.iter_order_contacts(campaign.olc_order_id):
-            recip = row.get('recipient') or row.get('contact') or row
-            if isinstance(recip, dict):
+            recip = svc._recipient_from_contact_row(row)
+            if recip:
                 recipients.append(recip)
         tracked = set(collapse_recipients_by_lead(recipients).keys())
 
-        svc = MailCampaignService()
         result = svc.heal_silent_omits(
             campaign.id,
             tracked,

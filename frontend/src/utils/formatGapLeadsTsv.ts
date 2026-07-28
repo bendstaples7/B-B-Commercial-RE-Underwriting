@@ -3,7 +3,8 @@ import type { MailCampaignGapKind, MailCampaignGapLead } from '@/services/openLe
 function cell(value: string | number | null | undefined): string {
   const raw = value == null ? '' : String(value)
   // Keep Excel-friendly TSV: strip tabs/newlines inside cells.
-  return raw.replace(/[\t\r\n]+/g, ' ').trim()
+  const cleaned = raw.replace(/[\t\r\n]+/g, ' ').trim()
+  return /^[=+\-@]/.test(cleaned) ? `'${cleaned}` : cleaned
 }
 
 function dispositionLabel(row: MailCampaignGapLead): string {

@@ -246,8 +246,53 @@ def test_list_gap_leads_omitted_does_not_call_olc_sync(app):
         assert rows[0]['resolution'] == 'Ready to Mail'
 
 
+def test_omitted_cache_probe_is_scoped_to_campaign_owner(app):
+    with app.app_context():
+        own_lead = _lead(
+            property_street='8 Omitted',
+            mailer_history=[{'olc_order_id': 'ord-x', 'olc_silent_omit': True}],
+        )
+        other_lead = _lead(
+            property_street='9 Other',
+            owner_user_id='user-2',
+            mailer_history=[{'olc_order_id': 'ord-x', 'olc_silent_omit': True}],
+        )
+        campaign = MailCampaign(
+            status='submitted',
+            lead_count=2,
+            submitted_count=2,
+            olc_order_id='ord-x',
+            created_by='user-1',
+        )
+        db.session.add(campaign)
+        db.session.flush()
+        _queue('user-1', own_lead.id, status='queued', campaign_id=None)
+        _queue('user-2', other_lead.id, status='queued', campaign_id=None)
+        db.session.commit()
+
+        rows = MailCampaignService().list_gap_leads(
+            campaign.id,
+            'user-1',
+            kind='olc_omitted',
+        )
+
+        assert [row['lead_id'] for row in rows] == [own_lead.id]
+
+
 def test_duplicate_reason_constant(app):
     assert DUPLICATE_MAILING_REASON == 'Duplicate mailing address in batch'
+
+
+def test_owner_mailing_validation_without_app_context_does_not_query_tasks():
+    lead = Lead(
+        id=123,
+        mailing_address='100 Main St',
+        mailing_city='Chicago',
+        mailing_state='IL',
+        mailing_zip='60614',
+    )
+
+    assert validate_owner_mailing_address(lead) is None
 
 
 def test_omitted_list_shrinks_when_lead_now_tracked(app):
