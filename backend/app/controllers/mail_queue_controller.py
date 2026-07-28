@@ -223,6 +223,15 @@ def get_campaign(campaign_id: int):
     return jsonify(_campaign_service.serialize_campaign(campaign)), 200
 
 
+@mail_queue_bp.route('/campaigns/<int:campaign_id>/gap-leads', methods=['GET'])
+@require_auth
+@handle_errors
+def campaign_gap_leads(campaign_id: int):
+    kind = (request.args.get('kind') or '').strip()
+    leads = _campaign_service.list_gap_leads(campaign_id, g.user_id, kind=kind)
+    return jsonify({'kind': kind, 'leads': leads, 'total': len(leads)}), 200
+
+
 @mail_queue_bp.route('/campaigns/<int:campaign_id>/redispatch', methods=['POST'])
 @require_auth
 @handle_errors

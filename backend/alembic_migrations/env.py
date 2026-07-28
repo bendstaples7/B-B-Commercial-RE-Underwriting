@@ -70,6 +70,8 @@ _KNOWN_REVISIONS = frozenset({
     'wh_skip_20260723',
     # Mail campaign submit reconciliation + address feedback rollup
     'mail_rec_20260727',
+    # OLC tracked/omitted lead id lists on mail campaigns
+    'mail_omit_20260727',
     's0t1u2v3w4x5', 't0u1v2w3x4y5', 'u1v2w3x4y5z6',
     'v1w2x3y4z5a6', 'w2x3y4z5a6b7', 'x3y4z5a6b7c8',
     'y4z5a6b7c8d9', 'z5a6b7c8d9e0',
