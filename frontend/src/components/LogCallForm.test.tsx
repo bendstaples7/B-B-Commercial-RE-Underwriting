@@ -75,23 +75,9 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-// ---------------------------------------------------------------------------
-// Helper: select an outcome from the MUI Select dropdown
-// Uses the same pattern as LeadTimeline.test.tsx:
-//   getByLabelText → fireEvent.mouseDown → getByRole('listbox') → fireEvent.click
-// ---------------------------------------------------------------------------
-
+// Helper: one-click outcome toggle buttons
 function selectOutcome(outcomeValue: string) {
-  // MUI Select's visible combobox div is associated with the label via aria-labelledby
-  // getByLabelText finds it by the label text
-  const selectEl = screen.getByLabelText('Outcome *')
-  fireEvent.mouseDown(selectEl)
-
-  // The listbox appears synchronously in jsdom after mouseDown
-  const listbox = screen.getByRole('listbox')
-  const option = listbox.querySelector(`[data-value="${outcomeValue}"]`)
-  if (!option) throw new Error(`Option with data-value="${outcomeValue}" not found`)
-  fireEvent.click(option)
+  fireEvent.click(screen.getByTestId(`call-outcome-${outcomeValue}`))
 }
 
 // ---------------------------------------------------------------------------
@@ -131,18 +117,15 @@ describe('LogCallForm', () => {
       expect(screen.queryByTestId('call-outcome-error')).not.toBeInTheDocument()
     })
 
-    it('renders all five outcome options in the dropdown', () => {
+    it('renders all five outcome options as buttons', () => {
       render(<LogCallForm leadId={1} onSaved={vi.fn()} />)
 
-      const selectEl = screen.getByLabelText('Outcome *')
-      fireEvent.mouseDown(selectEl)
-
-      const listbox = screen.getByRole('listbox')
-      expect(listbox.querySelector('[data-value="answered"]')).toBeInTheDocument()
-      expect(listbox.querySelector('[data-value="voicemail"]')).toBeInTheDocument()
-      expect(listbox.querySelector('[data-value="no_answer"]')).toBeInTheDocument()
-      expect(listbox.querySelector('[data-value="busy"]')).toBeInTheDocument()
-      expect(listbox.querySelector('[data-value="wrong_number"]')).toBeInTheDocument()
+      expect(screen.getByTestId('call-outcome-buttons')).toBeInTheDocument()
+      expect(screen.getByTestId('call-outcome-answered')).toHaveTextContent('Answered')
+      expect(screen.getByTestId('call-outcome-voicemail')).toHaveTextContent('Voicemail')
+      expect(screen.getByTestId('call-outcome-no_answer')).toHaveTextContent('No Answer')
+      expect(screen.getByTestId('call-outcome-busy')).toHaveTextContent('Busy')
+      expect(screen.getByTestId('call-outcome-wrong_number')).toHaveTextContent('Wrong Number')
     })
   })
 
@@ -328,7 +311,7 @@ describe('LogCallForm', () => {
       })
 
       // The select display should still show the selected value text
-      expect(screen.getByTestId('call-outcome-select')).toHaveTextContent('Voicemail')
+      expect(screen.getByTestId('call-outcome-voicemail')).toHaveAttribute('aria-pressed', 'true')
     })
 
     it('preserves duration after server error', async () => {

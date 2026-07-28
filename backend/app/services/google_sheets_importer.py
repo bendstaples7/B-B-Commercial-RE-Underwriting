@@ -1077,6 +1077,12 @@ class GoogleSheetsImporter:
                 db.session.add(audit)
                 lead.property_type = inferred
 
+        if any(f in data for f in (
+            'mailing_address', 'mailing_city', 'mailing_state', 'mailing_zip',
+        )):
+            from app.services.mailing_address_service import normalize_owner_mailing_on_lead
+            normalize_owner_mailing_on_lead(lead, rewrite_street=True)
+
         # Keep relational contacts in sync with flat owner / phone / email fields.
         try:
             from app.services.contact_service import ContactService
@@ -1115,6 +1121,11 @@ class GoogleSheetsImporter:
         # Infer property_type from units when the sheet didn't supply it
         if not lead.property_type and lead.units:
             lead.property_type = GoogleSheetsImporter._infer_property_type_from_units(lead.units)
+        if any(f in data for f in (
+            'mailing_address', 'mailing_city', 'mailing_state', 'mailing_zip',
+        )):
+            from app.services.mailing_address_service import normalize_owner_mailing_on_lead
+            normalize_owner_mailing_on_lead(lead, rewrite_street=True)
 
     # ------------------------------------------------------------------
     # Import orchestration

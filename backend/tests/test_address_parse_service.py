@@ -66,6 +66,19 @@ class TestParseEmbeddedUsAddress:
         result = parse_embedded_us_address('1137 W LELAND AVE, CHICAGO, IL 60640')
         assert result == ('1137 W LELAND AVE', 'CHICAGO', 'IL', '60640')
 
+    def test_tab_separated_mailing_with_short_zip(self):
+        # HubSpot / export dumps: street\\tcity\\tST\\tZIP (leading ZIP zero dropped).
+        result = parse_embedded_us_address(
+            '167 Lakeview Ter\tSandy Hook\tCT\t6482',
+        )
+        assert result == ('167 Lakeview Ter', 'Sandy Hook', 'CT', '06482')
+
+    def test_multi_space_column_mailing(self):
+        result = parse_embedded_us_address(
+            '167 Lakeview Ter        Sandy Hook      CT      6482',
+        )
+        assert result == ('167 Lakeview Ter', 'Sandy Hook', 'CT', '06482')
+
     def test_two_part_comma_separated(self):
         result = parse_embedded_us_address('2041 W Cuyler Ave, Chicago IL 60618')
         assert result == ('2041 W Cuyler Ave', 'Chicago', 'IL', '60618')

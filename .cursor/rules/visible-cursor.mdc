@@ -1,0 +1,29 @@
+---
+description: Never ship UI that hides the mouse pointer or text caret — no cursor:none, no blank grab cursors.
+globs:
+  - frontend/**/*.{tsx,ts,css}
+alwaysApply: true
+---
+
+# Visible pointer & caret (no invisible cursors)
+
+Users must always see a normal mouse pointer and text caret when interacting with the app. Invisible cursors are a ship-blocker — treat them like a functional regression.
+
+## Hard bans
+
+- **Never** set `cursor: none` / `cursor: 'none'` (CSS, `sx`, inline style, or `element.style.cursor`).
+- **Never** set `caret-color: transparent` (or match background) on inputs, textareas, or contenteditable unless the control is intentionally non-editable and not focused for typing.
+- **Never** leave `document.body` / `documentElement` `cursor` stuck after a drag/gesture — always clear in `pointerup` / `pointercancel` / unmount cleanup.
+
+## Drag handles & floating panels
+
+- Prefer **`cursor: move`** (and pin it on `documentElement`/`body` only while dragging) over **`grab` / `grabbing`**. On Windows those cursors often render blank over light surfaces.
+- Content surfaces (forms, DialogContent, Paper body) must set an **explicit visible** cursor (`auto`, `default`, or `text` on fields) so they never inherit drag chrome.
+- Floating / `pointer-events: none` shells must keep **`pointer-events: auto`** and a visible cursor on the interactive paper.
+
+## Checklist before claiming UI done
+
+1. Hover title, body, inputs, buttons — pointer never disappears.
+2. Focus a text field — caret is visible.
+3. Drag then release — body cursor returns to normal.
+4. Grep the change for `cursor:\\s*none`, `caretColor:\\s*['\"]transparent`, `caret-color:\\s*transparent`.

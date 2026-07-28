@@ -14,12 +14,15 @@ import {
   FormControl,
   FormControlLabel,
   FormHelperText,
+  FormLabel,
   InputLabel,
   MenuItem,
   Select,
   Grid,
   Stack,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
 } from '@mui/material'
 import type { LeadTask, LeadTimelineEntry, LogCallPayload, PropertyContact } from '@/types'
@@ -105,7 +108,7 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
   ref,
 ) {
   const formRef = useRef<HTMLDivElement>(null)
-  const outcomeInputRef = useRef<HTMLInputElement>(null)
+  const outcomeGroupRef = useRef<HTMLDivElement>(null)
 
   const callTask = useMemo(() => findCallCompletableTask(openTasks), [openTasks])
 
@@ -136,7 +139,8 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
 
   useImperativeHandle(ref, () => ({
     focus: () => {
-      outcomeInputRef.current?.focus()
+      const first = outcomeGroupRef.current?.querySelector('button')
+      ;(first as HTMLButtonElement | null | undefined)?.focus()
     },
   }))
 
@@ -336,28 +340,58 @@ export const LogCallForm = forwardRef<LogCallFormHandle, LogCallFormProps>(funct
             onChange={setContactMethod}
           />
 
-          <FormControl fullWidth error={!!outcomeError} size="small" sx={{ mb: 1.25 }}>
-            <InputLabel id="call-outcome-label">Outcome *</InputLabel>
-            <Select
-              inputRef={outcomeInputRef}
-              labelId="call-outcome-label"
-              label="Outcome *"
-              value={outcome}
-              onChange={(e) => handleOutcomeChange(e.target.value)}
-              SelectDisplayProps={
-                { 'data-testid': 'call-outcome-select' } as React.HTMLAttributes<HTMLDivElement>
-              }
+          <Box sx={{ mb: 1.25 }} data-testid="call-outcome-buttons">
+            <FormLabel
+              id="call-outcome-label"
+              error={!!outcomeError}
+              sx={{ mb: 0.75, display: 'block', typography: 'body2' }}
+            >
+              Outcome *
+            </FormLabel>
+            <ToggleButtonGroup
+              ref={outcomeGroupRef}
+              exclusive
+              size="small"
+              value={outcome || null}
+              onChange={(_e, next: LogCallPayload['outcome'] | null) => {
+                if (next) handleOutcomeChange(next)
+              }}
+              aria-labelledby="call-outcome-label"
+              aria-required
+              aria-invalid={!!outcomeError}
+              aria-describedby={outcomeError ? 'call-outcome-error' : undefined}
+              sx={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 0.5,
+                '& .MuiToggleButtonGroup-grouped': {
+                  border: 1,
+                  borderColor: 'divider',
+                  borderRadius: '4px !important',
+                  marginLeft: 0,
+                  textTransform: 'none',
+                  px: 1.25,
+                  py: 0.75,
+                  minHeight: 40,
+                },
+              }}
             >
               {OUTCOME_OPTIONS.map((opt) => (
-                <MenuItem key={opt.value} value={opt.value}>
+                <ToggleButton
+                  key={opt.value}
+                  value={opt.value}
+                  data-testid={`call-outcome-${opt.value}`}
+                >
                   {opt.label}
-                </MenuItem>
+                </ToggleButton>
               ))}
-            </Select>
+            </ToggleButtonGroup>
             {outcomeError && (
-              <FormHelperText data-testid="call-outcome-error">{outcomeError}</FormHelperText>
+              <FormHelperText error id="call-outcome-error" data-testid="call-outcome-error">
+                {outcomeError}
+              </FormHelperText>
             )}
-          </FormControl>
+          </Box>
 
           <TextField
             label="Duration (min)"

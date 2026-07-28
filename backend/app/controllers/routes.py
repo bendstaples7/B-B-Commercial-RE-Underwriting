@@ -267,6 +267,49 @@ def health_check():
         degraded = True
 
     # ------------------------------------------------------------------
+    # Check 4a: Owner mailing heal backlog (WARN only)
+    # ------------------------------------------------------------------
+    try:
+        from app.services.mailing_address_service import (
+            count_owner_mailing_heal_candidates,
+        )
+
+        mailing_backlog = count_owner_mailing_heal_candidates()
+        if mailing_backlog > 0:
+            checks['owner_mailing_heal'] = (
+                f'WARN: {mailing_backlog} leads with incomplete/tabular '
+                f'owner mailing (hourly owner_mailing.heal_incomplete)'
+            )
+        else:
+            checks['owner_mailing_heal'] = 'ok (0 candidates)'
+    except Exception as e:
+        checks['owner_mailing_heal'] = f'WARN: mailing heal probe failed ({e})'
+
+    # ------------------------------------------------------------------
+    # Check 4a2: Geocode paid/quota circuit (WARN only)
+    # ------------------------------------------------------------------
+    try:
+        from app.services.property_address_service import get_geocode_circuit_status
+
+        geo = get_geocode_circuit_status()
+        if geo.get('halt_all'):
+            checks['geocode_circuit'] = (
+                f'WARN: external geocode HALTED — {geo.get("reason") or "paid/quota circuit open"}'
+            )
+        elif geo.get('near_soft_cap'):
+            checks['geocode_circuit'] = (
+                f'WARN: Google geocode near soft-cap '
+                f'({geo.get("billable_this_month")}/{geo.get("monthly_soft_cap")})'
+            )
+        else:
+            checks['geocode_circuit'] = (
+                f'ok (billable {geo.get("billable_this_month")}/'
+                f'{geo.get("monthly_soft_cap")} this month)'
+            )
+    except Exception as e:
+        checks['geocode_circuit'] = f'WARN: geocode circuit probe failed ({e})'
+
+    # ------------------------------------------------------------------
     # Check 4b: Host memory / Celery RSS (WARN only — do not 503)
     # Soft-restart + MemoryMax handle remediation; flapping Deploy/ops
     # canaries on a 2GB box would hide real outages.

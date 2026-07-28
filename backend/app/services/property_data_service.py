@@ -29,7 +29,7 @@ import urllib.request
 import urllib.parse
 import urllib.error
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, NamedTuple
 from app.models.property_facts import PropertyFacts, PropertyType, ConstructionType, InteriorCondition
 
 
@@ -55,6 +55,14 @@ _STREET_SUFFIXES = {
     'RD', 'ROAD', 'LN', 'LANE', 'CT', 'COURT', 'PL', 'PLACE', 'WAY',
     'TER', 'TERRACE', 'CIR', 'CIRCLE', 'PKWY', 'PARKWAY', 'HWY', 'HIGHWAY',
 }
+
+
+class StructuredGeocodeOutcome(NamedTuple):
+    """Result of a structured geocode attempt (cache or live Google)."""
+    address: Optional[Dict[str, str]]
+    status: str
+    error_message: str = ''
+    billable: bool = False
 
 
 class PropertyDataService:
@@ -156,7 +164,7 @@ class PropertyDataService:
         if cached:
             return cached
 
-        if not self.google_maps_api_key:
+        if not self.google_maps_api_key or self.google_maps_api_key == 'your-google-maps-api-key':
             return None
 
         try:
@@ -176,6 +184,157 @@ class PropertyDataService:
             print("Geocoding error for " + repr(address) + ": " + str(exc))
 
         return None
+
+    def geocode_structured_address(
+        self,
+        address: str,
+        *,
+        components: str | None = 'country:US|administrative_area:IL',
+    ) -> StructuredGeocodeOutcome:
+        """Geocode to structured situs fields with permanent caching.
+
+        Returns a ``StructuredGeocodeOutcome`` so callers can trip a paid/quota
+        circuit on OVER_QUERY_LIMIT / billing denials. Cache hits are not billable.
+        """
+        cache_key = "geocode_situs:" + address + "|" + (components or '')
+        cached = self._get_from_cache(cache_key)
+        if cached is not None:
+            return StructuredGeocodeOutcome(
+                address=(cached or None),
+                status='CACHE_HIT',
+                billable=False,
+            )
+
+        api_key = (
+            os.getenv('GOOGLE_GEOCODING_API_KEY')
+            or os.getenv('GOOGLE_MAPS_SERVER_API_KEY')
+            or self.google_maps_api_key
+        )
+        if not api_key or api_key == 'your-google-maps-api-key':
+            return StructuredGeocodeOutcome(
+                address=None,
+                status='SKIPPED_NO_KEY',
+                billable=False,
+            )
+
+        try:
+            params: Dict[str, str] = {
+                'address': address,
+                'key': api_key,
+                'region': 'us',
+            }
+            if components:
+                params['components'] = components
+            resp = requests.get(
+                "https://maps.googleapis.com/maps/api/geocode/json",
+                params=params,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            status = (data.get('status') or 'ERROR').upper()
+            error_message = (data.get('error_message') or '').strip()
+
+            if status != 'OK' or not data.get('results'):
+                # Do not permanently cache quota/denied/exhaustion — operator may fix.
+                transient = status in (
+                    'OVER_QUERY_LIMIT',
+                    'REQUEST_DENIED',
+                    'UNKNOWN_ERROR',
+                    'RESOURCE_EXHAUSTED',
+                )
+                if transient:
+                    # REQUEST_DENIED from a misconfigured key is not a charged hit;
+                    # billing/quota denials still count toward the soft-cap.
+                    billing_hint = bool(
+                        error_message
+                        and re.search(
+                            r'billing|quota|exceeded|enable billing',
+                            error_message,
+                            re.IGNORECASE,
+                        )
+                    )
+                    billable = (
+                        status in ('OVER_QUERY_LIMIT', 'RESOURCE_EXHAUSTED')
+                        or (status == 'REQUEST_DENIED' and billing_hint)
+                    )
+                    return StructuredGeocodeOutcome(
+                        address=None,
+                        status=status,
+                        error_message=error_message,
+                        billable=billable,
+                    )
+                self._set_in_cache(cache_key, {}, self.geocoding_cache_ttl)
+                return StructuredGeocodeOutcome(
+                    address=None,
+                    status=status or 'ZERO_RESULTS',
+                    error_message=error_message,
+                    billable=True,
+                )
+
+            structured = self._structured_situs_from_geocode_result(data['results'][0])
+            self._set_in_cache(
+                cache_key,
+                structured or {},
+                self.geocoding_cache_ttl,
+            )
+            return StructuredGeocodeOutcome(
+                address=structured,
+                status='OK',
+                billable=True,
+            )
+        except Exception as exc:
+            print("Structured geocoding error for " + repr(address) + ": " + str(exc))
+            return StructuredGeocodeOutcome(
+                address=None,
+                status='ERROR',
+                error_message=str(exc),
+                billable=False,
+            )
+
+    @staticmethod
+    def _structured_situs_from_geocode_result(result: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        """Parse a Google Geocode result into situs fields, or None if low confidence."""
+        types = set(result.get('types') or [])
+        loc_type = ((result.get('geometry') or {}).get('location_type') or '').upper()
+        confident = (
+            bool(types & {
+                'street_address', 'premise', 'subpremise', 'route',
+            })
+            or loc_type in {'ROOFTOP', 'RANGE_INTERPOLATED', 'GEOMETRIC_CENTER'}
+        )
+        if not confident:
+            return None
+
+        comps = result.get('address_components') or []
+        by_type: Dict[str, Dict[str, str]] = {}
+        for comp in comps:
+            for t in comp.get('types') or []:
+                by_type[t] = comp
+
+        country = (by_type.get('country') or {}).get('short_name', '')
+        if country and country.upper() != 'US':
+            return None
+
+        number = (by_type.get('street_number') or {}).get('long_name', '')
+        route = (by_type.get('route') or {}).get('long_name', '')
+        street = ' '.join(p for p in (number, route) if p).strip()
+        city = (
+            (by_type.get('locality') or {}).get('long_name')
+            or (by_type.get('sublocality') or {}).get('long_name')
+            or (by_type.get('neighborhood') or {}).get('long_name')
+            or ''
+        )
+        state = (by_type.get('administrative_area_level_1') or {}).get('short_name', '')
+        zip_code = (by_type.get('postal_code') or {}).get('long_name', '')
+        if not street or not city or not state or not zip_code:
+            return None
+        return {
+            'property_street': street,
+            'property_city': city,
+            'property_state': state,
+            'property_zip': zip_code[:5] if zip_code else '',
+        }
 
     def validate_property_data(self, property_data: Dict[str, Any]) -> Dict[str, Any]:
         """Identify missing required fields."""

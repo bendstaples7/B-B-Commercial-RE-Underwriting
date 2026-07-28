@@ -1,11 +1,15 @@
 """Canonical property address completeness (street + city + state + ZIP).
 
 Single writer for completing ``Lead.property_*`` location fields. Reuses
-address parsers and Cook County street-only GIS lookup when city/state are blank.
+address parsers, Cook County street-only GIS lookup (with suffix retries),
+PIN-based situs fill, Chicago/IL market defaults when locality is still blank
+after GIS, and Google/Nominatim geocoding as a last resort. Never copies owner
+mailing onto property.
 """
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Mapping
@@ -27,6 +31,38 @@ INCOMPLETE_ADDRESS_REASON = 'incomplete_property_address'
 HEAL_INCOMPLETE_BATCH_SIZE = 200
 HEAL_INCOMPLETE_CURSOR_KEY = 'property_address:heal_incomplete:last_id'
 HEAL_INCOMPLETE_LOCK_KEY = 'property_address:heal_incomplete_lock'
+
+# Ben's book: blank city/state on situs → assume Chicago, IL before GIS/geocode.
+DEFAULT_MARKET_CITY = 'Chicago'
+DEFAULT_MARKET_STATE = 'IL'
+
+_STREET_SUFFIX_RE = re.compile(
+    r'\b(AVE|AVENUE|ST|STREET|BLVD|BOULEVARD|RD|ROAD|DR|DRIVE|CT|COURT|'
+    r'LN|LANE|PL|PLACE|TER|TERRACE|WAY|CIR|CIRCLE|PKWY|PARKWAY)\b',
+    re.IGNORECASE,
+)
+# Tried in order when the stored street has no USPS-style suffix.
+# Keep this short — each miss is a Cook Socrata round-trip before geocode.
+_STREET_SUFFIX_CANDIDATES = ('AVE', 'ST', 'RD', 'BLVD', 'DR', 'LN', 'CT')
+
+_geocode_calls_this_run = 0
+_geocode_halt_all = False
+_geocode_skip_google = False
+_geocode_circuit_reason: str | None = None
+
+GEOCODE_CIRCUIT_REDIS_KEY = 'property_address:geocode_circuit'
+GEOCODE_MONTHLY_COUNT_KEY_PREFIX = 'property_address:geocode_billable:'
+# Soft-stop before Google free-tier burn (~10k Essentials/mo).
+DEFAULT_GEOCODE_MONTHLY_SOFT_CAP = 9000
+
+_GOOGLE_PAID_OR_QUOTA_STATUSES = frozenset({
+    'OVER_QUERY_LIMIT',
+    'RESOURCE_EXHAUSTED',
+})
+_GOOGLE_BILLING_HINT_RE = re.compile(
+    r'billing|quota|exceeded|daily limit|enable billing|this API project is not authorized to use',
+    re.IGNORECASE,
+)
 
 _ZIP_RE = re.compile(r'^\d{5}(?:-\d{4})?$')
 _TRAILING_ZIP_RE = re.compile(r'[\s,]+(\d{5})(?:-\d{4})?\s*$')
@@ -258,6 +294,322 @@ def is_property_address_complete(
     )
 
 
+def _is_market_default_city(city: str | None, sources: list[str]) -> bool:
+    return (
+        'default_market_locality' in sources
+        and _clean(city).lower() == DEFAULT_MARKET_CITY.lower()
+    )
+
+
+def _is_market_default_state(state: str | None, sources: list[str]) -> bool:
+    return (
+        'default_market_locality' in sources
+        and _clean(state).upper() == DEFAULT_MARKET_STATE.upper()
+    )
+
+
+def _merge_gis_fill(
+    street_out: str | None,
+    city_out: str | None,
+    state_out: str | None,
+    zip_out: str | None,
+    sources: list[str],
+    gis_fill: Mapping[str, Any],
+    *,
+    source_tag: str,
+    replace_market_defaults: bool = False,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """Fill empty locality fields from a GIS/geocode result; optionally upgrade street.
+
+    When ``replace_market_defaults`` is True, Chicago/IL placeholders from
+    ``default_market_locality`` may be overwritten by a real GIS/geocode hit.
+    """
+    if gis_fill.get('property_street') and _should_replace_street(
+        street_out or '', gis_fill['property_street'],
+    ):
+        street_out = gis_fill['property_street']
+        sources.append(f'{source_tag}_street')
+    fill_city = bool(gis_fill.get('property_city')) and (
+        not city_out
+        or (replace_market_defaults and _is_market_default_city(city_out, sources))
+    )
+    if fill_city:
+        city_out = gis_fill['property_city']
+        sources.append(source_tag)
+    fill_state = bool(gis_fill.get('property_state')) and (
+        not state_out
+        or (replace_market_defaults and _is_market_default_state(state_out, sources))
+    )
+    if fill_state:
+        state_out = gis_fill['property_state']
+        sources.append(source_tag)
+    if not zip_out and gis_fill.get('property_zip'):
+        zip_out = _zip5(gis_fill['property_zip']) or zip_out
+        sources.append(source_tag)
+    return street_out, city_out, state_out, zip_out
+
+
+def _street_has_suffix(street: str) -> bool:
+    return bool(_STREET_SUFFIX_RE.search(_clean(street)))
+
+
+def _street_lookup_candidates(street: str) -> list[str]:
+    """Original street plus suffix variants when the street type is missing."""
+    base = _clean(street)
+    if not base:
+        return []
+    candidates = [base]
+    if _street_has_suffix(base):
+        return candidates
+    for suffix in _STREET_SUFFIX_CANDIDATES:
+        candidates.append(f'{base} {suffix}')
+    return candidates
+
+
+def _pick_unique_gis_row(rows: list[dict]) -> dict | None:
+    """Prefer a unique Chicago (or single) GIS hit; reject conflicting ZIPs."""
+    if not rows:
+        return None
+    chicago = [
+        r for r in rows
+        if _clean(r.get('property_city')).upper() == 'CHICAGO'
+    ]
+    pool = chicago if chicago else rows
+    zip_set = {
+        z for z in (_zip5(r.get('property_zip')) for r in pool) if z
+    }
+    if len(zip_set) > 1:
+        return None
+    cities = {
+        _clean(r.get('property_city')).upper()
+        for r in pool
+        if _clean(r.get('property_city'))
+    }
+    if len(cities) > 1:
+        return None
+    return pool[0]
+
+
+def _gis_row_to_fill(row: dict) -> dict[str, str]:
+    return {
+        'property_street': _clean(row.get('property_street')),
+        'property_city': _clean(row.get('property_city')),
+        'property_state': _clean(row.get('property_state')) or 'IL',
+        'property_zip': _zip5(row.get('property_zip')) or '',
+    }
+
+
+def _sync_geocode_circuit_from_redis() -> None:
+    """Honor persisted halt / skip-Google flags on every geocode path."""
+    global _geocode_halt_all, _geocode_skip_google, _geocode_circuit_reason
+    persisted = _load_geocode_circuit()
+    if not persisted:
+        return
+    if persisted.get('halt_all'):
+        _geocode_halt_all = True
+        _geocode_skip_google = True
+        _geocode_circuit_reason = (
+            persisted.get('reason') or 'persisted geocode circuit'
+        )
+    elif persisted.get('skip_google'):
+        _geocode_skip_google = True
+        if not _geocode_circuit_reason:
+            _geocode_circuit_reason = (
+                persisted.get('reason') or 'persisted skip-google circuit'
+            )
+
+
+def reset_geocode_run_budget() -> None:
+    """Reset per-process geocode counter and in-memory circuit for a heal batch."""
+    global _geocode_calls_this_run, _geocode_halt_all, _geocode_skip_google
+    global _geocode_circuit_reason
+    _geocode_calls_this_run = 0
+    _geocode_halt_all = False
+    _geocode_skip_google = False
+    _geocode_circuit_reason = None
+    # Re-load persistent circuit (quota/paid halt survives across heal runs).
+    _sync_geocode_circuit_from_redis()
+
+
+def _geocode_budget_allows() -> bool:
+    _sync_geocode_circuit_from_redis()
+    if _geocode_halt_all:
+        return False
+    try:
+        max_n = int(os.environ.get('PROPERTY_ADDRESS_GEOCODE_MAX_PER_RUN', '50'))
+    except (TypeError, ValueError):
+        max_n = 50
+    return max_n < 0 or _geocode_calls_this_run < max_n
+
+
+def _monthly_soft_cap() -> int:
+    try:
+        return int(os.environ.get(
+            'PROPERTY_ADDRESS_GEOCODE_MONTHLY_SOFT_CAP',
+            str(DEFAULT_GEOCODE_MONTHLY_SOFT_CAP),
+        ))
+    except (TypeError, ValueError):
+        return DEFAULT_GEOCODE_MONTHLY_SOFT_CAP
+
+
+def _month_key() -> str:
+    return datetime.now(timezone.utc).strftime('%Y-%m')
+
+
+def _billable_month_count() -> int:
+    from app.services.deploy_sync_policy import get_redis_value
+
+    raw = get_redis_value(f'{GEOCODE_MONTHLY_COUNT_KEY_PREFIX}{_month_key()}')
+    try:
+        return max(0, int(raw or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _increment_billable_month_count() -> int:
+    """Atomically increment the monthly Google geocode counter (Redis INCR)."""
+    from app.services.deploy_sync_policy import _redis_client, set_redis_value
+
+    key = f'{GEOCODE_MONTHLY_COUNT_KEY_PREFIX}{_month_key()}'
+    client = _redis_client()
+    if client is not None:
+        try:
+            next_n = int(client.incr(key))
+            if next_n == 1:
+                client.expire(key, 40 * 24 * 3600)
+            return max(0, next_n)
+        except Exception:
+            pass
+    # Fallback when Redis is unavailable (single-process best-effort).
+    next_n = _billable_month_count() + 1
+    set_redis_value(key, str(next_n))
+    return next_n
+
+
+def _load_geocode_circuit() -> dict[str, Any] | None:
+    from app.services.deploy_sync_policy import get_redis_value
+    import json
+
+    raw = get_redis_value(GEOCODE_CIRCUIT_REDIS_KEY)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _persist_geocode_circuit(
+    *,
+    halt_all: bool,
+    skip_google: bool,
+    reason: str,
+    status: str,
+) -> None:
+    import json
+    from app.services.deploy_sync_policy import set_redis_value
+
+    payload = {
+        'halt_all': halt_all,
+        'skip_google': bool(skip_google or halt_all),
+        'reason': reason,
+        'status': status,
+        'opened_at': datetime.now(timezone.utc).isoformat(),
+    }
+    set_redis_value(GEOCODE_CIRCUIT_REDIS_KEY, json.dumps(payload))
+    try:
+        from app.services.deploy_sync_policy import _redis_client
+        client = _redis_client()
+        if client is not None:
+            client.expire(GEOCODE_CIRCUIT_REDIS_KEY, 7 * 24 * 3600)
+    except Exception:
+        pass
+
+
+def clear_geocode_circuit() -> None:
+    """Clear persistent paid/quota halt (ops escape hatch)."""
+    global _geocode_halt_all, _geocode_skip_google, _geocode_circuit_reason
+    _geocode_halt_all = False
+    _geocode_skip_google = False
+    _geocode_circuit_reason = None
+    try:
+        from app.services.deploy_sync_policy import _redis_client
+        client = _redis_client()
+        if client is not None:
+            client.delete(GEOCODE_CIRCUIT_REDIS_KEY)
+    except Exception:
+        pass
+
+
+def get_geocode_circuit_status() -> dict[str, Any]:
+    """Health / ops snapshot of geocode stop-gap state."""
+    _sync_geocode_circuit_from_redis()
+    persisted = _load_geocode_circuit() or {}
+    month_count = _billable_month_count()
+    soft_cap = _monthly_soft_cap()
+    halt = bool(_geocode_halt_all or persisted.get('halt_all'))
+    skip_google = bool(
+        _geocode_skip_google or persisted.get('skip_google') or halt
+    )
+    reason = _geocode_circuit_reason or persisted.get('reason')
+    return {
+        'halt_all': halt,
+        'skip_google': skip_google,
+        'reason': reason,
+        'status': persisted.get('status'),
+        'billable_this_month': month_count,
+        'monthly_soft_cap': soft_cap,
+        'near_soft_cap': soft_cap > 0 and month_count >= soft_cap,
+    }
+
+
+def _trip_geocode_circuit(
+    *,
+    halt_all: bool,
+    reason: str,
+    status: str,
+) -> None:
+    """Open the stop-gap: stop geocoding and make the operator aware."""
+    global _geocode_halt_all, _geocode_skip_google, _geocode_circuit_reason
+    _geocode_circuit_reason = reason
+    if halt_all:
+        _geocode_halt_all = True
+        _geocode_skip_google = True
+        _persist_geocode_circuit(
+            halt_all=True, skip_google=True, reason=reason, status=status,
+        )
+        logger.error(
+            'GEOCODE CIRCUIT OPEN (halt all external geocode): status=%s reason=%s '
+            '— heal will not call Google/Nominatim until cleared. '
+            'Check Google billing/quota or clear via clear_geocode_circuit().',
+            status,
+            reason,
+        )
+    else:
+        _geocode_skip_google = True
+        _persist_geocode_circuit(
+            halt_all=False, skip_google=True, reason=reason, status=status,
+        )
+        logger.warning(
+            'GEOCODE: skipping further Google calls: status=%s reason=%s '
+            '(Nominatim may still run unless halt_all)',
+            status,
+            reason,
+        )
+
+
+def _google_status_is_paid_or_quota(status: str, error_message: str = '') -> bool:
+    st = (status or '').upper()
+    if st in _GOOGLE_PAID_OR_QUOTA_STATUSES:
+        return True
+    if st == 'REQUEST_DENIED' and _GOOGLE_BILLING_HINT_RE.search(error_message or ''):
+        return True
+    return bool(_GOOGLE_BILLING_HINT_RE.search(error_message or '') and st not in (
+        'OK', 'ZERO_RESULTS', 'CACHE_HIT', 'SKIPPED_NO_KEY',
+    ))
+
+
 def complete_property_address_fields(
     street: str | None = None,
     city: str | None = None,
@@ -265,17 +617,22 @@ def complete_property_address_fields(
     zip_code: str | None = None,
     *,
     try_gis: bool = True,
+    try_geocode: bool | None = None,
+    county_assessor_pin: str | None = None,
 ) -> dict[str, Any]:
     """Return completed property address components (pure helper for payloads).
 
-    Does not touch the database. GIS fill uses Cook County street lookup when
-    city/state/zip are still missing after parsing.
+    Order: parse → Cook GIS street (suffix retries) → PIN GIS → Chicago/IL
+    defaults for still-blank city/state → external geocode last resort.
+    Never copies owner mailing fields onto property.
     """
     street_out = _clean(street)
     city_out = _clean(city)
     state_out = _clean(state)
     zip_out = _clean(zip_code)
+    pin_out = _clean(county_assessor_pin)
     sources: list[str] = []
+    do_geocode = try_gis if try_geocode is None else bool(try_geocode)
 
     if street_out and not is_property_address_complete(
         street_out, city_out, state_out, zip_out,
@@ -324,20 +681,50 @@ def complete_property_address_fields(
     ):
         gis_fill = _gis_fill_from_street(street_out)
         if gis_fill:
-            if gis_fill.get('property_street') and _should_replace_street(
-                street_out, gis_fill['property_street'],
-            ):
-                street_out = gis_fill['property_street']
-                sources.append('gis_street')
-            if not city_out and gis_fill.get('property_city'):
-                city_out = gis_fill['property_city']
-                sources.append('gis')
-            if not state_out and gis_fill.get('property_state'):
-                state_out = gis_fill['property_state']
-                sources.append('gis')
-            if not zip_out and gis_fill.get('property_zip'):
-                zip_out = _zip5(gis_fill['property_zip']) or zip_out
-                sources.append('gis')
+            street_out, city_out, state_out, zip_out = _merge_gis_fill(
+                street_out, city_out, state_out, zip_out, sources, gis_fill,
+                source_tag='gis',
+            )
+
+    if (
+        try_gis
+        and pin_out
+        and not is_property_address_complete(street_out, city_out, state_out, zip_out)
+    ):
+        pin_fill = _gis_fill_from_pin(pin_out)
+        if pin_fill:
+            street_out, city_out, state_out, zip_out = _merge_gis_fill(
+                street_out, city_out, state_out, zip_out, sources, pin_fill,
+                source_tag='gis_pin',
+            )
+
+    # Market defaults after GIS/PIN — never invent ZIP; only blank city/state.
+    # Applied here so GIS can write suburban cities before Chicago is assumed.
+    if (
+        street_out
+        and not is_property_address_complete(street_out, city_out, state_out, zip_out)
+    ):
+        if not city_out:
+            city_out = DEFAULT_MARKET_CITY
+            sources.append('default_market_locality')
+        if not state_out:
+            state_out = DEFAULT_MARKET_STATE
+            sources.append('default_market_locality')
+
+    if (
+        do_geocode
+        and street_out
+        and not is_property_address_complete(street_out, city_out, state_out, zip_out)
+    ):
+        geo_fill = _geocode_fill_from_street(
+            street_out, city=city_out, state=state_out,
+        )
+        if geo_fill:
+            street_out, city_out, state_out, zip_out = _merge_gis_fill(
+                street_out, city_out, state_out, zip_out, sources, geo_fill,
+                source_tag='geocode',
+                replace_market_defaults=True,
+            )
 
     # Collapse one-liners / ZIP-in-street leftovers to street-only, then title-case.
     if street_out:
@@ -394,6 +781,7 @@ def complete_property_address(
         lead.property_state,
         lead.property_zip,
         try_gis=try_gis,
+        county_assessor_pin=getattr(lead, 'county_assessor_pin', None),
     )
 
     changed_fields: list[str] = []
@@ -612,6 +1000,7 @@ def heal_incomplete_property_addresses(
     offline previews. When ``lead_id`` is set, processes that lead only and does
     not touch the cursor.
     """
+    reset_geocode_run_budget()
     batch_limit = max(int(limit), 0)
     cursor = 0 if lead_id is not None else (
         _heal_incomplete_cursor() if last_id is None else max(0, int(last_id))
@@ -672,6 +1061,7 @@ def heal_incomplete_property_addresses(
                     lead.property_state,
                     lead.property_zip,
                     try_gis=try_gis,
+                    county_assessor_pin=getattr(lead, 'county_assessor_pin', None),
                 )
                 summary['previews'].append({
                     'lead_id': lead.id,
@@ -744,6 +1134,16 @@ def heal_incomplete_property_addresses(
     else:
         summary['last_id'] = lead_id or 0
 
+    circuit = get_geocode_circuit_status()
+    summary['geocode_circuit'] = circuit
+    if circuit.get('halt_all'):
+        summary['geocode_halted'] = True
+        summary['status'] = 'completed_with_geocode_halt'
+        logger.error(
+            'property address heal finished with geocode circuit OPEN: %s',
+            circuit.get('reason') or 'halt_all',
+        )
+
     return summary
 
 
@@ -781,41 +1181,247 @@ def _should_replace_street(current: str, assessor: str) -> bool:
 
 
 def _gis_fill_from_street(street: str) -> dict[str, str] | None:
-    """Cook County street-only lookup (no city routing required)."""
+    """Cook County street lookup with suffix retries when the street type is missing."""
     try:
         from app.services.gis.cook_county_gis_connector import (
             CookCountyGISConnector,
             lookup_all_pins_at_address,
         )
-        rows = lookup_all_pins_at_address(street)
-        if not rows:
-            connector = CookCountyGISConnector()
-            parcel = connector.lookup_by_address(street)
-            if parcel is None or not parcel.county_assessor_pin:
-                return None
-            addr = connector.lookup_address_by_pin(parcel.county_assessor_pin)
-            if not addr:
-                return None
-            return {
-                'property_street': _clean(addr.get('property_street')),
-                'property_city': _clean(addr.get('property_city')),
-                'property_state': _clean(addr.get('property_state')) or 'IL',
-                'property_zip': _zip5(addr.get('property_zip')) or '',
-            }
-        # Prefer Chicago row when multiple
-        chicago = [
-            r for r in rows
-            if _clean(r.get('property_city')).upper() == 'CHICAGO'
-        ]
-        row = chicago[0] if chicago else rows[0]
-        return {
-            'property_street': _clean(row.get('property_street')),
-            'property_city': _clean(row.get('property_city')),
-            'property_state': _clean(row.get('property_state')) or 'IL',
-            'property_zip': _zip5(row.get('property_zip')) or '',
-        }
+
+        for candidate in _street_lookup_candidates(street):
+            rows = lookup_all_pins_at_address(candidate)
+            picked = _pick_unique_gis_row(rows)
+            if picked:
+                return _gis_row_to_fill(picked)
+
+        # Single connector fallback on the original street only (avoid N× timeouts).
+        connector = CookCountyGISConnector()
+        parcel = connector.lookup_by_address(street)
+        if parcel is None or not parcel.county_assessor_pin:
+            return None
+        addr = connector.lookup_address_by_pin(parcel.county_assessor_pin)
+        if not addr:
+            return None
+        picked = _pick_unique_gis_row([addr])
+        return _gis_row_to_fill(picked) if picked else None
     except Exception as exc:
         logger.warning('GIS street fill failed for %r: %s', street, exc)
+        return None
+
+
+def _geocode_fill_from_street(
+    street: str,
+    *,
+    city: str | None = None,
+    state: str | None = None,
+) -> dict[str, str] | None:
+    """External geocode last resort for incomplete situs (never uses mailing).
+
+    Tries Google (server key) then OpenStreetMap Nominatim when Google is
+    unavailable — unless the paid/quota circuit is open (then stop entirely
+    and surface the halt via logs + health).
+    """
+    global _geocode_calls_this_run
+    if not _geocode_budget_allows():
+        if _geocode_halt_all:
+            logger.error(
+                'Geocode situs blocked by circuit: %s',
+                _geocode_circuit_reason or 'halt_all',
+            )
+        else:
+            logger.info('Geocode situs skipped — PROPERTY_ADDRESS_GEOCODE_MAX_PER_RUN reached')
+        return None
+
+    # Soft-cap: stop Google before free tier rolls into paid usage.
+    # Nominatim remains allowed (skip_google only — not halt_all).
+    soft_cap = _monthly_soft_cap()
+    month_count = _billable_month_count()
+    if soft_cap > 0 and month_count >= soft_cap and not _geocode_skip_google:
+        _trip_geocode_circuit(
+            halt_all=False,
+            reason=(
+                f'Monthly Google geocode soft-cap reached '
+                f'({month_count}/{soft_cap}). Skipping Google to avoid '
+                f'paid-mode charges; Nominatim may still run. Raise '
+                f'PROPERTY_ADDRESS_GEOCODE_MONTHLY_SOFT_CAP or clear circuit '
+                f'after reviewing Google billing.'
+            ),
+            status='SOFT_CAP',
+        )
+
+    query_parts = [_clean(street)]
+    if _clean(city):
+        query_parts.append(_clean(city))
+    if _clean(state):
+        query_parts.append(_clean(state))
+    query = ', '.join(query_parts)
+    if not query:
+        return None
+
+    _geocode_calls_this_run += 1
+
+    if not _geocode_skip_google:
+        try:
+            from app.services.property_data_service import PropertyDataService
+
+            outcome = PropertyDataService().geocode_structured_address(
+                query,
+                components='country:US|administrative_area:IL',
+            )
+            # Count only billable Google responses toward the soft-cap.
+            if outcome.billable:
+                new_count = _increment_billable_month_count()
+                if soft_cap > 0 and new_count >= soft_cap:
+                    _trip_geocode_circuit(
+                        halt_all=False,
+                        reason=(
+                            f'Monthly Google geocode soft-cap reached after '
+                            f'billable call ({new_count}/{soft_cap}).'
+                        ),
+                        status='SOFT_CAP',
+                    )
+
+            if _google_status_is_paid_or_quota(outcome.status, outcome.error_message):
+                _trip_geocode_circuit(
+                    halt_all=True,
+                    reason=(
+                        f'Google Geocoding entered quota/billing mode: '
+                        f'{outcome.status} {outcome.error_message}'.strip()
+                    ),
+                    status=outcome.status,
+                )
+                return None
+
+            if outcome.status == 'REQUEST_DENIED':
+                # Misconfigured / referer-restricted key — skip Google, allow Nominatim.
+                _trip_geocode_circuit(
+                    halt_all=False,
+                    reason=(
+                        f'Google REQUEST_DENIED: {outcome.error_message or "no detail"}'
+                    ),
+                    status=outcome.status,
+                )
+            elif outcome.address:
+                return {
+                    'property_street': _clean(outcome.address.get('property_street')),
+                    'property_city': _clean(outcome.address.get('property_city')),
+                    'property_state': _clean(outcome.address.get('property_state')) or 'IL',
+                    'property_zip': _zip5(outcome.address.get('property_zip')) or '',
+                }
+        except Exception as exc:
+            logger.warning('Google geocode situs fill failed for %r: %s', query, exc)
+
+    if _geocode_halt_all:
+        return None
+
+    try:
+        nominatim = _nominatim_structured_address(query)
+        if nominatim:
+            return nominatim
+    except Exception as exc:
+        logger.warning('Nominatim geocode situs fill failed for %r: %s', query, exc)
+    return None
+
+
+_last_nominatim_monotonic: float = 0.0
+_NOMINATIM_MIN_INTERVAL_SEC = 1.05
+
+
+def _nominatim_structured_address(query: str) -> dict[str, str] | None:
+    """Free OSM Nominatim fallback when Google Geocoding is unavailable."""
+    global _last_nominatim_monotonic
+    import json
+    import time
+    import urllib.parse
+    import urllib.request
+
+    # OSM usage policy: ~1 request/second.
+    elapsed = time.monotonic() - _last_nominatim_monotonic
+    if _last_nominatim_monotonic > 0 and elapsed < _NOMINATIM_MIN_INTERVAL_SEC:
+        time.sleep(_NOMINATIM_MIN_INTERVAL_SEC - elapsed)
+
+    params = urllib.parse.urlencode({
+        'q': query,
+        'format': 'json',
+        'addressdetails': '1',
+        'limit': '1',
+        'countrycodes': 'us',
+    })
+    url = f'https://nominatim.openstreetmap.org/search?{params}'
+    req = urllib.request.Request(
+        url,
+        headers={
+            'User-Agent': 'BAndBRealEstateAnalyzer/1.0 (property-address-heal)',
+            'Accept': 'application/json',
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            rows = json.loads(resp.read().decode('utf-8'))
+    finally:
+        _last_nominatim_monotonic = time.monotonic()
+    if not rows:
+        return None
+    row = rows[0]
+    addr = row.get('address') or {}
+    # Require a road-level hit — reject city/state centroids.
+    if not addr.get('road') and not addr.get('pedestrian'):
+        return None
+    number = (addr.get('house_number') or '').strip()
+    road = (addr.get('road') or addr.get('pedestrian') or '').strip()
+    street = ' '.join(p for p in (number, road) if p).strip()
+    city = (
+        addr.get('city')
+        or addr.get('town')
+        or addr.get('village')
+        or addr.get('hamlet')
+        or ''
+    ).strip()
+    state = (addr.get('state') or '').strip()
+    # Prefer ISO3166-2-lvl4 US-IL style short code when present.
+    state_code = (addr.get('ISO3166-2-lvl4') or '').split('-')[-1] or ''
+    if len(state_code) == 2:
+        state = state_code
+    elif state.upper() in ('ILLINOIS', 'IL'):
+        state = 'IL'
+    else:
+        state = _state_code(state) or state
+    zip_code = _zip5(addr.get('postcode')) or ''
+    if not street or not city or not state or not zip_code:
+        return None
+    return {
+        'property_street': street,
+        'property_city': city,
+        'property_state': state,
+        'property_zip': zip_code,
+    }
+
+
+def _gis_fill_from_pin(pin: str) -> dict[str, str] | None:
+    """Cook County situs fill from an existing assessor PIN."""
+    try:
+        from app.services.gis.cook_county_gis_connector import CookCountyGISConnector
+
+        connector = CookCountyGISConnector()
+        addr = connector.lookup_address_by_pin(pin)
+        if not addr:
+            return None
+        city = _clean(addr.get('property_city'))
+        zip_code = _zip5(addr.get('property_zip')) or ''
+        state = _clean(addr.get('property_state'))
+        if not state and (city or zip_code):
+            state = 'IL'
+        street = _clean(addr.get('property_street'))
+        if not city and not zip_code and not street:
+            return None
+        return {
+            'property_street': street,
+            'property_city': city,
+            'property_state': state or '',
+            'property_zip': zip_code,
+        }
+    except Exception as exc:
+        logger.warning('GIS PIN fill failed for %r: %s', pin, exc)
         return None
 
 

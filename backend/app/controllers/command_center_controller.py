@@ -38,6 +38,7 @@ from app.services.mail_task_lifecycle_service import (
 )
 from app.services.helpers.mailer_history import mailer_history_summary
 from app.services.open_letter_contact_mapper import is_owner_mailable_lead
+from app.services.mailing_address_service import owner_mailing_readiness_detail
 from app.services.scoring_rubric import (
     contacts_likely_prior_owner,
     contacts_stale_since,
@@ -887,6 +888,7 @@ def get_command_center(lead_id: int):
             if mail_eligible_date is not None
             else None
         ),
+        'owner_mailing_readiness': owner_mailing_readiness_detail(lead),
         'address_2': lead.address_2,
         'returned_addresses': lead.returned_addresses,
         # Research / workflow tracking
@@ -1230,6 +1232,64 @@ def move_to_skip_trace(lead_id: int):
         )
 
     return jsonify(result), 200
+
+
+@command_center_bp.route('/<int:lead_id>/owner-mailing/apply-parsed', methods=['POST'])
+@handle_errors
+@require_auth
+def apply_parsed_owner_mailing_route(lead_id: int):
+    """Persist in-memory parsed owner mailing onto structured mailing_* columns."""
+    from app import db
+    from app.services.mailing_address_service import apply_parsed_owner_mailing
+    from app.services.mail_task_lifecycle_service import recent_sale_mail_eligible_date
+
+    lead, denied = _load_authorized_lead(lead_id)
+    if denied is not None:
+        return denied
+
+    result = apply_parsed_owner_mailing(lead)
+    if result.get('applied'):
+        db.session.commit()
+        try:
+            from app.services.lead_refresh import refresh_lead_scoring
+            refresh_lead_scoring(lead_id)
+        except Exception as exc:
+            logger.warning(
+                'Re-score after apply-parsed mailing failed for lead %s: %s',
+                lead_id,
+                exc,
+            )
+
+    lead = Lead.query.get(lead_id)
+    is_mailable = is_owner_mailable_lead(lead) if lead else False
+    mail_eligible_date = recent_sale_mail_eligible_date(lead) if lead else None
+    return jsonify({
+        **result,
+        'is_mailable': is_mailable,
+        'mail_eligible': is_mailable and mail_eligible_date is None,
+        'mail_ineligible_reason': (
+            'recently_sold'
+            if mail_eligible_date is not None
+            else (
+                'invalid_owner_address'
+                if not is_mailable
+                else None
+            )
+        ),
+        'mail_eligible_date': (
+            mail_eligible_date.isoformat()
+            if mail_eligible_date is not None
+            else None
+        ),
+        'owner_mailing_readiness': (
+            result.get('detail')
+            or owner_mailing_readiness_detail(lead)
+        ),
+        'mailing_address': lead.mailing_address if lead else None,
+        'mailing_city': lead.mailing_city if lead else None,
+        'mailing_state': lead.mailing_state if lead else None,
+        'mailing_zip': lead.mailing_zip if lead else None,
+    }), 200
 
 
 @command_center_bp.route('/<int:lead_id>/adjust-for-recent-sale', methods=['POST'])

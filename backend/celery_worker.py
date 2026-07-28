@@ -186,6 +186,12 @@ celery.conf.update(
             'schedule': crontab(minute=45),
             'options': {'expires': 3300},
         },
+        # Owner mailing completeness — peel tab dumps / fill city/state/ZIP.
+        'owner-mailing-heal-incomplete': {
+            'task': 'owner_mailing.heal_incomplete',
+            'schedule': crontab(minute=50),
+            'options': {'expires': 3300},
+        },
         # OLC address feedback + delivery analytics for submitted mail batches.
         'open-letter-sync-campaign-analytics': {
             'task': 'open_letter.sync_due_campaign_analytics',
@@ -766,7 +772,13 @@ def property_address_heal_incomplete_task(self):
                 persist_cursor=True,
                 commit=True,
             )
-            _logger.info("property_address.heal_incomplete: %s", summary)
+            if summary.get('geocode_halted'):
+                _logger.error(
+                    "property_address.heal_incomplete: GEOCODE CIRCUIT OPEN — %s",
+                    (summary.get('geocode_circuit') or {}).get('reason'),
+                )
+            else:
+                _logger.info("property_address.heal_incomplete: %s", summary)
             return summary
     except Exception as exc:
         _logger.error("property_address.heal_incomplete failed: %s", exc)
@@ -781,6 +793,70 @@ def property_address_heal_incomplete_task(self):
             except Exception as release_exc:
                 _logger.warning(
                     "property_address.heal_incomplete: failed to release lock: %s",
+                    release_exc,
+                )
+
+
+@celery.task(
+    bind=True,
+    name='owner_mailing.heal_incomplete',
+    soft_time_limit=900,
+    time_limit=1000,
+)
+def owner_mailing_heal_incomplete_task(self):
+    """Hourly task: normalize incomplete / tabular owner mailing addresses."""
+    import logging
+    _logger = logging.getLogger('celery.owner_mailing.heal_incomplete')
+
+    from app.services.mailing_address_service import HEAL_OWNER_MAILING_LOCK_KEY
+
+    lock_key = HEAL_OWNER_MAILING_LOCK_KEY
+    lock_ttl_seconds = 50 * 60
+    lock_token: str | None = None
+
+    try:
+        from app import create_app
+        app = create_app()
+        with app.app_context():
+            from app.services.deploy_sync_policy import (
+                _redis_client,
+                try_claim_redis_key,
+            )
+            from app.services.mailing_address_service import (
+                heal_incomplete_owner_mailings,
+            )
+
+            client = _redis_client()
+            if client is not None:
+                lock_token = try_claim_redis_key(
+                    lock_key, ttl_seconds=lock_ttl_seconds,
+                )
+                if not lock_token:
+                    _logger.info(
+                        "owner_mailing.heal_incomplete: skipped (lock held)"
+                    )
+                    return {'skipped': True, 'reason': 'lock_held'}
+
+            summary = heal_incomplete_owner_mailings(
+                actor='owner_mailing.heal_incomplete',
+                persist_cursor=True,
+                commit=True,
+            )
+            _logger.info("owner_mailing.heal_incomplete: %s", summary)
+            return summary
+    except Exception as exc:
+        _logger.error("owner_mailing.heal_incomplete failed: %s", exc)
+        raise
+    finally:
+        if lock_token:
+            try:
+                from app.services.deploy_sync_policy import (
+                    release_redis_key_if_token,
+                )
+                release_redis_key_if_token(lock_key, lock_token)
+            except Exception as release_exc:
+                _logger.warning(
+                    "owner_mailing.heal_incomplete: failed to release lock: %s",
                     release_exc,
                 )
 

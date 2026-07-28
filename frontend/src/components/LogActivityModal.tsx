@@ -1,13 +1,22 @@
 /**
- * LogActivityModal — modal wrapper for logging notes, calls, and emails on a lead.
+ * LogActivityModal — floating non-modal panel for logging notes, calls, and emails.
+ *
+ * Command Center stays visible and interactive (no backdrop / scroll lock).
+ * Desktop docks lower-right; mobile bottom-anchors ~65–70vh. Title bar is
+ * draggable; Escape / Close / Cancel / Save dismiss.
  */
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  Box,
   Dialog,
   DialogContent,
   DialogTitle,
+  IconButton,
   useMediaQuery,
   useTheme,
 } from '@mui/material'
+import CloseIcon from '@mui/icons-material/Close'
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator'
 import type { SxProps, Theme } from '@mui/material/styles'
 import { useQuery } from '@tanstack/react-query'
 import type { LeadTask, LeadTimelineEntry } from '@/types'
@@ -37,6 +46,25 @@ export interface LogActivityModalProps {
   ) => void
 }
 
+interface PanelOffset {
+  x: number
+  y: number
+}
+
+function clampOffset(offset: PanelOffset, paper: HTMLElement | null): PanelOffset {
+  if (!paper || typeof window === 'undefined') return offset
+  const rect = paper.getBoundingClientRect()
+  const pad = 8
+  const minX = pad - rect.left + offset.x
+  const maxX = window.innerWidth - pad - rect.right + offset.x
+  const minY = pad - rect.top + offset.y
+  const maxY = window.innerHeight - pad - rect.bottom + offset.y
+  return {
+    x: Math.min(Math.max(offset.x, minX), maxX),
+    y: Math.min(Math.max(offset.y, minY), maxY),
+  }
+}
+
 export function LogActivityModal({
   open,
   activityType,
@@ -46,12 +74,89 @@ export function LogActivityModal({
   onSaved,
 }: LogActivityModalProps) {
   const theme = useTheme()
-  const fullScreen = useMediaQuery(theme.breakpoints.down('sm'))
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'))
+  const paperRef = useRef<HTMLDivElement | null>(null)
+  const dragStart = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null)
+  const previouslyFocused = useRef<HTMLElement | null>(null)
+  const [offset, setOffset] = useState<PanelOffset>({ x: 0, y: 0 })
+
   const { data: contacts = [], isLoading: contactsLoading } = useQuery({
     queryKey: ['propertyContacts', leadId],
     queryFn: () => contactService.getPropertyContacts(leadId),
     enabled: open && activityType != null && activityType !== 'note',
   })
+
+  // Reset dock when panel closes or switches activity / lead.
+  useEffect(() => {
+    if (!open) {
+      setOffset({ x: 0, y: 0 })
+      return
+    }
+    setOffset({ x: 0, y: 0 })
+  }, [open, activityType, leadId])
+
+  // Capture opener focus on open; restore on close or unmount while open.
+  useEffect(() => {
+    if (!open) {
+      const el = previouslyFocused.current
+      previouslyFocused.current = null
+      if (el && typeof el.focus === 'function') {
+        el.focus()
+      }
+      return
+    }
+    previouslyFocused.current = document.activeElement as HTMLElement | null
+    return () => {
+      const el = previouslyFocused.current
+      previouslyFocused.current = null
+      if (el && typeof el.focus === 'function') {
+        el.focus()
+      }
+    }
+  }, [open])
+
+  const onPointerMove = useCallback((e: PointerEvent) => {
+    const start = dragStart.current
+    if (!start) return
+    const next = {
+      x: start.ox + (e.clientX - start.x),
+      y: start.oy + (e.clientY - start.y),
+    }
+    setOffset(clampOffset(next, paperRef.current))
+  }, [])
+
+  const endDrag = useCallback(() => {
+    dragStart.current = null
+    document.documentElement.style.removeProperty('cursor')
+    document.body.style.removeProperty('cursor')
+    window.removeEventListener('pointermove', onPointerMove)
+    window.removeEventListener('pointerup', endDrag)
+    window.removeEventListener('pointercancel', endDrag)
+  }, [onPointerMove])
+
+  const startDrag = (e: React.PointerEvent) => {
+    // Only primary button / touch; ignore interactive children (Close).
+    if (e.button !== 0) return
+    const target = e.target as HTMLElement
+    if (target.closest('[data-testid="log-activity-close"]')) return
+    e.preventDefault()
+    dragStart.current = {
+      x: e.clientX,
+      y: e.clientY,
+      ox: offset.x,
+      oy: offset.y,
+    }
+    // Prefer `move` over `grab`/`grabbing` — on Windows those cursors often
+    // render blank over light surfaces. Pin on document while dragging so the
+    // pointer stays visible when it leaves the title bar.
+    document.documentElement.style.cursor = 'move'
+    document.body.style.cursor = 'move'
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', endDrag)
+    window.addEventListener('pointercancel', endDrag)
+  }
+
+  useEffect(() => () => endDrag(), [endDrag])
 
   if (!activityType) return null
 
@@ -59,44 +164,129 @@ export function LogActivityModal({
     onSaved(entry, activityType, meta)
   }
 
+  // Ignore backdrop / outside clicks — only Escape via onClose reason.
+  const handleDialogClose = (
+    _event: object,
+    reason: 'backdropClick' | 'escapeKeyDown',
+  ) => {
+    if (reason === 'escapeKeyDown') onClose()
+  }
+
   const isCall = activityType === 'call'
-  const contentSx: SxProps<Theme> = isCall
-    ? {
-        overflowX: 'hidden',
-        overflowY: 'visible',
-        pt: 1.5,
-        pb: 1.5,
-        '& .MuiFormControl-root': { overflow: 'visible' },
-      }
-    : {
-        overflowY: 'auto',
-        overflowX: 'hidden',
-        maxHeight: fullScreen ? 'none' : 'min(80vh, 720px)',
-        pt: 2,
-        '& .MuiFormControl-root': { overflow: 'visible' },
-      }
+  const contentSx: SxProps<Theme> = {
+    // Explicit visible cursor — never inherit drag chrome from the title bar.
+    cursor: 'auto',
+    overflowY: 'auto',
+    overflowX: 'hidden',
+    pt: isCall ? 1.5 : 2,
+    pb: 1.5,
+    maxHeight: isMobile ? 'calc(70vh - 56px)' : 'min(70vh, 640px)',
+    '& .MuiFormControl-root': { overflow: 'visible' },
+    '& input, & textarea, & [contenteditable="true"]': {
+      cursor: 'text',
+      caretColor: 'currentColor',
+    },
+  }
+
+  const paperSx: SxProps<Theme> = {
+    position: 'fixed',
+    m: 0,
+    cursor: 'auto',
+    ...(isMobile
+      ? {
+          left: 8,
+          right: 8,
+          bottom: 8,
+          top: 'auto',
+          width: 'auto',
+          maxWidth: '100%',
+          maxHeight: '70vh',
+        }
+      : {
+          right: 24,
+          bottom: 24,
+          left: 'auto',
+          top: 'auto',
+          width: isCall ? 'min(980px, calc(100vw - 48px))' : 'min(480px, calc(100vw - 48px))',
+          maxWidth: isCall ? 980 : 480,
+          maxHeight: 'min(80vh, 720px)',
+        }),
+    transform: `translate(${offset.x}px, ${offset.y}px)`,
+    boxShadow: 8,
+  }
 
   return (
     <Dialog
       open={open}
-      onClose={onClose}
-      maxWidth={isCall ? 'lg' : 'sm'}
-      fullWidth
-      fullScreen={fullScreen}
-      scroll={isCall ? 'body' : 'paper'}
+      onClose={handleDialogClose}
+      hideBackdrop
+      disableScrollLock
+      disableEnforceFocus
+      fullScreen={false}
+      maxWidth={false}
+      scroll="paper"
       aria-labelledby="log-activity-dialog-title"
+      aria-modal={false}
       data-testid={`log-activity-modal-${activityType}`}
-      PaperProps={
-        isCall
-          ? { sx: { maxWidth: 980 } }
-          : undefined
-      }
+      sx={{
+        pointerEvents: 'none',
+        '& .MuiDialog-container': {
+          pointerEvents: 'none',
+          alignItems: 'flex-end',
+          justifyContent: isMobile ? 'center' : 'flex-end',
+        },
+      }}
+      PaperProps={{
+        ref: paperRef,
+        sx: { ...paperSx, pointerEvents: 'auto' },
+        'data-testid': 'log-activity-panel-paper',
+        role: 'dialog',
+        'aria-modal': false,
+      } as React.ComponentProps<typeof Dialog>['PaperProps']}
     >
       <DialogTitle
         id="log-activity-dialog-title"
-        sx={isCall ? { py: 1.25, px: 2.5 } : undefined}
+        data-testid="log-activity-drag-handle"
+        onPointerDown={isMobile ? undefined : startDrag}
+        sx={{
+          py: 1.25,
+          px: 2,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1,
+          // `move` stays visible on Windows; `grab`/`grabbing` often blank out.
+          cursor: isMobile ? 'default' : 'move',
+          userSelect: 'none',
+          touchAction: isMobile ? 'auto' : 'none',
+        }}
       >
-        {TITLES[activityType]}
+        {!isMobile && (
+          <DragIndicatorIcon fontSize="small" color="action" aria-hidden />
+        )}
+        <Box component="span" sx={{ flex: 1, minWidth: 0 }}>
+          {TITLES[activityType]}
+        </Box>
+        {!isMobile && (offset.x !== 0 || offset.y !== 0) && (
+          <IconButton
+            aria-label="Reset panel position"
+            onClick={() => setOffset({ x: 0, y: 0 })}
+            size="small"
+            data-testid="log-activity-reset-position"
+          >
+            <Box component="span" sx={{ typography: 'caption', px: 0.5 }}>
+              Reset
+            </Box>
+          </IconButton>
+        )}
+        <IconButton
+          aria-label="Close"
+          onClick={onClose}
+          size="small"
+          data-testid="log-activity-close"
+          sx={{ ml: 0.5 }}
+        >
+          <CloseIcon fontSize="small" />
+        </IconButton>
       </DialogTitle>
       <DialogContent dividers sx={contentSx}>
         {activityType === 'note' && (

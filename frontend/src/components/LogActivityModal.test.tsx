@@ -17,6 +17,12 @@ vi.mock('@/services/api', () => ({
   },
 }))
 
+vi.mock('@/services/openLetterApi', () => ({
+  default: {
+    campaignsForLead: vi.fn().mockResolvedValue({ campaigns: [] }),
+  },
+}))
+
 import { callLogService } from '@/services/api'
 
 const mockLogNote = callLogService.logNote as ReturnType<typeof vi.fn>
@@ -101,5 +107,38 @@ describe('LogActivityModal', () => {
         undefined,
       )
     })
+  })
+
+  it('exposes a close control and never uses fullscreen modal chrome', () => {
+    render(
+      <LogActivityModal
+        open
+        activityType="call"
+        leadId={1}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByTestId('log-activity-modal-call')).toBeInTheDocument()
+    expect(screen.getByTestId('log-activity-close')).toBeInTheDocument()
+    expect(screen.getByTestId('log-activity-drag-handle')).toBeInTheDocument()
+    expect(screen.getByTestId('call-outcome-buttons')).toBeInTheDocument()
+    expect(document.querySelector('.MuiBackdrop-root')).not.toBeInTheDocument()
+  })
+
+  it('calls onClose from the title close button', async () => {
+    const onClose = vi.fn()
+    render(
+      <LogActivityModal
+        open
+        activityType="note"
+        leadId={1}
+        onClose={onClose}
+        onSaved={vi.fn()}
+      />,
+    )
+    await user.click(screen.getByTestId('log-activity-close'))
+    expect(onClose).toHaveBeenCalled()
   })
 })
