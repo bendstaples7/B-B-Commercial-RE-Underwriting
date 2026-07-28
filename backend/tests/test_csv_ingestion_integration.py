@@ -159,9 +159,9 @@ class TestCSVAsyncPath:
             db.session.commit()
 
             # Call the core service directly (same code path as the Celery task
-            # but without broker/worker overhead).
+            # but without broker/worker overhead). Use an empty GIS registry so
+            # this status/job-lifecycle test never hits live county endpoints.
             from app.services.deduplication_engine import DeduplicationEngine
-            from app.services.gis.base import GISConnectorRegistry
             from app.services.lead_ingestion_service import LeadIngestionService
 
             with patch(
@@ -170,11 +170,17 @@ class TestCSVAsyncPath:
             ), patch(
                 "app.services.gis.dupage_gis_connector.DuPageGISConnector.lookup_by_pin",
                 return_value=None,
+            ), patch(
+                "app.services.gis.cook_county_gis_connector.CookCountyGISConnector.lookup_by_address",
+                return_value=None,
+            ), patch(
+                "app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address",
+                return_value=[],
             ):
                 dedup = DeduplicationEngine()
                 service = LeadIngestionService(
                     dedup_engine=dedup,
-                    gis_registry=GISConnectorRegistry,
+                    gis_registry={},
                 )
                 service.process_csv(job_id, real_tmp_path, OWNER_USER_ID)
 

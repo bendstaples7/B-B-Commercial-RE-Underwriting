@@ -330,6 +330,18 @@ class TestCompletePropertyAddressFields:
         assert result['property_state'] == 'IL'
         assert 'default_market_locality' in result['sources']
 
+    def test_apply_market_defaults_false_leaves_city_blank(self):
+        """Pre-GIS create/merge must not invent Chicago (avoids live Cook routing)."""
+        result = complete_property_address_fields(
+            '2834 N Drake Ave',
+            try_gis=False,
+            try_geocode=False,
+            apply_market_defaults=False,
+        )
+        assert result['property_city'] is None
+        assert result['property_state'] is None
+        assert 'default_market_locality' not in result['sources']
+
     def test_gis_suburban_city_not_stuck_as_chicago(self):
         with patch(
             'app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address',
@@ -695,6 +707,19 @@ class TestCompletePropertyAddressLead:
 
 
 class TestHealIncompletePropertyAddresses:
+    def test_zero_limit_still_includes_geocode_circuit(self, app):
+        with app.app_context():
+            result = heal_incomplete_property_addresses(
+                last_id=0,
+                limit=0,
+                persist_cursor=False,
+                commit=False,
+                actor='test',
+            )
+            assert result['processed'] == 0
+            assert 'geocode_circuit' in result
+            assert isinstance(result['geocode_circuit'], dict)
+
     def test_heals_street_only_batch_and_advances_cursor(self, app):
         with app.app_context():
             incomplete = _make_lead(

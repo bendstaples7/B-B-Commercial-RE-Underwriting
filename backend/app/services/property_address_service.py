@@ -527,19 +527,41 @@ def _persist_geocode_circuit(
         pass
 
 
-def clear_geocode_circuit() -> None:
-    """Clear persistent paid/quota halt (ops escape hatch)."""
+def clear_geocode_circuit() -> bool:
+    """Clear persistent paid/quota halt (ops escape hatch).
+
+    Returns True when Redis delete succeeded. Returns False when the Redis
+    client is unavailable or delete raises a Redis/client error so callers can
+    tell backend unavailability from a successful clear.
+    """
     global _geocode_halt_all, _geocode_skip_google, _geocode_circuit_reason
     _geocode_halt_all = False
     _geocode_skip_google = False
     _geocode_circuit_reason = None
     try:
         from app.services.deploy_sync_policy import _redis_client
+        import redis as redis_lib
+
         client = _redis_client()
-        if client is not None:
-            client.delete(GEOCODE_CIRCUIT_REDIS_KEY)
+        if client is None:
+            logger.warning('clear_geocode_circuit: Redis client unavailable')
+            return False
+        client.delete(GEOCODE_CIRCUIT_REDIS_KEY)
+        return True
     except Exception as exc:
+        # Prefer Redis client errors; still fail closed for unexpected types.
+        try:
+            import redis as redis_lib
+            if not isinstance(exc, (redis_lib.RedisError, OSError, TimeoutError)):
+                logger.warning(
+                    'clear_geocode_circuit: unexpected error clearing Redis: %s',
+                    exc,
+                )
+                return False
+        except Exception:
+            pass
         logger.warning('clear_geocode_circuit: Redis delete failed: %s', exc)
+        return False
 
 
 def get_geocode_circuit_status() -> dict[str, Any]:
@@ -618,6 +640,7 @@ def complete_property_address_fields(
     *,
     try_gis: bool = True,
     try_geocode: bool | None = None,
+    apply_market_defaults: bool = True,
     county_assessor_pin: str | None = None,
 ) -> dict[str, Any]:
     """Return completed property address components (pure helper for payloads).
@@ -625,6 +648,10 @@ def complete_property_address_fields(
     Order: parse → Cook GIS street (suffix retries) → PIN GIS → Chicago/IL
     defaults for still-blank city/state → external geocode last resort.
     Never copies owner mailing fields onto property.
+
+    Pass ``apply_market_defaults=False`` on pre-GIS create/merge paths so a
+    blank city is not invented as Chicago (which would route live Cook GIS
+    enrichment for every imported row).
     """
     street_out = _clean(street)
     city_out = _clean(city)
@@ -704,8 +731,10 @@ def complete_property_address_fields(
 
     # Market defaults after GIS/PIN — never invent ZIP; only blank city/state.
     # Applied here so GIS can write suburban cities before Chicago is assumed.
+    # Skip when callers still plan a separate GIS enrichment pass (dedup create).
     if (
-        street_out
+        apply_market_defaults
+        and street_out
         and not is_property_address_complete(street_out, city_out, state_out, zip_out)
     ):
         if not city_out:
@@ -766,6 +795,7 @@ def complete_property_address(
     *,
     try_gis: bool = True,
     try_geocode: bool | None = None,
+    apply_market_defaults: bool = True,
     actor: str = 'property_address_completer',
     commit: bool = False,
     write_timeline: bool = True,
@@ -777,6 +807,8 @@ def complete_property_address(
     paths that must not persist ``review_required``. ``try_geocode`` defaults
     to off (see ``complete_property_address_fields``) — pass ``True`` only for
     batch heal paths that intend to spend Google/Nominatim budget.
+    Pass ``apply_market_defaults=False`` before a separate GIS enrichment pass
+    so blank cities are not assumed Chicago.
     """
     was_complete = is_property_address_complete(lead=lead)
     before = {
@@ -794,6 +826,7 @@ def complete_property_address(
         lead.property_zip,
         try_gis=try_gis,
         try_geocode=try_geocode,
+        apply_market_defaults=apply_market_defaults,
         county_assessor_pin=getattr(lead, 'county_assessor_pin', None),
     )
 
@@ -940,6 +973,7 @@ def ensure_lead_property_address_complete(
     actor: str,
     try_gis: bool = True,
     try_geocode: bool | None = None,
+    apply_market_defaults: bool = True,
     commit: bool = False,
     write_timeline: bool = True,
     set_review_flag: bool = True,
@@ -956,11 +990,26 @@ def ensure_lead_property_address_complete(
         lead,
         try_gis=try_gis,
         try_geocode=try_geocode,
+        apply_market_defaults=apply_market_defaults,
         actor=actor,
         commit=commit,
         write_timeline=write_timeline,
         set_review_flag=set_review_flag,
     )
+
+
+def _decorate_heal_summary_with_geocode_circuit(summary: dict[str, Any]) -> dict[str, Any]:
+    """Attach geocode circuit fields on every heal return path."""
+    circuit = get_geocode_circuit_status()
+    summary['geocode_circuit'] = circuit
+    if circuit.get('halt_all'):
+        summary['geocode_halted'] = True
+        summary['status'] = 'completed_with_geocode_halt'
+        logger.error(
+            'property address heal finished with geocode circuit OPEN: %s',
+            circuit.get('reason') or 'halt_all',
+        )
+    return summary
 
 
 def _incomplete_property_address_clause():
@@ -1037,7 +1086,7 @@ def heal_incomplete_property_addresses(
         'previews': [],
     }
     if batch_limit == 0 and lead_id is None:
-        return summary
+        return _decorate_heal_summary_with_geocode_circuit(summary)
 
     if lead_id is not None:
         leads = (
@@ -1155,17 +1204,7 @@ def heal_incomplete_property_addresses(
     else:
         summary['last_id'] = lead_id or 0
 
-    circuit = get_geocode_circuit_status()
-    summary['geocode_circuit'] = circuit
-    if circuit.get('halt_all'):
-        summary['geocode_halted'] = True
-        summary['status'] = 'completed_with_geocode_halt'
-        logger.error(
-            'property address heal finished with geocode circuit OPEN: %s',
-            circuit.get('reason') or 'halt_all',
-        )
-
-    return summary
+    return _decorate_heal_summary_with_geocode_circuit(summary)
 
 
 def _zip5(value: Any) -> str | None:

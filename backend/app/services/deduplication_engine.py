@@ -98,6 +98,9 @@ class DeduplicationEngine:
                 lead,
                 actor=actor,
                 try_gis=False,
+                # Do not invent Chicago/IL before a later GIS enrichment pass —
+                # that would route every street-only import row to live Cook GIS.
+                apply_market_defaults=False,
                 commit=False,
             )
         except Exception as exc:
