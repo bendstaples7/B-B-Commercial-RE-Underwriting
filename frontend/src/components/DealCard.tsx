@@ -78,7 +78,7 @@ export function DealCard({ deal, onClick }: DealCardProps) {
   const style: React.CSSProperties = {
     transform: CSS.Translate.toString(transform),
     opacity: isDragging ? 0.5 : 1,
-    cursor: 'grab',
+    cursor: 'move',
     marginBottom: 8,
     userSelect: 'none',
   }

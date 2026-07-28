@@ -7,7 +7,10 @@ from typing import Any
 from flask import has_app_context
 
 from app.models.lead import Lead
-from app.services.address_parse_service import parse_embedded_us_address
+from app.services.address_parse_service import (
+    parse_embedded_us_address,
+    street_looks_tabular,
+)
 
 
 def _clean(value: Any) -> str:
@@ -28,7 +31,12 @@ def _merge_parsed_fields(
     raw_line: str,
 ) -> tuple[str, str, str, str]:
     """Fill missing components by parsing a one-line address string."""
-    if _complete_address(street, city, state, zip_code) or not raw_line:
+    if not raw_line:
+        return street, city, state, zip_code
+
+    # Structured city/state/zip may already be filled from a prior heal while
+    # mailing_address still holds the original tab/column dump — keep peeling.
+    if _complete_address(street, city, state, zip_code) and not street_looks_tabular(street):
         return street, city, state, zip_code
 
     parsed = parse_embedded_us_address(raw_line)
@@ -37,9 +45,13 @@ def _merge_parsed_fields(
 
     p_street, p_city, p_state, p_zip = parsed
     use_street = street
-    if p_street and (not city or not state or not zip_code):
-        if not street or street == raw_line.strip():
-            use_street = p_street
+    if p_street and (
+        not street
+        or street == raw_line.strip()
+        or street_looks_tabular(street)
+        or (not city or not state or not zip_code)
+    ):
+        use_street = p_street
     return (
         use_street or p_street,
         city or p_city,

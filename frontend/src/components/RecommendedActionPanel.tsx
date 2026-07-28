@@ -29,7 +29,7 @@ import ContactMailOutlinedIcon from '@mui/icons-material/ContactMailOutlined'
 import PinDropOutlinedIcon from '@mui/icons-material/PinDropOutlined'
 import EventAvailableOutlinedIcon from '@mui/icons-material/EventAvailableOutlined'
 import DoNotDisturbOnOutlinedIcon from '@mui/icons-material/DoNotDisturbOnOutlined'
-import type { RecommendedActionMeta, LeadStatus, LeadTask, CRMRecommendedAction, OutreachContact, EntityResearchSummary } from '@/types'
+import type { RecommendedActionMeta, LeadStatus, LeadTask, CRMRecommendedAction, OutreachContact, EntityResearchSummary, OwnerMailingReadiness } from '@/types'
 import { outreachDisplayLabel } from '@/constants/scoringRecommendedActions'
 import { OutreachContactInline, OutreachContactMissingHint } from '@/components/OutreachContactCallout'
 import { formatDateOnly } from '@/utils/helpers'
@@ -188,6 +188,10 @@ export interface RecommendedActionPanelProps {
   mailEligible?: boolean
   mailIneligibleReason?: string | null
   mailEligibleDate?: string | null
+  /** Owner mailing parse preview when Add to Mail Queue is blocked. */
+  ownerMailingReadiness?: OwnerMailingReadiness | null
+  /** Persist parsed mailing_* and refresh command center. */
+  onApplyParsedMailing?: () => Promise<void>
   /** When true, show outreach contact inline under the action label */
   showOutreachContact?: boolean
   /** Drop outer border when nested inside a shared action card. */
@@ -223,6 +227,8 @@ export function RecommendedActionPanel({
   mailEligible,
   mailIneligibleReason = null,
   mailEligibleDate = null,
+  ownerMailingReadiness = null,
+  onApplyParsedMailing,
   showOutreachContact = false,
   embedded = false,
   showActionCenterTiles = false,
@@ -234,6 +240,7 @@ export function RecommendedActionPanel({
   const [actionError, setActionError] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [researchPending, setResearchPending] = useState(false)
+  const [applyMailingPending, setApplyMailingPending] = useState(false)
 
   const isDNC = leadStatus === 'do_not_contact'
   const isInMailBatch = mailQueueStatus === 'queued'
@@ -256,6 +263,92 @@ export function RecommendedActionPanel({
         ? ` until ${formatDateOnly(mailEligibleDate)}.`
         : ' until the two-year hold ends.'}
       {' '}It stays in Skip Trace; when the hold expires the undated handoff becomes active work.
+    </Alert>
+  ) : null
+
+  const showMailAddressAlert =
+    (
+      mailIneligibleReason === 'invalid_owner_address'
+      || Boolean(ownerMailingReadiness?.can_apply_parsed)
+      || (
+        mailEligible === false
+        && ownerMailingReadiness != null
+        && !ownerMailingReadiness.is_mailable
+      )
+    )
+    && mailIneligibleReason !== 'recently_sold'
+
+  const handleApplyParsedMailing = async () => {
+    if (!onApplyParsedMailing) return
+    setActionError(null)
+    setApplyMailingPending(true)
+    try {
+      await onApplyParsedMailing()
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : 'Could not apply parsed mailing address.',
+      )
+    } finally {
+      setApplyMailingPending(false)
+    }
+  }
+
+  const mailAddressAlert = showMailAddressAlert ? (
+    <Alert
+      severity="info"
+      sx={{ mb: 2 }}
+      data-testid="owner-mailing-readiness"
+    >
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 2,
+          flexWrap: 'wrap',
+          width: '100%',
+        }}
+      >
+        <Box sx={{ minWidth: 0, flex: '1 1 220px' }}>
+          <Typography variant="body2" component="div">
+            {ownerMailingReadiness?.reason
+              ?? 'Owner mailing address is not ready for the mail queue'}
+          </Typography>
+          {ownerMailingReadiness?.parsed ? (
+            <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.5 }}>
+              Parsed preview:{' '}
+              {[
+                ownerMailingReadiness.parsed.street,
+                ownerMailingReadiness.parsed.city,
+                ownerMailingReadiness.parsed.state,
+                ownerMailingReadiness.parsed.zip,
+              ].filter(Boolean).join(', ')}
+            </Typography>
+          ) : ownerMailingReadiness?.raw.street ? (
+            <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.5 }}>
+              Stored street: {ownerMailingReadiness.raw.street}
+            </Typography>
+          ) : null}
+        </Box>
+        {ownerMailingReadiness?.can_apply_parsed && onApplyParsedMailing ? (
+          <Button
+            size="small"
+            variant="contained"
+            color="primary"
+            disabled={applyMailingPending || pendingAction !== null}
+            onClick={() => void handleApplyParsedMailing()}
+            startIcon={
+              applyMailingPending
+                ? <CircularProgress size={14} color="inherit" />
+                : undefined
+            }
+            data-testid="apply-parsed-owner-mailing"
+            sx={{ flexShrink: 0 }}
+          >
+            Use parsed address
+          </Button>
+        ) : null}
+      </Box>
     </Alert>
   ) : null
 
@@ -603,6 +696,7 @@ export function RecommendedActionPanel({
         sx={panelSx}
       >
         {mailHoldAlert}
+        {mailAddressAlert}
         {isDNC && (
           <Chip
             icon={<BlockIcon />}
@@ -659,6 +753,7 @@ export function RecommendedActionPanel({
       sx={panelSx}
     >
       {mailHoldAlert}
+      {mailAddressAlert}
       {/* DNC badge — shown when lead is do_not_contact */}
       {isDNC && (
         <Chip

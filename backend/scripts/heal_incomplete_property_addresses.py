@@ -56,6 +56,31 @@ def main() -> int:
                 result.get('errors'),
             )
         )
+        circuit = result.get('geocode_circuit') or {}
+        if circuit.get('halt_all') or result.get('geocode_halted'):
+            print(
+                'GEOCODE CIRCUIT OPEN — external geocode stopped. reason=%s '
+                'billable_this_month=%s/%s'
+                % (
+                    circuit.get('reason') or 'halt_all',
+                    circuit.get('billable_this_month'),
+                    circuit.get('monthly_soft_cap'),
+                )
+            )
+            print(
+                'Fix Google billing/quota (prefer GOOGLE_GEOCODING_API_KEY), then '
+                'clear via clear_geocode_circuit() or Redis key '
+                'property_address:geocode_circuit'
+            )
+        elif circuit:
+            print(
+                'geocode billable=%s/%s soft-cap skip_google=%s'
+                % (
+                    circuit.get('billable_this_month'),
+                    circuit.get('monthly_soft_cap'),
+                    circuit.get('skip_google'),
+                )
+            )
         if args.dry_run:
             for preview in result.get('previews') or []:
                 before = preview.get('before') or {}
@@ -104,7 +129,7 @@ def main() -> int:
                         lead.property_zip,
                     )
                 )
-        return 1 if result.get('errors') else 0
+        return 1 if (result.get('errors') or result.get('geocode_halted')) else 0
 
 
 if __name__ == '__main__':

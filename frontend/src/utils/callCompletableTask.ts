@@ -71,9 +71,15 @@ function sortOpenTasks(tasks: LeadTask[]): LeadTask[] {
       (DUE_STATUS_ORDER[dueStatus(a.due_date)] ?? 3) -
       (DUE_STATUS_ORDER[dueStatus(b.due_date)] ?? 3)
     if (order !== 0) return order
+    if (a.due_date === null && b.due_date === null) return 0
+    if (a.due_date === null) return 1
+    if (b.due_date === null) return -1
     return (a.due_date || '').localeCompare(b.due_date || '')
   })
 }
+
+/** Shared overdue → due-today ordering for open-task primary row selection. */
+export { sortOpenTasks }
 
 /** Prefer overdue → due today; first call-completable open task (native or HubSpot). */
 export function findCallCompletableTask(tasks: LeadTask[]): LeadTask | null {

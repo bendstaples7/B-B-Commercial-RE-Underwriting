@@ -664,8 +664,11 @@ class HubSpotMatcherService:
           only when a primary street is present (avoids orphan locality).
         - ``additional_addresses``: promote/complete owner mailing when street is
           empty or incomplete (same street); otherwise store on ``address_2``.
+        - All writes go through ``apply_owner_mailing`` so tab dumps / short ZIPs
+          normalize before persist.
         """
         from app.services.address_parse_service import parse_embedded_us_address
+        from app.services.mailing_address_service import apply_owner_mailing
 
         updated: list[str] = []
 
@@ -674,22 +677,20 @@ class HubSpotMatcherService:
         hs_state = (props.get('state') or '').strip() or None
         hs_zip = (props.get('zip') or '').strip() or None
 
-        if hs_street and not (lead.mailing_address or '').strip():
-            lead.mailing_address = hs_street
-            updated.append('mailing_address')
-
-        # Locality only with a HubSpot primary street — orphan city/state/zip
-        # must not block a later additional_addresses promote.
         if hs_street:
-            if hs_city and not (lead.mailing_city or '').strip():
-                lead.mailing_city = hs_city
-                updated.append('mailing_city')
-            if hs_state and not (lead.mailing_state or '').strip():
-                lead.mailing_state = hs_state
-                updated.append('mailing_state')
-            if hs_zip and not (lead.mailing_zip or '').strip():
-                lead.mailing_zip = hs_zip
-                updated.append('mailing_zip')
+            # Locality only with a HubSpot primary street — orphan city/state/zip
+            # must not block a later additional_addresses promote.
+            updated.extend(
+                apply_owner_mailing(
+                    lead,
+                    street=hs_street,
+                    city=hs_city,
+                    state=hs_state,
+                    zip_code=hs_zip,
+                    fill_empty_only=True,
+                    rewrite_street=True,
+                )
+            )
 
         for line in cls._hubspot_additional_address_lines(props):
             parsed = parse_embedded_us_address(line)
@@ -698,21 +699,17 @@ class HubSpotMatcherService:
             if not mailing_street:
                 if parsed:
                     street, city, state, zip_code = parsed
-                    lead.mailing_address = street
-                    updated.append('mailing_address')
-                    # Overwrite orphans — this line is the source of truth.
-                    if city:
-                        lead.mailing_city = city
-                        if 'mailing_city' not in updated:
-                            updated.append('mailing_city')
-                    if state:
-                        lead.mailing_state = state
-                        if 'mailing_state' not in updated:
-                            updated.append('mailing_state')
-                    if zip_code:
-                        lead.mailing_zip = zip_code
-                        if 'mailing_zip' not in updated:
-                            updated.append('mailing_zip')
+                    updated.extend(
+                        apply_owner_mailing(
+                            lead,
+                            street=street,
+                            city=city,
+                            state=state,
+                            zip_code=zip_code,
+                            fill_empty_only=False,
+                            rewrite_street=True,
+                        )
+                    )
                 else:
                     if len(line) > 500:
                         logger.warning(
@@ -721,27 +718,42 @@ class HubSpotMatcherService:
                             getattr(lead, 'id', None),
                         )
                         continue
-                    lead.mailing_address = line
-                    updated.append('mailing_address')
+                    updated.extend(
+                        apply_owner_mailing(
+                            lead,
+                            street=line,
+                            fill_empty_only=True,
+                            rewrite_street=True,
+                        )
+                    )
                 continue
 
             if cls._owner_mailing_incomplete(lead) and parsed:
                 street, city, state, zip_code = parsed
                 if cls._address_lines_equivalent(street, mailing_street):
-                    if city and not (lead.mailing_city or '').strip():
-                        lead.mailing_city = city
-                        updated.append('mailing_city')
-                    if state and not (lead.mailing_state or '').strip():
-                        lead.mailing_state = state
-                        updated.append('mailing_state')
-                    if zip_code and not (lead.mailing_zip or '').strip():
-                        lead.mailing_zip = zip_code
-                        updated.append('mailing_zip')
+                    updated.extend(
+                        apply_owner_mailing(
+                            lead,
+                            street=mailing_street,
+                            city=city,
+                            state=state,
+                            zip_code=zip_code,
+                            fill_empty_only=True,
+                            rewrite_street=False,
+                        )
+                    )
                     continue
 
             updated.extend(cls._store_additional_address_line(lead, line))
 
-        return updated
+        # De-dupe field names while preserving order.
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for name in updated:
+            if name not in seen:
+                seen.add(name)
+                ordered.append(name)
+        return ordered
 
     # ------------------------------------------------------------------
     # Deal matching  (HubSpot Deal → internal Lead / property)

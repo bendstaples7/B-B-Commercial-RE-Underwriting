@@ -516,6 +516,11 @@ export interface LeadTimelineProps {
   highlightEntryId?: number | null
   /** Compact scrollable feed (right rail) vs accordion timeline. */
   variant?: 'accordion' | 'feed'
+  /**
+   * When false, skip the 5-entry preview collapse (full-screen activity view).
+   * Defaults to true.
+   */
+  previewMode?: boolean
 }
 
 function mergeTimelineEntries(
@@ -555,6 +560,7 @@ export function LeadTimeline({
   onLoadMore,
   highlightEntryId = null,
   variant = 'accordion',
+  previewMode = true,
 }: LeadTimelineProps) {
   const initialScopedRef = useRef<ReturnType<typeof scopeRowsToLeadWithTotal<LeadTimelineEntry>> | null>(null)
   if (initialScopedRef.current === null) {
@@ -570,7 +576,7 @@ export function LeadTimeline({
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [showAllLoaded, setShowAllLoaded] = useState(false)
+  const [showAllLoaded, setShowAllLoaded] = useState(!previewMode)
   const leadIdRef = useRef(leadId)
   const previousLeadIdRef = useRef(leadId)
   const requestSeqRef = useRef(0)
@@ -610,14 +616,14 @@ export function LeadTimeline({
   // not when the same lead's entries refresh after an activity log.
   useEffect(() => {
     requestSeqRef.current += 1
-    setShowAllLoaded(false)
+    setShowAllLoaded(!previewMode)
     setPage(1)
     setLoading(false)
     setError(null)
-  }, [leadId])
+  }, [leadId, previewMode])
 
   const hasMore = entries.length < total
-  const inPreview = !showAllLoaded && total > TIMELINE_PREVIEW_COUNT
+  const inPreview = previewMode && !showAllLoaded && total > TIMELINE_PREVIEW_COUNT
   const visibleEntries = inPreview
     ? entries.slice(0, TIMELINE_PREVIEW_COUNT)
     : entries
@@ -754,9 +760,10 @@ export function LeadTimeline({
           aria-label="Activity feed"
           tabIndex={0}
           sx={{
-            maxHeight: 360,
+            maxHeight: previewMode ? 360 : 'none',
             overflowY: 'auto',
             pr: 0.5,
+            ...(previewMode ? {} : { flex: 1, minHeight: 0 }),
           }}
           data-testid="activity-feed-scroll"
         >

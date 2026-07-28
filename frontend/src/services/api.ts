@@ -1321,6 +1321,20 @@ export const prospectService = {
 export const commandCenterService = {
   getCommandCenter: (leadId: number): Promise<CommandCenterPayload> =>
     api.get(`/leads/${leadId}/command-center`).then(r => r.data),
+  applyParsedOwnerMailing: (leadId: number): Promise<{
+    applied: boolean
+    updated_fields: string[]
+    is_mailable: boolean
+    mail_eligible: boolean
+    mail_ineligible_reason: 'recently_sold' | 'invalid_owner_address' | null
+    mail_eligible_date: string | null
+    owner_mailing_readiness: import('@/types').OwnerMailingReadiness
+    mailing_address: string | null
+    mailing_city: string | null
+    mailing_state: string | null
+    mailing_zip: string | null
+  }> =>
+    api.post(`/leads/${leadId}/owner-mailing/apply-parsed`).then(r => r.data),
   getRecommendedAction: (leadId: number): Promise<{ recommended_action: CRMRecommendedAction | null }> =>
     api.get(`/leads/${leadId}/recommended-action`).then(r => r.data),
   updateStatus: (leadId: number, status: LeadStatus, reason?: string): Promise<{

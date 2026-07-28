@@ -2172,6 +2172,25 @@ export interface EntityResearchSummary {
   file_number?: string | null
 }
 
+/** Parsed vs stored owner mailing for mail-queue readiness UI. */
+export interface OwnerMailingReadiness {
+  is_mailable: boolean
+  reason: string | null
+  raw: {
+    street: string | null
+    city: string | null
+    state: string | null
+    zip: string | null
+  }
+  parsed: {
+    street: string
+    city: string
+    state: string
+    zip: string
+  } | null
+  can_apply_parsed: boolean
+}
+
 export interface CommandCenterPayload {
   id: number;
   owner_first_name: string | null;
@@ -2279,6 +2298,8 @@ export interface CommandCenterPayload {
   mail_eligible?: boolean;
   mail_ineligible_reason?: 'recently_sold' | 'invalid_owner_address' | null;
   mail_eligible_date?: string | null;
+  /** Owner mailing parse preview + Apply Parsed affordance when blocked. */
+  owner_mailing_readiness?: OwnerMailingReadiness | null;
   most_recent_sale_display?: string | null;
   /** Raw most-recent sale date when display string is absent. */
   most_recent_sale?: string | null;

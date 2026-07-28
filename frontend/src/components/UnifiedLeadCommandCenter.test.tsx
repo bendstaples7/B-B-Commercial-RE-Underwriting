@@ -426,6 +426,21 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     })
   })
 
+  it('opens activity in a full-screen dialog from the Activity header', async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    renderComponent()
+    await waitFor(() => {
+      expect(screen.getByTestId('activity-fullscreen-btn')).toBeInTheDocument()
+    })
+    await user.click(screen.getByTestId('activity-fullscreen-btn'))
+    expect(screen.getByTestId('activity-fullscreen-dialog')).toBeInTheDocument()
+    expect(screen.getByTestId('activity-fullscreen-dialog')).toHaveTextContent('Activity')
+    await user.click(screen.getByTestId('activity-fullscreen-close'))
+    await waitFor(() => {
+      expect(screen.queryByTestId('activity-fullscreen-dialog')).not.toBeInTheDocument()
+    })
+  })
+
   it('renders the tasks panel', async () => {
     renderComponent()
     await waitFor(() => {
@@ -842,7 +857,7 @@ describe('UnifiedLeadCommandCenter — back button', () => {
 // ---------------------------------------------------------------------------
 
 describe('UnifiedLeadCommandCenter — contact and secondary surfaces', () => {
-  it('shows Key Contact as the single outreach surface (no RA/task inline contact)', async () => {
+  it('shows preferred phone on primary follow-up task while Key Contact stays as directory', async () => {
     vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
       makeCommandCenterPayload({
         recommended_action: {
@@ -877,13 +892,13 @@ describe('UnifiedLeadCommandCenter — contact and secondary surfaces', () => {
     })
 
     expect(screen.getByTestId('key-contact-phone')).toHaveTextContent('(630) 202-3839')
-    expect(screen.queryByTestId('outreach-contact-inline')).not.toBeInTheDocument()
+    expect(screen.getByTestId('outreach-contact-inline')).toBeInTheDocument()
+    expect(screen.getByTestId('task-item-99')).toHaveTextContent('(630) 202-3839')
     expect(screen.queryByTestId('outreach-contact-callout')).not.toBeInTheDocument()
     expect(screen.getByTestId('recommended-action-panel')).not.toHaveTextContent('(630) 202-3839')
-    expect(screen.getByTestId('task-item-99')).not.toHaveTextContent('(630) 202-3839')
   })
 
-  it('shows Key Contact empty phone when channel missing (no task missing hint)', async () => {
+  it('shows missing-phone hint on follow-up task when no number resolves', async () => {
     vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
       makeCommandCenterPayload({
         recommended_action: {
@@ -918,9 +933,8 @@ describe('UnifiedLeadCommandCenter — contact and secondary surfaces', () => {
     })
 
     expect(screen.getByTestId('key-contact-phone-empty')).toBeInTheDocument()
-    expect(screen.queryByTestId('outreach-contact-missing')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('outreach-contact-inline')).not.toBeInTheDocument()
-    expect(screen.getByTestId('task-item-100')).not.toHaveTextContent('No phone number on file')
+    expect(screen.getByTestId('outreach-contact-missing')).toBeInTheDocument()
+    expect(screen.getByTestId('task-item-100')).toHaveTextContent('No phone number on file')
   })
 
   it('keeps secondary property details reachable in the mobile accordion', async () => {
@@ -1141,8 +1155,8 @@ describe('UnifiedLeadCommandCenter — queue advance', () => {
   })
 })
 
-describe('UnifiedLeadCommandCenter — mail stage toast + continue banner', () => {
-  it('toasts staged confirmation without a results dialog and shows next-lead banner', async () => {
+describe('UnifiedLeadCommandCenter — mail stage advances queue', () => {
+  it('toasts staged confirmation and auto-advances to the next Today’s Action lead', async () => {
     const openLetterService = (await import('@/services/openLetterApi')).default
     const api = await import('@/services/api')
 
@@ -1199,21 +1213,142 @@ describe('UnifiedLeadCommandCenter — mail stage toast + continue banner', () =
     })
 
     expect(screen.queryByText('Direct mail results')).not.toBeInTheDocument()
-    expect(await screen.findByTestId('activity-success-alert')).toBeInTheDocument()
-    expect(screen.getByTestId('activity-success-alert')).toHaveTextContent(/staged|added|1/i)
-    expect(screen.getByTestId('activity-success-link')).toHaveAttribute(
-      'href',
-      '/queues/ready-to-mail',
+    expect(screen.queryByTestId('mail-continue-banner')).not.toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith(
+        '/leads/55?queue=todays-action',
+        expect.objectContaining({
+          state: expect.objectContaining({
+            fromQueue: { ...fromQueue, visitedHistory: [1], forwardStack: [] },
+            flashSnackbar: expect.objectContaining({
+              linkTo: '/queues/ready-to-mail',
+              linkLabel: 'View staged batch',
+            }),
+          }),
+        }),
+      )
+    })
+  })
+
+  it('does not auto-advance when queue navigation is still loading', async () => {
+    const openLetterService = (await import('@/services/openLetterApi')).default
+    const api = await import('@/services/api')
+
+    vi.mocked(openLetterService.enqueue).mockResolvedValue({
+      attempt_id: 42,
+      added: 1,
+      skipped: 0,
+      invalid: 0,
+      queued_count: 1,
+      batch_minimum: 1,
+      allow_send_below_minimum: true,
+      can_send: true,
+      results: [{ lead_id: 1, status: 'queued', owner_name: 'Jane', property_street: '456 Oak Ave' }],
+    })
+    // Never resolve navigation → isLoading stays true
+    vi.mocked(api.queueService.getNavigation).mockImplementation(
+      () => new Promise(() => {}),
+    )
+    vi.mocked(api.commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        is_mailable: true,
+        mail_eligible: true,
+        mail_queue_status: null,
+      }),
     )
 
-    expect(await screen.findByTestId('mail-continue-banner')).toHaveTextContent(
-      'Staged for the next mail batch.',
+    const fromQueue = { key: 'todays-action', label: "Today's Action" }
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: '/leads/1',
+            search: '?queue=todays-action',
+            state: { fromQueue },
+          },
+        ]}
+      >
+        <UnifiedLeadCommandCenter leadId={1} />
+      </MemoryRouter>,
     )
-    expect(screen.getByTestId('mail-continue-view-staged-batch')).toHaveAttribute(
-      'href',
-      '/queues/ready-to-mail',
+
+    await waitFor(() => {
+      expect(screen.getByTestId('action-center-tile-add_to_mail_batch')).toBeInTheDocument()
+    })
+    await userEvent.click(screen.getByTestId('action-center-tile-add_to_mail_batch'))
+    await waitFor(() => {
+      expect(openLetterService.enqueue).toHaveBeenCalled()
+    })
+    expect(await screen.findByTestId('activity-success-alert')).toBeInTheDocument()
+    expect(mockNavigate).not.toHaveBeenCalledWith(
+      expect.stringContaining('/leads/'),
+      expect.anything(),
     )
-    expect(screen.getByTestId('mail-continue-next-lead')).toBeInTheDocument()
+  })
+
+  it('exits queue when next_id is null (end of queue)', async () => {
+    const openLetterService = (await import('@/services/openLetterApi')).default
+    const api = await import('@/services/api')
+
+    vi.mocked(openLetterService.enqueue).mockResolvedValue({
+      attempt_id: 42,
+      added: 1,
+      skipped: 0,
+      invalid: 0,
+      queued_count: 1,
+      batch_minimum: 1,
+      allow_send_below_minimum: true,
+      can_send: true,
+      results: [{ lead_id: 1, status: 'queued', owner_name: 'Jane', property_street: '456 Oak Ave' }],
+    })
+    vi.mocked(api.queueService.getNavigation).mockResolvedValue({
+      queue_key: 'todays-action',
+      lead_id: 1,
+      position: 10,
+      total: 10,
+      prev_id: 99,
+      next_id: null,
+    })
+    vi.mocked(api.commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        is_mailable: true,
+        mail_eligible: true,
+        mail_queue_status: null,
+      }),
+    )
+
+    const fromQueue = { key: 'todays-action', label: "Today's Action" }
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: '/leads/1',
+            search: '?queue=todays-action',
+            state: { fromQueue },
+          },
+        ]}
+      >
+        <UnifiedLeadCommandCenter leadId={1} />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('action-center-tile-add_to_mail_batch')).toBeInTheDocument()
+    })
+    await userEvent.click(screen.getByTestId('action-center-tile-add_to_mail_batch'))
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith(
+        '/queues/todays-action',
+        expect.objectContaining({
+          state: expect.objectContaining({
+            flashSnackbar: expect.objectContaining({
+              linkTo: '/queues/ready-to-mail',
+            }),
+          }),
+        }),
+      )
+    })
   })
 })
 

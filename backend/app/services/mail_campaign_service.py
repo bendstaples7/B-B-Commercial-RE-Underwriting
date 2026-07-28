@@ -1073,25 +1073,46 @@ class MailCampaignService:
             'mailing_state': lead.mailing_state,
             'mailing_zip': lead.mailing_zip,
         }
+        from app.services.mailing_address_service import apply_owner_mailing, normalize_mailing_parts
+
+        n_street, n_city, n_state, n_zip = normalize_mailing_parts(
+            street, city, state, zip_code,
+        )
+        if not (n_street and n_city and n_state and n_zip):
+            logger.warning(
+                'OLC Corrected address dropped for lead_id=%s campaign=%s: '
+                'normalize_mailing_parts blanked a part (street=%r city=%r '
+                'state=%r zip=%r) from raw (street=%r city=%r state=%r zip=%r)',
+                lead.id, campaign.id, n_street, n_city, n_state, n_zip,
+                street, city, state, zip_code,
+            )
+            return False
         changed = (
-            (lead.mailing_address or '') != street
-            or (lead.mailing_city or '') != city
-            or (lead.mailing_state or '') != state
-            or (lead.mailing_zip or '') != zip_code
+            (lead.mailing_address or '') != n_street
+            or (lead.mailing_city or '') != n_city
+            or (lead.mailing_state or '') != n_state
+            or (lead.mailing_zip or '') != n_zip
         )
         if not changed:
             # Fields already match (e.g. prior partial apply) — stamp only, no new timeline
             self._stamp_address_feedback(lead, campaign.olc_order_id, 'Corrected')
             return False
-        lead.mailing_address = street
-        lead.mailing_city = city
-        lead.mailing_state = state
-        lead.mailing_zip = zip_code
+        apply_owner_mailing(
+            lead,
+            street=n_street,
+            city=n_city,
+            state=n_state,
+            zip_code=n_zip,
+            fill_empty_only=False,
+            rewrite_street=True,
+        )
         self._stamp_address_feedback(
             lead,
             campaign.olc_order_id,
             'Corrected',
-            {'corrected_mailing': {'address1': street, 'city': city, 'state': state, 'zip': zip_code}},
+            {'corrected_mailing': {
+                'address1': n_street, 'city': n_city, 'state': n_state, 'zip': n_zip,
+            }},
         )
         self._timeline.append(
             lead_id=lead.id,
@@ -1104,10 +1125,10 @@ class MailCampaignService:
                 'address_status': 'Corrected',
                 'before': before,
                 'after': {
-                    'mailing_address': street,
-                    'mailing_city': city,
-                    'mailing_state': state,
-                    'mailing_zip': zip_code,
+                    'mailing_address': n_street,
+                    'mailing_city': n_city,
+                    'mailing_state': n_state,
+                    'mailing_zip': n_zip,
                 },
             },
             source='system',

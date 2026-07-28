@@ -2,16 +2,30 @@
 from datetime import date
 from unittest.mock import patch
 
+import pytest
+
 from app.models.lead import Lead
 from app.services.property_address_service import (
     apply_parcel_address_to_lead,
+    clear_geocode_circuit,
     complete_property_address,
     complete_property_address_fields,
     display_street,
     heal_incomplete_property_addresses,
     is_property_address_complete,
+    reset_geocode_run_budget,
     street_only_line,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_geocode_stopgap():
+    """Geocode budget/circuit are process-global — isolate every test."""
+    clear_geocode_circuit()
+    reset_geocode_run_budget()
+    yield
+    clear_geocode_circuit()
+    reset_geocode_run_budget()
 
 
 class TestStreetOnlyLine:
@@ -139,6 +153,453 @@ class TestCompletePropertyAddressFields:
         assert result['property_street'] == '1239 N Hoyne Ave'
         assert 'gis' in result['sources']
 
+    def test_pin_fill_when_street_gis_misses(self):
+        with patch(
+            'app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address',
+            return_value=[],
+        ), patch(
+            'app.services.gis.cook_county_gis_connector.CookCountyGISConnector'
+            '.lookup_by_address',
+            return_value=None,
+        ), patch(
+            'app.services.gis.cook_county_gis_connector.CookCountyGISConnector'
+            '.lookup_address_by_pin',
+        ) as mock_pin:
+            mock_pin.return_value = {
+                'property_street': '3111 W PALMER BLVD',
+                'property_city': 'CHICAGO',
+                'property_state': 'IL',
+                'property_zip': '60647',
+            }
+            result = complete_property_address_fields(
+                '3111 W Palmer Blvd',
+                try_gis=True,
+                county_assessor_pin='13361130320000',
+            )
+        assert result['complete'] is True
+        assert result['property_city'] == 'Chicago'
+        assert result['property_state'] == 'IL'
+        assert result['property_zip'] == '60647'
+        assert 'gis_pin' in result['sources']
+
+    def test_pin_fill_does_not_overwrite_existing_city(self):
+        with patch(
+            'app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address',
+            return_value=[],
+        ), patch(
+            'app.services.gis.cook_county_gis_connector.CookCountyGISConnector'
+            '.lookup_by_address',
+            return_value=None,
+        ), patch(
+            'app.services.gis.cook_county_gis_connector.CookCountyGISConnector'
+            '.lookup_address_by_pin',
+        ) as mock_pin:
+            mock_pin.return_value = {
+                'property_street': '3111 W PALMER BLVD',
+                'property_city': 'CHICAGO',
+                'property_state': 'IL',
+                'property_zip': '60647',
+            }
+            result = complete_property_address_fields(
+                '3111 W Palmer Blvd',
+                'Oak Park',
+                None,
+                None,
+                try_gis=True,
+                county_assessor_pin='13361130320000',
+            )
+        assert result['property_city'] == 'Oak Park'
+        assert result['property_state'] == 'IL'
+        assert result['property_zip'] == '60647'
+        assert 'gis_pin' in result['sources']
+
+    def test_street_gis_preferred_before_pin(self):
+        with patch(
+            'app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address',
+        ) as mock_lookup, patch(
+            'app.services.gis.cook_county_gis_connector.CookCountyGISConnector'
+            '.lookup_address_by_pin',
+        ) as mock_pin:
+            mock_lookup.return_value = [{
+                'pin': '13361130320000',
+                'property_street': '3111 W PALMER BLVD',
+                'property_city': 'CHICAGO',
+                'property_state': 'IL',
+                'property_zip': '60647',
+            }]
+            mock_pin.return_value = {
+                'property_street': 'SHOULD NOT USE',
+                'property_city': 'EVANSTON',
+                'property_state': 'IL',
+                'property_zip': '60201',
+            }
+            result = complete_property_address_fields(
+                '3111 W Palmer',
+                try_gis=True,
+                county_assessor_pin='13361130320000',
+            )
+        assert result['property_city'] == 'Chicago'
+        assert 'gis' in result['sources']
+        assert 'gis_pin' not in result['sources']
+
+    def test_suffix_retry_fills_foster_class_street(self):
+        """Bare street without Ave — GIS hits on AVE candidate only."""
+        def _lookup(addr: str):
+            if addr.upper().endswith(' AVE'):
+                return [{
+                    'pin': '14081234560000',
+                    'property_street': '1233 W FOSTER AVE',
+                    'property_city': 'CHICAGO',
+                    'property_state': 'IL',
+                    'property_zip': '60640',
+                }]
+            return []
+
+        with patch(
+            'app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address',
+            side_effect=_lookup,
+        ), patch(
+            'app.services.gis.cook_county_gis_connector.CookCountyGISConnector'
+            '.lookup_by_address',
+            return_value=None,
+        ):
+            result = complete_property_address_fields(
+                '1233 W Foster',
+                'Chicago',
+                'IL',
+                None,
+                try_gis=True,
+                try_geocode=False,
+            )
+        assert result['complete'] is True
+        assert result['property_zip'] == '60640'
+        assert result['property_street'] == '1233 W Foster Ave'
+        assert 'gis' in result['sources']
+
+    def test_ambiguous_gis_zips_rejected(self):
+        with patch(
+            'app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address',
+            return_value=[
+                {
+                    'pin': '1',
+                    'property_street': '100 MAIN ST',
+                    'property_city': 'CHICAGO',
+                    'property_state': 'IL',
+                    'property_zip': '60601',
+                },
+                {
+                    'pin': '2',
+                    'property_street': '100 MAIN ST',
+                    'property_city': 'CHICAGO',
+                    'property_state': 'IL',
+                    'property_zip': '60602',
+                },
+            ],
+        ), patch(
+            'app.services.gis.cook_county_gis_connector.CookCountyGISConnector'
+            '.lookup_by_address',
+            return_value=None,
+        ):
+            result = complete_property_address_fields(
+                '100 Main',
+                'Chicago',
+                'IL',
+                None,
+                try_gis=True,
+                try_geocode=False,
+            )
+        assert result['complete'] is False
+        assert result['property_zip'] is None
+
+    def test_default_market_locality_when_gis_misses(self):
+        with patch(
+            'app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address',
+            return_value=[],
+        ), patch(
+            'app.services.gis.cook_county_gis_connector.CookCountyGISConnector'
+            '.lookup_by_address',
+            return_value=None,
+        ):
+            result = complete_property_address_fields(
+                '2834 N Drake Ave',
+                try_gis=True,
+                try_geocode=False,
+            )
+        assert result['complete'] is False
+        assert result['property_city'] == 'Chicago'
+        assert result['property_state'] == 'IL'
+        assert 'default_market_locality' in result['sources']
+
+    def test_apply_market_defaults_false_leaves_city_blank(self):
+        """Pre-GIS create/merge must not invent Chicago (avoids live Cook routing)."""
+        result = complete_property_address_fields(
+            '2834 N Drake Ave',
+            try_gis=False,
+            try_geocode=False,
+            apply_market_defaults=False,
+        )
+        assert result['property_city'] is None
+        assert result['property_state'] is None
+        assert 'default_market_locality' not in result['sources']
+
+    def test_gis_suburban_city_not_stuck_as_chicago(self):
+        with patch(
+            'app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address',
+            return_value=[{
+                'pin': '16000000000000',
+                'property_street': '123 MAIN ST',
+                'property_city': 'OAK PARK',
+                'property_state': 'IL',
+                'property_zip': '60302',
+            }],
+        ):
+            result = complete_property_address_fields(
+                '123 Main',
+                try_gis=True,
+                try_geocode=False,
+            )
+        assert result['complete'] is True
+        assert result['property_city'] == 'Oak Park'
+        assert result['property_zip'] == '60302'
+        assert 'default_market_locality' not in result['sources']
+        assert 'gis' in result['sources']
+
+    def test_gis_fills_chicago_without_needing_defaults(self):
+        with patch(
+            'app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address',
+            return_value=[{
+                'pin': '13262220410000',
+                'property_street': '2834 N DRAKE AVE',
+                'property_city': 'CHICAGO',
+                'property_state': 'IL',
+                'property_zip': '60618',
+            }],
+        ):
+            result = complete_property_address_fields(
+                '2834 N Drake Ave',
+                try_gis=True,
+                try_geocode=False,
+            )
+        assert result['complete'] is True
+        assert result['property_city'] == 'Chicago'
+        assert result['property_state'] == 'IL'
+        assert result['property_zip'] == '60618'
+        assert 'gis' in result['sources']
+        assert 'default_market_locality' not in result['sources']
+
+    def test_geocode_last_resort_when_gis_misses(self):
+        from app.services.property_data_service import StructuredGeocodeOutcome
+
+        with patch(
+            'app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address',
+            return_value=[],
+        ), patch(
+            'app.services.gis.cook_county_gis_connector.CookCountyGISConnector'
+            '.lookup_by_address',
+            return_value=None,
+        ), patch(
+            'app.services.property_data_service.PropertyDataService'
+            '.geocode_structured_address',
+            return_value=StructuredGeocodeOutcome(
+                address=None,
+                status='SKIPPED_NO_KEY',
+                billable=False,
+            ),
+        ), patch(
+            'app.services.property_address_service._nominatim_structured_address',
+        ) as mock_nom:
+            mock_nom.return_value = {
+                'property_street': '1233 W Foster Ave',
+                'property_city': 'Chicago',
+                'property_state': 'IL',
+                'property_zip': '60640',
+            }
+            result = complete_property_address_fields(
+                '1233 W Foster',
+                'Chicago',
+                'IL',
+                None,
+                try_gis=True,
+                try_geocode=True,
+            )
+        assert result['complete'] is True
+        assert result['property_zip'] == '60640'
+        assert 'geocode' in result['sources']
+        mock_nom.assert_called()
+
+    def test_geocode_circuit_halts_on_over_query_limit(self):
+        from app.services.property_address_service import (
+            clear_geocode_circuit,
+            get_geocode_circuit_status,
+            reset_geocode_run_budget,
+        )
+        from app.services.property_data_service import StructuredGeocodeOutcome
+
+        clear_geocode_circuit()
+        reset_geocode_run_budget()
+        with patch(
+            'app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address',
+            return_value=[],
+        ), patch(
+            'app.services.gis.cook_county_gis_connector.CookCountyGISConnector'
+            '.lookup_by_address',
+            return_value=None,
+        ), patch(
+            'app.services.property_data_service.PropertyDataService'
+            '.geocode_structured_address',
+            return_value=StructuredGeocodeOutcome(
+                address=None,
+                status='OVER_QUERY_LIMIT',
+                error_message='You have exceeded your daily request quota',
+                billable=True,
+            ),
+        ), patch(
+            'app.services.property_address_service._increment_billable_month_count',
+            return_value=1,
+        ), patch(
+            'app.services.property_address_service._billable_month_count',
+            return_value=0,
+        ), patch(
+            'app.services.property_address_service._nominatim_structured_address',
+        ) as mock_nom, patch(
+            'app.services.property_address_service._persist_geocode_circuit',
+        ):
+            result = complete_property_address_fields(
+                '1233 W Foster',
+                'Chicago',
+                'IL',
+                None,
+                try_gis=True,
+                try_geocode=True,
+            )
+        assert result['complete'] is False
+        mock_nom.assert_not_called()
+        status = get_geocode_circuit_status()
+        assert status['halt_all'] is True
+        clear_geocode_circuit()
+        reset_geocode_run_budget()
+
+    def test_geocode_request_denied_still_allows_nominatim(self):
+        from app.services.property_address_service import (
+            clear_geocode_circuit,
+            get_geocode_circuit_status,
+            reset_geocode_run_budget,
+        )
+        from app.services.property_data_service import StructuredGeocodeOutcome
+
+        clear_geocode_circuit()
+        reset_geocode_run_budget()
+        with patch(
+            'app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address',
+            return_value=[],
+        ), patch(
+            'app.services.gis.cook_county_gis_connector.CookCountyGISConnector'
+            '.lookup_by_address',
+            return_value=None,
+        ), patch(
+            'app.services.property_data_service.PropertyDataService'
+            '.geocode_structured_address',
+            return_value=StructuredGeocodeOutcome(
+                address=None,
+                status='REQUEST_DENIED',
+                error_message='API keys with referer restrictions cannot be used',
+                billable=False,
+            ),
+        ), patch(
+            'app.services.property_address_service._increment_billable_month_count',
+        ) as mock_incr, patch(
+            'app.services.property_address_service._billable_month_count',
+            return_value=0,
+        ), patch(
+            'app.services.property_address_service._nominatim_structured_address',
+        ) as mock_nom, patch(
+            'app.services.property_address_service._persist_geocode_circuit',
+        ):
+            mock_nom.return_value = {
+                'property_street': '1233 W Foster Ave',
+                'property_city': 'Chicago',
+                'property_state': 'IL',
+                'property_zip': '60640',
+            }
+            result = complete_property_address_fields(
+                '1233 W Foster',
+                'Chicago',
+                'IL',
+                None,
+                try_gis=True,
+                try_geocode=True,
+            )
+        assert result['complete'] is True
+        assert result['property_zip'] == '60640'
+        mock_nom.assert_called()
+        mock_incr.assert_not_called()
+        status = get_geocode_circuit_status()
+        assert status['halt_all'] is False
+        assert status['skip_google'] is True
+        clear_geocode_circuit()
+        reset_geocode_run_budget()
+
+    def test_geocode_soft_cap_skips_google_allows_nominatim(self):
+        from app.services.property_address_service import (
+            clear_geocode_circuit,
+            get_geocode_circuit_status,
+            reset_geocode_run_budget,
+        )
+
+        clear_geocode_circuit()
+        reset_geocode_run_budget()
+        with patch(
+            'app.services.gis.cook_county_gis_connector.lookup_all_pins_at_address',
+            return_value=[],
+        ), patch(
+            'app.services.gis.cook_county_gis_connector.CookCountyGISConnector'
+            '.lookup_by_address',
+            return_value=None,
+        ), patch(
+            'app.services.property_address_service._billable_month_count',
+            return_value=9000,
+        ), patch(
+            'app.services.property_address_service._monthly_soft_cap',
+            return_value=9000,
+        ), patch(
+            'app.services.property_data_service.PropertyDataService'
+            '.geocode_structured_address',
+        ) as mock_google, patch(
+            'app.services.property_address_service._nominatim_structured_address',
+        ) as mock_nom, patch(
+            'app.services.property_address_service._persist_geocode_circuit',
+        ):
+            mock_nom.return_value = {
+                'property_street': '1233 W Foster Ave',
+                'property_city': 'Chicago',
+                'property_state': 'IL',
+                'property_zip': '60640',
+            }
+            result = complete_property_address_fields(
+                '1233 W Foster',
+                'Chicago',
+                'IL',
+                None,
+                try_gis=True,
+                try_geocode=True,
+            )
+        assert result['complete'] is True
+        assert result['property_zip'] == '60640'
+        mock_google.assert_not_called()
+        mock_nom.assert_called()
+        status = get_geocode_circuit_status()
+        assert status['halt_all'] is False
+        assert status['skip_google'] is True
+        clear_geocode_circuit()
+        reset_geocode_run_budget()
+
+    def test_never_uses_mailing_fields(self):
+        """Completer signature has no mailing args — regression guard."""
+        import inspect
+        params = inspect.signature(complete_property_address_fields).parameters
+        assert 'mailing_zip' not in params
+        assert 'mailing_address' not in params
+
 
 class TestCompletePropertyAddressLead:
     def test_fills_lead_and_clears_review_when_complete(self, app):
@@ -246,6 +707,19 @@ class TestCompletePropertyAddressLead:
 
 
 class TestHealIncompletePropertyAddresses:
+    def test_zero_limit_still_includes_geocode_circuit(self, app):
+        with app.app_context():
+            result = heal_incomplete_property_addresses(
+                last_id=0,
+                limit=0,
+                persist_cursor=False,
+                commit=False,
+                actor='test',
+            )
+            assert result['processed'] == 0
+            assert 'geocode_circuit' in result
+            assert isinstance(result['geocode_circuit'], dict)
+
     def test_heals_street_only_batch_and_advances_cursor(self, app):
         with app.app_context():
             incomplete = _make_lead(

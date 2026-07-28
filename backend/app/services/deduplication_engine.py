@@ -98,6 +98,9 @@ class DeduplicationEngine:
                 lead,
                 actor=actor,
                 try_gis=False,
+                # Do not invent Chicago/IL before a later GIS enrichment pass —
+                # that would route every street-only import row to live Cook GIS.
+                apply_market_defaults=False,
                 commit=False,
             )
         except Exception as exc:
@@ -264,6 +267,12 @@ class DeduplicationEngine:
         self._complete_property_address_if_needed(
             existing, actor='deduplication_engine.merge',
         )
+        if any(
+            incoming.get(f)
+            for f in ('mailing_address', 'mailing_city', 'mailing_state', 'mailing_zip')
+        ):
+            from app.services.mailing_address_service import normalize_owner_mailing_safe
+            normalize_owner_mailing_safe(existing, rewrite_street=True)
 
         conflict_detail = {'field_conflicts': conflicts} if conflicts else None
         outcome: Literal["updated", "conflict"] = 'conflict' if conflicts else 'updated'
@@ -328,6 +337,12 @@ class DeduplicationEngine:
             self._complete_property_address_if_needed(
                 new_lead, actor='deduplication_engine.create',
             )
+            if any(
+                record.get(f)
+                for f in ('mailing_address', 'mailing_city', 'mailing_state', 'mailing_zip')
+            ):
+                from app.services.mailing_address_service import normalize_owner_mailing_safe
+                normalize_owner_mailing_safe(new_lead, rewrite_street=True)
 
             return DeduplicationResult(
                 outcome='created',

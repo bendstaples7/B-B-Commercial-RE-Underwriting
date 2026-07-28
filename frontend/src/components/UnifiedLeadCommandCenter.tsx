@@ -34,7 +34,9 @@ import { Link as RouterLink, useNavigate, useSearchParams, useLocation } from 'r
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
+import CloseIcon from '@mui/icons-material/Close'
 import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted'
+import OpenInFullIcon from '@mui/icons-material/OpenInFull'
 import { commandCenterService, leadTaskService, leadScoreService, queueService } from '@/services/api'
 import { entityResolutionApi } from '@/services/entityResolutionApi'
 import { leadService } from '@/services/leadApi'
@@ -722,6 +724,7 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
     ref,
   ) {
     const panelRef = useRef<HTMLDivElement>(null)
+    const [fullscreenOpen, setFullscreenOpen] = useState(false)
     const initialScopedEntries = normalizeTimelineEntriesForLead(initialEntries, leadId)
     const [timelineEntries, setTimelineEntries] = useState<LeadTimelineEntry[]>(() =>
       scopeRowsToLead(initialScopedEntries, leadId, 'timeline'),
@@ -731,6 +734,10 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
     leadIdRef.current = leadId
     const timelineEntriesRef = useRef(timelineEntries)
     timelineEntriesRef.current = timelineEntries
+
+    React.useEffect(() => {
+      setFullscreenOpen(false)
+    }, [leadId])
 
     // Drop prior-lead rows entirely when navigating. Only keep optimistic
     // prepends that belong to the *current* lead (same lead_id), then
@@ -792,6 +799,18 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
       }
     }
 
+    const timeline = (
+      <LeadTimeline
+        leadId={leadId}
+        initialEntries={timelineEntries}
+        initialTotal={timelineTotal}
+        onLoadMore={handleLoadMore}
+        highlightEntryId={highlightEntryId}
+        variant={fullscreenOpen ? 'feed' : variant}
+        previewMode={fullscreenOpen ? false : undefined}
+      />
+    )
+
     return (
       <Box
         ref={panelRef}
@@ -800,17 +819,77 @@ const ActivityPanel = React.forwardRef<ActivityPanelHandle, ActivityPanelProps>(
         sx={embedded ? { ...ccCardSx, mb: 0 } : { mb: 2 }}
         data-testid="activity-panel"
       >
-        <Typography sx={ccSectionTitleSx}>
-          Activity
-        </Typography>
-        <LeadTimeline
-          leadId={leadId}
-          initialEntries={timelineEntries}
-          initialTotal={timelineTotal}
-          onLoadMore={handleLoadMore}
-          highlightEntryId={highlightEntryId}
-          variant={variant}
-        />
+        {!fullscreenOpen && (
+          <>
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 1,
+                mb: 1.5,
+                flexWrap: 'wrap',
+              }}
+            >
+              <Typography sx={{ ...ccSectionTitleSx, mb: 0 }} component="h2">
+                Activity
+              </Typography>
+              <Button
+                size="small"
+                startIcon={<OpenInFullIcon fontSize="small" />}
+                onClick={() => setFullscreenOpen(true)}
+                data-testid="activity-fullscreen-btn"
+                aria-label="View activity full screen"
+              >
+                Full screen
+              </Button>
+            </Box>
+            {timeline}
+          </>
+        )}
+        <Dialog
+          open={fullscreenOpen}
+          onClose={() => setFullscreenOpen(false)}
+          fullScreen
+          aria-labelledby="activity-fullscreen-title"
+          data-testid="activity-fullscreen-dialog"
+        >
+          <DialogTitle
+            id="activity-fullscreen-title"
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 1,
+              py: 1.5,
+            }}
+          >
+            <Typography component="span" variant="h6" fontWeight={700}>
+              Activity
+            </Typography>
+            <IconButton
+              aria-label="Close full screen activity"
+              onClick={() => setFullscreenOpen(false)}
+              data-testid="activity-fullscreen-close"
+              edge="end"
+            >
+              <CloseIcon />
+            </IconButton>
+          </DialogTitle>
+          <DialogContent
+            dividers
+            sx={{
+              display: 'flex',
+              flexDirection: 'column',
+              p: { xs: 2, sm: 3 },
+              maxWidth: 960,
+              width: '100%',
+              mx: 'auto',
+            }}
+          >
+            {timeline}
+          </DialogContent>
+        </Dialog>
       </Box>
     )
   }
@@ -935,17 +1014,21 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     open: false,
     message: '',
   })
-  /** After staging mail from a work queue — prompt to continue to next lead. */
-  const [mailContinuePrompt, setMailContinuePrompt] = useState(false)
   const [suppressDialogOpen, setSuppressDialogOpen] = useState(false)
   const [dncDialogOpen, setDncDialogOpen] = useState(false)
   const [dncPending, setDncPending] = useState(false)
   const [dncError, setDncError] = useState<string | null>(null)
 
+  type QueueFlashSnackbar = {
+    message: string
+    severity?: 'success' | 'warning' | 'error'
+    linkTo?: string
+    linkLabel?: string
+  }
+
   const advanceInQueue = useCallback(
-    (nextLeadId: number) => {
+    (nextLeadId: number, flash?: QueueFlashSnackbar) => {
       if (!fromQueue) return
-      setMailContinuePrompt(false)
       const isBack = visitedHistory.at(-1) === nextLeadId
       const isForward = forwardStack.at(-1) === nextLeadId
       const nextQueueState: FromQueueState = {
@@ -959,26 +1042,41 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             ? forwardStack.slice(0, -1)
             : [],
       }
-      navigate(buildLeadUrl(nextLeadId, fromQueue.key), { state: { fromQueue: nextQueueState } })
+      navigate(buildLeadUrl(nextLeadId, fromQueue.key), {
+        state: {
+          fromQueue: nextQueueState,
+          ...(flash ? { flashSnackbar: flash } : {}),
+        },
+      })
     },
     [fromQueue, forwardStack, leadId, navigate, visitedHistory],
   )
 
-  const exitQueueCaughtUp = useCallback(() => {
+  const exitQueueCaughtUp = useCallback((flash?: QueueFlashSnackbar) => {
     if (!fromQueue) return
-    setMailContinuePrompt(false)
-    navigate(queuePath(fromQueue.key))
-    setActivitySnackbar({
-      open: true,
-      message: 'Queue caught up.',
+    navigate(queuePath(fromQueue.key), {
+      state: flash ? { flashSnackbar: flash } : undefined,
     })
+    if (flash) {
+      setActivitySnackbar({ open: true, ...flash })
+    } else {
+      setActivitySnackbar({
+        open: true,
+        message: 'Queue caught up.',
+      })
+    }
   }, [fromQueue, navigate])
 
-  const advanceAfterTaskComplete = useCallback(async (snapshottedNextId?: number | null) => {
+  const advanceAfterTaskComplete = useCallback(async (
+    snapshottedNextId?: number | null,
+    flash?: QueueFlashSnackbar,
+  ) => {
     if (!fromQueue) return
     const queueListKey = `queue-${fromQueue.key}`
     // Refresh list/counts before leaving so Back lands on fresh data; clear
-    // cache so remount shows QueueLoadingState instead of stale rows.
+    // cache so remount shows QueueLoadingState instead of stale rows. Run this
+    // even when nav isn't ready yet (nextId undefined) so the queue list is
+    // never left stale just because we're staying put this time.
     await queryClient.invalidateQueries({
       queryKey: [queueListKey],
       refetchType: 'all',
@@ -992,25 +1090,24 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     }
     queryClient.removeQueries({ queryKey: [queueListKey] })
 
+    // undefined = nav not ready — stay put (never re-fetch neighbour after removal).
+    if (snapshottedNextId === undefined) {
+      if (flash) {
+        setActivitySnackbar({ open: true, ...flash })
+      }
+      return
+    }
+
     try {
-      // The neighbour must be captured before completion removes this lead.
-      // A fresh queue query can otherwise return the queue head, skipping work.
-      if (snapshottedNextId) {
-        advanceInQueue(snapshottedNextId)
+      if (snapshottedNextId != null) {
+        advanceInQueue(snapshottedNextId, flash)
       } else {
-        const nav = await queueService.getNavigation(fromQueue.key, leadId, {
-          outreach: fromQueue.outreach,
-        })
-        if (nav.next_id) {
-          advanceInQueue(nav.next_id)
-        } else {
-          exitQueueCaughtUp()
-        }
+        exitQueueCaughtUp(flash)
       }
     } catch {
-      exitQueueCaughtUp()
+      exitQueueCaughtUp(flash)
     }
-  }, [fromQueue, leadId, advanceInQueue, exitQueueCaughtUp, queryClient])
+  }, [fromQueue, advanceInQueue, exitQueueCaughtUp, queryClient])
 
   const handleStatusChanged = useCallback(async (
     nextStatus?: LeadStatus,
@@ -1086,9 +1183,21 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
       fromQueue
       && (meta?.completedTaskId != null || meta?.completedHubSpotTaskId != null)
     ) {
-      void advanceAfterTaskComplete(queueNavigation?.next_id)
+      const nextLeadId: number | null | undefined =
+        queueNavLoading || !queueNavigation
+          ? undefined
+          : (forwardStack.at(-1) ?? queueNavigation.next_id ?? null)
+      void advanceAfterTaskComplete(nextLeadId)
     }
-  }, [queryClient, leadId, fromQueue, advanceAfterTaskComplete, queueNavigation?.next_id])
+  }, [
+    queryClient,
+    leadId,
+    fromQueue,
+    advanceAfterTaskComplete,
+    queueNavigation,
+    queueNavLoading,
+    forwardStack,
+  ])
 
   const handleRaAction = useCallback(async (action: string) => {
     switch (action) {
@@ -1106,32 +1215,31 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
         window.setTimeout(() => tasksPanelRef.current?.openCreateForm(), 300)
         return
       case 'add_to_mail_batch': {
+        // Snapshot neighbour before enqueue removes this lead from Today's Action.
+        // Prefer session forward stack; undefined = nav still loading (do not advance).
+        const nextLeadId: number | null | undefined =
+          !fromQueue || queueNavLoading || !queueNavigation
+            ? undefined
+            : (forwardStack.at(-1) ?? queueNavigation.next_id ?? null)
         const result = await openLetterService.enqueue([leadId], fromQueue?.key ?? 'command-center')
-        setActivitySnackbar({
-          open: true,
+        const flash = {
           message: formatEnqueueSummary(result),
           severity: enqueueResultSeverity(result),
           ...(result.added > 0
             ? { linkTo: '/queues/ready-to-mail', linkLabel: 'View staged batch' }
             : {}),
+        } as const
+        setActivitySnackbar({
+          open: true,
+          ...flash,
         })
-        if (result.added > 0 && fromQueue) {
-          setMailContinuePrompt(true)
-          await queryClient.invalidateQueries({
-            queryKey: [`queue-${fromQueue.key}`],
-            refetchType: 'all',
-          })
-          if (fromQueue.key === 'todays-action') {
-            await queryClient.invalidateQueries({
-              queryKey: ['queue-todays-action-outreach-counts'],
-              refetchType: 'all',
-            })
-          }
-          await queryClient.invalidateQueries({ queryKey: ['queue-navigation', fromQueue.key] })
-        }
         await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
         await queryClient.invalidateQueries({ queryKey: ['mail-queue'] })
         await queryClient.invalidateQueries({ queryKey: ['queue-counts'] })
+        if (result.added > 0 && fromQueue) {
+          // Same as task completion: leave this lead and open the next due row.
+          await advanceAfterTaskComplete(nextLeadId, flash)
+        }
         return
       }
       case 'research_property': {
@@ -1261,7 +1369,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
           // Status change alone stays put; Move to Skip Trace completes current
           // work and drops the lead from due-work queues — advance like task done.
           if (fromQueue && SKIP_TRACE_AUTO_ADVANCE_QUEUE_KEYS.has(fromQueue.key)) {
-            await advanceAfterTaskComplete(queueNavigation?.next_id)
+            const nextLeadId: number | null | undefined =
+              queueNavLoading || !queueNavigation
+                ? undefined
+                : (forwardStack.at(-1) ?? queueNavigation.next_id ?? null)
+            await advanceAfterTaskComplete(nextLeadId)
           }
         }
         return
@@ -1322,7 +1434,9 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
     fromQueue,
     handleStatusChanged,
     advanceAfterTaskComplete,
-    queueNavigation?.next_id,
+    queueNavigation,
+    queueNavLoading,
+    forwardStack,
   ])
 
   const handleCreateTask = useCallback(() => {
@@ -1354,15 +1468,39 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
   }, [showLead, tabParam])
 
   useEffect(() => {
-    setMailContinuePrompt(false)
     setHighlightEntryId(null)
     setActivityModal(null)
     setSuppressDialogOpen(false)
     setDncDialogOpen(false)
     setDncPending(false)
     setDncError(null)
-    setActivitySnackbar({ open: false, message: '' })
-  }, [leadId])
+
+    const state = location.state as {
+      fromQueue?: FromQueueState
+      flashSnackbar?: {
+        message: string
+        severity?: 'success' | 'warning' | 'error'
+        linkTo?: string
+        linkLabel?: string
+      }
+    } | null
+    const flash = state?.flashSnackbar
+    if (flash?.message) {
+      setActivitySnackbar({ open: true, ...flash })
+      navigate(
+        {
+          pathname: location.pathname,
+          search: location.search,
+        },
+        {
+          replace: true,
+          state: state?.fromQueue ? { fromQueue: state.fromQueue } : null,
+        },
+      )
+    } else {
+      setActivitySnackbar({ open: false, message: '' })
+    }
+  }, [leadId]) // eslint-disable-line react-hooks/exhaustive-deps -- remount flash only on lead change
 
   useEffect(() => {
     if (!showLead) return
@@ -1447,63 +1585,6 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
             onPrefetchLead={prefetchQueueLead}
           />
         )}
-        {mailContinuePrompt && fromQueue && (
-          <Alert
-            severity="success"
-            data-testid="mail-continue-banner"
-            onClose={() => setMailContinuePrompt(false)}
-            sx={{
-              borderRadius: 0,
-              borderBottom: 1,
-              borderColor: 'divider',
-            }}
-            action={
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexShrink: 0 }}>
-                <Button
-                  color="inherit"
-                  size="small"
-                  variant="outlined"
-                  component={RouterLink}
-                  to="/queues/ready-to-mail"
-                  data-testid="mail-continue-view-staged-batch"
-                  sx={{ bgcolor: 'background.paper' }}
-                >
-                  View staged batch
-                </Button>
-                {queueNavLoading ? (
-                  <CircularProgress size={18} color="inherit" sx={{ mx: 1 }} />
-                ) : queueNavigation?.next_id ? (
-                  <Button
-                    color="inherit"
-                    size="small"
-                    variant="outlined"
-                    data-testid="mail-continue-next-lead"
-                    onClick={() => { void advanceAfterTaskComplete(queueNavigation?.next_id) }}
-                  >
-                    Next lead
-                  </Button>
-                ) : (
-                  <Button
-                    color="inherit"
-                    size="small"
-                    variant="outlined"
-                    data-testid="mail-continue-back-to-queue"
-                    onClick={() => {
-                      setMailContinuePrompt(false)
-                      navigate(queuePath(fromQueue.key))
-                    }}
-                  >
-                    Back to queue
-                  </Button>
-                )}
-              </Box>
-            }
-          >
-            {queueNavLoading || queueNavigation?.next_id
-              ? 'Staged for the next mail batch.'
-              : 'Staged. You’re caught up.'}
-          </Alert>
-        )}
 
         <Box
           sx={{ pt: 1, display: 'flex', flexDirection: 'column', gap: 0.75 }}
@@ -1546,6 +1627,11 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 mailEligible={commandCenterData!.mail_eligible}
                 mailIneligibleReason={commandCenterData!.mail_ineligible_reason}
                 mailEligibleDate={commandCenterData!.mail_eligible_date}
+                ownerMailingReadiness={commandCenterData!.owner_mailing_readiness ?? null}
+                onApplyParsedMailing={async () => {
+                  await commandCenterService.applyParsedOwnerMailing(leadId)
+                  await queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })
+                }}
                 showOutreachContact={placement === 'recommended_action'}
                 embedded
                 showActionCenterTiles
@@ -1571,7 +1657,13 @@ export function UnifiedLeadCommandCenter({ leadId }: UnifiedLeadCommandCenterPro
                 upNextToMail={Boolean(commandCenterData!.up_next_to_mail)}
                 embedded
                 onTasksChanged={() => queryClient.invalidateQueries({ queryKey: ['commandCenter', leadId] })}
-                onAfterTaskCompleted={fromQueue ? () => { void advanceAfterTaskComplete(queueNavigation?.next_id) } : undefined}
+                onAfterTaskCompleted={fromQueue ? () => {
+                  const nextLeadId: number | null | undefined =
+                    queueNavLoading || !queueNavigation
+                      ? undefined
+                      : (forwardStack.at(-1) ?? queueNavigation.next_id ?? null)
+                  void advanceAfterTaskComplete(nextLeadId)
+                } : undefined}
               />
             </Paper>
 

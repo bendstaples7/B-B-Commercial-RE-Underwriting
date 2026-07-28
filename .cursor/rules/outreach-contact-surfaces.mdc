@@ -13,22 +13,22 @@ alwaysApply: false
 
 ## Invariant
 
-Contact detail (phone, email, mailing address) appears on **exactly one** surface per view.
+Preferred action target (`OutreachContactInline` — phone, email, mailing) appears on **exactly one** surface per view. Key Contact may still list all numbers as a **directory**; that is not a second `OutreachContactInline`.
 
 Use `outreachContactPlacement()` from `frontend/src/utils/outreachContactPlacement.ts` before adding any contact UI.
 
 | Surface | When |
 |---------|------|
-| `key_contact_card` | Key Contact card mounted (lg+ right rail **or** below-lg main stack) — single CC contact surface |
-| `primary_task` | Open task exists **and** Key Contact card not visible — inline on first sorted task row via `OutreachContactInline` |
-| `recommended_action` | No open tasks **and** Key Contact card not visible — inline under RA label via `OutreachContactInline` |
+| `primary_task` | Primary (first sorted) open task is **call / follow-up / email / mail** — inline on that task row even when Key Contact is mounted |
+| `key_contact_card` | Key Contact mounted **and** primary task is not call/email outreach |
+| `recommended_action` | Primary task is not outreach-capable (call/follow-up/email/mail) **and** Key Contact card not visible — inline under RA label |
 | Queue table | Compact subline only — `OutreachContactCallout compact` |
 
 ## Do not
 
 - Import bordered `OutreachContactCallout` (non-compact) into Command Center components
 - Add a standalone contact box above/below tasks separate from the task row
-- Show contact in both Recommended Action panel and Open Tasks on the same page
+- Show `OutreachContactInline` in both Recommended Action panel and Open Tasks on the same page
 
 ## Do
 

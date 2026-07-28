@@ -1077,6 +1077,30 @@ class GoogleSheetsImporter:
                 db.session.add(audit)
                 lead.property_type = inferred
 
+        mailing_fields = (
+            'mailing_address', 'mailing_city', 'mailing_state', 'mailing_zip',
+        )
+        if any(f in data for f in mailing_fields):
+            from app.services.mailing_address_service import normalize_owner_mailing_safe
+
+            pre_normalize = {f: getattr(lead, f, None) for f in mailing_fields}
+            normalize_owner_mailing_safe(lead, rewrite_street=True)
+            # Audit the *normalized* result, not the raw sheet value already
+            # audited above — normalize can further rewrite what was just set
+            # (e.g. peel tab-dump columns, pad short ZIPs).
+            for field_name in mailing_fields:
+                old_str = str(pre_normalize[field_name]) if pre_normalize[field_name] is not None else None
+                new_value = getattr(lead, field_name, None)
+                new_str = str(new_value) if new_value is not None else None
+                if old_str != new_str:
+                    db.session.add(LeadAuditTrail(
+                        lead_id=lead.id,
+                        field_name=field_name,
+                        old_value=old_str,
+                        new_value=new_str,
+                        changed_by=changed_by,
+                    ))
+
         # Keep relational contacts in sync with flat owner / phone / email fields.
         try:
             from app.services.contact_service import ContactService
@@ -1115,6 +1139,11 @@ class GoogleSheetsImporter:
         # Infer property_type from units when the sheet didn't supply it
         if not lead.property_type and lead.units:
             lead.property_type = GoogleSheetsImporter._infer_property_type_from_units(lead.units)
+        if any(f in data for f in (
+            'mailing_address', 'mailing_city', 'mailing_state', 'mailing_zip',
+        )):
+            from app.services.mailing_address_service import normalize_owner_mailing_safe
+            normalize_owner_mailing_safe(lead, rewrite_street=True)
 
     # ------------------------------------------------------------------
     # Import orchestration

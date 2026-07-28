@@ -11,6 +11,7 @@ from app.services.plugins.cook_county_sheriff_foreclosure import (
 )
 
 _ZIP_RE = re.compile(r'^(\d{5})(?:-\d{4})?$')
+_ZIP_SHORT_RE = re.compile(r'^(\d{3,4})$')
 _STATE_ZIP_RE = re.compile(r'^([A-Z]{2})\s*(\d{5})(?:-\d{4})?$', re.IGNORECASE)
 
 # USPS state / DC / territory abbreviations — reject street suffixes like ST/DR.
@@ -24,11 +25,21 @@ _US_STATE_CODES = frozenset({
 })
 
 
+def street_looks_tabular(street: str) -> bool:
+    """True when street still embeds city/state/zip as tab or multi-space columns."""
+    return bool(street) and ('\t' in street or re.search(r' {2,}', street) is not None)
+
+
 def parse_embedded_us_address(raw: str) -> tuple[str, str, str, str] | None:
     """Parse (street, city, state, zip) from a one-line US address, or None if ambiguous."""
     text = (raw or '').strip()
     if not text:
         return None
+
+    # Tab / multi-column exports (HubSpot / assessor dumps) before space heuristics.
+    parsed = _parse_tabular_separated(text)
+    if parsed:
+        return parsed
 
     parsed = _parse_comma_separated(text)
     if parsed:
@@ -39,6 +50,52 @@ def parse_embedded_us_address(raw: str) -> tuple[str, str, str, str] | None:
         return parsed
 
     return _parse_space_separated_no_state(text)
+
+
+def _normalize_zip5(raw: str, *, state: str | None = None) -> str | None:
+    """Return a 5-digit ZIP, zero-padding short imports when state is known."""
+    text = (raw or '').strip()
+    if not text:
+        return None
+    match = _ZIP_RE.match(text)
+    if match:
+        return match.group(1)
+    short = _ZIP_SHORT_RE.match(text)
+    if short and state and state.upper() in _US_STATE_CODES:
+        padded = short.group(1).zfill(5)
+        looked_up = city_state_from_zip(padded)
+        if looked_up and looked_up[1].upper() == state.upper():
+            return padded
+        # Still accept padded ZIP when lookup has no row (offline / rare ZIPs).
+        if looked_up is None:
+            return padded
+    return None
+
+
+def _parse_tabular_separated(raw: str) -> tuple[str, str, str, str] | None:
+    """Parse ``street\\tcity\\tST\\tZIP`` (and multi-space column dumps)."""
+    if '\t' in raw:
+        parts = [p.strip() for p in raw.split('\t') if p.strip()]
+    else:
+        # Two-or-more spaces often mark columns in fixed-width / pasted dumps.
+        parts = [p.strip() for p in re.split(r' {2,}', raw) if p.strip()]
+    if len(parts) < 4:
+        return None
+
+    # Prefer trailing state + ZIP columns when more than 4 pieces.
+    state = parts[-2].upper()
+    if len(state) != 2 or state not in _US_STATE_CODES:
+        return None
+    zip_code = _normalize_zip5(parts[-1], state=state)
+    if not zip_code:
+        return None
+    city = parts[-3].strip()
+    street = ' '.join(parts[:-3]).strip()
+    # Collapse leftover internal whitespace/tabs in street.
+    street = re.sub(r'\s+', ' ', street).strip()
+    if not street or not city:
+        return None
+    return street, city, state, zip_code
 
 
 def street_only_from_glued_city_state_zip(raw: str) -> str | None:
@@ -92,20 +149,30 @@ def _parse_comma_separated(raw: str) -> tuple[str, str, str, str] | None:
     return None
 
 
+def parse_city_state_zip_line(raw: str) -> tuple[str, str, str] | None:
+    """Parse ``City ST ZIP`` or ``City, ST ZIP`` into (city, state, zip5)."""
+    text = re.sub(r'[,\s]+', ' ', (raw or '').strip())
+    return _parse_city_state_zip(text)
+
+
 def _parse_city_state_zip(raw: str) -> tuple[str, str, str] | None:
     parts = re.sub(r'\s+', ' ', raw.strip()).split()
     if len(parts) < 3:
         return None
 
-    zip_match = _ZIP_RE.match(parts[-1])
+    zip_raw = parts[-1]
+    zip_match = _ZIP_RE.match(zip_raw)
+    if not zip_match:
+        # Allow a 9-digit ZIP+4 already stripped of its hyphen (e.g. "606223009").
+        zip_match = re.match(r'^(\d{5})\d{4}$', zip_raw)
     if not zip_match:
         return None
 
-    state = parts[-2].upper()
+    state = parts[-2].upper().rstrip(',')
     if len(state) != 2 or not state.isalpha() or state not in _US_STATE_CODES:
         return None
 
-    city = ' '.join(parts[:-2]).strip()
+    city = ' '.join(parts[:-2]).strip().rstrip(',')
     if not city:
         return None
     return city, state, zip_match.group(1)

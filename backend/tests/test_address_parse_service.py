@@ -66,6 +66,19 @@ class TestParseEmbeddedUsAddress:
         result = parse_embedded_us_address('1137 W LELAND AVE, CHICAGO, IL 60640')
         assert result == ('1137 W LELAND AVE', 'CHICAGO', 'IL', '60640')
 
+    def test_tab_separated_mailing_with_short_zip(self):
+        # HubSpot / export dumps: street\\tcity\\tST\\tZIP (leading ZIP zero dropped).
+        result = parse_embedded_us_address(
+            '167 Lakeview Ter\tSandy Hook\tCT\t6482',
+        )
+        assert result == ('167 Lakeview Ter', 'Sandy Hook', 'CT', '06482')
+
+    def test_multi_space_column_mailing(self):
+        result = parse_embedded_us_address(
+            '167 Lakeview Ter        Sandy Hook      CT      6482',
+        )
+        assert result == ('167 Lakeview Ter', 'Sandy Hook', 'CT', '06482')
+
     def test_two_part_comma_separated(self):
         result = parse_embedded_us_address('2041 W Cuyler Ave, Chicago IL 60618')
         assert result == ('2041 W Cuyler Ave', 'Chicago', 'IL', '60618')
@@ -89,6 +102,24 @@ class TestParseEmbeddedUsAddress:
     def test_zip_plus_four(self):
         result = parse_embedded_us_address('123 Main St Chicago IL 60601-1234')
         assert result == ('123 Main St', 'Chicago', 'IL', '60601')
+
+
+class TestParseCityStateZipLine:
+    def test_dehyphenated_zip_plus_four(self):
+        # ZIP+4 sometimes arrives with the hyphen stripped (e.g. spreadsheet
+        # exports) — must still resolve to the 5-digit ZIP, not be rejected.
+        from app.services.address_parse_service import parse_city_state_zip_line
+
+        assert parse_city_state_zip_line('Chicago IL 606223009') == (
+            'Chicago', 'IL', '60622',
+        )
+
+    def test_hyphenated_zip_plus_four_still_works(self):
+        from app.services.address_parse_service import parse_city_state_zip_line
+
+        assert parse_city_state_zip_line('Chicago, IL 60622-3009') == (
+            'Chicago', 'IL', '60622',
+        )
 
 
 class TestZipLookup:

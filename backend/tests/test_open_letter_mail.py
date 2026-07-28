@@ -10,6 +10,7 @@ from app.services.open_letter_config_service import OpenLetterConfigService
 from app.services.open_letter_contact_mapper import (
     lead_to_olc_contact,
     is_owner_mailable_lead,
+    owner_mailing_address,
     persist_embedded_address_fields,
     validate_lead_mail_address,
     validate_owner_mailing_address,
@@ -88,6 +89,32 @@ class TestOpenLetterContactMapper:
             mailing_zip=None,
         )
         assert is_owner_mailable_lead(lead) is True
+
+    def test_owner_mail_readiness_parses_tab_separated_short_zip(self):
+        # Export dumps: street\\tcity\\tST\\tZIP with leading ZIP zero dropped.
+        lead = _make_lead(
+            mailing_address='167 Lakeview Ter\tSandy Hook\tCT\t6482',
+            mailing_city=None,
+            mailing_state=None,
+            mailing_zip=None,
+        )
+        assert is_owner_mailable_lead(lead) is True
+        assert owner_mailing_address(lead) == (
+            '167 Lakeview Ter', 'Sandy Hook', 'CT', '06482',
+        )
+
+    def test_owner_mail_peels_tabular_street_after_city_state_zip_heal(self):
+        # After persist fills structured columns, street may still be the dump.
+        lead = _make_lead(
+            mailing_address='167 Lakeview Ter\tSandy Hook\tCT\t6482',
+            mailing_city='Sandy Hook',
+            mailing_state='CT',
+            mailing_zip='06482',
+        )
+        assert validate_owner_mailing_address(lead) is None
+        assert owner_mailing_address(lead) == (
+            '167 Lakeview Ter', 'Sandy Hook', 'CT', '06482',
+        )
 
     def test_owner_mail_readiness_rejects_returned_address(self):
         lead = _make_lead(returned_addresses='123 Main St Chicago IL 60601')
