@@ -458,6 +458,7 @@ export function RecommendedActionPanel({
   }
 
   const openDeprioritizeDialog = () => {
+    setActionError(null)
     setDeprioritizeReason(confirmCondoDeprioritize ? CONDO_DEPRIORITIZE_REASON : '')
     setDeprioritizeOpen(true)
   }

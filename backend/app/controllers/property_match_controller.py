@@ -69,7 +69,7 @@ def approve_property_match(lead_id: int):
         else None
     )
     use_assessor_street = (
-        bool(body.get('use_assessor_street'))
+        body.get('use_assessor_street') is True
         if isinstance(body, dict)
         else False
     )

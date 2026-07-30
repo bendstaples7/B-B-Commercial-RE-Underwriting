@@ -484,6 +484,50 @@ class TestScoringMailGate:
         assert action == 'follow_up_now'
         assert reason == 'is_warm'
 
+    def test_phone_unresolved_entity_research_after_engaged_checks(self, monkeypatch):
+        """Company phone + unresolved entity → Research LLC (not nurture/mail)."""
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine._resolve_crm_flags',
+            lambda lead: (True, False, True),
+        )
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine.cold_mail_block_reason',
+            lambda lead: 'unresolved_entity_owner',
+        )
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine._mail_work_in_flight',
+            lambda lead_id: False,
+        )
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine._has_overdue_lead_task',
+            lambda lead_id: False,
+        )
+        monkeypatch.setattr(
+            'app.services.lead_scoring_engine._count_open_tasks',
+            lambda lead_id: 0,
+        )
+        monkeypatch.setattr(
+            'app.services.scoring_rubric.is_recently_sold',
+            lambda lead: False,
+        )
+
+        lead = MagicMock()
+        lead.lead_status = 'mailing_no_contact_made'
+        lead.lead_category = 'residential'
+        lead.do_not_contact = False
+        lead.follow_up_overdue = False
+        lead.is_warm = False
+        lead.id = 96
+        lead.property_street = '1 Main'
+        lead.motivation_score = 0
+
+        action, reason, meta = LeadScoringEngine.evaluate_recommended_action(
+            lead, total_score=80.0, data_quality_score=80.0, score_tier='A',
+        )
+        assert action == 'enrich_data'
+        assert reason == 'research_entity_owner'
+        assert meta.get('requires_entity_research') is True
+
     def test_unresolved_entity_enrich(self, monkeypatch):
         monkeypatch.setattr(
             'app.services.lead_scoring_engine._resolve_crm_flags',

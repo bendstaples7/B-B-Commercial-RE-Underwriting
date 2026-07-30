@@ -83,13 +83,23 @@ def _cancel_open_lead_tasks(lead_id: int) -> set[str]:
 
 
 def _sync_cancelled_hubspot_tasks(hubspot_task_ids: set[str]) -> None:
-    """Mirror HubSpot completions for tasks cancelled locally (post-commit)."""
+    """Mirror HubSpot completions for tasks cancelled locally (post-commit).
+
+    Best-effort: never fail the already-committed local status/task change.
+    """
     if not hubspot_task_ids:
         return
-    from app.services.hubspot_task_completion_service import (
-        sync_pending_hubspot_completions,
-    )
-    sync_pending_hubspot_completions(sorted(hubspot_task_ids))
+    try:
+        from app.services.hubspot_task_completion_service import (
+            sync_pending_hubspot_completions,
+        )
+        sync_pending_hubspot_completions(sorted(hubspot_task_ids))
+    except Exception as exc:  # noqa: BLE001 — CRM mirror must not 500 the request
+        logger.warning(
+            'HubSpot completion sync failed after local task cancel: %s',
+            exc,
+            exc_info=True,
+        )
 
 
 def _display_street(street: str | None) -> str | None:
@@ -884,10 +894,13 @@ def get_command_center(lead_id: int):
         from app.services.entity_owner_policy import is_unresolved_entity_owner
         needs_entity_research = bool(is_unresolved_entity_owner(lead))
         # Likely-condo commercial path asks Confirm deprioritize — do not keep
-        # Research LLC as a competing primary next action. Use the same resolved
-        # condo status that the payload exposes (analysis fallback when lead empty).
+        # Research LLC as a competing primary next action. Residential LLC
+        # owners still need entity research even if condo risk is elevated.
+        # Use the same resolved condo status that the payload exposes
+        # (analysis fallback when lead empty).
         condo_lower = str(condo_risk_status or '').strip().lower()
-        if condo_lower == 'likely_condo':
+        lead_category = str(getattr(lead, 'lead_category', None) or '').strip().lower()
+        if condo_lower == 'likely_condo' and lead_category == 'commercial':
             needs_entity_research = False
     except Exception:  # noqa: BLE001
         logger.debug(
@@ -1244,21 +1257,23 @@ def update_status(lead_id: int):
     # Mirror move_to_skip_trace: after the transaction commits, complete the
     # HubSpot-backed chores we cleared and clear due-dates on converted handoffs.
     hubspot_complete_ids = set(skip_trace_pending_hubspot_ids) | cancelled_open_task_hs_ids
-    if hubspot_complete_ids:
-        from app.services.hubspot_task_completion_service import (
-            sync_pending_hubspot_completions,
-        )
-        sync_pending_hubspot_completions(sorted(hubspot_complete_ids))
+    _sync_cancelled_hubspot_tasks(hubspot_complete_ids)
     if skip_trace_handoff_clear_ids:
         from app.services.hubspot_task_completion_service import (
             sync_hubspot_task_properties,
         )
         for hs_id in sorted(skip_trace_handoff_clear_ids):
-            sync_hubspot_task_properties(
-                hs_id,
-                title='Awaiting skip trace',
-                clear_due_date=True,
-            )
+            try:
+                sync_hubspot_task_properties(
+                    hs_id,
+                    title='Awaiting skip trace',
+                    clear_due_date=True,
+                )
+            except Exception as exc:  # noqa: BLE001 — best-effort CRM mirror
+                logger.warning(
+                    'HubSpot skip-trace handoff property sync failed for %s: %s',
+                    hs_id, exc,
+                )
 
     from app.services.queue_order_cache import queue_order_cache
     queue_order_cache.clear()
