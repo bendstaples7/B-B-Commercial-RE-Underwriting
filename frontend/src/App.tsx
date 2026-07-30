@@ -177,6 +177,12 @@ const ActivityDashboardPage = lazy(() =>
 const QuickAddPage = lazy(() =>
   import('./pages/QuickAddPage').then((m) => ({ default: m.QuickAddPage })),
 )
+const BuildingOwnershipLookbookPage = lazy(
+  () => import('./pages/lookbook/BuildingOwnershipLookbookPage'),
+)
+const CcPinDeprioritizeLookbookPage = lazy(
+  () => import('./pages/lookbook/CcPinDeprioritizeLookbookPage'),
+)
 const PipelineConfigAdminPage = lazy(() =>
   import('./pages/PipelineConfigAdminPage').then((m) => ({ default: m.PipelineConfigAdminPage })),
 )
@@ -2519,6 +2525,18 @@ function App() {
           {/* Kanban view */}
           <Route path="/kanban" element={<DealKanbanPage />} />
           <Route path="/quick-add" element={<QuickAddPage />} />
+          {import.meta.env.DEV && (
+            <Route
+              path="/lookbook/building-ownership"
+              element={<BuildingOwnershipLookbookPage />}
+            />
+          )}
+          {import.meta.env.DEV && (
+            <Route
+              path="/lookbook/cc-pin-deprioritize"
+              element={<CcPinDeprioritizeLookbookPage />}
+            />
+          )}
           {/* Old /leads/views/* — redirect to new /queues/* routes */}
           <Route path="/leads/views/previously-warm" element={<Navigate to="/queues/previously-warm" replace />} />
           <Route path="/leads/views/needs-review" element={<Navigate to="/queues/needs-review" replace />} />

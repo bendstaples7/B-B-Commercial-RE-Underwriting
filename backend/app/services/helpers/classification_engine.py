@@ -47,6 +47,8 @@ def classify(metrics: AddressGroupMetrics) -> ClassificationResult:
     1. has_unit_number=True → likely_condo / no / high confidence
     2. has_condo_language=True → likely_condo / no / high confidence
     3. pin_count >= 4 AND owner_count >= 2 → likely_condo / no / high confidence
+    3b. commercial AND pin_count >= 4 → likely_condo / no / medium confidence
+       (dense tax-situs PIN cluster even when CRM shows a single owner)
     4. pin_count=1 AND owner_count=1 AND no unit AND no condo language
        → likely_not_condo / yes / high confidence
     4b. commercial / multi-unit (5+) with 1–2 PINs and no condo indicators
@@ -103,6 +105,22 @@ def classify(metrics: AddressGroupMetrics) -> ClassificationResult:
                 f"({metrics.owner_count}) suggest fragmented ownership"
             ),
             confidence="high",
+        )
+
+    # Rule 3b: Commercial lead with a dense PIN cluster at situs (often unit parcels)
+    # even when CRM still shows a single owner name — selecting one PIN does not help.
+    # Medium confidence: high confidence still requires multi-owner (rule 3) or
+    # condo language / unit markers (rules 1–2).
+    if metrics.is_commercial and metrics.pin_count >= 4:
+        return ClassificationResult(
+            condo_risk_status="likely_condo",
+            building_sale_possible="no",
+            triggered_rules=["rule_3b_commercial_multi_pin_cluster"],
+            reason=(
+                f"Commercial property with {metrics.pin_count} assessor PINs at the "
+                f"tax situs — typical of a building split into condo / unit parcels"
+            ),
+            confidence="medium",
         )
 
     # Rule 4: Single PIN, single owner, no condo indicators

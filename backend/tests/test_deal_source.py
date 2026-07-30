@@ -169,20 +169,25 @@ class TestHubSpotDealSourceEnrichment:
             assert 'deal_source' in updated
             assert lead.deal_source == 'CoStar'
 
-    def test_enrich_lead_from_deal_uses_description_when_peers_blank(self, app):
+    def test_enrich_lead_from_deal_fills_costar_units_and_category(self, app):
         with app.app_context():
-            lead = Lead(property_street='3 Source St', source='hubspot_import', deal_source=None)
+            lead = Lead(
+                property_street='3715-3721 N Leavitt St',
+                deal_source='CoStar',
+                deal_description='Costar  Date ID: 3/7/2022 Not Yet Skip Traced Units: 12',
+                units=None,
+                lead_category='residential',
+                property_type=None,
+            )
             deal = HubSpotDeal(
-                hubspot_id='deal-source-from-description',
-                raw_payload={
-                    'properties': {
-                        'deal_source': '',
-                        'description': 'Listsource Date ID: 3/1/2021 Munawar',
-                    }
-                },
+                hubspot_id='deal-costar-units',
+                raw_payload={'properties': {'deal_source': 'CoStar'}},
             )
 
             updated = HubSpotMatcherService().enrich_lead_from_deal(lead, deal)
 
-            assert 'deal_source' in updated
-            assert lead.deal_source == 'Listsource'
+            assert 'units' in updated
+            assert 'lead_category' in updated
+            assert lead.units == 12
+            assert lead.lead_category == 'commercial'
+            assert lead.property_type == 'Commercial'

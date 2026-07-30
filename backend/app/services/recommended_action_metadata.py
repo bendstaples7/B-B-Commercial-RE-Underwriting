@@ -261,10 +261,21 @@ def get_recommended_action_display(
             else OWNER_MAILING_RETURNED_NO_CONTACT_EXPLANATION
         )
 
+    # Confirmed commercial condo → ask to park (not Suppress / not Research LLC).
+    # Heuristic likely_condo (e.g. multi-PIN cluster) is not a manual confirmation.
+    if winning_rule == 'likely_condo':
+        base_label = 'Confirm deprioritize?'
+        base_explanation = (
+            'Likely condoized / multi-PIN tax situs — confirm deprioritize.'
+        )
+
     channel_label = outreach_action_label(action, contact_method)
     label = channel_label or base_label
 
-    if winning_rule == 'owner_mailing_returned':
+    if winning_rule == 'likely_condo':
+        label = base_label
+        explanation = base_explanation
+    elif winning_rule == 'owner_mailing_returned':
         explanation = base_explanation
     else:
         explanation = outreach_action_explanation(action, contact_method, base_explanation)

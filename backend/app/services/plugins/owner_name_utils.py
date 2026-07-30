@@ -120,7 +120,17 @@ def is_entity_name(cleaned: str) -> bool:
     if any(phrase in upper for phrase in _ENTITY_PHRASES):
         return True
     tokens = {_normalize_token(t) for t in upper.split()}
-    return bool(tokens & _ENTITY_MARKERS)
+    if tokens & _ENTITY_MARKERS:
+        return True
+    # Multi-token org shapes ending in singular PROPERTY / INVESTMENTS
+    # (e.g. "Silver Property"). Do not treat bare "Properties"/"Holdings" as
+    # entity tokens — those false-positive person-like names in tests.
+    parts = [p for p in upper.split() if p]
+    if len(parts) >= 2 and _normalize_token(parts[-1]) in {
+        "PROPERTY", "INVESTMENTS",
+    }:
+        return True
+    return False
 
 
 def is_generic_owner_name(name: str | None) -> bool:

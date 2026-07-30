@@ -444,6 +444,7 @@ describe('RecommendedActionPanel', () => {
         'ra-universal-btn-log_email',
         'ra-universal-btn-add_to_mail_batch',
         'ra-universal-btn-move_to_skip_trace',
+        'ra-universal-btn-deprioritize',
       ])
     })
   })
@@ -1070,7 +1071,7 @@ describe('RecommendedActionPanel', () => {
       )
     })
 
-    it('puts nurture label and explanation on one line under Action Center tiles', () => {
+    it('hides nurture recommended line under Action Center tiles', () => {
       render(
         <RecommendedActionPanel
           recommendedAction={makeRA('nurture', 'Nurture', 'Keep nurturing this lead.')}
@@ -1080,9 +1081,8 @@ describe('RecommendedActionPanel', () => {
           showActionCenterTiles
         />,
       )
-      expect(screen.getByTestId('ra-label')).toHaveTextContent(
-        'Recommended next action: Nurture — Keep nurturing this lead.',
-      )
+      expect(screen.queryByTestId('ra-label')).not.toBeInTheDocument()
+      expect(screen.getByTestId('action-center-tiles')).toBeInTheDocument()
     })
 
     it('grays out Move to Skip Trace tile when already in skip_trace', () => {
@@ -1154,6 +1154,86 @@ describe('RecommendedActionPanel', () => {
       await user.click(screen.getByTestId('action-center-tile-log_call'))
       await waitFor(() => expect(onAction).toHaveBeenCalledWith('log_call'))
     })
+  })
+
+  it('shows Research LLC as an Action Center tile (not a separate button row)', () => {
+    const onRefresh = vi.fn()
+    render(
+      <RecommendedActionPanel
+        recommendedAction={{
+          ...makeRA('enrich_data', 'Enrich Data'),
+          winning_rule: 'research_entity_owner',
+        }}
+        leadStatus="mailing_no_contact_made"
+        openTasks={[]}
+        onAction={vi.fn()}
+        onRefreshEntityResearch={onRefresh}
+        showActionCenterTiles
+      />,
+    )
+    expect(screen.getByTestId('action-center-tile-research_llc')).toHaveTextContent(/Research LLC/i)
+    expect(screen.getByTestId('action-center-tile-move_to_skip_trace')).toBeInTheDocument()
+    expect(screen.queryByTestId('ra-action-btn-research_llc')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('ra-action-btn-move_to_skip_trace')).not.toBeInTheDocument()
+    // Exactly one Skip Trace control
+    expect(screen.getAllByText(/Skip Trace/i)).toHaveLength(1)
+  })
+
+  it('shows Research LLC tile from needsEntityResearch even when RA is nurture', () => {
+    render(
+      <RecommendedActionPanel
+        recommendedAction={makeRA('nurture', 'Nurture')}
+        leadStatus="mailing_no_contact_made"
+        openTasks={[]}
+        onAction={vi.fn()}
+        onRefreshEntityResearch={vi.fn()}
+        needsEntityResearch
+        showActionCenterTiles
+      />,
+    )
+    expect(screen.getByTestId('action-center-tile-research_llc')).toBeInTheDocument()
+  })
+
+  it('demotes Research LLC when winning_rule is likely_condo', () => {
+    render(
+      <RecommendedActionPanel
+        recommendedAction={{
+          ...makeRA('needs_manual_review', 'Confirm deprioritize?'),
+          winning_rule: 'likely_condo',
+          explanation: 'Likely condoized / multi-PIN tax situs — confirm deprioritize.',
+        }}
+        leadStatus="mailing_no_contact_made"
+        openTasks={[]}
+        onAction={vi.fn()}
+        onRefreshEntityResearch={vi.fn()}
+        needsEntityResearch
+        showActionCenterTiles
+        onDeprioritize={vi.fn()}
+      />,
+    )
+    expect(screen.getByTestId('ra-label')).toHaveTextContent(/Confirm deprioritize/i)
+    expect(screen.queryByTestId('action-center-tile-research_llc')).not.toBeInTheDocument()
+    expect(screen.getByTestId('action-center-tile-deprioritize')).toHaveTextContent(/Confirm deprioritize/i)
+  })
+
+  it('does not float Suppress Lead tile when RA is suppress after deprioritize', () => {
+    render(
+      <RecommendedActionPanel
+        recommendedAction={{
+          ...makeRA('suppress', 'Suppress'),
+          winning_rule: 'terminal_status',
+          explanation: 'This lead does not meet investment criteria.',
+        }}
+        leadStatus="deprioritize"
+        openTasks={[]}
+        onAction={vi.fn()}
+        showActionCenterTiles
+        onDeprioritize={vi.fn()}
+      />,
+    )
+    expect(screen.queryByTestId('action-center-tile-suppress')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Suppress Lead/i)).not.toBeInTheDocument()
+    expect(screen.queryByTestId('ra-label')).not.toBeInTheDocument()
   })
 })
 

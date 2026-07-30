@@ -141,6 +141,34 @@ def _cold_mail_block_reason_with_context(
     return None
 
 
+def is_unresolved_entity_owner(lead: Lead) -> bool:
+    """True when the owner looks like an org/LLC with no natural-person primary.
+
+    Used for Command Center Research LLC CTA — independent of commercial
+    cold-mail allowance (commercial may still cold-mail the LLC address).
+    """
+    lead_id = getattr(lead, "id", None)
+    primary: Optional[Contact] = None
+    orgs: list[Organization] = []
+    if isinstance(lead_id, int):
+        try:
+            primary = _primary_contact(lead_id)
+            orgs = _owner_organizations(lead_id)
+        except Exception:  # noqa: BLE001
+            primary = None
+            orgs = []
+
+    display = _owner_display_name(lead, primary)
+    entity_shaped = False
+    if primary is not None and is_entity_contact(primary.first_name, primary.last_name):
+        entity_shaped = True
+    elif display and is_entity_name(display) and not _has_natural_person_primary(primary):
+        entity_shaped = True
+    elif any(_org_name_is_entity(org) for org in orgs):
+        entity_shaped = True
+    return bool(entity_shaped and not _has_natural_person_primary(primary))
+
+
 def cold_mail_block_reason(lead: Lead) -> Optional[str]:
     """Return a reason code when this lead should not be cold-mailed, else None."""
     lead_id = getattr(lead, "id", None)

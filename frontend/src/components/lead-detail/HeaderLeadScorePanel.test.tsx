@@ -83,4 +83,22 @@ describe('HeaderLeadScorePanel', () => {
     expect(screen.getByTestId('header-lead-score')).toHaveTextContent('Unscored')
     expect(screen.getByTestId('header-lead-score')).not.toHaveTextContent('Low Priority')
   })
+
+  it('contains driver chips inside the panel (no overflow escape)', () => {
+    render(
+      <HeaderLeadScorePanel score={87} tier="A" scoreRecord={makeScore()} />,
+    )
+    const panel = screen.getByTestId('header-lead-score')
+    expect(getComputedStyle(panel).overflow).toBe('hidden')
+    expect(getComputedStyle(panel).minWidth).toBe('0px')
+
+    const drivers = screen.getByTestId('header-score-drivers')
+    const chip = drivers.querySelector('.MuiChip-root') as HTMLElement
+    expect(chip).toBeTruthy()
+    expect(getComputedStyle(chip).maxWidth).toBe('100%')
+    expect(getComputedStyle(chip).overflow).toBe('hidden')
+    const label = chip.querySelector('.MuiChip-label') as HTMLElement
+    expect(getComputedStyle(label).textOverflow).toBe('ellipsis')
+    expect(getComputedStyle(label).overflow).toBe('hidden')
+  })
 })

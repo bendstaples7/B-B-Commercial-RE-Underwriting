@@ -4,11 +4,21 @@
 import api from '@/services/api'
 
 export const propertyMatchService = {
-  preview: (leadId: number) =>
-    api.get(`/leads/${leadId}/property-match/preview`).then(r => r.data),
-  approve: (leadId: number, options?: { pin?: string }) =>
+  preview: (leadId: number, options?: { pin?: string }) =>
     api
-      .post(`/leads/${leadId}/property-match/approve`, options?.pin ? { pin: options.pin } : {})
+      .get(`/leads/${leadId}/property-match/preview`, {
+        params: options?.pin ? { pin: options.pin } : undefined,
+      })
+      .then(r => r.data),
+  approve: (
+    leadId: number,
+    options?: { pin?: string; use_assessor_street?: boolean },
+  ) =>
+    api
+      .post(`/leads/${leadId}/property-match/approve`, {
+        ...(options?.pin ? { pin: options.pin } : {}),
+        ...(options?.use_assessor_street ? { use_assessor_street: true } : {}),
+      })
       .then(r => r.data),
   reject: (leadId: number, action: string, note?: string) =>
     api.post(`/leads/${leadId}/property-match/reject`, { action, note }).then(r => r.data),
@@ -26,9 +36,28 @@ export const propertyMatchService = {
 export const buildingOwnershipService = {
   get: (leadId: number) =>
     api.get(`/leads/${leadId}/building-ownership`).then(r => r.data),
-  analyze: (leadId: number, options?: { force?: boolean }) =>
+  analyze: (
+    leadId: number,
+    options?: {
+      force?: boolean
+      tax_situs_street?: string
+      candidate_pins?: string[]
+      apply_closest_pin?: boolean
+      persist_aka?: boolean
+    },
+  ) =>
     api
-      .post(`/leads/${leadId}/building-ownership/analyze`, { force: Boolean(options?.force) })
+      .post(`/leads/${leadId}/building-ownership/analyze`, {
+        force: Boolean(options?.force),
+        ...(options?.tax_situs_street
+          ? { tax_situs_street: options.tax_situs_street }
+          : {}),
+        ...(options?.candidate_pins?.length
+          ? { candidate_pins: options.candidate_pins }
+          : {}),
+        ...(options?.apply_closest_pin ? { apply_closest_pin: true } : {}),
+        ...(options?.persist_aka === false ? { persist_aka: false } : {}),
+      })
       .then(r => r.data),
   override: (
     leadId: number,

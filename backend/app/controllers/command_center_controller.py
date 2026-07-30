@@ -65,6 +65,43 @@ def _format_lead_score(value) -> str | None:
         return None
 
 
+def _cancel_open_lead_tasks(lead_id: int) -> set[str]:
+    """Cancel open LeadTask rows; return HubSpot IDs for post-commit CRM sync."""
+    hs_ids = {
+        str(task.hubspot_task_id)
+        for task in LeadTask.query.filter(
+            LeadTask.lead_id == lead_id,
+            LeadTask.status == 'open',
+            LeadTask.hubspot_task_id.isnot(None),
+        ).all()
+        if task.hubspot_task_id
+    }
+    LeadTask.query.filter_by(lead_id=lead_id, status='open').update(
+        {'status': 'cancelled'},
+    )
+    return hs_ids
+
+
+def _sync_cancelled_hubspot_tasks(hubspot_task_ids: set[str]) -> None:
+    """Mirror HubSpot completions for tasks cancelled locally (post-commit).
+
+    Best-effort: never fail the already-committed local status/task change.
+    """
+    if not hubspot_task_ids:
+        return
+    try:
+        from app.services.hubspot_task_completion_service import (
+            sync_pending_hubspot_completions,
+        )
+        sync_pending_hubspot_completions(sorted(hubspot_task_ids))
+    except Exception as exc:  # noqa: BLE001 — CRM mirror must not 500 the request
+        logger.warning(
+            'HubSpot completion sync failed after local task cancel: %s',
+            exc,
+            exc_info=True,
+        )
+
+
 def _display_street(street: str | None) -> str | None:
     """Street-only form for display — delegates to canonical helper."""
     from app.services.property_address_service import display_street
@@ -674,6 +711,15 @@ def get_command_center(lead_id: int):
         _db.session.add(lead)
         _db.session.commit()
 
+    # Historic CRM/sheet signals: CoStar → commercial; ``Units: N`` in description.
+    # Never overwrites authoritative GIS/assessor values already on the lead.
+    from app.services.helpers.import_signal_fills import apply_import_signal_fills
+
+    import_signal_updates = apply_import_signal_fills(lead)
+    if import_signal_updates:
+        _db.session.add(lead)
+        _db.session.commit()
+
     # Interaction table is frozen for Command Center — HubSpot activity history
     # lives on LeadTimelineEntry via HubSpotTimelineImportService. Do not UNION
     # or inject Interaction rows into the CC timeline payload.
@@ -791,6 +837,77 @@ def get_command_center(lead_id: int):
     mail_eligible_date = recent_sale_mail_eligible_date(lead)
     from app.services.cook_county_enrichment_service import is_cook_county_lead
 
+    condo_confidence = None
+    condo_check_reason = None
+    condo_checked_at = None
+    condo_check_drivers: list[str] = []
+    condo_risk_status = getattr(lead, 'condo_risk_status', None)
+    building_sale_possible = getattr(lead, 'building_sale_possible', None)
+    analysis_id = getattr(lead, 'condo_analysis_id', None)
+    analysis = None
+    try:
+        from app.models.address_group_analysis import AddressGroupAnalysis
+        from app.services.helpers.address_normalizer import normalize_address
+        from app.services.lead_merge_utils import street_line_from_address
+
+        if isinstance(analysis_id, int):
+            analysis = AddressGroupAnalysis.query.get(analysis_id)
+        if analysis is None:
+            street = getattr(lead, 'property_street', None) or ''
+            street_line = street_line_from_address(street) or street
+            normalized = normalize_address(street_line)
+            if normalized:
+                analysis = AddressGroupAnalysis.query.filter_by(
+                    normalized_address=normalized,
+                ).first()
+                if analysis is not None:
+                    analysis_id = analysis.id
+                    # Prefer live analysis status for KPI when lead row is stale/empty.
+                    if not condo_risk_status:
+                        condo_risk_status = analysis.condo_risk_status
+                    if not building_sale_possible:
+                        building_sale_possible = analysis.building_sale_possible
+        if analysis is not None:
+            if getattr(analysis, 'analyzed_at', None) is not None:
+                condo_checked_at = analysis.analyzed_at.isoformat()
+            details = analysis.analysis_details or {}
+            if isinstance(details, dict):
+                conf = details.get('confidence')
+                if isinstance(conf, str) and conf.strip():
+                    condo_confidence = conf.strip().lower()
+                reason = details.get('reason')
+                if isinstance(reason, str) and reason.strip():
+                    condo_check_reason = reason.strip()
+                rules = details.get('triggered_rules')
+                if isinstance(rules, list):
+                    condo_check_drivers = [
+                        str(r).strip() for r in rules if isinstance(r, str) and r.strip()
+                    ]
+    except Exception:  # noqa: BLE001
+        logger.debug(
+            'condo analysis details unavailable for lead %s', lead.id,
+            exc_info=True,
+        )
+
+    needs_entity_research = False
+    try:
+        from app.services.entity_owner_policy import is_unresolved_entity_owner
+        needs_entity_research = bool(is_unresolved_entity_owner(lead))
+        # Likely-condo commercial path asks Confirm deprioritize — do not keep
+        # Research LLC as a competing primary next action. Residential LLC
+        # owners still need entity research even if condo risk is elevated.
+        # Use the same resolved condo status that the payload exposes
+        # (analysis fallback when lead empty).
+        condo_lower = str(condo_risk_status or '').strip().lower()
+        lead_category = str(getattr(lead, 'lead_category', None) or '').strip().lower()
+        if condo_lower == 'likely_condo' and lead_category == 'commercial':
+            needs_entity_research = False
+    except Exception:  # noqa: BLE001
+        logger.debug(
+            'needs_entity_research unavailable for lead %s', lead.id,
+            exc_info=True,
+        )
+
     return jsonify({
         'id': lead.id,
         'owner_first_name': lead.owner_first_name,
@@ -815,6 +932,10 @@ def get_command_center(lead_id: int):
         'square_footage': lead.square_footage,
         'year_built': lead.year_built,
         'county_assessor_pin': lead.county_assessor_pin,
+        'assessor_aka_street': getattr(lead, 'assessor_aka_street', None),
+        'assessor_aka_city': getattr(lead, 'assessor_aka_city', None),
+        'assessor_aka_state': getattr(lead, 'assessor_aka_state', None),
+        'assessor_aka_zip': getattr(lead, 'assessor_aka_zip', None),
         'is_cook_county_eligible': is_cook_county_lead(lead),
         # Mailing address
         'mailing_address': lead.mailing_address,
@@ -924,9 +1045,14 @@ def get_command_center(lead_id: int):
         'is_warm': lead.is_warm,
         'follow_up_overdue': lead.follow_up_overdue,
         'analysis_complete': lead.analysis_complete,
-        'condo_risk_status': getattr(lead, 'condo_risk_status', None),
-        'building_sale_possible': getattr(lead, 'building_sale_possible', None),
-        'condo_analysis_id': getattr(lead, 'condo_analysis_id', None),
+        'condo_risk_status': condo_risk_status,
+        'building_sale_possible': building_sale_possible,
+        'condo_analysis_id': analysis_id,
+        'condo_confidence': condo_confidence,
+        'condo_check_reason': condo_check_reason,
+        'condo_checked_at': condo_checked_at,
+        'condo_check_drivers': condo_check_drivers,
+        'needs_entity_research': needs_entity_research,
         'assessor_class': getattr(lead, 'assessor_class', None),
         'data_completeness_score': data_completeness_score,
         'data_quality_breakdown': data_quality_breakdown,
@@ -1098,14 +1224,13 @@ def update_status(lead_id: int):
         )
         skip_trace_pending_hubspot_ids.update(extra_hs)
 
-    # Match the dedicated DNC action: DNC always cancels open next-action work,
-    # regardless of whether it came from Quick Actions or the status selector.
-    if new_status in ('do_not_contact', 'suppressed'):
+    # Terminal park statuses cancel open next-action work (same invariant as DNC),
+    # whether from Quick Actions, Confirm deprioritize, or the status selector.
+    # Deprioritize is then rescored below → terminal RA `suppress` (not left null).
+    cancelled_open_task_hs_ids: set[str] = set()
+    if new_status in ('do_not_contact', 'suppressed', 'deprioritize'):
         lead.recommended_action = None
-    if new_status == 'do_not_contact':
-        LeadTask.query.filter_by(lead_id=lead_id, status='open').update(
-            {'status': 'cancelled'},
-        )
+        cancelled_open_task_hs_ids = _cancel_open_lead_tasks(lead_id)
 
     db.session.add(lead)
 
@@ -1131,21 +1256,24 @@ def update_status(lead_id: int):
 
     # Mirror move_to_skip_trace: after the transaction commits, complete the
     # HubSpot-backed chores we cleared and clear due-dates on converted handoffs.
-    if skip_trace_pending_hubspot_ids:
-        from app.services.hubspot_task_completion_service import (
-            sync_pending_hubspot_completions,
-        )
-        sync_pending_hubspot_completions(sorted(skip_trace_pending_hubspot_ids))
+    hubspot_complete_ids = set(skip_trace_pending_hubspot_ids) | cancelled_open_task_hs_ids
+    _sync_cancelled_hubspot_tasks(hubspot_complete_ids)
     if skip_trace_handoff_clear_ids:
         from app.services.hubspot_task_completion_service import (
             sync_hubspot_task_properties,
         )
         for hs_id in sorted(skip_trace_handoff_clear_ids):
-            sync_hubspot_task_properties(
-                hs_id,
-                title='Awaiting skip trace',
-                clear_due_date=True,
-            )
+            try:
+                sync_hubspot_task_properties(
+                    hs_id,
+                    title='Awaiting skip trace',
+                    clear_due_date=True,
+                )
+            except Exception as exc:  # noqa: BLE001 — best-effort CRM mirror
+                logger.warning(
+                    'HubSpot skip-trace handoff property sync failed for %s: %s',
+                    hs_id, exc,
+                )
 
     from app.services.queue_order_cache import queue_order_cache
     queue_order_cache.clear()
@@ -1626,7 +1754,7 @@ def do_not_contact(lead_id: int):
     old_status = lead.lead_status
     lead.lead_status = 'do_not_contact'
     lead.recommended_action = None
-    LeadTask.query.filter_by(lead_id=lead_id, status='open').update({'status': 'cancelled'})
+    cancelled_hs_ids = _cancel_open_lead_tasks(lead_id)
 
     entry = LeadTimelineEntry(
         lead_id=lead_id,
@@ -1640,6 +1768,7 @@ def do_not_contact(lead_id: int):
     db.session.add(lead)
     db.session.add(entry)
     db.session.commit()
+    _sync_cancelled_hubspot_tasks(cancelled_hs_ids)
 
     _rescore_after_status_change(lead_id)
 
@@ -1652,8 +1781,9 @@ def park_lead(lead_id: int):
     """
     POST /api/leads/<lead_id>/park
 
-    Park a lead by setting its status to 'nurture'. Optionally sets a
+    Park a lead by setting its status to 'deprioritize'. Optionally sets a
     reactivation_date (must be a future date, max 365 days from today).
+    Cancels open tasks (same invariant as DNC).
     """
     import datetime as _dt
     from datetime import date, timedelta
@@ -1679,6 +1809,8 @@ def park_lead(lead_id: int):
     if reactivation_date:
         lead.follow_up_date = reactivation_date
 
+    cancelled_hs_ids = _cancel_open_lead_tasks(lead_id)
+
     entry = LeadTimelineEntry(
         lead_id=lead_id,
         event_type='status_changed',
@@ -1695,6 +1827,7 @@ def park_lead(lead_id: int):
     db.session.add(lead)
     db.session.add(entry)
     db.session.commit()
+    _sync_cancelled_hubspot_tasks(cancelled_hs_ids)
 
     # Rescore first, then recompute RA (inside _rescore_after_status_change).
     _rescore_after_status_change(lead_id)
@@ -1762,6 +1895,7 @@ def suppress_lead(lead_id: int):
     old_status = lead.lead_status
     lead.lead_status = 'suppressed'
     lead.recommended_action = None
+    cancelled_hs_ids = _cancel_open_lead_tasks(lead_id)
 
     entry = LeadTimelineEntry(
         lead_id=lead_id,
@@ -1775,6 +1909,7 @@ def suppress_lead(lead_id: int):
     db.session.add(lead)
     db.session.add(entry)
     db.session.commit()
+    _sync_cancelled_hubspot_tasks(cancelled_hs_ids)
 
     _rescore_after_status_change(lead_id)
 

@@ -402,7 +402,7 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     }
   })
 
-  it('omits PIN when missing and keeps units only in quick stats', async () => {
+  it('shows PIN as dash when missing and keeps units only in quick stats', async () => {
     vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
       makeCommandCenterPayload({
         county_assessor_pin: null,
@@ -414,9 +414,71 @@ describe('UnifiedLeadCommandCenter — structural presence', () => {
     await waitFor(() => {
       expect(screen.getByTestId('property-overview-address')).toBeInTheDocument()
     })
-    expect(screen.queryByTestId('property-overview-pin')).not.toBeInTheDocument()
+    expect(screen.getByTestId('property-overview-pin')).toHaveTextContent(/Parcel ID \/ PIN: —/)
+    expect(screen.getByTestId('property-overview-look-up-pin')).toBeInTheDocument()
+    expect(screen.getByTestId('property-overview-enter-pin')).toBeInTheDocument()
     expect(screen.queryByTestId('property-overview-units-chip')).not.toBeInTheDocument()
     expect(screen.getByTestId('quick-stat-units-details')).toHaveTextContent(/Duplex/)
+  })
+
+  it('shows Also known as when assessor AKA differs from lead street', async () => {
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        property_street: '3715-3721 N Leavitt St',
+        county_assessor_pin: '14-19-122-001-0000',
+        assessor_aka_street: '2155 W Bradley Pl',
+      }),
+    )
+    renderComponent()
+    await waitFor(() => {
+      expect(screen.getByTestId('property-overview-aka')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('property-overview-aka')).toHaveTextContent(
+      /Also known as:\s*2155 W Bradley Pl/,
+    )
+  })
+
+  it('auto-previews Cook missing PIN and shows tax-situs AKA banner', async () => {
+    const { propertyMatchService } = await import('@/services/propertyMatchApi')
+    vi.mocked(commandCenterService.getCommandCenter).mockResolvedValue(
+      makeCommandCenterPayload({
+        property_street: '3715-3721 N Leavitt St',
+        property_city: 'Chicago',
+        property_state: 'IL',
+        property_zip: '60618',
+        county_assessor_pin: null,
+        is_cook_county_eligible: true,
+      }),
+    )
+    vi.spyOn(propertyMatchService, 'preview').mockResolvedValue({
+      found: true,
+      pin: null,
+      pin_count: 4,
+      require_explicit_apply: true,
+      tax_situs_street: '2155 W BRADLEY PL',
+      tax_situs_pin_count: 4,
+      assessor_aka: { property_street: '2155 W BRADLEY PL' },
+      candidates: [
+        { pin: '14-19-122-001-0000', property_street: '2155 W BRADLEY PL' },
+        { pin: '14-19-122-002-0000', property_street: '2153 W BRADLEY PL' },
+        { pin: '14-19-122-003-0000', property_street: '2151 W BRADLEY PL' },
+        { pin: '14-19-122-004-0000', property_street: '2149 W BRADLEY PL' },
+      ],
+    } as never)
+
+    renderComponent()
+    await waitFor(() => {
+      expect(screen.getByTestId('property-overview-pin-lookup-aka-banner')).toBeInTheDocument()
+    })
+    expect(screen.getByTestId('property-overview-pin-lookup-aka-banner')).toHaveTextContent(
+      /Also known as \(tax situs\).*Bradley/i,
+    )
+    expect(screen.getByTestId('property-overview-analyze-tax-situs')).toBeInTheDocument()
+    expect(screen.getByTestId('property-overview-apply-closest-pin')).toBeInTheDocument()
+    expect(screen.getByTestId('property-overview-pin-deprioritize-cta')).toBeInTheDocument()
+    expect(screen.getByTestId('property-overview-deprioritize-multi-pin')).toHaveTextContent(
+      /Deprioritize — likely condos/i,
+    )
   })
 
   it('renders the activity panel', async () => {

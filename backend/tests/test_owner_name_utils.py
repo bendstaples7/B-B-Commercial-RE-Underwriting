@@ -86,6 +86,10 @@ class TestInstitutionalName:
         assert not is_entity_name("Jane Management")
         assert not is_entity_name("Bob Holdings")
         assert not is_entity_name("Sue Properties")
+        # Multi-token trailing singular PROPERTY / INVESTMENTS are orgs.
+        assert is_entity_name("Silver Property")
+        assert is_entity_name("Acme Investments")
+        assert not is_entity_name("Property")
 
     def test_ambiguous_inc_not_institutional(self):
         assert not is_institutional_name("North Lockwood Jazz Inc")

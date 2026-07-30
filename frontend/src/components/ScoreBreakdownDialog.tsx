@@ -20,8 +20,12 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import type { PropertyScoreRecord } from '@/types'
 import { LeadScoreBadge } from './LeadScoreBadge'
 import { getDimensionMeta, getScoreVersionMeta } from '@/utils/scoreDimensionMeta'
-
-const ATTRIBUTION_ONLY_KEYS = new Set(['notes_keywords'])
+import {
+  ATTRIBUTION_ONLY_KEYS,
+  buildScorePathSummary,
+  formatSignedPoints,
+  partitionScoreDetails,
+} from '@/utils/scoreBreakdownSummary'
 
 export interface ScoreBreakdownDialogProps {
   score: PropertyScoreRecord
@@ -30,9 +34,74 @@ export interface ScoreBreakdownDialogProps {
   onViewFullBreakdown?: () => void
 }
 
-function formatPoints(points: number): string {
-  const rounded = Math.round(points * 10) / 10
-  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)
+function DimensionRow({
+  dimension,
+  points,
+  scoreVersion,
+  isAdjustment,
+}: {
+  dimension: string
+  points: number
+  scoreVersion: string
+  isAdjustment?: boolean
+}) {
+  const meta = getDimensionMeta(dimension, scoreVersion)
+  const negative = points < 0
+  return (
+    <Box
+      component="li"
+      sx={{
+        py: 1.25,
+        borderTop: 1,
+        borderColor: 'divider',
+        '&:first-of-type': { borderTop: 0 },
+      }}
+    >
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'baseline',
+          gap: 2,
+          mb: 0.5,
+        }}
+      >
+        <Typography variant="body2" fontWeight={600}>
+          {meta.label}
+        </Typography>
+        <Typography
+          variant="body2"
+          fontWeight={700}
+          color={negative ? 'error.main' : 'text.primary'}
+          sx={{ fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}
+        >
+          {ATTRIBUTION_ONLY_KEYS.has(dimension) ? formatSignedPoints(points).replace(/^[+−]/, '') : formatSignedPoints(points)}
+          {!isAdjustment && meta.maxPoints > 0 && (
+            <Typography
+              component="span"
+              variant="caption"
+              color="text.secondary"
+              fontWeight={400}
+            >
+              {' '}
+              / {meta.maxPoints}
+            </Typography>
+          )}
+        </Typography>
+      </Box>
+      <Typography variant="caption" color="text.secondary" display="block">
+        {meta.description}
+      </Typography>
+      {ATTRIBUTION_ONLY_KEYS.has(dimension) && (
+        <Typography variant="caption" color="text.secondary" display="block">
+          Included in Structured Motivation (not added again)
+        </Typography>
+      )}
+      <Typography variant="caption" color="text.disabled" display="block">
+        Data: {meta.dataSource}
+      </Typography>
+    </Box>
+  )
 }
 
 export function ScoreBreakdownDialog({
@@ -42,7 +111,9 @@ export function ScoreBreakdownDialog({
   onViewFullBreakdown,
 }: ScoreBreakdownDialogProps) {
   const versionMeta = getScoreVersionMeta(score.score_version)
-  const breakdownEntries = Object.entries(score.score_details).sort(([, a], [, b]) => b - a)
+  const path = buildScorePathSummary(score.score_details, score.total_score)
+  const { helps, adjustments, attribution } = partitionScoreDetails(score.score_details)
+  const hasRows = helps.length + adjustments.length + attribution.length > 0
 
   const handleViewHistory = () => {
     onClose()
@@ -122,74 +193,108 @@ export function ScoreBreakdownDialog({
           </Box>
         </Stack>
 
-        <Typography variant="subtitle2" sx={{ mb: 1 }}>
-          How this score was calculated
-        </Typography>
+        <Box
+          data-testid="score-how-we-got-to"
+          sx={{
+            mb: 2.5,
+            p: 1.5,
+            borderRadius: 1,
+            bgcolor: 'action.hover',
+            border: 1,
+            borderColor: 'divider',
+          }}
+        >
+          <Typography
+            component="h2"
+            variant="subtitle2"
+            sx={{ mb: 0.5 }}
+            data-testid="score-how-we-got-to-title"
+          >
+            {path.title}
+          </Typography>
+          <Typography
+            variant="body2"
+            fontWeight={600}
+            sx={{ fontVariantNumeric: 'tabular-nums', lineHeight: 1.4 }}
+            data-testid="score-how-we-got-to-equation"
+          >
+            {path.equation}
+          </Typography>
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.75 }}>
+            {path.caption}
+          </Typography>
+        </Box>
 
-        {breakdownEntries.length === 0 ? (
+        {!hasRows ? (
           <Typography variant="body2" color="text.secondary">
             No score details available.
           </Typography>
         ) : (
-          <Box component="ul" sx={{ listStyle: 'none', m: 0, p: 0 }} data-testid="score-breakdown-details">
-            {breakdownEntries.map(([dimension, points], index) => {
-              const meta = getDimensionMeta(dimension, score.score_version)
-              return (
-                <Box
-                  component="li"
-                  key={dimension}
-                  sx={{
-                    py: 1.25,
-                    borderTop: index > 0 ? 1 : 0,
-                    borderColor: 'divider',
-                  }}
+          <Box data-testid="score-breakdown-details">
+            {helps.length > 0 && (
+              <Box sx={{ mb: adjustments.length || attribution.length ? 2 : 0 }}>
+                <Typography
+                  component="h2"
+                  variant="subtitle2"
+                  sx={{ mb: 0.5 }}
+                  data-testid="score-what-helps"
                 >
-                  <Box
-                    sx={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'baseline',
-                      gap: 2,
-                      mb: 0.5,
-                    }}
-                  >
-                    <Typography variant="body2" fontWeight={600}>
-                      {meta.label}
-                    </Typography>
-                    <Typography
-                      variant="body2"
-                      fontWeight={700}
-                      sx={{ fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}
-                    >
-                      {ATTRIBUTION_ONLY_KEYS.has(dimension) ? '' : '+'}
-                      {formatPoints(points)}
-                      {meta.maxPoints > 0 && (
-                        <Typography
-                          component="span"
-                          variant="caption"
-                          color="text.secondary"
-                          fontWeight={400}
-                        >
-                          {' '}
-                          / {meta.maxPoints}
-                        </Typography>
-                      )}
-                    </Typography>
-                  </Box>
-                  <Typography variant="caption" color="text.secondary" display="block">
-                    {meta.description}
-                  </Typography>
-                  {ATTRIBUTION_ONLY_KEYS.has(dimension) && (
-                    <Typography variant="caption" color="text.secondary" display="block">
-                      Included in Structured Motivation (not added again)
-                    </Typography>
-                  )}
-                  <Typography variant="caption" color="text.disabled" display="block">
-                    Data: {meta.dataSource}
-                  </Typography>
+                  What helps
+                </Typography>
+                <Box component="ul" sx={{ listStyle: 'none', m: 0, p: 0 }}>
+                  {helps.map(([dimension, points]) => (
+                    <DimensionRow
+                      key={dimension}
+                      dimension={dimension}
+                      points={points}
+                      scoreVersion={score.score_version}
+                    />
+                  ))}
                 </Box>
-              )
-            })}
+              </Box>
+            )}
+
+            {adjustments.length > 0 && (
+              <Box sx={{ mb: attribution.length ? 2 : 0 }}>
+                <Typography
+                  component="h2"
+                  variant="subtitle2"
+                  sx={{ mb: 0.5 }}
+                  data-testid="score-adjustments"
+                >
+                  Adjustments
+                </Typography>
+                <Box component="ul" sx={{ listStyle: 'none', m: 0, p: 0 }}>
+                  {adjustments.map(([dimension, points]) => (
+                    <DimensionRow
+                      key={dimension}
+                      dimension={dimension}
+                      points={points}
+                      scoreVersion={score.score_version}
+                      isAdjustment
+                    />
+                  ))}
+                </Box>
+              </Box>
+            )}
+
+            {attribution.length > 0 && (
+              <Box>
+                <Typography component="h2" variant="subtitle2" sx={{ mb: 0.5 }}>
+                  Attribution
+                </Typography>
+                <Box component="ul" sx={{ listStyle: 'none', m: 0, p: 0 }}>
+                  {attribution.map(([dimension, points]) => (
+                    <DimensionRow
+                      key={dimension}
+                      dimension={dimension}
+                      points={points}
+                      scoreVersion={score.score_version}
+                    />
+                  ))}
+                </Box>
+              </Box>
+            )}
           </Box>
         )}
       </DialogContent>

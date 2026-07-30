@@ -645,6 +645,55 @@ class TestUpdateStatus:
             assert task.status == 'cancelled'
             assert task.completed_at is None
 
+    def test_deprioritize_status_cancels_open_tasks(self, client, app):
+        """PATCH to deprioritize cancels open tasks (same as DNC park)."""
+        with app.app_context():
+            lead = _make_lead(app, '10b Status St', lead_status='mailing_no_contact_made')
+            task = _make_task(app, lead.id)
+            client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({
+                    'status': 'deprioritize',
+                    'reason': 'Commercial property confirmed split into condos.',
+                }),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            db.session.refresh(task)
+            db.session.refresh(lead)
+            assert lead.lead_status == 'deprioritize'
+            assert task.status == 'cancelled'
+            assert task.completed_at is None
+
+    def test_deprioritize_status_syncs_hubspot_backed_cancelled_tasks(
+        self, client, app, monkeypatch,
+    ):
+        """PATCH deprioritize syncs HubSpot completions for cancelled tasks."""
+        with app.app_context():
+            lead = _make_lead(app, '10c Status Hs St', lead_status='mailing_no_contact_made')
+            task = _make_task(app, lead.id, hubspot_task_id='hs-status-dep-1')
+            synced: list[list[str]] = []
+
+            def _capture(ids):
+                synced.append(list(ids))
+
+            monkeypatch.setattr(
+                'app.services.hubspot_task_completion_service.sync_pending_hubspot_completions',
+                _capture,
+            )
+            client.patch(
+                f'/api/leads/{lead.id}/status',
+                data=json.dumps({
+                    'status': 'deprioritize',
+                    'reason': 'Condoized multi-PIN tax situs.',
+                }),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            db.session.refresh(task)
+            assert task.status == 'cancelled'
+            assert synced == [['hs-status-dep-1']]
+
     def test_returns_404_for_missing_lead(self, client, app):
         """PATCH /api/leads/99999/status returns 404."""
         with app.app_context():
@@ -1852,6 +1901,31 @@ class TestDoNotContact:
             assert task1.status == 'cancelled'
             assert task2.status == 'cancelled'
 
+    def test_dnc_syncs_hubspot_backed_cancelled_tasks(self, client, app, monkeypatch):
+        """DNC cancels HubSpot-backed tasks and syncs CRM completions."""
+        with app.app_context():
+            lead = _make_lead(app, '28b DNC Hs St', lead_status='mailing_no_contact_made')
+            task = _make_task(app, lead.id, hubspot_task_id='hs-dnc-1')
+            synced: list[list[str]] = []
+
+            def _capture(ids):
+                synced.append(list(ids))
+
+            monkeypatch.setattr(
+                'app.services.hubspot_task_completion_service.sync_pending_hubspot_completions',
+                _capture,
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/do-not-contact',
+                data=json.dumps({}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            db.session.refresh(task)
+            assert task.status == 'cancelled'
+            assert synced == [['hs-dnc-1']]
+
     def test_dnc_lead_returns_403_on_log_call(self, client, app):
         """Logging a call on a DNC lead returns 403."""
         with app.app_context():
@@ -1906,6 +1980,71 @@ class TestParkLead:
             )
             db.session.refresh(lead)
             assert lead.lead_status == 'deprioritize'
+
+    def test_park_cancels_open_tasks(self, client, app):
+        """POST /api/leads/<id>/park cancels open tasks."""
+        with app.app_context():
+            lead = _make_lead(app, '32b Park St', lead_status='mailing_no_contact_made')
+            task = _make_task(app, lead.id)
+            response = client.post(
+                f'/api/leads/{lead.id}/park',
+                data=json.dumps({}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            db.session.refresh(task)
+            assert task.status == 'cancelled'
+
+    def test_park_syncs_hubspot_backed_cancelled_tasks(self, client, app, monkeypatch):
+        """Park cancels HubSpot-backed open tasks and syncs CRM completions."""
+        with app.app_context():
+            lead = _make_lead(app, '32c Park Hs St', lead_status='mailing_no_contact_made')
+            task = _make_task(app, lead.id, hubspot_task_id='hs-park-1')
+            synced: list[list[str]] = []
+
+            def _capture(ids):
+                synced.append(list(ids))
+
+            monkeypatch.setattr(
+                'app.services.hubspot_task_completion_service.sync_pending_hubspot_completions',
+                _capture,
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/park',
+                data=json.dumps({}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            db.session.refresh(task)
+            assert task.status == 'cancelled'
+            assert synced == [['hs-park-1']]
+
+    def test_suppress_syncs_hubspot_backed_cancelled_tasks(self, client, app, monkeypatch):
+        """POST /suppress cancels HubSpot-backed tasks and syncs CRM completions."""
+        with app.app_context():
+            lead = _make_lead(app, '32d Suppress Hs St', lead_status='mailing_no_contact_made')
+            task = _make_task(app, lead.id, hubspot_task_id='hs-suppress-1')
+            synced: list[list[str]] = []
+
+            def _capture(ids):
+                synced.append(list(ids))
+
+            monkeypatch.setattr(
+                'app.services.hubspot_task_completion_service.sync_pending_hubspot_completions',
+                _capture,
+            )
+            response = client.post(
+                f'/api/leads/{lead.id}/suppress',
+                data=json.dumps({}),
+                content_type='application/json',
+                headers=_AUTH_HEADERS,
+            )
+            assert response.status_code == 200
+            db.session.refresh(task)
+            assert task.status == 'cancelled'
+            assert synced == [['hs-suppress-1']]
 
     def test_park_with_future_reactivation_date_accepted(self, client, app):
         """POST /api/leads/<id>/park with a future reactivation_date returns 200."""

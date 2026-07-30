@@ -76,12 +76,22 @@ def _normalise_address(address: str) -> str:
     The dataset stores only the street address without unit numbers.
     This strips common unit suffixes (APT 1, UNIT 2, #3, trailing digits
     after the street name) so the lookup matches the dataset format.
+    Also strips trailing city/state/ZIP when the full line was stuffed into
+    ``property_street`` (e.g. ``3715 N LEAVITT ST CHICAGO IL 60618``).
     """
     street_part = address.split(',')[0].strip().upper()
     for pattern, abbr in _DIRECTION_MAP.items():
         street_part = re.sub(pattern, abbr, street_part)
     for pattern, abbr in _SUFFIX_MAP.items():
         street_part = re.sub(pattern, abbr, street_part)
+
+    # Strip trailing locality when city/state/ZIP were concatenated into street.
+    # Keep through the first street-type token (AVE/ST/PL/…), drop the rest.
+    street_part = re.sub(
+        r'^(.+?\b(?:AVE|BLVD|CIR|CT|DR|LN|PL|RD|ST|TER|WAY))\b.*$',
+        r'\1',
+        street_part,
+    )
 
     # Strip unit/apt suffixes — these are NOT in the Cook County dataset.
     # Patterns handled (case-insensitive, already uppercased):
@@ -133,34 +143,85 @@ def _socrata_get(url: str) -> list:
     return []
 
 
+def _house_number_range_variants(normalised: str, *, max_extras: int = 8) -> list[str]:
+    """Expand ``3715-3721 N LEAVITT ST`` into discrete house-number tries.
+
+    Order: start, end, then step-matched intermediates (odd–odd → odds like
+    3717/3719; even–even → evens). Caps intermediate extras at ``max_extras``.
+    """
+    import re as _re
+
+    text = (normalised or '').strip()
+    if not text:
+        return []
+    range_match = _re.match(r'^(\d+)-(\d+)\s+(.+)$', text)
+    if not range_match:
+        return [text]
+
+    start = int(range_match.group(1))
+    end = int(range_match.group(2))
+    rest = range_match.group(3)
+    if start > end:
+        start, end = end, start
+
+    variants: list[str] = []
+    seen: set[str] = set()
+
+    def _add(num: int) -> None:
+        addr = f'{num} {rest}'
+        if addr not in seen:
+            seen.add(addr)
+            variants.append(addr)
+
+    _add(start)
+    if end != start:
+        _add(end)
+
+    span = end - start
+    if span <= 1:
+        return variants
+
+    both_odd = start % 2 == 1 and end % 2 == 1
+    both_even = start % 2 == 0 and end % 2 == 0
+    if both_odd or both_even:
+        step = 2
+        mid = start + step
+        extras = 0
+        while mid < end and extras < max_extras:
+            _add(mid)
+            mid += step
+            extras += 1
+    else:
+        mid = start + span // 2
+        if mid not in (start, end):
+            _add(mid)
+
+    return variants
+
+
 def _lookup_pin_from_address(address: str, parcel_addresses_url: str) -> Optional[str]:
     """Address → 14-digit PIN via Cook County parcel addresses dataset.
 
-    Handles both plain addresses ('2553 N DRAKE AVE') and range-format addresses
-    ('5401-5409 W LEMOYNE ST') by trying the normalised address first, then
-    falling back to just the first street number when a range is detected.
+    Handles plain addresses and range-format addresses (``3715-3721 N LEAVITT ST``)
+    by trying discrete house numbers (start, end, odd/even intermediates).
     """
     normalised = _normalise_address(address)
     if not normalised:
         return None
 
-    # Try the normalised address first (exact, then LIKE prefix)
+    # Prefer exact normalised string first (covers non-range and already-single).
     pin = _try_lookup(normalised, parcel_addresses_url)
     if pin:
         return pin
 
-    # Fallback: strip address range notation (e.g. '5401-5409 W LEMOYNE ST'
-    # → '5401 W LEMOYNE ST') and retry.  Range addresses are common for
-    # multi-unit buildings; Cook County Socrata indexes each unit individually.
-    import re as _re
-    range_match = _re.match(r'^(\d+)-\d+\s+(.+)$', normalised)
-    if range_match:
-        first_number = range_match.group(1)
-        rest = range_match.group(2)
-        stripped = f"{first_number} {rest}"
-        pin = _try_lookup(stripped, parcel_addresses_url)
+    for variant in _house_number_range_variants(normalised):
+        if variant == normalised:
+            continue
+        pin = _try_lookup(variant, parcel_addresses_url)
+        if pin:
+            return pin
 
-    return pin
+    return None
 
 
 def _try_lookup(normalised: str, parcel_addresses_url: str) -> Optional[str]:
@@ -209,11 +270,9 @@ def _lookup_all_pins_from_address(address: str, parcel_addresses_url: str, limit
     if not normalised:
         return []
 
-    addresses_to_try = [normalised]
-    import re as _re
-    range_match = _re.match(r'^(\d+)-\d+\s+(.+)$', normalised)
-    if range_match:
-        addresses_to_try.append(f"{range_match.group(1)} {range_match.group(2)}")
+    addresses_to_try = _house_number_range_variants(normalised)
+    if normalised not in addresses_to_try:
+        addresses_to_try = [normalised] + addresses_to_try
 
     seen_pins: set[str] = set()
     rows_out: list[dict] = []
@@ -374,6 +433,7 @@ def _build_parcel(
     pin: str,
     chars: dict,
     *,
+    property_street: str | None = None,
     property_city: str | None = None,
     property_state: str | None = None,
     property_zip: str | None = None,
@@ -393,6 +453,7 @@ def _build_parcel(
         mailing_city=None,
         mailing_state=None,
         mailing_zip=None,
+        property_street=property_street,
         property_city=property_city,
         property_state=property_state,
         property_zip=property_zip,
@@ -448,10 +509,9 @@ class CookCountyGISConnector(GISConnector):
     def lookup_by_pin(self, pin: str) -> Optional[GISParcel]:
         """Look up a parcel by 14-digit Cook County PIN.
 
-        Fetches improvement characteristics directly. Returns None when the PIN
-        is missing/empty OR when no characteristics are found for it — an empty
-        PIN or empty result must report *no match* rather than a truthy
-        (false-positive) match.
+        Prefers improvement characteristics when present. When chars are missing
+        (vacant / land-like commercial), still returns a parcel if the PIN has a
+        situs row — so PIN→address verify works without improvement data.
         """
         if not pin or not str(pin).strip():
             return None
@@ -459,16 +519,19 @@ class CookCountyGISConnector(GISConnector):
         # validating with .strip() but querying with the raw padded value would
         # make a padded-but-valid PIN miss.
         normalized_pin = str(pin).strip()
-        chars = _fetch_improvement_chars(normalized_pin, self._improvement_chars_url)
-        if not chars:
+        chars = _fetch_improvement_chars(normalized_pin, self._improvement_chars_url) or {}
+        parcel = self._parcel_with_situs(normalized_pin, chars)
+        # No improvement chars and no situs → not a usable match.
+        if not chars and not (parcel.property_street or '').strip():
             return None
-        return self._parcel_with_situs(normalized_pin, chars)
+        return parcel
 
     def _parcel_with_situs(self, pin: str, chars: dict) -> GISParcel:
         addr = _lookup_address_from_pin(pin, self._parcel_addresses_url) or {}
         zip_code = (addr.get('property_zip') or '').strip() or None
         if zip_code and '-' in zip_code:
             zip_code = zip_code.split('-', 1)[0]
+        street = (addr.get('property_street') or '').strip() or None
         city = (addr.get('property_city') or '').strip() or None
         state_raw = (addr.get('property_state') or '').strip() or None
         # Only invent IL when the assessor returned some situs (city or ZIP).
@@ -481,6 +544,7 @@ class CookCountyGISConnector(GISConnector):
         return _build_parcel(
             pin,
             chars,
+            property_street=street,
             property_city=city,
             property_state=state,
             property_zip=zip_code,

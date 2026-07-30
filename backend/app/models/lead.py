@@ -68,6 +68,11 @@ class Property(db.Model):
     units_allowed = db.Column(db.Integer, nullable=True)
     zoning = db.Column(db.String(100), nullable=True)
     county_assessor_pin = db.Column(db.String(50), nullable=True)
+    # Assessor tax situs when it differs from marketing / CoStar property_street
+    assessor_aka_street = db.Column(db.String(500), nullable=True)
+    assessor_aka_city = db.Column(db.String(100), nullable=True)
+    assessor_aka_state = db.Column(db.String(50), nullable=True)
+    assessor_aka_zip = db.Column(db.String(20), nullable=True)
     tax_bill_2021 = db.Column(db.Float, nullable=True)
     most_recent_sale = db.Column(db.String(255), nullable=True)
 

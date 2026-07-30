@@ -65,6 +65,7 @@ describe('PropertyOverviewQuickStats', () => {
     expect(screen.queryByTestId('quick-stat-est-rent')).not.toBeInTheDocument()
     expect(screen.getByTestId('quick-stat-last-sale')).toHaveTextContent('—')
     expect(screen.getByTestId('quick-stat-units-details')).toHaveTextContent('—')
+    expect(screen.queryByTestId('quick-stat-condo-check')).not.toBeInTheDocument()
   })
 
   it('fills cells from payload fields with last sale date and amount', () => {
@@ -85,5 +86,21 @@ describe('PropertyOverviewQuickStats', () => {
     expect(lastSale).toHaveTextContent('04/01/1993')
     expect(lastSale).toHaveTextContent('$310,000')
     expect(screen.getByTestId('quick-stat-units-details')).toHaveTextContent(/3 Units/)
+  })
+
+  it('does not embed Condo check in the KPI grid (lives in HeaderCondoCheckPanel)', () => {
+    render(
+      <PropertyOverviewQuickStats
+        commandCenterData={basePayload({
+          lead_category: 'commercial',
+          condo_risk_status: 'needs_review',
+          condo_confidence: 'low',
+          condo_check_reason: 'Incomplete data',
+          condo_analysis_id: 99,
+        })}
+      />,
+    )
+    expect(screen.queryByTestId('quick-stat-condo-check')).not.toBeInTheDocument()
+    expect(screen.getByTestId('quick-stat-est-value')).toBeInTheDocument()
   })
 })

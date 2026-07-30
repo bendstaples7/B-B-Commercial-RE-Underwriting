@@ -32,10 +32,11 @@ import {
   formatSaleDateFreshness,
   isSaleDateVerifiedWithinDays,
 } from '@/utils/saleDateFreshness'
-import { formatCookCountyPin } from '@/utils/cookCountyPin'
 import { looksLikePhoneNumber } from '@/utils/phone'
-import { commandCenterService, leadTaskService } from '@/services/api'
-import { propertyMatchService } from '@/services/propertyMatchApi'
+import { commandCenterService } from '@/services/api'
+import {
+  CopyablePin,
+} from '@/components/lead-detail/PinLookupControl'
 import {
   isEntityContactName,
   isGenericOwnerName,
@@ -217,54 +218,6 @@ function CopyableEmail({
   )
 }
 
-function CopyablePin({
-  pin,
-  valueTestId,
-}: {
-  pin: string
-  valueTestId?: string
-}) {
-  const [copied, setCopied] = useState(false)
-  const displayPin = formatCookCountyPin(pin)
-  if (!displayPin) return null
-  const handleCopy = () => {
-    void navigator.clipboard.writeText(displayPin)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
-  }
-  return (
-    <Box
-      sx={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'flex-end',
-        gap: 0.5,
-        minWidth: 0,
-      }}
-    >
-      <Typography
-        variant="caption"
-        component="span"
-        noWrap
-        data-testid={valueTestId}
-      >
-        {displayPin}
-      </Typography>
-      <Tooltip title={copied ? 'Copied!' : 'Copy'}>
-        <IconButton
-          size="small"
-          onClick={handleCopy}
-          aria-label="Copy PIN"
-          data-testid="sidebar-pin-copy"
-          sx={{ p: 0.25, flexShrink: 0 }}
-        >
-          <ContentCopyIcon sx={{ fontSize: 11 }} />
-        </IconButton>
-      </Tooltip>
-    </Box>
-  )
-}
-
 export interface PropertySidebarProps {
   commandCenterData: CommandCenterPayload
   /** `sidebar` sticky lg+ panel; `inline` accordion for viewports below lg. */
@@ -293,10 +246,8 @@ export function PropertySidebar({
   const queryClient = useQueryClient()
   const [saleVerifyPending, setSaleVerifyPending] = useState(false)
   const [saleVerifyMessage, setSaleVerifyMessage] = useState<string | null>(null)
-  const [pinLookupPending, setPinLookupPending] = useState(false)
-  const [pinCandidate, setPinCandidate] = useState<string | null>(null)
-  const [pinApplyPending, setPinApplyPending] = useState(false)
   const [sidebarSnack, setSidebarSnack] = useState<string | null>(null)
+  const pinMissing = !String(commandCenterData.county_assessor_pin || '').trim()
   type SidebarExtras = {
     phones?: LeadPhone[]
     emails?: string[]
@@ -451,17 +402,11 @@ export function PropertySidebar({
       || commandCenterData.sale_date_meta?.status === 'failed'
     ),
   )
-  const optimisticPin = pinApplyPending ? pinCandidate : null
-  const displayedPin = optimisticPin || commandCenterData.county_assessor_pin || ''
-  const pinMissing = !displayedPin.trim()
   const contactsLikelyPriorOwner = Boolean(commandCenterData.contacts_likely_prior_owner)
 
   useEffect(() => {
     setSaleVerifyPending(false)
     setSaleVerifyMessage(null)
-    setPinLookupPending(false)
-    setPinCandidate(null)
-    setPinApplyPending(false)
   }, [commandCenterData.id])
 
   const pollQueuedSaleVerification = async (
@@ -525,76 +470,6 @@ export function PropertySidebar({
     } finally {
       setSaleVerifyPending(false)
     }
-  }
-
-  const handleLookUpPin = async () => {
-    setPinLookupPending(true)
-    setPinCandidate(null)
-    try {
-      const preview = await propertyMatchService.preview(commandCenterData.id)
-      const pin = formatCookCountyPin(
-        preview.pin || preview.recommended_address?.county_assessor_pin || '',
-      )
-      // Incomplete situs must win over a street-only found+pin candidate.
-      if (preview.reason === 'incomplete_address' || preview.address_complete === false) {
-        setSidebarSnack(
-          preview.message
-          || 'Add city, state, and ZIP — then look up PIN',
-        )
-        await queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
-        return
-      }
-      if (preview.found && pin) {
-        setPinCandidate(pin)
-        // Auto-apply only when GIS reports a unique PIN. Absent/null pin_count
-        // (non-Cook previews) must stay on the explicit Apply path.
-        if (preview.pin_count === 1) {
-          await applyPin(pin)
-        }
-        return
-      }
-      await leadTaskService.createTask(commandCenterData.id, {
-        title: 'Research missing PIN',
-        task_type: 'research_missing_pin',
-      })
-      setSidebarSnack('No PIN found — research task created')
-      await queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
-    } catch (error) {
-      setSidebarSnack(error instanceof Error ? error.message : 'PIN lookup failed')
-    } finally {
-      setPinLookupPending(false)
-    }
-  }
-
-  const applyPin = async (pin: string) => {
-    setPinApplyPending(true)
-    try {
-      const result = await propertyMatchService.approve(commandCenterData.id, {
-        pin,
-      })
-      const appliedPin = formatCookCountyPin(
-        (result as { county_assessor_pin?: string | null })?.county_assessor_pin,
-      ) || pin
-      queryClient.setQueryData<CommandCenterPayload>(
-        ['commandCenter', commandCenterData.id],
-        (current) => current
-          ? { ...current, county_assessor_pin: appliedPin }
-          : current,
-      )
-      setPinCandidate(null)
-      setSidebarSnack(
-        `PIN applied: ${appliedPin}`,
-      )
-      await queryClient.invalidateQueries({ queryKey: ['commandCenter', commandCenterData.id] })
-    } catch (error) {
-      setSidebarSnack(error instanceof Error ? error.message : 'Could not apply PIN')
-    } finally {
-      setPinApplyPending(false)
-    }
-  }
-
-  const handleApplyPinCandidate = async () => {
-    if (pinCandidate) await applyPin(pinCandidate)
   }
 
   const stacked = variant === 'inline'
@@ -798,63 +673,20 @@ export function PropertySidebar({
           label="PIN"
           value={
             pinMissing ? (
-              <Box
-                sx={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'flex-end',
-                  gap: 0.5,
-                }}
-                data-testid="sidebar-pin-lookup"
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ textAlign: 'right', display: 'block' }}
+                data-testid="sidebar-pin-lookup-hint"
               >
-                <Typography variant="caption" color="text.disabled" component="span">
-                  None
-                </Typography>
-                {pinCandidate ? (
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                    <CopyablePin pin={pinCandidate} valueTestId="sidebar-pin-candidate" />
-                    <Button
-                      size="small"
-                      variant="text"
-                      onClick={handleApplyPinCandidate}
-                      disabled={pinApplyPending}
-                      data-testid="sidebar-apply-pin"
-                      startIcon={
-                        pinApplyPending ? (
-                          <CircularProgress size={12} color="inherit" aria-hidden />
-                        ) : undefined
-                      }
-                      sx={{ minWidth: 0, px: 0.5, py: 0, fontSize: '0.7rem' }}
-                    >
-                      {pinApplyPending ? 'Applying…' : 'Apply'}
-                    </Button>
-                  </Box>
-                ) : (
-                  <Button
-                    size="small"
-                    variant="text"
-                    onClick={handleLookUpPin}
-                    disabled={pinLookupPending}
-                    data-testid="sidebar-look-up-pin"
-                    startIcon={
-                      pinLookupPending ? (
-                        <CircularProgress size={12} color="inherit" aria-hidden />
-                      ) : undefined
-                    }
-                    sx={{ minWidth: 0, px: 0.5, py: 0, fontSize: '0.7rem' }}
-                  >
-                    {pinLookupPending ? 'Looking up…' : 'Look up PIN'}
-                  </Button>
-                )}
-              </Box>
-            ) : pinApplyPending ? (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                <CopyablePin pin={displayedPin} valueTestId="sidebar-pin-value" />
-                <CircularProgress size={12} aria-label="Applying PIN" />
-                <Typography variant="caption" component="span">Applying…</Typography>
-              </Box>
+                Look up PIN in Property Overview
+              </Typography>
             ) : (
-              <CopyablePin pin={displayedPin} valueTestId="sidebar-pin-value" />
+              <CopyablePin
+                pin={commandCenterData.county_assessor_pin || ''}
+                valueTestId="sidebar-pin-value"
+                copyTestId="sidebar-pin-copy"
+              />
             )
           }
           alwaysShow

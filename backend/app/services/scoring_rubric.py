@@ -48,6 +48,11 @@ SCORE_ATTRIBUTION_ONLY_KEYS = frozenset({
     "notes_keywords",
 })
 
+# Stored in score_details for UI path math — never a top signal / additive dim.
+SCORE_META_ONLY_KEYS = frozenset({
+    "weighted_base",
+})
+
 RESIDENTIAL_MAX_POINTS = {
     "property_type_fit": 20,
     "neighborhood_fit": 15,
@@ -1252,7 +1257,7 @@ def extract_top_signals(score_details: dict, lead=None) -> list:
                         'points': pts,
                     })
     for dim, pts in score_details.items():
-        if dim in SCORE_ATTRIBUTION_ONLY_KEYS:
+        if dim in SCORE_ATTRIBUTION_ONLY_KEYS or dim in SCORE_META_ONLY_KEYS:
             continue
         if pts <= 0:
             continue

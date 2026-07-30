@@ -31,7 +31,9 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { buildingOwnershipService } from '@/services/api'
 import { formatDateTime } from '@/utils/formatters'
-import { ccMetaSx, ccSupportCardSx, ccSubsectionTitleSx } from '@/components/lead-detail/commandCenterChrome'
+import { formatCookCountyPin } from '@/utils/cookCountyPin'
+import { ccCardSx, ccMetaSx, ccSectionTitleSx, ccSubsectionTitleSx } from '@/components/lead-detail/commandCenterChrome'
+import { CondoCheckSummary } from '@/components/lead-detail/CondoCheckSummary'
 import type {
   BuildingOwnershipAnalyzeResult,
   BuildingOwnershipDetail,
@@ -299,14 +301,30 @@ export function BuildingOwnershipSection({
   const pinCount = detail?.pin_count ?? assessorPins.length
   const saleDisplay = commandCenterData.most_recent_sale_display ?? null
   const needsDecision = statusNeedsDecision(displayRisk)
-  const hasResults = Boolean(detail || analyzeSnapshot || displayRisk)
   const lastCheckedAt =
     detail?.analyzed_at
     || (analyzeSnapshot?.analysis_details as { analyzed_at?: string } | undefined)?.analyzed_at
+    || commandCenterData.condo_checked_at
     || null
   const condoizedValue = statusToCondoized(displayRisk)
-  const confidence =
+  const detailConfidence =
     classification?.confidence != null ? String(classification.confidence) : null
+  const detailReason =
+    classification?.reason != null ? String(classification.reason) : null
+  const detailDrivers = Array.isArray(classification?.triggered_rules)
+    ? (classification.triggered_rules as string[])
+    : null
+  const condoSummaryData: CommandCenterPayload = {
+    ...commandCenterData,
+    condo_confidence: detailConfidence ?? commandCenterData.condo_confidence,
+    condo_check_reason: detailReason ?? commandCenterData.condo_check_reason,
+    condo_checked_at: lastCheckedAt ?? commandCenterData.condo_checked_at,
+    condo_check_drivers:
+      (detailDrivers && detailDrivers.length > 0
+        ? detailDrivers
+        : commandCenterData.condo_check_drivers) ?? [],
+    condo_risk_status: displayRisk ?? commandCenterData.condo_risk_status,
+  }
 
   const saveCondoized = (answer: CondoizedAnswer) => {
     if (answer === condoizedValue) return
@@ -322,6 +340,20 @@ export function BuildingOwnershipSection({
     })
   }
 
+  const unitsLabel =
+    units != null
+      ? `${units} unit${units === 1 ? '' : 's'}${unitsAllowed != null ? ` · allowed ${unitsAllowed}` : ''}`
+      : '—'
+  const saleLabel = saleDisplay || '—'
+  const pinFormatted = formatCookCountyPin(commandCenterData.county_assessor_pin || '') || null
+  const pinLabel = pinFormatted
+    ? `${pinFormatted}${
+        commandCenterData.assessor_class ? ` · Class ${commandCenterData.assessor_class}` : ''
+      }`
+    : '—'
+  const salePossibleLabel =
+    BUILDING_SALE_OPTIONS.find((opt) => opt.value === displaySale)?.label ?? displaySale
+
   const toggleMobileExpanded = () => setMobileExpanded((open) => !open)
 
   const handleMobileHeaderKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -332,17 +364,24 @@ export function BuildingOwnershipSection({
 
   return (
     <Paper
-      sx={ccSupportCardSx}
+      sx={{
+        ...ccCardSx,
+        mb: 0,
+        // Fallback when hash / native scrollIntoView is used without the helper.
+        scrollMarginTop: { xs: 120, sm: 140 },
+      }}
       data-testid="building-ownership-section"
       id="building-ownership-section"
+      data-layout="split-header-metric-strip"
     >
+      {/* Header: title (+ mobile chevron) */}
       <Box
         sx={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: 1,
-          mb: isXs && !mobileExpanded ? 1 : 0,
+          mb: 1.5,
           cursor: isXs ? 'pointer' : 'default',
         }}
         onClick={isXs ? toggleMobileExpanded : undefined}
@@ -350,122 +389,153 @@ export function BuildingOwnershipSection({
         role={isXs ? 'button' : undefined}
         aria-expanded={isXs ? mobileExpanded : undefined}
         tabIndex={isXs ? 0 : undefined}
+        data-testid="building-ownership-header"
       >
-        <Typography sx={ccSubsectionTitleSx} component="div">
+        <Typography sx={{ ...ccSectionTitleSx, mb: 0 }} component="h2">
           Building ownership
         </Typography>
         {isXs && (mobileExpanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />)}
       </Box>
 
       <Collapse in={!isXs || mobileExpanded}>
-      <Box sx={{ pt: 1 }}>
-      <Stack
-        direction={{ xs: 'column', sm: 'row' }}
-        spacing={1}
-        alignItems={{ xs: 'flex-start', sm: 'center' }}
-        sx={{ mb: 1.5, flexWrap: 'wrap', gap: 1 }}
-      >
-        <Typography variant="body2" fontWeight={600} sx={{ mr: 0.5 }}>
-          Condoized?
-        </Typography>
-        <ToggleButtonGroup
-          exclusive
-          size="small"
-          value={condoizedValue}
-          disabled={overridePendingForActiveLead || !hasAnalysisId}
-          onChange={(_e, next: CondoizedAnswer | null) => {
-            if (next) saveCondoized(next)
-          }}
-          data-testid="building-ownership-condoized-control"
-        >
-          <ToggleButton value="yes" data-testid="building-ownership-condoized-yes">
-            Yes
-          </ToggleButton>
-          <ToggleButton value="no" data-testid="building-ownership-condoized-no">
-            No
-          </ToggleButton>
-          <ToggleButton value="unclear" data-testid="building-ownership-condoized-unclear">
-            Unclear
-          </ToggleButton>
-        </ToggleButtonGroup>
-        {confidence && (
-          <Chip
-            size="small"
-            variant="outlined"
-            label={`${confidence} confidence`}
-            data-testid="building-ownership-confidence"
-          />
-        )}
-        {overridePendingForActiveLead && <CircularProgress size={16} />}
-      </Stack>
-
-      {displaySale && (
-        <Chip
-          size="small"
-          variant="outlined"
-          label={`Whole-building sale: ${displaySale}`}
-          sx={{ mb: 1.5 }}
-        />
-      )}
-
-      {hasAnalysisId && lastCheckedAt && (
-        <Typography
-          sx={{ ...ccMetaSx, mb: 1.5 }}
-          data-testid="building-ownership-last-checked"
-        >
-          Last automated check: {formatDateTime(lastCheckedAt)}
-        </Typography>
-      )}
-
+      <Box>
+      {/* Condoized left · condo check card center · last check + sale right */}
       <Box
+        data-testid="building-ownership-decision-row"
         sx={{
           display: 'grid',
-          gridTemplateColumns: { xs: '1fr', sm: '140px 1fr' },
-          columnGap: 1,
-          rowGap: 0.75,
+          gridTemplateColumns: { xs: '1fr', md: 'minmax(0, 1fr) auto minmax(0, 1fr)' },
+          alignItems: 'center',
+          columnGap: 2,
+          rowGap: 1.5,
           mb: 1.5,
         }}
       >
-        <Typography variant="caption" color="text.secondary">
-          Imported units
-        </Typography>
-        <Typography variant="body2" data-testid="building-ownership-units">
-          {units != null
-            ? `${units} unit${units === 1 ? '' : 's'}${unitsAllowed != null ? ` · allowed ${unitsAllowed}` : ''}`
-            : '—'}
-        </Typography>
+        <Stack
+          direction="row"
+          alignItems="center"
+          gap={1}
+          flexWrap="wrap"
+          sx={{ justifyContent: { xs: 'flex-start', md: 'flex-start' } }}
+        >
+          <Typography variant="body2" fontWeight={600}>
+            Condoized?
+          </Typography>
+          <ToggleButtonGroup
+            exclusive
+            size="small"
+            value={condoizedValue}
+            disabled={overridePendingForActiveLead || !hasAnalysisId}
+            onChange={(_e, next: CondoizedAnswer | null) => {
+              if (next) saveCondoized(next)
+            }}
+            data-testid="building-ownership-condoized-control"
+            sx={{
+              '& .MuiToggleButton-root': {
+                width: 88,
+                px: 1,
+                boxSizing: 'border-box',
+              },
+            }}
+          >
+            <ToggleButton value="yes" data-testid="building-ownership-condoized-yes">
+              Yes
+            </ToggleButton>
+            <ToggleButton value="no" data-testid="building-ownership-condoized-no">
+              No
+            </ToggleButton>
+            <ToggleButton value="unclear" data-testid="building-ownership-condoized-unclear">
+              Unclear
+            </ToggleButton>
+          </ToggleButtonGroup>
+          {overridePendingForActiveLead && <CircularProgress size={16} />}
+        </Stack>
 
-        <Typography variant="caption" color="text.secondary">
-          Most recent sale
-        </Typography>
-        <Typography variant="body2" data-testid="building-ownership-sale">
-          {saleDisplay || '—'}
-        </Typography>
+        <Box
+          sx={{
+            width: { xs: '100%', md: 300 },
+            maxWidth: { xs: '100%', md: 340 },
+            minWidth: { md: 260 },
+            justifySelf: 'center',
+          }}
+        >
+          <CondoCheckSummary
+            commandCenterData={condoSummaryData}
+            testIdStem="building-ownership-condo"
+            hideUpdated
+          />
+        </Box>
 
-        {commandCenterData.county_assessor_pin && (
-          <>
-            <Typography variant="caption" color="text.secondary">
-              Lead PIN
+        <Stack
+          alignItems={{ xs: 'flex-start', md: 'flex-end' }}
+          gap={0.75}
+          sx={{ minWidth: 0 }}
+        >
+          {lastCheckedAt && (
+            <Typography
+              sx={{ ...ccMetaSx, textAlign: { xs: 'left', md: 'right' }, mb: 0 }}
+              data-testid="building-ownership-last-checked"
+            >
+              Last automated check: {formatDateTime(lastCheckedAt)}
             </Typography>
-            <Typography variant="body2">
-              {commandCenterData.county_assessor_pin}
-              {commandCenterData.assessor_class
-                ? ` · Class ${commandCenterData.assessor_class}`
-                : ''}
-            </Typography>
-          </>
-        )}
+          )}
+          {displaySale && (
+            <Chip
+              size="small"
+              variant="outlined"
+              label={`Sale possible: ${salePossibleLabel}`}
+              data-testid="building-ownership-sale-possible"
+            />
+          )}
+        </Stack>
+      </Box>
 
-        {hasResults && classification?.reason != null && (
-          <>
-            <Typography variant="caption" color="text.secondary">
-              System note
-            </Typography>
-            <Typography variant="body2" data-testid="building-ownership-reason">
-              {String(classification.reason)}
-            </Typography>
-          </>
-        )}
+      {/* Metric strip: Units · Sale · PIN */}
+      <Box
+        data-testid="building-ownership-metric-strip"
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr 1fr' },
+          border: 1,
+          borderColor: 'divider',
+          borderRadius: 1,
+          mb: 1.5,
+          '& > *:not(:last-of-type)': {
+            borderRight: { sm: '1px solid' },
+            borderColor: { sm: 'divider' },
+            borderBottom: { xs: '1px solid', sm: 'none' },
+            borderBottomColor: { xs: 'divider' },
+          },
+        }}
+      >
+        <Box sx={{ minWidth: 0, px: { xs: 1.25, sm: 1.5 }, py: 0.75 }}>
+          <Typography sx={{ ...ccMetaSx, mb: 0.25, fontSize: '0.7rem' }}>
+            Imported units
+          </Typography>
+          <Typography variant="body2" fontWeight={500} data-testid="building-ownership-units">
+            {unitsLabel}
+          </Typography>
+        </Box>
+        <Box sx={{ minWidth: 0, px: { xs: 1.25, sm: 1.5 }, py: 0.75 }}>
+          <Typography sx={{ ...ccMetaSx, mb: 0.25, fontSize: '0.7rem' }}>
+            Most recent sale
+          </Typography>
+          <Typography variant="body2" fontWeight={500} data-testid="building-ownership-sale">
+            {saleLabel}
+          </Typography>
+        </Box>
+        <Box sx={{ minWidth: 0, px: { xs: 1.25, sm: 1.5 }, py: 0.75 }}>
+          <Typography sx={{ ...ccMetaSx, mb: 0.25, fontSize: '0.7rem' }}>Lead PIN</Typography>
+          <Typography
+            variant="body2"
+            fontWeight={500}
+            noWrap
+            title={pinLabel}
+            data-testid="building-ownership-lead-pin"
+          >
+            {pinLabel}
+          </Typography>
+        </Box>
       </Box>
 
       {isLoading && hasAnalysisId && !analyzeSnapshot && (
@@ -544,11 +614,17 @@ export function BuildingOwnershipSection({
         </Alert>
       )}
 
-      {/* Actions only when a decision is still needed or analysis has never run */}
+      {/* Actions: run check left · advanced form right */}
       {(needsDecision || !hasAnalysisId) && (
         <>
           <Divider sx={{ my: 1.5 }} />
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+          <Stack
+            direction="row"
+            justifyContent="space-between"
+            alignItems="center"
+            flexWrap="wrap"
+            gap={1}
+          >
             <Button
               variant="outlined"
               size="small"

@@ -37,6 +37,13 @@ def _fill_deal_source_from_import_source(lead: Lead) -> bool:
     return True
 
 
+def _apply_import_signal_fills(lead: Lead) -> bool:
+    """Fill blank units / commercial category from deal_source + description."""
+    from app.services.helpers.import_signal_fills import apply_import_signal_fills
+
+    return bool(apply_import_signal_fills(lead))
+
+
 def _split_owner_name(first: Optional[str], last: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     """Normalize owner name fields to ensure first and last are separate.
 
@@ -941,6 +948,7 @@ class GoogleSheetsImporter:
                 existing.last_import_job_id = import_job_id
             existing.updated_at = datetime.utcnow()
             _fill_deal_source_from_import_source(existing)
+            _apply_import_signal_fills(existing)
             from app.services.property_address_service import complete_property_address
             # Parse-only on import hot path — batch GIS via heal script / Celery.
             complete_property_address(
@@ -963,6 +971,7 @@ class GoogleSheetsImporter:
                 lead.owner_user_id = owner_user_id
             self._set_lead_fields(lead, validated_data)
             _fill_deal_source_from_import_source(lead)
+            _apply_import_signal_fills(lead)
             from app.services.property_address_service import complete_property_address
             complete_property_address(
                 lead,
@@ -991,6 +1000,7 @@ class GoogleSheetsImporter:
                     existing.last_import_job_id = import_job_id
                 existing.updated_at = datetime.utcnow()
                 _fill_deal_source_from_import_source(existing)
+                _apply_import_signal_fills(existing)
                 from app.services.property_address_service import complete_property_address
                 complete_property_address(
                     existing,
